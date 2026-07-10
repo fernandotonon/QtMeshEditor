@@ -92,10 +92,32 @@ runs the comparison automatically when `QTMESH_SKIN_REF_FBX` (the
 Mixamo file) and `QTMESH_SKIN_OURS_FBX` are set; it is skipped
 otherwise, so CI stays hermetic.
 
-### Recorded run
+### Recorded run (2026-07-10, bandit.fbx — artist-skinned reference)
 
-_Pending a manual Mixamo export (requires an Adobe account). Record
-the `--compare` and `--evaluate` outputs here when first run._
+Reference: a production character ("bandit", UE-style rig — `pelvis` /
+`spine_03` / `thigh_twist_01_l` naming, 119 bones, 90,573 verts,
+artist-painted weights) used in place of a Mixamo export — same
+`--compare`/`--evaluate` pipeline; a Mixamo-exported reference slots
+into the identical commands. Both candidates were skinned by the
+app on a same-pipeline copy of the mesh (skeleton preserved,
+weights recomputed), then compared against the artist original.
+
+| metric | SkinTokens ML (+ geodesic localisation) | GeodesicVoxel | artist reference |
+|---|---|---|---|
+| Mean weight L1 vs artist | **1.2241** | **1.0929** | — |
+| Avg influences / vertex | 2.52 | 3.44 | 2.22 |
+| Max influences | 4 | 4 | 4 |
+| Smoothness energy (lower = smoother) | 0.0209 | 0.0124 | 0.0099 |
+| Bleed fraction (non-geodesically-local weight) | 0.0764 | 0.0283 | **0.1426** |
+
+Top differing bones in both cases are the head/spine/pelvis mass
+distribution plus accessory bones (`hat`, `holster`, `ponytail_*`) —
+places where artists paint deliberate stylistic weights. Notably the
+artist reference itself scores the *highest* bleed: artists
+intentionally assign non-local weights (twist bones, accessories),
+which is also why weight-L1 vs the artist is a proxy, not a verdict —
+the visual pick in production use was the ML skinner (see the default
+choice in `SkinWeights`).
 
 ## Dual-quaternion display (Slice D)
 
@@ -105,3 +127,33 @@ candy-wrapper collapse on twists that no weight map can fix. Display
 only: exporters consume the unchanged vertex weights — engines
 re-skin with their own blend. Entities above the RTSS bone cap (96)
 stay on the default path.
+
+### Forearm-twist comparison (recorded 2026-07-10)
+
+Reproducible fixture — a dense 0.6×0.18 bar (486 verts, 121 rings),
+auto-rigged with the `generic` 3-joint template, GVB-skinned, with a
+"Twist" animation (Top bone, 0° → 180° about the bone axis) injected
+into the exported glTF. Headless LBS renders via the pose pipeline:
+
+```
+qtmesh pose twist_bar_rig.gltf2 --animation Twist --time 0.5 -o bar_90.stl
+qtmesh turntable bar_90.stl -o bar_90_%02d.png --frames 4
+```
+
+| rest (LBS) | 90° twist (LBS) |
+|---|---|
+| ![rest](img/twist_bar_rest_lbs.png) | ![90° LBS](img/twist_bar_90_lbs.png) |
+
+The 90° frame shows linear blending's volume loss: through the
+Spine→Top blend zone the silhouette necks inward (the blended matrix
+at 50% of a 90° rotation scales the cross-section by cos 45° ≈ 0.71),
+the classic precursor of the 180° candy-wrapper collapse. Under DQS
+the cross-section keeps its width through the same zone.
+
+**Known issue:** on macOS (legacy `RenderSystem_GL`, max glsl120) the
+DQS technique currently renders nothing — the entity disappears until
+toggled back to Linear, so the DQS side of this comparison cannot be
+captured there yet. Tracked in
+[#833](https://github.com/fernandotonon/QtMeshEditor/issues/833);
+the imprint/technique path is covered by `SkinningDisplayTest` on
+Linux CI, and a pixel-level LBS/DQS diff should land with that fix.
