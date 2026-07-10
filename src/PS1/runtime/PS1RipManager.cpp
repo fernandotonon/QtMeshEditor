@@ -176,9 +176,16 @@ void PS1RipManager::initializeWorkerThread()
 
                 const MeshDedupeMode dedupeMode =
                     m_dedupeStrict ? MeshDedupeMode::Strict : MeshDedupeMode::Loose;
+                // The tracked-only clean-up filter only makes sense when the
+                // in-core stream actually produced records; on a RAM-scan
+                // capture (no records, all-None provenance) it would filter to
+                // empty, so force it off in that case.
+                Ps1NormalizerSettings normalize = m_normalize;
+                if (normalize.trackedGeometryOnly && snapshot.gteRecords.isEmpty())
+                    normalize.trackedGeometryOnly = false;
                 MeshReconstructionStats reconStats;
                 const ReconstructedCaptureSet captureSet =
-                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode, m_normalize,
+                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode, normalize,
                                                           &reconStats);
                 if (captureSet.isEmpty()) {
                     reportError(tr("Capture produced no reconstructable geometry"));

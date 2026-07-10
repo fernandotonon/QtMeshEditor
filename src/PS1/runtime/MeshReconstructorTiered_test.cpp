@@ -414,6 +414,49 @@ TEST(MeshReconstructorTieredTest, NoneProvenanceKeepsLegacyBehavior)
     EXPECT_TRUE(stats.slabLike);
 }
 
+TEST(MeshReconstructorTieredTest, TrackedGeometryOnlyDropsScreenSpacePrims)
+{
+    // A mixed capture: a tracked cube plus one screen-space "HUD" triangle
+    // (None provenance, no depth) — the clean-up filter must keep the cube
+    // and drop the HUD prim entirely.
+    MatrixRecord matrix = rotationMatrix(0.0, 0.0, 0.0);
+    matrix.tr[2] = 5000;
+    CaptureSnapshot snap = cubeSnapshot(matrix, FixtureTier::Tracked);
+    const int trackedPrims = snap.prims.size();
+
+    PrimRecord hud;
+    hud.kind = PrimKind::ShadedTri;
+    hud.vertexCount = 3;
+    for (int v = 0; v < 3; ++v) {
+        hud.verts[v].x = 40 + v * 20;
+        hud.verts[v].y = 30;
+        hud.verts[v].provenance = static_cast<uint8_t>(PsxVertexProvenance::None);
+        hud.verts[v].gteRecordIndex = UINT32_MAX;
+        hud.verts[v].viewW = 0.0f;
+    }
+    snap.prims.append(hud);
+
+    // Baseline (filter off): both the cube and the HUD prim reconstruct.
+    MeshReconstructionStats baseStats;
+    const ReconstructedCaptureSet baseline =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, &baseStats);
+    EXPECT_GT(baseStats.screenFallbackVertices, 0) << "HUD prim should land in Tier 2";
+
+    // Filter on: the HUD prim is dropped, only tracked geometry survives.
+    Ps1NormalizerSettings clean;
+    clean.trackedGeometryOnly = true;
+    MeshReconstructionStats cleanStats;
+    const ReconstructedCaptureSet cleaned =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, clean, &cleanStats);
+
+    ASSERT_FALSE(cleaned.isEmpty());
+    EXPECT_EQ(cleanStats.screenFallbackVertices, 0)
+        << "clean-up filter must drop every screen-space prim";
+    EXPECT_EQ(cleanStats.gteTrackedVertices, cleanStats.totalVertices);
+    EXPECT_EQ(cleanStats.totalVertices, trackedPrims * 3);
+    EXPECT_FALSE(cleanStats.slabLike);
+}
+
 TEST(MeshReconstructorTieredTest, EditorRotationFromGtePins90DegreeYRotation)
 {
     // 90° around Y in the GTE camera basis: model (x,y,z) -> camera (z,y,-x).

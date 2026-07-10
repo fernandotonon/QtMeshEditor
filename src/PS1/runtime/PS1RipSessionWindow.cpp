@@ -54,6 +54,7 @@ constexpr auto kSettingsGroup = "ps1Rip";
 constexpr auto kBiosKey = "biosPath";
 constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
+constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -257,6 +258,34 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kDedupeStrictKey), on);
     });
     toolbar->addWidget(strictDedupe);
+
+    // "Clean up" filter: keep only in-core tracked/depth geometry, dropping the
+    // screen-space HUD/sprite/2D junk that clutters the whole-frame draw list.
+    // Applies to the next Capture Frame (the reconstruction reads the current
+    // normalizer settings). No-op on RAM-scan captures (forced off in the
+    // manager when the capture has no GTE records).
+    auto *trackedOnly = new QCheckBox(tr("Tracked only"), this);
+    trackedOnly->setToolTip(tr("Clean up: keep only real in-core 3D geometry "
+                               "(tracked + depth); drop HUD / sprites / 2D overlays. "
+                               "Takes effect on the next Capture Frame."));
+    trackedOnly->setChecked(
+        settings.value(ps1SettingsKey(kTrackedOnlyKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.trackedGeometryOnly = trackedOnly->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(trackedOnly, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.trackedGeometryOnly = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      on ? QStringLiteral("ps1_rip_tracked_only_on")
+                                         : QStringLiteral("ps1_rip_tracked_only_off"));
+        QSettings().setValue(ps1SettingsKey(kTrackedOnlyKey), on);
+    });
+    toolbar->addWidget(trackedOnly);
+
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);

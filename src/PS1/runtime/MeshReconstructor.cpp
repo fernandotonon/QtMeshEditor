@@ -324,10 +324,38 @@ void emitTri(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
     emitTriDirect(a, b, c, matrix, gteRecords, textured, acc, statsOut);
 }
 
+/** "Clean up" filter (#816 follow-up): true when every vertex the prim will
+ *  emit lands via the in-core GTE path (Tier 0 GteTracked or Tier 1 DepthOnly)
+ *  rather than the Tier 2 screen-space fallback. Mirrors vertexFromPsx's
+ *  tier decision from the raw PsxVertex so we can reject before reconstructing.
+ *  Screen-fallback prims are the HUD / sprite / 2D overlay junk that clutters
+ *  the whole-frame draw list. */
+bool primIsTrackedGeometry(const PrimRecord &prim, const QVector<GteRecordEntry> &gteRecords)
+{
+    const int n = std::min<int>(prim.vertexCount, 4);
+    for (int i = 0; i < n; ++i) {
+        const PsxVertex &v = prim.verts[i];
+        const bool tracked =
+            v.provenance == static_cast<uint8_t>(PsxVertexProvenance::GteTracked)
+            && v.gteRecordIndex < static_cast<uint32_t>(gteRecords.size());
+        const bool depth = v.provenance != static_cast<uint8_t>(PsxVertexProvenance::None)
+                           && v.viewW != 0.0f;
+        if (!tracked && !depth)
+            return false;
+    }
+    return true;
+}
+
 void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
                    const QVector<GteRecordEntry> &gteRecords, SubMeshAccumulator &acc,
                    MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings)
 {
+    // Clean-up filter: drop screen-space-fallback prims entirely when the user
+    // asked to keep only tracked geometry. Guarded by the caller so an
+    // all-None (RAM-scan) capture doesn't filter to empty.
+    if (settings.trackedGeometryOnly && !primIsTrackedGeometry(prim, gteRecords))
+        return;
+
     const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
                           || prim.kind == PrimKind::Sprite;
 
