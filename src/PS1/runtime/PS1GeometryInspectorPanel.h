@@ -41,6 +41,7 @@ public:
         ColMaterial,
         ColTriangles,
         ColProvenance,
+        ColRemove, // per-row discard/restore affordance (trash glyph)
         ColCount
     };
 

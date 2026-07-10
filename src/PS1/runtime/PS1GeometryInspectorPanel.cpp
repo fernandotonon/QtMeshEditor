@@ -115,10 +115,18 @@ QVariant PS1GeometryInspectorModel::data(const QModelIndex &index, int role) con
             return row.triangleCount;
         case ColProvenance:
             return provenanceLabel(row.provenance);
+        case ColRemove:
+            // Trash glyph the user clicks to discard the row (restore glyph
+            // when already discarded). The click is handled in the view.
+            return row.discarded ? QStringLiteral("↺") : QStringLiteral("🗑");
         default:
             return {};
         }
     }
+    if (role == Qt::TextAlignmentRole && index.column() == ColRemove)
+        return static_cast<int>(Qt::AlignCenter);
+    if (role == Qt::ToolTipRole && index.column() == ColRemove)
+        return row.discarded ? tr("Restore this mesh") : tr("Discard this mesh");
     if (role == Qt::ForegroundRole) {
         if (row.discarded)
             return QColor(Qt::gray);
@@ -172,6 +180,8 @@ QVariant PS1GeometryInspectorModel::headerData(int section, Qt::Orientation orie
         return tr("triangles");
     case ColProvenance:
         return tr("src");
+    case ColRemove:
+        return QString();
     default:
         return {};
     }
@@ -392,6 +402,19 @@ void PS1GeometryInspectorPanel::onActivated(const QModelIndex &index)
     const CapturedAssetRow row = m_model->rowAt(src.row());
     if (row.rowIndex == 0)
         return;
+
+    // Clicking the trash column toggles discard directly — the visible
+    // one-click affordance the context-menu "Discard" also drives.
+    if (src.column() == PS1GeometryInspectorModel::ColRemove) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ui.action"),
+            QStringLiteral("ps1_rip_inspector_discard=%1 set=%2")
+                .arg(row.rowIndex)
+                .arg(row.discarded ? 0 : 1));
+        emit discardRowRequested(row.rowIndex);
+        return;
+    }
+
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("ps1_rip_inspector_highlight=%1").arg(row.rowIndex));
     emit highlightRow(row.rowIndex);
