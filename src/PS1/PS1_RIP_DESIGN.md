@@ -311,6 +311,38 @@ it through the real plugin + trampolines and stream a scripted tracked cube
 (`InCoreRipCapture_test.cpp`): handshake, ABI-mismatch refusal, `QTMESH_PS1_RIP_INCORE=0`,
 armed mirroring, record→draw correlation, provenance tiers, RAM-pass suppression.
 
+### MCP drive-and-verify surface
+
+Seven `ps1rip_*` MCP tools (`ps1rip_start` / `run_frames` / `capture` / `stats` / `status`
+/ `stop` / `clear`, `MCPServer.cpp`, `ENABLE_PS1_RIP`-guarded) drive a full capture
+headlessly over the MCP stdio/HTTP API and return the tier breakdown, so the pipeline can
+be validated without a human at the GUI. `save_scene` then exports the captured nodes to
+glTF. Verified end-to-end on Crash Warped: start → play → capture → export a real
+`.gltf2`+`.bin`+`.material`.
+
+### Observed capture quality (real retail titles)
+
+Live runs on Crash Bandicoot Warped (proper MODE2/2352 `.cue`, in-core hooks active)
+confirm the chain produces recognizable, non-slab 3D at scale (single frames up to ~800k
+tris). Two title-dependent characteristics to be aware of:
+
+- **Tracked-vs-depth ratio varies by scene and engine.** Different Warped moments
+  reconstructed anywhere from 73% GteTracked down to ~43%, with the remainder arriving as
+  DepthOnly (PGXP-precise screen + view depth, inverted per-draw — still real 3D, just via
+  the well-posed inverse rather than the exact object-space record). The `rip_tag`
+  GTE→GP0 correlation (#815) survives the CPU path for a large fraction of vertices but not
+  all; games that recombine SXY through CPU ops PGXP's tag-drop rules treat conservatively
+  land more vertices in DepthOnly. Both tiers are usable; improving the tracked share is
+  future fork work (audit which `pgxp_cpu.c` ops the title uses to move screen coords and
+  widen tag survival where it's provably a pure move).
+- **Accumulation dilutes the tracked ratio.** The live worker ingests the in-core stream
+  every armed frame and accumulates across frames (cross-frame dedupe on), so a long armed
+  window mixes many frames' geometry — the tracked *percentage* drops as depth-tier prims
+  from other frames pile in (120 frames → 77% tracked; 600 frames → 43%; hundreds → single
+  digits) even though the absolute tracked count grows. For the cleanest single-object
+  tracked ratio, arm briefly and capture one frame; for whole-scene coverage, accumulate.
+  The `tracked_only` clean-up filter drops the screen-space Tier-2 junk regardless.
+
 ## Model-space RAM scanners (#674)
 
 Screen-space GP0 prims always carry information loss because they're post-projection — the
