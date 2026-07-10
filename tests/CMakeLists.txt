@@ -184,6 +184,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinningDisplay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinMetrics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinEvaluate.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinTokensPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRig.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRigController.cpp

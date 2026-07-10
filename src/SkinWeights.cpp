@@ -1,5 +1,6 @@
 #include "SkinWeights.h"
 #include "GeodesicVoxelBind.h"
+#include "SkinTokensPredictor.h"
 #include "SkinWeightsPost.h"
 
 #include <Ogre.h>
@@ -164,7 +165,8 @@ bool SkinWeights::computeWeights(const float* vertexPositions,
                                   const SkinWeightsOptions& opts,
                                   Algorithm algo,
                                   std::vector<VertexWeights>& outWeights,
-                                  ComputeInfo* info)
+                                  ComputeInfo* info,
+                                  const SkeletonHierarchy* hierarchy)
 {
     outWeights.clear();
     ComputeInfo localInfo;
@@ -173,11 +175,54 @@ bool SkinWeights::computeWeights(const float* vertexPositions,
     if (!vertexPositions || vertexCount < 1 || bones.empty()) return false;
 
     if (algo == Algorithm::UniRigML) {
-        // Slice C plumbing: the UniRig skinning head (skin.onnx)
-        // export/hosting is pending — fall through to the geodesic
-        // path, which is also its designed automatic fallback.
+        // ML path: SkinTokens (see THIRD_PARTY_AI_MODELS.md — it
+        // replaced UniRig's spconv-blocked skin head). Needs the
+        // joint hierarchy for tokenization, an ONNX build, and the
+        // downloaded models; anything missing falls back to
+        // geodesic-voxel, its designed fallback.
+        QString mlWhy;
+        if (!SkinTokensPredictor::isAvailable()) {
+            mlWhy = QStringLiteral("built without ONNX");
+        } else if (!hierarchy || hierarchy->nodes.size() != bones.size()) {
+            mlWhy = QStringLiteral("no skeleton hierarchy available");
+        } else if (!indices || indexCount < 3) {
+            mlWhy = QStringLiteral("no triangle indices");
+        } else if (SkinTokensPredictor::ensureModelBlocking().isEmpty()) {
+            mlWhy = QStringLiteral("SkinTokens models unavailable");
+        } else {
+            std::vector<SkinTokensPredictor::Joint> joints;
+            joints.reserve(hierarchy->nodes.size());
+            for (const auto& n : hierarchy->nodes) {
+                SkinTokensPredictor::Joint j;
+                j.pos = { n.x, n.y, n.z };
+                j.parent = n.parent;
+                joints.push_back(j);
+            }
+            SkinTokensPredictor::Options mlOpts;
+            mlOpts.maxInfluencesPerVertex = opts.maxInfluencesPerVertex;
+            const auto ml = SkinTokensPredictor::predict(
+                vertexPositions, vertexCount, indices, indexCount,
+                joints, mlOpts);
+            if (ml.ok && int(ml.weights.size()) == vertexCount) {
+                outWeights.resize(std::size_t(vertexCount));
+                for (int v = 0; v < vertexCount; ++v) {
+                    const auto& src = ml.weights[std::size_t(v)];
+                    VertexWeights& dst = outWeights[std::size_t(v)];
+                    dst.count = std::min<int>(src.count, 8);
+                    for (int k = 0; k < dst.count; ++k) {
+                        dst.boneIndices[k] = src.jointIndices[k];
+                        dst.weights[k]     = src.weights[k];
+                    }
+                }
+                inf.algorithmUsed = QStringLiteral("skintokens");
+                return true;
+            }
+            mlWhy = ml.error.isEmpty()
+                ? QStringLiteral("prediction failed") : ml.error;
+        }
         inf.fallbackReason = QStringLiteral(
-            "UniRig skinning model not yet available — used geodesic-voxel");
+            "SkinTokens ML skinning unavailable (%1) — used geodesic-voxel")
+            .arg(mlWhy);
         algo = Algorithm::GeodesicVoxel;
     }
 
@@ -318,6 +363,37 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
     std::vector<int> handleToIdx(numBones, -1);
     for (size_t i = 0; i < boneIdxToHandle.size(); ++i)
         handleToIdx[boneIdxToHandle[i]] = static_cast<int>(i);
+
+    // Joint hierarchy for the ML (SkinTokens) path — aligned with
+    // bones[]. Parent = the nearest ANCESTOR that survived the
+    // skipUnweightedBones filter. Ogre bone handles are creation-
+    // ordered (parent-first for every importer we ship), which is
+    // exactly the parent-before-child ordering the tokenizer needs;
+    // if an exotic skeleton violates it, the predictor rejects and
+    // the geodesic fallback runs.
+    SkinWeights::SkeletonHierarchy hierarchy;
+    if (algo == SkinWeights::Algorithm::UniRigML) {
+        hierarchy.nodes.reserve(bones.size());
+        for (size_t i = 0; i < boneIdxToHandle.size(); ++i) {
+            Ogre::Bone* bone = skel->getBone(boneIdxToHandle[i]);
+            SkinWeights::SkeletonHierarchy::Node n;
+            n.x = bones[i].headX;
+            n.y = bones[i].headY;
+            n.z = bones[i].headZ;
+            n.parent = -1;
+            const Ogre::Node* p = bone ? bone->getParent() : nullptr;
+            while (p) {
+                const auto* pb = dynamic_cast<const Ogre::Bone*>(p);
+                if (pb && pb->getHandle() < numBones
+                    && handleToIdx[pb->getHandle()] >= 0) {
+                    n.parent = handleToIdx[pb->getHandle()];
+                    break;
+                }
+                p = p->getParent();
+            }
+            hierarchy.nodes.push_back(n);
+        }
+    }
 
     // Helper: append one owner's index data (16- or 32-bit) as flat
     // uint32 triangle indices, offset by the owner's base vertex in
@@ -470,7 +546,9 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
     if (!SkinWeights::computeWeights(positions.data(), totalVerts,
                                       indices.empty() ? nullptr : indices.data(),
                                       indices.size(),
-                                      bones, opts, algo, weights, &info)) {
+                                      bones, opts, algo, weights, &info,
+                                      hierarchy.nodes.empty() ? nullptr
+                                                              : &hierarchy)) {
         report.error = QStringLiteral("weight computation failed");
         return report;
     }

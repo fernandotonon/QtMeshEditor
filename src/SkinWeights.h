@@ -187,6 +187,20 @@ public:
         std::vector<std::vector<int>> allowedBones;
     };
 
+    // Skeleton hierarchy for the ML (SkinTokens) path — the
+    // UniRigML algorithm tokenizes the actual joint tree, which the
+    // flat BoneSegment list can't express. Entries must be
+    // DFS-ordered (parent before child); `parent` indexes into the
+    // same array (-1 = root). Pass via the overload's optional
+    // parameter; when absent, UniRigML falls back to GeodesicVoxel.
+    struct SkeletonHierarchy {
+        struct Node {
+            double x = 0, y = 0, z = 0;
+            int parent = -1;
+        };
+        std::vector<Node> nodes;   // aligned with the bones[] order
+    };
+
     // Algorithm-aware overload (#819). `indices` is the triangle
     // list referencing `vertexPositions` — required by GeodesicVoxel
     // for voxelization (pass nullptr/0 to force the InverseDistance
@@ -207,7 +221,8 @@ public:
                                const SkinWeightsOptions& opts,
                                Algorithm algo,
                                std::vector<VertexWeights>& outWeights,
-                               ComputeInfo* info = nullptr);
+                               ComputeInfo* info = nullptr,
+                               const SkeletonHierarchy* hierarchy = nullptr);
 
     static QJsonObject reportToJson(const SkinWeightsReport& report);
     static QString     reportToText(const SkinWeightsReport& report);
