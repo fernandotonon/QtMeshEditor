@@ -18,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <set>
 #include <thread>
 
 #ifdef ENABLE_ONNX
@@ -37,6 +38,8 @@ const char* kFiles[] = {
     "vae_cond.onnx",
     "embed.onnx",
     "decoder.onnx",
+    "decoder.onnx.data",   // Qwen3 weights as external data — ORT 1.20.1
+                           // SIGSEGVs parsing the 1.66 GB single-file proto
     "skin_decode.onnx",
 };
 
@@ -46,6 +49,14 @@ SkinTokensPredictor::Result failResult(const QString& why)
     r.ok = false;
     r.error = why;
     return r;
+}
+
+// Stage tracing for crash diagnosis: QTMESH_SKINTOKENS_DEBUG=1.
+void dbg(const char* msg)
+{
+    if (qEnvironmentVariableIsEmpty("QTMESH_SKINTOKENS_DEBUG")) return;
+    fprintf(stderr, "[skintokens] %s\n", msg);
+    fflush(stderr);
 }
 
 // Deterministic LCG so sampling never touches global RNG state (and
@@ -431,6 +442,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         return failResult(QStringLiteral(
             "SkinTokens: models not present (download them first)."));
 
+    dbg("reading manifest");
     // ── Manifest ────────────────────────────────────────────────────
     QFile mf(manifestPath());
     if (!mf.open(QIODevice::ReadOnly))
@@ -497,6 +509,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         out[2] = float((z - mid[2]) * scale + centre);
     };
 
+    dbg("sampling surface");
     // ── Sample the surface ──────────────────────────────────────────
     std::vector<std::array<float, 3>> pts, nrm;
     sampleSurface(positions, vertexCount, indices, indexCount, N, pts, nrm);
@@ -509,12 +522,61 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         p = { o[0], o[1], o[2] };
     }
 
-    // ── Tokenize the (normalised) skeleton ──────────────────────────
-    std::vector<Joint> normJoints = joints;
-    for (auto& j : normJoints) {
+    // ── Normalise the topology + tokenize the skeleton ─────────────
+    // Real skeletons arrive in creation order with possibly MANY
+    // roots (prop/attachment bones) — the token stream needs one
+    // root and parent-first DFS order. Re-parent extra roots to the
+    // first root and DFS-reorder; `order[k]` maps stream position k
+    // back to the caller's joint index for the output columns.
+    std::vector<int> order;
+    {
+        std::vector<std::vector<int>> children(joints.size());
+        int firstRoot = -1;
+        bool valid = true;
+        for (int i = 0; i < J; ++i) {
+            const int p = joints[std::size_t(i)].parent;
+            if (p < 0) {
+                if (firstRoot < 0) firstRoot = i;
+                else children[std::size_t(firstRoot)].push_back(i);
+            } else if (p < J && p != i) {
+                children[std::size_t(p)].push_back(i);
+            } else {
+                valid = false;
+            }
+        }
+        if (firstRoot < 0 || !valid)
+            return failResult(QStringLiteral(
+                "SkinTokens: invalid joint hierarchy."));
+        order.reserve(std::size_t(J));
+        std::vector<int> stack = { firstRoot };
+        while (!stack.empty()) {
+            const int i = stack.back();
+            stack.pop_back();
+            order.push_back(i);
+            const auto& c = children[std::size_t(i)];
+            for (auto it = c.rbegin(); it != c.rend(); ++it)
+                stack.push_back(*it);
+        }
+        if (int(order.size()) != J)
+            return failResult(QStringLiteral(
+                "SkinTokens: joint hierarchy contains a cycle."));
+    }
+    std::vector<int> oldToNew(std::size_t(J), -1);
+    for (int k = 0; k < J; ++k) oldToNew[std::size_t(order[k])] = k;
+
+    std::vector<Joint> normJoints(static_cast<std::size_t>(J));
+    for (int k = 0; k < J; ++k) {
+        const Joint& src = joints[std::size_t(order[k])];
+        Joint& dst = normJoints[std::size_t(k)];
         float o[3];
-        normPt(j.pos[0], j.pos[1], j.pos[2], o);
-        j.pos = { o[0], o[1], o[2] };
+        normPt(src.pos[0], src.pos[1], src.pos[2], o);
+        dst.pos = { o[0], o[1], o[2] };
+        if (k == 0) {
+            dst.parent = -1;
+        } else {
+            const int p = src.parent < 0 ? order[0] : src.parent;
+            dst.parent = oldToNew[std::size_t(p)];
+        }
     }
     const std::vector<std::int64_t> skelIds =
         tokenizeSkeleton(normJoints, layout);
@@ -522,6 +584,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         return failResult(QStringLiteral(
             "SkinTokens: joints are not in a valid parent-first order."));
 
+    dbg("opening ONNX env");
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_skintokens");
         Ort::SessionOptions so;
@@ -580,6 +643,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             return {};
         };
 
+        dbg("stage 1: mesh_cond");
         // ── (1) mesh_cond ───────────────────────────────────────────
         std::vector<float> flatPts(std::size_t(N) * 3),
             flatNrm(std::size_t(N) * 3);
@@ -606,6 +670,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         const int64_t condLen = condShape[1];
         const int64_t hidden  = condShape[2];
 
+        dbg("stage 2: vae_cond");
         // ── (2) vae_cond ────────────────────────────────────────────
         std::vector<float> vaeCondIn(std::size_t(N) * 6);
         for (int i = 0; i < N; ++i) {
@@ -628,6 +693,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             return failResult(QStringLiteral(
                 "SkinTokens: VAE conditioning failed."));
 
+        dbg("stage 3: embed skeleton");
         // ── (3) embed the skeleton ids ──────────────────────────────
         std::vector<float> skelEmbeds;
         {
@@ -645,9 +711,12 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
                     "SkinTokens: token embedding failed."));
         }
 
+        dbg("stage 4: decoder open");
         // ── (4) decoder prefix + greedy skin decode ─────────────────
         Ort::Session dec   = openSession("decoder.onnx");
+        dbg("stage 4a: decoder session created");
         Ort::Session embed = openSession("embed.onnx");
+        dbg("stage 4a2: embed session created");
 
         const size_t decIn = dec.GetInputCount();
         std::vector<Ort::AllocatedStringPtr> dInHold;
@@ -682,10 +751,14 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             return failResult(QStringLiteral(
                 "SkinTokens: unexpected decoder I/O layout."));
 
+        dbg("stage 4a3: decoder I/O discovered");
         // KV-cache geometry from the declared past input shape
-        // [1, KV, seq, Dh] (seq dynamic).
-        auto pastInfo = dec.GetInputTypeInfo(std::size_t(pastIdx[0]))
-                            .GetTensorTypeAndShapeInfo();
+        // [1, KV, seq, Dh] (seq dynamic). NB: GetTensorTypeAndShapeInfo()
+        // returns a NON-OWNING view into the TypeInfo — the TypeInfo must
+        // outlive it (chaining off the temporary reads freed memory).
+        Ort::TypeInfo pastTypeInfo =
+            dec.GetInputTypeInfo(std::size_t(pastIdx[0]));
+        auto pastInfo  = pastTypeInfo.GetTensorTypeAndShapeInfo();
         auto pastShape = pastInfo.GetShape();
         if (pastShape.size() != 4)
             return failResult(QStringLiteral(
@@ -719,10 +792,16 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
                 } else {
                     auto& pc = pastCopies[pastCounter];
                     pc = cache[pastCounter];
-                    if (pc.empty()) pc.resize(0);
+                    // A zero-length past (step 0) must still hand ORT a
+                    // VALID data pointer — data() of an empty vector is
+                    // null and CreateTensor crashes on it.
+                    if (pc.empty()) pc.reserve(1);
                     const int64_t shp[4] = { 1, numKv, cacheLen, headDim };
+                    float* base = pc.empty()
+                        ? reinterpret_cast<float*>(&pc)   // non-null, unused (0 elements)
+                        : pc.data();
                     ins.push_back(Ort::Value::CreateTensor<float>(
-                        mem, pc.data(), pc.size(), shp, 4));
+                        mem, base, pc.size(), shp, 4));
                     ++pastCounter;
                 }
             }
@@ -753,6 +832,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             return std::vector<float>(last, last + V);
         };
 
+        dbg("stage 4b: prefix pass");
         // Prefix: [mesh_cond | skeleton embeds] in one pass.
         std::vector<float> prefix;
         prefix.reserve(condEmbeds.size() + skelEmbeds.size());
@@ -779,7 +859,18 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
                 }
             }
             skinIds.push_back(best);
-            if (step + 1 == totalSteps) break;
+            if (step + 1 == totalSteps) {
+                if (!qEnvironmentVariableIsEmpty("QTMESH_SKINTOKENS_DEBUG")) {
+                    std::set<std::int64_t> distinct(skinIds.begin(), skinIds.end());
+                    fprintf(stderr, "[skintokens] decode done: %zu ids, %zu distinct, first=[",
+                            skinIds.size(), distinct.size());
+                    for (int i = 0; i < 12 && i < int(skinIds.size()); ++i)
+                        fprintf(stderr, "%lld ", (long long)skinIds[size_t(i)]);
+                    fprintf(stderr, "]\n");
+                    fflush(stderr);
+                }
+                break;
+            }
             // Embed the new token and step the decoder.
             std::vector<std::int64_t> one = { best };
             const int64_t shp[2] = { 1, 1 };
@@ -794,6 +885,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             logits = runDecoder(e, 1);
         }
 
+        dbg("stage 5: per-joint skin decode");
         // ── (5) per-joint skin decode ───────────────────────────────
         Ort::Session skinDec = openSession("skin_decode.onnx");
         std::vector<float> sampleWeights(std::size_t(N) * J, 0.f);
@@ -819,10 +911,16 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             if (int(w.size()) < N)
                 return failResult(QStringLiteral(
                     "SkinTokens: skin decode failed for joint %1.").arg(j));
+            // Stream joint j ↔ caller joint order[j]: write the
+            // column in CALLER space so the output indices need no
+            // further mapping.
+            const int callerJ = order[std::size_t(j)];
             for (int s = 0; s < N; ++s)
-                sampleWeights[std::size_t(s) * J + j] = w[std::size_t(s)];
+                sampleWeights[std::size_t(s) * J + callerJ]
+                    = w[std::size_t(s)];
         }
 
+        dbg("stage 6: transfer");
         // ── (6) transfer to full-res vertices ───────────────────────
         Result res;
         transferWeights(positions, vertexCount, ptsWorld, sampleWeights, J,

@@ -41,10 +41,36 @@ the binary). Attribution + licenses for the models and their training data:
   Weights-license confirmation on its HF release is part of that follow-up.
 - **What ships today:** `SkinWeights::Algorithm::UniRigML` exists on every
   surface (GUI/CLI/MCP) and falls back to GeodesicVoxel with a clear
-  `fallbackReason` — the fallback the issue specifies. The geodesic-voxel
-  default (#819 Slice A) covers the through-volume awareness the ML head
-  would have contributed; the ML path lights up in a follow-up slice via
-  SkinTokens without changing the app surfaces.
+  `fallbackReason` — the fallback the issue specifies. The ML path is
+  implemented via SkinTokens (next section).
+
+## SkinTokens / TokenRig — ML skin-weight prediction (issue #819 Slice C)
+
+- **Model:** SkinTokens ("a learned, compact, discrete representation for
+  skinning weights") + TokenRig, the unified autoregressive rig transformer
+  built on it. We run it SKELETON-TEACHER-FORCED: the existing skeleton
+  (ours, #407's, or #408's) is tokenized as the prefix and only the skin
+  tokens are generated.
+- **Source:** VAST-AI-Research — https://github.com/VAST-AI-Research/SkinTokens
+  — code **MIT**. Weights: https://huggingface.co/VAST-AI/SkinTokens —
+  **MIT** (license tag verified 2026-07, ungated). The AR backbone is
+  Qwen3-0.6B (**Apache-2.0**).
+- **Components** (exported by `scripts/export-skintokens-onnx.py`, a
+  one-time offline developer tool — not shipped): `mesh_cond.onnx`
+  (Michelangelo shape encoder + projection), `vae_cond.onnx` (FSQ-CVAE
+  conditioning encoder), `embed.onnx` + `decoder.onnx` (Qwen3-0.6B causal
+  step with explicit KV cache), `skin_decode.onnx` (FSQ code lookup + the
+  CVAE weight decoder), plus `skintokens.json` (the config manifest the
+  C++ runtime reads — vocab layout, tokens-per-skin, point count,
+  normalisation). Export parity vs the torch reference validated to ~1e-5
+  relative on every graph.
+- The app runs the graphs via ONNX Runtime (`src/SkinTokensPredictor.cpp`),
+  downloading them on first use to `AppData/ai_models/skintokens/`
+  (~2.3 GB — the decoder alone is 1.66 GB fp32). Base URL override
+  `QTMESH_SKINTOKENS_MODEL_BASE_URL` / `QSettings ai/skintokensModelBaseUrl`;
+  offline guard `QTMESH_SKINTOKENS_NO_DOWNLOAD`. Any failure (non-ONNX
+  build, models absent, invalid hierarchy) falls back to GeodesicVoxel with
+  a reported reason.
 
 ## TripoSR — image-to-3D mesh generation (epic #764)
 
