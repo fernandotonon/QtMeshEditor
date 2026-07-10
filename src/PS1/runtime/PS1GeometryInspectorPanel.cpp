@@ -329,7 +329,14 @@ PS1GeometryInspectorPanel::PS1GeometryInspectorPanel(PS1CapturedAssets *store, Q
     m_tableView->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tableView->setSortingEnabled(true);
     m_tableView->verticalHeader()->setVisible(false);
-    m_tableView->horizontalHeader()->setStretchLastSection(true);
+    // Let the material column absorb slack; keep the trash column a fixed,
+    // always-visible narrow width so the 🗑 glyph never gets stranded in a
+    // stretched last column past the horizontal scroll.
+    QHeaderView *hh = m_tableView->horizontalHeader();
+    hh->setStretchLastSection(false);
+    hh->setSectionResizeMode(PS1GeometryInspectorModel::ColMaterial, QHeaderView::Stretch);
+    hh->setSectionResizeMode(PS1GeometryInspectorModel::ColRemove, QHeaderView::Fixed);
+    m_tableView->setColumnWidth(PS1GeometryInspectorModel::ColRemove, 32);
     m_tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tableView->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tableView->setAlternatingRowColors(true);

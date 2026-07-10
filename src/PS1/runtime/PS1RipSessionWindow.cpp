@@ -183,7 +183,16 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(stepAct, &QAction::triggered, this, &PS1RipSessionWindow::onStep);
     auto *resetAct = toolbar->addAction(tr("Reset"));
     connect(resetAct, &QAction::triggered, this, &PS1RipSessionWindow::onReset);
-    toolbar->addSeparator();
+
+    // Capture + clean-up controls live on their OWN toolbar row so they never
+    // get pushed off the right edge (under the tiny >> overflow chevron) by the
+    // transport buttons on a normal-width window — the reason these were
+    // "invisible" before. addToolBarBreak() forces the second row.
+    addToolBarBreak();
+    QToolBar *captureBar = addToolBar(tr("Capture"));
+    captureBar->setMovable(false);
+    toolbar = captureBar; // the capture + clean-up group below appends here
+
     m_captureUi.armCaptureAct = toolbar->addAction(tr("Arm Capture"));
     m_captureUi.armCaptureAct->setCheckable(true);
     connect(m_captureUi.armCaptureAct, &QAction::toggled, this, [this](bool on) {
