@@ -19,6 +19,33 @@ the binary). Attribution + licenses for the models and their training data:
   `encoder.onnx` + `decoder.onnx` via ONNX Runtime (`src/UniRigPredictor.cpp`),
   downloading them on first use to `AppData/ai_models/unirig/`.
 
+### UniRig skinning head (issue #819 Slice C) — decision record
+
+- **Status: not exported.** UniRig's second stage (skin-weight prediction,
+  the Bone-Point Cross Attention head) runs its mesh geometry through a
+  **PTv3 (Point Transformer V3) backbone built on spconv sparse
+  convolutions**, plus flash-attn MHA modules (verified against
+  `src/model/unirig_skin.py` upstream, 2026-07). spconv ops have **no ONNX
+  operator lowering** — the skeleton-stage export only worked because that
+  stage never executes the PTv3/spconv path (it was stubbed out). A faithful
+  `skin.onnx` therefore requires re-implementing the PTv3 forward densely, a
+  research task, not an export chore.
+- **SkinTokens / TokenRig evaluated as the issue's decision gate asks**
+  (https://github.com/VAST-AI-Research/SkinTokens): code **MIT**; predicts
+  the full rig (skeleton + skinning) as one token sequence via an FSQ-CVAE
+  weight tokenizer + a Qwen3-0.6B autoregressive transformer — **no spconv**,
+  so it is ONNX-exportable with the same KV-cache decoder pattern as the
+  #408 skeleton export. It *is* the preferred ML-skinning path, but it is a
+  full new integration (its own weight tokenizer + AR decode + a different
+  skeleton representation), not a drop-in head on our predicted skeletons.
+  Weights-license confirmation on its HF release is part of that follow-up.
+- **What ships today:** `SkinWeights::Algorithm::UniRigML` exists on every
+  surface (GUI/CLI/MCP) and falls back to GeodesicVoxel with a clear
+  `fallbackReason` — the fallback the issue specifies. The geodesic-voxel
+  default (#819 Slice A) covers the through-volume awareness the ML head
+  would have contributed; the ML path lights up in a follow-up slice via
+  SkinTokens without changing the app surfaces.
+
 ## TripoSR — image-to-3D mesh generation (epic #764)
 
 - **Model:** TripoSR single-image 3D reconstruction (DINO ViT tokenizer +

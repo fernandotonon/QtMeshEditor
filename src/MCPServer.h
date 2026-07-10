@@ -167,9 +167,13 @@ private:
     /// convex quads when coplanarity + shape + aspect ratio gates
     /// pass. Output is committed via the n-gon binding.
     QJsonObject toolRetopologize(const QJsonObject &args);
-    /// Issue #402: compute skin weights via inverse-distance
-    /// heuristic. Mesh must have a skeleton attached.
+    /// Issue #402 (+ #819): compute skin weights (geodesic-voxel
+    /// default). Mesh must have a skeleton attached.
     QJsonObject toolComputeSkinWeights(const QJsonObject &args);
+    /// #819 Slice D: toggle the selected entity's skinning display
+    /// mode ("linear" | "dual-quaternion") via RTSS hardware
+    /// skinning. Display only — exported weights are unchanged.
+    QJsonObject toolSetSkinningDisplay(const QJsonObject &args);
     /// #407: native auto-rig of the selected static mesh (template embedding),
     /// optional skin chain + re-export.
     QJsonObject toolAutoRig(const QJsonObject &args);

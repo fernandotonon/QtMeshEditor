@@ -168,6 +168,36 @@ void RTShaderHelper::initialize(Ogre::SceneManager* sceneMgr)
     Ogre::MaterialManager::getSingleton().addListener(sListener);
 
     HdrIblRtss::registerFactory();
+
+    // Hardware skinning SRS (issue #819 Slice D — dual-quaternion
+    // display toggle). Ogre 14.x registers HardwareSkinningFactory as
+    // a BUILT-IN of the ShaderGenerator (mBuiltinSRSFactories) — we
+    // must never create or delete one ourselves (deleting it in
+    // shutdown double-freed against ShaderGenerator::destroy and
+    // segfaulted suite teardown on CI). Per the DualQuaternion sample
+    // we only (a) raise the bone cap and (b) add a template SRS to the
+    // generated scheme; it stays dormant on every material until
+    // SkinningDisplay imprints one via prepareEntityForSkinning, so
+    // plain materials are unaffected.
+    if (Ogre::RTShader::HardwareSkinningFactory::getSingletonPtr()) {
+        // Desktop GL has uniform room well past the shader-model-3
+        // default of 70 (DQS costs 2×vec4 per bone; linear 3×vec4).
+        // Entities above the cap keep the default (software) path.
+        Ogre::RTShader::HardwareSkinningFactory::setMaxCalculableBoneCount(96);
+        auto* renderState = shaderGen->getRenderState(Ogre::MSN_SHADERGEN);
+        // addTemplateSubRenderState dedupes by INSTANCE only — check by
+        // type so repeated initialize() (tests) doesn't stack copies.
+        bool present = false;
+        for (auto* srs : renderState->getSubRenderStates())
+            if (srs->getType() == Ogre::RTShader::SRS_HARDWARE_SKINNING) {
+                present = true;
+                break;
+            }
+        if (!present)
+            renderState->addTemplateSubRenderState(
+                shaderGen->createSubRenderState(
+                    Ogre::RTShader::SRS_HARDWARE_SKINNING));
+    }
 }
 
 void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
@@ -183,6 +213,10 @@ void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
     if (shaderGen)
     {
+        // NOTE: do NOT touch HardwareSkinningFactory here — it is an
+        // Ogre BUILT-IN owned by the ShaderGenerator; destroy() below
+        // unregisters and deletes it (deleting it ourselves was a
+        // double free that segfaulted every full-RTSS suite teardown).
         if (sceneMgr)
             shaderGen->removeSceneManager(sceneMgr);
         Ogre::RTShader::ShaderGenerator::destroy();

@@ -45,6 +45,7 @@
 #include "ScanEngine.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "SkinningDisplay.h"
 #include "AutoRig.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
@@ -610,6 +611,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("uv_unwrap_selection"),   &MCPServer::toolUvUnwrapSelection},
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
+        {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
@@ -2120,6 +2122,40 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     QJsonObject result = makeSuccessResult(SkinWeights::reportToText(report));
     result["skin"] = SkinWeights::reportToJson(report);
     return result;
+}
+
+QJsonObject MCPServer::toolSetSkinningDisplay(const QJsonObject &args)
+{
+    // #819 Slice D: per-entity Linear / Dual-Quaternion display
+    // toggle. Runtime shading only — exported weights are unchanged.
+    if (!args.contains("mode") || !args["mode"].isString())
+        return makeErrorResult("Error: 'mode' (string) is required.");
+    const QString modeStr = args["mode"].toString().toLower();
+    if (modeStr != "linear" && modeStr != "dual-quaternion")
+        return makeErrorResult("Error: 'mode' must be 'linear' or "
+                               "'dual-quaternion'.");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty())
+        return makeErrorResult("No selected entity. Load a mesh first with load_mesh.");
+    Ogre::Entity* entity = resolved.first();
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("render.skinning"),
+        QStringLiteral("set_skinning_display mode=%1 entity=%2")
+            .arg(modeStr, QString::fromStdString(entity->getName())));
+
+    QString err;
+    if (!SkinningDisplay::apply(entity,
+                                SkinningDisplay::modeFromString(modeStr), &err))
+        return makeErrorResult(QStringLiteral("Failed: %1").arg(err));
+
+    return makeSuccessResult(QStringLiteral(
+        "Skinning display set to %1 on '%2'. Display only — exported "
+        "weights are unchanged.")
+        .arg(modeStr, QString::fromStdString(entity->getName())));
 }
 
 QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
@@ -7988,6 +8024,24 @@ QJsonArray MCPServer::buildToolsList()
             "never share weights; weights are then Laplacian-smoothed and pruned. "
             "The mesh must have a skeleton attached.",
             props
+        );
+    }
+
+    // set_skinning_display (#819 Slice D)
+    {
+        QJsonObject props;
+        props["mode"] = QJsonObject{{"type", "string"},
+            {"enum", QJsonArray{"linear", "dual-quaternion"}},
+            {"description",
+             "'linear' (default LBS path) or 'dual-quaternion' (RTSS hardware DQS — "
+             "preserves volume on twists, no candy-wrapper collapse)."}};
+        appendTool(
+            "set_skinning_display",
+            "Set the skinning display mode of the currently selected skinned entity. "
+            "Dual-quaternion is a runtime shading choice only: exported weights are "
+            "unchanged (engines re-skin with their own blend). Issue #819 Slice D.",
+            props,
+            QJsonArray{"mode"}
         );
     }
 
