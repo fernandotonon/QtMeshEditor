@@ -114,6 +114,7 @@ GeodesicVoxelBind.cpp
 SkinningDisplay.cpp
 SkinMetrics.cpp
 SkinEvaluate.cpp
+SkinTokensPredictor.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
@@ -305,6 +306,7 @@ GeodesicVoxelBind.h
 SkinningDisplay.h
 SkinMetrics.h
 SkinEvaluate.h
+SkinTokensPredictor.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h

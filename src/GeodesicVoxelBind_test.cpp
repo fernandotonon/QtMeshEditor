@@ -354,11 +354,11 @@ TEST(GeodesicVoxelBindTest, DispatchRunsGeodesicOnSolidAndReportsIt)
     EXPECT_EQ(int(info.allowedBones.size()), soup.vertexCount());
 }
 
-TEST(GeodesicVoxelBindTest, UniRigRequestFallsBackToGeodesic)
+TEST(GeodesicVoxelBindTest, SkinTokensRequestFallsBackToGeodesic)
 {
-    // Slice-C plumbing: until the UniRig skin model is exported and
-    // hosted, requesting it must transparently run geodesic-voxel
-    // and say so.
+    // Slice-C fallback: requesting the ML skinner without a joint
+    // hierarchy (or without models/ONNX) must transparently run
+    // geodesic-voxel and say so.
     Soup soup;
     soup.addBox(0.0f, 0.0f, 0.0f, 1.0f, 4.0f, 1.0f);
     const std::vector<SkinWeights::BoneSegment> bones = {
@@ -372,9 +372,9 @@ TEST(GeodesicVoxelBindTest, UniRigRequestFallsBackToGeodesic)
     ASSERT_TRUE(SkinWeights::computeWeights(
         soup.positions.data(), soup.vertexCount(),
         soup.indices.data(), soup.indices.size(),
-        bones, opts, SkinWeights::Algorithm::UniRigML, w, &info));
+        bones, opts, SkinWeights::Algorithm::SkinTokens, w, &info));
     EXPECT_EQ(info.algorithmUsed, QStringLiteral("geodesic-voxel"));
-    EXPECT_TRUE(info.fallbackReason.contains(QStringLiteral("UniRig")));
+    EXPECT_TRUE(info.fallbackReason.contains(QStringLiteral("SkinTokens")));
 }
 
 // ─── Bones outside the solid ────────────────────────────────────────────────

@@ -18,6 +18,21 @@ ComputeSkinWeightsCommand::ComputeSkinWeightsCommand(std::string entityName,
     setText(QStringLiteral("Compute Skin Weights"));
 }
 
+ComputeSkinWeightsCommand::ComputeSkinWeightsCommand(
+        std::string entityName,
+        SkinWeightsOptions opts,
+        std::shared_ptr<SkinWeights::ComputeJob> job,
+        std::shared_ptr<SkinWeights::JobResult> result,
+        QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , mEntityName(std::move(entityName))
+    , mOpts(opts)
+    , mJob(std::move(job))
+    , mResult(std::move(result))
+{
+    setText(QStringLiteral("Compute Skin Weights"));
+}
+
 Ogre::Entity* ComputeSkinWeightsCommand::resolveEntity() const
 {
     Manager* mgr = Manager::getSingletonPtr();
@@ -115,7 +130,13 @@ void ComputeSkinWeightsCommand::redo()
         // First execution: snapshot the pre-skin weights, run the
         // compute, then snapshot the post-skin weights for replay.
         captureSnapshot(mesh, mBefore);
-        mReport = SkinWeights::computeAndApply(entity, mOpts, mAlgo);
+        if (mJob && mResult) {
+            // Async path: the compute already ran on a worker —
+            // only commit it here (main thread).
+            mReport = SkinWeights::commitJob(entity, *mJob, *mResult, mOpts);
+        } else {
+            mReport = SkinWeights::computeAndApply(entity, mOpts, mAlgo);
+        }
         captureSnapshot(mesh, mAfter);
         mCaptured = true;
     } else {

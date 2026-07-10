@@ -27,15 +27,15 @@ Window {
     property double maxInfluenceDistance: 0.5
     property bool   skipUnweightedBones:  false
     property bool   replaceExisting:      true
-    property string algorithm:            "geodesic-voxel"
+    property string algorithm:            "skintokens"
     property int    voxelResolution:      64
     property int    smoothIterations:     3
 
-    readonly property var algorithmIds: ["geodesic-voxel", "inverse-distance", "unirig"]
+    readonly property var algorithmIds: ["skintokens", "geodesic-voxel", "inverse-distance"]
     readonly property var algorithmLabels: [
-        "Geodesic Voxel (default)",
-        "Inverse Distance (legacy)",
-        "UniRig ML (falls back to Geodesic)"
+        "SkinTokens ML (default)",
+        "Geodesic Voxel",
+        "Inverse Distance (legacy)"
     ]
 
     property string lastStatus: ""
@@ -53,7 +53,10 @@ Window {
     function runCompute() {
         if (SkinWeightsController.busy) return
         if (!SkinWeightsController.hasSkinnedSelection) return
-        const r = SkinWeightsController.computeWeightsForSelected(
+        // Async: the compute runs on a worker thread (the ML skinner
+        // takes minutes) — the result arrives via onWeightsApplied /
+        // onError below, progress via skinProgress/skinTotal.
+        const started = SkinWeightsController.computeWeightsForSelectedAsync(
             dialog.maxInfluences,
             dialog.falloff,
             dialog.maxInfluenceDistance,
@@ -62,20 +65,9 @@ Window {
             dialog.algorithm,
             dialog.voxelResolution,
             dialog.smoothIterations)
-        if (r && r.applied) {
-            let status =
-                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
-                + r.totalBones + " bones, "
-                + r.totalVerticesProcessed + " verts, "
-                + r.totalAssignmentsBefore + " → "
-                + r.totalAssignmentsAfter + " assignments"
-            if (r.fallbackReason && r.fallbackReason.length > 0)
-                status += " — " + r.fallbackReason
-            dialog.lastStatus = status
+        if (started) {
+            dialog.lastStatus = "Computing…"
             dialog.lastWasError = false
-        } else {
-            dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
-            dialog.lastWasError = true
         }
     }
 
@@ -227,13 +219,13 @@ Window {
             wrapMode: Text.WordWrap
             opacity: 0.85
             text: "Compute per-vertex skin weights against the attached "
-                + "skeleton. Geodesic Voxel (Maya's production bind — "
-                + "distances travel through the mesh volume, so nearby limbs "
-                + "never share weights) is the default; Inverse Distance is "
-                + "the legacy straight-line heuristic, still used for "
-                + "volume-less meshes (planes, cloth). Weights are smoothed "
-                + "and pruned to the influence cap afterwards. Existing "
-                + "assignments are replaced (or merged — see option)."
+                + "skeleton. SkinTokens ML (the default) predicts weights "
+                + "with a rig transformer and localises them geodesically — "
+                + "first use downloads ~2.3 GB of models, and it falls back "
+                + "to Geodesic Voxel (Maya's production bind) when models "
+                + "or ONNX are unavailable. Weights are smoothed and pruned "
+                + "to the influence cap afterwards. Existing assignments "
+                + "are replaced (or merged — see option)."
         }
 
         // Algorithm
@@ -391,6 +383,43 @@ Window {
 
         Item { Layout.fillHeight: true }
 
+        // Worker progress (ML decode steps + per-joint weight decode)
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: SkinWeightsController.busy
+            Rectangle {
+                Layout.fillWidth: true
+                height: 8
+                radius: 4
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                Rectangle {
+                    height: parent.height
+                    radius: 4
+                    color: PropertiesPanelController.highlightColor
+                    width: SkinWeightsController.skinTotal > 0
+                        ? parent.width * Math.min(1,
+                              SkinWeightsController.skinProgress
+                              / SkinWeightsController.skinTotal)
+                        : 0
+                }
+            }
+            InspectorLabel {
+                text: SkinWeightsController.skinDownloading
+                    ? "Downloading models…"
+                    : (SkinWeightsController.skinTotal > 0
+                        ? SkinWeightsController.skinProgress + " / "
+                          + SkinWeightsController.skinTotal
+                        : "Preparing…")
+            }
+            InspectorButton {
+                label: "Cancel"
+                Layout.preferredWidth: 70
+                onClicked: SkinWeightsController.cancelSkin()
+            }
+        }
+
         // Status line
         InspectorLabel {
             Layout.fillWidth: true
@@ -424,6 +453,18 @@ Window {
         function onError(msg) {
             dialog.lastStatus = "Failed: " + msg
             dialog.lastWasError = true
+        }
+        function onWeightsApplied(r) {
+            let status =
+                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
+                + r.totalBones + " bones, "
+                + r.totalVerticesProcessed + " verts, "
+                + r.totalAssignmentsBefore + " → "
+                + r.totalAssignmentsAfter + " assignments"
+            if (r.fallbackReason && r.fallbackReason.length > 0)
+                status += " — " + r.fallbackReason
+            dialog.lastStatus = status
+            dialog.lastWasError = false
         }
     }
 }

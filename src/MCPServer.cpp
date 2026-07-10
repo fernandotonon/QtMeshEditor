@@ -2071,13 +2071,14 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     if (args.contains("smooth_iterations"))
         opts.smoothIterations = args["smooth_iterations"].toInt(3);
 
-    QString algoName = QStringLiteral("geodesic-voxel");
+    QString algoName = QStringLiteral("skintokens");
     if (args.contains("algo")) {
         algoName = args["algo"].toString().toLower();
-        if (algoName != "geodesic-voxel" && algoName != "inverse-distance"
-            && algoName != "unirig")
-            return makeErrorResult("Error: 'algo' must be 'geodesic-voxel', "
-                                   "'inverse-distance', or 'unirig'.");
+        if (algoName != "skintokens" && algoName != "geodesic-voxel"
+            && algoName != "inverse-distance"
+            && algoName != "unirig")   // deprecated alias of skintokens
+            return makeErrorResult("Error: 'algo' must be 'skintokens', "
+                                   "'geodesic-voxel', or 'inverse-distance'.");
     }
     const SkinWeights::Algorithm algo = SkinWeights::algorithmFromString(algoName);
 
@@ -8002,12 +8003,15 @@ QJsonArray MCPServer::buildToolsList()
              "When true (default), overwrite existing bone assignments. When false, "
              "merge — keep existing weights and add new ones for unweighted vertices."}};
         props["algo"] = QJsonObject{{"type", "string"},
-            {"enum", QJsonArray{"geodesic-voxel", "inverse-distance", "unirig"}},
+            {"enum", QJsonArray{"skintokens", "geodesic-voxel",
+                                "inverse-distance", "unirig"}},
             {"description",
-             "Weighting algorithm: 'geodesic-voxel' (default — Maya-style volume-aware "
-             "bind, no cross-limb bleed; falls back to inverse-distance on volume-less "
-             "meshes), 'inverse-distance' (legacy straight-line heuristic), or 'unirig' "
-             "(ML skinning head — currently falls back to geodesic-voxel)."}};
+             "Weighting algorithm: 'skintokens' (default — SkinTokens/TokenRig ML "
+             "skinner, geodesically localised; downloads ~2.3 GB models on first use "
+             "and falls back to geodesic-voxel when models/ONNX are unavailable), "
+             "'geodesic-voxel' (Maya-style volume-aware bind), 'inverse-distance' "
+             "(legacy straight-line heuristic). 'unirig' is a deprecated alias of "
+             "'skintokens'."}};
         props["voxel_resolution"] = QJsonObject{{"type", "integer"},
             {"description",
              "Geodesic-voxel grid resolution along the longest axis. Higher resolves "
@@ -8019,10 +8023,10 @@ QJsonArray MCPServer::buildToolsList()
         appendTool(
             "compute_skin_weights",
             "Compute and apply skin weights for the currently selected mesh against "
-            "its attached skeleton. Default algorithm is geodesic-voxel binding "
-            "(issue #819) — distances travel through the mesh volume so nearby limbs "
-            "never share weights; weights are then Laplacian-smoothed and pruned. "
-            "The mesh must have a skeleton attached.",
+            "its attached skeleton. Default algorithm is the SkinTokens ML skinner "
+            "(issue #819) with geodesic localisation; it falls back to geodesic-voxel "
+            "binding when the models or ONNX are unavailable. Weights are "
+            "Laplacian-smoothed and pruned. The mesh must have a skeleton attached.",
             props
         );
     }

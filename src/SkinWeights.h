@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace Ogre {
@@ -24,17 +25,18 @@ namespace Ogre {
 // supersedes that plan with the two paths that beat BBW in
 // production practice without the license problem:
 //
-//   • GeodesicVoxel (Slice A, the DEFAULT) — Maya's "Geodesic
-//     Voxel" bind (Dionne & de Lasa, SCA 2013). Distances travel
-//     through the mesh's interior voxels, so cross-limb bleed
-//     (hand near thigh, inner thighs, fingers) is impossible by
-//     construction, and voxel-resolution hole closing makes it
-//     work on non-watertight / self-intersecting / multi-component
-//     production meshes. See src/GeodesicVoxelBind.{h,cpp}.
-//   • UniRigML (Slice C) — UniRig's skinning head (Bone-Point
-//     Cross Attention, MIT weights) via ONNX; falls back to
-//     GeodesicVoxel automatically when the model / ONNX build is
-//     unavailable.
+//   • SkinTokens (Slice C, the DEFAULT) — SkinTokens/TokenRig ML
+//     skin-weight prediction (VAST-AI, MIT code + weights) via
+//     ONNX, skeleton-teacher-forced and geodesically localised;
+//     falls back to GeodesicVoxel automatically when the models /
+//     ONNX build are unavailable. See src/SkinTokensPredictor.*.
+//   • GeodesicVoxel (Slice A) — Maya's "Geodesic Voxel" bind
+//     (Dionne & de Lasa, SCA 2013). Distances travel through the
+//     mesh's interior voxels, so cross-limb bleed (hand near thigh,
+//     inner thighs, fingers) is impossible by construction, and
+//     voxel-resolution hole closing makes it work on non-watertight
+//     / self-intersecting / multi-component production meshes. The
+//     ML path's fallback. See src/GeodesicVoxelBind.{h,cpp}.
 //
 // InverseDistance — the original #402 closest-point-on-bone smooth
 // bind — is kept as the fallback for meshes that enclose no volume
@@ -133,13 +135,23 @@ public:
         InverseDistance,   // #402 closest-point-on-bone heuristic
                            // (kept: fallback for volume-less meshes
                            // + explicit choice for planes/cloth).
-        GeodesicVoxel,     // #819 Slice A — the DEFAULT. Maya-style
-                           // geodesic voxel binding; falls back to
+        GeodesicVoxel,     // #819 Slice A — Maya-style geodesic voxel
+                           // binding; the fallback for the ML path and
+                           // an explicit choice. Falls back to
                            // InverseDistance on degenerate input.
-        UniRigML,          // #819 Slice C — UniRig skinning head via
-                           // ONNX. Falls back to GeodesicVoxel until
-                           // the exported model is integrated/hosted.
+        SkinTokens,        // #819 Slice C — SkinTokens/TokenRig ML
+                           // skinning (the DEFAULT; falls back to
+                           // GeodesicVoxel when models/ONNX are
+                           // unavailable). "unirig" is kept as a
+                           // deprecated string alias.
     };
+
+    // Called per progress step with (done, total); return false to
+    // cancel (runJob then returns ok=false, error="cancelled").
+    // SkinTokens reports real totals (J×tokens_per_skin decode steps
+    // + J weight decodes); the other algorithms finish too fast to
+    // report.
+    using ProgressFn = std::function<bool(int done, int total)>;
 
     // Compute new skin weights for `entity` against its attached
     // skeleton and commit them to the mesh. Replaces (or merges
@@ -152,7 +164,7 @@ public:
     // less) entities return `applied=false` with an error.
     static SkinWeightsReport computeAndApply(Ogre::Entity* entity,
                                              const SkinWeightsOptions& opts = {},
-                                             Algorithm algo = Algorithm::GeodesicVoxel);
+                                             Algorithm algo = Algorithm::SkinTokens);
 
     // Pure-data variant: bone segments + vertex positions →
     // sparse weight list (per vertex: K (bone_index, weight)
@@ -187,6 +199,20 @@ public:
         std::vector<std::vector<int>> allowedBones;
     };
 
+    // Skeleton hierarchy for the ML (SkinTokens) path — it
+    // tokenizes the actual joint tree, which the
+    // flat BoneSegment list can't express. Entries must be
+    // DFS-ordered (parent before child); `parent` indexes into the
+    // same array (-1 = root). Pass via the overload's optional
+    // parameter; when absent, SkinTokens falls back to GeodesicVoxel.
+    struct SkeletonHierarchy {
+        struct Node {
+            double x = 0, y = 0, z = 0;
+            int parent = -1;
+        };
+        std::vector<Node> nodes;   // aligned with the bones[] order
+    };
+
     // Algorithm-aware overload (#819). `indices` is the triangle
     // list referencing `vertexPositions` — required by GeodesicVoxel
     // for voxelization (pass nullptr/0 to force the InverseDistance
@@ -195,8 +221,9 @@ public:
     // degenerate input; vertices unreachable from any bone seed
     // (floating islands with no bone) are filled in with
     // inverse-distance weights so everything still moves with the
-    // rig. UniRigML currently falls back to GeodesicVoxel (Slice C
-    // model integration pending). The Slice-B post-passes are NOT
+    // rig. SkinTokens needs the joint hierarchy + downloaded models
+    // and falls back to GeodesicVoxel otherwise. The Slice-B
+    // post-passes are NOT
     // applied here — callers (computeAndApply, tests) run
     // SkinWeightsPost explicitly.
     static bool computeWeights(const float* vertexPositions,
@@ -207,13 +234,74 @@ public:
                                const SkinWeightsOptions& opts,
                                Algorithm algo,
                                std::vector<VertexWeights>& outWeights,
-                               ComputeInfo* info = nullptr);
+                               ComputeInfo* info = nullptr,
+                               const SkeletonHierarchy* hierarchy = nullptr,
+                               const ProgressFn& progress = {});
 
     static QJsonObject reportToJson(const SkinWeightsReport& report);
     static QString     reportToText(const SkinWeightsReport& report);
 
     static QString algorithmToString(Algorithm algo);
     static Algorithm algorithmFromString(const QString& s);
+
+    // ── Threaded pipeline (GUI async path) ──────────────────────────
+    // The ML skinner takes minutes; running it on the UI thread
+    // freezes the app. computeAndApply is therefore split into three
+    // stages so the GUI can run the heavy middle stage on a worker:
+    //   prepareJob  (MAIN thread — locks Ogre hardware buffers)
+    //   runJob      (ANY thread — pure data: algorithm + post-passes)
+    //   commitJob   (MAIN thread — bone assignments + compile)
+    // computeAndApply() itself is prepare+run+commit back-to-back, so
+    // the synchronous CLI/MCP behaviour is unchanged.
+
+    // Everything the computation needs, snapshotted Ogre-free.
+    struct ComputeJob {
+        std::vector<float>          positions;   // combined xyz
+        std::vector<std::uint32_t>  indices;     // combined, owner-offset
+        std::vector<BoneSegment>    bones;
+        std::vector<unsigned short> boneIdxToHandle;
+        std::vector<int>            handleToIdx;
+        SkeletonHierarchy           hierarchy;   // for the ML path
+        QString meshName;
+        QString skeletonName;
+        QStringList boneNames;                   // by bones[] index
+        int numBones = 0;
+        struct Assign {
+            unsigned int   vertexIndex = 0;
+            unsigned short boneIndex   = 0;      // Ogre handle
+            float          weight      = 0;
+        };
+        struct Owner {
+            int           submeshIndex = -1;     // -1 == shared data
+            std::uint32_t baseVertex   = 0;
+            std::uint32_t vertexCount  = 0;
+            std::vector<Assign> existing;        // pre-skin assignments
+        };
+        std::vector<Owner> owners;
+    };
+
+    struct JobResult {
+        bool ok = false;
+        QString error;
+        std::vector<VertexWeights> weights;      // post-passed, combined
+        std::vector<std::uint8_t>  locked;       // merge-mode locks
+        ComputeInfo info;
+        double bleedFraction = -1.0;
+    };
+
+    static bool prepareJob(Ogre::Entity* entity,
+                           const SkinWeightsOptions& opts,
+                           Algorithm algo,
+                           ComputeJob& out,
+                           QString* error = nullptr);
+    static JobResult runJob(const ComputeJob& job,
+                            const SkinWeightsOptions& opts,
+                            Algorithm algo,
+                            const ProgressFn& progress = {});
+    static SkinWeightsReport commitJob(Ogre::Entity* entity,
+                                       const ComputeJob& job,
+                                       const JobResult& result,
+                                       const SkinWeightsOptions& opts);
 };
 
 #endif // SKIN_WEIGHTS_H

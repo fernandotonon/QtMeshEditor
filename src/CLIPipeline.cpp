@@ -836,11 +836,11 @@ void CLIPipeline::printUsage()
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
-        "  skin <file> [--algo geodesic-voxel|inverse-distance|unirig] [--max-influences N] [--falloff F]\n"
+        "  skin <file> [--algo skintokens|geodesic-voxel|inverse-distance] [--max-influences N] [--falloff F]\n"
         "              [--max-distance D] [--voxel-res N] [--smooth-iterations N] [--skip-unweighted] [--merge] -o <out> [--json]\n"
-        "                                    Compute skin weights. Default algo: geodesic-voxel (Maya-style volume-\n"
-        "                                    aware bind, #819 — no cross-limb bleed; falls back to inverse-distance\n"
-        "                                    on volume-less meshes). Weights are Laplacian-smoothed + pruned\n"
+        "                                    Compute skin weights. Default algo: skintokens (ML skinner, #819 —\n"
+        "                                    downloads ~2.3 GB models on first use; falls back to geodesic-voxel\n"
+        "                                    when models/ONNX are unavailable). Weights are Laplacian-smoothed + pruned\n"
         "                                    (--smooth-iterations, 0 = off). Mesh must have a skeleton attached.\n"
         "                                    --merge keeps existing weights instead of replacing them.\n"
         "  skin <file> --evaluate [--voxel-res N] [--json]\n"
@@ -8848,7 +8848,7 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     double maxDistance = 0.5;
     bool skipUnweighted = false;
     bool replaceExisting = true;
-    QString algoName = QStringLiteral("geodesic-voxel");
+    QString algoName = QStringLiteral("skintokens");
     int voxelRes = 64;
     int smoothIterations = 3;
     bool evaluateMode = false;      // #819 Slice E: metrics, no write
@@ -8865,10 +8865,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         }
         if (arg == "--algo" && i + 1 < argc) {
             algoName = QString::fromLocal8Bit(argv[++i]).toLower();
-            if (algoName != "geodesic-voxel" && algoName != "inverse-distance"
-                && algoName != "unirig") {
-                err() << "Error: --algo must be 'geodesic-voxel', "
-                         "'inverse-distance', or 'unirig'." << Qt::endl;
+            if (algoName != "skintokens" && algoName != "geodesic-voxel"
+                && algoName != "inverse-distance"
+                && algoName != "unirig") {   // deprecated alias of skintokens
+                err() << "Error: --algo must be 'skintokens', "
+                         "'geodesic-voxel', or 'inverse-distance'." << Qt::endl;
                 return 2;
             }
             continue;
@@ -8930,7 +8931,7 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh skin <file> "
-                 "[--algo geodesic-voxel|inverse-distance|unirig] "
+                 "[--algo skintokens|geodesic-voxel|inverse-distance] "
                  "[--max-influences N] [--falloff F] [--max-distance D] "
                  "[--voxel-res N] [--smooth-iterations N] "
                  "[--skip-unweighted] [--merge] -o <out> [--json]\n"
