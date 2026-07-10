@@ -54,7 +54,10 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
                                                               double falloff,
                                                               double maxInfluenceDistance,
                                                               bool skipUnweightedBones,
-                                                              bool replaceExisting)
+                                                              bool replaceExisting,
+                                                              const QString& algorithm,
+                                                              int voxelResolution,
+                                                              int smoothIterations)
 {
     QVariantMap result;
 
@@ -111,12 +114,19 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     opts.maxInfluenceDistance   = maxInfluenceDistance;
     opts.skipUnweightedBones    = skipUnweightedBones;
     opts.replaceExisting        = replaceExisting;
+    opts.voxelResolution        = voxelResolution;
+    opts.smoothIterations       = smoothIterations;
+    const SkinWeights::Algorithm algo
+        = SkinWeights::algorithmFromString(algorithm);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QString("UI skin entity=%1 maxInf=%2 falloff=%3 maxDist=%4")
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1")
+            .arg(SkinWeights::algorithmToString(algo)),
+        QString("UI skin entity=%1 maxInf=%2 falloff=%3 maxDist=%4 voxelRes=%5 smooth=%6")
             .arg(QString::fromStdString(entity->getName()))
             .arg(maxInfluencesPerVertex)
-            .arg(falloff).arg(maxInfluenceDistance));
+            .arg(falloff).arg(maxInfluenceDistance)
+            .arg(voxelResolution).arg(smoothIterations));
 
     m_busy = true;
     emit busyChanged();
@@ -130,7 +140,7 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         // push it (which executes redo() synchronously), then read
         // the report it captured.
         auto* cmd = new ComputeSkinWeightsCommand(
-            entity->getName(), opts);
+            entity->getName(), opts, algo);
         UndoManager::getSingleton()->push(cmd);
         report = cmd->report();
     } catch (const Ogre::Exception& e) {
@@ -153,6 +163,10 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     result["totalVerticesProcessed"] = report.totalVerticesProcessed;
     result["totalAssignmentsBefore"] = report.totalAssignmentsBefore;
     result["totalAssignmentsAfter"]  = report.totalAssignmentsAfter;
+    result["algorithmUsed"]          = report.algorithmUsed;
+    result["fallbackReason"]         = report.fallbackReason;
+    if (report.bleedFraction >= 0.0)
+        result["bleedFraction"] = report.bleedFraction;
 
     if (report.applied) {
         GamificationManager::noteOperation(

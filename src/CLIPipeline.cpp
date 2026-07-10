@@ -835,11 +835,13 @@ void CLIPipeline::printUsage()
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
-        "  skin <file> [--max-influences N] [--falloff F] [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]\n"
-        "                                    Compute skin weights via inverse-distance heuristic (closest-point-on-\n"
-        "                                    bone smooth bind). Mesh must have a skeleton attached. Bones with no\n"
-        "                                    existing weights can be filtered with --skip-unweighted. --merge\n"
-        "                                    keeps existing weights instead of replacing them.\n"
+        "  skin <file> [--algo geodesic-voxel|inverse-distance|unirig] [--max-influences N] [--falloff F]\n"
+        "              [--max-distance D] [--voxel-res N] [--smooth-iterations N] [--skip-unweighted] [--merge] -o <out> [--json]\n"
+        "                                    Compute skin weights. Default algo: geodesic-voxel (Maya-style volume-\n"
+        "                                    aware bind, #819 — no cross-limb bleed; falls back to inverse-distance\n"
+        "                                    on volume-less meshes). Weights are Laplacian-smoothed + pruned\n"
+        "                                    (--smooth-iterations, 0 = off). Mesh must have a skeleton attached.\n"
+        "                                    --merge keeps existing weights instead of replacing them.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -8827,8 +8829,10 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
 
 int CLIPipeline::cmdSkin(int argc, char* argv[])
 {
-    // Parse: skin <file> [--max-influences N] [--falloff F]
-    //        [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]
+    // Parse: skin <file> [--algo geodesic-voxel|inverse-distance|unirig]
+    //        [--max-influences N] [--falloff F] [--max-distance D]
+    //        [--voxel-res N] [--smooth-iterations N]
+    //        [--skip-unweighted] [--merge] -o <out> [--json]
     QString inputPath, outputPath;
     bool jsonOutput = false;
     int  maxInfluences = 4;
@@ -8836,6 +8840,9 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     double maxDistance = 0.5;
     bool skipUnweighted = false;
     bool replaceExisting = true;
+    QString algoName = QStringLiteral("geodesic-voxel");
+    int voxelRes = 64;
+    int smoothIterations = 3;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -8845,6 +8852,34 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         if (arg == "--merge") { replaceExisting = false; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--algo" && i + 1 < argc) {
+            algoName = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (algoName != "geodesic-voxel" && algoName != "inverse-distance"
+                && algoName != "unirig") {
+                err() << "Error: --algo must be 'geodesic-voxel', "
+                         "'inverse-distance', or 'unirig'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--voxel-res" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 8 || v > 256) {
+                err() << "Error: --voxel-res must be in [8, 256]." << Qt::endl;
+                return 2;
+            }
+            voxelRes = v; continue;
+        }
+        if (arg == "--smooth-iterations" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 0 || v > 50) {
+                err() << "Error: --smooth-iterations must be in [0, 50]." << Qt::endl;
+                return 2;
+            }
+            smoothIterations = v; continue;
         }
         if (arg == "--max-influences" && i + 1 < argc) {
             bool ok = false;
@@ -8880,8 +8915,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh skin <file> [--max-influences N] [--falloff F] "
-                 "[--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]"
+        err() << "Usage: qtmesh skin <file> "
+                 "[--algo geodesic-voxel|inverse-distance|unirig] "
+                 "[--max-influences N] [--falloff F] [--max-distance D] "
+                 "[--voxel-res N] [--smooth-iterations N] "
+                 "[--skip-unweighted] [--merge] -o <out> [--json]"
               << Qt::endl;
         return 2;
     }
@@ -8896,9 +8934,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     }
     if (!initOgreHeadless()) return 1;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QString("skin .%1 maxInf=%2 falloff=%3")
-            .arg(fi.suffix()).arg(maxInfluences).arg(falloff));
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1").arg(algoName),
+        QString("skin .%1 maxInf=%2 falloff=%3 voxelRes=%4 smooth=%5")
+            .arg(fi.suffix()).arg(maxInfluences).arg(falloff)
+            .arg(voxelRes).arg(smoothIterations));
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
@@ -8929,8 +8969,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     opts.maxInfluenceDistance   = maxDistance;
     opts.skipUnweightedBones    = skipUnweighted;
     opts.replaceExisting        = replaceExisting;
+    opts.voxelResolution        = voxelRes;
+    opts.smoothIterations       = smoothIterations;
 
-    const auto report = SkinWeights::computeAndApply(entity, opts);
+    const auto report = SkinWeights::computeAndApply(
+        entity, opts, SkinWeights::algorithmFromString(algoName));
     if (!report.applied) {
         err() << "Error: skin weights failed — " << report.error << Qt::endl;
         return 1;

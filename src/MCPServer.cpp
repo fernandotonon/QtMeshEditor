@@ -2046,6 +2046,12 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         return makeErrorResult("Error: 'skip_unweighted' must be a boolean.");
     if (args.contains("replace_existing") && !args["replace_existing"].isBool())
         return makeErrorResult("Error: 'replace_existing' must be a boolean.");
+    if (args.contains("algo") && !args["algo"].isString())
+        return makeErrorResult("Error: 'algo' must be a string.");
+    if (args.contains("voxel_resolution") && !args["voxel_resolution"].isDouble())
+        return makeErrorResult("Error: 'voxel_resolution' must be a number.");
+    if (args.contains("smooth_iterations") && !args["smooth_iterations"].isDouble())
+        return makeErrorResult("Error: 'smooth_iterations' must be a number.");
 
     SkinWeightsOptions opts;
     if (args.contains("max_influences"))
@@ -2058,6 +2064,20 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         opts.skipUnweightedBones = args["skip_unweighted"].toBool(false);
     if (args.contains("replace_existing"))
         opts.replaceExisting = args["replace_existing"].toBool(true);
+    if (args.contains("voxel_resolution"))
+        opts.voxelResolution = args["voxel_resolution"].toInt(64);
+    if (args.contains("smooth_iterations"))
+        opts.smoothIterations = args["smooth_iterations"].toInt(3);
+
+    QString algoName = QStringLiteral("geodesic-voxel");
+    if (args.contains("algo")) {
+        algoName = args["algo"].toString().toLower();
+        if (algoName != "geodesic-voxel" && algoName != "inverse-distance"
+            && algoName != "unirig")
+            return makeErrorResult("Error: 'algo' must be 'geodesic-voxel', "
+                                   "'inverse-distance', or 'unirig'.");
+    }
+    const SkinWeights::Algorithm algo = SkinWeights::algorithmFromString(algoName);
 
     if (opts.maxInfluencesPerVertex < 1 || opts.maxInfluencesPerVertex > 8)
         return makeErrorResult("Error: 'max_influences' must be in [1, 8].");
@@ -2065,6 +2085,10 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         return makeErrorResult("Error: 'falloff' must be in [0.5, 16].");
     if (opts.maxInfluenceDistance < 0.0 || opts.maxInfluenceDistance > 10.0)
         return makeErrorResult("Error: 'max_distance' must be in [0, 10].");
+    if (opts.voxelResolution < 8 || opts.voxelResolution > 256)
+        return makeErrorResult("Error: 'voxel_resolution' must be in [8, 256].");
+    if (opts.smoothIterations < 0 || opts.smoothIterations > 50)
+        return makeErrorResult("Error: 'smooth_iterations' must be in [0, 50].");
 
     SelectionSet* sel = SelectionSet::getSingleton();
     const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
@@ -2074,14 +2098,16 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     Ogre::Entity* entity = resolved.first();
     if (!entity) return makeErrorResult("Selected entity is null.");
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QStringLiteral("compute_skin_weights entity=%1 maxInf=%2 falloff=%3")
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1").arg(algoName),
+        QStringLiteral("compute_skin_weights entity=%1 maxInf=%2 falloff=%3 voxelRes=%4 smooth=%5")
             .arg(QString::fromStdString(entity->getName()))
-            .arg(opts.maxInfluencesPerVertex).arg(opts.falloff));
+            .arg(opts.maxInfluencesPerVertex).arg(opts.falloff)
+            .arg(opts.voxelResolution).arg(opts.smoothIterations));
 
     SkinWeightsReport report;
     try {
-        report = SkinWeights::computeAndApply(entity, opts);
+        report = SkinWeights::computeAndApply(entity, opts, algo);
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
@@ -7939,12 +7965,27 @@ QJsonArray MCPServer::buildToolsList()
             {"description",
              "When true (default), overwrite existing bone assignments. When false, "
              "merge — keep existing weights and add new ones for unweighted vertices."}};
+        props["algo"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Weighting algorithm: 'geodesic-voxel' (default — Maya-style volume-aware "
+             "bind, no cross-limb bleed; falls back to inverse-distance on volume-less "
+             "meshes), 'inverse-distance' (legacy straight-line heuristic), or 'unirig' "
+             "(ML skinning head — currently falls back to geodesic-voxel)."}};
+        props["voxel_resolution"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Geodesic-voxel grid resolution along the longest axis. Higher resolves "
+             "thinner parts (fingers). Range [8, 256]. Default 64."}};
+        props["smooth_iterations"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Laplacian weight-smoothing iterations applied after any algorithm "
+             "(0 disables). Range [0, 50]. Default 3."}};
         appendTool(
             "compute_skin_weights",
             "Compute and apply skin weights for the currently selected mesh against "
-            "its attached skeleton. Uses an inverse-distance heuristic (closest-point-"
-            "on-bone smooth bind) — the same approach Maya / 3dsMax use as their "
-            "default. The mesh must have a skeleton attached. Issue #402.",
+            "its attached skeleton. Default algorithm is geodesic-voxel binding "
+            "(issue #819) — distances travel through the mesh volume so nearby limbs "
+            "never share weights; weights are then Laplacian-smoothed and pruned. "
+            "The mesh must have a skeleton attached.",
             props
         );
     }

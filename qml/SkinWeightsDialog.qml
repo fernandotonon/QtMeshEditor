@@ -5,17 +5,18 @@ import QtQuick.Window
 import MaterialEditorQML 1.0
 import PropertiesPanel 1.0
 
-// Issue #402: top-level Window for inverse-distance skin weights.
-// Same Inspector-styled idiom as QuadRetopoDialog / UvUnwrapDialog.
-// Operates on the currently selected entity — the mesh must have
-// a skeleton attached, otherwise the button disables itself.
+// Issue #402 (+ Skinning v2 #819): top-level Window for automatic
+// skin weights. Same Inspector-styled idiom as QuadRetopoDialog /
+// UvUnwrapDialog. Operates on the currently selected entity — the
+// mesh must have a skeleton attached, otherwise the button
+// disables itself.
 Window {
     id: dialog
     title: "Skin Weights"
     width: 560
-    height: 440
+    height: 560
     minimumWidth: 480
-    minimumHeight: 400
+    minimumHeight: 500
     flags: Qt.Dialog
     modality: Qt.ApplicationModal
     color: PropertiesPanelController.panelColor
@@ -26,6 +27,16 @@ Window {
     property double maxInfluenceDistance: 0.5
     property bool   skipUnweightedBones:  false
     property bool   replaceExisting:      true
+    property string algorithm:            "geodesic-voxel"
+    property int    voxelResolution:      64
+    property int    smoothIterations:     3
+
+    readonly property var algorithmIds: ["geodesic-voxel", "inverse-distance", "unirig"]
+    readonly property var algorithmLabels: [
+        "Geodesic Voxel (default)",
+        "Inverse Distance (legacy)",
+        "UniRig ML (falls back to Geodesic)"
+    ]
 
     property string lastStatus: ""
     property bool   lastWasError: false
@@ -47,13 +58,20 @@ Window {
             dialog.falloff,
             dialog.maxInfluenceDistance,
             dialog.skipUnweightedBones,
-            dialog.replaceExisting)
+            dialog.replaceExisting,
+            dialog.algorithm,
+            dialog.voxelResolution,
+            dialog.smoothIterations)
         if (r && r.applied) {
-            dialog.lastStatus =
-                "Done: " + r.totalBones + " bones, "
+            let status =
+                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
+                + r.totalBones + " bones, "
                 + r.totalVerticesProcessed + " verts, "
                 + r.totalAssignmentsBefore + " → "
                 + r.totalAssignmentsAfter + " assignments"
+            if (r.fallbackReason && r.fallbackReason.length > 0)
+                status += " — " + r.fallbackReason
+            dialog.lastStatus = status
             dialog.lastWasError = false
         } else {
             dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
@@ -208,12 +226,80 @@ Window {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             opacity: 0.85
-            text: "Compute per-vertex skin weights from the bind-pose distance "
-                + "to each bone segment. Inverse-distance heuristic (closest-"
-                + "point-on-bone smooth bind) — the same default Maya / 3dsMax "
-                + "use. Falloff controls the sharpness of the bind. The mesh "
-                + "must have a skeleton attached. Existing bone assignments "
-                + "are replaced (or merged — see option)."
+            text: "Compute per-vertex skin weights against the attached "
+                + "skeleton. Geodesic Voxel (Maya's production bind — "
+                + "distances travel through the mesh volume, so nearby limbs "
+                + "never share weights) is the default; Inverse Distance is "
+                + "the legacy straight-line heuristic, still used for "
+                + "volume-less meshes (planes, cloth). Weights are smoothed "
+                + "and pruned to the influence cap afterwards. Existing "
+                + "assignments are replaced (or merged — see option)."
+        }
+
+        // Algorithm
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            InspectorLabel { text: "Algorithm:"; Layout.preferredWidth: 130 }
+            ThemedComboBox {
+                Layout.preferredWidth: 240
+                height: 24
+                font.pixelSize: 11
+                model: dialog.algorithmLabels
+                currentIndex: Math.max(0, dialog.algorithmIds.indexOf(dialog.algorithm))
+                onActivated: function(index) {
+                    dialog.algorithm = dialog.algorithmIds[index]
+                }
+            }
+            InspectorLabel {
+                text: "how weights are computed"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        // Voxel resolution (geodesic algorithms only)
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: dialog.algorithm !== "inverse-distance"
+            InspectorLabel { text: "Voxel resolution:"; Layout.preferredWidth: 130 }
+            InspectorNumberField {
+                Layout.preferredWidth: 80
+                value: dialog.voxelResolution
+                minValue: 8
+                maxValue: 256
+                isInt: true
+                onNewValue: dialog.voxelResolution = Math.round(v)
+            }
+            InspectorLabel {
+                text: "grid cells along the longest axis (higher = resolves thinner parts)"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        // Smoothing iterations
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            InspectorLabel { text: "Smoothing:"; Layout.preferredWidth: 130 }
+            InspectorNumberField {
+                Layout.preferredWidth: 80
+                value: dialog.smoothIterations
+                minValue: 0
+                maxValue: 20
+                isInt: true
+                onNewValue: dialog.smoothIterations = Math.round(v)
+            }
+            InspectorLabel {
+                text: "Laplacian relaxation iterations (0 = off; default 3)"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
         }
 
         // Max influences
