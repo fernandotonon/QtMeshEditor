@@ -2259,7 +2259,8 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: "Auto-generate per-vertex bone weights for the selected "
-                    + "skinned mesh (inverse-distance smooth bind). Undoable."
+                    + "skinned mesh (geodesic voxel bind — volume-aware, no "
+                    + "cross-limb bleed). Undoable."
             }
 
             Rectangle {
