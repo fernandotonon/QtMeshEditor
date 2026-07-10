@@ -72,6 +72,16 @@ struct Ps1NormalizerSettings {
      *  to empty — guarded at the call site. */
     bool trackedGeometryOnly = false;
 
+    /** Degenerate-triangle cull (#816 spike follow-up): drop any reconstructed
+     *  triangle whose longest edge exceeds `spikeEdgeFactor` × the part's
+     *  median edge length. A spanning "spike" triangle (a corner that landed in
+     *  the wrong model space) has one enormously long edge, so this removes the
+     *  visible artifact directly, regardless of its root cause — complementary
+     *  to the per-part radius outlier policy. 0 or negative disables it.
+     *  Default 12.0: loose enough to keep legitimately elongated PS1 geometry
+     *  (thin platforms, long walls) while catching the runaway spans. */
+    float spikeEdgeFactor = 12.0f;
+
     bool isDefault() const;
     bool flipsAreActive() const { return flipX || flipY || flipZ; }
 

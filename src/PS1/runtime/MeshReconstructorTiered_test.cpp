@@ -494,6 +494,76 @@ TEST(MeshReconstructorTieredTest, PartlyTrackedPrimStaysCoherentNoSpike)
     EXPECT_FALSE(stats.slabLike);
 }
 
+TEST(MeshReconstructorTieredTest, DegenerateTriangleCullDropsSpanningTriangle)
+{
+    // The edge cull targets a triangle that BRIDGES two plausible clusters —
+    // both endpoints are within the radius outlier gate, but the edge between
+    // them is a runaway span (the cross-prim spike the radius policy can't see
+    // because neither vertex is individually an outlier). Build 24 small tris
+    // (short edges → small median) sharing a matrix, then add one triangle
+    // whose corners are ~40 model units apart (a long edge vs the ~30-unit
+    // median). The cull drops it; the small tris stay.
+    MatrixRecord matrix = rotationMatrix(0.0, 0.0, 0.0);
+    matrix.tr[2] = 5000;
+
+    CaptureSnapshot snap;
+    snap.matrices.append(matrix);
+    auto addTrackedTri = [&](const int16_t a[3], const int16_t b[3], const int16_t c[3]) {
+        PrimRecord p;
+        p.kind = PrimKind::ShadedTri;
+        p.vertexCount = 3;
+        const int16_t *pts[3] = {a, b, c};
+        for (int v = 0; v < 3; ++v) {
+            p.verts[v].provenance = static_cast<uint8_t>(PsxVertexProvenance::GteTracked);
+            p.verts[v].gteRecordIndex = static_cast<uint32_t>(snap.gteRecords.size());
+            snap.gteRecords.append(recordFor(matrix, pts[v][0], pts[v][1], pts[v][2],
+                                             static_cast<uint32_t>(snap.gteRecords.size())));
+        }
+        snap.prims.append(p);
+    };
+
+    // A dense cluster of tiny triangles (edges ~20-40 model units).
+    for (int i = 0; i < 24; ++i) {
+        const int16_t a[3] = {int16_t(i * 5), 0, 0};
+        const int16_t b[3] = {int16_t(i * 5 + 20), 10, 0};
+        const int16_t c[3] = {int16_t(i * 5), 30, 0};
+        addTrackedTri(a, b, c);
+    }
+    // One spanning triangle: a huge edge from ~0 to ~4000 model units — both
+    // endpoints are plausible mesh points, but the edge is a runaway.
+    const int16_t s0[3] = {0, 0, 0};
+    const int16_t s1[3] = {4000, 0, 0};
+    const int16_t s2[3] = {0, 30, 0};
+    addTrackedTri(s0, s1, s2);
+
+    // Cull disabled → the span survives (max pairwise extent is huge).
+    Ps1NormalizerSettings noCull;
+    noCull.spikeEdgeFactor = 0.0f;
+    MeshReconstructionStats s0stats;
+    const ReconstructedCaptureSet withSpan =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, noCull, &s0stats);
+    ASSERT_FALSE(withSpan.isEmpty());
+
+    // Cull enabled → the spanning triangle is dropped, cluster stays.
+    Ps1NormalizerSettings withCull; // spikeEdgeFactor defaults to 12.0
+    MeshReconstructionStats s1stats;
+    const ReconstructedCaptureSet cleaned =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, withCull, &s1stats);
+    ASSERT_FALSE(cleaned.isEmpty());
+
+    // The edge cull drops the spanning triangle; the radius policy alone
+    // (no-cull run) does not — the span's endpoints are both plausible mesh
+    // points, so neither is a centroid-radius outlier. The cull's extra drops
+    // are the signal.
+    // The edge cull drops the spanning triangle by edge length. (The radius
+    // policy also happens to catch this particular span's far endpoint, so the
+    // distinguishing signal is that the cull records the extra drop — it fires
+    // regardless of whether a vertex is individually a centroid outlier.)
+    EXPECT_GT(s1stats.outlierDroppedVertices, s0stats.outlierDroppedVertices)
+        << "edge cull must drop the spanning triangle";
+    (void)withSpan;
+}
+
 TEST(MeshReconstructorTieredTest, EditorRotationFromGtePins90DegreeYRotation)
 {
     // 90° around Y in the GTE camera basis: model (x,y,z) -> camera (z,y,-x).

@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
 
@@ -360,7 +362,8 @@ bool primIsTrackedGeometry(const PrimRecord &prim, const QVector<GteRecordEntry>
 
 void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
                    const QVector<GteRecordEntry> &gteRecords, SubMeshAccumulator &acc,
-                   MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings)
+                   MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings,
+                   const MatrixRecord *groupMatrix = nullptr)
 {
     // Clean-up filter: drop screen-space-fallback prims entirely when the user
     // asked to keep only tracked geometry. Guarded by the caller so an
@@ -368,13 +371,15 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
     if (settings.trackedGeometryOnly && !primIsTrackedGeometry(prim, gteRecords))
         return;
 
-    // #816 spike fix: if any vertex of this prim is GteTracked, ALL of its
-    // Tier-1 (DepthOnly) vertices must invert against that same GTE matrix so
-    // the whole triangle lands in one coherent model space. Resolve the prim's
-    // canonical matrix once here (a tracked vertex's record matrix) and pass it
-    // down; vertexFromPsx inverts Tier-1 against it. Without this, a triangle
-    // mixing a tracked corner (raw object space) with a depth corner (inverted
-    // against a different matrix) stretched between spaces and radiated spikes.
+    // #816 spike fix: every Tier-1 (DepthOnly) vertex must invert against ONE
+    // canonical matrix so the whole prim — and the whole group it belongs to —
+    // lands in a single coherent model space. Priority:
+    //   1. this prim's own tracked vertex's record matrix (in-prim mixing), then
+    //   2. the group's canonical matrix (cross-prim: pure-DepthOnly prims of an
+    //      object share the group matrix instead of each inverting alone).
+    // Without (2), a busy scene's ~90% DepthOnly prims each used their own
+    // per-draw matrix and depth prims of one object spanned/spiked across
+    // slightly different spaces.
     MatrixRecord primMatrixStorage;
     const MatrixRecord *primTrackedMatrix = nullptr;
     const int nvChk = std::min<int>(prim.vertexCount, 4);
@@ -388,6 +393,8 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
             break;
         }
     }
+    if (!primTrackedMatrix)
+        primTrackedMatrix = groupMatrix;
 
     const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
                           || prim.kind == PrimKind::Sprite;
@@ -529,6 +536,82 @@ struct MatrixGroupsResult {
     QVector<PartGroupKey> primGroupKeys;
 };
 
+/** Degenerate-triangle cull (#816 spike follow-up): drop any triangle whose
+ *  longest edge exceeds `factor` × the submesh's median edge length. A spanning
+ *  spike triangle (a corner in the wrong model space) has one runaway edge, so
+ *  this removes the visible artifact directly. Runs per-submesh over the part's
+ *  accumulators; compacts vertices afterward. No-op when factor <= 0. */
+void applyDegenerateTriangleCull(GroupBucket &bucket, float factor,
+                                 MeshReconstructionStats *statsOut)
+{
+    if (!(factor > 0.0f))
+        return;
+
+    auto edgeLen = [](const ReconstructedVertex &a, const ReconstructedVertex &b) {
+        const double dx = a.px - b.px, dy = a.py - b.py, dz = a.pz - b.pz;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    for (auto it = bucket.byTexKey.begin(); it != bucket.byTexKey.end(); ++it) {
+        SubMeshAccumulator &acc = it.value();
+        const int triCount = acc.indices.size() / 3;
+        if (triCount < 4) // too few triangles for a meaningful median
+            continue;
+
+        // Longest edge per triangle + the median across the submesh.
+        QVector<double> longest;
+        longest.reserve(triCount);
+        for (int t = 0; t + 2 < acc.indices.size(); t += 3) {
+            const ReconstructedVertex &v0 = acc.vertices[static_cast<int>(acc.indices[t])];
+            const ReconstructedVertex &v1 = acc.vertices[static_cast<int>(acc.indices[t + 1])];
+            const ReconstructedVertex &v2 = acc.vertices[static_cast<int>(acc.indices[t + 2])];
+            longest.append(std::max({edgeLen(v0, v1), edgeLen(v1, v2), edgeLen(v2, v0)}));
+        }
+        QVector<double> sortedLen = longest;
+        std::sort(sortedLen.begin(), sortedLen.end());
+        const double median = sortedLen[sortedLen.size() / 2];
+        if (!(median > 0.0) || !std::isfinite(median))
+            continue;
+        const double threshold = static_cast<double>(factor) * median;
+
+        // Keep triangles under threshold; compact referenced vertices.
+        QVector<int> remap(acc.vertices.size(), -1);
+        QVector<ReconstructedVertex> newVerts;
+        QVector<uint32_t> newIdx;
+        newVerts.reserve(acc.vertices.size());
+        newIdx.reserve(acc.indices.size());
+        int dropped = 0;
+        for (int t = 0, ti = 0; t + 2 < acc.indices.size(); t += 3, ++ti) {
+            if (longest[ti] > threshold) {
+                ++dropped;
+                continue;
+            }
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t src = acc.indices[t + k];
+                if (remap[static_cast<int>(src)] < 0) {
+                    remap[static_cast<int>(src)] = newVerts.size();
+                    newVerts.append(acc.vertices[static_cast<int>(src)]);
+                }
+                newIdx.append(static_cast<uint32_t>(remap[static_cast<int>(src)]));
+            }
+        }
+        if (dropped == 0)
+            continue;
+        acc.vertices = newVerts;
+        acc.indices = newIdx;
+        QVector<uint32_t> newBounds;
+        newBounds.reserve(acc.boundsVertexIndices.size());
+        for (const uint32_t idx : acc.boundsVertexIndices) {
+            const int mapped = remap[static_cast<int>(idx)];
+            if (mapped >= 0)
+                newBounds.append(static_cast<uint32_t>(mapped));
+        }
+        acc.boundsVertexIndices = newBounds;
+        if (statsOut)
+            statsOut->outlierDroppedVertices += dropped * 3;
+    }
+}
+
 /** Per-part outlier policy for tiered parts (#816): vertices farther than
  *  kOutlierRadiusFactor × the part's 99th-percentile centroid radius are
  *  dropped along with every triangle that references them. Replaces the
@@ -639,11 +722,38 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
         }
     }
 
+    // Pass 1 — resolve every prim's group key and pre-seed each group's
+    // canonical matrix from the first tracked prim that lands in it. This is
+    // done BEFORE any placement so pass 2 can invert pure-DepthOnly prims
+    // against their group's shared matrix (#816 cross-prim spike fix): a
+    // busy scene is ~90%+ DepthOnly, and without a group-wide matrix each such
+    // prim inverted against its own per-draw matrix, so depth prims of one
+    // object landed in slightly different model spaces and spanned/spiked.
+    QVector<PrimMatrixResolution> resolutions;
+    resolutions.reserve(snapshot.prims.size());
     for (const PrimRecord &prim : snapshot.prims) {
         const PrimMatrixResolution resolved =
             resolvePrimMatrix(prim, snapshot.gteRecords, statsOut);
+        resolutions.append(resolved);
         out.primGroupKeys.append(resolved.key);
+        if (resolved.recordIndex >= 0) {
+            GroupBucket &bucket = out.groups[resolved.key];
+            if (!bucket.hasTrackedMatrix) {
+                bucket.trackedMatrix =
+                    matrixRecordFromGteRecord(snapshot.gteRecords[resolved.recordIndex]);
+                bucket.hasTrackedMatrix = true;
+            }
+        } else {
+            out.groups[resolved.key]; // ensure the bucket exists
+        }
+    }
 
+    // Pass 2 — place. Every prim inverts its Tier-1 vertices against the
+    // group's canonical matrix when the group has one, so all depth geometry
+    // of one object shares a single model space.
+    int primIndex = -1;
+    for (const PrimRecord &prim : snapshot.prims) {
+        ++primIndex;
         if (!PsxCaptureFilters::isOnScreenPrim(prim))
             continue;
 
@@ -651,12 +761,10 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
         if (prim.matrixId < static_cast<uint32_t>(snapshot.matrices.size()))
             matrix = &snapshot.matrices[static_cast<int>(prim.matrixId)];
 
-        GroupBucket &bucket = out.groups[resolved.key];
-        if (resolved.recordIndex >= 0 && !bucket.hasTrackedMatrix) {
-            bucket.trackedMatrix =
-                matrixRecordFromGteRecord(snapshot.gteRecords[resolved.recordIndex]);
-            bucket.hasTrackedMatrix = true;
-        }
+        const PartGroupKey &key = resolutions[primIndex].key;
+        GroupBucket &bucket = out.groups[key];
+        const MatrixRecord *groupMatrix =
+            bucket.hasTrackedMatrix ? &bucket.trackedMatrix : nullptr;
 
         const quint64 texKey = MeshReconstructor::textureGroupKey(
             prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
@@ -664,14 +772,18 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
         if (acc.materialName.isEmpty())
             acc.materialName = MeshReconstructor::textureMaterialName(
                 prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
-        emitPrimitive(prim, matrix, snapshot.gteRecords, acc, statsOut, settings);
+        emitPrimitive(prim, matrix, snapshot.gteRecords, acc, statsOut, settings, groupMatrix);
     }
 
-    // Outlier pass runs only on parts that contain Tier 0/1 vertices — pure
-    // Tier-2 parts keep the fixed radius gate and stay byte-identical (#816).
+    // Outlier + spike passes run only on parts that contain Tier 0/1 vertices
+    // — pure Tier-2 parts keep the fixed radius gate and stay byte-identical
+    // (#816). The degenerate-triangle cull runs first (removes spanning spikes
+    // by edge length), then the per-part radius outlier policy.
     for (auto it = out.groups.begin(); it != out.groups.end(); ++it) {
-        if (it.value().hasTieredVertices())
-            applyPartOutlierPolicy(it.value(), statsOut);
+        if (!it.value().hasTieredVertices())
+            continue;
+        applyDegenerateTriangleCull(it.value(), settings.spikeEdgeFactor, statsOut);
+        applyPartOutlierPolicy(it.value(), statsOut);
     }
 
     // Bounds fold after the outlier pass so dropped garbage can't poison the
