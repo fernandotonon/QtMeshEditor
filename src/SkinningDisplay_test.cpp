@@ -12,6 +12,7 @@
 #include <OgreRTShaderSystem.h>
 
 #include <string>
+#include <vector>
 
 #include "Manager.h"
 #include "RTShaderHelper.h"
@@ -167,4 +168,78 @@ TEST_F(SkinningDisplayTest, ModeStringRoundTrip)
     // Null entity reads as Linear.
     EXPECT_EQ(SkinningDisplay::current(nullptr),
               SkinningDisplay::Mode::Linear);
+}
+
+// Regression for issue #833: Ogre caches the per-scheme
+// hardware-animation decision per entity (Entity::mSchemeHardwareAnim)
+// the first time it renders. Toggling DQS regenerates the technique
+// with a skeletal-animation vertex program, but without a cache
+// re-evaluation the entity keeps SOFTWARE-skinning and binds
+// blend-info-stripped buffers — the shader reads all-zero blend
+// weights and every vertex collapses to the origin (the mesh
+// disappears, silently). SkinningDisplay::apply must force the
+// re-evaluation, so the entity must still produce pixels after the
+// toggle in BOTH directions.
+TEST_F(SkinningDisplayTest, EntityStillRendersAfterDqsToggle)
+{
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = createAnimatedTestEntity(uniqueName("dqs_px"));
+    ASSERT_NE(ent, nullptr);
+
+    sceneMgr->setAmbientLight(Ogre::ColourValue::White);
+
+    const std::string camName = uniqueName("dqs_px_cam");
+    Ogre::Camera* cam = sceneMgr->createCamera(camName);
+    cam->setNearClipDistance(0.05f);
+    auto* camNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    camNode->attachObject(cam);
+    camNode->setPosition(0.4f, 0.4f, 3.0f);
+    camNode->lookAt(Ogre::Vector3(0.4f, 0.4f, 0.0f), Ogre::Node::TS_WORLD);
+
+    const int W = 64, H = 64;
+    Ogre::TexturePtr rtt = Ogre::TextureManager::getSingleton().createManual(
+        uniqueName("dqs_px_rtt"),
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        Ogre::TEX_TYPE_2D, W, H, 0, Ogre::PF_BYTE_RGBA,
+        Ogre::TU_RENDERTARGET);
+    auto* target = rtt->getBuffer()->getRenderTarget();
+    auto* vp = target->addViewport(cam);
+    vp->setBackgroundColour(Ogre::ColourValue::Black);
+    vp->setOverlaysEnabled(false);
+    // Render through the RTSS scheme — the DQS technique lives there.
+    vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
+
+    std::vector<Ogre::uchar> pixels(static_cast<size_t>(W) * H * 4);
+    const auto litPixels = [&]() -> int {
+        target->update();
+        Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, pixels.data());
+        target->copyContentsToMemory(Ogre::Box(0, 0, W, H), pb);
+        int lit = 0;
+        for (size_t i = 0; i < pixels.size(); i += 4)
+            if (pixels[i] > 16 || pixels[i + 1] > 16 || pixels[i + 2] > 16)
+                ++lit;
+        return lit;
+    };
+
+    // First render in Linear populates Ogre's cached decision.
+    const int litLinear = litPixels();
+    ASSERT_GT(litLinear, 0) << "fixture entity renders nothing in Linear "
+                               "— test setup problem, not a DQS issue";
+
+    QString err;
+    ASSERT_TRUE(SkinningDisplay::apply(
+        ent, SkinningDisplay::Mode::DualQuaternion, &err))
+        << err.toStdString();
+    EXPECT_GT(litPixels(), 0)
+        << "entity vanished after switching to dual-quaternion (#833)";
+
+    ASSERT_TRUE(SkinningDisplay::apply(ent, SkinningDisplay::Mode::Linear,
+                                       &err)) << err.toStdString();
+    EXPECT_GT(litPixels(), 0)
+        << "entity vanished after switching back to linear";
+
+    target->removeAllViewports();
+    sceneMgr->destroyCamera(cam);
+    sceneMgr->destroySceneNode(camNode);
+    Ogre::TextureManager::getSingleton().remove(rtt);
 }

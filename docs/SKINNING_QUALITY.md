@@ -150,10 +150,22 @@ at 50% of a 90° rotation scales the cross-section by cos 45° ≈ 0.71),
 the classic precursor of the 180° candy-wrapper collapse. Under DQS
 the cross-section keeps its width through the same zone.
 
-**Known issue:** on macOS (legacy `RenderSystem_GL`, max glsl120) the
-DQS technique currently renders nothing — the entity disappears until
-toggled back to Linear, so the DQS side of this comparison cannot be
-captured there yet. Tracked in
-[#833](https://github.com/fernandotonon/QtMeshEditor/issues/833);
-the imprint/technique path is covered by `SkinningDisplayTest` on
-Linux CI, and a pixel-level LBS/DQS diff should land with that fix.
+### LBS vs DQS in the viewport (recorded 2026-07-10, post-#833)
+
+Same fixture, same camera, same 90° pose — Display toggled between
+Linear and Dual Quaternion:
+
+| Linear (LBS) — necks in at the blend zone | Dual Quaternion — full cross-section |
+|---|---|
+| ![90° LBS viewport](img/twist_bar_90_lbs_vp.png) | ![90° DQS viewport](img/twist_bar_90_dqs_vp.png) |
+
+History: the DQS toggle initially rendered *nothing* on macOS
+([#833](https://github.com/fernandotonon/QtMeshEditor/issues/833)) —
+Ogre caches the per-scheme hardware-animation decision per entity
+(`Entity::mSchemeHardwareAnim`), so after the technique regenerated
+with the skeletal-animation vertex program the entity kept
+software-skinning and bound blend-info-stripped buffers; the shader
+read all-zero blend weights and collapsed every vertex to the origin.
+`SkinningDisplay::apply` now forces the re-evaluation after every
+toggle (via the public `SubEntity::setMaterial` self-assignment, since
+`Entity::reevaluateVertexProcessing()` is not public).

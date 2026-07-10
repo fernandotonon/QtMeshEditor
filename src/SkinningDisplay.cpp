@@ -81,6 +81,25 @@ bool SkinningDisplay::apply(Ogre::Entity* entity, Mode mode, QString* error)
                                       mat->getName(), mat->getGroup());
     }
 
+    // Ogre CACHES the per-scheme hardware-animation decision
+    // (Entity::mSchemeHardwareAnim) the first time an entity renders,
+    // and invalidating the material does NOT clear it. Without a
+    // reevaluation the entity keeps SOFTWARE-skinning after the
+    // technique gains the skeletal-animation vertex program — and the
+    // software path binds blend-info-stripped buffers, so the
+    // hardware-skinning shader reads all-zero blend weights and every
+    // vertex collapses to the origin (issue #833: the mesh disappears,
+    // silently). Entity::reevaluateVertexProcessing() is not public;
+    // re-setting each sub-entity's own material is the public no-op
+    // that calls it.
+    const auto reevaluate = [](Ogre::Entity* ent) {
+        for (size_t i = 0; i < ent->getNumSubEntities(); ++i) {
+            auto* se = ent->getSubEntity(i);
+            se->setMaterial(se->getMaterial());
+        }
+    };
+    reevaluate(entity);
+
     // The imprint is MATERIAL-level, so entities sharing one of
     // these materials switch with us — stamp their tracked mode
     // too, keeping current() truthful for all of them.
@@ -96,9 +115,11 @@ bool SkinningDisplay::apply(Ogre::Entity* entity, Mode mode, QString* error)
                 const auto& m = other->getSubEntity(i)->getMaterial();
                 shares = m && mats.count(m.get()) > 0;
             }
-            if (shares)
+            if (shares) {
                 other->getUserObjectBindings().setUserAny(kModeBindKey,
                                                           modeAny);
+                reevaluate(other);
+            }
         }
     }
     return true;
