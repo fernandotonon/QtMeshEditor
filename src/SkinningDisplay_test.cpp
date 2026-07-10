@@ -36,12 +36,13 @@ const char* kOgreHsDataKey = "HS_SRS_DATA";
 
 bool materialHasImprint(Ogre::Entity* entity)
 {
+    // Ogre imprints on Technique(0)'s bindings (not a pass) —
+    // verified against v14.5.2 imprintSkeletonData.
     for (size_t i = 0; i < entity->getNumSubEntities(); ++i) {
         const auto& mat = entity->getSubEntity(i)->getMaterial();
-        if (!mat || mat->getNumTechniques() == 0
-            || mat->getTechnique(0)->getNumPasses() == 0)
+        if (!mat || mat->getNumTechniques() == 0)
             continue;
-        const Ogre::Any& any = mat->getTechnique(0)->getPass(0)
+        const Ogre::Any& any = mat->getTechnique(0)
             ->getUserObjectBindings().getUserAny(kOgreHsDataKey);
         if (any.has_value()) return true;
     }
@@ -119,6 +120,33 @@ TEST_F(SkinningDisplayTest, DqsAppliesAndLinearReverts)
     EXPECT_EQ(SkinningDisplay::current(ent), SkinningDisplay::Mode::Linear);
     EXPECT_FALSE(materialHasImprint(ent))
         << "Linear mode must erase the HS imprint";
+}
+
+TEST_F(SkinningDisplayTest, SharedMaterialEntitiesTrackTheSameMode)
+{
+    // The RTSS imprint is material-level: a second entity sharing
+    // the material switches with the first, so its tracked mode
+    // must be stamped too (Codex P2 on PR #830).
+    Ogre::Entity* a = createAnimatedTestEntity(uniqueName("shared_a"));
+    ASSERT_NE(a, nullptr);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* b =
+        sceneMgr->createEntity(uniqueName("shared_b"), a->getMesh());
+    ASSERT_NE(b, nullptr);
+
+    QString err;
+    ASSERT_TRUE(SkinningDisplay::apply(
+        a, SkinningDisplay::Mode::DualQuaternion, &err))
+        << err.toStdString();
+    EXPECT_EQ(SkinningDisplay::current(b),
+              SkinningDisplay::Mode::DualQuaternion)
+        << "entity sharing the imprinted material reports a stale mode";
+
+    ASSERT_TRUE(SkinningDisplay::apply(a, SkinningDisplay::Mode::Linear,
+                                       &err)) << err.toStdString();
+    EXPECT_EQ(SkinningDisplay::current(b), SkinningDisplay::Mode::Linear);
+
+    sceneMgr->destroyEntity(b);
 }
 
 TEST_F(SkinningDisplayTest, ModeStringRoundTrip)

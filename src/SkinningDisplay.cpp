@@ -19,7 +19,10 @@ const char* kModeBindKey = "qtme.skinning.display";
 // per-material SkinningData under. The constant lives file-local in
 // OgreShaderExHardwareSkinning.cpp ("HS_SRS_DATA", unchanged since
 // Ogre 1.8) — mirrored here so Linear mode can erase the imprint
-// and return the material to the default path.
+// and return the material to the default path. Ogre stores AND
+// reads it on `getTechnique(0)`'s UserObjectBindings (verified
+// v14.5.2: imprintSkeletonData line ~494, preAddToRenderState line
+// ~170) — NOT on a pass.
 const char* kOgreHsDataKey = "HS_SRS_DATA";
 
 // Unique materials across the entity's subentities.
@@ -64,22 +67,40 @@ bool SkinningDisplay::apply(Ogre::Entity* entity, Mode mode, QString* error)
         // Back to the default path: erase the imprint so the SRS
         // deactivates on the regenerated technique.
         for (Ogre::Material* mat : entityMaterials(entity)) {
-            if (mat->getNumTechniques() == 0
-                || mat->getTechnique(0)->getNumPasses() == 0)
+            if (mat->getNumTechniques() == 0)
                 continue;
-            mat->getTechnique(0)->getPass(0)
+            mat->getTechnique(0)
                ->getUserObjectBindings().eraseUserAny(kOgreHsDataKey);
         }
     }
 
     // Rebuild the generated techniques of every affected material.
-    for (Ogre::Material* mat : entityMaterials(entity)) {
+    const std::set<Ogre::Material*> mats = entityMaterials(entity);
+    for (Ogre::Material* mat : mats) {
         shaderGen->invalidateMaterial(Ogre::MSN_SHADERGEN,
                                       mat->getName(), mat->getGroup());
     }
 
-    entity->getUserObjectBindings().setUserAny(
-        kModeBindKey, Ogre::Any(static_cast<int>(mode)));
+    // The imprint is MATERIAL-level, so entities sharing one of
+    // these materials switch with us — stamp their tracked mode
+    // too, keeping current() truthful for all of them.
+    const Ogre::Any modeAny(static_cast<int>(mode));
+    entity->getUserObjectBindings().setUserAny(kModeBindKey, modeAny);
+    if (auto* sm = entity->_getManager()) {
+        auto it = sm->getMovableObjectIterator("Entity");
+        while (it.hasMoreElements()) {
+            auto* other = static_cast<Ogre::Entity*>(it.getNext());
+            if (!other || other == entity) continue;
+            bool shares = false;
+            for (size_t i = 0; i < other->getNumSubEntities() && !shares; ++i) {
+                const auto& m = other->getSubEntity(i)->getMaterial();
+                shares = m && mats.count(m.get()) > 0;
+            }
+            if (shares)
+                other->getUserObjectBindings().setUserAny(kModeBindKey,
+                                                          modeAny);
+        }
+    }
     return true;
 }
 
