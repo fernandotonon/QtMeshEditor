@@ -59,8 +59,18 @@ QStringList fileNamesForHost(const QString &baseName)
 QStringList EmuCoreLoader::coreSearchPaths()
 {
     QStringList paths;
+    // Shipped layout: cores bundled inside the .app (bundleOrAppDir climbs to
+    // the .app root). Dev layout: the plugin CMake writes cores to
+    // <build>/bin/PS1Cores, i.e. the directory *containing* the .app — so also
+    // search one level above the bundle. And the raw-binary dir for good
+    // measure (non-bundled builds / Linux / Windows).
     paths << QDir(bundleOrAppDir()).filePath(QStringLiteral("PS1Cores"));
+#if defined(Q_OS_MACOS)
+    paths << QDir(bundleOrAppDir() + QStringLiteral("/..")).filePath(QStringLiteral("PS1Cores"));
+#endif
     paths << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("PS1Cores"));
+    for (QString &p : paths)
+        p = QDir(p).absolutePath();
     paths.removeDuplicates();
     return paths;
 }
