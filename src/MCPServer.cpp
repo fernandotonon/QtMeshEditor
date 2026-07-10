@@ -61,6 +61,17 @@
 #include "HDR/HdrTonemap.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
+#include <QThread>
+#ifdef ENABLE_PS1_RIP
+#include "PS1/runtime/PS1RipManager.h"
+#include "PS1/runtime/PS1RipWorker.h"
+#include "PS1/runtime/PS1CapturedAssets.h"
+#include "PS1/runtime/Ps1CoordinateNormalizer.h"
+#include "PS1/runtime/Gp0CaptureStats.h"
+#include "PS1/runtime/PsxVramMirrorMode.h"
+#include <OgreEntity.h>
+#include <OgreSubMesh.h>
+#endif
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -685,7 +696,14 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("cloud_logout"), &MCPServer::toolCloudLogout},
         {QStringLiteral("cloud_list_projects"), &MCPServer::toolCloudListProjects},
         {QStringLiteral("cloud_delete_project"), &MCPServer::toolCloudDeleteProject},
-        {QStringLiteral("cloud_upload"), &MCPServer::toolCloudUpload}
+        {QStringLiteral("cloud_upload"), &MCPServer::toolCloudUpload},
+        {QStringLiteral("ps1rip_start"), &MCPServer::toolPs1RipStart},
+        {QStringLiteral("ps1rip_stop"), &MCPServer::toolPs1RipStop},
+        {QStringLiteral("ps1rip_status"), &MCPServer::toolPs1RipStatus},
+        {QStringLiteral("ps1rip_run_frames"), &MCPServer::toolPs1RipRunFrames},
+        {QStringLiteral("ps1rip_capture"), &MCPServer::toolPs1RipCapture},
+        {QStringLiteral("ps1rip_stats"), &MCPServer::toolPs1RipStats},
+        {QStringLiteral("ps1rip_clear"), &MCPServer::toolPs1RipClear}
     };
     return handlers;
 }
@@ -6616,6 +6634,255 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// PS1 runtime ripper MCP surface (#412) — headless drive-and-verify.
+// ---------------------------------------------------------------------------
+#ifdef ENABLE_PS1_RIP
+
+namespace {
+
+void ps1PumpEventLoop(int ms)
+{
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+    }
+}
+
+QJsonObject ps1StatusObject(PS1RipManager *mgr)
+{
+    QJsonObject o;
+    o[QStringLiteral("sessionActive")] = mgr->isSessionActive();
+    o[QStringLiteral("startPending")] = mgr->isStartPending();
+    o[QStringLiteral("paused")] = mgr->isPaused();
+    o[QStringLiteral("captureArmed")] = mgr->isCaptureArmed();
+    o[QStringLiteral("hasBios")] = mgr->hasBios();
+    o[QStringLiteral("hasIso")] = mgr->hasIso();
+    o[QStringLiteral("coreId")] = mgr->activeCoreId();
+    o[QStringLiteral("biosPath")] = mgr->biosPath();
+    o[QStringLiteral("isoPath")] = mgr->isoPath();
+    return o;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolPs1RipStart(const QJsonObject &args)
+{
+    PS1RipManager *mgr = PS1RipManager::getSingleton();
+    if (!mgr)
+        return makeErrorResult("PS1 ripper unavailable");
+
+    const QString bios = args.value(QStringLiteral("bios_path")).toString();
+    const QString iso = args.value(QStringLiteral("iso_path")).toString();
+    if (!bios.isEmpty() && !mgr->loadBios(bios))
+        return makeErrorResult(QStringLiteral("Failed to load BIOS: %1").arg(bios));
+    if (!iso.isEmpty() && !mgr->loadIso(iso))
+        return makeErrorResult(QStringLiteral("Failed to load ISO: %1").arg(iso));
+    if (!mgr->hasBios() || !mgr->hasIso())
+        return makeErrorResult("BIOS and ISO must both be loaded (pass bios_path/iso_path)");
+
+    if (!mgr->isSessionActive() && !mgr->start())
+        return makeErrorResult("Failed to start emulation");
+
+    const int bootTimeoutMs = args.value(QStringLiteral("boot_timeout_ms")).toInt(30000);
+    QElapsedTimer t;
+    t.start();
+    while (!mgr->isSessionActive() && t.elapsed() < bootTimeoutMs)
+        ps1PumpEventLoop(50);
+    if (!mgr->isSessionActive())
+        return makeErrorResult("Emulator did not reach an active session before timeout");
+
+    QJsonObject o = ps1StatusObject(mgr);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPs1RipStop(const QJsonObject &)
+{
+    PS1RipManager *mgr = PS1RipManager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("PS1 ripper not running");
+    mgr->stop();
+    ps1PumpEventLoop(300);
+    return makeSuccessResult("stopped");
+}
+
+QJsonObject MCPServer::toolPs1RipStatus(const QJsonObject &)
+{
+    PS1RipManager *mgr = PS1RipManager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("PS1 ripper not initialized");
+    QJsonObject o = ps1StatusObject(mgr);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPs1RipRunFrames(const QJsonObject &args)
+{
+    PS1RipManager *mgr = PS1RipManager::getSingletonPtr();
+    if (!mgr || !mgr->isSessionActive())
+        return makeErrorResult("No active PS1 session — call ps1rip_start first");
+
+    const int frames = std::clamp(args.value(QStringLiteral("frames")).toInt(600), 1, 20000);
+    const bool autoInput = args.value(QStringLiteral("auto_input")).toBool();
+
+    const int approxMs = std::clamp(frames * 1000 / 60, 100, 120000);
+    QElapsedTimer t;
+    t.start();
+    int phase = 0;
+    while (t.elapsed() < approxMs) {
+        if (autoInput) {
+            const bool press = (phase / 15) % 2 == 0;
+            const unsigned button = ((phase / 30) % 2 == 0) ? 3u : 8u;
+            mgr->setJoypadPressed(0, 3, false);
+            mgr->setJoypadPressed(0, 8, false);
+            mgr->setJoypadPressed(0, button, press);
+            ++phase;
+        }
+        ps1PumpEventLoop(50);
+    }
+    if (autoInput)
+        mgr->resetJoypad(0);
+
+    QJsonObject o = ps1StatusObject(mgr);
+    o[QStringLiteral("ranApproxFrames")] = frames;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPs1RipCapture(const QJsonObject &args)
+{
+    PS1RipManager *mgr = PS1RipManager::getSingletonPtr();
+    if (!mgr || !mgr->isSessionActive())
+        return makeErrorResult("No active PS1 session — call ps1rip_start first");
+
+    const bool trackedOnly = args.value(QStringLiteral("tracked_only")).toBool();
+    Ps1NormalizerSettings ns = mgr->normalizerSettings();
+    ns.trackedGeometryOnly = trackedOnly;
+    mgr->setNormalizerSettings(ns);
+
+    QJsonObject built;
+    bool done = false;
+    QMetaObject::Connection conn = QObject::connect(
+        mgr, &PS1RipManager::meshBuilt, mgr,
+        [&](const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
+            int vertexCount, int triangleCount, int matrixCount, uint32_t, bool,
+            int gteInversePercent, int gteTrackedPercent, int depthOnlyPercent, bool slabLike,
+            int primsWithMatrixId, int primsTotal, PsxVramMirrorMode, Gp0CaptureStats) {
+            built[QStringLiteral("captureId")] = captureId;
+            built[QStringLiteral("capturedParts")] = capturedParts;
+            built[QStringLiteral("uniqueMeshes")] = uniqueMeshes;
+            built[QStringLiteral("instances")] = instanceCount;
+            built[QStringLiteral("vertices")] = vertexCount;
+            built[QStringLiteral("triangles")] = triangleCount;
+            built[QStringLiteral("matrices")] = matrixCount;
+            built[QStringLiteral("trackedPercent")] = gteTrackedPercent;
+            built[QStringLiteral("depthPercent")] = depthOnlyPercent;
+            built[QStringLiteral("inversePercent")] = gteInversePercent;
+            built[QStringLiteral("slabLike")] = slabLike;
+            built[QStringLiteral("primsWithMatrix")] = primsWithMatrixId;
+            built[QStringLiteral("primsTotal")] = primsTotal;
+            done = true;
+        });
+
+    const int seconds = args.value(QStringLiteral("scene_seconds")).toInt();
+    if (seconds > 0)
+        mgr->captureScene(seconds);
+    else {
+        mgr->armCapture(true);
+        ps1PumpEventLoop(200);
+        mgr->captureFrame();
+    }
+
+    const int timeoutMs = args.value(QStringLiteral("timeout_ms")).toInt(30000)
+                          + (seconds > 0 ? seconds * 1000 : 0);
+    QElapsedTimer t;
+    t.start();
+    while (!done && t.elapsed() < timeoutMs)
+        ps1PumpEventLoop(50);
+    QObject::disconnect(conn);
+
+    if (!done)
+        return makeErrorResult("Capture produced no reconstructable geometry before timeout "
+                               "(let the game play into a 3D scene first via ps1rip_run_frames)");
+
+    built[QStringLiteral("trackedOnlyFilter")] = trackedOnly;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(built).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPs1RipStats(const QJsonObject &)
+{
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("Scene manager unavailable");
+    int nodes = 0, entities = 0;
+    qint64 tris = 0;
+    for (Ogre::SceneNode *node : mgr->getSceneNodes()) {
+        const QString name = QString::fromStdString(node->getName());
+        if (!name.startsWith(QStringLiteral("PS1Capture_"))
+            && !name.startsWith(QStringLiteral("PS1Imported_")))
+            continue;
+        ++nodes;
+        for (Ogre::MovableObject *obj : node->getAttachedObjects()) {
+            if (!obj || obj->getMovableType() != "Entity")
+                continue;
+            ++entities;
+            Ogre::Entity *e = static_cast<Ogre::Entity *>(obj);
+            const Ogre::MeshPtr &m = e->getMesh();
+            for (unsigned s = 0; s < m->getNumSubMeshes(); ++s) {
+                Ogre::SubMesh *sm = m->getSubMesh(s);
+                if (sm->indexData)
+                    tris += sm->indexData->indexCount / 3;
+            }
+        }
+    }
+    QJsonObject o;
+    o[QStringLiteral("captureNodes")] = nodes;
+    o[QStringLiteral("entities")] = entities;
+    o[QStringLiteral("triangles")] = static_cast<double>(tris);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPs1RipClear(const QJsonObject &)
+{
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("Scene manager unavailable");
+    QStringList toRemove;
+    for (Ogre::SceneNode *node : mgr->getSceneNodes()) {
+        const QString name = QString::fromStdString(node->getName());
+        if (name.startsWith(QStringLiteral("PS1Capture_"))
+            || name.startsWith(QStringLiteral("PS1Imported_")))
+            toRemove.append(name);
+    }
+    for (const QString &name : toRemove)
+        mgr->destroySceneNode(name);
+    if (PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr())
+        store->clear();
+    QJsonObject o;
+    o[QStringLiteral("removed")] = toRemove.size();
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+#else // !ENABLE_PS1_RIP
+
+QJsonObject MCPServer::toolPs1RipStart(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipStop(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipStatus(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipRunFrames(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipCapture(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipStats(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+QJsonObject MCPServer::toolPs1RipClear(const QJsonObject &)
+{ return makeErrorResult("PS1 ripper not compiled in (build with -DENABLE_PS1_RIP=ON)"); }
+
+#endif // ENABLE_PS1_RIP
+
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -8580,6 +8847,83 @@ QJsonArray MCPServer::buildToolsList()
             required
         );
     }
+
+#ifdef ENABLE_PS1_RIP
+    // PS1 runtime ripper (#412): drive-and-verify a capture headlessly.
+    {
+        QJsonObject schema;
+        schema["type"] = "object";
+        QJsonObject props;
+        props["bios_path"] = QJsonObject{{"type", "string"},
+            {"description", "Path to the PS1 BIOS (e.g. scph5501.bin)."}};
+        props["iso_path"] = QJsonObject{{"type", "string"},
+            {"description", "Path to the disc image (.cue/.bin/.chd/.iso). .cue/.chd boot most reliably."}};
+        props["boot_timeout_ms"] = QJsonObject{{"type", "integer"},
+            {"description", "Boot timeout ms (default 30000)."}};
+        schema["properties"] = props;
+        tools.append(buildToolDefinition(
+            "ps1rip_start",
+            "Start the PS1 runtime ripper on a BIOS + disc image and wait for an active session. "
+            "Loads bios_path/iso_path if given. Returns session status incl. whether the "
+            "in-core rip fork registered. Requires the beetle_psx_qtmesh_libretro core in PS1Cores/.",
+            schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object"; schema["properties"] = QJsonObject();
+        tools.append(buildToolDefinition("ps1rip_stop", "Stop the running PS1 emulation session.",
+                                         schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object"; schema["properties"] = QJsonObject();
+        tools.append(buildToolDefinition("ps1rip_status",
+            "Report PS1 ripper session status (active, armed, core id, in-core hooks).", schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object";
+        QJsonObject props;
+        props["frames"] = QJsonObject{{"type", "integer"},
+            {"description", "Approx frames of gameplay to advance (default 600 ~10s). The emulator "
+                            "runs uncapped, so this is wall-clock-approximate, not exact."}};
+        props["auto_input"] = QJsonObject{{"type", "boolean"},
+            {"description", "Mash START/X through intros & menus to reach a 3D scene (default false)."}};
+        schema["properties"] = props;
+        tools.append(buildToolDefinition(
+            "ps1rip_run_frames",
+            "Advance the running game (let it play) so it reaches an in-game 3D scene before capture. "
+            "Optionally auto-presses START/X to get past logos and menus.",
+            schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object";
+        QJsonObject props;
+        props["tracked_only"] = QJsonObject{{"type", "boolean"},
+            {"description", "Clean-up filter: keep only in-core tracked+depth 3D geometry, drop "
+                            "HUD/sprite/2D screen-space prims (default false)."}};
+        props["scene_seconds"] = QJsonObject{{"type", "integer"},
+            {"description", "If > 0, accumulate a multi-second scene capture instead of one frame."}};
+        props["timeout_ms"] = QJsonObject{{"type", "integer"},
+            {"description", "Build timeout ms (default 30000)."}};
+        schema["properties"] = props;
+        tools.append(buildToolDefinition(
+            "ps1rip_capture",
+            "Capture the current frame (or a scene), reconstruct meshes, and return the tier "
+            "breakdown (tracked%/depth%, unique meshes, triangles, slabLike). Arms capture "
+            "automatically. Blocks until the mesh is built.",
+            schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object"; schema["properties"] = QJsonObject();
+        tools.append(buildToolDefinition("ps1rip_stats",
+            "Aggregate the captured PS1 meshes currently in the scene (nodes, entities, "
+            "triangles) straight from Ogre.", schema));
+    }
+    {
+        QJsonObject schema; schema["type"] = "object"; schema["properties"] = QJsonObject();
+        tools.append(buildToolDefinition("ps1rip_clear",
+            "Remove all captured PS1 meshes (live preview + promoted) from the scene and clear "
+            "the inspector list.", schema));
+    }
+#endif
 
     return tools;
 }
