@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 // Unit tests for geodesic voxel binding (issue #819, Slice A).
@@ -401,6 +402,65 @@ TEST(GeodesicVoxelBindTest, FarBoneGetsNoSeedsAndIsReported)
     EXPECT_EQ(res.bonesWithoutSeeds[0], 1);
     for (const auto& vw : w)
         EXPECT_DOUBLE_EQ(weightOnBone(vw, 1), 0.0);
+}
+
+TEST(GeodesicVoxelBindTest, DistantEndpointBoneStillSeedsThroughTheMesh)
+{
+    // A bone whose endpoints lie far outside the grid but whose
+    // segment passes straight through the box must still seed —
+    // the DDA clips the segment to the grid instead of exhausting
+    // its step budget marching in from a distant start cell.
+    Soup soup;
+    soup.addBox(0.0f, 0.0f, 0.0f, 1.0f, 4.0f, 1.0f);
+    const std::vector<SkinWeights::BoneSegment> bones = {
+        { 0.5, -1000.0, 0.5, 0.5, 1000.0, 0.5 },   // through the core
+    };
+    SkinWeightsOptions opts;
+    opts.maxInfluenceDistance = 0;
+
+    std::vector<SkinWeights::VertexWeights> w;
+    const auto res = GeodesicVoxelBind::compute(
+        soup.positions.data(), soup.vertexCount(),
+        soup.indices.data(), soup.indices.size(), bones, opts, w);
+    ASSERT_TRUE(res.ok) << res.error.toStdString();
+    EXPECT_TRUE(res.bonesWithoutSeeds.empty())
+        << "distant-endpoint bone lost its seeds — DDA grid clipping broke";
+    for (const auto& vw : w)
+        EXPECT_NEAR(weightOnBone(vw, 0), 1.0, 1e-9);
+}
+
+TEST(GeodesicVoxelBindTest, NonFiniteInputFailsGracefully)
+{
+    // NaN vertex positions must be rejected before any grid
+    // arithmetic (int conversion of non-finite doubles is UB).
+    Soup soup;
+    soup.addBox(0.0f, 0.0f, 0.0f, 1.0f, 4.0f, 1.0f);
+    soup.positions[4] = std::numeric_limits<float>::quiet_NaN();
+    const std::vector<SkinWeights::BoneSegment> bones = {
+        vBone(0.5, 0.5, 3.5, 0.5),
+    };
+    std::vector<SkinWeights::VertexWeights> w;
+    const auto res = GeodesicVoxelBind::compute(
+        soup.positions.data(), soup.vertexCount(),
+        soup.indices.data(), soup.indices.size(), bones, {}, w);
+    EXPECT_FALSE(res.ok);
+    EXPECT_FALSE(res.error.isEmpty());
+
+    // A non-finite BONE is skipped (reported seedless), not fatal.
+    Soup clean;
+    clean.addBox(0.0f, 0.0f, 0.0f, 1.0f, 4.0f, 1.0f);
+    const std::vector<SkinWeights::BoneSegment> mixedBones = {
+        vBone(0.5, 0.5, 3.5, 0.5),
+        { std::numeric_limits<double>::quiet_NaN(), 0, 0, 0, 1, 0 },
+    };
+    SkinWeightsOptions opts;
+    opts.maxInfluenceDistance = 0;
+    const auto res2 = GeodesicVoxelBind::compute(
+        clean.positions.data(), clean.vertexCount(),
+        clean.indices.data(), clean.indices.size(), mixedBones, opts, w);
+    ASSERT_TRUE(res2.ok) << res2.error.toStdString();
+    ASSERT_EQ(res2.bonesWithoutSeeds.size(), 1u);
+    EXPECT_EQ(res2.bonesWithoutSeeds[0], 1);
 }
 
 // ─── Partition of unity + influence cap ─────────────────────────────────────

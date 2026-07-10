@@ -7966,6 +7966,7 @@ QJsonArray MCPServer::buildToolsList()
              "When true (default), overwrite existing bone assignments. When false, "
              "merge — keep existing weights and add new ones for unweighted vertices."}};
         props["algo"] = QJsonObject{{"type", "string"},
+            {"enum", QJsonArray{"geodesic-voxel", "inverse-distance", "unirig"}},
             {"description",
              "Weighting algorithm: 'geodesic-voxel' (default — Maya-style volume-aware "
              "bind, no cross-limb bleed; falls back to inverse-distance on volume-less "

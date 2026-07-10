@@ -41,12 +41,17 @@ void normalizeRow(Row& r)
 }
 
 // Collapse a sparse row back into the fixed-size VertexWeights,
-// keeping the `maxK` largest entries, sorted descending.
+// keeping the `maxK` largest entries, sorted descending, and
+// renormalized — truncation of a >maxK row would otherwise leave
+// the kept weights summing below one.
 void toVertexWeights(Row r, int maxK, SkinWeights::VertexWeights& vw)
 {
     std::sort(r.begin(), r.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
-    if (int(r.size()) > maxK) r.resize(maxK);
+    if (int(r.size()) > maxK) {
+        r.resize(maxK);
+        normalizeRow(r);
+    }
     vw = {};
     for (const auto& [bone, w] : r) {
         vw.boneIndices[vw.count] = bone;

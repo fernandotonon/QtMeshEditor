@@ -137,6 +137,33 @@ TEST(SkinWeightsPostTest, ZeroIterationsIsANoOp)
     }
 }
 
+TEST(SkinWeightsPostTest, SmoothingRenormalizesWhenTruncatingPastEightBones)
+{
+    // A hub vertex ringed by 10 neighbours, each weighted to a
+    // DISTINCT bone: one smoothing step spreads the hub across 11
+    // bones, which must truncate back to the 8-slot cap AND still
+    // sum to one.
+    std::vector<std::uint32_t> indices;
+    const int ring = 10;
+    for (int i = 0; i < ring; ++i) {
+        indices.push_back(0);
+        indices.push_back(std::uint32_t(1 + i));
+        indices.push_back(std::uint32_t(1 + (i + 1) % ring));
+    }
+    std::vector<SkinWeights::VertexWeights> w;
+    w.push_back(makeVW({{100, 1.0}}));           // hub, its own bone
+    for (int i = 0; i < ring; ++i)
+        w.push_back(makeVW({{i, 1.0}}));         // unique bone per spoke
+
+    const auto adj = SkinWeightsPost::buildAdjacency(
+        ring + 1, indices.data(), indices.size());
+    SkinWeightsPost::laplacianSmooth(w, adj, 1);
+
+    EXPECT_LE(w[0].count, 8);
+    EXPECT_NEAR(rowSum(w[0]), 1.0, 1e-9)
+        << "truncating a >8-bone smoothed row must renormalize";
+}
+
 // ─── pruneAndRenormalize ────────────────────────────────────────────────────
 
 TEST(SkinWeightsPostTest, PruneDropsTinyWeightsAndRenormalizes)

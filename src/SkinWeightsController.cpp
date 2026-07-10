@@ -10,6 +10,8 @@
 #include <OgreEntity.h>
 #include <OgreMesh.h>
 
+#include <algorithm>
+
 SkinWeightsController* SkinWeightsController::m_pSingleton = nullptr;
 
 SkinWeightsController* SkinWeightsController::instance()
@@ -108,16 +110,32 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         return result;
     }
 
+    // Validate the algorithm string instead of letting
+    // algorithmFromString's default swallow a typo silently, and
+    // clamp the new knobs to the same ranges the CLI/MCP enforce.
+    const QString algoName = algorithm.trimmed().toLower();
+    if (algoName != QLatin1String("geodesic-voxel")
+        && algoName != QLatin1String("inverse-distance")
+        && algoName != QLatin1String("unirig")) {
+        const auto msg = QStringLiteral(
+            "Unknown algorithm '%1' — expected 'geodesic-voxel', "
+            "'inverse-distance', or 'unirig'.").arg(algorithm);
+        emit error(msg);
+        result["applied"] = false;
+        result["error"]   = msg;
+        return result;
+    }
+
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluencesPerVertex;
     opts.falloff                = falloff;
     opts.maxInfluenceDistance   = maxInfluenceDistance;
     opts.skipUnweightedBones    = skipUnweightedBones;
     opts.replaceExisting        = replaceExisting;
-    opts.voxelResolution        = voxelResolution;
-    opts.smoothIterations       = smoothIterations;
+    opts.voxelResolution        = std::clamp(voxelResolution, 8, 256);
+    opts.smoothIterations       = std::clamp(smoothIterations, 0, 50);
     const SkinWeights::Algorithm algo
-        = SkinWeights::algorithmFromString(algorithm);
+        = SkinWeights::algorithmFromString(algoName);
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("ai.assist.skin.%1")

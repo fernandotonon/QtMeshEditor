@@ -290,7 +290,7 @@ Window {
                 Layout.preferredWidth: 80
                 value: dialog.smoothIterations
                 minValue: 0
-                maxValue: 20
+                maxValue: 50
                 isInt: true
                 onNewValue: dialog.smoothIterations = Math.round(v)
             }

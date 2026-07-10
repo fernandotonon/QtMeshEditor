@@ -177,13 +177,41 @@ struct Grid {
     }
 };
 
-// Amanatides-Woo 3D-DDA: every voxel the segment [a, b] passes
-// through. Coordinates are clamped into the grid — the caller
-// guarantees the grid's padded AABB contains the mesh, but a bone
-// can legitimately stick out of it (wide clothing rigs).
-void ddaSegment(const Grid& g, const V3& a, const V3& b,
+// Amanatides-Woo 3D-DDA: every voxel the segment [a0, b0] passes
+// through. The segment is first clipped to the grid's world AABB —
+// a bone can legitimately stick far out of it (wide clothing rigs,
+// export-scale mishaps), and without clipping the step budget can
+// be exhausted marching toward the grid from a distant start cell,
+// silently dropping the seeds of a genuinely intersecting bone.
+void ddaSegment(const Grid& g, const V3& a0, const V3& b0,
                 std::vector<std::size_t>& outCells)
 {
+    // Slab-clip [a0, b0] to the grid bounds (inset a hair so a
+    // clipped endpoint lands inside the boundary cell, not past it).
+    const double inset = g.voxel * 1e-6;
+    const double lo[3] = { g.ox + inset, g.oy + inset, g.oz + inset };
+    const double hi[3] = { g.ox + g.nx * g.voxel - inset,
+                           g.oy + g.ny * g.voxel - inset,
+                           g.oz + g.nz * g.voxel - inset };
+    const double o[3] = { a0.x, a0.y, a0.z };
+    const V3 d0 = sub(b0, a0);
+    const double dir[3] = { d0.x, d0.y, d0.z };
+    double t0 = 0.0, t1 = 1.0;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (std::abs(dir[axis]) < 1e-15) {
+            if (o[axis] < lo[axis] || o[axis] > hi[axis]) return;
+            continue;
+        }
+        double ta = (lo[axis] - o[axis]) / dir[axis];
+        double tb = (hi[axis] - o[axis]) / dir[axis];
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta);
+        t1 = std::min(t1, tb);
+        if (t0 > t1) return;   // segment misses the grid entirely
+    }
+    const V3 a { a0.x + t0 * d0.x, a0.y + t0 * d0.y, a0.z + t0 * d0.z };
+    const V3 b { a0.x + t1 * d0.x, a0.y + t1 * d0.y, a0.z + t1 * d0.z };
+
     int x, y, z, xe, ye, ze;
     g.toCell(a.x, a.y, a.z, x, y, z);
     g.toCell(b.x, b.y, b.z, xe, ye, ze);
@@ -268,6 +296,13 @@ GeodesicVoxelBind::Result GeodesicVoxelBind::compute(
         mnx = std::min<double>(mnx, p[0]); mxx = std::max<double>(mxx, p[0]);
         mny = std::min<double>(mny, p[1]); mxy = std::max<double>(mxy, p[1]);
         mnz = std::min<double>(mnz, p[2]); mxz = std::max<double>(mxz, p[2]);
+    }
+    if (!std::isfinite(mnx) || !std::isfinite(mny) || !std::isfinite(mnz)
+        || !std::isfinite(mxx) || !std::isfinite(mxy) || !std::isfinite(mxz)) {
+        // NaN/Inf positions would poison the grid arithmetic
+        // (ceil/floor → int conversion is UB on non-finite input).
+        res.error = QStringLiteral("mesh has non-finite vertex positions");
+        return res;
     }
     const double ex = mxx - mnx, ey = mxy - mny, ez = mxz - mnz;
     const double maxExtent = std::max(ex, std::max(ey, ez));
@@ -490,6 +525,12 @@ GeodesicVoxelBind::Result GeodesicVoxelBind::compute(
     std::vector<std::size_t> cells;
     for (std::size_t b = 0; b < bones.size(); ++b) {
         const auto& seg = bones[b];
+        if (!std::isfinite(seg.headX) || !std::isfinite(seg.headY)
+            || !std::isfinite(seg.headZ) || !std::isfinite(seg.tailX)
+            || !std::isfinite(seg.tailY) || !std::isfinite(seg.tailZ)) {
+            res.bonesWithoutSeeds.push_back(int(b));
+            continue;
+        }
         cells.clear();
         ddaSegment(g, { seg.headX, seg.headY, seg.headZ },
                       { seg.tailX, seg.tailY, seg.tailZ }, cells);

@@ -467,10 +467,13 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
     // ── One compute over the whole mesh ────────────────────────────
     std::vector<SkinWeights::VertexWeights> weights;
     SkinWeights::ComputeInfo info;
-    SkinWeights::computeWeights(positions.data(), totalVerts,
-                                 indices.empty() ? nullptr : indices.data(),
-                                 indices.size(),
-                                 bones, opts, algo, weights, &info);
+    if (!SkinWeights::computeWeights(positions.data(), totalVerts,
+                                      indices.empty() ? nullptr : indices.data(),
+                                      indices.size(),
+                                      bones, opts, algo, weights, &info)) {
+        report.error = QStringLiteral("weight computation failed");
+        return report;
+    }
 
     report.algorithmUsed  = info.algorithmUsed;
     report.fallbackReason = info.fallbackReason;
