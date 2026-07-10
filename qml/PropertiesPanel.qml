@@ -2259,7 +2259,8 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: "Auto-generate per-vertex bone weights for the selected "
-                    + "skinned mesh (inverse-distance smooth bind). Undoable."
+                    + "skinned mesh (geodesic voxel bind — volume-aware, no "
+                    + "cross-limb bleed). Undoable."
             }
 
             Rectangle {
@@ -2303,7 +2304,7 @@ Rectangle {
                     ToolTip.visible: containsMouse
                     ToolTip.delay: 500
                     ToolTip.text: SkinWeightsController.hasSkinnedSelection
-                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
+                        ? "Compute per-vertex bone weights via geodesic voxel bind (volume-aware, no cross-limb bleed). Mesh must have a skeleton."
                         : "Select a skinned mesh (with a skeleton) first."
                 }
             }

@@ -34,11 +34,21 @@ public:
     /// selected entity. Returns a QVariantMap mirroring
     /// `SkinWeightsReport`. Emits `weightsApplied(report)` on
     /// success or `error(msg)` on failure.
+    ///
+    /// `algorithm` is one of "geodesic-voxel" (default, #819),
+    /// "inverse-distance", or "unirig" (falls back to geodesic
+    /// until the Slice-C model lands). `voxelResolution` and
+    /// `smoothIterations` map to the same-named
+    /// SkinWeightsOptions fields.
     Q_INVOKABLE QVariantMap computeWeightsForSelected(int maxInfluencesPerVertex,
                                                        double falloff,
                                                        double maxInfluenceDistance,
                                                        bool skipUnweightedBones,
-                                                       bool replaceExisting);
+                                                       bool replaceExisting,
+                                                       const QString& algorithm
+                                                           = QStringLiteral("geodesic-voxel"),
+                                                       int voxelResolution = 64,
+                                                       int smoothIterations = 3);
 
 signals:
     void selectionChanged();

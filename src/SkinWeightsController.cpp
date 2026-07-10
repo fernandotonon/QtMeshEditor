@@ -10,6 +10,8 @@
 #include <OgreEntity.h>
 #include <OgreMesh.h>
 
+#include <algorithm>
+
 SkinWeightsController* SkinWeightsController::m_pSingleton = nullptr;
 
 SkinWeightsController* SkinWeightsController::instance()
@@ -54,7 +56,10 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
                                                               double falloff,
                                                               double maxInfluenceDistance,
                                                               bool skipUnweightedBones,
-                                                              bool replaceExisting)
+                                                              bool replaceExisting,
+                                                              const QString& algorithm,
+                                                              int voxelResolution,
+                                                              int smoothIterations)
 {
     QVariantMap result;
 
@@ -105,18 +110,41 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         return result;
     }
 
+    // Validate the algorithm string instead of letting
+    // algorithmFromString's default swallow a typo silently, and
+    // clamp the new knobs to the same ranges the CLI/MCP enforce.
+    const QString algoName = algorithm.trimmed().toLower();
+    if (algoName != QLatin1String("geodesic-voxel")
+        && algoName != QLatin1String("inverse-distance")
+        && algoName != QLatin1String("unirig")) {
+        const auto msg = QStringLiteral(
+            "Unknown algorithm '%1' — expected 'geodesic-voxel', "
+            "'inverse-distance', or 'unirig'.").arg(algorithm);
+        emit error(msg);
+        result["applied"] = false;
+        result["error"]   = msg;
+        return result;
+    }
+
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluencesPerVertex;
     opts.falloff                = falloff;
     opts.maxInfluenceDistance   = maxInfluenceDistance;
     opts.skipUnweightedBones    = skipUnweightedBones;
     opts.replaceExisting        = replaceExisting;
+    opts.voxelResolution        = std::clamp(voxelResolution, 8, 256);
+    opts.smoothIterations       = std::clamp(smoothIterations, 0, 50);
+    const SkinWeights::Algorithm algo
+        = SkinWeights::algorithmFromString(algoName);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QString("UI skin entity=%1 maxInf=%2 falloff=%3 maxDist=%4")
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1")
+            .arg(SkinWeights::algorithmToString(algo)),
+        QString("UI skin entity=%1 maxInf=%2 falloff=%3 maxDist=%4 voxelRes=%5 smooth=%6")
             .arg(QString::fromStdString(entity->getName()))
             .arg(maxInfluencesPerVertex)
-            .arg(falloff).arg(maxInfluenceDistance));
+            .arg(falloff).arg(maxInfluenceDistance)
+            .arg(voxelResolution).arg(smoothIterations));
 
     m_busy = true;
     emit busyChanged();
@@ -130,7 +158,7 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         // push it (which executes redo() synchronously), then read
         // the report it captured.
         auto* cmd = new ComputeSkinWeightsCommand(
-            entity->getName(), opts);
+            entity->getName(), opts, algo);
         UndoManager::getSingleton()->push(cmd);
         report = cmd->report();
     } catch (const Ogre::Exception& e) {
@@ -153,6 +181,10 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     result["totalVerticesProcessed"] = report.totalVerticesProcessed;
     result["totalAssignmentsBefore"] = report.totalAssignmentsBefore;
     result["totalAssignmentsAfter"]  = report.totalAssignmentsAfter;
+    result["algorithmUsed"]          = report.algorithmUsed;
+    result["fallbackReason"]         = report.fallbackReason;
+    if (report.bleedFraction >= 0.0)
+        result["bleedFraction"] = report.bleedFraction;
 
     if (report.applied) {
         GamificationManager::noteOperation(

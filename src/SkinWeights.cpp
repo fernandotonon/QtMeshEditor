@@ -1,4 +1,6 @@
 #include "SkinWeights.h"
+#include "GeodesicVoxelBind.h"
+#include "SkinWeightsPost.h"
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -154,6 +156,67 @@ bool SkinWeights::computeWeights(const float* vertexPositions,
     return true;
 }
 
+bool SkinWeights::computeWeights(const float* vertexPositions,
+                                  int vertexCount,
+                                  const std::uint32_t* indices,
+                                  std::size_t indexCount,
+                                  const std::vector<BoneSegment>& bones,
+                                  const SkinWeightsOptions& opts,
+                                  Algorithm algo,
+                                  std::vector<VertexWeights>& outWeights,
+                                  ComputeInfo* info)
+{
+    outWeights.clear();
+    ComputeInfo localInfo;
+    ComputeInfo& inf = info ? *info : localInfo;
+    inf = {};
+    if (!vertexPositions || vertexCount < 1 || bones.empty()) return false;
+
+    if (algo == Algorithm::UniRigML) {
+        // Slice C plumbing: the UniRig skinning head (skin.onnx)
+        // export/hosting is pending — fall through to the geodesic
+        // path, which is also its designed automatic fallback.
+        inf.fallbackReason = QStringLiteral(
+            "UniRig skinning model not yet available — used geodesic-voxel");
+        algo = Algorithm::GeodesicVoxel;
+    }
+
+    if (algo == Algorithm::GeodesicVoxel) {
+        std::vector<VertexWeights> gvb;
+        const GeodesicVoxelBind::Result r = GeodesicVoxelBind::compute(
+            vertexPositions, vertexCount, indices, indexCount,
+            bones, opts, gvb, &inf.allowedBones);
+        if (r.ok) {
+            inf.algorithmUsed     = QStringLiteral("geodesic-voxel");
+            inf.bonesWithoutSeeds = r.bonesWithoutSeeds;
+            if (r.verticesWithoutGeodesicWeights > 0) {
+                // Vertices unreachable from every bone seed (floating
+                // island with no bone inside): fill them with
+                // inverse-distance weights so they still move with
+                // the rig instead of staying pinned in place.
+                std::vector<VertexWeights> id;
+                if (computeWeights(vertexPositions, vertexCount,
+                                   bones, opts, id)) {
+                    for (int v = 0; v < vertexCount; ++v)
+                        if (gvb[v].count == 0) gvb[v] = id[v];
+                }
+            }
+            outWeights = std::move(gvb);
+            return true;
+        }
+        if (!inf.fallbackReason.isEmpty())
+            inf.fallbackReason += QStringLiteral("; ");
+        inf.fallbackReason += QStringLiteral(
+            "geodesic-voxel unavailable (%1) — used inverse-distance")
+            .arg(r.error);
+        inf.allowedBones.clear();
+    }
+
+    inf.algorithmUsed = QStringLiteral("inverse-distance");
+    return computeWeights(vertexPositions, vertexCount, bones, opts,
+                          outWeights);
+}
+
 namespace {
 
 // Walk every submesh of the entity, gather flat vertex positions
@@ -162,7 +225,8 @@ namespace {
 // bind pose, run `computeWeights`, then commit the result via
 // `SubMesh::addBoneAssignment`/`_compileBoneAssignments`.
 SkinWeightsReport applyToEntity(Ogre::Entity* entity,
-                                 const SkinWeightsOptions& opts)
+                                 const SkinWeightsOptions& opts,
+                                 SkinWeights::Algorithm algo)
 {
     SkinWeightsReport report;
     if (!entity) { report.error = QStringLiteral("null entity"); return report; }
@@ -249,6 +313,37 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
     const size_t maxK = static_cast<size_t>(
         std::clamp(opts.maxInfluencesPerVertex, 1, 8));
 
+    // Reverse map: Ogre bone handle → `bones[]` index (for merge-
+    // mode constraint rows and bones-without-seeds names).
+    std::vector<int> handleToIdx(numBones, -1);
+    for (size_t i = 0; i < boneIdxToHandle.size(); ++i)
+        handleToIdx[boneIdxToHandle[i]] = static_cast<int>(i);
+
+    // Helper: append one owner's index data (16- or 32-bit) as flat
+    // uint32 triangle indices, offset by the owner's base vertex in
+    // the combined arrays. GeodesicVoxel needs the surface; the
+    // Slice-B smoothing needs the adjacency.
+    auto appendIndices = [](Ogre::IndexData* id,
+                            std::uint32_t vertexOffset,
+                            std::vector<std::uint32_t>& out) {
+        if (!id || !id->indexBuffer || id->indexCount == 0) return;
+        auto ibuf = id->indexBuffer;
+        const auto* base = static_cast<const unsigned char*>(
+            ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        base += id->indexStart * ibuf->getIndexSize();
+        out.reserve(out.size() + id->indexCount);
+        if (ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT) {
+            const auto* p = reinterpret_cast<const std::uint32_t*>(base);
+            for (size_t i = 0; i < id->indexCount; ++i)
+                out.push_back(p[i] + vertexOffset);
+        } else {
+            const auto* p = reinterpret_cast<const std::uint16_t*>(base);
+            for (size_t i = 0; i < id->indexCount; ++i)
+                out.push_back(p[i] + vertexOffset);
+        }
+        ibuf->unlock();
+    };
+
     // Helper: read tight xyz floats out of a VertexData's POSITION
     // element. Returns false if the buffer is unusable.
     auto extractPositions = [](Ogre::VertexData* vd,
@@ -273,74 +368,32 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
         return true;
     };
 
-    // Helper: compute + commit weights against one assignment owner
-    // (either an Ogre::SubMesh* or the Ogre::Mesh* for shared
-    // vertices). `getList` / `clear` / `add` / `compile` are the
-    // four operations that differ between the two owners; everything
-    // else is shared. `mesh-local space` matches the skeleton's
-    // bind-pose world space for the same entity, so no transform is
-    // applied to the positions here.
-    auto computeAndCommit =
-        [&](Ogre::VertexData* vd,
-            const Ogre::Mesh::VertexBoneAssignmentList& existing,
-            const std::function<void()>& clearFn,
-            const std::function<void(const Ogre::VertexBoneAssignment&)>& addFn,
-            const std::function<void()>& compileFn,
-            SkinWeightsSubmeshReport& subReport) -> bool
-    {
-        std::vector<float> positions;
-        if (!extractPositions(vd, positions)) return false;
-
-        std::vector<SkinWeights::VertexWeights> weights;
-        SkinWeights::computeWeights(positions.data(),
-                                     static_cast<int>(vd->vertexCount),
-                                     bones, opts, weights);
-
-        // Merge mode (`replaceExisting=false`): keep existing
-        // weights and only fill vertices that have NONE. Build the
-        // set of already-weighted vertex indices from the existing
-        // assignment list BEFORE we touch anything. In replace mode
-        // we clear the list outright.
-        std::vector<char> alreadyWeighted;
-        if (opts.replaceExisting) {
-            clearFn();
-        } else {
-            alreadyWeighted.assign(weights.size(), 0);
-            for (const auto& kv : existing) {
-                if (kv.second.vertexIndex < alreadyWeighted.size())
-                    alreadyWeighted[kv.second.vertexIndex] = 1;
-            }
-        }
-
-        for (size_t v = 0; v < weights.size(); ++v) {
-            // In merge mode, skip vertices that already had weights —
-            // don't append a second normalized set on top of theirs.
-            if (!opts.replaceExisting && v < alreadyWeighted.size()
-                && alreadyWeighted[v])
-                continue;
-            const auto& vw = weights[v];
-            if (static_cast<size_t>(vw.count) == maxK)
-                ++subReport.verticesWithMaxInfluences;
-            for (int k = 0; k < vw.count; ++k) {
-                Ogre::VertexBoneAssignment vba;
-                vba.vertexIndex = static_cast<unsigned int>(v);
-                vba.boneIndex   = boneIdxToHandle[vw.boneIndices[k]];
-                vba.weight      = static_cast<float>(vw.weights[k]);
-                addFn(vba);
-            }
-        }
-        compileFn();
-        subReport.verticesProcessed = static_cast<int>(weights.size());
-        return true;
-    };
-
-    // Process the shared vertex data once (if any submesh uses it).
-    // Ogre stores shared-vertex bone assignments on the Mesh, not
-    // the SubMesh — the FBX/glTF exporters read
+    // ── Collect every assignment owner into ONE combined vertex/
+    // index set. The whole mesh is computed in a single pass — the
+    // paper voxelizes the whole character, so accessories (hats,
+    // props) bind through the body's solid, the bone field is
+    // seeded once, and per-submesh grids can't strand bones outside
+    // their AABB. Ogre stores shared-vertex bone assignments on the
+    // Mesh, not the SubMesh — the FBX/glTF exporters read
     // `Mesh::getBoneAssignments()` for shared geometry, so routing
     // them to the submesh list would leave the export with stale /
-    // missing weights (Codex review on PR #699).
-    bool anySharedProcessed = false;
+    // missing weights (Codex review on PR #699). `mesh-local space`
+    // matches the skeleton's bind-pose space for the same entity,
+    // so no transform is applied to the positions here.
+    struct Owner {
+        Ogre::VertexData* vd = nullptr;
+        int submeshIndex = 0;             // -1 == mesh-level shared data
+        std::uint32_t baseVertex = 0;     // offset in the combined arrays
+        Ogre::Mesh::VertexBoneAssignmentList existing;
+        std::function<void()> clearFn;
+        std::function<void(const Ogre::VertexBoneAssignment&)> addFn;
+        std::function<void()> compileFn;
+        std::function<int()>  countFn;
+    };
+    std::vector<Owner> owners;
+    std::vector<float>         positions;   // combined xyz
+    std::vector<std::uint32_t> indices;     // combined, owner-offset
+
     if (mesh->sharedVertexData) {
         bool anySubUsesShared = false;
         for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
@@ -349,65 +402,170 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
                 break;
             }
         }
-        if (anySubUsesShared) {
-            SkinWeightsSubmeshReport subReport;
-            subReport.submeshIndex = -1;   // -1 == mesh-level shared data
-            subReport.boneAssignmentsBefore =
-                static_cast<int>(mesh->getBoneAssignments().size());
-            const auto existingShared = mesh->getBoneAssignments();
-            if (computeAndCommit(
-                    mesh->sharedVertexData,
-                    existingShared,
-                    [&]() { mesh->clearBoneAssignments(); },
-                    [&](const Ogre::VertexBoneAssignment& vba) {
-                        mesh->addBoneAssignment(vba);
-                    },
-                    [&]() { mesh->_compileBoneAssignments(); },
-                    subReport)) {
-                subReport.boneAssignmentsAfter =
-                    static_cast<int>(mesh->getBoneAssignments().size());
-                report.submeshes.push_back(subReport);
-                report.totalVerticesProcessed += subReport.verticesProcessed;
-                report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
-                report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
-                anySharedProcessed = true;
+        std::vector<float> ownerPositions;
+        if (anySubUsesShared
+            && extractPositions(mesh->sharedVertexData, ownerPositions)) {
+            Owner o;
+            o.vd           = mesh->sharedVertexData;
+            o.submeshIndex = -1;
+            o.baseVertex   = std::uint32_t(positions.size() / 3);
+            o.existing     = mesh->getBoneAssignments();
+            o.clearFn      = [mesh]() { mesh->clearBoneAssignments(); };
+            o.addFn        = [mesh](const Ogre::VertexBoneAssignment& vba) {
+                mesh->addBoneAssignment(vba);
+            };
+            o.compileFn    = [mesh]() { mesh->_compileBoneAssignments(); };
+            o.countFn      = [mesh]() {
+                return static_cast<int>(mesh->getBoneAssignments().size());
+            };
+            // Shared geometry: the surface is the union of every
+            // shared-vertex submesh's triangles.
+            for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+                Ogre::SubMesh* sub = mesh->getSubMesh(si);
+                if (sub && sub->useSharedVertices)
+                    appendIndices(sub->indexData, o.baseVertex, indices);
             }
+            positions.insert(positions.end(), ownerPositions.begin(),
+                             ownerPositions.end());
+            owners.push_back(std::move(o));
         }
     }
 
-    // Process every submesh that owns its own (non-shared) vertex
-    // data.
     const unsigned short numSubs = mesh->getNumSubMeshes();
     for (unsigned short si = 0; si < numSubs; ++si) {
         Ogre::SubMesh* sub = mesh->getSubMesh(si);
         if (!sub) continue;
         if (sub->useSharedVertices) continue;  // handled above
         if (!sub->vertexData) continue;
+        std::vector<float> ownerPositions;
+        if (!extractPositions(sub->vertexData, ownerPositions)) continue;
+        Owner o;
+        o.vd           = sub->vertexData;
+        o.submeshIndex = si;
+        o.baseVertex   = std::uint32_t(positions.size() / 3);
+        o.existing     = sub->getBoneAssignments();
+        o.clearFn      = [sub]() { sub->clearBoneAssignments(); };
+        o.addFn        = [sub](const Ogre::VertexBoneAssignment& vba) {
+            sub->addBoneAssignment(vba);
+        };
+        o.compileFn    = [sub]() { sub->_compileBoneAssignments(); };
+        o.countFn      = [sub]() {
+            return static_cast<int>(sub->getBoneAssignments().size());
+        };
+        appendIndices(sub->indexData, o.baseVertex, indices);
+        positions.insert(positions.end(), ownerPositions.begin(),
+                         ownerPositions.end());
+        owners.push_back(std::move(o));
+    }
 
-        SkinWeightsSubmeshReport subReport;
-        subReport.submeshIndex = si;
-        subReport.boneAssignmentsBefore =
-            static_cast<int>(sub->getBoneAssignments().size());
-        const auto existingSub = sub->getBoneAssignments();
-        if (computeAndCommit(
-                sub->vertexData,
-                existingSub,
-                [&]() { sub->clearBoneAssignments(); },
-                [&](const Ogre::VertexBoneAssignment& vba) {
-                    sub->addBoneAssignment(vba);
-                },
-                [&]() { sub->_compileBoneAssignments(); },
-                subReport)) {
-            subReport.boneAssignmentsAfter =
-                static_cast<int>(sub->getBoneAssignments().size());
-            report.submeshes.push_back(subReport);
-            report.totalVerticesProcessed += subReport.verticesProcessed;
-            report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
-            report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
+    if (owners.empty()) {
+        report.error = QStringLiteral("mesh has no readable vertex data");
+        return report;
+    }
+    const int totalVerts = static_cast<int>(positions.size() / 3);
+
+    // ── One compute over the whole mesh ────────────────────────────
+    std::vector<SkinWeights::VertexWeights> weights;
+    SkinWeights::ComputeInfo info;
+    if (!SkinWeights::computeWeights(positions.data(), totalVerts,
+                                      indices.empty() ? nullptr : indices.data(),
+                                      indices.size(),
+                                      bones, opts, algo, weights, &info)) {
+        report.error = QStringLiteral("weight computation failed");
+        return report;
+    }
+
+    report.algorithmUsed  = info.algorithmUsed;
+    report.fallbackReason = info.fallbackReason;
+    for (const int b : info.bonesWithoutSeeds) {
+        if (b < 0 || static_cast<size_t>(b) >= boneIdxToHandle.size())
+            continue;
+        Ogre::Bone* bone = skel->getBone(boneIdxToHandle[b]);
+        if (!bone) continue;
+        const QString name = QString::fromStdString(bone->getName());
+        if (!report.bonesWithoutSeeds.contains(name))
+            report.bonesWithoutSeeds.push_back(name);
+    }
+
+    // Merge mode (`replaceExisting=false`): keep existing weights
+    // and only fill vertices that have NONE. Locked vertices double
+    // as Dirichlet constraints for the Slice-B smoothing — seed
+    // their rows from the existing assignments (translated to
+    // `bones[]` index space) so manual weights shape the blend at
+    // the merge boundary.
+    std::vector<std::uint8_t> locked;
+    if (!opts.replaceExisting) {
+        locked.assign(weights.size(), 0);
+        for (const Owner& o : owners) {
+            for (const auto& kv : o.existing) {
+                const size_t v = o.baseVertex + kv.second.vertexIndex;
+                if (v >= weights.size()) continue;
+                if (!locked[v]) {
+                    locked[v]  = 1;
+                    weights[v] = {};
+                }
+                const int bi = (kv.second.boneIndex < numBones)
+                    ? handleToIdx[kv.second.boneIndex] : -1;
+                if (bi >= 0 && weights[v].count < 8) {
+                    weights[v].boneIndices[weights[v].count] = bi;
+                    weights[v].weights[weights[v].count] = kv.second.weight;
+                    ++weights[v].count;
+                }
+            }
         }
     }
 
-    Q_UNUSED(anySharedProcessed);
+    // ── Slice-B post-passes ────────────────────────────────────────
+    if (opts.smoothIterations > 0 && !indices.empty()) {
+        const auto adjacency = SkinWeightsPost::buildAdjacency(
+            totalVerts, indices.data(), indices.size());
+        SkinWeightsPost::laplacianSmooth(
+            weights, adjacency, opts.smoothIterations, locked);
+    }
+    SkinWeightsPost::pruneAndRenormalize(weights, opts.maxInfluencesPerVertex);
+
+    // Bleed metric (report only) — needs the geodesic field.
+    if (!info.allowedBones.empty()) {
+        const double f = SkinWeightsPost::bleedFraction(weights,
+                                                        info.allowedBones);
+        if (f >= 0.0) report.bleedFraction = f;
+    }
+
+    // ── Commit per owner ───────────────────────────────────────────
+    for (const Owner& o : owners) {
+        SkinWeightsSubmeshReport subReport;
+        subReport.submeshIndex          = o.submeshIndex;
+        subReport.boneAssignmentsBefore = static_cast<int>(o.existing.size());
+
+        if (opts.replaceExisting) o.clearFn();
+        const size_t ownerVerts = o.vd->vertexCount;
+        for (size_t v = 0; v < ownerVerts; ++v) {
+            const size_t gv = o.baseVertex + v;
+            if (gv >= weights.size()) break;
+            // In merge mode, skip vertices that already had weights —
+            // don't append a second normalized set on top of theirs.
+            if (gv < locked.size() && locked[gv])
+                continue;
+            const auto& vw = weights[gv];
+            if (static_cast<size_t>(vw.count) == maxK)
+                ++subReport.verticesWithMaxInfluences;
+            for (int k = 0; k < vw.count; ++k) {
+                Ogre::VertexBoneAssignment vba;
+                vba.vertexIndex = static_cast<unsigned int>(v);
+                vba.boneIndex   = boneIdxToHandle[vw.boneIndices[k]];
+                vba.weight      = static_cast<float>(vw.weights[k]);
+                o.addFn(vba);
+            }
+        }
+        o.compileFn();
+        subReport.verticesProcessed    = static_cast<int>(ownerVerts);
+        subReport.boneAssignmentsAfter = o.countFn();
+        report.submeshes.push_back(subReport);
+        report.totalVerticesProcessed += subReport.verticesProcessed;
+        report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
+        report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
+    }
+
     report.applied = true;
     return report;
 }
@@ -418,12 +576,7 @@ SkinWeightsReport SkinWeights::computeAndApply(Ogre::Entity* entity,
                                                 const SkinWeightsOptions& opts,
                                                 Algorithm algo)
 {
-    SkinWeightsReport report;
-    if (algo != Algorithm::InverseDistance) {
-        report.error = QStringLiteral("only InverseDistance backend is implemented");
-        return report;
-    }
-    return applyToEntity(entity, opts);
+    return applyToEntity(entity, opts, algo);
 }
 
 QJsonObject SkinWeights::reportToJson(const SkinWeightsReport& report)
@@ -437,6 +590,14 @@ QJsonObject SkinWeights::reportToJson(const SkinWeightsReport& report)
     root["totalAssignmentsBefore"]  = report.totalAssignmentsBefore;
     root["totalAssignmentsAfter"]   = report.totalAssignmentsAfter;
     if (!report.error.isEmpty()) root["error"] = report.error;
+    if (!report.algorithmUsed.isEmpty())
+        root["algorithmUsed"] = report.algorithmUsed;
+    if (!report.fallbackReason.isEmpty())
+        root["fallbackReason"] = report.fallbackReason;
+    if (report.bleedFraction >= 0.0)
+        root["bleedFraction"] = report.bleedFraction;
+    if (!report.bonesWithoutSeeds.isEmpty())
+        root["bonesWithoutSeeds"] = QJsonArray::fromStringList(report.bonesWithoutSeeds);
 
     QJsonArray subs;
     for (const auto& s : report.submeshes) {
@@ -464,21 +625,41 @@ QString SkinWeights::reportToText(const SkinWeightsReport& report)
     s << "Vertices processed: " << report.totalVerticesProcessed << "\n";
     s << "Assignments:        " << report.totalAssignmentsBefore
       << " → " << report.totalAssignmentsAfter << "\n";
+    if (!report.algorithmUsed.isEmpty())
+        s << "Algorithm:          " << report.algorithmUsed << "\n";
+    if (!report.fallbackReason.isEmpty())
+        s << "Fallback:           " << report.fallbackReason << "\n";
+    if (report.bleedFraction >= 0.0)
+        s << "Bleed fraction:     "
+          << QString::number(report.bleedFraction, 'f', 4) << "\n";
+    if (!report.bonesWithoutSeeds.isEmpty())
+        s << "Bones w/o seeds:    "
+          << report.bonesWithoutSeeds.join(QStringLiteral(", ")) << "\n";
     if (!report.error.isEmpty()) s << "Error: " << report.error << "\n";
     return out;
 }
 
 QString SkinWeights::algorithmToString(Algorithm algo)
 {
-    Q_UNUSED(algo);
-    return QStringLiteral("inverse-distance");
+    switch (algo) {
+    case Algorithm::InverseDistance: return QStringLiteral("inverse-distance");
+    case Algorithm::GeodesicVoxel:   return QStringLiteral("geodesic-voxel");
+    case Algorithm::UniRigML:        return QStringLiteral("unirig");
+    }
+    return QStringLiteral("geodesic-voxel");
 }
 
 SkinWeights::Algorithm SkinWeights::algorithmFromString(const QString& s)
 {
-    // Only `InverseDistance` is implemented today. The
-    // recognized-string set widens here naturally when libigl
-    // BBW lands behind `-DENABLE_LIBIGL_BBW`.
-    Q_UNUSED(s);
-    return Algorithm::InverseDistance;
+    const QString v = s.trimmed().toLower();
+    if (v == QLatin1String("inverse-distance")
+        || v == QLatin1String("inverse_distance")
+        || v == QLatin1String("id"))
+        return Algorithm::InverseDistance;
+    if (v == QLatin1String("unirig") || v == QLatin1String("unirig-ml")
+        || v == QLatin1String("unirigml"))
+        return Algorithm::UniRigML;
+    // "geodesic-voxel" / "geodesic" / "gvb" / anything else → the
+    // default.
+    return Algorithm::GeodesicVoxel;
 }

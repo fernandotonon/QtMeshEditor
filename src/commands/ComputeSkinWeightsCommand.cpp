@@ -8,10 +8,12 @@
 
 ComputeSkinWeightsCommand::ComputeSkinWeightsCommand(std::string entityName,
                                                      SkinWeightsOptions opts,
+                                                     SkinWeights::Algorithm algo,
                                                      QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
     , mOpts(opts)
+    , mAlgo(algo)
 {
     setText(QStringLiteral("Compute Skin Weights"));
 }
@@ -113,7 +115,7 @@ void ComputeSkinWeightsCommand::redo()
         // First execution: snapshot the pre-skin weights, run the
         // compute, then snapshot the post-skin weights for replay.
         captureSnapshot(mesh, mBefore);
-        mReport = SkinWeights::computeAndApply(entity, mOpts);
+        mReport = SkinWeights::computeAndApply(entity, mOpts, mAlgo);
         captureSnapshot(mesh, mAfter);
         mCaptured = true;
     } else {

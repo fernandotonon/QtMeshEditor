@@ -179,6 +179,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GeodesicVoxelBind.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRig.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRigController.cpp

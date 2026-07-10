@@ -40,6 +40,8 @@ class ComputeSkinWeightsCommand : public QUndoCommand
 public:
     ComputeSkinWeightsCommand(std::string entityName,
                               SkinWeightsOptions opts,
+                              SkinWeights::Algorithm algo
+                                  = SkinWeights::Algorithm::GeodesicVoxel,
                               QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -70,9 +72,10 @@ private:
     void restoreSnapshot(Ogre::Mesh* mesh,
                          const std::vector<OwnerSnapshot>& snap) const;
 
-    std::string        mEntityName;
-    SkinWeightsOptions mOpts;
-    SkinWeightsReport  mReport;
+    std::string             mEntityName;
+    SkinWeightsOptions      mOpts;
+    SkinWeights::Algorithm  mAlgo = SkinWeights::Algorithm::GeodesicVoxel;
+    SkinWeightsReport       mReport;
 
     std::vector<OwnerSnapshot> mBefore;   // pre-skin weights
     std::vector<OwnerSnapshot> mAfter;    // post-skin weights (for redo replay)

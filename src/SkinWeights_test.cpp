@@ -167,10 +167,21 @@ TEST(SkinWeightsTest, AlgorithmStringRoundTrip)
     EXPECT_EQ(SkinWeights::algorithmToString(
                   SkinWeights::Algorithm::InverseDistance),
               QStringLiteral("inverse-distance"));
+    EXPECT_EQ(SkinWeights::algorithmToString(
+                  SkinWeights::Algorithm::GeodesicVoxel),
+              QStringLiteral("geodesic-voxel"));
+    EXPECT_EQ(SkinWeights::algorithmToString(
+                  SkinWeights::Algorithm::UniRigML),
+              QStringLiteral("unirig"));
     EXPECT_EQ(SkinWeights::algorithmFromString("inverse-distance"),
               SkinWeights::Algorithm::InverseDistance);
+    EXPECT_EQ(SkinWeights::algorithmFromString("geodesic-voxel"),
+              SkinWeights::Algorithm::GeodesicVoxel);
+    EXPECT_EQ(SkinWeights::algorithmFromString("unirig"),
+              SkinWeights::Algorithm::UniRigML);
+    // Unknown strings resolve to the #819 default.
     EXPECT_EQ(SkinWeights::algorithmFromString("unknown-fallback"),
-              SkinWeights::Algorithm::InverseDistance);
+              SkinWeights::Algorithm::GeodesicVoxel);
 }
 
 // ─── Edge cases ──────────────────────────────────────────────────────────────
