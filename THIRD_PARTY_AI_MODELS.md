@@ -3,6 +3,21 @@
 QtMeshEditor downloads optional ML model files on first use (never bundled in
 the binary). Attribution + licenses for the models and their training data:
 
+> **Hosting layout:** the app downloads everything from the aggregate
+> [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
+> HF repo. Each converted model also has a **dedicated mirror repo** with the
+> full standalone model card, per-model license, and I/O contract —
+> [`QtMeshEditor-unirig-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-unirig-onnx),
+> [`QtMeshEditor-skintokens-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-skintokens-onnx),
+> [`QtMeshEditor-triposr-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposr-onnx),
+> [`QtMeshEditor-triposg-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposg-onnx),
+> [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx)
+> (plus the in-house
+> [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
+> [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
+> [`QtMeshEditor-t2m`](https://huggingface.co/fernandotonon/QtMeshEditor-t2m)).
+> Mirrors are refreshed with `scripts/sync-hf-model-repos.sh`.
+
 ## UniRig — auto-rig skeleton prediction (issue #408)
 
 - **Model:** UniRig skeleton-prediction (autoregressive transformer + Michelangelo
