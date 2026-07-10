@@ -214,6 +214,45 @@ bool SkinWeights::computeWeights(const float* vertexPositions,
                         dst.weights[k]     = src.weights[k];
                     }
                 }
+                // Geodesic localisation pass: SkinTokens' RAW weights
+                // are diffuse — the upstream demo post-processes them
+                // with a voxel-visibility mask by default. Our
+                // geodesic field is the stronger version of the same
+                // idea: keep only geodesically-local bones per vertex
+                // and renormalise; vertices left empty (or meshes with
+                // no volume) take the geodesic weights instead.
+                std::vector<VertexWeights> gvb;
+                std::vector<std::vector<int>> allowed;
+                const GeodesicVoxelBind::Result gres =
+                    GeodesicVoxelBind::compute(
+                        vertexPositions, vertexCount, indices, indexCount,
+                        bones, opts, gvb, &allowed);
+                if (gres.ok && int(allowed.size()) == vertexCount) {
+                    for (int v = 0; v < vertexCount; ++v) {
+                        VertexWeights& vw = outWeights[std::size_t(v)];
+                        const auto& ok = allowed[std::size_t(v)];
+                        VertexWeights kept;
+                        double sum = 0.0;
+                        for (int k = 0; k < vw.count; ++k) {
+                            if (std::find(ok.begin(), ok.end(),
+                                          vw.boneIndices[k]) == ok.end())
+                                continue;
+                            kept.boneIndices[kept.count] = vw.boneIndices[k];
+                            kept.weights[kept.count]     = vw.weights[k];
+                            sum += vw.weights[k];
+                            ++kept.count;
+                        }
+                        if (kept.count > 0 && sum > 0.0) {
+                            for (int k = 0; k < kept.count; ++k)
+                                kept.weights[k] /= sum;
+                            vw = kept;
+                        } else if (std::size_t(v) < gvb.size()
+                                   && gvb[std::size_t(v)].count > 0) {
+                            vw = gvb[std::size_t(v)];
+                        }
+                    }
+                    inf.allowedBones = std::move(allowed);
+                }
                 inf.algorithmUsed = QStringLiteral("skintokens");
                 return true;
             }

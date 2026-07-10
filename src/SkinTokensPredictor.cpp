@@ -484,6 +484,8 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
     // and put the JOINTS through the same transform — coordinate
     // consistency between the point cloud and the tokenized skeleton
     // is what the model was trained on.
+    // Upstream AugmentAffine parity: the AABB includes the JOINTS,
+    // uniform scale, exact fit into continuous_range (no margin).
     double mn[3] = { std::numeric_limits<double>::max(),
                      std::numeric_limits<double>::max(),
                      std::numeric_limits<double>::max() };
@@ -493,12 +495,16 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
             mn[a] = std::min<double>(mn[a], positions[3 * v + a]);
             mx[a] = std::max<double>(mx[a], positions[3 * v + a]);
         }
+    for (const Joint& j : joints)
+        for (int a = 0; a < 3; ++a) {
+            mn[a] = std::min(mn[a], j.pos[a]);
+            mx[a] = std::max(mx[a], j.pos[a]);
+        }
     const double extent = std::max({ mx[0] - mn[0], mx[1] - mn[1],
                                      mx[2] - mn[2] });
     if (!(extent > 1e-12) || !std::isfinite(extent))
         return failResult(QStringLiteral("SkinTokens: degenerate mesh bounds."));
-    const double halfRange =
-        0.5 * (layout.rangeHi - layout.rangeLo) * 0.95;   // small margin
+    const double halfRange = 0.5 * (layout.rangeHi - layout.rangeLo);
     const double scale = 2.0 * halfRange / extent;
     const double mid[3] = { (mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5,
                             (mn[2] + mx[2]) * 0.5 };
