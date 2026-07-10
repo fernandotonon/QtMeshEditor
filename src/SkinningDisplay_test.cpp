@@ -14,6 +14,7 @@
 #include <string>
 
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "TestHelpers.h"
 
 // Slice D (#819): dual-quaternion skinning display toggle. Uses a
@@ -58,6 +59,12 @@ protected:
             << "Ogre init failed — invalid CI/runtime environment";
         ASSERT_TRUE(canLoadMeshFiles()) << "no GL context";
         createStandardOgreMaterials();
+        // The test harness never runs Manager::loadResources() (the
+        // GUI/CLI path that initializes RTSS), so bring the shader
+        // generator + HS factory up explicitly — the same pattern
+        // MaterialPresetLibrary_test uses. Safe to repeat: it
+        // early-returns once the generator exists.
+        RTShaderHelper::initialize(Manager::getSingleton()->getSceneMgr());
     }
 };
 
