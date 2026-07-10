@@ -838,8 +838,10 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // Leave one core for the UI and stop ORT's pool from busy-spinning —
         // the default (all cores, spin-wait) starves the render loop for the
         // whole multi-minute decode and the viewport appears frozen.
-        so.SetIntraOpNumThreads(static_cast<int>(
-            std::max(1u, std::thread::hardware_concurrency() - 1)));
+        // hardware_concurrency() may legally return 0 — guard before the -1
+        // (0u - 1 underflows to a UINT_MAX-sized thread pool request).
+        const unsigned hc = std::thread::hardware_concurrency();
+        so.SetIntraOpNumThreads(hc > 1 ? static_cast<int>(hc - 1) : 1);
         so.AddConfigEntry("session.intra_op.allow_spinning", "0");
 #ifdef __APPLE__
         try {

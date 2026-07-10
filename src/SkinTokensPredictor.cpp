@@ -594,8 +594,10 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_skintokens");
         Ort::SessionOptions so;
-        so.SetIntraOpNumThreads(
-            std::max(1u, std::thread::hardware_concurrency() - 1));
+        // hardware_concurrency() may legally return 0 — guard before the -1
+        // (0u - 1 underflows to a UINT_MAX-sized thread pool request).
+        const unsigned hc = std::thread::hardware_concurrency();
+        so.SetIntraOpNumThreads(hc > 1 ? static_cast<int>(hc - 1) : 1);
         // Don't busy-spin the pool between ops — spinning starves the GUI
         // render loop even though the compute runs on a worker thread.
         so.AddConfigEntry("session.intra_op.allow_spinning", "0");
