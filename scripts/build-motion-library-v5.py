@@ -270,12 +270,21 @@ def main():
                             continue
                         seen.add(fp); seen.add(sem)
                         counts[action] = counts.get(action, 0) + 1
-                        clips.append({
+                        clip = {
                             "action": action,
                             "source": f"{title} — {c.get('animation')}",
                             "frames": len(w),
                             "quats": w,
-                        })
+                        }
+                        # Source-bind orientations + canonical bind bone
+                        # directions → the bind-referenced retarget path.
+                        # Older sidecar caches predate these fields; delete
+                        # *.canonical.json to re-extract.
+                        if len(c.get("restWorld", [])) == CANON_COUNT:
+                            clip["restWorld"] = c["restWorld"]
+                        if len(c.get("restDir", [])) == CANON_COUNT:
+                            clip["restDir"] = c["restDir"]
+                        clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f)")
 
