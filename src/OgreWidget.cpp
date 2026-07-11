@@ -48,6 +48,7 @@ THE SOFTWARE.
 #include "TransformOperator.h"
 #include "HDR/HdrViewportController.h"
 #include "ShadowController.h"
+#include "ViewportLightSoloController.h"
 #include "SentryReporter.h"
 
 namespace {
@@ -135,6 +136,7 @@ OgreWidget::~OgreWidget()
 {
     HdrViewportController::getSingleton()->unregisterWidget(this);
     ShadowController::instance()->unregisterViewport(this);
+    ViewportLightSoloController::instance()->unregisterWidget(this);
 
     // Safely clean up OGRE resources
     // Order is important: remove listeners first, then destroy camera, then detach render target, then remove viewports
@@ -302,6 +304,7 @@ void OgreWidget::initOgreWindow(void)
 
     HdrViewportController::getSingleton()->registerWidget(this);
     ShadowController::instance()->registerViewport(this);
+    ViewportLightSoloController::instance()->registerWidget(this);
 }
 
 void OgreWidget::teardownOgreWindow()
@@ -362,11 +365,13 @@ void OgreWidget::rebuildRenderWindow()
 
     HdrViewportController::getSingleton()->unregisterWidget(this);
     ShadowController::instance()->unregisterViewport(this);
+    ViewportLightSoloController::instance()->unregisterWidget(this);
 
     teardownOgreWindow();
     initOgreWindow();
 
     HdrViewportController::getSingleton()->registerWidget(this);
+    ViewportLightSoloController::instance()->registerWidget(this);
 
     setBackgroundColor(bg);
     if (mViewport)
@@ -430,7 +435,9 @@ bool OgreWidget::frameEnded(const Ogre::FrameEvent& e)
     {
         try {
             mOgreWindow->windowMovedOrResized();
+            ViewportLightSoloController::instance()->beginRenderPass(this);
             mOgreWindow->update();
+            ViewportLightSoloController::instance()->endRenderPass(this);
         } catch (...) {
             // Ignore exceptions during shutdown
             return false;

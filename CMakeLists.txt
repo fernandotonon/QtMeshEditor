@@ -324,6 +324,15 @@ if(ENABLE_PS1_RIP)
     add_subdirectory(plugins/ps1core_stub)
 endif()
 ##############################################################
+#  Area lights (Slice I #491 — multi-point approximation)
+##############################################################
+option(ENABLE_AREA_LIGHTS "Enable area-light gizmo + multi-point approximation" ON)
+
+if(ENABLE_AREA_LIGHTS)
+    add_definitions(-DENABLE_AREA_LIGHTS)
+    message(STATUS "Area lights enabled (multi-point approximation)")
+endif()
+##############################################################
 #  In-app auto-updater (portable Windows/macOS/Linux tarballs)
 ##############################################################
 option(ENABLE_AUTO_UPDATER "Enable in-app auto-updater UI and download path" ON)

@@ -72,7 +72,9 @@ enum class LightPropertyClass
     Attenuation,
     SpotCone,
     Shadow,
-    Linking
+    Linking,
+    IesProfile,
+    AreaShape
 };
 
 QString lightPropertyClassLabel(LightPropertyClass propertyClass);

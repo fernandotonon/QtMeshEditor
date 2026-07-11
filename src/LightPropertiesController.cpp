@@ -2,6 +2,7 @@
 
 #include "LightManager.h"
 #include "LightLinking.h"
+#include "IesProfile.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "ShadowController.h"
@@ -13,6 +14,7 @@
 #include <OgreLight.h>
 
 #include <QColorDialog>
+#include <QFileDialog>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -921,6 +923,116 @@ void LightPropertiesController::removeLinkedEntity(const QString& entityName)
         snapshot.linkedEntityNames.removeAll(entityName);
     });
 }
+
+QString LightPropertiesController::iesProfilePath() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.size() != 1)
+        return {};
+    return snapshots.first().iesProfilePath;
+}
+
+bool LightPropertiesController::hasIesProfile() const
+{
+    return !iesProfilePath().isEmpty();
+}
+
+bool LightPropertiesController::areaLightsEnabled() const
+{
+#ifdef ENABLE_AREA_LIGHTS
+    return true;
+#else
+    return false;
+#endif
+}
+
+void LightPropertiesController::browseIesProfile()
+{
+    QWidget* parent = Manager::getSingletonPtr() ? Manager::getSingleton()->getMainWindow() : nullptr;
+    const QString path = QFileDialog::getOpenFileName(
+        parent, QObject::tr("Select IES profile"), QString(), QObject::tr("IES files (*.ies)"));
+    if (path.isEmpty())
+        return;
+
+    QString error;
+    const IesProfile profile = IesProfile::parseFile(path, &error);
+    if (!profile.valid)
+        return;
+
+    pushImmediateEdit(LightPropertyClass::IesProfile, [path](LightSnapshot& snapshot) {
+        snapshot.iesProfilePath = path;
+    });
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Assign IES profile: %1").arg(path));
+}
+
+void LightPropertiesController::clearIesProfile()
+{
+    pushImmediateEdit(LightPropertyClass::IesProfile, [](LightSnapshot& snapshot) {
+        snapshot.iesProfilePath.clear();
+    });
+}
+
+#ifdef ENABLE_AREA_LIGHTS
+QString LightPropertiesController::areaShape() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    return snapshots.size() == 1 ? snapshots.first().areaShape : QString();
+}
+
+void LightPropertiesController::setAreaShape(const QString& shape)
+{
+    const QString trimmed = shape.trimmed().toLower();
+    pushImmediateEdit(LightPropertyClass::AreaShape, [trimmed](LightSnapshot& snapshot) {
+        snapshot.areaShape = trimmed;
+    });
+}
+
+double LightPropertiesController::areaWidth() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    return snapshots.size() == 1 ? snapshots.first().areaWidth : 1.0;
+}
+
+void LightPropertiesController::setAreaWidth(double value)
+{
+    pushImmediateEdit(LightPropertyClass::AreaShape, [value](LightSnapshot& snapshot) {
+        snapshot.areaWidth = static_cast<float>(qMax(0.01, value));
+    });
+}
+
+double LightPropertiesController::areaHeight() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    return snapshots.size() == 1 ? snapshots.first().areaHeight : 1.0;
+}
+
+void LightPropertiesController::setAreaHeight(double value)
+{
+    pushImmediateEdit(LightPropertyClass::AreaShape, [value](LightSnapshot& snapshot) {
+        snapshot.areaHeight = static_cast<float>(qMax(0.01, value));
+    });
+}
+
+int LightPropertiesController::areaSampleCount() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    return snapshots.size() == 1 ? snapshots.first().areaSampleCount : 4;
+}
+
+void LightPropertiesController::setAreaSampleCount(int count)
+{
+    const int clamped = std::clamp(count, 2, 16);
+    pushImmediateEdit(LightPropertyClass::AreaShape, [clamped](LightSnapshot& snapshot) {
+        snapshot.areaSampleCount = clamped;
+    });
+}
+
+QStringList LightPropertiesController::areaShapeChoices() const
+{
+    return {QString(), QStringLiteral("rectangle"), QStringLiteral("disk"), QStringLiteral("line")};
+}
+#endif
 
 void LightPropertiesController::beginSliderEdit(int propertyClass)
 {

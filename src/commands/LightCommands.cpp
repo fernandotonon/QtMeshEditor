@@ -127,6 +127,10 @@ QString lightPropertyClassLabel(LightPropertyClass propertyClass)
         return QStringLiteral("shadow");
     case LightPropertyClass::Linking:
         return QStringLiteral("light linking");
+    case LightPropertyClass::IesProfile:
+        return QStringLiteral("IES profile");
+    case LightPropertyClass::AreaShape:
+        return QStringLiteral("area light");
     }
     return QStringLiteral("property");
 }

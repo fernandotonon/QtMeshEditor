@@ -49,6 +49,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightLinking.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightGroupLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightGroupController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportLightSoloController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/IesProfile.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AreaLight.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.cpp

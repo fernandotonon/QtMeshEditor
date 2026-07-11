@@ -5,6 +5,11 @@
 #include "SentryReporter.h"
 #include "ShadowController.h"
 
+#include "IesProfile.h"
+#ifdef ENABLE_AREA_LIGHTS
+#include "AreaLight.h"
+#endif
+
 #include <OgreLight.h>
 #include <OgreMath.h>
 #include <OgreSceneManager.h>
@@ -96,6 +101,43 @@ LightSnapshot LightSnapshot::fromHandle(const LightHandle& handle)
         }
     }
 
+    const auto iesAny = bindings.getUserAny(QStringLiteral("light_ies_path").toStdString());
+    if (iesAny.has_value())
+    {
+        try
+        {
+            snapshot.iesProfilePath = QString::fromStdString(Ogre::any_cast<std::string>(iesAny));
+        }
+        catch (...)
+        {
+            snapshot.iesProfilePath.clear();
+        }
+    }
+
+#ifdef ENABLE_AREA_LIGHTS
+    const auto areaShapeAny = bindings.getUserAny(QStringLiteral("light_area_shape").toStdString());
+    if (areaShapeAny.has_value())
+    {
+        try
+        {
+            snapshot.areaShape = QString::fromStdString(Ogre::any_cast<std::string>(areaShapeAny));
+        }
+        catch (...)
+        {
+            snapshot.areaShape.clear();
+        }
+    }
+    const auto areaWidthAny = bindings.getUserAny(QStringLiteral("light_area_width").toStdString());
+    if (areaWidthAny.has_value())
+        snapshot.areaWidth = Ogre::any_cast<float>(areaWidthAny);
+    const auto areaHeightAny = bindings.getUserAny(QStringLiteral("light_area_height").toStdString());
+    if (areaHeightAny.has_value())
+        snapshot.areaHeight = Ogre::any_cast<float>(areaHeightAny);
+    const auto areaSamplesAny = bindings.getUserAny(QStringLiteral("light_area_samples").toStdString());
+    if (areaSamplesAny.has_value())
+        snapshot.areaSampleCount = static_cast<int>(Ogre::any_cast<uint32_t>(areaSamplesAny));
+#endif
+
     return snapshot;
 }
 
@@ -118,7 +160,13 @@ bool LightSnapshot::operator==(const LightSnapshot& other) const
            && shadowSlopeBias == other.shadowSlopeBias
            && linkMode == other.linkMode
            && linkedEntityNames == other.linkedEntityNames
-           && linkChannelBit == other.linkChannelBit;
+           && linkChannelBit == other.linkChannelBit
+           && iesProfilePath == other.iesProfilePath
+#ifdef ENABLE_AREA_LIGHTS
+           && areaShape == other.areaShape && areaWidth == other.areaWidth
+           && areaHeight == other.areaHeight && areaSampleCount == other.areaSampleCount
+#endif
+        ;
 }
 
 LightManager* LightManager::getSingleton()
@@ -270,7 +318,29 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
     bindings.setUserAny(QStringLiteral("light_link_channel").toStdString(),
                         Ogre::Any(snapshot.linkChannelBit));
 
+    bindings.setUserAny(QStringLiteral("light_ies_path").toStdString(),
+                        Ogre::Any(snapshot.iesProfilePath.toStdString()));
+#ifdef ENABLE_AREA_LIGHTS
+    bindings.setUserAny(QStringLiteral("light_area_shape").toStdString(),
+                        Ogre::Any(snapshot.areaShape.toStdString()));
+    bindings.setUserAny(QStringLiteral("light_area_width").toStdString(),
+                        Ogre::Any(snapshot.areaWidth));
+    bindings.setUserAny(QStringLiteral("light_area_height").toStdString(),
+                        Ogre::Any(snapshot.areaHeight));
+    bindings.setUserAny(QStringLiteral("light_area_samples").toStdString(),
+                        Ogre::Any(static_cast<uint32_t>(snapshot.areaSampleCount)));
+#endif
+
     LightLinking::applyFromSnapshot(snapshot, handle.light);
+
+    if (!snapshot.iesProfilePath.isEmpty())
+    {
+        const IesProfile profile = IesProfile::parseFile(snapshot.iesProfilePath);
+        IesLightApply::applyToLight(profile, handle.light);
+    }
+#ifdef ENABLE_AREA_LIGHTS
+    AreaLight::syncProxies(handle, snapshot);
+#endif
 }
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)

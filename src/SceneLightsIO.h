@@ -26,6 +26,8 @@ struct RigGroupExport
     QString name;
     QString rigId;
     bool preserveGrouping = true;
+    /// True for user-created light collections (#491); false for preset rig groups.
+    bool isUserCollection = false;
     QList<LightSnapshot> lights;
 };
 
