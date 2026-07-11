@@ -23,14 +23,59 @@
 #endif
 
 namespace {
-constexpr const char* kModelFile = "meshseg.onnx";
+constexpr const char* kClassifierModelFile = "meshseg_category.onnx";
 constexpr const char* kDefaultModelBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/segment/";
 constexpr const char* kBaseUrlSettingsKey = "ai/segmentModelBaseUrl";
 
+// Global label vocabulary — order MUST match MeshSegmenter::Part.
 const char* const kPartIds[] = {
     "unknown", "head", "torso", "left_arm", "right_arm", "left_leg", "right_leg",
+    "trunk", "branch", "foliage", "root", "flower",
+    "vehicle_body", "wheel", "window", "wing", "rotor",
+    "wall", "roof", "door", "chimney", "foundation",
 };
+static_assert(sizeof(kPartIds) / sizeof(kPartIds[0])
+                  == static_cast<size_t>(MeshSegmenter::Part::Count),
+              "kPartIds must cover every MeshSegmenter::Part");
+
+// Per-category tables, indexed by Category (Auto shares the Body row).
+// kCategoryChannelMaps: LOCAL model output channel → global Part. Channel
+// order MUST match scripts/export-meshseg-onnx.py's per-category label
+// constants; `window` is one global label shared by vehicle + building.
+struct CategoryInfo {
+    const char* name;
+    const char* modelFile;
+    std::vector<int> channelMap;
+};
+using P = MeshSegmenter::Part;
+const CategoryInfo kCategories[] = {
+    { "auto", "meshseg.onnx",
+      { int(P::Unknown), int(P::Head), int(P::Torso), int(P::LeftArm),
+        int(P::RightArm), int(P::LeftLeg), int(P::RightLeg) } },
+    { "body", "meshseg.onnx",
+      { int(P::Unknown), int(P::Head), int(P::Torso), int(P::LeftArm),
+        int(P::RightArm), int(P::LeftLeg), int(P::RightLeg) } },
+    { "vegetation", "meshseg_vegetation.onnx",
+      { int(P::Unknown), int(P::Trunk), int(P::Branch), int(P::Foliage),
+        int(P::Root), int(P::Flower) } },
+    { "vehicle", "meshseg_vehicle.onnx",
+      { int(P::Unknown), int(P::VehicleBody), int(P::Wheel), int(P::Window),
+        int(P::Wing), int(P::Rotor) } },
+    { "building", "meshseg_building.onnx",
+      { int(P::Unknown), int(P::Wall), int(P::Roof), int(P::Window),
+        int(P::Door), int(P::Chimney), int(P::Foundation) } },
+};
+static_assert(sizeof(kCategories) / sizeof(kCategories[0])
+                  == static_cast<size_t>(MeshSegmenter::Category::CategoryCount),
+              "kCategories must cover every MeshSegmenter::Category");
+
+const CategoryInfo& categoryInfo(MeshSegmenter::Category c)
+{
+    const auto i = static_cast<size_t>(c);
+    return kCategories[i < static_cast<size_t>(MeshSegmenter::Category::CategoryCount)
+                           ? i : 1 /* Body */];
+}
 
 // Strip non-semantic prefixes (lowercased): a "mixamorig[N]:" / namespace
 // colon prefix and a leading "def_"/"org-"/"mch-"/"ctrl-" rig prefix. Keeps
@@ -175,6 +220,39 @@ QString MeshSegmenter::partName(int p)
 }
 QString MeshSegmenter::partName(Part p) { return partName(static_cast<int>(p)); }
 
+QString MeshSegmenter::categoryName(Category c)
+{
+    return QString::fromLatin1(categoryInfo(c).name);
+}
+
+MeshSegmenter::Category MeshSegmenter::categoryFromName(const QString& name, bool* ok)
+{
+    const QString n = name.trimmed().toLower();
+    for (size_t i = 0; i < static_cast<size_t>(Category::CategoryCount); ++i) {
+        if (n == QLatin1String(kCategories[i].name)) {
+            if (ok) *ok = true;
+            return static_cast<Category>(i);
+        }
+    }
+    if (ok) *ok = !n.isEmpty() ? false : true;   // empty = default Auto, valid
+    return Category::Auto;
+}
+
+int MeshSegmenter::categoryChannelCount(Category c)
+{
+    return static_cast<int>(categoryInfo(c).channelMap.size());
+}
+
+std::vector<int> MeshSegmenter::categoryChannelMap(Category c)
+{
+    return categoryInfo(c).channelMap;
+}
+
+QString MeshSegmenter::modelFileName(Category c)
+{
+    return QString::fromLatin1(categoryInfo(c).modelFile);
+}
+
 MeshSegmenter::Part MeshSegmenter::partForBoneName(const QString& boneName)
 {
     const QString n = normaliseBoneName(boneName);
@@ -236,15 +314,28 @@ bool MeshSegmenter::isModelBackendAvailable()
 #endif
 }
 
-QString MeshSegmenter::modelPath()
+QString MeshSegmenter::modelPath(Category c)
 {
     const QString dataPath =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     return QDir(dataPath).filePath(QStringLiteral("ai_models/segment/")
-                                   + QString::fromLatin1(kModelFile));
+                                   + modelFileName(c));
 }
 
-bool MeshSegmenter::modelPresent() { return QFileInfo::exists(modelPath()); }
+bool MeshSegmenter::modelPresent(Category c) { return QFileInfo::exists(modelPath(c)); }
+
+QString MeshSegmenter::classifierModelPath()
+{
+    const QString dataPath =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return QDir(dataPath).filePath(QStringLiteral("ai_models/segment/")
+                                   + QString::fromLatin1(kClassifierModelFile));
+}
+
+bool MeshSegmenter::classifierModelPresent()
+{
+    return QFileInfo::exists(classifierModelPath());
+}
 
 // ---------------------------------------------------------------------------
 // Pure-data helpers
@@ -337,10 +428,20 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
     const float upSpan = std::max(1e-6f, mx[up] - mn[up]);
     const float sideMid = 0.5f * (mn[side] + mx[side]);
 
-    r.vertexLabels.assign(vertexCount, static_cast<int>(Part::Torso));
+    // Category-aware fallback (#818 B2): Body keeps the original humanoid
+    // heuristic; the other categories get a coarse up-band split — crude, but
+    // deterministic and better than body labels on a tree/car/house.
+    const Category cat = (opts.category == Category::Auto) ? Category::Body
+                                                           : opts.category;
+    const Part defaultPart = (cat == Category::Vegetation) ? Part::Trunk
+                           : (cat == Category::Vehicle)    ? Part::VehicleBody
+                           : (cat == Category::Building)   ? Part::Wall
+                                                           : Part::Torso;
+    r.vertexLabels.assign(vertexCount, static_cast<int>(defaultPart));
 
-    // If we have rig bone-proximity hints, they're authoritative per-vertex.
-    const bool haveBone = (boneProximity != nullptr);
+    // If we have rig bone-proximity hints, they're authoritative per-vertex
+    // (bone-name → part is a BODY concept; other categories have no rig prior).
+    const bool haveBone = (boneProximity != nullptr && cat == Category::Body);
 
     // Otherwise classify by connected-component island, using each island's
     // centroid in normalized up/side space. Per-island keeps a limb coherent
@@ -350,6 +451,15 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
 
     auto classify = [&](float upN, float lateral) -> Part {
         // upN in [0,1] along up axis; lateral = signed offset from mid (>0 one side).
+        switch (cat) {
+        case Category::Vegetation:
+            return upN > 0.5f ? Part::Foliage : Part::Trunk;
+        case Category::Vehicle:
+            return upN < 0.30f ? Part::Wheel : Part::VehicleBody;
+        case Category::Building:
+            return upN > 0.72f ? Part::Roof : Part::Wall;
+        default: break;                                 // Body below
+        }
         if (upN > 0.82f) return Part::Head;
         if (upN < 0.45f) {                              // lower body → legs
             return lateral >= 0.0f ? Part::RightLeg : Part::LeftLeg;
@@ -371,7 +481,7 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
             for (int a = 0; a < 3; ++a) sum[is][a] += positions[3*v + a];
             ++cnt[is];
         }
-        std::vector<int> islandLabel(nIslands, static_cast<int>(Part::Torso));
+        std::vector<int> islandLabel(nIslands, static_cast<int>(defaultPart));
         for (int is = 0; is < nIslands; ++is) {
             if (cnt[is] == 0) continue;
             const float cu = static_cast<float>(sum[is][up] / cnt[is]);
@@ -399,6 +509,7 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
     r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
     r.ok = true;
     r.usedModel = false;
+    r.category = cat;
     return r;
 }
 
@@ -406,12 +517,16 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
 // Model management
 // ---------------------------------------------------------------------------
 
-QString MeshSegmenter::ensureModelBlocking()
+namespace {
+// Shared first-use download for the segment/ model family. Returns the local
+// path, or empty when offline/disabled/failed.
+QString ensureSegmentFileBlocking(const QString& dest, const QString& fileName,
+                                  const QString& label)
 {
 #ifndef ENABLE_ONNX
+    Q_UNUSED(dest); Q_UNUSED(fileName); Q_UNUSED(label);
     return {};
 #else
-    const QString dest = modelPath();
     if (QFileInfo::exists(dest)) return dest;
     if (!qEnvironmentVariableIsEmpty("QTMESH_SEGMENT_NO_DOWNLOAD"))
         return {};
@@ -433,8 +548,7 @@ QString MeshSegmenter::ensureModelBlocking()
     if (!dl) return {};
 
     QDir().mkpath(QFileInfo(dest).absolutePath());
-    const QString url = base + QString::fromLatin1(kModelFile);
-    const QString label = QStringLiteral("Mesh segmentation model");
+    const QString url = base + fileName;
 
     QEventLoop loop;
     bool ok = false, timedOut = false;
@@ -445,7 +559,7 @@ QString MeshSegmenter::ensureModelBlocking()
     QTimer timeout;
     timeout.setSingleShot(true);
     QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    timeout.start(300000);   // 5 min — the model is small (~MBs)
+    timeout.start(300000);   // 5 min — every segment model is small (~MBs)
 
     dl->startDownload(url, dest, label);
     loop.exec();
@@ -457,12 +571,49 @@ QString MeshSegmenter::ensureModelBlocking()
     return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
 #endif
 }
+} // namespace
+
+QString MeshSegmenter::ensureModelBlocking(Category c)
+{
+    return ensureSegmentFileBlocking(
+        modelPath(c), modelFileName(c),
+        QStringLiteral("Mesh segmentation model (%1)").arg(categoryName(c)));
+}
+
+QString MeshSegmenter::ensureClassifierModelBlocking()
+{
+    return ensureSegmentFileBlocking(
+        classifierModelPath(), QString::fromLatin1(kClassifierModelFile),
+        QStringLiteral("Mesh category classifier"));
+}
 
 // ---------------------------------------------------------------------------
 // ONNX path
 // ---------------------------------------------------------------------------
 
+MeshSegmenter::Category MeshSegmenter::resolveCategoryBlocking(const float* positions,
+                                                               int vertexCount,
+                                                               const Options& opts)
+{
+    if (opts.category != Category::Auto) return opts.category;
 #ifndef ENABLE_ONNX
+    Q_UNUSED(positions); Q_UNUSED(vertexCount);
+    return Category::Body;
+#else
+    if (!positions || vertexCount <= 0) return Category::Body;
+    const QString cp = ensureClassifierModelBlocking();
+    if (cp.isEmpty()) return Category::Body;
+    return classifyCategory(positions, vertexCount, cp, opts);
+#endif
+}
+
+#ifndef ENABLE_ONNX
+
+MeshSegmenter::Category MeshSegmenter::classifyCategory(const float*, int,
+                                                        const QString&, const Options&)
+{
+    return Category::Body;
+}
 
 MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexCount,
                                              const uint32_t* indices, int indexCount,
@@ -479,11 +630,81 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
 
 #else // ENABLE_ONNX
 
+namespace {
+// The models are trained on +Y-up point clouds in a centred unit box. This
+// frame captures the normalisation + the up-axis remap so the sampled cloud
+// and the per-vertex scatter agree (`axisFor[outComponent] = sourceComponent`:
+// up → Y(1), the two remaining source axes fill X(0)/Z(2) in ascending order).
+struct CloudFrame {
+    std::array<float,3> centre{};
+    float inv = 1.0f;
+    std::array<int,3> axisFor{ 0, 1, 2 };
+};
+
+CloudFrame computeCloudFrame(const float* positions, int vertexCount, int upAxis)
+{
+    CloudFrame f;
+    std::array<float,3> mn{positions[0],positions[1],positions[2]}, mx = mn;
+    for (int v = 0; v < vertexCount; ++v)
+        for (int a = 0; a < 3; ++a) {
+            mn[a] = std::min(mn[a], positions[3*v+a]);
+            mx[a] = std::max(mx[a], positions[3*v+a]);
+        }
+    f.centre = { 0.5f*(mn[0]+mx[0]), 0.5f*(mn[1]+mx[1]), 0.5f*(mn[2]+mx[2]) };
+    float half = 0.0f;
+    for (int a = 0; a < 3; ++a) half = std::max(half, 0.5f*(mx[a]-mn[a]));
+    f.inv = half > 1e-6f ? 1.0f/half : 1.0f;
+
+    const int up = (upAxis >= 0 && upAxis <= 2) ? upAxis : 1;
+    if (up != 1) {
+        f.axisFor[1] = up;                 // model Y  ← mesh up axis
+        int fill = 0;
+        for (int a = 0; a < 3; ++a) {
+            if (a == up) continue;
+            f.axisFor[fill == 0 ? 0 : 2] = a;   // X then Z get the other two
+            ++fill;
+        }
+    }
+    return f;
+}
+
+// Deterministic point sample into the model frame. Small meshes include every
+// vertex once so no vertex keeps the default label; large meshes are sampled
+// across the whole vertex buffer instead of taking the first N vertices.
+void sampleCloud(const float* positions, int vertexCount, const CloudFrame& f,
+                 int N, std::vector<float>& pts, std::vector<int>* srcVert)
+{
+    std::mt19937 rng(0x5e6u);  // NOSONAR — non-crypto, fixed for reproducibility
+    std::uniform_int_distribution<int> pick(0, vertexCount - 1);
+    pts.assign(static_cast<size_t>(N) * 3, 0.0f);
+    if (srcVert) srcVert->assign(N, 0);
+    for (int i = 0; i < N; ++i) {
+        int v = 0;
+        if (vertexCount <= N) {
+            v = (i < vertexCount) ? i : pick(rng);
+        } else {
+            const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(N);
+            v = std::clamp(static_cast<int>(t * static_cast<double>(vertexCount)),
+                           0, vertexCount - 1);
+        }
+        if (srcVert) (*srcVert)[i] = v;
+        for (int c = 0; c < 3; ++c) {
+            const int a = f.axisFor[c];
+            pts[3*i+c] = (positions[3*v+a]-f.centre[a])*f.inv;
+        }
+    }
+}
+} // namespace
+
 MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexCount,
                                              const uint32_t* indices, int indexCount,
                                              const QString& modelPath, const Options& opts,
                                              const int* boneProximity, const ProgressFn& progress)
 {
+    // Auto is resolved by the CALLER (resolveCategoryBlocking) — a still-Auto
+    // value here means "no classifier available", which degrades to Body.
+    const Category cat = (opts.category == Category::Auto) ? Category::Body
+                                                           : opts.category;
     auto fallback = [&](const QString& why) -> Result {
         Result r = segmentGeometric(positions, vertexCount, indices, indexCount, opts, boneProximity);
         if (r.ok) r.fallbackReason = why;
@@ -497,58 +718,11 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         return fallback(QStringLiteral("Empty geometry — used the geometric fallback."));
 
     try {
-        // Normalise vertices into a centred unit box (PointNet++ convention).
-        std::array<float,3> mn{positions[0],positions[1],positions[2]}, mx = mn;
-        for (int v = 0; v < vertexCount; ++v)
-            for (int a = 0; a < 3; ++a) {
-                mn[a] = std::min(mn[a], positions[3*v+a]);
-                mx[a] = std::max(mx[a], positions[3*v+a]);
-            }
-        std::array<float,3> centre{ 0.5f*(mn[0]+mx[0]), 0.5f*(mn[1]+mx[1]), 0.5f*(mn[2]+mx[2]) };
-        float half = 0.0f;
-        for (int a = 0; a < 3; ++a) half = std::max(half, 0.5f*(mx[a]-mn[a]));
-        const float inv = half > 1e-6f ? 1.0f/half : 1.0f;
-
-        // The model is trained on +Y-up point clouds. If the mesh's up axis is
-        // X or Z, remap coordinates so the up axis lands on Y before inference —
-        // otherwise an x/z-up mesh is segmented in the wrong frame and head/legs
-        // mislabel. `axisFor[outComponent] = sourceComponent`: up → Y(1), and the
-        // two remaining source axes fill X(0)/Z(2) in ascending order.
-        const int up = (opts.upAxis >= 0 && opts.upAxis <= 2) ? opts.upAxis : 1;
-        std::array<int,3> axisFor{ 0, 1, 2 };
-        if (up != 1) {
-            axisFor[1] = up;                 // model Y  ← mesh up axis
-            int fill = 0;
-            for (int a = 0; a < 3; ++a) {
-                if (a == up) continue;
-                axisFor[fill == 0 ? 0 : 2] = a;   // X then Z get the other two
-                ++fill;
-            }
-        }
-
+        const CloudFrame frame = computeCloudFrame(positions, vertexCount, opts.upAxis);
         const int N = std::max(256, opts.samplePoints);
-        // Deterministic point sample. Small meshes include every vertex once so
-        // no vertex keeps the default label; large meshes are sampled across the
-        // whole vertex buffer instead of taking the first N vertices.
-        std::mt19937 rng(0x5e6u);  // NOSONAR — non-crypto, fixed for reproducibility
-        std::uniform_int_distribution<int> pick(0, vertexCount - 1);
-        std::vector<float> pts(static_cast<size_t>(N) * 3);
-        std::vector<int> srcVert(N);
-        for (int i = 0; i < N; ++i) {
-            int v = 0;
-            if (vertexCount <= N) {
-                v = (i < vertexCount) ? i : pick(rng);
-            } else {
-                const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(N);
-                v = std::clamp(static_cast<int>(t * static_cast<double>(vertexCount)),
-                               0, vertexCount - 1);
-            }
-            srcVert[i] = v;
-            for (int c = 0; c < 3; ++c) {
-                const int a = axisFor[c];
-                pts[3*i+c] = (positions[3*v+a]-centre[a])*inv;
-            }
-        }
+        std::vector<float> pts;
+        std::vector<int> srcVert;
+        sampleCloud(positions, vertexCount, frame, N, pts, &srcVert);
 
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_segment");
         Ort::SessionOptions so;
@@ -589,11 +763,14 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         if (outputs.empty() || !outputs[0].IsTensor())
             return fallback(QStringLiteral("Segmentation model gave no output — used the geometric fallback."));
 
-        // Output is per-point logits [1, N, C] (or [1, C, N]); argmax → label.
+        // Output is per-point logits [1, N, C] (or [1, C, N]); argmax over the
+        // CATEGORY's channel count, then map the local channel to the global
+        // Part via the category's channel map.
         auto ti = outputs[0].GetTensorTypeAndShapeInfo();
         const auto oshape = ti.GetShape();
         const size_t elems = ti.GetElementCount();
-        const int C = static_cast<int>(Part::Count);
+        const std::vector<int> chanMap = categoryChannelMap(cat);
+        const int C = static_cast<int>(chanMap.size());
         if (elems < static_cast<size_t>(N))
             return fallback(QStringLiteral("Segmentation output too small — used the geometric fallback."));
         const int chan = (!oshape.empty() && oshape.back() > 0)
@@ -601,7 +778,10 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         const bool channelsLast = (chan == C);
         const float* d = outputs[0].GetTensorData<float>();
 
-        std::vector<int> pointLabel(N, static_cast<int>(Part::Torso));
+        // Placeholder only — every sampled point and every scattered vertex is
+        // overwritten below.
+        const int defaultLabel = static_cast<int>(Part::Unknown);
+        std::vector<int> pointLabel(N, defaultLabel);
         for (int i = 0; i < N; ++i) {
             int best = 0; float bestv = -1e30f;
             for (int c = 0; c < C; ++c) {
@@ -609,14 +789,14 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
                                                : d[static_cast<size_t>(c)*N + i];
                 if (val > bestv) { bestv = val; best = c; }
             }
-            pointLabel[i] = best;
+            pointLabel[i] = chanMap[best];
         }
 
         // Scatter sampled-point labels back to ALL vertices by nearest sampled
         // point (in normalised space). For samplePoints >= vertexCount the first
         // vertexCount samples cover every vertex 1:1, so this is exact.
         Result r;
-        r.vertexLabels.assign(vertexCount, static_cast<int>(Part::Torso));
+        r.vertexLabels.assign(vertexCount, defaultLabel);
         if (vertexCount <= N) {
             for (int i = 0; i < vertexCount; ++i)
                 r.vertexLabels[i] = pointLabel[i];
@@ -625,9 +805,9 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
             for (int v = 0; v < vertexCount; ++v) {
                 // Same axis remap as the sampled points (`pts`), so distances are
                 // compared in the SAME (model +Y-up) frame — not raw vertex order.
-                const float vx=(positions[3*v+axisFor[0]]-centre[axisFor[0]])*inv;
-                const float vy=(positions[3*v+axisFor[1]]-centre[axisFor[1]])*inv;
-                const float vz=(positions[3*v+axisFor[2]]-centre[axisFor[2]])*inv;
+                const float vx=(positions[3*v+frame.axisFor[0]]-frame.centre[frame.axisFor[0]])*frame.inv;
+                const float vy=(positions[3*v+frame.axisFor[1]]-frame.centre[frame.axisFor[1]])*frame.inv;
+                const float vz=(positions[3*v+frame.axisFor[2]]-frame.centre[frame.axisFor[2]])*frame.inv;
                 int best=0; float bd=1e30f;
                 for (int i = 0; i < N; ++i) {
                     const float dx=vx-pts[3*i+0], dy=vy-pts[3*i+1], dz=vz-pts[3*i+2];
@@ -637,12 +817,16 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
                 r.vertexLabels[v] = pointLabel[best];
             }
         }
-        applyBoneHints(r.vertexLabels, boneProximity);
+        // Bone hints map bone names to BODY parts — only authoritative there.
+        if (cat == Category::Body)
+            applyBoneHints(r.vertexLabels, boneProximity);
         smoothLabelsByTopology(r.vertexLabels, indices, indexCount, 1);
-        applyBoneHints(r.vertexLabels, boneProximity);
+        if (cat == Category::Body)
+            applyBoneHints(r.vertexLabels, boneProximity);
         r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
         r.ok = true;
         r.usedModel = true;
+        r.category = cat;
         return r;
     } catch (const Ort::Exception& e) {
         return fallback(QStringLiteral("Segmentation inference failed (%1) — used the geometric fallback.")
@@ -650,6 +834,72 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
     } catch (const std::exception& e) {
         return fallback(QStringLiteral("Segmentation error (%1) — used the geometric fallback.")
                             .arg(QString::fromUtf8(e.what())));
+    }
+}
+
+MeshSegmenter::Category MeshSegmenter::classifyCategory(const float* positions,
+                                                        int vertexCount,
+                                                        const QString& classifierPath,
+                                                        const Options& opts)
+{
+    if (!positions || vertexCount <= 0) return Category::Body;
+    if (classifierPath.isEmpty() || !QFileInfo::exists(classifierPath))
+        return Category::Body;
+
+    try {
+        const CloudFrame frame = computeCloudFrame(positions, vertexCount, opts.upAxis);
+        const int N = std::max(256, opts.samplePoints);
+        std::vector<float> pts;
+        sampleCloud(positions, vertexCount, frame, N, pts, nullptr);
+
+        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_segment_cls");
+        Ort::SessionOptions so;
+        so.SetIntraOpNumThreads(1);
+        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#ifdef __APPLE__
+        try { std::unordered_map<std::string,std::string> c; so.AppendExecutionProvider("CoreML", c); }
+        catch (const Ort::Exception&) {}
+#endif
+#ifdef _WIN32
+        const std::wstring wpath = classifierPath.toStdWString();
+        Ort::Session session(env, wpath.c_str(), so);
+#else
+        const std::string p = classifierPath.toStdString();
+        Ort::Session session(env, p.c_str(), so);
+#endif
+        Ort::AllocatorWithDefaultOptions alloc;
+        Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+        const std::array<int64_t,3> shape{ 1, N, 3 };
+        Ort::Value input = Ort::Value::CreateTensor<float>(
+            mem, pts.data(), pts.size(), shape.data(), shape.size());
+
+        Ort::AllocatedStringPtr inName = session.GetInputNameAllocated(0, alloc);
+        const char* inNames[] = { inName.get() };
+        Ort::AllocatedStringPtr outName = session.GetOutputNameAllocated(0, alloc);
+        const char* outNames[] = { outName.get() };
+
+        std::vector<Ort::Value> outputs = session.Run(
+            Ort::RunOptions{nullptr}, inNames, &input, 1, outNames, 1);
+        if (outputs.empty() || !outputs[0].IsTensor()) return Category::Body;
+
+        // Output: [1, 4] logits over {body, vegetation, vehicle, building} —
+        // the training-script CLASSIFIER_CLASSES order, which maps 1:1 onto
+        // Category::Body..Building.
+        auto ti = outputs[0].GetTensorTypeAndShapeInfo();
+        const size_t elems = ti.GetElementCount();
+        constexpr size_t kClasses =
+            static_cast<size_t>(Category::CategoryCount) - 1;   // minus Auto
+        if (elems < kClasses) return Category::Body;
+        const float* d = outputs[0].GetTensorData<float>();
+        size_t best = 0;
+        for (size_t c = 1; c < kClasses; ++c)
+            if (d[c] > d[best]) best = c;
+        return static_cast<Category>(best + 1);   // 0 → Body, 1 → Vegetation, …
+    } catch (const Ort::Exception&) {
+        return Category::Body;
+    } catch (const std::exception&) {
+        return Category::Body;
     }
 }
 

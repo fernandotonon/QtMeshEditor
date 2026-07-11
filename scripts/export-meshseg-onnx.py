@@ -3,23 +3,34 @@
 #   This is a compact, offline, NOT-shipped dev tool: a few `;`-joined helper
 #   one-liners (E702) and the `l` part-label loop var (E741) are intentional for
 #   density. The app never runs this file.
-"""Train + export the mesh part-segmentation model to ONNX (#410).
+"""Train + export the mesh part-segmentation models to ONNX (#410, #788, #818 B2).
 
 ONE-TIME, OFFLINE developer tool — NOT shipped with the app, and the app never
-runs Python. The app runs the resulting meshseg.onnx in C++ via ONNX Runtime
-(src/MeshSegmenter.cpp), downloading it on first use to
-AppData/ai_models/segment/meshseg.onnx.
+runs Python. The app runs the resulting .onnx files in C++ via ONNX Runtime
+(src/MeshSegmenter.cpp), downloading them on first use to
+AppData/ai_models/segment/.
 
-WHAT IT PRODUCES
-  meshseg.onnx with the contract MeshSegmenter::predict() expects:
+WHAT IT PRODUCES (select with --category; default `body` = the original model)
+  Per-category segmenters with the contract MeshSegmenter::predict() expects:
     input  "points" float32 [1, N, 3]   (point cloud, centred unit box)
-    output "logits" float32 [1, N, C]   (per-point class logits; C = 7)
-  Part order MUST match src/MeshSegmenter.h:
-    0 unknown, 1 head, 2 torso, 3 left_arm, 4 right_arm, 5 left_leg, 6 right_leg.
-  Frame convention (matches the app's inference path): +Y up, character
+    output "logits" float32 [1, N, C]   (per-point class logits)
+  Channel order MUST match the per-category channel→Part maps in
+  src/MeshSegmenter.cpp (kCategoryChannelMaps):
+    body       (meshseg.onnx, C=7):  0 unknown, 1 head, 2 torso, 3 left_arm,
+                                     4 right_arm, 5 left_leg, 6 right_leg
+    vegetation (meshseg_vegetation.onnx, C=6): 0 unknown, 1 trunk, 2 branch,
+                                     3 foliage, 4 root, 5 flower
+    vehicle    (meshseg_vehicle.onnx, C=6):    0 unknown, 1 body, 2 wheel,
+                                     3 window, 4 wing, 5 rotor
+    building   (meshseg_building.onnx, C=7):   0 unknown, 1 wall, 2 roof,
+                                     3 window, 4 door, 5 chimney, 6 foundation
+  Plus `--category classifier` (meshseg_category.onnx): a tiny point-cloud
+  CATEGORY classifier, input "points" [1, N, 3] → output "logits" [1, 4]
+  (0 body, 1 vegetation, 2 vehicle, 3 building) — the Auto dispatcher.
+  Frame convention (matches the app's inference path): +Y up, character/vehicle
   facing +Z, LEFT limbs at +X. MeshSegmenter::predict() remaps the user's
-  --up-axis onto Y; facing is learned (feet/muzzle point +Z in training, with
-  yaw augmentation for robustness).
+  --up-axis onto Y; facing is learned (feet/muzzle/car-nose point +Z in
+  training, with yaw augmentation for robustness).
 
 DATA — SYNTHETIC (CC0, ours) + MINED CC0 RIGS
   The standard part-seg datasets (ShapeNet-Part, PartNet) are NON-COMMERCIAL, so
@@ -68,6 +79,13 @@ Usage (offline, with torch + numpy + onnx in a venv):
         --val-real Male_Suit Female_Dress Trex --out meshseg.onnx
     # sanity-check the canonicalisation of mined data without training:
     python export-meshseg-onnx.py --real-data ./mined/ --check-real
+    # per-category segmenters (#818 B2, synthetic-only):
+    python export-meshseg-onnx.py --category vegetation --samples 3000
+    python export-meshseg-onnx.py --category vehicle --samples 3000
+    python export-meshseg-onnx.py --category building --samples 3000
+    # the Auto-dispatch category classifier (real data mixed in as `body`):
+    python export-meshseg-onnx.py --category classifier --samples 6000 \
+        --real-data ./mined/
 """
 import argparse
 import glob
@@ -77,8 +95,23 @@ import os
 import numpy as np
 
 HEAD, TORSO, LARM, RARM, LLEG, RLEG = 1, 2, 3, 4, 5, 6
-C = 7  # Part::Count
+C = 7  # body Part channel count (meshseg.onnx wire contract)
 N_BASE = 4096  # stored points per sample == the app's inference sample size
+
+# per-category LOCAL channel indices (0 = unknown everywhere); the C++ side
+# maps these to the global MeshSegmenter::Part enum via kCategoryChannelMaps
+TRUNK, BRANCH, FOLIAGE, ROOT, FLOWER = 1, 2, 3, 4, 5                # vegetation
+VBODY, WHEEL, WINDOW, WING, ROTOR = 1, 2, 3, 4, 5                   # vehicle
+WALL, ROOF, BWINDOW, DOOR, CHIMNEY, FOUNDATION = 1, 2, 3, 4, 5, 6   # building
+
+CATEGORIES = {
+    #  name       C  out-file suffix
+    "body":       (7, "meshseg.onnx"),
+    "vegetation": (6, "meshseg_vegetation.onnx"),
+    "vehicle":    (6, "meshseg_vehicle.onnx"),
+    "building":   (7, "meshseg_building.onnx"),
+}
+CLASSIFIER_CLASSES = ["body", "vegetation", "vehicle", "building"]
 
 
 # --- surface samplers --------------------------------------------------------
@@ -128,6 +161,23 @@ def box_surf(c, half, n, rng):
     ax = face // 2; sign = np.where(face % 2 == 0, 1.0, -1.0)
     p[np.arange(n), ax] = sign * half[ax]
     return c + p
+
+
+def quad_surf(origin, e1, e2, n, rng):
+    """Points on a parallelogram patch origin + u·e1 + v·e2, u,v ∈ [0,1]."""
+    uv = rng.random((n, 2))
+    return np.asarray(origin, float) + uv[:, :1] * np.asarray(e1, float) \
+        + uv[:, 1:] * np.asarray(e2, float)
+
+
+def tri_surf(a, b, c, n, rng):
+    """Points on a triangle (uniform barycentric)."""
+    uv = rng.random((n, 2))
+    flip = uv.sum(1) > 1
+    uv[flip] = 1 - uv[flip]
+    a = np.asarray(a, float)
+    return a + uv[:, :1] * (np.asarray(b, float) - a) \
+        + uv[:, 1:] * (np.asarray(c, float) - a)
 
 
 # --- synthetic body plans (frame: +Y up, facing +Z, LEFT at +X) --------------
@@ -342,6 +392,282 @@ def sample_body(rng, n_out=N_BASE):
     return normalise(P[idx]), L[idx]
 
 
+# --- synthetic vegetation (trunk/branch/foliage/root/flower) -----------------
+def make_tree(rng):
+    """Surface-sampled tree/plant. Same (sampler, label, weight) contract as the
+    body plans; labels are the vegetation LOCAL channels."""
+    parts = []
+    kind = rng.choice(['broadleaf', 'pine', 'palm', 'dead', 'bush'],
+                      p=[0.40, 0.25, 0.15, 0.10, 0.10])
+    trunkH = rng.uniform(0.5, 1.5)
+    trunkR = trunkH * rng.uniform(0.04, 0.12)
+    if kind == 'bush':
+        trunkH *= rng.uniform(0.15, 0.4)
+    lean = rng.uniform(-0.12, 0.12, size=2)
+    top = np.array([lean[0] * trunkH, trunkH, lean[1] * trunkH])
+    parts.append((lambda n, b=top, r=trunkR: capsule_surf([0, 0, 0], b, r, n, rng),
+                  TRUNK, trunkH * trunkR * 3))
+
+    def blob(c, r, label, w, squash=None):
+        parts.append((lambda n, c=c, r=r, s=squash: sphere_surf(c, r, n, rng, s),
+                      label, w))
+
+    if kind in ('broadleaf', 'dead', 'bush'):
+        nbr = rng.integers(2, 7)
+        tips = []
+        for _ in range(nbr):
+            az = rng.uniform(0, 2 * np.pi)
+            elev = rng.uniform(0.3, 1.1)
+            bl = trunkH * rng.uniform(0.25, 0.6)
+            base = top * rng.uniform(0.55, 0.95)
+            tip = base + bl * np.array([np.cos(az) * np.cos(elev), np.sin(elev),
+                                        np.sin(az) * np.cos(elev)])
+            parts.append((lambda n, a=base, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
+                          capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR))
+            tips.append(tip)
+        if kind != 'dead':
+            if rng.random() < 0.5 or kind == 'bush':     # one big low-poly canopy
+                cr = trunkH * rng.uniform(0.35, 0.7)
+                cc = top + np.array([0, cr * rng.uniform(0.3, 0.8), 0])
+                blob(cc, cr, FOLIAGE, cr * cr * 10,
+                     np.array([rng.uniform(0.8, 1.2), rng.uniform(0.6, 1.1),
+                               rng.uniform(0.8, 1.2)]))
+            else:                                        # per-tip blobs
+                for tip in tips:
+                    br = trunkH * rng.uniform(0.15, 0.35)
+                    blob(tip, br, FOLIAGE, br * br * 8)
+            if rng.random() < 0.25:                      # flowers / fruit
+                for _ in range(rng.integers(2, 8)):
+                    d = _unit_dirs(1, rng)[0]
+                    fc = top + np.array([0, trunkH * 0.4, 0]) + d * trunkH * 0.45
+                    blob(fc, trunkH * rng.uniform(0.02, 0.06), FLOWER, trunkH * 0.05)
+    elif kind == 'pine':
+        layers = rng.integers(3, 7)
+        baseR = trunkH * rng.uniform(0.3, 0.55)
+        for i in range(layers):
+            t = (i + 1) / (layers + 1)
+            lr = baseR * (1 - 0.75 * t)
+            lc = np.array([0, trunkH * (0.35 + 0.75 * t), 0])
+            blob(lc, lr, FOLIAGE, lr * lr * 6,
+                 np.array([1, rng.uniform(0.25, 0.5), 1]))
+    elif kind == 'palm':
+        nfr = rng.integers(4, 9)
+        for _ in range(nfr):
+            az = rng.uniform(0, 2 * np.pi)
+            fl = trunkH * rng.uniform(0.3, 0.55)
+            fc = top + fl * 0.6 * np.array([np.cos(az), rng.uniform(-0.1, 0.35),
+                                            np.sin(az)])
+            sq = np.array([abs(np.cos(az)) * 2.2 + 0.3, 0.18,
+                           abs(np.sin(az)) * 2.2 + 0.3])
+            blob(fc, fl * 0.45, FOLIAGE, fl * fl * 2, sq)
+        if rng.random() < 0.3:                           # coconuts
+            for _ in range(rng.integers(2, 5)):
+                d = _unit_dirs(1, rng)[0] * trunkR * 2
+                blob(top + d, trunkR * rng.uniform(0.5, 1.0), FLOWER, trunkR)
+    if rng.random() < 0.45 and kind != 'bush':           # surface roots
+        for _ in range(rng.integers(2, 6)):
+            az = rng.uniform(0, 2 * np.pi)
+            rl = trunkH * rng.uniform(0.08, 0.25)
+            tip = np.array([np.cos(az) * rl, -rl * rng.uniform(0.1, 0.4),
+                            np.sin(az) * rl])
+            parts.append((lambda n, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
+                          capsule_surf([0, 0, 0], b, r, n, rng), ROOT, rl * trunkR))
+    return parts
+
+
+# --- synthetic vehicles (body/wheel/window/wing/rotor), nose at +Z -----------
+def make_vehicle(rng):
+    parts = []
+    kind = rng.choice(['car', 'truck', 'plane', 'heli'], p=[0.40, 0.15, 0.28, 0.17])
+
+    def boxp(c, half, label, w):
+        parts.append((lambda n, c=np.asarray(c, float), h=np.asarray(half, float):
+                      box_surf(c, h, n, rng), label, w))
+
+    def blob(c, r, label, w, squash=None):
+        parts.append((lambda n, c=np.asarray(c, float), r=r, s=squash:
+                      sphere_surf(c, r, n, rng, s), label, w))
+
+    if kind in ('car', 'truck'):
+        L = rng.uniform(0.8, 1.4); W = L * rng.uniform(0.35, 0.55)
+        wheelR = L * rng.uniform(0.09, 0.16)
+        bodyH = L * rng.uniform(0.12, 0.22)
+        y0 = wheelR * rng.uniform(0.7, 1.1)
+        boxp([0, y0 + bodyH / 2, 0], [W / 2, bodyH / 2, L / 2], VBODY, L * W * 2)
+        cabL = L * rng.uniform(0.35, 0.55); cabH = bodyH * rng.uniform(0.7, 1.2)
+        cabZ = (L / 2 - cabL / 2) * (rng.uniform(0.3, 0.9) if kind == 'car' else 0.95)
+        cabY = y0 + bodyH + cabH / 2
+        boxp([0, cabY, cabZ if kind == 'car' else L / 2 - cabL / 2],
+             [W / 2 * 0.92, cabH / 2, cabL / 2], VBODY, cabL * W)
+        # windows: thin proud panes on the cabin's four faces
+        zc = cabZ if kind == 'car' else L / 2 - cabL / 2
+        for sx in (+1, -1):
+            boxp([sx * W / 2 * 0.94, cabY, zc],
+                 [0.012 * L, cabH * 0.32, cabL * 0.36], WINDOW, cabL * cabH * 0.6)
+        for sz in (+1, -1):
+            boxp([0, cabY, zc + sz * cabL / 2 * 0.96],
+                 [W / 2 * 0.7, cabH * 0.32, 0.012 * L], WINDOW, W * cabH * 0.6)
+        if kind == 'truck':
+            boxp([0, y0 + bodyH + cabH * rng.uniform(0.5, 1.0),
+                  -L * rng.uniform(0.05, 0.15)],
+                 [W / 2, cabH * rng.uniform(0.5, 1.0), L * 0.3], VBODY, L * W)
+        nw = 4 if kind == 'car' else int(rng.choice([4, 6]))
+        zs = np.linspace(-L / 2 * 0.72, L / 2 * 0.72, nw // 2)
+        for sx in (+1, -1):
+            for z in zs:
+                blob([sx * W / 2, wheelR, z], wheelR, WHEEL, wheelR * wheelR * 8,
+                     np.array([0.35, 1, 1]))
+    elif kind == 'plane':
+        L = rng.uniform(1.0, 1.6); fr = L * rng.uniform(0.07, 0.13)
+        y0 = fr * rng.uniform(1.5, 3.0)
+        parts.append((lambda n, a=[0, y0, -L / 2], b=[0, y0, L / 2], r=fr:
+                      capsule_surf(a, b, r, n, rng), VBODY, L * fr * 3))
+        span = L * rng.uniform(0.5, 0.9); chord = L * rng.uniform(0.12, 0.22)
+        zw = L * rng.uniform(-0.1, 0.15)
+        for sx in (+1, -1):
+            boxp([sx * (span / 2 + fr * 0.5), y0, zw],
+                 [span / 2, 0.015 * L, chord / 2], WING, span * chord)
+            boxp([sx * (span * 0.18 + fr * 0.4), y0 + fr * 0.3, -L / 2 * 0.92],
+                 [span * 0.18, 0.012 * L, chord * 0.3], WING, span * chord * 0.2)
+        boxp([0, y0 + fr + span * 0.12, -L / 2 * 0.94],
+             [0.012 * L, span * 0.12, chord * 0.35], WING, span * chord * 0.2)
+        if rng.random() < 0.6:                           # nose prop
+            pr = fr * rng.uniform(1.8, 3.0)
+            boxp([0, y0, L / 2 + fr * 0.4], [pr, 0.03 * L, 0.02 * L], ROTOR, pr)
+            boxp([0, y0, L / 2 + fr * 0.4], [0.03 * L, pr, 0.02 * L], ROTOR, pr)
+        blob([0, y0 + fr * 0.75, L * 0.18], fr * 0.75, WINDOW, fr * fr * 3,
+             np.array([0.8, 0.6, 1.4]))
+        if rng.random() < 0.5:                           # landing gear
+            for sx, z in ((+1, zw), (-1, zw), (0, L / 2 * 0.75)):
+                blob([sx * span * 0.12, fr * 0.5, z], fr * 0.45, WHEEL, fr * fr * 2,
+                     np.array([0.4, 1, 1]))
+    else:                                                # helicopter
+        L = rng.uniform(0.7, 1.1); br = L * rng.uniform(0.16, 0.24)
+        y0 = br * rng.uniform(1.6, 2.4)
+        blob([0, y0, L * 0.15], br, VBODY, br * br * 8,
+             np.array([0.8, 0.85, 1.3]))
+        parts.append((lambda n, a=[0, y0 + br * 0.2, 0], b=[0, y0 + br * 0.35, -L], r=br * 0.22:
+                      capsule_surf(a, b, r, n, rng), VBODY, L * br))
+        rr = L * rng.uniform(0.55, 0.85)
+        boxp([0, y0 + br * 1.25, L * 0.1], [rr, 0.015 * L, 0.035 * L], ROTOR, rr)
+        boxp([0, y0 + br * 1.25, L * 0.1], [0.035 * L, 0.015 * L, rr], ROTOR, rr)
+        boxp([br * 0.28, y0 + br * 0.4, -L], [0.012 * L, rr * 0.22, rr * 0.22],
+             ROTOR, rr * 0.2)
+        blob([0, y0 + br * 0.15, L * 0.15 + br * 0.75], br * 0.6, WINDOW,
+             br * br * 3, np.array([0.9, 0.7, 0.9]))
+        for sx in (+1, -1):                              # skids
+            parts.append((lambda n, a=[sx * br * 0.7, br * 0.25, -L * 0.25],
+                          b=[sx * br * 0.7, br * 0.25, L * 0.55], r=br * 0.08:
+                          capsule_surf(a, b, r, n, rng), WHEEL, L * br * 0.3))
+    return parts
+
+
+# --- synthetic buildings (wall/roof/window/door/chimney/foundation) ----------
+def make_building(rng):
+    parts = []
+    kind = rng.choice(['house', 'tower', 'hut'], p=[0.55, 0.30, 0.15])
+
+    def boxp(c, half, label, w):
+        parts.append((lambda n, c=np.asarray(c, float), h=np.asarray(half, float):
+                      box_surf(c, h, n, rng), label, w))
+
+    W = rng.uniform(0.5, 1.0); D = W * rng.uniform(0.6, 1.4)
+    if kind == 'tower':
+        H = W * rng.uniform(2.0, 4.0); D = W * rng.uniform(0.8, 1.2)
+    elif kind == 'hut':
+        H = W * rng.uniform(0.4, 0.8)
+    else:
+        H = W * rng.uniform(0.6, 1.3)
+    boxp([0, H / 2, 0], [W / 2, H / 2, D / 2], WALL, W * H * 4)
+
+    ov = rng.uniform(1.02, 1.2)                          # roof overhang
+    roofH = W * rng.uniform(0.25, 0.7) * (1.6 if kind == 'hut' else 1.0)
+    flat_roof = kind == 'tower' and rng.random() < 0.5
+    if flat_roof:
+        boxp([0, H + W * 0.04, 0], [W / 2 * ov, W * 0.04, D / 2 * ov],
+             ROOF, W * D * 2)
+    elif rng.random() < 0.45 or kind == 'hut':           # pyramid roof (4 tris)
+        apex = np.array([0, H + roofH, 0])
+        cs = [np.array([sx * W / 2 * ov, H, sz * D / 2 * ov])
+              for sx, sz in ((+1, +1), (-1, +1), (-1, -1), (+1, -1))]
+        for i in range(4):
+            parts.append((lambda n, a=cs[i], b=cs[(i + 1) % 4], c=apex:
+                          tri_surf(a, b, c, n, rng), ROOF, W * roofH))
+    else:                                                # gable roof
+        ridge0 = np.array([0, H + roofH, -D / 2 * ov])
+        ridge1 = np.array([0, H + roofH, D / 2 * ov])
+        for sx in (+1, -1):
+            eave0 = np.array([sx * W / 2 * ov, H, -D / 2 * ov])
+            parts.append((lambda n, o=eave0, e1=ridge0 - eave0,
+                          e2=[0, 0, D * ov]: quad_surf(o, e1, e2, n, rng),
+                          ROOF, W * D))
+        for sz in (+1, -1):                              # gable triangles
+            parts.append((lambda n,
+                          a=[+W / 2, H, sz * D / 2], b=[-W / 2, H, sz * D / 2],
+                          c=[0, H + roofH, sz * D / 2]: tri_surf(a, b, c, n, rng),
+                          WALL, W * roofH * 0.5))
+    # windows: proud thin panes in rows on ±X and ±Z faces
+    rows = max(1, int(H / (W * 0.55))) if kind != 'hut' else 1
+    for row in range(rows):
+        wy = H * (row + 0.55) / (rows + 0.35)
+        wh = min(W, H / rows) * rng.uniform(0.12, 0.22)
+        for sx in (+1, -1):
+            for z in np.linspace(-D * 0.28, D * 0.28, rng.integers(1, 4)):
+                boxp([sx * W / 2, wy, z], [0.015 * W, wh, wh], BWINDOW, wh * wh * 8)
+        for sz in (+1, -1):
+            for x in np.linspace(-W * 0.28, W * 0.28, rng.integers(1, 4)):
+                boxp([x, wy, sz * D / 2], [wh, wh, 0.015 * W], BWINDOW, wh * wh * 8)
+    doorH = min(H * 0.7, W * rng.uniform(0.35, 0.55))
+    boxp([rng.uniform(-W * 0.2, W * 0.2), doorH / 2, D / 2],
+         [doorH * 0.35, doorH / 2, 0.02 * W], DOOR, doorH * doorH * 2)
+    if rng.random() < 0.4 and not flat_roof:
+        boxp([rng.uniform(-W * 0.3, W * 0.3), H + roofH * rng.uniform(0.6, 1.1),
+              rng.uniform(-D * 0.25, D * 0.25)],
+             [W * 0.06, roofH * 0.5, W * 0.06], CHIMNEY, W * roofH * 0.3)
+    if rng.random() < 0.5:
+        boxp([0, W * 0.03, 0], [W / 2 * 1.15, W * 0.03, D / 2 * 1.15],
+             FOUNDATION, W * D)
+    return parts
+
+
+def sample_category_cloud(rng, make_fn, n_out=N_BASE):
+    """Like sample_body but for the non-body category plans: uniform density
+    randomisation (no body-specific head-density boost), same augment +
+    normalise. Mirror is applied by the caller (no L/R label swap needed)."""
+    parts = make_fn(rng)
+    ws = np.array([w * rng.uniform(0.5, 2.5) for _, _, w in parts])
+    ws /= ws.sum()
+    counts = np.maximum(8, (ws * n_out * 1.5).astype(int))
+    pts, lab = [], []
+    for (fn, l, _), cnt in zip(parts, counts):
+        pts.append(fn(int(cnt))); lab.append(np.full(int(cnt), l, np.int64))
+    P = np.concatenate(pts).astype(np.float32); L = np.concatenate(lab)
+    P = augment(P, rng)
+    idx = rng.choice(len(P), n_out, replace=len(P) < n_out)
+    return normalise(P[idx]), L[idx]
+
+
+CATEGORY_MAKERS = {
+    "vegetation": make_tree,
+    "vehicle": make_vehicle,
+    "building": make_building,
+}
+
+
+def gen_dataset_category(category, samples, seed):
+    """Synthetic dataset for a non-body category (mirror = plain x-flip)."""
+    rng = np.random.default_rng(seed)
+    make_fn = CATEGORY_MAKERS[category]
+    aP = np.zeros((samples, N_BASE, 3), np.float32)
+    aL = np.zeros((samples, N_BASE), np.int64)
+    for i in range(samples):
+        P, L = sample_category_cloud(rng, make_fn)
+        if rng.random() < 0.5:
+            P = P.copy(); P[:, 0] = -P[:, 0]
+        aP[i] = P; aL[i] = L
+    return aP, aL
+
+
 # --- augmentation / normalisation --------------------------------------------
 def augment(P, rng):
     """Yaw (mostly near-canonical, sometimes full 360°), small tilt, anisotropic
@@ -546,18 +872,110 @@ def check_real(paths):
     print(f"\n{len(files) - bad}/{len(files)} canonicalised cleanly")
 
 
+# --- Auto-dispatch category classifier ----------------------------------------
+def train_classifier(a, torch, nn):
+    """Train + export meshseg_category.onnx: point cloud [1,N,3] → [1,4] logits
+    over CLASSIFIER_CLASSES. Tiny PointNet (per-point MLP + max-pool + head) —
+    no kNN blocks needed for a 4-way whole-cloud decision. Mined real rigs
+    (--real-data) are mixed in as extra `body` samples."""
+    per = max(1, a.samples // len(CLASSIFIER_CLASSES))
+    rng = np.random.default_rng(a.seed)
+    Ps, Ys = [], []
+    print(f"generating classifier data… ({per} samples/class)")
+    for ci, cls in enumerate(CLASSIFIER_CLASSES):
+        for _ in range(per):
+            if cls == "body":
+                P, _ = sample_body(rng)
+            else:
+                P, _ = sample_category_cloud(rng, CATEGORY_MAKERS[cls])
+            if rng.random() < 0.5:
+                P = P.copy(); P[:, 0] = -P[:, 0]
+            Ps.append(P); Ys.append(ci)
+    if a.real_data:
+        rP, _ = load_real_data(a.real_data, min(a.real_aug, 7), a.seed,
+                               exclude=a.val_real)
+        for i in range(len(rP)):
+            Ps.append(rP[i]); Ys.append(CLASSIFIER_CLASSES.index("body"))
+        print(f"added {len(rP)} mined real clouds as `body` samples")
+    P = torch.tensor(np.stack(Ps)); Y = torch.tensor(np.array(Ys, np.int64))
+    sh = torch.randperm(len(P), generator=torch.Generator().manual_seed(a.seed))
+    P, Y = P[sh], Y[sh]
+    n = len(P); nval = max(1, n // 10)
+    dev = "mps" if torch.backends.mps.is_available() else \
+          ("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"classifier data n={n} dev={dev}")
+
+    nCls = len(CLASSIFIER_CLASSES)
+
+    class PointCls(nn.Module):
+        def __init__(s, d=128):
+            super().__init__()
+            s.mlp = nn.Sequential(nn.Linear(3, 64), nn.GELU(),
+                                  nn.Linear(64, d), nn.GELU(),
+                                  nn.Linear(d, d), nn.GELU())
+            s.head = nn.Sequential(nn.Linear(d, 64), nn.GELU(), nn.Linear(64, nCls))
+
+        def forward(s, pts):                       # pts: [B,N,3]
+            f = s.mlp(pts)
+            return s.head(f.max(dim=1).values)     # [B,nCls]
+
+    net = PointCls().to(dev)
+    lossf = nn.CrossEntropyLoss()
+    epochs = max(8, a.epochs // 3)
+    opt = torch.optim.AdamW(net.parameters(), lr=2e-3, weight_decay=1e-4)
+    sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
+    g = torch.Generator().manual_seed(a.seed)
+    bs = max(8, a.batch * 2)
+    for ep in range(epochs):
+        net.train()
+        perm = torch.randperm(n - nval, generator=g) + nval
+        last = 0.0
+        for b in range(0, perm.numel(), bs):
+            bi = perm[b:b + bs]
+            # random 1024-pt subsets: fast + free augmentation
+            sub = torch.randint(0, N_BASE, (len(bi), 1024), generator=g)
+            pts = torch.gather(P[bi], 1, sub.unsqueeze(-1).expand(-1, -1, 3))
+            loss = lossf(net(pts.to(dev)), Y[bi].to(dev))
+            opt.zero_grad(); loss.backward(); opt.step()
+            last = loss.item()
+        sch.step()
+        net.eval()
+        with torch.no_grad():
+            correct = 0
+            for b in range(0, nval, 16):
+                pv = P[b:b + 16].to(dev)
+                correct += (net(pv).argmax(-1) == Y[b:b + 16].to(dev)).sum().item()
+        print(f"cls ep{ep:3d} loss{last:.4f} val_acc={correct / nval:.4f}", flush=True)
+
+    out = a.out or "meshseg_category.onnx"
+    net.eval().cpu()
+    torch.onnx.export(
+        net, (torch.zeros(1, N_BASE, 3),), out,
+        input_names=["points"], output_names=["logits"],
+        dynamic_axes={"points": {1: "N"}},
+        opset_version=17, dynamo=False)
+    print("wrote", out)
+
+
 # --- training -----------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--category", default="body",
+                    choices=[*CATEGORIES.keys(), "classifier"],
+                    help="which model to train: a per-category segmenter "
+                         "(body = the original meshseg.onnx) or the Auto-dispatch "
+                         "point-cloud category `classifier`")
     ap.add_argument("--samples", type=int, default=4000)
     ap.add_argument("--epochs", type=int, default=40, help="phase-1 epochs @2048 pts")
     ap.add_argument("--epochs2", type=int, default=6, help="phase-2 epochs @4096 pts")
     ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--out", default="meshseg.onnx")
+    ap.add_argument("--out", default=None,
+                    help="output path (default: the category's canonical file name)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--real-data", nargs="*", default=[],
                     help="dirs/files of `qtmesh segment --dump-training-data` JSON "
-                         "samples (rig-prior ground truth) to MIX with synthetic data")
+                         "samples (rig-prior ground truth) to MIX with synthetic data "
+                         "(body segmenter + classifier only)")
     ap.add_argument("--real-aug", type=int, default=23,
                     help="augmented copies per real mesh (yaw/tilt/scale/mirror)")
     ap.add_argument("--val-real", nargs="*", default=[],
@@ -573,21 +991,31 @@ def main():
     import torch
     import torch.nn as nn
 
-    print("generating synthetic data…")
-    P, L = gen_dataset(a.samples, a.seed)
-    if a.real_data:
-        rP, rL = load_real_data(a.real_data, a.real_aug, a.seed, exclude=a.val_real)
-        if len(rP):
-            P = np.concatenate([P, rP]); L = np.concatenate([L, rL])
-            sh = np.random.default_rng(a.seed + 1).permutation(len(P))
-            P = P[sh]; L = L[sh]
-            print(f"combined dataset: {len(P)} samples "
-                  f"({a.samples} synthetic + {len(rP)} real)")
-    # real validation set: held-out mined files, no augmentation
+    if a.category == "classifier":
+        train_classifier(a, torch, nn); return
+
+    nC = CATEGORIES[a.category][0]
+    if a.out is None:
+        a.out = CATEGORIES[a.category][1]
+
+    print(f"generating synthetic data… (category: {a.category})")
     vP = vL = None
-    if a.real_data and a.val_real:
-        vP, vL = load_real_data(a.real_data, 0, a.seed, only=a.val_real)
-        if not len(vP): vP = vL = None
+    if a.category == "body":
+        P, L = gen_dataset(a.samples, a.seed)
+        if a.real_data:
+            rP, rL = load_real_data(a.real_data, a.real_aug, a.seed, exclude=a.val_real)
+            if len(rP):
+                P = np.concatenate([P, rP]); L = np.concatenate([L, rL])
+                sh = np.random.default_rng(a.seed + 1).permutation(len(P))
+                P = P[sh]; L = L[sh]
+                print(f"combined dataset: {len(P)} samples "
+                      f"({a.samples} synthetic + {len(rP)} real)")
+        # real validation set: held-out mined files, no augmentation
+        if a.real_data and a.val_real:
+            vP, vL = load_real_data(a.real_data, 0, a.seed, only=a.val_real)
+            if not len(vP): vP = vL = None
+    else:
+        P, L = gen_dataset_category(a.category, a.samples, a.seed)
 
     P = torch.tensor(P); L = torch.tensor(L)
     n = P.shape[0]
@@ -597,10 +1025,10 @@ def main():
     print(f"data n={n} stored_points={N_BASE} dev={dev}")
 
     # class weights: unknown masked out, others inverse-sqrt frequency
-    freq = np.bincount(L.numpy().ravel(), minlength=C).astype(np.float64)
-    w = np.zeros(C); nz = freq > 0
+    freq = np.bincount(L.numpy().ravel(), minlength=nC).astype(np.float64)
+    w = np.zeros(nC); nz = freq > 0
     w[nz] = 1.0 / np.sqrt(freq[nz]); w[0] = 0.0
-    w = w / w[nz & (np.arange(C) > 0)].mean()
+    w = w / w[nz & (np.arange(nC) > 0)].mean()
     print("class weights:", np.round(w, 2))
     cw = torch.tensor(w, dtype=torch.float32, device=dev)
 
@@ -615,7 +1043,7 @@ def main():
             s.loc1 = nn.Sequential(nn.Linear(2 * d, d), nn.GELU(), nn.Linear(d, d), nn.GELU())
             s.loc2 = nn.Sequential(nn.Linear(2 * d, d), nn.GELU(), nn.Linear(d, d), nn.GELU())
             s.mlp2 = nn.Sequential(nn.Linear(d, d), nn.GELU(), nn.Linear(d, d), nn.GELU())
-            s.head = nn.Sequential(nn.Linear(3 * d, d), nn.GELU(), nn.Linear(d, C))
+            s.head = nn.Sequential(nn.Linear(3 * d, d), nn.GELU(), nn.Linear(d, nC))
 
         def _agg(s, f, nbr):
             B, N, dimf = f.shape
@@ -678,7 +1106,7 @@ def main():
                     pts = torch.gather(pts, 1, sub.unsqueeze(-1).expand(-1, -1, 3))
                     lab = torch.gather(lab, 1, sub)
                 logits = net(pts.to(dev))
-                loss = lossf(logits.reshape(-1, C), lab.to(dev).reshape(-1))
+                loss = lossf(logits.reshape(-1, nC), lab.to(dev).reshape(-1))
                 opt.zero_grad(); loss.backward(); opt.step()
                 last = loss.item()
             sch.step()

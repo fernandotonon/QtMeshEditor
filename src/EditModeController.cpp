@@ -922,7 +922,15 @@ QString EditModeController::selectByPart(const QString& upAxis)
             return true;
         };
 
-        const QString modelPath = MeshSegmenter::ensureModelBlocking();
+        // Resolve the mesh category first (#818 B2): Auto runs the tiny
+        // point-cloud classifier (first-use download; Body when unavailable)
+        // so a tree/car/house gets its specialised label set, then fetch that
+        // category's segmentation model.
+        MeshSegmenter::Options opts;
+        opts.upAxis = upAxisIdx;
+        opts.category = MeshSegmenter::resolveCategoryBlocking(
+            verts.data(), vertexCount, opts);
+        const QString modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
         if (cancel->load()) {
             QMetaObject::invokeMethod(qApp, [self]() {
                 if (!self) return;
@@ -933,8 +941,6 @@ QString EditModeController::selectByPart(const QString& upAxis)
             return;
         }
 
-        MeshSegmenter::Options opts;
-        opts.upAxis = upAxisIdx;
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,

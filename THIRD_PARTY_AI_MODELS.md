@@ -181,11 +181,23 @@ the binary). Attribution + licenses for the models and their training data:
   no model, and visibly smoother than naive linear interpolation. The trained
   model measurably beats slerp on held-out CMU motion (rotation error < half).
 
-## Mesh part segmentation (issue #410)
+## Mesh part segmentation (issue #410, categories #818 B2)
 
-- **Model:** a PointNet++-style point-cloud part-segmentation network (per-point
-  → head / torso / left+right arm / left+right leg), exported to ONNX. Run by
-  `src/MeshSegmenter.cpp`; the fourth ONNX consumer.
+- **Models:** a family of PointNet++-style point-cloud part-segmentation
+  networks, one small ONNX per mesh CATEGORY, plus a tiny category classifier
+  for Auto dispatch — all exported to ONNX and run by `src/MeshSegmenter.cpp`
+  (the fourth ONNX consumer):
+  - `meshseg.onnx` — body (head / torso / left+right arm / left+right leg);
+  - `meshseg_vegetation.onnx` — trunk / branch / foliage / root / flower;
+  - `meshseg_vehicle.onnx` — vehicle_body / wheel / window / wing / rotor;
+  - `meshseg_building.onnx` — wall / roof / window / door / chimney / foundation;
+  - `meshseg_category.onnx` — point-cloud → {body, vegetation, vehicle,
+    building} (PointNet max-pool classifier, ~0.1 MB).
+  The non-body models are trained on **procedurally generated synthetic
+  shapes we own** (parametric trees / vehicles / buildings with exact
+  by-construction labels — CC0, ours); the classifier trains on the same
+  generators + the mined body corpus. No third-party data at all in those
+  four files.
 - **Training data — synthetic / permissively derived.** The standard
   part-segmentation datasets (**ShapeNet-Part**, **PartNet**) are
   **non-commercial research-only** and so were rejected (same bar as #408
@@ -221,11 +233,13 @@ the binary). Attribution + licenses for the models and their training data:
   of training; accuracy figures live in `docs/MESH_SEGMENTATION_STRATEGY.md`.
 - **Export tool:** `scripts/export-meshseg-onnx.py` (one-time, offline, NOT
   shipped — the app never runs Python; it synthesises the data + trains + exports).
-- **Hosting:** `meshseg.onnx` is hosted in the
+- **Hosting:** every `meshseg*.onnx` (body + the category models + the
+  classifier) is hosted in the
   [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
   HF repo under `segment/` and downloads on first use to
-  `AppData/ai_models/segment/` (override `QTMESH_SEGMENT_MODEL_BASE_URL` /
-  `QSettings ai/segmentModelBaseUrl`; offline guard `QTMESH_SEGMENT_NO_DOWNLOAD`).
+  `AppData/ai_models/segment/` (one shared override
+  `QTMESH_SEGMENT_MODEL_BASE_URL` / `QSettings ai/segmentModelBaseUrl`;
+  offline guard `QTMESH_SEGMENT_NO_DOWNLOAD` covers the whole family).
 - **Fallback:** when ONNX is disabled, the model can't be fetched, or inference
   fails, the feature uses a deterministic **geometric** segmenter (connected-
   component islands + an up-axis/lateral spatial heuristic, refined by rig
