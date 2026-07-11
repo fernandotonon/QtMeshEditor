@@ -10019,6 +10019,7 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
     bool trackedOnly = false;
     bool smooth = false;
     bool dropSlivers = false;
+    bool rigidAnim = false;
     bool dedupeStrict = false;
     bool jsonOut = false;
 
@@ -10039,6 +10040,8 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
                 "  --tracked-only      Keep only in-core tracked+depth 3D geometry\n"
                 "  --smooth            Weld verts + recompute normals\n"
                 "  --drop-slivers      Remove zero-area triangles (#428 cleanup)\n"
+                "  --rigid-animation   Extract per-object rigid animation (scene capture;\n"
+                "                      in-editor preview — node tracks don't export yet)\n"
                 "  --dedupe-strict     Bit-exact instance dedupe\n"
                 "  -o <file>           Output mesh/scene (gltf/glb/fbx/obj/…)\n"
                 "  --json              Machine-readable result\n"
@@ -10062,6 +10065,7 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
         if (arg == QStringLiteral("--tracked-only")) { trackedOnly = true; continue; }
         if (arg == QStringLiteral("--smooth")) { smooth = true; continue; }
         if (arg == QStringLiteral("--drop-slivers")) { dropSlivers = true; continue; }
+        if (arg == QStringLiteral("--rigid-animation")) { rigidAnim = true; continue; }
         if (arg == QStringLiteral("--dedupe-strict")) { dedupeStrict = true; continue; }
         if (arg == QStringLiteral("--json")) { jsonOut = true; continue; }
         if (arg == QStringLiteral("--cli") || arg == QStringLiteral("--verbose")
@@ -10162,6 +10166,7 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
         ns.trackedGeometryOnly = trackedOnly;
         ns.cleanupWeldNormals = smooth;
         ns.cleanupRemoveZeroArea = dropSlivers;
+        ns.captureRigidAnimation = rigidAnim;
         mgr->setNormalizerSettings(ns);
     }
 

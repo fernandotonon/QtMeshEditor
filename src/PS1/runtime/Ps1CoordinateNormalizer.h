@@ -103,6 +103,18 @@ struct Ps1NormalizerSettings {
      *  ×0.01 editor magnitude. Triangles with area <= this are removed. */
     float zeroAreaEpsilon = 1.0e-7f;
 
+    /** Rigid animation capture (#429): during a *Capture Scene* the per-frame
+     *  in-core GTE records carry each object's changing (rt,tr). When true, the
+     *  builder extracts one matrix track per moving object and authors an
+     *  Ogre NodeAnimationTrack on that object's capture node so the ripped
+     *  rigid motion PLAYS in the editor viewport. In-editor preview only —
+     *  node-transform tracks do not yet round-trip through the glTF/FBX
+     *  exporter (skeletal only). Off by default; only meaningful for scene
+     *  captures (a single-frame capture has no motion). Best on static-camera
+     *  scenes: GTE matrices are View×Model, so tracks otherwise fold in camera
+     *  motion (documented #816 caveat). */
+    bool captureRigidAnimation = false;
+
     bool isDefault() const;
     bool flipsAreActive() const { return flipX || flipY || flipZ; }
 

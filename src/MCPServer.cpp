@@ -7070,10 +7070,12 @@ QJsonObject MCPServer::toolPs1RipCapture(const QJsonObject &args)
     const bool trackedOnly = args.value(QStringLiteral("tracked_only")).toBool();
     const bool smooth = args.value(QStringLiteral("smooth")).toBool();
     const bool removeZeroArea = args.value(QStringLiteral("remove_zero_area")).toBool();
+    const bool rigidAnimation = args.value(QStringLiteral("rigid_animation")).toBool();
     Ps1NormalizerSettings ns = mgr->normalizerSettings();
     ns.trackedGeometryOnly = trackedOnly;
     ns.cleanupWeldNormals = smooth;
     ns.cleanupRemoveZeroArea = removeZeroArea;
+    ns.captureRigidAnimation = rigidAnimation;
     mgr->setNormalizerSettings(ns);
 
     QJsonObject built;
@@ -9328,6 +9330,11 @@ QJsonArray MCPServer::buildToolsList()
         props["remove_zero_area"] = QJsonObject{{"type", "boolean"},
             {"description", "Clean-up: drop zero-area (collinear / duplicate-vertex) sliver "
                             "triangles common in raw PS1 captures (default false)."}};
+        props["rigid_animation"] = QJsonObject{{"type", "boolean"},
+            {"description", "Scene capture only: extract per-object rigid animation from the "
+                            "per-frame GTE matrices and author node tracks that play in the "
+                            "editor (in-editor preview; node tracks don't export yet). "
+                            "Default false. Use with scene_seconds > 0."}};
         props["scene_seconds"] = QJsonObject{{"type", "integer"},
             {"description", "If > 0, accumulate a multi-second scene capture instead of one frame."}};
         props["timeout_ms"] = QJsonObject{{"type", "integer"},

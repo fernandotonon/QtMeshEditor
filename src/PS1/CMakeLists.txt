@@ -41,6 +41,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1AnimationExtractor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1CoordinateNormalizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1CapturedAssets.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1ExtractedAssetBrowser.cpp
@@ -78,6 +79,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxModelRamScanCommon.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/ReconstructedMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1AnimationExtractor.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1CoordinateNormalizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1CapturedAssets.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1ExtractedAssetBrowser.h

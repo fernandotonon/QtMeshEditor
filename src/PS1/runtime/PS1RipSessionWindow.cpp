@@ -57,6 +57,7 @@ constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
 constexpr auto kCleanupKey = "cleanupWeldNormals";
 constexpr auto kRemoveZeroAreaKey = "cleanupRemoveZeroArea";
+constexpr auto kRigidAnimKey = "captureRigidAnimation";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -343,6 +344,31 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kRemoveZeroAreaKey), on);
     });
     toolbar->addWidget(removeZeroArea);
+
+    // #429: capture rigid animation from a *scene* capture — authors an Ogre
+    // node-animation track per moving object so the ripped motion plays in the
+    // viewport. In-editor preview only (node tracks don't export yet).
+    auto *rigidAnim = new QCheckBox(tr("Rigid anim"), this);
+    rigidAnim->setToolTip(tr("Capture Scene only: extract per-object rigid animation from the "
+                             "per-frame GTE matrices and play it in the viewport. In-editor "
+                             "preview — node-transform tracks don't export to glTF/FBX yet. "
+                             "Best on a static-camera scene."));
+    rigidAnim->setChecked(settings.value(ps1SettingsKey(kRigidAnimKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.captureRigidAnimation = rigidAnim->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(rigidAnim, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.captureRigidAnimation = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.anim"),
+                                      on ? QStringLiteral("capture_on")
+                                         : QStringLiteral("capture_off"));
+        QSettings().setValue(ps1SettingsKey(kRigidAnimKey), on);
+    });
+    toolbar->addWidget(rigidAnim);
 
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));

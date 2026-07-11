@@ -7,7 +7,11 @@
 
 #include <QHash>
 #include <QImage>
+#include <QPair>
 #include <QString>
+#include <QVector>
+
+#include <OgreVector.h>
 
 namespace Ogre {
 class Entity;
@@ -51,6 +55,19 @@ public:
      *  S = diag(1,-1,-1). Pure-data so the conversion is testable without
      *  Ogre (#816). */
     static void editorRotationFromGte(const float rot[9], float out[9]);
+
+    /** #429 rigid animation preview: extract per-object matrix tracks from the
+     *  scene capture's GTE records (Ps1AnimationExtractor), match each moving
+     *  object to a created capture node by first-frame world translation, and
+     *  author an Ogre NodeAnimationTrack (via NodeAnimationManager) so the
+     *  ripped motion plays in the viewport. Returns the number of tracks
+     *  authored. `placements` is {nodeName, editor-space world position} for
+     *  every instance node. In-editor preview only (node tracks don't export
+     *  yet). Public + static so it's unit-testable against a fake scene. */
+    static int authorRigidAnimation(const QVector<GteRecordEntry> &records,
+                                    const QVector<QPair<QString, Ogre::Vector3>> &placements,
+                                    const QString &captureId,
+                                    const Ps1NormalizerSettings &normalize);
 };
 
 #endif // PS1RIPMESHBUILDER_H

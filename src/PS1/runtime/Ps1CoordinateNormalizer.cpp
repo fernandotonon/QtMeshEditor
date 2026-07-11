@@ -33,7 +33,8 @@ bool Ps1NormalizerSettings::isDefault() const
         && nearlyEqual(spikeEdgeFactor, d.spikeEdgeFactor)
         && cleanupWeldNormals == d.cleanupWeldNormals
         && cleanupRemoveZeroArea == d.cleanupRemoveZeroArea
-        && nearlyEqual(zeroAreaEpsilon, d.zeroAreaEpsilon);
+        && nearlyEqual(zeroAreaEpsilon, d.zeroAreaEpsilon)
+        && captureRigidAnimation == d.captureRigidAnimation;
 }
 
 void Ps1CoordinateNormalizer::composeNodeTransform(const Ps1NormalizerSettings &settings,
@@ -142,6 +143,7 @@ void Ps1CoordinateNormalizer::save(QSettings &settings, const QString &prefix,
     settings.setValue(prefix + QStringLiteral("/cleanupWeldNormals"), value.cleanupWeldNormals);
     settings.setValue(prefix + QStringLiteral("/cleanupRemoveZeroArea"), value.cleanupRemoveZeroArea);
     settings.setValue(prefix + QStringLiteral("/zeroAreaEpsilon"), value.zeroAreaEpsilon);
+    settings.setValue(prefix + QStringLiteral("/captureRigidAnimation"), value.captureRigidAnimation);
 }
 
 Ps1NormalizerSettings Ps1CoordinateNormalizer::load(QSettings &settings, const QString &prefix)
@@ -181,6 +183,8 @@ Ps1NormalizerSettings Ps1CoordinateNormalizer::load(QSettings &settings, const Q
                                          out.zeroAreaEpsilon).toFloat();
     if (!(out.zeroAreaEpsilon > 0.0f && out.zeroAreaEpsilon <= 1.0f))
         out.zeroAreaEpsilon = 1.0e-7f;
+    out.captureRigidAnimation = settings.value(prefix + QStringLiteral("/captureRigidAnimation"),
+                                               out.captureRigidAnimation).toBool();
     return out;
 }
 
@@ -201,6 +205,7 @@ QString Ps1CoordinateNormalizer::describe(const Ps1NormalizerSettings &settings)
     if (settings.trackedGeometryOnly) parts.append(QStringLiteral("trackedOnly"));
     if (settings.cleanupWeldNormals) parts.append(QStringLiteral("weldNormals"));
     if (settings.cleanupRemoveZeroArea) parts.append(QStringLiteral("removeZeroArea"));
+    if (settings.captureRigidAnimation) parts.append(QStringLiteral("rigidAnim"));
     if (!nearlyEqual(settings.spikeEdgeFactor, Ps1NormalizerSettings{}.spikeEdgeFactor))
         parts.append(QStringLiteral("spike=%1").arg(settings.spikeEdgeFactor, 0, 'g', 3));
     return parts.join(QLatin1Char(','));
