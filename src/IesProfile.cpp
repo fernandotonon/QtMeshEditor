@@ -134,7 +134,7 @@ IesProfile IesProfile::parseBytes(const QByteArray& bytes, QString* error)
     QVector<float> slice0;
     slice0.reserve(numVertical);
     for (int v = 0; v < numVertical; ++v)
-        slice0.append(candelaFlat[v * numHorizontal]); // first horizontal column
+        slice0.append(candelaFlat[v]); // horizontal index 0 → candela[h * numVertical + v]
 
     profile.beamAngleDeg = angleAtFraction(vertical, slice0, 0.5f);
     profile.fieldAngleDeg = angleAtFraction(vertical, slice0, 0.1f);
@@ -169,11 +169,11 @@ QVector<float> IesProfile::polarSlice() const
     if (!valid || verticalAnglesDeg.isEmpty())
         return out;
 
-    const int numHorizontal = candela.isEmpty() ? 1 : candela.size() / verticalAnglesDeg.size();
-    out.reserve(verticalAnglesDeg.size());
-    for (int v = 0; v < verticalAnglesDeg.size(); ++v)
+    const int numVertical = verticalAnglesDeg.size();
+    out.reserve(numVertical);
+    for (int v = 0; v < numVertical; ++v)
     {
-        const float c = candela[v * numHorizontal];
+        const float c = candela[v]; // horizontal index 0
         out.append(maxCandela > 0.0f ? c / maxCandela : 0.0f);
     }
     return out;
@@ -182,14 +182,14 @@ QVector<float> IesProfile::polarSlice() const
 namespace IesLightApply
 {
 
-void applyToLight(const IesProfile& profile, Ogre::Light* light)
+void applyToLight(const IesProfile& profile, Ogre::Light* light, float basePowerScale)
 {
     if (!profile.valid || !light)
         return;
 
     const float inner = qBound(1.0f, profile.beamAngleDeg * 0.65f, 179.0f);
     const float outer = qBound(inner + 1.0f, profile.fieldAngleDeg, 179.0f);
-  const float falloff = qBound(0.1f, profile.beamAngleDeg / qMax(1.0f, profile.fieldAngleDeg), 4.0f);
+    const float falloff = qBound(0.1f, profile.beamAngleDeg / qMax(1.0f, profile.fieldAngleDeg), 4.0f);
 
     if (light->getType() == Ogre::Light::LT_SPOTLIGHT)
     {
@@ -203,7 +203,7 @@ void applyToLight(const IesProfile& profile, Ogre::Light* light)
 
     const float reference = 1000.0f;
     const float scale = qBound(0.05f, profile.maxCandela / reference, 8.0f);
-    light->setPowerScale(light->getPowerScale() * scale);
+    light->setPowerScale(basePowerScale * scale);
 }
 
 } // namespace IesLightApply

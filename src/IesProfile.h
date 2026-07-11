@@ -13,7 +13,7 @@ struct IesProfile
     bool valid = false;
     QString sourcePath;
     QVector<float> verticalAnglesDeg;
-    QVector<float> candela; ///< flattened [vert][horiz], horiz fixed at 0 for Type C
+    QVector<float> candela; ///< flattened LM-63 horizontal-major: index = h * numVertical + v
     float totalLumens = 0.0f;
     float maxCandela = 0.0f;
     float beamAngleDeg = 90.0f; ///< angle where intensity drops to 50% of peak (0° slice)
@@ -28,6 +28,6 @@ namespace IesLightApply
 {
 
 /// Approximate IES distribution on a point/spot light using Ogre spotlight cones.
-void applyToLight(const IesProfile& profile, Ogre::Light* light);
+void applyToLight(const IesProfile& profile, Ogre::Light* light, float basePowerScale = 1.0f);
 
 } // namespace IesLightApply

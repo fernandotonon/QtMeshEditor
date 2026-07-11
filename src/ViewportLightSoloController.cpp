@@ -127,12 +127,13 @@ void ViewportLightSoloController::beginRenderPass(OgreWidget* widget)
         return;
 
     m_inRenderPass = true;
+    m_savedVisibility.clear();
     for (const LightHandle& handle : lights->lights())
     {
         if (!handle.light)
             continue;
-        const bool shouldShow = handle.name == soloName;
-        handle.light->setVisible(shouldShow);
+        m_savedVisibility.insert(handle.name, handle.light->getVisible());
+        handle.light->setVisible(handle.name == soloName);
     }
 }
 
@@ -153,8 +154,10 @@ void ViewportLightSoloController::endRenderPass(OgreWidget* widget)
     {
         if (!handle.light)
             continue;
-        const LightSnapshot snapshot = LightSnapshot::fromHandle(handle);
-        handle.light->setVisible(snapshot.enabled);
+        const auto it = m_savedVisibility.constFind(handle.name);
+        handle.light->setVisible(it != m_savedVisibility.constEnd() ? it.value()
+                                                                    : handle.light->getVisible());
     }
+    m_savedVisibility.clear();
     m_inRenderPass = false;
 }

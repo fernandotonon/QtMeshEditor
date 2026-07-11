@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
@@ -50,5 +51,6 @@ private:
     static ViewportLightSoloController* s_singleton;
     OgreWidget* m_activeWidget = nullptr;
     std::unordered_map<OgreWidget*, QString> m_soloByWidget;
+    QHash<QString, bool> m_savedVisibility;
     bool m_inRenderPass = false;
 };

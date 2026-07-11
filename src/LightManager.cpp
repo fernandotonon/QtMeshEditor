@@ -25,7 +25,23 @@ LightSnapshot LightSnapshot::fromHandle(const LightHandle& handle)
 
     snapshot.name = handle.name;
     snapshot.type = handle.light->getType();
-    snapshot.enabled = handle.light->isVisible();
+    const auto& bindings = handle.light->getUserObjectBindings();
+    const auto enabledAny = bindings.getUserAny(QStringLiteral("light_user_enabled").toStdString());
+    if (enabledAny.has_value())
+    {
+        try
+        {
+            snapshot.enabled = Ogre::any_cast<bool>(enabledAny);
+        }
+        catch (...)
+        {
+            snapshot.enabled = handle.light->isVisible();
+        }
+    }
+    else
+    {
+        snapshot.enabled = handle.light->isVisible();
+    }
     snapshot.diffuse = handle.light->getDiffuseColour();
     snapshot.specular = handle.light->getSpecularColour();
     snapshot.powerScale = handle.light->getPowerScale();
@@ -50,7 +66,6 @@ LightSnapshot LightSnapshot::fromHandle(const LightHandle& handle)
     }
     snapshot.castShadows = handle.light->getCastShadows();
 
-    const auto& bindings = handle.light->getUserObjectBindings();
     const auto depthAny = bindings.getUserAny(QStringLiteral("shadow_depth_bias").toStdString());
     const auto slopeAny = bindings.getUserAny(QStringLiteral("shadow_slope_bias").toStdString());
     if (depthAny.has_value())
@@ -283,7 +298,6 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
         return;
 
     handle.light->setType(snapshot.type);
-    handle.light->setVisible(snapshot.enabled);
     handle.light->setDiffuseColour(snapshot.diffuse);
     handle.light->setSpecularColour(snapshot.specular);
     handle.light->setPowerScale(snapshot.powerScale);
@@ -318,6 +332,8 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
     bindings.setUserAny(QStringLiteral("light_link_channel").toStdString(),
                         Ogre::Any(snapshot.linkChannelBit));
 
+    bindings.setUserAny(QStringLiteral("light_user_enabled").toStdString(),
+                        Ogre::Any(snapshot.enabled));
     bindings.setUserAny(QStringLiteral("light_ies_path").toStdString(),
                         Ogre::Any(snapshot.iesProfilePath.toStdString()));
 #ifdef ENABLE_AREA_LIGHTS
@@ -336,10 +352,12 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
     if (!snapshot.iesProfilePath.isEmpty())
     {
         const IesProfile profile = IesProfile::parseFile(snapshot.iesProfilePath);
-        IesLightApply::applyToLight(profile, handle.light);
+        IesLightApply::applyToLight(profile, handle.light, snapshot.powerScale);
     }
 #ifdef ENABLE_AREA_LIGHTS
     AreaLight::syncProxies(handle, snapshot);
+#else
+    handle.light->setVisible(snapshot.enabled);
 #endif
 }
 

@@ -72,3 +72,26 @@ TEST(IesProfileTest, MissingTiltFails)
     EXPECT_FALSE(profile.valid);
     EXPECT_FALSE(error.isEmpty());
 }
+
+TEST(IesProfileTest, HorizontalMajorCandelaLayout)
+{
+    const QByteArray bytes =
+        "IESNA:LM-63-2002\n"
+        "TILT=NONE\n"
+        "1 1 1 2 2 1 1 1 0 0 0\n"
+        "1 1 1 0 0\n"
+        "0 90\n"
+        "0 180\n"
+        "1000 2000 3000 4000\n";
+
+    QString error;
+    const IesProfile profile = IesProfile::parseBytes(bytes, &error);
+    ASSERT_TRUE(profile.valid) << error.toStdString();
+    ASSERT_EQ(profile.verticalAnglesDeg.size(), 2);
+    ASSERT_EQ(profile.candela.size(), 4);
+
+    const QVector<float> slice = profile.polarSlice();
+    ASSERT_EQ(slice.size(), 2);
+    EXPECT_FLOAT_EQ(slice[0], 0.25f);
+    EXPECT_FLOAT_EQ(slice[1], 0.5f);
+}
