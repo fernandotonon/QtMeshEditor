@@ -143,6 +143,117 @@ def select_window(quats, max_frames):
     return calm, min(T, calm + max_frames)
 
 
+def qmul(a, b):  # [x,y,z,w]
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz]
+
+
+def qrot(q, v):
+    return qmul(qmul(q, [v[0], v[1], v[2], 0.0]),
+                [-q[0], -q[1], -q[2], q[3]])[:3]
+
+
+def vnorm(v):
+    l = math.sqrt(sum(x * x for x in v))
+    return [x / l for x in v] if l > 1e-9 else None
+
+
+# Actions that legitimately go horizontal — no uprightness gate for these.
+HORIZONTAL_OK = {"death", "roll", "crawl", "swim", "fall", "sleep"}
+
+# canonical role indices
+HIP, ABDOMEN, CHEST, NECK = 0, 1, 2, 3
+RHIP, LHIP = 15, 19
+
+
+def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
+                 mean_energy, min_energy):
+    """Score a clip 0..1 (#855): uprightness under its own reference triple
+    (catches mis-mapped rigs — quadrupeds pass the role gate but retarget
+    horizontal), reference completeness, and a sane energy band. Returns
+    (quality, drop_reason|None)."""
+    dirs_ok = sum(1 for d in (rest_dir or [])
+                  if abs(d[0]) > 1e-6 or abs(d[1]) > 1e-6 or abs(d[2]) > 1e-6)
+    completeness = dirs_ok / CANON_COUNT
+    roles = (resolved_roles or 0) / CANON_COUNT
+
+    # Uprightness: track spine-up (hip→abdomen) and thigh-down direction dots
+    # under the animation quats. A biped stays roughly vertical along the
+    # spine with thighs hanging down; quadrupeds / dinosaurs / mis-oriented
+    # rigs go horizontal on one or both — retargeting bent-over onto a biped.
+    upness = 0.35  # unmeasurable → low (do NOT assume upright)
+    if rest_world and rest_dir and dirs_ok:
+        def axis(role):
+            d = vnorm(rest_dir[role])
+            if d is None:
+                return None
+            q = rest_world[role]
+            return qrot([-q[0], -q[1], -q[2], q[3]], d)
+        # SPINE cue: the torso should point up. Use the first resolvable
+        # torso bone (hip→abdomen→chest→neck) — the bind restDir itself must
+        # already point roughly up (+Y): a horizontal-torso rig (T-rex, whose
+        # abdomen/chest dirs are ~[0,0,-1]) fails here BEFORE animation even
+        # applies. This is what the hip-only cue missed when hip restDir=0.
+        spine_bind, a_spine, spine_role = None, None, None
+        for r in (HIP, ABDOMEN, CHEST, NECK):
+            d = vnorm(rest_dir[r])
+            if d is not None:
+                spine_bind, a_spine, spine_role = d, axis(r), r
+                break
+        thigh_axes = [(r, axis(r)) for r in (RHIP, LHIP)]
+        thigh_axes = [(r, a) for r, a in thigh_axes if a is not None]
+        spine_up, thigh_down, ns, nt = 0.0, 0.0, 0, 0
+        for f in range(0, len(quats), 3):
+            if a_spine is not None:
+                spine_up += qrot(quats[f][spine_role], a_spine)[1]; ns += 1
+            if thigh_axes:
+                thigh_down += sum(-qrot(quats[f][r], a)[1]
+                                  for r, a in thigh_axes) / len(thigh_axes)
+                nt += 1
+        spine_up = spine_up / ns if ns else None
+        thigh_down = thigh_down / nt if nt else None
+        if action in HORIZONTAL_OK:
+            upness = 0.7  # horizontal by design: neutral, no gate
+        else:
+            # Bind-frame gate: the torso's REST direction must already be
+            # roughly vertical, else the rig is non-biped (horizontal torso)
+            # regardless of the animation.
+            if spine_bind is not None and spine_bind[1] < 0.4:
+                return 0.0, (f"non-biped torso (bind spine-up "
+                             f"{spine_bind[1]:.2f})")
+            if ns or nt:
+                # Animated gate: torso must stay up, thighs hang down.
+                if spine_up is not None and spine_up < 0.5:
+                    return 0.0, f"not upright (spine-up {spine_up:.2f})"
+                if spine_up is None and thigh_down is not None \
+                        and thigh_down < 0.3:
+                    return 0.0, f"not upright (thigh-down {thigh_down:.2f})"
+                up_terms = [max(0.0, v) for v in (spine_up, thigh_down)
+                            if v is not None]
+                upness = sum(up_terms) / len(up_terms) if up_terms else 0.35
+    elif action in HORIZONTAL_OK:
+        upness = 0.7
+
+    # Energy band: below = a pose, way above = spasm/mis-mapped.
+    lo, hi, cap = min_energy * 2.0, 0.10, 0.20
+    if mean_energy <= lo:
+        energy = max(0.0, (mean_energy - min_energy) / max(1e-9, lo - min_energy))
+    elif mean_energy <= hi:
+        energy = 1.0
+    else:
+        energy = max(0.0, (cap - mean_energy) / (cap - hi))
+
+    q = 0.45 * upness + 0.25 * completeness + 0.15 * roles + 0.15 * energy
+    q = max(0.0, min(1.0, q))
+    if q < 0.35:
+        return q, f"quality {q:.2f} below floor"
+    return q, None
+
+
 def fingerprint(action, quats):
     h = hashlib.sha1(action.encode())
     for f in (0, len(quats) // 2, len(quats) - 1):
@@ -268,25 +379,40 @@ def main():
                             continue      # duplicate take
                         if counts.get(action, 0) >= args.max_per_action:
                             continue
+                        rest_world = c.get("restWorld") \
+                            if len(c.get("restWorld", [])) == CANON_COUNT \
+                            else None
+                        rest_dir = c.get("restDir") \
+                            if len(c.get("restDir", [])) == CANON_COUNT \
+                            else None
+                        quality, drop = clip_quality(
+                            action, w, rest_world, rest_dir,
+                            c.get("resolvedRoles", 0),
+                            sum(e) / max(1, len(e)), args.min_energy)
+                        if drop:
+                            print(f"  - {action:<10} {title[:38]:<40}"
+                                  f" {c.get('animation')} DROPPED: {drop}")
+                            continue
                         seen.add(fp); seen.add(sem)
                         counts[action] = counts.get(action, 0) + 1
                         clip = {
                             "action": action,
                             "source": f"{title} — {c.get('animation')}",
                             "frames": len(w),
+                            "quality": round(quality, 3),
                             "quats": w,
                         }
                         # Source-bind orientations + canonical bind bone
                         # directions → the bind-referenced retarget path.
                         # Older sidecar caches predate these fields; delete
                         # *.canonical.json to re-extract.
-                        if len(c.get("restWorld", [])) == CANON_COUNT:
-                            clip["restWorld"] = c["restWorld"]
-                        if len(c.get("restDir", [])) == CANON_COUNT:
-                            clip["restDir"] = c["restDir"]
+                        if rest_world:
+                            clip["restWorld"] = rest_world
+                        if rest_dir:
+                            clip["restDir"] = rest_dir
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
-                              f" {c.get('animation')} ({len(w)}f)")
+                              f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
 
     if not clips:
         sys.exit("no clips extracted — is the corpus downloaded/validated?")

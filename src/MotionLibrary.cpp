@@ -1,6 +1,8 @@
 #include "MotionLibrary.h"
 
 #include <QRandomGenerator>
+#include <algorithm>
+#include <cmath>
 #include "ModelDownloader.h"
 
 #include <QDir>
@@ -145,6 +147,8 @@ bool MotionLibrary::parse(const QByteArray& json)
                     static_cast<float>(v.at(2).toDouble())});
             }
         }
+        clip.quality = static_cast<float>(
+            std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
@@ -181,7 +185,25 @@ int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) co
                 hits.append(i);
         if (hits.isEmpty()) return -1;
         if (hits.size() == 1) return hits.first();
-        return hits.at(QRandomGenerator::global()->bounded(hits.size()));
+        // Quality-weighted sampling (P ∝ quality², #855): keeps take variety
+        // but one weak take no longer poisons its whole action. Libraries
+        // without curation scores (quality defaults to 1) stay uniform.
+        double total = 0.0;
+        QList<double> weights;
+        weights.reserve(hits.size());
+        for (int i : hits) {
+            const double q = m_clips[static_cast<size_t>(i)].quality;
+            weights.append(q * q);
+            total += q * q;
+        }
+        if (total <= 1e-9)
+            return hits.at(QRandomGenerator::global()->bounded(hits.size()));
+        double r = QRandomGenerator::global()->generateDouble() * total;
+        for (int k = 0; k < hits.size(); ++k) {
+            r -= weights.at(k);
+            if (r <= 0.0) return hits.at(k);
+        }
+        return hits.last();
     };
 
     // 1. Direct: a library action name appears in the prompt.
