@@ -1385,7 +1385,30 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 artic = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
                                                 Ogre::Quaternion::IDENTITY,
                                                 artic, /*shortestPath=*/true);
-            const Ogre::Quaternion local = (c == 0) ? bind : (bind * artic);
+            Ogre::Quaternion local;
+            if (c == 0) {
+                // Root: CMU/scraped clips bake whole-body FACING into the hip,
+                // so the yaw must stay locked to the standing pose — but the
+                // pitch/roll component is the pelvic sway that makes walks
+                // read as alive (measured 14.5° on a reference walk, 0° when
+                // fully locked). Swing–twist split about canonical +Y: drop
+                // the twist (facing), pre-multiply the swing in world axes.
+                local = bind;
+                if (worldFrame) {
+                    const Ogre::Quaternion d = cmuLocalDelta[0][f];
+                    Ogre::Quaternion twist(d.w, 0.0f, d.y, 0.0f);
+                    const float n = std::sqrt(twist.w * twist.w
+                                              + twist.y * twist.y);
+                    if (n > 1e-6f) {
+                        twist.w /= n; twist.y /= n;
+                        Ogre::Quaternion swing = d * twist.Inverse();
+                        swing.normalise();
+                        local = swing * bind;
+                    }
+                }
+            } else {
+                local = bind * artic;
+            }
             Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
             kf->setRotation(local);
             kf->setTranslate(standPos);
