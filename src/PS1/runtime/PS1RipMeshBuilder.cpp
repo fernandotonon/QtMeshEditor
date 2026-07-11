@@ -746,11 +746,12 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
 
 void PS1RipMeshBuilder::editorRotationFromGte(const float rot[9], float out[9])
 {
-    // Editor space negates Y and Z relative to the GTE camera basis (see
-    // GteInverse::modelToEditor). Conjugating by S = diag(1,-1,-1) maps a
-    // rotation acting on GTE vectors to one acting on editor vectors:
-    // out = S·R·S, i.e. out[r][c] = s(r)·s(c)·R[r][c] (#816).
-    static constexpr float kSign[3] = {1.0f, -1.0f, -1.0f};
+    // Editor space maps GTE vectors by (x,y,z) -> (-x, y, -z): the Y/Z negate
+    // (PS1 Y-down/Z-away) folded with the 180°-about-Z upright rotation, exactly
+    // as GteInverse::modelToEditor now does. Conjugating a rotation by that basis
+    // S = diag(-1, 1, -1) gives out = S·R·S, i.e. out[r][c] = s(r)·s(c)·R[r][c].
+    // Keep this in lockstep with modelToEditor or instances rotate wrong (#816).
+    static constexpr float kSign[3] = {-1.0f, 1.0f, -1.0f};
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c)
             out[r * 3 + c] = kSign[r] * kSign[c] * rot[r * 3 + c];

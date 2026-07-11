@@ -571,9 +571,11 @@ TEST(MeshReconstructorTieredTest, EditorRotationFromGtePins90DegreeYRotation)
     float editor[9] = {};
     PS1RipMeshBuilder::editorRotationFromGte(gteRot, editor);
 
-    // Conjugation by S = diag(1,-1,-1) flips the sign of every element with
-    // exactly one Y/Z index: out[r][c] = s(r)·s(c)·R[r][c].
-    const float expected[9] = {0.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    // Conjugation by S = diag(-1,1,-1) (Y/Z negate folded with the 180°-Z
+    // upright rotation): out[r][c] = s(r)·s(c)·R[r][c]. For a pure Y rotation
+    // this basis change is a no-op (the 180° about Z commutes into the Y turn),
+    // so the editor rotation equals the input.
+    const float expected[9] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f};
     for (int i = 0; i < 9; ++i)
         EXPECT_FLOAT_EQ(editor[i], expected[i]) << "element " << i;
 

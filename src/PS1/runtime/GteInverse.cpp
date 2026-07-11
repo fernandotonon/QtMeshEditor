@@ -144,8 +144,12 @@ void psxScreenToWorld(float sx, float sy, float sz, float &wx, float &wy, float 
 void modelToEditor(float mx, float my, float mz, float &wx, float &wy, float &wz)
 {
     constexpr float kScale = 0.01f;
-    wx = mx * kScale;
-    wy = -my * kScale;
+    // PS1 model space -> editor: scale by 0.01, negate Y/Z (PS1 Y-down/Z-away
+    // vs editor Y-up/Z-toward), then rotate 180° about Z ((x,y) -> (-x,-y)) so
+    // captured meshes come out upright instead of upside-down. The Z-rotation
+    // folds into the existing negations: X = -(mx), Y = +(my), Z = -(mz).
+    wx = -mx * kScale;
+    wy = my * kScale;
     wz = -mz * kScale;
 }
 
