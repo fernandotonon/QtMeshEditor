@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 #include "UniRigPredictor.h"
 #include "SkinWeights.h"
+#include "SkinWeightsController.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "Manager.h"
@@ -277,10 +278,17 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
     try {
         // Run through an undo command so rig (+ optional skin) reverts with
         // Ctrl+Z. push() executes redo() synchronously; read back the report.
-        auto* cmd = new AutoRigCommand(entity->getName(), opts, {}, alsoSkin);
+        auto* cmd = new AutoRigCommand(entity->getName(), opts, {}, /*alsoSkin*/false);
         UndoManager::getSingleton()->push(cmd);
         report  = cmd->report();
-        skinned = cmd->skinned();
+        // Chained skinning runs ASYNC through SkinWeightsController
+        // (the default ML skinner takes minutes — a synchronous chain
+        // froze the UI). Separate undo entry; result via its signals.
+        skinned = false;
+        if (report.applied && alsoSkin)
+            skinned = SkinWeightsController::instance()
+                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
+                                                           false, true);
     } catch (const Ogre::Exception& e) {
         m_busy = false;
         emit busyChanged();
@@ -372,10 +380,16 @@ void AutoRigController::finishUniRigOnMain(const QString& entityName,
 
     AutoRig::Report report; bool skinned = false;
     try {
-        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, alsoSkin);
+        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, /*alsoSkin*/false);
         UndoManager::getSingleton()->push(cmd);
         report  = cmd->report();
-        skinned = cmd->skinned();
+        // Chained skinning runs ASYNC (see autoRigSelected) — its
+        // result arrives via SkinWeightsController's signals.
+        skinned = false;
+        if (report.applied && alsoSkin)
+            skinned = SkinWeightsController::instance()
+                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
+                                                           false, true);
     } catch (const std::exception& e) {
         report.applied = false;
         report.error = QString::fromUtf8(e.what());
@@ -394,10 +408,16 @@ void AutoRigController::finishUniRigFallback(const QString& entityName, const QS
 
     AutoRig::Report report; bool skinned = false;
     try {
-        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, alsoSkin);
+        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, /*alsoSkin*/false);
         UndoManager::getSingleton()->push(cmd);
         report  = cmd->report();
-        skinned = cmd->skinned();
+        // Chained skinning runs ASYNC (see autoRigSelected) — its
+        // result arrives via SkinWeightsController's signals.
+        skinned = false;
+        if (report.applied && alsoSkin)
+            skinned = SkinWeightsController::instance()
+                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
+                                                           false, true);
     } catch (const std::exception& e) {
         report.applied = false;
         report.error = QString::fromUtf8(e.what());

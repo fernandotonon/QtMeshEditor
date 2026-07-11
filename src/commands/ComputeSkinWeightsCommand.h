@@ -7,6 +7,7 @@
 #include "SkinWeights.h"
 
 #include <map>
+#include <memory>
 #include <vector>
 
 namespace Ogre {
@@ -40,6 +41,18 @@ class ComputeSkinWeightsCommand : public QUndoCommand
 public:
     ComputeSkinWeightsCommand(std::string entityName,
                               SkinWeightsOptions opts,
+                              SkinWeights::Algorithm algo
+                                  = SkinWeights::Algorithm::SkinTokens,
+                              QUndoCommand* parent = nullptr);
+
+    /// Precomputed mode (the async GUI path): the heavy compute
+    /// already ran on a worker (SkinWeights::runJob); the first
+    /// redo() only COMMITS the given result on the main thread
+    /// (snapshotting around it for undo, like the compute mode).
+    ComputeSkinWeightsCommand(std::string entityName,
+                              SkinWeightsOptions opts,
+                              std::shared_ptr<SkinWeights::ComputeJob> job,
+                              std::shared_ptr<SkinWeights::JobResult> result,
                               QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -70,9 +83,13 @@ private:
     void restoreSnapshot(Ogre::Mesh* mesh,
                          const std::vector<OwnerSnapshot>& snap) const;
 
-    std::string        mEntityName;
-    SkinWeightsOptions mOpts;
-    SkinWeightsReport  mReport;
+    std::string             mEntityName;
+    SkinWeightsOptions      mOpts;
+    SkinWeights::Algorithm  mAlgo = SkinWeights::Algorithm::SkinTokens;
+    // Precomputed mode payload (null in compute mode).
+    std::shared_ptr<SkinWeights::ComputeJob> mJob;
+    std::shared_ptr<SkinWeights::JobResult>  mResult;
+    SkinWeightsReport       mReport;
 
     std::vector<OwnerSnapshot> mBefore;   // pre-skin weights
     std::vector<OwnerSnapshot> mAfter;    // post-skin weights (for redo replay)

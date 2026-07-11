@@ -39,6 +39,7 @@
 #include "UvProject.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "SkinEvaluate.h"
 #include "AutoRig.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
@@ -835,11 +836,20 @@ void CLIPipeline::printUsage()
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
-        "  skin <file> [--max-influences N] [--falloff F] [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]\n"
-        "                                    Compute skin weights via inverse-distance heuristic (closest-point-on-\n"
-        "                                    bone smooth bind). Mesh must have a skeleton attached. Bones with no\n"
-        "                                    existing weights can be filtered with --skip-unweighted. --merge\n"
-        "                                    keeps existing weights instead of replacing them.\n"
+        "  skin <file> [--algo skintokens|geodesic-voxel|inverse-distance] [--max-influences N] [--falloff F]\n"
+        "              [--max-distance D] [--voxel-res N] [--smooth-iterations N] [--skip-unweighted] [--merge] -o <out> [--json]\n"
+        "                                    Compute skin weights. Default algo: skintokens (ML skinner, #819 —\n"
+        "                                    downloads ~2.3 GB models on first use; falls back to geodesic-voxel\n"
+        "                                    when models/ONNX are unavailable). Weights are Laplacian-smoothed + pruned\n"
+        "                                    (--smooth-iterations, 0 = off). Mesh must have a skeleton attached.\n"
+        "                                    --merge keeps existing weights instead of replacing them.\n"
+        "  skin <file> --evaluate [--voxel-res N] [--json]\n"
+        "                                    Skin-quality metrics on the EXISTING weights (#819): influence\n"
+        "                                    histogram, Laplacian smoothness energy, geodesic bleed fraction.\n"
+        "  skin <file> --compare <reference> [--json]\n"
+        "                                    Per-vertex weight diff vs a reference-skinned copy of the same asset\n"
+        "                                    (e.g. Mixamo) — vertices matched by position, bones by name. See\n"
+        "                                    docs/SKINNING_QUALITY.md for the comparison protocol.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -8827,8 +8837,10 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
 
 int CLIPipeline::cmdSkin(int argc, char* argv[])
 {
-    // Parse: skin <file> [--max-influences N] [--falloff F]
-    //        [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]
+    // Parse: skin <file> [--algo geodesic-voxel|inverse-distance|unirig]
+    //        [--max-influences N] [--falloff F] [--max-distance D]
+    //        [--voxel-res N] [--smooth-iterations N]
+    //        [--skip-unweighted] [--merge] -o <out> [--json]
     QString inputPath, outputPath;
     bool jsonOutput = false;
     int  maxInfluences = 4;
@@ -8836,6 +8848,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     double maxDistance = 0.5;
     bool skipUnweighted = false;
     bool replaceExisting = true;
+    QString algoName = QStringLiteral("skintokens");
+    int voxelRes = 64;
+    int smoothIterations = 3;
+    bool evaluateMode = false;      // #819 Slice E: metrics, no write
+    QString comparePath;            // #819 Slice E: reference-skin diff
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -8845,6 +8862,35 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         if (arg == "--merge") { replaceExisting = false; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--algo" && i + 1 < argc) {
+            algoName = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (algoName != "skintokens" && algoName != "geodesic-voxel"
+                && algoName != "inverse-distance"
+                && algoName != "unirig") {   // deprecated alias of skintokens
+                err() << "Error: --algo must be 'skintokens', "
+                         "'geodesic-voxel', or 'inverse-distance'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--voxel-res" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 8 || v > 256) {
+                err() << "Error: --voxel-res must be in [8, 256]." << Qt::endl;
+                return 2;
+            }
+            voxelRes = v; continue;
+        }
+        if (arg == "--smooth-iterations" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 0 || v > 50) {
+                err() << "Error: --smooth-iterations must be in [0, 50]." << Qt::endl;
+                return 2;
+            }
+            smoothIterations = v; continue;
         }
         if (arg == "--max-influences" && i + 1 < argc) {
             bool ok = false;
@@ -8873,6 +8919,10 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
             }
             maxDistance = v; continue;
         }
+        if (arg == "--evaluate") { evaluateMode = true; continue; }
+        if (arg == "--compare" && i + 1 < argc) {
+            comparePath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg; continue;
         }
@@ -8880,12 +8930,18 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh skin <file> [--max-influences N] [--falloff F] "
-                 "[--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]"
+        err() << "Usage: qtmesh skin <file> "
+                 "[--algo skintokens|geodesic-voxel|inverse-distance] "
+                 "[--max-influences N] [--falloff F] [--max-distance D] "
+                 "[--voxel-res N] [--smooth-iterations N] "
+                 "[--skip-unweighted] [--merge] -o <out> [--json]\n"
+                 "       qtmesh skin <file> --evaluate [--voxel-res N] [--json]\n"
+                 "       qtmesh skin <file> --compare <reference> [--json]"
               << Qt::endl;
         return 2;
     }
-    if (outputPath.isEmpty()) {
+    const bool analysisMode = evaluateMode || !comparePath.isEmpty();
+    if (outputPath.isEmpty() && !analysisMode) {
         err() << "Error: -o <output> required." << Qt::endl;
         return 2;
     }
@@ -8894,11 +8950,17 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     if (!fi.exists()) {
         err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
     }
+    if (!comparePath.isEmpty() && !QFileInfo::exists(comparePath)) {
+        err() << "Error: reference file not found: " << comparePath << Qt::endl;
+        return 1;
+    }
     if (!initOgreHeadless()) return 1;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QString("skin .%1 maxInf=%2 falloff=%3")
-            .arg(fi.suffix()).arg(maxInfluences).arg(falloff));
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1").arg(algoName),
+        QString("skin .%1 maxInf=%2 falloff=%3 voxelRes=%4 smooth=%5")
+            .arg(fi.suffix()).arg(maxInfluences).arg(falloff)
+            .arg(voxelRes).arg(smoothIterations));
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
@@ -8923,14 +8985,66 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     }
     Ogre::Entity* entity = meshEntities.first();
 
+    // ── #819 Slice E: metrics / reference-comparison modes ─────────
+    // Both analyse the EXISTING weights; nothing is written.
+    if (analysisMode) {
+        QJsonObject evalReport;
+        QString evalError;
+        if (!comparePath.isEmpty()) {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin.compare"),
+                QString("skin --compare .%1").arg(fi.suffix()));
+            // Import the reference into the same scene and diff the
+            // sets to find its entity.
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QString("Importing %1").arg(QFileInfo(comparePath).absoluteFilePath()));
+            MeshImporterExporter::importer(
+                {QFileInfo(comparePath).absoluteFilePath()});
+            Ogre::Entity* refEntity = nullptr;
+            for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+                if (e && e->getMovableType() == "Entity"
+                    && !meshEntities.contains(e)) {
+                    refEntity = e;
+                    break;
+                }
+            }
+            if (!refEntity) {
+                err() << "Error: failed to load reference " << comparePath
+                      << Qt::endl;
+                return 1;
+            }
+            evalReport = SkinEvaluate::compare(entity, refEntity, &evalError);
+        } else {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin.evaluate"),
+                QString("skin --evaluate .%1 voxelRes=%2")
+                    .arg(fi.suffix()).arg(voxelRes));
+            evalReport = SkinEvaluate::evaluate(entity, voxelRes, &evalError);
+        }
+        if (evalReport.isEmpty()) {
+            err() << "Error: " << (evalError.isEmpty()
+                    ? QStringLiteral("evaluation failed") : evalError)
+                  << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            cliWrite(QString::fromUtf8(
+                QJsonDocument(evalReport).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            cliWrite(SkinEvaluate::reportToText(evalReport));
+        }
+        return 0;
+    }
+
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluences;
     opts.falloff                = falloff;
     opts.maxInfluenceDistance   = maxDistance;
     opts.skipUnweightedBones    = skipUnweighted;
     opts.replaceExisting        = replaceExisting;
+    opts.voxelResolution        = voxelRes;
+    opts.smoothIterations       = smoothIterations;
 
-    const auto report = SkinWeights::computeAndApply(entity, opts);
+    const auto report = SkinWeights::computeAndApply(
+        entity, opts, SkinWeights::algorithmFromString(algoName));
     if (!report.applied) {
         err() << "Error: skin weights failed — " << report.error << Qt::endl;
         return 1;

@@ -114,6 +114,12 @@ UVTransform.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
+SkinWeightsPost.cpp
+GeodesicVoxelBind.cpp
+SkinningDisplay.cpp
+SkinMetrics.cpp
+SkinEvaluate.cpp
+SkinTokensPredictor.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
@@ -300,6 +306,12 @@ commands/UvSeamCommands.h
 QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
+SkinWeightsPost.h
+GeodesicVoxelBind.h
+SkinningDisplay.h
+SkinMetrics.h
+SkinEvaluate.h
+SkinTokensPredictor.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h

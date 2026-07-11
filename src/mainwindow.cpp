@@ -389,23 +389,46 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(m_pTimer, &QTimer::timeout, this, [this](){
         if(m_pRoot && m_pRoot->getRenderSystem())
         {
+            // A transient render exception must NOT kill the render loop for
+            // the rest of the session (a permanently frozen viewport looks
+            // like an app hang). Skip the bad frame and keep going; only give
+            // up after many CONSECUTIVE failures (a persistent error would
+            // otherwise spam at timer frequency).
+            static int consecutiveRenderFailures = 0;
+            constexpr int kMaxConsecutiveRenderFailures = 300;
+            const auto onRenderError = [this](const QString& what) {
+                ++consecutiveRenderFailures;
+                if (consecutiveRenderFailures == 1) {
+                    fprintf(stderr, "RENDER ERROR: %s\n", qPrintable(what));
+                    SentryReporter::captureMessage(
+                        QString("Render error: %1").arg(what), "error");
+                    statusBar()->showMessage(
+                        tr("Render error (frame skipped): %1").arg(what), 15000);
+                }
+                if (consecutiveRenderFailures >= kMaxConsecutiveRenderFailures) {
+                    fprintf(stderr, "RENDER ERROR: %d consecutive failures — "
+                                    "stopping the render loop\n",
+                            consecutiveRenderFailures);
+                    SentryReporter::captureMessage(
+                        QString("Render loop stopped after %1 consecutive "
+                                "failures: %2")
+                            .arg(consecutiveRenderFailures).arg(what), "error");
+                    statusBar()->showMessage(
+                        tr("Rendering stopped — persistent render error: %1")
+                            .arg(what));
+                    if (m_pTimer) m_pTimer->stop();
+                }
+            };
             try {
                 OgreRenderTargetUtil::restoreEditorRenderTarget();
                 m_pRoot->renderOneFrame();
+                consecutiveRenderFailures = 0;
             } catch (Ogre::Exception& e) {
-                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
-                SentryReporter::captureMessage(
-                    QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QString::fromStdString(e.getFullDescription()));
             } catch (std::exception& e) {
-                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
-                SentryReporter::captureMessage(
-                    QString("Render error (std): %1").arg(e.what()), "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QString::fromUtf8(e.what()));
             } catch (...) {
-                fprintf(stderr, "RENDER ERROR (unknown)\n");
-                SentryReporter::captureMessage("Render error (unknown)", "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QStringLiteral("unknown exception"));
             }
         }
     });

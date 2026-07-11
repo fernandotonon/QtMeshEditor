@@ -71,6 +71,7 @@ Rectangle {
     property int    rigAlgoIndex: 0             // pinocchio (offline) default
     property var    rigUpAxes: ["x", "y", "z"]
     property int    rigUpAxisIndex: 1           // +Y default
+    // Rigging always chains skin-weight computation (async, in background).
     property bool   rigAlsoSkin: true
     property bool   rigShowAdvanced: false      // up-axis picker
     property string rigStatus: ""
@@ -96,7 +97,7 @@ Rectangle {
                 + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts, "
                 + r.jointsRecentered + " recentered"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
                 + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         } else {
@@ -111,7 +112,7 @@ Rectangle {
         if (r && r.applied) {
             root.rigStatus = "Rigged from markers: " + r.boneCount + " bones, "
                 + r.markersApplied + " markers"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
             root.rigStatusError = false
         } else {
             root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
@@ -129,7 +130,7 @@ Rectangle {
             root.rigStatus = "Rigged (" + (r.algorithm ? r.algorithm : "pinocchio")
                 + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
                 + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         }
@@ -195,11 +196,13 @@ Rectangle {
             text: rcb.label
             color: PropertiesPanelController.textColor
             font.pixelSize: 11
-        }
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: rcb.toggled()
+            // Row positioners ignore fill anchors on children, so the
+            // click area lives INSIDE this item and spans the whole row.
+            MouseArea {
+                x: -20; width: rcb.width + 20; height: rcb.height
+                cursorShape: Qt.PointingHandCursor
+                onClicked: rcb.toggled()
+            }
         }
     }
 
@@ -2259,7 +2262,8 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: "Auto-generate per-vertex bone weights for the selected "
-                    + "skinned mesh (inverse-distance smooth bind). Undoable."
+                    + "skinned mesh (geodesic voxel bind — volume-aware, no "
+                    + "cross-limb bleed). Undoable."
             }
 
             Rectangle {
@@ -2303,8 +2307,83 @@ Rectangle {
                     ToolTip.visible: containsMouse
                     ToolTip.delay: 500
                     ToolTip.text: SkinWeightsController.hasSkinnedSelection
-                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
+                        ? "Compute per-vertex bone weights via geodesic voxel bind (volume-aware, no cross-limb bleed). Mesh must have a skeleton."
                         : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+
+            // #819 Slice D: per-entity skinning display mode.
+            // Dual Quaternion (RTSS hardware skinning) preserves
+            // volume on twists — no candy-wrapper collapse. Display
+            // only: exported weights are unchanged.
+            Row {
+                id: skinDispRow
+                spacing: 6
+                visible: SkinWeightsController.hasSkinnedSelection
+
+                // Re-read the active mode when the selection changes.
+                property string activeMode: SkinWeightsController.skinningDisplayMode()
+                Connections {
+                    target: SkinWeightsController
+                    function onSelectionChanged() {
+                        skinDispRow.activeMode =
+                            SkinWeightsController.skinningDisplayMode()
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Display:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.8
+                }
+
+                Repeater {
+                    model: [
+                        { label: "Linear", mode: "linear" },
+                        { label: "Dual Quaternion", mode: "dual-quaternion" }
+                    ]
+
+                    Rectangle {
+                        id: dispBtn
+                        required property var modelData
+                        readonly property bool active:
+                            skinDispRow.activeMode === modelData.mode
+                        width: dispLabel.implicitWidth + 14
+                        height: 22
+                        radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : (dispMa.containsMouse
+                                ? PropertiesPanelController.headerColor
+                                : PropertiesPanelController.inputColor)
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+
+                        Text {
+                            id: dispLabel
+                            anchors.centerIn: parent
+                            text: dispBtn.modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: dispMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (SkinWeightsController.setSkinningDisplayMode(
+                                        dispBtn.modelData.mode))
+                                    skinDispRow.activeMode = dispBtn.modelData.mode
+                            }
+                            ToolTip.visible: containsMouse
+                            ToolTip.delay: 500
+                            ToolTip.text: dispBtn.modelData.mode === "dual-quaternion"
+                                ? "Render with dual-quaternion hardware skinning — preserves volume on twists (no candy-wrapper). Display only: exported weights are unchanged; engines re-skin with their own blend."
+                                : "Render with the default linear-blend skinning path."
+                        }
+                    }
                 }
             }
         }
@@ -2341,8 +2420,12 @@ Rectangle {
                 text: rigCol.marking
                     ? "Click each highlighted point on the mesh in the viewport."
                     : (rigCol.canRig
-                        ? "Embed a skeleton into this unrigged mesh. Optionally skin "
-                          + "in one click."
+                        ? "Embed a skeleton into this unrigged mesh, then compute "
+                          + "skin weights with "
+                          + (SkinWeightsController.mlSkinnerReady
+                             ? "the SkinTokens ML skinner"
+                             : "Geodesic Voxel (the SkinTokens ML models are not downloaded yet)")
+                          + "."
                         : "Select a static (unrigged) mesh to enable rigging.")
             }
 
@@ -2497,8 +2580,11 @@ Rectangle {
                     }
                 }
 
+                // Skinning opt-out — checked by default; unchecking rigs only.
                 RigCheckbox {
-                    label: "Also compute skin weights"
+                    label: SkinWeightsController.mlSkinnerReady
+                        ? "Compute skin weights (SkinTokens ML)"
+                        : "Compute skin weights (Geodesic Voxel)"
                     checked: root.rigAlsoSkin
                     onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
                 }
@@ -2547,13 +2633,19 @@ Rectangle {
                     wrapMode: Text.Wrap
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 10
+                    // The decoder's 2048 total is a SAFETY CAP, not a real
+                    // count — generation ends at EOS (typically ~180 tokens),
+                    // so show the token count instead of a bogus "/ 2048".
                     text: AutoRigController.rigDownloading
                         ? "Downloading UniRig model (~1.4 GB, first use only)…"
-                        : (AutoRigController.rigTotal > 0
+                        : (AutoRigController.rigTotal > 0 && AutoRigController.rigTotal < 2048
                             ? ("Predicting skeleton… step "
                                + AutoRigController.rigProgress + " / "
                                + AutoRigController.rigTotal)
-                            : "Preparing…")
+                            : (AutoRigController.rigTotal >= 2048
+                                ? ("Predicting skeleton… " + AutoRigController.rigProgress
+                                   + " tokens")
+                                : "Preparing…"))
                 }
 
                 // Determinate while decoding; indeterminate-looking (full-width
@@ -2571,11 +2663,14 @@ Rectangle {
                         radius: 2
                         color: PropertiesPanelController.highlightColor
                         readonly property real frac:
-                            AutoRigController.rigTotal > 0
-                                ? Math.max(0, Math.min(1,
-                                    AutoRigController.rigProgress
-                                    / AutoRigController.rigTotal))
-                                : 0
+                            AutoRigController.rigTotal >= 2048
+                                ? (AutoRigController.rigProgress
+                                   / (AutoRigController.rigProgress + 120.0))
+                                : (AutoRigController.rigTotal > 0
+                                    ? Math.max(0, Math.min(1,
+                                        AutoRigController.rigProgress
+                                        / AutoRigController.rigTotal))
+                                    : 0)
                         width: (parent.width - 2) * frac
                         Behavior on width { NumberAnimation { duration: 120 } }
                     }

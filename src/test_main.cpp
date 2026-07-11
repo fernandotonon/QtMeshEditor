@@ -99,6 +99,7 @@ int main(int argc, char **argv)
         "QTMESH_T2M_NO_DOWNLOAD",
         "QTMESH_TRIPOSR_NO_DOWNLOAD",
         "QTMESH_REMBG_NO_DOWNLOAD",
+        "QTMESH_SKINTOKENS_NO_DOWNLOAD",
     };
     for (const char* guard : kNoDownloadGuards) {
         if (!qEnvironmentVariableIsSet(guard))
