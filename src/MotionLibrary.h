@@ -44,6 +44,9 @@ public:
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
+        /// Curation score 0..1 from the library builder (#855) — take
+        /// selection samples proportionally to quality². Absent → 1.0.
+        float quality = 1.0f;
     };
 
     MotionLibrary() = default;

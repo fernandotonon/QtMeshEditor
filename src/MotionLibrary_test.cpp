@@ -132,6 +132,48 @@ TEST(MotionLibrary, ParsesPerClipRestWorldAndRestDir)
     EXPECT_EQ(lib2.clipCount(), 2);
 }
 
+TEST(MotionLibrary, ParsesQualityAndDefaultsToOne)
+{
+    MotionLibrary plain;
+    ASSERT_TRUE(plain.loadFromJson(miniLib())) << plain.error().toStdString();
+    EXPECT_FLOAT_EQ(plain.clip(0).quality, 1.0f);   // absent → 1.0
+
+    QByteArray lib = miniLib();
+    lib.insert(lib.indexOf("\"quats\""), "\"quality\":0.42,");
+    MotionLibrary l;
+    ASSERT_TRUE(l.loadFromJson(lib)) << l.error().toStdString();
+    EXPECT_NEAR(l.clip(0).quality, 0.42f, 1e-6f);
+    EXPECT_FLOAT_EQ(l.clip(1).quality, 1.0f);
+
+    QByteArray wild = miniLib();                     // out-of-range clamps
+    wild.insert(wild.indexOf("\"quats\""), "\"quality\":7.5,");
+    MotionLibrary l2;
+    ASSERT_TRUE(l2.loadFromJson(wild)) << l2.error().toStdString();
+    EXPECT_FLOAT_EQ(l2.clip(0).quality, 1.0f);
+}
+
+TEST(MotionLibrary, QualityWeightedPickSkipsZeroQualityTakes)
+{
+    // Two walk takes, one scored 0 — the weighted sampler (P ∝ q²) must
+    // never pick the zero-quality one.
+    QByteArray pose = "[";
+    for (int j = 0; j < 22; ++j) pose += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+    pose += "]";
+    const QByteArray frames = "[" + pose + "," + pose + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,"
+                      "\"joints\":[],\"clips\":["
+        "{\"action\":\"walk\",\"source\":\"bad\",\"quality\":0,\"quats\":" + frames + "},"
+        "{\"action\":\"walk\",\"source\":\"good\",\"quality\":0.9,\"quats\":" + frames + "}"
+        "]}";
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    for (int i = 0; i < 32; ++i) {
+        const int idx = lib.matchPrompt("walk");
+        ASSERT_GE(idx, 0);
+        EXPECT_EQ(lib.clip(idx).source.toStdString(), "good");
+    }
+}
+
 TEST(MotionLibrary, MatchesDirectActionWord)
 {
     MotionLibrary lib;
