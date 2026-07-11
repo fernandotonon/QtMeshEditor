@@ -856,6 +856,122 @@ static double nonManifoldEdgesRatioForEntities(const QList<Ogre::Entity*>& entit
     return static_cast<double>(nonManifold) / static_cast<double>(edges.size());
 }
 
+// PS1-capture degeneracy fractions (#428). Walks every triangulated submesh
+// once and returns two ratios via out-params:
+//   *zeroAreaOut       — fraction of triangles with ~zero POSITION-space area
+//                        (collinear / duplicate-vertex slivers).
+//   *degenerateUvOut   — fraction of triangles whose UV0 triangle has ~zero
+//                        area (all three UVs coincident/collinear). -1 when
+//                        UV0 is absent.
+// Both are -1 when the asset has no triangulated submeshes. Mirrors the
+// buffer-locking idiom of overlappingUvsRatioForEntities so the scan sees the
+// exact geometry the editor loaded.
+static void ps1RipDegeneracyRatiosForEntities(const QList<Ogre::Entity*>& entities,
+                                              double* zeroAreaOut, double* degenerateUvOut)
+{
+    // Editor-space area threshold. PS1 verts land at ×0.01 magnitude, so a
+    // triangle smaller than 1e-7 units² is a sliver. UV space is [0,1], so a
+    // 1e-8 UV-area threshold flags fully-collapsed UV triangles.
+    constexpr double kAreaEps = 1.0e-7;
+    constexpr double kUvAreaEps = 1.0e-8;
+
+    long long triTotal = 0;
+    long long zeroArea = 0;
+    long long uvTriTotal = 0;
+    long long degenerateUv = 0;
+    bool sawTris = false;
+
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh) continue;
+
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub) continue;
+            const std::vector<uint32_t> idx = readSubmeshIndexBuffer(sub);
+            if (idx.empty()) continue;
+            const Ogre::VertexData* vd = sub->useSharedVertices
+                ? mesh->sharedVertexData
+                : sub->vertexData;
+            if (!vd || !vd->vertexDeclaration) continue;
+
+            const Ogre::VertexElement* posElem =
+                vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+            if (!posElem) continue;
+            const Ogre::VertexElement* uvElem =
+                vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES, 0);
+
+            const Ogre::HardwareVertexBufferSharedPtr posBuf =
+                vd->vertexBufferBinding->getBuffer(posElem->getSource());
+            if (!posBuf) continue;
+            const auto* posBase = static_cast<const unsigned char*>(
+                posBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            const size_t posStride = posBuf->getVertexSize();
+
+            const unsigned char* uvBase = nullptr;
+            size_t uvStride = 0;
+            Ogre::HardwareVertexBufferSharedPtr uvBuf;
+            if (uvElem) {
+                uvBuf = vd->vertexBufferBinding->getBuffer(uvElem->getSource());
+                if (uvBuf) {
+                    // Same buffer as position → already locked; reuse the map.
+                    if (uvBuf == posBuf) {
+                        uvBase = posBase;
+                    } else {
+                        uvBase = static_cast<const unsigned char*>(
+                            uvBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    }
+                    uvStride = uvBuf->getVertexSize();
+                }
+            }
+
+            sawTris = true;
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                float p[3][3];
+                for (int k = 0; k < 3; ++k) {
+                    const unsigned char* vp = posBase + idx[t + k] * posStride;
+                    float* fp;
+                    posElem->baseVertexPointerToElement(const_cast<unsigned char*>(vp), &fp);
+                    p[k][0] = fp[0]; p[k][1] = fp[1]; p[k][2] = fp[2];
+                }
+                const double ux = p[1][0]-p[0][0], uy = p[1][1]-p[0][1], uz = p[1][2]-p[0][2];
+                const double vx = p[2][0]-p[0][0], vy = p[2][1]-p[0][1], vz = p[2][2]-p[0][2];
+                const double cxp = uy*vz - uz*vy, cyp = uz*vx - ux*vz, czp = ux*vy - uy*vx;
+                const double area = 0.5 * std::sqrt(cxp*cxp + cyp*cyp + czp*czp);
+                ++triTotal;
+                if (area <= kAreaEps) ++zeroArea;
+
+                if (uvBase) {
+                    float uv[3][2];
+                    for (int k = 0; k < 3; ++k) {
+                        const unsigned char* vp = uvBase + idx[t + k] * uvStride;
+                        float* fp;
+                        uvElem->baseVertexPointerToElement(const_cast<unsigned char*>(vp), &fp);
+                        uv[k][0] = fp[0]; uv[k][1] = fp[1];
+                    }
+                    const double uvArea = 0.5 * std::fabs(
+                        (uv[1][0]-uv[0][0]) * (uv[2][1]-uv[0][1])
+                        - (uv[2][0]-uv[0][0]) * (uv[1][1]-uv[0][1]));
+                    ++uvTriTotal;
+                    if (uvArea <= kUvAreaEps) ++degenerateUv;
+                }
+            }
+
+            if (uvBuf && uvBuf != posBuf && uvBase)
+                uvBuf->unlock();
+            posBuf->unlock();
+        }
+    }
+
+    if (zeroAreaOut)
+        *zeroAreaOut = (sawTris && triTotal > 0)
+            ? static_cast<double>(zeroArea) / static_cast<double>(triTotal) : -1.0;
+    if (degenerateUvOut)
+        *degenerateUvOut = (uvTriTotal > 0)
+            ? static_cast<double>(degenerateUv) / static_cast<double>(uvTriTotal) : -1.0;
+}
+
 // Detect embedded textures: walk each TextureUnitState used by every
 // SubEntity's Material and ask Ogre if the texture was manually loaded
 // (i.e. fed bytes from an in-memory stream rather than resolved through
@@ -1074,6 +1190,8 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
     info.zeroWeightBoneNames  = zeroWeightBonesForEntities(entities);
     info.overlappingUvsRatio  = overlappingUvsRatioForEntities(entities);
     info.nonManifoldEdgesRatio = nonManifoldEdgesRatioForEntities(entities);
+    ps1RipDegeneracyRatiosForEntities(entities, &info.ps1RipZeroAreaRatio,
+                                      &info.ps1RipDegenerateUvRatio);
 
     fillMeshStatsFromOgreEntities(entities, info);
     syncTriangleDerivedFields(info);
@@ -1321,6 +1439,8 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         info.zeroWeightBoneNames = inner.zeroWeightBoneNames;
         info.overlappingUvsRatio = inner.overlappingUvsRatio;
         info.nonManifoldEdgesRatio = inner.nonManifoldEdgesRatio;
+        info.ps1RipZeroAreaRatio = inner.ps1RipZeroAreaRatio;
+        info.ps1RipDegenerateUvRatio = inner.ps1RipDegenerateUvRatio;
         copyAssetInspectExtensionFields(info, inner);
         info.filePath = filePath;
         info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
@@ -1750,6 +1870,30 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                 QString("%1% of edges are non-manifold (shared by != 2 faces). "
                         "Boolean ops, fluid sims and 3D printing expect manifold input — "
                         "weld duplicate verts and cap open boundaries in your DCC.")
+                    .arg(pct, 0, 'f', 1)});
+        }
+    }
+
+    // ---- ps1-rip-zero-area (#428) ----
+    if (config.ps1RipZeroAreaPct > 0.0 && asset.ps1RipZeroAreaRatio >= 0.0) {
+        const double pct = 100.0 * asset.ps1RipZeroAreaRatio;
+        if (pct >= config.ps1RipZeroAreaPct) {
+            findings.append({asset.relativePath, "ps1-rip-zero-area", Severity::Warning,
+                QString("%1% of triangles are zero-area (collinear / duplicate-vertex "
+                        "slivers). Common in raw PS1 captures — run the \"Clean PS1 "
+                        "Capture\" pipeline (Remove zero-area triangles) to strip them.")
+                    .arg(pct, 0, 'f', 1)});
+        }
+    }
+
+    // ---- ps1-rip-degenerate-uv (#428) ----
+    if (config.ps1RipDegenerateUvPct > 0.0 && asset.ps1RipDegenerateUvRatio >= 0.0) {
+        const double pct = 100.0 * asset.ps1RipDegenerateUvRatio;
+        if (pct >= config.ps1RipDegenerateUvPct) {
+            findings.append({asset.relativePath, "ps1-rip-degenerate-uv", Severity::Info,
+                QString("%1% of triangles have a degenerate (zero-area) UV0. Harmless for "
+                        "solid-colour PS1 prims, but breaks texture-atlas and lightmap "
+                        "workflows — re-unwrap the affected submeshes if you need UVs.")
                     .arg(pct, 0, 'f', 1)});
         }
     }
@@ -2483,6 +2627,10 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             ao["overlappingUvsRatio"]  = asset.overlappingUvsRatio;
         if (asset.nonManifoldEdgesRatio >= 0.0)
             ao["nonManifoldEdgesRatio"] = asset.nonManifoldEdgesRatio;
+        if (asset.ps1RipZeroAreaRatio >= 0.0)
+            ao["ps1RipZeroAreaRatio"] = asset.ps1RipZeroAreaRatio;
+        if (asset.ps1RipDegenerateUvRatio >= 0.0)
+            ao["ps1RipDegenerateUvRatio"] = asset.ps1RipDegenerateUvRatio;
 
         if (asset.loadError)
             ao["loadError"] = true;
@@ -2591,6 +2739,8 @@ QString ScanEngine::formatSarif(const ScanResult& result, const QString& activeP
     ruleDescriptions["detect_zero_weight_bones"]  = "Skeleton has bones with no vertex weights (Mixamo bloat)";
     ruleDescriptions["detect_overlapping_uvs_pct"]    = "Triangles share overlapping UV0 regions (lightmap-unsafe)";
     ruleDescriptions["detect_non_manifold_edges_pct"] = "Mesh has non-manifold edges (booleans / printing will fail)";
+    ruleDescriptions["ps1-rip-zero-area"]             = "Zero-area (sliver) triangles from a PS1 capture — clean with the PS1 cleanup pipeline";
+    ruleDescriptions["ps1-rip-degenerate-uv"]         = "Degenerate UV0 triangles from a PS1 capture — re-unwrap if UVs are needed";
     ruleDescriptions["max_triangle_count"]            = "Asset exceeds maximum triangle count";
     ruleDescriptions["max_triangles_per_mesh"]        = "Single mesh exceeds maximum triangle count";
     ruleDescriptions["max_bones"]                   = "Skeleton exceeds maximum bone count";

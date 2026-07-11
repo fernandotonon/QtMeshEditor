@@ -108,6 +108,16 @@
 #include <set>
 #include <cstdio>
 
+#ifdef ENABLE_PS1_RIP
+#include "PS1/runtime/PS1RipManager.h"
+#include "PS1/runtime/PS1CapturedAssets.h"
+#include "PS1/runtime/Ps1CoordinateNormalizer.h"
+#include "PS1/runtime/Gp0CaptureStats.h"
+#include "PS1/runtime/PsxJoypadState.h"
+#include <QElapsedTimer>
+#include <QThread>
+#endif
+
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #else
@@ -856,6 +866,15 @@ void CLIPipeline::printUsage()
         "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
         "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
         "\n"
+        "  ps1 capture <iso> --bios <bios> [--frames N | --scene Ns] [--script in.json]\n"
+        "              [--auto-input] [--tracked-only] [--smooth] [--drop-slivers]\n"
+        "              [--dedupe-strict] [-o out.gltf] [--json]\n"
+        "                                    Headless PS1 runtime rip: boot a disc, capture geometry,\n"
+        "                                    export a scene (experimental; needs -DENABLE_PS1_RIP=ON +\n"
+        "                                    the beetle rip fork in PS1Cores/; Xvfb on Linux).\n"
+        "  ps1 dump-vram <iso> --bios <bios> [--frames N] -o vram.png [--json]\n"
+        "                                    Boot a disc and snapshot the GPU VRAM mirror to PNG.\n"
+        "\n"
         "  cloud login [--api-key <token>]   Sign in via device flow (prints URL + code) or store an API key.\n"
         "  cloud logout                      Sign out and clear the saved session.\n"
         "  cloud status [--json]             Show whether a QtMesh Cloud session is stored locally.\n"
@@ -1570,6 +1589,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "generate3d") rc = cmdGenerate3d(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
+    else if (cmd == "ps1") rc = cmdPs1(argc, argv);
     else if (cmd == "cloud") rc = CloudCLIPipeline::run(argc, argv);
 
     if (rc < 0) {
@@ -9933,4 +9953,351 @@ int CLIPipeline::cmdHdri(int argc, char* argv[])
         }
     }
     return failures > 0 ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// #431 — headless PS1 runtime ripper CLI
+// ---------------------------------------------------------------------------
+#ifdef ENABLE_PS1_RIP
+namespace {
+
+// Pump the Qt event loop for `ms` while the PS1 worker thread runs. The CLI
+// never calls a.exec(), so signals from the worker (sessionStarted, meshBuilt,
+// vramDumped, error) only get delivered when we drain the event queue here.
+// Mirrors MCPServer::ps1PumpEventLoop.
+void ps1CliPump(int ms)
+{
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+    }
+}
+
+// Map an input-script button name to a libretro joypad id. Accepts the common
+// PlayStation names plus dpad/shoulder aliases; returns UINT_MAX for unknown.
+unsigned ps1ButtonId(const QString& raw)
+{
+    const QString n = raw.trimmed().toLower();
+    if (n == "start")  return PsxJoypadButton::Start;
+    if (n == "select") return PsxJoypadButton::Select;
+    if (n == "cross" || n == "x" || n == "b") return PsxJoypadButton::B;
+    if (n == "circle" || n == "a") return PsxJoypadButton::A;
+    if (n == "square" || n == "y") return PsxJoypadButton::Y;
+    if (n == "triangle") return PsxJoypadButton::X;
+    if (n == "up")    return PsxJoypadButton::Up;
+    if (n == "down")  return PsxJoypadButton::Down;
+    if (n == "left")  return PsxJoypadButton::Left;
+    if (n == "right") return PsxJoypadButton::Right;
+    if (n == "l" || n == "l1") return PsxJoypadButton::L;
+    if (n == "r" || n == "r1") return PsxJoypadButton::R;
+    return UINT_MAX;
+}
+
+} // namespace
+#endif // ENABLE_PS1_RIP
+
+int CLIPipeline::cmdPs1(int argc, char* argv[])
+{
+#ifndef ENABLE_PS1_RIP
+    (void)argc;
+    (void)argv;
+    err() << "Error: PS1 runtime ripper not compiled in. Rebuild with "
+             "-DENABLE_PS1_RIP=ON." << Qt::endl;
+    return 1;
+#else
+    // ---- parse ------------------------------------------------------------
+    QString action;      // "capture" | "dump-vram"
+    QString isoPath;
+    QString biosPath;
+    QString scriptPath;
+    QString outputPath;
+    int frames = 600;            // default run length before capture
+    int sceneSeconds = 0;        // > 0 → multi-second scene capture
+    bool autoInput = false;
+    bool trackedOnly = false;
+    bool smooth = false;
+    bool dropSlivers = false;
+    bool rigidAnim = false;
+    bool dedupeStrict = false;
+    bool jsonOut = false;
+
+    for (int i = 2; i < argc; ++i) {
+        const QString arg(argv[i]);
+        if (arg == QStringLiteral("--help") || arg == QStringLiteral("-h")) {
+            cliWrite(QStringLiteral(
+                "Usage:\n"
+                "  qtmesh ps1 capture <iso> --bios <bios> [options] -o out.gltf\n"
+                "  qtmesh ps1 dump-vram <iso> --bios <bios> [--frames N] -o vram.png\n"
+                "\n"
+                "Options (capture):\n"
+                "  --bios <file>       PS1 BIOS (required; you supply your own)\n"
+                "  --frames N          Emulate N frames before capture (default 600)\n"
+                "  --scene Ns          Accumulate an N-second scene instead of one frame\n"
+                "  --script <json>     Input script: [{\"frame\":60,\"button\":\"start\"}, ...]\n"
+                "  --auto-input        Mash Start/Cross to get past menus (no script)\n"
+                "  --tracked-only      Keep only in-core tracked+depth 3D geometry\n"
+                "  --smooth            Weld verts + recompute normals\n"
+                "  --drop-slivers      Remove zero-area triangles (#428 cleanup)\n"
+                "  --rigid-animation   Extract per-object rigid animation (scene capture;\n"
+                "                      in-editor preview — node tracks don't export yet)\n"
+                "  --dedupe-strict     Bit-exact instance dedupe\n"
+                "  -o <file>           Output mesh/scene (gltf/glb/fbx/obj/…)\n"
+                "  --json              Machine-readable result\n"
+                "\n"
+                "Requires Xvfb on Linux for the libretro core's GL context.\n"));
+            return 0;
+        }
+        if (arg == QStringLiteral("--bios") && i + 1 < argc) { biosPath = QString::fromUtf8(argv[++i]); continue; }
+        if (arg == QStringLiteral("--script") && i + 1 < argc) { scriptPath = QString::fromUtf8(argv[++i]); continue; }
+        if ((arg == QStringLiteral("-o") || arg == QStringLiteral("--output")) && i + 1 < argc) {
+            outputPath = QString::fromUtf8(argv[++i]); continue;
+        }
+        if (arg == QStringLiteral("--frames") && i + 1 < argc) { frames = QString::fromUtf8(argv[++i]).toInt(); continue; }
+        if (arg == QStringLiteral("--scene") && i + 1 < argc) {
+            QString s = QString::fromUtf8(argv[++i]);
+            if (s.endsWith(QLatin1Char('s'), Qt::CaseInsensitive)) s.chop(1);
+            sceneSeconds = s.toInt();
+            continue;
+        }
+        if (arg == QStringLiteral("--auto-input")) { autoInput = true; continue; }
+        if (arg == QStringLiteral("--tracked-only")) { trackedOnly = true; continue; }
+        if (arg == QStringLiteral("--smooth")) { smooth = true; continue; }
+        if (arg == QStringLiteral("--drop-slivers")) { dropSlivers = true; continue; }
+        if (arg == QStringLiteral("--rigid-animation")) { rigidAnim = true; continue; }
+        if (arg == QStringLiteral("--dedupe-strict")) { dedupeStrict = true; continue; }
+        if (arg == QStringLiteral("--json")) { jsonOut = true; continue; }
+        if (arg == QStringLiteral("--cli") || arg == QStringLiteral("--verbose")
+            || arg == QStringLiteral("--no-telemetry"))
+            continue;
+        if (arg.startsWith(QLatin1Char('-'))) {
+            err() << "Error: unknown ps1 option '" << arg << "'" << Qt::endl;
+            return 2;
+        }
+        // positionals: first is the action, second is the ISO
+        if (action.isEmpty()) { action = arg; continue; }
+        if (isoPath.isEmpty()) { isoPath = arg; continue; }
+    }
+
+    if (action.isEmpty() || (action != QStringLiteral("capture") && action != QStringLiteral("dump-vram"))) {
+        err() << "Error: ps1 requires an action: capture | dump-vram" << Qt::endl;
+        return 2;
+    }
+    if (isoPath.isEmpty()) { err() << "Error: no ISO/cue supplied" << Qt::endl; return 2; }
+    if (biosPath.isEmpty()) { err() << "Error: --bios <file> is required" << Qt::endl; return 2; }
+    if (!QFileInfo::exists(isoPath)) { err() << "Error: ISO not found: " << isoPath << Qt::endl; return 1; }
+    if (!QFileInfo::exists(biosPath)) { err() << "Error: BIOS not found: " << biosPath << Qt::endl; return 1; }
+    if (action == QStringLiteral("dump-vram") && outputPath.isEmpty()) {
+        err() << "Error: dump-vram requires -o <file.png>" << Qt::endl; return 2;
+    }
+
+    // ---- parse the optional input script ---------------------------------
+    struct ScriptEvent { int frame; unsigned button; };
+    QVector<ScriptEvent> script;
+    if (!scriptPath.isEmpty()) {
+        QFile sf(scriptPath);
+        if (!sf.open(QIODevice::ReadOnly)) {
+            err() << "Error: cannot read input script: " << scriptPath << Qt::endl; return 1;
+        }
+        QJsonParseError perr{};
+        const QJsonDocument doc = QJsonDocument::fromJson(sf.readAll(), &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isArray()) {
+            err() << "Error: input script must be a JSON array of {frame, button}" << Qt::endl;
+            return 1;
+        }
+        for (const QJsonValue& v : doc.array()) {
+            const QJsonObject o = v.toObject();
+            const unsigned bid = ps1ButtonId(o.value(QStringLiteral("button")).toString());
+            if (bid == UINT_MAX) {
+                err() << "Error: unknown button in script: "
+                      << o.value(QStringLiteral("button")).toString() << Qt::endl;
+                return 1;
+            }
+            script.append({o.value(QStringLiteral("frame")).toInt(), bid});
+        }
+        std::sort(script.begin(), script.end(),
+                  [](const ScriptEvent& a, const ScriptEvent& b) { return a.frame < b.frame; });
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cli.start"),
+                                  QStringLiteral("%1 iso=%2").arg(action, QFileInfo(isoPath).fileName()));
+
+    // The reconstructor attaches captured meshes to the live Ogre scene, so we
+    // need a headless SceneManager even for a file-out capture (dump-vram
+    // doesn't, but initialising is cheap and harmless).
+    if (!initOgreHeadless()) {
+        err() << "Error: headless Ogre init failed" << Qt::endl;
+        return 1;
+    }
+
+    // ---- boot -------------------------------------------------------------
+    PS1RipManager* mgr = PS1RipManager::getSingleton();
+    if (!mgr) { err() << "Error: could not create PS1 ripper" << Qt::endl; return 1; }
+    if (!mgr->loadBios(biosPath)) { err() << "Error: BIOS load failed" << Qt::endl; return 1; }
+    if (!mgr->loadIso(isoPath)) { err() << "Error: ISO load failed" << Qt::endl; return 1; }
+
+    bool inCoreActive = false;
+    QObject::connect(mgr, &PS1RipManager::inCoreHooksState, mgr,
+                     [&inCoreActive](bool a) { inCoreActive = a; });
+    QString sessionError;
+    QObject::connect(mgr, &PS1RipManager::error, mgr,
+                     [&sessionError](const QString& m) { sessionError = m; });
+
+    if (!mgr->start()) { err() << "Error: emulator start failed" << Qt::endl; return 1; }
+
+    // Wait for boot (bounded). sessionStarted flips isSessionActive().
+    {
+        QElapsedTimer boot; boot.start();
+        while (!mgr->isSessionActive() && boot.elapsed() < 60000 && sessionError.isEmpty())
+            ps1CliPump(50);
+    }
+    if (!mgr->isSessionActive()) {
+        err() << "Error: emulator did not boot"
+              << (sessionError.isEmpty() ? QString() : QStringLiteral(" — ") + sessionError) << Qt::endl;
+        return 1;
+    }
+    err() << "Booted core '" << mgr->activeCoreId() << "'; in-core hooks: "
+          << (inCoreActive ? "active" : "unavailable (stock core)") << Qt::endl;
+
+    mgr->setDedupeStrict(dedupeStrict);
+    {
+        Ps1NormalizerSettings ns = mgr->normalizerSettings();
+        ns.trackedGeometryOnly = trackedOnly;
+        ns.cleanupWeldNormals = smooth;
+        ns.cleanupRemoveZeroArea = dropSlivers;
+        ns.captureRigidAnimation = rigidAnim;
+        mgr->setNormalizerSettings(ns);
+    }
+
+    // ---- run frames, applying input (script > auto-input > none) ----------
+    const int totalFrames = qBound(1, frames, 20000);
+    int scriptCursor = 0;
+    for (int f = 0; f < totalFrames; ++f) {
+        // Fire any scripted events due at this frame (30ms press pulse).
+        while (scriptCursor < script.size() && script[scriptCursor].frame <= f) {
+            const unsigned bid = script[scriptCursor].button;
+            mgr->setJoypadPressed(0, bid, true);
+            ps1CliPump(30);
+            mgr->setJoypadPressed(0, bid, false);
+            ++scriptCursor;
+        }
+        if (autoInput && script.isEmpty() && (f % 60) < 4) {
+            const unsigned bid = ((f / 60) % 2 == 0) ? PsxJoypadButton::B : PsxJoypadButton::Start;
+            mgr->setJoypadPressed(0, bid, true);
+            ps1CliPump(16);
+            mgr->setJoypadPressed(0, bid, false);
+        } else {
+            ps1CliPump(16); // ~one frame at 60Hz
+        }
+        if (!sessionError.isEmpty()) {
+            err() << "Error: " << sessionError << Qt::endl;
+            mgr->stop(); ps1CliPump(200);
+            return 1;
+        }
+    }
+
+    // ---- dump-vram action -------------------------------------------------
+    if (action == QStringLiteral("dump-vram")) {
+        QString pngOut; bool dumped = false;
+        QMetaObject::Connection c = QObject::connect(
+            mgr, &PS1RipManager::vramDumped, mgr,
+            [&](const QString&, const QString& png, const QVector<uint16_t>&, const QImage&) {
+                pngOut = png; dumped = true;
+            });
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cli.dump_vram"),
+                                      QStringLiteral("frames=%1").arg(totalFrames));
+        mgr->dumpVRAM();
+        QElapsedTimer w; w.start();
+        while (!dumped && w.elapsed() < 30000) ps1CliPump(50);
+        QObject::disconnect(c);
+        mgr->stop(); ps1CliPump(200);
+        if (!dumped || pngOut.isEmpty()) {
+            err() << "Error: VRAM dump produced no image" << Qt::endl; return 1;
+        }
+        // Move the dump to the requested output path.
+        QFile::remove(outputPath);
+        if (!QFile::copy(pngOut, outputPath)) {
+            err() << "Error: could not write " << outputPath << Qt::endl; return 1;
+        }
+        if (jsonOut) {
+            QJsonObject o{{"action", "dump-vram"}, {"output", outputPath}, {"source", pngOut}};
+            cliWrite(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)) + "\n");
+        } else {
+            cliWrite(QStringLiteral("VRAM dumped to %1\n").arg(outputPath));
+        }
+        return 0;
+    }
+
+    // ---- capture action ---------------------------------------------------
+    QJsonObject built; bool done = false;
+    QMetaObject::Connection c = QObject::connect(
+        mgr, &PS1RipManager::meshBuilt, mgr,
+        [&](const QString& id, int parts, int uniq, int inst, int verts, int tris, int matrices,
+            uint32_t, bool, int inversePct, int trackedPct, int depthPct, bool slabLike,
+            int primsMat, int primsTotal, PsxVramMirrorMode, Gp0CaptureStats) {
+            built = QJsonObject{
+                {"captureId", id}, {"capturedParts", parts}, {"uniqueMeshes", uniq},
+                {"instances", inst}, {"vertices", verts}, {"triangles", tris},
+                {"matrices", matrices}, {"trackedPercent", trackedPct},
+                {"depthPercent", depthPct}, {"trustedPercent", inversePct},
+                {"slabLike", slabLike}, {"primsWithMatrix", primsMat}, {"primsTotal", primsTotal}};
+            done = true;
+        });
+
+    if (sceneSeconds > 0)
+        mgr->captureScene(sceneSeconds);
+    else {
+        mgr->armCapture(true);
+        ps1CliPump(200);
+        mgr->captureFrame();
+    }
+
+    {
+        const int budget = 30000 + sceneSeconds * 1000;
+        QElapsedTimer w; w.start();
+        while (!done && w.elapsed() < budget && sessionError.isEmpty()) ps1CliPump(50);
+    }
+    QObject::disconnect(c);
+
+    if (!done) {
+        err() << "Error: capture produced no mesh"
+              << (sessionError.isEmpty() ? QString() : QStringLiteral(" — ") + sessionError) << Qt::endl;
+        mgr->stop(); ps1CliPump(200);
+        return 1;
+    }
+
+    // ---- export the reconstructed scene -----------------------------------
+    int exportRc = 0;
+    if (!outputPath.isEmpty()) {
+        const int ok = MeshImporterExporter::sceneExporter(outputPath);
+        if (ok != 0) {
+            err() << "Error: scene export failed (" << outputPath << ")" << Qt::endl;
+            exportRc = 1;
+        } else {
+            built["output"] = outputPath;
+        }
+    }
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.cli.capture"),
+        QStringLiteral("tris=%1 tracked=%2%%").arg(built.value("triangles").toInt())
+            .arg(built.value("trackedPercent").toInt()));
+
+    mgr->stop();
+    ps1CliPump(200);
+
+    if (jsonOut) {
+        cliWrite(QString::fromUtf8(QJsonDocument(built).toJson(QJsonDocument::Compact)) + "\n");
+    } else {
+        cliWrite(QStringLiteral("Captured: %1 tris, %2 verts, %3 meshes, %4%% tracked%5\n")
+                     .arg(built.value("triangles").toInt())
+                     .arg(built.value("vertices").toInt())
+                     .arg(built.value("uniqueMeshes").toInt())
+                     .arg(built.value("trackedPercent").toInt())
+                     .arg(outputPath.isEmpty() ? QString()
+                                               : QStringLiteral(" → ") + outputPath));
+    }
+    return exportRc;
+#endif // ENABLE_PS1_RIP
 }

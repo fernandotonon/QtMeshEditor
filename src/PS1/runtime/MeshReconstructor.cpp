@@ -612,6 +612,75 @@ void applyDegenerateTriangleCull(GroupBucket &bucket, float factor,
     }
 }
 
+/** Zero-area triangle cull (#428 cleanup pipeline): drop every triangle whose
+ *  cross-product area is <= `epsilon` (editor units²). PS1 captures emit
+ *  collinear / duplicated-vertex slivers on quad splits and near-clip prims —
+ *  they render nothing but bloat the mesh and break normal-recompute and
+ *  topology tooling. Same per-submesh vertex-compaction idiom as the spike
+ *  cull; no-op when epsilon <= 0. Reports the drop count in
+ *  `statsOut->zeroAreaTrianglesDropped`. */
+void applyZeroAreaTriangleCull(GroupBucket &bucket, float epsilon,
+                               MeshReconstructionStats *statsOut)
+{
+    if (!(epsilon > 0.0f))
+        return;
+
+    auto triArea = [](const ReconstructedVertex &a, const ReconstructedVertex &b,
+                      const ReconstructedVertex &c) {
+        // Half the magnitude of (b-a) × (c-a).
+        const double ux = b.px - a.px, uy = b.py - a.py, uz = b.pz - a.pz;
+        const double vx = c.px - a.px, vy = c.py - a.py, vz = c.pz - a.pz;
+        const double cxp = uy * vz - uz * vy;
+        const double cyp = uz * vx - ux * vz;
+        const double czp = ux * vy - uy * vx;
+        return 0.5 * std::sqrt(cxp * cxp + cyp * cyp + czp * czp);
+    };
+
+    for (auto it = bucket.byTexKey.begin(); it != bucket.byTexKey.end(); ++it) {
+        SubMeshAccumulator &acc = it.value();
+        if (acc.indices.size() < 3)
+            continue;
+
+        QVector<int> remap(acc.vertices.size(), -1);
+        QVector<ReconstructedVertex> newVerts;
+        QVector<uint32_t> newIdx;
+        newVerts.reserve(acc.vertices.size());
+        newIdx.reserve(acc.indices.size());
+        int dropped = 0;
+        for (int t = 0; t + 2 < acc.indices.size(); t += 3) {
+            const ReconstructedVertex &v0 = acc.vertices[static_cast<int>(acc.indices[t])];
+            const ReconstructedVertex &v1 = acc.vertices[static_cast<int>(acc.indices[t + 1])];
+            const ReconstructedVertex &v2 = acc.vertices[static_cast<int>(acc.indices[t + 2])];
+            if (triArea(v0, v1, v2) <= static_cast<double>(epsilon)) {
+                ++dropped;
+                continue;
+            }
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t src = acc.indices[t + k];
+                if (remap[static_cast<int>(src)] < 0) {
+                    remap[static_cast<int>(src)] = newVerts.size();
+                    newVerts.append(acc.vertices[static_cast<int>(src)]);
+                }
+                newIdx.append(static_cast<uint32_t>(remap[static_cast<int>(src)]));
+            }
+        }
+        if (dropped == 0)
+            continue;
+        acc.vertices = newVerts;
+        acc.indices = newIdx;
+        QVector<uint32_t> newBounds;
+        newBounds.reserve(acc.boundsVertexIndices.size());
+        for (const uint32_t idx : acc.boundsVertexIndices) {
+            const int mapped = remap[static_cast<int>(idx)];
+            if (mapped >= 0)
+                newBounds.append(static_cast<uint32_t>(mapped));
+        }
+        acc.boundsVertexIndices = newBounds;
+        if (statsOut)
+            statsOut->zeroAreaTrianglesDropped += dropped;
+    }
+}
+
 /** Per-part outlier policy for tiered parts (#816): vertices farther than
  *  kOutlierRadiusFactor × the part's 99th-percentile centroid radius are
  *  dropped along with every triangle that references them. Replaces the
@@ -784,6 +853,13 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
             continue;
         applyDegenerateTriangleCull(it.value(), settings.spikeEdgeFactor, statsOut);
         applyPartOutlierPolicy(it.value(), statsOut);
+    }
+
+    // Zero-area cull (#428) runs on ALL parts (Tier-2 slivers exist too) when
+    // the user opts in — flat degenerate triangles aren't tier-specific.
+    if (settings.cleanupRemoveZeroArea) {
+        for (auto it = out.groups.begin(); it != out.groups.end(); ++it)
+            applyZeroAreaTriangleCull(it.value(), settings.zeroAreaEpsilon, statsOut);
     }
 
     // Bounds fold after the outlier pass so dropped garbage can't poison the

@@ -564,6 +564,71 @@ TEST(ScanEngineTest, EvaluateRules_DetectNonManifoldEdges_FiresOverThreshold)
     EXPECT_TRUE(found);
 }
 
+TEST(ScanEngineTest, EvaluateRules_Ps1RipZeroArea_FiresOverThreshold)
+{
+    AssetInfo asset;
+    asset.relativePath = "ps1-capture.glb";
+    asset.format = "glb";
+    asset.ps1RipZeroAreaRatio = 0.20; // 20% slivers
+
+    ScanConfig config = ScanConfig::defaults();
+    config.ps1RipZeroAreaPct = 5.0;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "ps1-rip-zero-area") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_Ps1RipZeroArea_QuietUnderThreshold)
+{
+    AssetInfo asset;
+    asset.relativePath = "clean.glb";
+    asset.format = "glb";
+    asset.ps1RipZeroAreaRatio = 0.01; // 1%, below the 5% threshold
+
+    ScanConfig config = ScanConfig::defaults();
+    config.ps1RipZeroAreaPct = 5.0;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "ps1-rip-zero-area");
+}
+
+TEST(ScanEngineTest, EvaluateRules_Ps1RipDegenerateUv_FiresOverThreshold)
+{
+    AssetInfo asset;
+    asset.relativePath = "ps1-capture.glb";
+    asset.format = "glb";
+    asset.ps1RipDegenerateUvRatio = 0.40; // 40% degenerate UV tris
+
+    ScanConfig config = ScanConfig::defaults();
+    config.ps1RipDegenerateUvPct = 10.0;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "ps1-rip-degenerate-uv") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_Ps1RipRules_DisabledByDefault)
+{
+    AssetInfo asset;
+    asset.relativePath = "any.glb";
+    asset.format = "glb";
+    asset.ps1RipZeroAreaRatio = 0.9;
+    asset.ps1RipDegenerateUvRatio = 0.9;
+
+    ScanConfig config = ScanConfig::defaults(); // no PS1 rule enabled
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings) {
+        EXPECT_NE(f.rule, "ps1-rip-zero-area");
+        EXPECT_NE(f.rule, "ps1-rip-degenerate-uv");
+    }
+}
+
 TEST(ScanEngineTest, EvaluateRules_C4Rules_AllDisabledByDefault)
 {
     AssetInfo asset;

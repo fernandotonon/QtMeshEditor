@@ -102,6 +102,15 @@ struct ScanConfig {
     // Boolean operations, fluid sims, 3D printing all expect manifold
     // input; 1% is the conservative starting point.
     double detectNonManifoldEdgesPct = 0.0;
+    // ps1-rip-zero-area (#428): percent of triangles with ~zero cross-product
+    // area at which to flag. PS1 captures produce collinear/duplicate-vertex
+    // slivers; the "Clean PS1 Capture" pipeline removes them. 0 = disabled.
+    double ps1RipZeroAreaPct = 0.0;
+    // ps1-rip-degenerate-uv (#428): percent of triangles whose UV0 triangle has
+    // ~zero area (all three UVs coincident/collinear) at which to flag. Common
+    // on PS1 flat-shaded/untextured prims; harmless for solid colour but breaks
+    // texture-atlas and lightmap workflows. 0 = disabled.
+    double ps1RipDegenerateUvPct = 0.0;
 
     // inspect (issue #364) — enabled via platform profile metadata `inspect_textures: true`
     bool probeTextureFiles = false;

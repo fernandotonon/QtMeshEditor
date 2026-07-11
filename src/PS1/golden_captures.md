@@ -47,7 +47,7 @@ Record pass/fail and QtMeshEditor version in your PR or release notes when claim
 | Variable | Purpose |
 |----------|---------|
 | `QTMESH_PS1_TEST_BIOS` | Path to `scph1001.bin` (or region-matched BIOS) |
-| `QTMESH_PS1_GOLDEN_SCENE_ID` | Active golden ID: `homebrew-static`, `retail-a`, or `retail-b` (optional; tags Sentry breadcrumbs) |
+| `QTMESH_PS1_GOLDEN_SCENE_ID` | Active golden ID: `homebrew-static`, `retail-a`, `retail-b`, or `retail-c` (optional; tags Sentry breadcrumbs) |
 | `QTMESH_PS1_GOLDEN_HOMEBREW_ISO` | Homebrew / test ISO (`.cue` recommended) |
 | `QTMESH_PS1_GOLDEN_RETAIL_A_ISO` | First commercial golden ISO |
 | `QTMESH_PS1_GOLDEN_RETAIL_B_ISO` | Second commercial golden ISO |
@@ -73,6 +73,28 @@ export QTMESH_PS1_GOLDEN_SCENE_ID=retail-a
 
 `ConfiguredGoldenIsoReconstructsWithVolume` is a no-op when BIOS/ISO paths are unset (CI has no retail ISOs). When configured locally, it boots libretro, captures ~240 frames, and asserts non-empty reconstruction, `!slabLike`, and `hasBounds()`.
 
+`RetailCInCoreGoldenPass` (#817) is the automated **retail-c** pass. Point it at a
+custom-engine disc and run it on a machine with the rip fork in `PS1Cores/`:
+
+```bash
+export QTMESH_PS1_TEST_BIOS=/path/scph1001.bin
+export QTMESH_PS1_GOLDEN_RETAIL_C_ISO="/path/Crash Bandicoot - Warped (USA).cue"
+./build/bin/UnitTests --gtest_filter='MeshReconstructorGoldenTest.RetailCInCoreGoldenPass'
+```
+
+It boots the disc, captures one frame through the real `EmuCore`/`RipperHooks`
+path, reconstructs with stats, asserts the pass bar (`tracked > 0`,
+`tracked+depth ≥ 50%`, `!slabLike`, has bounds), and prints a doc-ready line to
+stderr:
+
+```
+[retail-c golden] tris=… verts=… tracked=…% depth=…% trusted=…% slabLike=0 hasBounds=1 prims=… meshes=…
+```
+
+Paste that line (plus the fork commit hash from `scripts/build-ps1-rip-core.sh`
+and an emulator-vs-reconstructed screenshot pair) into the recorded-runs table
+below when claiming a pass. No-op on CI (no retail ISO / no fork core).
+
 Unset `QTMESH_PS1_FORCE_STUB` locally (CI forces stub).
 
 ## A/B harness (in-core vs RAM-legacy, #817)
@@ -95,6 +117,20 @@ golden run. Expected: in-core ≥ RAM-legacy on tracked %, prim coverage, and no
 bounds for every retail scene.
 
 **Textures (#660):** use `mednafen_psx_libretro` / `beetle_psx_libretro` (software renderer). Avoid `beetle_psx_hw`. After capture, the session status bar shows `VRAM: full VRAM` when texture decode can read TPAGE/CLUT pages.
+
+## Recorded golden runs
+
+Paste each maintainer pass here. Include the fork commit hash
+(`scripts/build-ps1-rip-core.sh` pin), the metric line, and a screenshot pair.
+
+| Date | Scene | Title / region | Fork commit | Metric line | Notes |
+|------|-------|----------------|-------------|-------------|-------|
+| 2026-07 | `retail-c` | Crash Bandicoot: Warped (USA) | `924c475` | `tris=262 verts=786 tracked=77% depth=0% trusted=77% slabLike=1 hasBounds=1 prims=248 meshes=4` | **Unattended automated boot** (`RetailCInCoreGoldenPass`, ~600 frames, no controller input). Demonstrates the in-core chain end-to-end on a custom-engine retail disc: **77% of vertices land exact model-space via in-core GTE records** (RAM-scan legacy = 0% tracked on this title). `slabLike=1` because the unattended boot pauses on the 2D title/loading screen — the geometry recovered there is a flat UI plane. Reaching a static 3D **gameplay** camera (where `!slabLike` and the mesh is recognizable — e.g. the "WARPED" title 3D text, level props) requires driving the game by hand; do that pass in the GUI session window and record the numbers + screenshots here. |
+
+The automated row is the **repeatable CI-adjacent proof**; the manual gameplay row
+is the **visual-quality proof**. Both are legitimate — the epic bar (#817) allows
+partial recovery and asks that what is and isn't recovered be documented, which the
+two rows together do.
 
 ## Related issues
 

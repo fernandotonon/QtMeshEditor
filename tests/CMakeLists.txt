@@ -253,6 +253,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshTopologyHash.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/Ps1AnimationExtractor.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/Ps1CoordinateNormalizer.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1CapturedAssets.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1ExtractedAssetBrowser.cpp

@@ -22,7 +22,7 @@ QString existingFileFromEnv(const char *name)
 QStringList allSceneIds()
 {
     return {QString::fromLatin1(kSceneHomebrewStatic), QString::fromLatin1(kSceneRetailA),
-            QString::fromLatin1(kSceneRetailB)};
+            QString::fromLatin1(kSceneRetailB), QString::fromLatin1(kSceneRetailC)};
 }
 
 bool isKnownSceneId(const QString &sceneId)
@@ -38,6 +38,8 @@ QString isoEnvVarForScene(const QString &sceneId)
         return QString::fromLatin1(kEnvRetailAIso);
     if (sceneId == QLatin1String(kSceneRetailB))
         return QString::fromLatin1(kEnvRetailBIso);
+    if (sceneId == QLatin1String(kSceneRetailC))
+        return QString::fromLatin1(kEnvRetailCIso);
     return {};
 }
 
@@ -57,6 +59,8 @@ QString isoPathForScene(const QString &sceneId)
     }
     if (sceneId == QLatin1String(kSceneRetailB))
         return existingFileFromEnv(kEnvRetailBIso);
+    if (sceneId == QLatin1String(kSceneRetailC))
+        return existingFileFromEnv(kEnvRetailCIso);
     return {};
 }
 

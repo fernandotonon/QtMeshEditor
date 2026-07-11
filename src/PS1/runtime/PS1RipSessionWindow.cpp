@@ -56,6 +56,8 @@ constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
 constexpr auto kCleanupKey = "cleanupWeldNormals";
+constexpr auto kRemoveZeroAreaKey = "cleanupRemoveZeroArea";
+constexpr auto kRigidAnimKey = "captureRigidAnimation";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -319,6 +321,54 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kCleanupKey), on);
     });
     toolbar->addWidget(smoothMesh);
+
+    // Mesh cleanup: drop zero-area (sliver) triangles from the raw capture
+    // (#428). Complements Smooth — welding shares verts, this removes the
+    // collinear / duplicate-vertex triangles PS1 quad-splits leave behind.
+    auto *removeZeroArea = new QCheckBox(tr("Drop slivers"), this);
+    removeZeroArea->setToolTip(tr("Clean up: remove zero-area (collinear / duplicate-vertex) "
+                                  "sliver triangles common in PS1 captures. Takes effect on "
+                                  "the next Capture Frame."));
+    removeZeroArea->setChecked(settings.value(ps1SettingsKey(kRemoveZeroAreaKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupRemoveZeroArea = removeZeroArea->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(removeZeroArea, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupRemoveZeroArea = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cleanup.zero_area"),
+                                      on ? QStringLiteral("on") : QStringLiteral("off"));
+        QSettings().setValue(ps1SettingsKey(kRemoveZeroAreaKey), on);
+    });
+    toolbar->addWidget(removeZeroArea);
+
+    // #429: capture rigid animation from a *scene* capture — authors an Ogre
+    // node-animation track per moving object so the ripped motion plays in the
+    // viewport. In-editor preview only (node tracks don't export yet).
+    auto *rigidAnim = new QCheckBox(tr("Rigid anim"), this);
+    rigidAnim->setToolTip(tr("Capture Scene only: extract per-object rigid animation from the "
+                             "per-frame GTE matrices and play it in the viewport. In-editor "
+                             "preview — node-transform tracks don't export to glTF/FBX yet. "
+                             "Best on a static-camera scene."));
+    rigidAnim->setChecked(settings.value(ps1SettingsKey(kRigidAnimKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.captureRigidAnimation = rigidAnim->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(rigidAnim, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.captureRigidAnimation = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.anim"),
+                                      on ? QStringLiteral("capture_on")
+                                         : QStringLiteral("capture_off"));
+        QSettings().setValue(ps1SettingsKey(kRigidAnimKey), on);
+    });
+    toolbar->addWidget(rigidAnim);
 
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));

@@ -564,6 +564,74 @@ TEST(MeshReconstructorTieredTest, DegenerateTriangleCullDropsSpanningTriangle)
     (void)withSpan;
 }
 
+TEST(MeshReconstructorTieredTest, ZeroAreaCullDropsSliverTriangles)
+{
+    // #428 cleanup pipeline: build 12 good tracked triangles plus 4 degenerate
+    // ones (two of the three verts coincident → zero cross-product area). With
+    // the cull OFF the slivers survive; with it ON they're dropped and the
+    // stats record the exact count.
+    MatrixRecord matrix = rotationMatrix(0.0, 0.0, 0.0);
+    matrix.tr[2] = 5000;
+
+    CaptureSnapshot snap;
+    snap.matrices.append(matrix);
+    auto addTrackedTri = [&](const int16_t a[3], const int16_t b[3], const int16_t c[3]) {
+        PrimRecord p;
+        p.kind = PrimKind::ShadedTri;
+        p.vertexCount = 3;
+        const int16_t *pts[3] = {a, b, c};
+        for (int v = 0; v < 3; ++v) {
+            p.verts[v].provenance = static_cast<uint8_t>(PsxVertexProvenance::GteTracked);
+            p.verts[v].gteRecordIndex = static_cast<uint32_t>(snap.gteRecords.size());
+            snap.gteRecords.append(recordFor(matrix, pts[v][0], pts[v][1], pts[v][2],
+                                             static_cast<uint32_t>(snap.gteRecords.size())));
+        }
+        snap.prims.append(p);
+    };
+
+    // 12 well-formed triangles.
+    for (int i = 0; i < 12; ++i) {
+        const int16_t a[3] = {int16_t(i * 8), 0, 0};
+        const int16_t b[3] = {int16_t(i * 8 + 20), 12, 0};
+        const int16_t c[3] = {int16_t(i * 8), 24, 0};
+        addTrackedTri(a, b, c);
+    }
+    // 4 zero-area slivers: verts b == a (two coincident corners → area 0).
+    for (int i = 0; i < 4; ++i) {
+        const int16_t a[3] = {int16_t(i * 8), 40, 0};
+        const int16_t c[3] = {int16_t(i * 8 + 15), 52, 0};
+        addTrackedTri(a, a, c); // duplicate first corner
+    }
+
+    // Cull disabled → slivers survive.
+    Ps1NormalizerSettings noCull; // cleanupRemoveZeroArea defaults to false
+    MeshReconstructionStats s0stats;
+    const ReconstructedCaptureSet withSlivers =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, noCull, &s0stats);
+    ASSERT_FALSE(withSlivers.isEmpty());
+    EXPECT_EQ(s0stats.zeroAreaTrianglesDropped, 0);
+
+    // Cull enabled → exactly the 4 slivers are dropped.
+    Ps1NormalizerSettings withCull;
+    withCull.cleanupRemoveZeroArea = true;
+    withCull.spikeEdgeFactor = 0.0f; // isolate the zero-area cull from the spike cull
+    MeshReconstructionStats s1stats;
+    const ReconstructedCaptureSet cleaned =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, withCull, &s1stats);
+    ASSERT_FALSE(cleaned.isEmpty());
+    EXPECT_EQ(s1stats.zeroAreaTrianglesDropped, 4)
+        << "expected exactly the 4 zero-area slivers to be dropped";
+
+    // Triangle count drops by 4; the 12 good triangles are untouched.
+    int cleanTris = 0;
+    for (const auto &m : cleaned.uniqueMeshes)
+        cleanTris += m.triangleCount;
+    int rawTris = 0;
+    for (const auto &m : withSlivers.uniqueMeshes)
+        rawTris += m.triangleCount;
+    EXPECT_EQ(rawTris - cleanTris, 4);
+}
+
 TEST(MeshReconstructorTieredTest, CleanupWeldsVerticesAndComputesNormals)
 {
     // Without cleanup the tracked cube is unindexed soup: 12 tris × 3 = 36

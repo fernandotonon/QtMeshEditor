@@ -1,7 +1,10 @@
 #include "PS1RipMeshBuilder.h"
 
+#include "GteInverse.h"
 #include "Manager.h"
 #include "MeshReconstructor.h"
+#include "NodeAnimationManager.h"
+#include "Ps1AnimationExtractor.h"
 #include "SentryReporter.h"
 #include "TextureDecoder.h"
 #include "VramSnapshot.h"
@@ -11,6 +14,7 @@
 #include <QVector>
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <vector>
 
 #include <OgreAxisAlignedBox.h>
@@ -660,6 +664,11 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
     Ogre::Entity *firstEntity = nullptr;
 
     QStringList createdNodeNames;
+    // #429: node name + its editor-space world position, so after all nodes
+    // exist we can match extracted rigid-animation tracks (keyed by first-frame
+    // world translation) to the node that should carry them.
+    struct InstancePlacement { QString nodeName; Ogre::Vector3 world; };
+    QVector<InstancePlacement> instancePlacements;
     int instanceOrdinal = 0;
     for (int meshIndex = 0; meshIndex < captureSet.uniqueMeshes.size(); ++meshIndex) {
         const ReconstructedMesh &mesh = captureSet.uniqueMeshes[meshIndex];
@@ -714,6 +723,8 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
                 normalize, placementScale, px, py, pz, scaleOut, posOut);
             node->setScale(scaleOut[0], scaleOut[1], scaleOut[2]);
             node->setPosition(posOut[0], posOut[1], posOut[2]);
+            instancePlacements.append({nodeName,
+                                       Ogre::Vector3(posOut[0], posOut[1], posOut[2])});
             if (inst.hasMatrix) {
                 float editorRot[9];
                 editorRotationFromGte(inst.rot, editorRot);
@@ -739,6 +750,21 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
                 firstEntity = entity;
             }
         }
+    }
+
+    // #429: author rigid animation tracks (in-editor preview) when the user
+    // opted in AND this capture carries per-frame GTE records (scene capture).
+    if (normalize.captureRigidAnimation && textureSource
+        && !textureSource->gteRecords.isEmpty()) {
+        QVector<QPair<QString, Ogre::Vector3>> placements;
+        placements.reserve(instancePlacements.size());
+        for (const InstancePlacement &p : instancePlacements)
+            placements.append({p.nodeName, p.world});
+        const int authored = authorRigidAnimation(textureSource->gteRecords, placements,
+                                                   captureId, normalize);
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ps1.rip.anim"),
+            QStringLiteral("capture=%1 tracks=%2").arg(captureId).arg(authored));
     }
 
     if (resultOut) {
@@ -769,4 +795,104 @@ void PS1RipMeshBuilder::editorRotationFromGte(const float rot[9], float out[9])
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c)
             out[r * 3 + c] = kSign[r] * kSign[c] * rot[r * 3 + c];
+}
+
+int PS1RipMeshBuilder::authorRigidAnimation(
+    const QVector<GteRecordEntry> &records,
+    const QVector<QPair<QString, Ogre::Vector3>> &placements,
+    const QString &captureId, const Ps1NormalizerSettings &normalize)
+{
+    const QVector<Ps1MatrixTrack> tracks = Ps1AnimationExtractor::extract(records);
+    if (tracks.isEmpty() || placements.isEmpty())
+        return 0;
+
+    auto *nodeAnim = NodeAnimationManager::instance();
+    if (!nodeAnim)
+        return 0;
+
+    // Frame -> playback time. PS1 titles run ~30 fps of distinct geometry
+    // frames in a Capture Scene; a fixed rate keeps the preview timing sane.
+    constexpr double kFps = 30.0;
+
+    // Determine the clip length from the widest frame span across all tracks.
+    uint32_t maxFrame = 0;
+    for (const Ps1MatrixTrack &t : tracks)
+        for (const Ps1MatrixKey &k : t.keys)
+            maxFrame = std::max(maxFrame, k.frame);
+    const double clipLength = std::max(0.001, static_cast<double>(maxFrame) / kFps);
+
+    const QString clipName = QStringLiteral("PS1Anim_%1").arg(captureId);
+    if (!nodeAnim->createClip(clipName, clipLength))
+        return 0;
+
+    // Match each track to the placement node whose world position is nearest
+    // the track's FIRST-frame world translation (GTE tr -> editor units). Each
+    // node is claimed at most once.
+    QVector<bool> claimed(placements.size(), false);
+    int authored = 0;
+
+    for (const Ps1MatrixTrack &track : tracks) {
+        if (track.keys.isEmpty())
+            continue;
+
+        // First-frame world position of this object.
+        float fx, fy, fz;
+        GteInverse::modelToEditor(static_cast<float>(track.keys.first().tr[0]),
+                                  static_cast<float>(track.keys.first().tr[1]),
+                                  static_cast<float>(track.keys.first().tr[2]),
+                                  fx, fy, fz);
+        const Ogre::Vector3 firstWorld(fx, fy, fz);
+
+        int bestIdx = -1;
+        float bestDist = std::numeric_limits<float>::max();
+        for (int i = 0; i < placements.size(); ++i) {
+            if (claimed[i])
+                continue;
+            const float d = placements[i].second.squaredDistance(firstWorld);
+            if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx < 0)
+            continue;
+        claimed[bestIdx] = true;
+        const QString &nodeName = placements[bestIdx].first;
+
+        // Author one keyframe per captured frame. Translation via modelToEditor;
+        // rotation via the same GTE->editor basis the static placement uses.
+        // Scale stays at the node's current scale (rigid — no per-frame scale).
+        for (const Ps1MatrixKey &key : track.keys) {
+            float wx, wy, wz;
+            GteInverse::modelToEditor(static_cast<float>(key.tr[0]),
+                                      static_cast<float>(key.tr[1]),
+                                      static_cast<float>(key.tr[2]), wx, wy, wz);
+            // Fold the auto-fit + user scale/flip into the animated translation
+            // so the clip lands in the same world layout as the static node.
+            float rotf[9];
+            const float rawRot[9] = {
+                static_cast<float>(key.rt[0]) / 4096.0f, static_cast<float>(key.rt[1]) / 4096.0f,
+                static_cast<float>(key.rt[2]) / 4096.0f, static_cast<float>(key.rt[3]) / 4096.0f,
+                static_cast<float>(key.rt[4]) / 4096.0f, static_cast<float>(key.rt[5]) / 4096.0f,
+                static_cast<float>(key.rt[6]) / 4096.0f, static_cast<float>(key.rt[7]) / 4096.0f,
+                static_cast<float>(key.rt[8]) / 4096.0f};
+            editorRotationFromGte(rawRot, rotf);
+            const Ogre::Matrix3 m3(rotf[0], rotf[1], rotf[2], rotf[3], rotf[4], rotf[5],
+                                   rotf[6], rotf[7], rotf[8]);
+            const double time = static_cast<double>(key.frame) / kFps;
+            nodeAnim->addKeyframe(clipName, nodeName, time,
+                                  Ogre::Vector3(wx, wy, wz), Ogre::Quaternion(m3),
+                                  Ogre::Vector3::UNIT_SCALE);
+        }
+        ++authored;
+    }
+
+    if (authored == 0) {
+        nodeAnim->deleteClip(clipName);
+        return 0;
+    }
+    // Auto-play the preview so the user sees the ripped motion immediately.
+    nodeAnim->setClipEnabled(clipName, true);
+    (void)normalize;
+    return authored;
 }
