@@ -182,6 +182,29 @@ public:
         int refineStride = 8,
         bool yaw180 = false);
 
+    /// One skeletal animation extracted onto the 22-joint canonical skeleton
+    /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
+    /// per canonical role, the source bone's WORLD orientation — exactly the
+    /// "frame":"world" convention the v3 motion library stores, so extracted
+    /// clips ride the existing retarget unchanged (delta vs clip frame 0).
+    struct CanonicalClip {
+        QString animation;      ///< source animation name
+        int frames = 0;         ///< sampled frame count at `fps`
+        int resolvedRoles = 0;  ///< canonical roles matched on this rig (≤22)
+        /// frames × 22 × [x,y,z,w]; unresolved roles hold identity.
+        std::vector<std::vector<std::array<float, 4>>> quats;
+    };
+
+    /// Sample every (or one) skeletal animation of `entity` at `fps` and
+    /// express each canonical joint's world orientation per frame. Bone→role
+    /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher
+    /// the retarget uses, so extraction and application are consistent by
+    /// construction. Animations whose rig resolves 0 roles are skipped.
+    static std::vector<CanonicalClip> extractCanonicalClips(
+        Ogre::Entity* entity,
+        int fps = 30,
+        const QString& onlyAnimation = {});
+
     /// True when the entity's mesh appears to FACE −Z (the retarget and the
     /// CMU clips assume +Z): detected from the foot region — toe mass extends
     /// forward of the ankle joints. Rigs WITH a harvested standing pose don't

@@ -10,6 +10,7 @@
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreKeyFrame.h>
+#include "MotionInbetween.h"
 
 class AnimationMergerTest : public ::testing::Test {
 protected:
@@ -892,4 +893,73 @@ TEST(AnimationMergerStandaloneTest, NullSkeletonCompatibility)
 {
     Ogre::SkeletonPtr null;
     EXPECT_FALSE(AnimationMerger::areSkeletonsCompatible(null, null));
+}
+
+// ── #839: rig→canonical clip extraction ─────────────────────────────────────
+
+TEST_F(AnimationMergerTest, ExtractCanonicalClipsRejectsNonHumanoid)
+{
+    // Root/Child bone names resolve no canonical roles → empty result.
+    Ogre::Entity* ent = createAnimatedTestEntity("extract_nonhuman");
+    ASSERT_NE(ent, nullptr);
+    EXPECT_TRUE(AnimationMerger::extractCanonicalClips(ent).empty());
+}
+
+TEST_F(AnimationMergerTest, ExtractCanonicalClipsSamplesWorldFrame)
+{
+    // Minimal humanoid: Mixamo-style names resolve hip/head/lhip/rhip roles.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "extract_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* hips = skel->createBone("Hips", 0);
+    hips->setPosition(Ogre::Vector3(0, 1, 0));
+    auto* head = skel->createBone("Head", 1);
+    head->setPosition(Ogre::Vector3(0, 0.7f, 0));
+    hips->addChild(head);
+    auto* lleg = skel->createBone("LeftUpLeg", 2);
+    lleg->setPosition(Ogre::Vector3(0.15f, -0.1f, 0));
+    hips->addChild(lleg);
+    auto* rleg = skel->createBone("RightUpLeg", 3);
+    rleg->setPosition(Ogre::Vector3(-0.15f, -0.1f, 0));
+    hips->addChild(rleg);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("Spin", 1.0f);
+    auto* track = anim->createNodeTrack(1, head);
+    track->createNodeKeyFrame(0.0f);
+    auto* k1 = static_cast<Ogre::TransformKeyFrame*>(
+        track->createNodeKeyFrame(1.0f));
+    k1->setRotation(Ogre::Quaternion(Ogre::Degree(90),
+                                     Ogre::Vector3::UNIT_Y));
+
+    auto mesh = createInMemoryMesh("extract_mesh", skel);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sceneMgr->createEntity("extract_ent", mesh);
+
+    const auto clips = AnimationMerger::extractCanonicalClips(ent, 30);
+    ASSERT_EQ(clips.size(), 1u);
+    const auto& c = clips.front();
+    EXPECT_EQ(c.animation, QStringLiteral("Spin"));
+    EXPECT_EQ(c.resolvedRoles, 4);
+    EXPECT_EQ(c.frames, 31);                       // 1s @ 30fps inclusive
+    ASSERT_EQ(static_cast<int>(c.quats.size()), c.frames);
+    for (const auto& pose : c.quats)
+        ASSERT_EQ(pose.size(),
+                  static_cast<size_t>(MotionInbetween::canonicalJointCount()));
+
+    // Unresolved roles (e.g. chest, index 2) stay identity in every frame.
+    const auto& idq = c.quats.front()[2];
+    EXPECT_FLOAT_EQ(idq[0], 0.f); EXPECT_FLOAT_EQ(idq[3], 1.f);
+
+    // The animated head (role 5) actually rotates ~90° about the up axis
+    // between first and last frame — world-frame delta, conjugation-safe.
+    const auto& h0 = c.quats.front()[5];
+    const auto& h1 = c.quats.back()[5];
+    const Ogre::Quaternion q0(h0[3], h0[0], h0[1], h0[2]);
+    const Ogre::Quaternion q1(h1[3], h1[0], h1[1], h1[2]);
+    const Ogre::Quaternion d = q1 * q0.Inverse();
+    const double ang = 2.0 * std::acos(std::min(1.0,
+        static_cast<double>(std::abs(d.w)))) * 180.0 / M_PI;
+    EXPECT_NEAR(ang, 90.0, 5.0);
+
+    sceneMgr->destroyEntity(ent);
 }

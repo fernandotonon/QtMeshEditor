@@ -2135,6 +2135,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool bakeFpsMode  = false;
     bool inbetweenMode = false;       // #409: AI in-betweening
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
+    bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
+    QString dumpCanonicalPath;        // --dump-canonical <out.json>
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
@@ -2208,6 +2210,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-model") { inbetweenNoModel = true; continue; }
+        if (arg == "--dump-canonical" && i + 1 < argc) {
+            dumpCanonicalMode = true;
+            dumpCanonicalPath = QString(argv[++i]);
+            continue;
+        }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -2279,7 +2286,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
-        && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode) {
+        && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode
+        && !dumpCanonicalMode) {
         err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
@@ -2292,6 +2300,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "                          (--tolerance T sets translation+scale tolerance in world units)" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
         err() << "       qtmesh anim <file> --in-between --gap-frames N [--start-time S] [--end-time S] [--no-model] [-o <output>] [--animation <name>]" << Qt::endl;
+        err() << "       qtmesh anim <file> --dump-canonical <out.json> [--animation <name>]   (#839: 22-joint world-frame clip extraction)" << Qt::endl;
         return 2;
     }
 
@@ -2359,6 +2368,72 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     const bool isAnimOnlyInput = (entity == nullptr);
+
+    if (dumpCanonicalMode) {
+        // #839 (t2m-v2 Slice B): extract every skeletal animation onto the
+        // 22-joint canonical skeleton as WORLD-frame quats — the same
+        // "frame":"world" convention the v3 motion library stores, produced
+        // by the same bone-role matcher the retarget consumes.
+        if (isAnimOnlyInput) {
+            err() << "Error: --dump-canonical needs a mesh with its rig "
+                     "(animation-only input has no bind pose)." << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb("ai.tool_call",
+            QString("anim dump-canonical: %1").arg(fi.fileName()));
+        const auto clips = AnimationMerger::extractCanonicalClips(
+            entity, 30, animationFilter);
+        if (clips.empty()) {
+            err() << "Error: no canonical clips extracted (rig resolves no "
+                     "canonical roles, or no matching animation)." << Qt::endl;
+            return 1;
+        }
+        QJsonObject root;
+        root["schema"] = "qtmesh-canonical-clips-v1";
+        root["frame"]  = "world";
+        root["fps"]    = 30;
+        root["source"] = fi.fileName();
+        QJsonArray joints;
+        for (int j = 0; j < MotionInbetween::canonicalJointCount(); ++j)
+            joints.append(MotionInbetween::canonicalJointName(j));
+        root["joints"] = joints;
+        QJsonArray clipArr;
+        for (const auto& c : clips) {
+            QJsonObject co;
+            co["animation"]     = c.animation;
+            co["frames"]        = c.frames;
+            co["resolvedRoles"] = c.resolvedRoles;
+            QJsonArray frames;
+            for (const auto& pose : c.quats) {
+                QJsonArray row;
+                for (const auto& q : pose) {
+                    QJsonArray quat;
+                    // [x,y,z,w] — the motion-library component order.
+                    for (float v : q)
+                        quat.append(static_cast<double>(
+                            std::round(v * 100000.0f) / 100000.0f));
+                    row.append(quat);
+                }
+                frames.append(row);
+            }
+            co["quats"] = frames;
+            clipArr.append(co);
+        }
+        root["clips"] = clipArr;
+        QFile out(dumpCanonicalPath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            err() << "Error: cannot write " << dumpCanonicalPath << Qt::endl;
+            return 1;
+        }
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        out.close();
+        cliWrite(QString("Dumped %1 canonical clip(s) (%2/%3 roles) to %4\n")
+                     .arg(clips.size())
+                     .arg(clips.front().resolvedRoles)
+                     .arg(MotionInbetween::canonicalJointCount())
+                     .arg(dumpCanonicalPath));
+        return 0;
+    }
 
     if (listMode) {
         if (skel->getNumAnimations() == 0) {

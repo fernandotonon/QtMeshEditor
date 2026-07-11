@@ -911,6 +911,132 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
     return res;
 }
 
+std::vector<AnimationMerger::CanonicalClip>
+AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
+                                       const QString& onlyAnimation)
+{
+    std::vector<CanonicalClip> out;
+    if (!entity || !entity->hasSkeleton() || fps <= 0)
+        return out;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+    if (!skel || !states)
+        return out;
+
+    const int J = MotionInbetween::canonicalJointCount();
+
+    // Bone → canonical role, first match wins per role (the same matcher the
+    // retarget uses, so round-trips are consistent by construction).
+    std::vector<Ogre::Bone*> roleBone(static_cast<size_t>(J), nullptr);
+    int resolved = 0;
+    for (auto* bone : skel->getBones()) {
+        const int role = MotionInbetween::canonicalIndexForBone(
+            QString::fromStdString(bone->getName()));
+        if (role >= 0 && role < J && !roleBone[static_cast<size_t>(role)]) {
+            roleBone[static_cast<size_t>(role)] = bone;
+            ++resolved;
+        }
+    }
+    if (resolved == 0)
+        return out;
+
+    // Remember enabled states so sampling leaves the entity as found.
+    std::vector<std::pair<Ogre::AnimationState*, bool>> prev;
+    for (auto& it : states->getAnimationStates())
+        prev.emplace_back(it.second, it.second->getEnabled());
+    for (auto& p : prev) p.first->setEnabled(false);
+
+    // ── source-frame → canonical-frame conjugation ─────────────────────
+    // Scraped rigs live in arbitrary file frames (Blender FBX armatures are
+    // commonly Z-up), while the motion library's world convention is Y-up,
+    // +Z-facing, +X-left. Guessing per format is fragile — derive the
+    // source frame from the rig's own BIND geometry instead: up = hip→head,
+    // left = right-hip→left-hip (shoulders as fallback), forward = left×up.
+    // Every sampled world quat is then conjugated: q' = C · q · C⁻¹.
+    Ogre::Quaternion C = Ogre::Quaternion::IDENTITY;
+    {
+        skel->reset(true);
+        skel->_updateTransforms();
+        auto posOf = [&](int role) -> const Ogre::Bone* {
+            return (role >= 0 && role < J)
+                       ? roleBone[static_cast<size_t>(role)] : nullptr;
+        };
+        const Ogre::Bone* hip  = posOf(0);   // "hip"
+        const Ogre::Bone* head = posOf(5);   // "head"
+        if (!head) head = posOf(3);          // "neck" fallback
+        const Ogre::Bone* lSide = posOf(19); // "lhip"
+        const Ogre::Bone* rSide = posOf(15); // "rhip"
+        if (!lSide || !rSide) { lSide = posOf(11); rSide = posOf(7); }
+        if (hip && head && lSide && rSide) {
+            Ogre::Vector3 up = head->_getDerivedPosition()
+                               - hip->_getDerivedPosition();
+            Ogre::Vector3 left = lSide->_getDerivedPosition()
+                                 - rSide->_getDerivedPosition();
+            if (up.squaredLength() > 1e-12f
+                && left.squaredLength() > 1e-12f) {
+                up.normalise();
+                left = left - up * left.dotProduct(up);   // orthogonalise
+                if (left.squaredLength() > 1e-12f) {
+                    left.normalise();
+                    const Ogre::Vector3 fwd = left.crossProduct(up);
+                    // Rotation taking the SOURCE basis (left, up, fwd) onto
+                    // the canonical axes (+X, +Y, +Z).
+                    Ogre::Matrix3 src;
+                    src.SetColumn(0, left);
+                    src.SetColumn(1, up);
+                    src.SetColumn(2, fwd);
+                    C = Ogre::Quaternion(src).Inverse();
+                    C.normalise();
+                }
+            }
+        }
+    }
+
+    for (auto& it : states->getAnimationStates()) {
+        Ogre::AnimationState* st = it.second;
+        const QString name = QString::fromStdString(st->getAnimationName());
+        if (!onlyAnimation.isEmpty()
+            && name.compare(onlyAnimation, Qt::CaseInsensitive) != 0)
+            continue;
+        const float length = st->getLength();
+        if (length <= 0.0f)
+            continue;
+
+        CanonicalClip clip;
+        clip.animation = name;
+        clip.resolvedRoles = resolved;
+        const int frames =
+            std::max(2, static_cast<int>(std::lround(length * fps)) + 1);
+        clip.quats.reserve(static_cast<size_t>(frames));
+
+        st->setEnabled(true);
+        for (int f = 0; f < frames; ++f) {
+            st->setTimePosition(std::min(length,
+                static_cast<float>(f) / static_cast<float>(fps)));
+            skel->setAnimationState(*states);
+            skel->_updateTransforms();
+            std::vector<std::array<float, 4>> pose(
+                static_cast<size_t>(J), {0.f, 0.f, 0.f, 1.f});
+            for (int j = 0; j < J; ++j) {
+                Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+                if (!b) continue;
+                const Ogre::Quaternion w =
+                    C * b->_getDerivedOrientation() * C.Inverse();
+                pose[static_cast<size_t>(j)] = {
+                    static_cast<float>(w.x), static_cast<float>(w.y),
+                    static_cast<float>(w.z), static_cast<float>(w.w)};
+            }
+            clip.quats.push_back(std::move(pose));
+        }
+        st->setEnabled(false);
+        clip.frames = static_cast<int>(clip.quats.size());
+        out.push_back(std::move(clip));
+    }
+
+    for (auto& p : prev) p.first->setEnabled(p.second);
+    return out;
+}
+
 bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
 {
     // Escape hatch for exotic meshes where the foot-region heuristic guesses
