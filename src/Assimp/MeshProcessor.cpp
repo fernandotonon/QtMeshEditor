@@ -225,13 +225,30 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         // Set the index count
         indexData->indexCount = subMeshData->indices.size();
 
-        // Create the index buffer and set the index data
-        Ogre::HardwareIndexBufferSharedPtr ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(Ogre::HardwareIndexBuffer::IT_16BIT, indexData->indexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-        unsigned short* pIndices = static_cast<unsigned short*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        // Create the index buffer. Use 32-bit indices when the submesh has
+        // more than 65535 vertices — a 16-bit buffer wraps every index past
+        // 0xFFFF, which collapsed large meshes (e.g. high-res image-to-3D
+        // output, 80k+ verts) onto their first 65536 vertices and tore them
+        // apart on import. Match on the VERTEX count (what indices address),
+        // not the index count.
+        const bool use32BitIndices = subMeshData->vertices.size() > 65535;
+        Ogre::HardwareIndexBufferSharedPtr ibuf =
+            Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+                use32BitIndices ? Ogre::HardwareIndexBuffer::IT_32BIT
+                                : Ogre::HardwareIndexBuffer::IT_16BIT,
+                indexData->indexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
 
-        // Set the indices
-        for(size_t i = 0; i < subMeshData->indices.size(); i++) {
-            *pIndices++ = subMeshData->indices[i];
+        // Set the indices, writing the matching element width.
+        if (use32BitIndices) {
+            uint32_t* pIndices = static_cast<uint32_t*>(
+                ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (size_t i = 0; i < subMeshData->indices.size(); i++)
+                *pIndices++ = subMeshData->indices[i];
+        } else {
+            unsigned short* pIndices = static_cast<unsigned short*>(
+                ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (size_t i = 0; i < subMeshData->indices.size(); i++)
+                *pIndices++ = static_cast<unsigned short>(subMeshData->indices[i]);
         }
 
         ibuf->unlock();

@@ -1,5 +1,6 @@
 #include "MCPServer.h"
 #include "mainwindow.h"
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "MaterialEditorQML.h"
 #include "MaterialPresetLibrary.h"
@@ -18,6 +19,7 @@
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
@@ -44,6 +46,7 @@
 #include "ScanEngine.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "SkinningDisplay.h"
 #include "AutoRig.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
@@ -58,6 +61,9 @@
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrEnvironmentController.h"
 #include "HDR/HdrTonemap.h"
+#include "LightManager.h"
+#include "LightRigLibrary.h"
+#include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
 #include <QDebug>
@@ -67,6 +73,7 @@
 #include <QTemporaryFile>
 #include <QImage>
 #include <QBuffer>
+#include <QColor>
 #include "SentryReporter.h"
 #include <QTimer>
 #include <QDateTime>
@@ -75,6 +82,7 @@
 #include <QSet>
 #include <optional>
 #include <OgreException.h>
+#include <OgreLight.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
 #include <OgreTechnique.h>
@@ -604,6 +612,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("uv_unwrap_selection"),   &MCPServer::toolUvUnwrapSelection},
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
+        {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
@@ -647,6 +656,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
         {QStringLiteral("delete_entity"), &MCPServer::toolDeleteEntity},
+        {QStringLiteral("create_light"), &MCPServer::toolCreateLight},
+        {QStringLiteral("delete_light"), &MCPServer::toolDeleteLight},
+        {QStringLiteral("list_lights"), &MCPServer::toolListLights},
+        {QStringLiteral("set_light_property"), &MCPServer::toolSetLightProperty},
+        {QStringLiteral("apply_light_rig"), &MCPServer::toolApplyLightRig},
         {QStringLiteral("duplicate_entity"), &MCPServer::toolDuplicateEntity},
         {QStringLiteral("camera_control"), &MCPServer::toolCameraControl},
         {QStringLiteral("get_camera_info"), &MCPServer::toolGetCameraInfo},
@@ -748,6 +762,46 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     if (toolResult.contains("isError") && toolResult["isError"].toBool()) {
         SentryReporter::addBreadcrumb("ai.tool_call",
             QStringLiteral("Tool error: %1").arg(name), "error");
+    } else {
+        // Gamification discovery (#798): first successful MCP tool call marks
+        // the mcp_server cluster; tools with a mapped editor cluster also
+        // count toward that cluster's discovery (deduped per session).
+        GamificationManager::noteFeature(QStringLiteral("mcp_server"),
+                                         GamificationManager::Surface::Mcp);
+        static const QHash<QString, QString> toolFeatureMap = {
+            {QStringLiteral("retopologize"), QStringLiteral("retopo")},
+            {QStringLiteral("decimate_mesh"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("generate_lods"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("optimize_mesh"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_unwrap_selection"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_project"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
+            {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("motion_in_between"), QStringLiteral("motion_inbetween")},
+            {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
+            {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
+            {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
+            {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("pack_atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
+            {QStringLiteral("bake_vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
+            {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
+            {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
+            {QStringLiteral("create_material"), QStringLiteral("material_editor")},
+            {QStringLiteral("generate_mesh_texture"), QStringLiteral("stable_diffusion")},
+            {QStringLiteral("cloud_upload"), QStringLiteral("cloud_upload")},
+        };
+        const QString feature = toolFeatureMap.value(name);
+        if (!feature.isEmpty())
+            GamificationManager::noteFeature(feature, GamificationManager::Surface::Mcp);
     }
 
     if (txn) SentryReporter::finishTransaction(txn);
@@ -1998,6 +2052,12 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         return makeErrorResult("Error: 'skip_unweighted' must be a boolean.");
     if (args.contains("replace_existing") && !args["replace_existing"].isBool())
         return makeErrorResult("Error: 'replace_existing' must be a boolean.");
+    if (args.contains("algo") && !args["algo"].isString())
+        return makeErrorResult("Error: 'algo' must be a string.");
+    if (args.contains("voxel_resolution") && !args["voxel_resolution"].isDouble())
+        return makeErrorResult("Error: 'voxel_resolution' must be a number.");
+    if (args.contains("smooth_iterations") && !args["smooth_iterations"].isDouble())
+        return makeErrorResult("Error: 'smooth_iterations' must be a number.");
 
     SkinWeightsOptions opts;
     if (args.contains("max_influences"))
@@ -2010,6 +2070,21 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         opts.skipUnweightedBones = args["skip_unweighted"].toBool(false);
     if (args.contains("replace_existing"))
         opts.replaceExisting = args["replace_existing"].toBool(true);
+    if (args.contains("voxel_resolution"))
+        opts.voxelResolution = args["voxel_resolution"].toInt(64);
+    if (args.contains("smooth_iterations"))
+        opts.smoothIterations = args["smooth_iterations"].toInt(3);
+
+    QString algoName = QStringLiteral("skintokens");
+    if (args.contains("algo")) {
+        algoName = args["algo"].toString().toLower();
+        if (algoName != "skintokens" && algoName != "geodesic-voxel"
+            && algoName != "inverse-distance"
+            && algoName != "unirig")   // deprecated alias of skintokens
+            return makeErrorResult("Error: 'algo' must be 'skintokens', "
+                                   "'geodesic-voxel', or 'inverse-distance'.");
+    }
+    const SkinWeights::Algorithm algo = SkinWeights::algorithmFromString(algoName);
 
     if (opts.maxInfluencesPerVertex < 1 || opts.maxInfluencesPerVertex > 8)
         return makeErrorResult("Error: 'max_influences' must be in [1, 8].");
@@ -2017,6 +2092,10 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
         return makeErrorResult("Error: 'falloff' must be in [0.5, 16].");
     if (opts.maxInfluenceDistance < 0.0 || opts.maxInfluenceDistance > 10.0)
         return makeErrorResult("Error: 'max_distance' must be in [0, 10].");
+    if (opts.voxelResolution < 8 || opts.voxelResolution > 256)
+        return makeErrorResult("Error: 'voxel_resolution' must be in [8, 256].");
+    if (opts.smoothIterations < 0 || opts.smoothIterations > 50)
+        return makeErrorResult("Error: 'smooth_iterations' must be in [0, 50].");
 
     SelectionSet* sel = SelectionSet::getSingleton();
     const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
@@ -2026,14 +2105,16 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     Ogre::Entity* entity = resolved.first();
     if (!entity) return makeErrorResult("Selected entity is null.");
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QStringLiteral("compute_skin_weights entity=%1 maxInf=%2 falloff=%3")
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1").arg(algoName),
+        QStringLiteral("compute_skin_weights entity=%1 maxInf=%2 falloff=%3 voxelRes=%4 smooth=%5")
             .arg(QString::fromStdString(entity->getName()))
-            .arg(opts.maxInfluencesPerVertex).arg(opts.falloff));
+            .arg(opts.maxInfluencesPerVertex).arg(opts.falloff)
+            .arg(opts.voxelResolution).arg(opts.smoothIterations));
 
     SkinWeightsReport report;
     try {
-        report = SkinWeights::computeAndApply(entity, opts);
+        report = SkinWeights::computeAndApply(entity, opts, algo);
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
@@ -2046,6 +2127,40 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     QJsonObject result = makeSuccessResult(SkinWeights::reportToText(report));
     result["skin"] = SkinWeights::reportToJson(report);
     return result;
+}
+
+QJsonObject MCPServer::toolSetSkinningDisplay(const QJsonObject &args)
+{
+    // #819 Slice D: per-entity Linear / Dual-Quaternion display
+    // toggle. Runtime shading only — exported weights are unchanged.
+    if (!args.contains("mode") || !args["mode"].isString())
+        return makeErrorResult("Error: 'mode' (string) is required.");
+    const QString modeStr = args["mode"].toString().toLower();
+    if (modeStr != "linear" && modeStr != "dual-quaternion")
+        return makeErrorResult("Error: 'mode' must be 'linear' or "
+                               "'dual-quaternion'.");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty())
+        return makeErrorResult("No selected entity. Load a mesh first with load_mesh.");
+    Ogre::Entity* entity = resolved.first();
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("render.skinning"),
+        QStringLiteral("set_skinning_display mode=%1 entity=%2")
+            .arg(modeStr, QString::fromStdString(entity->getName())));
+
+    QString err;
+    if (!SkinningDisplay::apply(entity,
+                                SkinningDisplay::modeFromString(modeStr), &err))
+        return makeErrorResult(QStringLiteral("Failed: %1").arg(err));
+
+    return makeSuccessResult(QStringLiteral(
+        "Skinning display set to %1 on '%2'. Display only — exported "
+        "weights are unchanged.")
+        .arg(modeStr, QString::fromStdString(entity->getName())));
 }
 
 QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
@@ -2385,17 +2500,52 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     const bool upscaleTex  = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
+    if (args.contains("backend")) {
+        const QString b = args["backend"].toString().toLower();
+        if (b == "triposg")      opts.backend = MeshGenPredictor::Backend::TripoSG;
+        else if (b == "triposr" || b.isEmpty())
+            opts.backend = MeshGenPredictor::Backend::TripoSR;
+        else return makeErrorResult("'backend' must be 'triposr' or 'triposg'.");
+    }
+    if (args.contains("flow_steps")) {
+        opts.flowSteps = args["flow_steps"].toInt(25);
+        if (opts.flowSteps < 1 || opts.flowSteps > 200)
+            return makeErrorResult("'flow_steps' must be between 1 and 200.");
+    }
+    if (args.contains("guidance")) {
+        opts.guidanceScale = static_cast<float>(args["guidance"].toDouble(7.0));
+        if (opts.guidanceScale < 0.0f || opts.guidanceScale > 30.0f)
+            return makeErrorResult("'guidance' must be between 0 and 30.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-        QStringLiteral("generate_mesh_from_image %1 res=%2")
-            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
+        QStringLiteral("generate_mesh_from_image %1 res=%2 backend=%3")
+            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution)
+            .arg(opts.backend == MeshGenPredictor::Backend::TripoSG
+                     ? QStringLiteral("triposg") : QStringLiteral("triposr")));
 
-    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
-        return makeErrorResult(
-            "TripoSR model unavailable — it downloads on first use; if it is not "
-            "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
-            "or drop the files in the ai_models/triposr/ cache.");
+    if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
+        // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
+        // geometry, no ARM speed win); 'quality' still selects the TripoSR
+        // tier used for the colour bake.
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        if (enc.isEmpty())
+            return makeErrorResult(
+                "TripoSG models unavailable — they download on first use; if not "
+                "hosted yet, set QTMESH_TRIPOSG_MODEL_BASE_URL / ai/triposgModelBaseUrl "
+                "or drop the files in the ai_models/triposg/ cache.");
+        // TripoSG's colour bake queries TripoSR's colour field — best-effort
+        // ensure (absent models fall back to clay with a warning).
+        if (opts.bakeTexture)
+            MeshGenPredictor::ensureModelBlocking(opts.quality);
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
+            return makeErrorResult(
+                "TripoSR model unavailable — it downloads on first use; if it is not "
+                "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
+                "or drop the files in the ai_models/triposr/ cache.");
+    }
 
     QImage image(imagePath);
     if (image.isNull())
@@ -4658,6 +4808,245 @@ QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
     return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
 }
 
+namespace
+{
+
+bool parseMcpLightType(const QString& text, Ogre::Light::LightTypes& out)
+{
+    const QString lower = text.trimmed().toLower();
+    if (lower == QStringLiteral("directional"))
+    {
+        out = Ogre::Light::LT_DIRECTIONAL;
+        return true;
+    }
+    if (lower == QStringLiteral("point"))
+    {
+        out = Ogre::Light::LT_POINT;
+        return true;
+    }
+    if (lower == QStringLiteral("spot") || lower == QStringLiteral("spotlight"))
+    {
+        out = Ogre::Light::LT_SPOTLIGHT;
+        return true;
+    }
+    return false;
+}
+
+Ogre::ColourValue parseMcpColour(const QJsonValue& value)
+{
+    if (value.isString())
+    {
+        QColor colour(value.toString());
+        if (colour.isValid())
+            return Ogre::ColourValue(colour.redF(), colour.greenF(), colour.blueF(), colour.alphaF());
+    }
+    if (value.isArray())
+    {
+        const QJsonArray arr = value.toArray();
+        if (arr.size() >= 3)
+        {
+            return Ogre::ColourValue(static_cast<float>(arr.at(0).toDouble()),
+                                     static_cast<float>(arr.at(1).toDouble()),
+                                     static_cast<float>(arr.at(2).toDouble()),
+                                     arr.size() > 3 ? static_cast<float>(arr.at(3).toDouble()) : 1.0f);
+        }
+    }
+    return Ogre::ColourValue::White;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolCreateLight(const QJsonObject& args)
+{
+    const QString typeText = args.value(QStringLiteral("type")).toString();
+    if (typeText.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'type' is required (directional|point|spot)."));
+
+    Ogre::Light::LightTypes type = Ogre::Light::LT_POINT;
+    if (!parseMcpLightType(typeText, type))
+        return makeErrorResult(QStringLiteral("Error: Unknown light type '%1'.").arg(typeText));
+
+    if (!args.contains(QStringLiteral("position")))
+        return makeErrorResult(QStringLiteral("Error: 'position' is required ([x,y,z])."));
+
+    const Ogre::Vector3 position = parseVector3(args.value(QStringLiteral("position")));
+    Ogre::Vector3 direction(0.0f, -1.0f, 0.0f);
+    if (args.contains(QStringLiteral("direction")))
+        direction = parseVector3(args.value(QStringLiteral("direction")));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+
+    const bool setDirection =
+        type == Ogre::Light::LT_DIRECTIONAL || type == Ogre::Light::LT_SPOTLIGHT;
+    LightHandle handle = lights->createLightAt(
+        type, LightManager::defaultBaseNameForType(type), position, direction, setDirection);
+    if (!handle.isValid())
+        return makeErrorResult(QStringLiteral("Error: Failed to create light."));
+
+    if (args.contains(QStringLiteral("colour")) || args.contains(QStringLiteral("color")))
+    {
+        const QJsonValue colourValue =
+            args.contains(QStringLiteral("colour")) ? args.value(QStringLiteral("colour"))
+                                                    : args.value(QStringLiteral("color"));
+        handle.light->setDiffuseColour(parseMcpColour(colourValue));
+    }
+    if (args.contains(QStringLiteral("intensity")))
+        handle.light->setPowerScale(static_cast<Ogre::Real>(args.value(QStringLiteral("intensity")).toDouble(1.0)));
+    if (args.contains(QStringLiteral("range")) && type != Ogre::Light::LT_DIRECTIONAL)
+    {
+        const float range = static_cast<float>(args.value(QStringLiteral("range")).toDouble(10.0));
+        handle.light->setAttenuation(range, 1.0f, 0.0f, 0.0f);
+    }
+    if (args.contains(QStringLiteral("cone")) && type == Ogre::Light::LT_SPOTLIGHT)
+    {
+        const QJsonValue cone = args.value(QStringLiteral("cone"));
+        float innerDeg = 30.0f;
+        float outerDeg = 40.0f;
+        if (cone.isArray())
+        {
+            const QJsonArray arr = cone.toArray();
+            if (arr.size() >= 1)
+                innerDeg = static_cast<float>(arr.at(0).toDouble(innerDeg));
+            if (arr.size() >= 2)
+                outerDeg = static_cast<float>(arr.at(1).toDouble(outerDeg));
+        }
+        else if (cone.isObject())
+        {
+            const QJsonObject obj = cone.toObject();
+            innerDeg = static_cast<float>(obj.value(QStringLiteral("inner")).toDouble(innerDeg));
+            outerDeg = static_cast<float>(obj.value(QStringLiteral("outer")).toDouble(outerDeg));
+        }
+        handle.light->setSpotlightRange(Ogre::Degree(innerDeg), Ogre::Degree(outerDeg), 1.0f);
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.create"),
+                                  QStringLiteral("MCP create %1").arg(handle.name));
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("name"), handle.name);
+    payload.insert(QStringLiteral("type"), typeText);
+    payload.insert(QStringLiteral("position"),
+                   QJsonArray{position.x, position.y, position.z});
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolDeleteLight(const QJsonObject& args)
+{
+    const QString name = args.value(QStringLiteral("name")).toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' is required."));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+    if (!lights->deleteLight(name))
+        return makeErrorResult(QStringLiteral("Error: Light '%1' not found.").arg(name));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.delete"),
+                                  QStringLiteral("MCP delete %1").arg(name));
+    return makeSuccessResult(QStringLiteral("Deleted light '%1'.").arg(name));
+}
+
+QJsonObject MCPServer::toolListLights(const QJsonObject& args)
+{
+    Q_UNUSED(args);
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+
+    const QJsonObject payload = SceneLightsIO::documentToListJson(SceneLightsIO::captureFromScene());
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetLightProperty(const QJsonObject& args)
+{
+    const QString name = args.value(QStringLiteral("name")).toString();
+    const QString key = args.value(QStringLiteral("key")).toString().trimmed().toLower();
+    if (name.isEmpty() || key.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' and 'key' are required."));
+    if (!args.contains(QStringLiteral("value")))
+        return makeErrorResult(QStringLiteral("Error: 'value' is required."));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+    LightHandle* handle = lights->findLight(name);
+    if (!handle || !handle->isValid())
+        return makeErrorResult(QStringLiteral("Error: Light '%1' not found.").arg(name));
+
+    const QJsonValue value = args.value(QStringLiteral("value"));
+    LightSnapshot snapshot = LightSnapshot::fromHandle(*handle);
+
+    if (key == QStringLiteral("position"))
+        handle->sceneNode->setPosition(parseVector3(value));
+    else if (key == QStringLiteral("direction"))
+        handle->sceneNode->setDirection(parseVector3(value));
+    else if (key == QStringLiteral("colour") || key == QStringLiteral("color") || key == QStringLiteral("diffuse"))
+        snapshot.diffuse = parseMcpColour(value);
+    else if (key == QStringLiteral("intensity") || key == QStringLiteral("powerscale"))
+        snapshot.powerScale = static_cast<float>(value.toDouble(snapshot.powerScale));
+    else if (key == QStringLiteral("range") || key == QStringLiteral("attenuationrange"))
+        snapshot.attenuationRange = static_cast<float>(value.toDouble(snapshot.attenuationRange));
+    else if (key == QStringLiteral("enabled") || key == QStringLiteral("visible"))
+        snapshot.enabled = value.toBool(snapshot.enabled);
+    else if (key == QStringLiteral("castshadows") || key == QStringLiteral("shadows"))
+        snapshot.castShadows = value.toBool(snapshot.castShadows);
+    else if (key == QStringLiteral("cone") && snapshot.type == Ogre::Light::LT_SPOTLIGHT)
+    {
+        float innerDeg = snapshot.spotlightInnerAngleDeg;
+        float outerDeg = snapshot.spotlightOuterAngleDeg;
+        if (value.isArray())
+        {
+            const QJsonArray arr = value.toArray();
+            if (arr.size() >= 1)
+                innerDeg = static_cast<float>(arr.at(0).toDouble(innerDeg));
+            if (arr.size() >= 2)
+                outerDeg = static_cast<float>(arr.at(1).toDouble(outerDeg));
+        }
+        else if (value.isObject())
+        {
+            const QJsonObject obj = value.toObject();
+            innerDeg = static_cast<float>(obj.value(QStringLiteral("inner")).toDouble(innerDeg));
+            outerDeg = static_cast<float>(obj.value(QStringLiteral("outer")).toDouble(outerDeg));
+        }
+        snapshot.spotlightInnerAngleDeg = innerDeg;
+        snapshot.spotlightOuterAngleDeg = outerDeg;
+    }
+    else
+        return makeErrorResult(QStringLiteral("Error: Unsupported light property key '%1'.").arg(key));
+
+    if (!lights->applyProperties(name, snapshot))
+        return makeErrorResult(QStringLiteral("Error: Failed to set property on '%1'.").arg(name));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.edit"),
+                                  QStringLiteral("MCP set %1 on %2").arg(key, name));
+    return makeSuccessResult(QStringLiteral("Updated '%1'.%2 = %3")
+                                 .arg(name, key, QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("value"), value}}).toJson(QJsonDocument::Compact))));
+}
+
+QJsonObject MCPServer::toolApplyLightRig(const QJsonObject& args)
+{
+    QString rigId = args.value(QStringLiteral("name")).toString();
+    if (rigId.isEmpty())
+        rigId = args.value(QStringLiteral("rig_id")).toString();
+    if (rigId.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' (rig id) is required."));
+
+    const bool replaceExisting = args.value(QStringLiteral("replace_existing")).toBool(false);
+    LightManager::getSingleton()->tryConnectToManager();
+
+    const LightRigApplyResult result = LightRigLibrary::apply(rigId, replaceExisting);
+    if (!result.ok)
+        return makeErrorResult(result.error);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.apply_rig"),
+                                  QStringLiteral("MCP rig %1").arg(rigId));
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("rigId"), result.rigId);
+    payload.insert(QStringLiteral("rigGroupNodeName"), result.rigGroupNodeName);
+    payload.insert(QStringLiteral("addedLightCount"), result.addedLights.size());
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
 {
     QString name = args["name"].toString();
@@ -6730,6 +7119,77 @@ QJsonArray MCPServer::buildToolsList()
         ));
     }
 
+    // create_light
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["type"] = QJsonObject{{"type", "string"}, {"description", "directional | point | spot"}};
+        properties["position"] = QJsonObject{{"type", "array"}, {"description", "World position [x, y, z]"}};
+        properties["direction"] = QJsonObject{{"type", "array"}, {"description", "Optional aim direction [x, y, z] for directional/spot lights"}};
+        properties["colour"] = QJsonObject{{"type", "string"}, {"description", "Optional diffuse colour (#rrggbb or [r,g,b])"}};
+        properties["intensity"] = QJsonObject{{"type", "number"}, {"description", "Optional powerScale (QtMeshEditor intensity units)"}};
+        properties["range"] = QJsonObject{{"type", "number"}, {"description", "Optional attenuation range for point/spot lights"}};
+        properties["cone"] = QJsonObject{{"type", "array"}, {"description", "Optional spot cone [innerDeg, outerDeg]"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"type", "position"};
+        tools.append(buildToolDefinition(
+            "create_light",
+            "Create a user scene light in the live editor scene. Intensity uses QtMeshEditor powerScale units.",
+            inputSchema));
+    }
+
+    // delete_light
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Light scene-node name"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
+        tools.append(buildToolDefinition(
+            "delete_light",
+            "Delete a user scene light by name from the live editor scene.",
+            inputSchema));
+    }
+
+    // list_lights
+    appendTool(
+        "list_lights",
+        "List every user light in the live scene (name, type, colour, intensity, rig group, etc.) as JSON.",
+        QJsonObject());
+
+    // set_light_property
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Light scene-node name"}};
+        properties["key"] = QJsonObject{{"type", "string"}, {"description", "position | direction | colour | intensity | range | enabled | castShadows | cone"}};
+        properties["value"] = QJsonObject{{"description", "New value (type depends on key)"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name", "key", "value"};
+        tools.append(buildToolDefinition(
+            "set_light_property",
+            "Set one property on an existing user light in the live scene.",
+            inputSchema));
+    }
+
+    // apply_light_rig
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Rig preset id (e.g. three_point_studio). Use list_rigs via qtmesh light --list-rigs."}};
+        properties["replace_existing"] = QJsonObject{{"type", "boolean"}, {"description", "When true, remove existing rig groups before applying."}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
+        tools.append(buildToolDefinition(
+            "apply_light_rig",
+            "Apply a built-in light rig preset to the live scene (same presets as the Lighting panel).",
+            inputSchema));
+    }
+
     // set_hdr_environment
   {
         QJsonObject properties;
@@ -7328,16 +7788,19 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
-        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. The encoder input is fixed at 512^2, so detail gains taper off above 512."}};
-        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
-        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
-        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. (TripoSR's encoder input is fixed at 512^2, so its detail gains taper off above 512; TripoSG uses a 224^2 DINOv2 encoder and this is purely the extraction grid.)"}};
+        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake its predicted per-vertex color (default true). Ignored by triposg (geometry-only — colour comes from the AI texture pass)."}};
+        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; the model needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Precision/size tier, downloaded on demand. TripoSR: fp32 = best (~1.7GB), int8 = smallest with slight quality loss (~430MB). TripoSG: fp32 only (int8 degrades geometry) — int8 is silently upgraded to fp32."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
-        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
+        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"triposr", "triposg"}}, {"description", "Generation backend (default triposr). triposr = fast single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only (no texture bake). Both MIT. TripoSG models download on first use."}};
+        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by triposr."}};
+        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by triposr."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
@@ -7609,13 +8072,50 @@ QJsonArray MCPServer::buildToolsList()
             {"description",
              "When true (default), overwrite existing bone assignments. When false, "
              "merge — keep existing weights and add new ones for unweighted vertices."}};
+        props["algo"] = QJsonObject{{"type", "string"},
+            {"enum", QJsonArray{"skintokens", "geodesic-voxel",
+                                "inverse-distance", "unirig"}},
+            {"description",
+             "Weighting algorithm: 'skintokens' (default — SkinTokens/TokenRig ML "
+             "skinner, geodesically localised; downloads ~2.3 GB models on first use "
+             "and falls back to geodesic-voxel when models/ONNX are unavailable), "
+             "'geodesic-voxel' (Maya-style volume-aware bind), 'inverse-distance' "
+             "(legacy straight-line heuristic). 'unirig' is a deprecated alias of "
+             "'skintokens'."}};
+        props["voxel_resolution"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Geodesic-voxel grid resolution along the longest axis. Higher resolves "
+             "thinner parts (fingers). Range [8, 256]. Default 64."}};
+        props["smooth_iterations"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Laplacian weight-smoothing iterations applied after any algorithm "
+             "(0 disables). Range [0, 50]. Default 3."}};
         appendTool(
             "compute_skin_weights",
             "Compute and apply skin weights for the currently selected mesh against "
-            "its attached skeleton. Uses an inverse-distance heuristic (closest-point-"
-            "on-bone smooth bind) — the same approach Maya / 3dsMax use as their "
-            "default. The mesh must have a skeleton attached. Issue #402.",
+            "its attached skeleton. Default algorithm is the SkinTokens ML skinner "
+            "(issue #819) with geodesic localisation; it falls back to geodesic-voxel "
+            "binding when the models or ONNX are unavailable. Weights are "
+            "Laplacian-smoothed and pruned. The mesh must have a skeleton attached.",
             props
+        );
+    }
+
+    // set_skinning_display (#819 Slice D)
+    {
+        QJsonObject props;
+        props["mode"] = QJsonObject{{"type", "string"},
+            {"enum", QJsonArray{"linear", "dual-quaternion"}},
+            {"description",
+             "'linear' (default LBS path) or 'dual-quaternion' (RTSS hardware DQS — "
+             "preserves volume on twists, no candy-wrapper collapse)."}};
+        appendTool(
+            "set_skinning_display",
+            "Set the skinning display mode of the currently selected skinned entity. "
+            "Dual-quaternion is a runtime shading choice only: exported weights are "
+            "unchanged (engines re-skin with their own blend). Issue #819 Slice D.",
+            props,
+            QJsonArray{"mode"}
         );
     }
 

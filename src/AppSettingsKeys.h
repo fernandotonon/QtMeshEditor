@@ -158,6 +158,122 @@ inline const QString& updaterSkippedVersion()
     return k;
 }
 
+// ---- Gamification / progress sync (#796) ----
+
+/** @brief One-time consent prompt answered (accept OR decline). Nothing is
+ *  ever queued or sent before this is true (E-P6: default off). */
+inline const QString& gamificationConsentAcknowledged()
+{
+    static const QString k(QStringLiteral("Gamification/consentAcknowledged"));
+    return k;
+}
+
+/** @brief Whether the one-time consent prompt has been shown. */
+inline const QString& gamificationConsentPrompted()
+{
+    static const QString k(QStringLiteral("Gamification/consentPrompted"));
+    return k;
+}
+
+/** @brief Master "Sync my QtMesh progress" toggle (default off). */
+inline const QString& gamificationSyncEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/syncEnabled"));
+    return k;
+}
+
+/** @brief Sub-toggle: feature-usage (discovery) events. */
+inline const QString& gamificationUsageEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/usageEnabled"));
+    return k;
+}
+
+/** @brief Sub-toggle: operations-history (before/after metrics) events. */
+inline const QString& gamificationOpsEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/opsEnabled"));
+    return k;
+}
+
+/** @brief "Try this next" welcome-screen nudges on/off (E-P5). */
+inline const QString& gamificationNudgesEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/nudgesEnabled"));
+    return k;
+}
+
+/** @brief Feature keys the user dismissed from the nudge card. */
+inline const QString& gamificationDismissedSuggestions()
+{
+    static const QString k(QStringLiteral("Gamification/dismissedSuggestions"));
+    return k;
+}
+
+/** @brief Rotation cursor so the nudge card cycles between app runs. */
+inline const QString& gamificationSuggestionCursor()
+{
+    static const QString k(QStringLiteral("Gamification/suggestionCursor"));
+    return k;
+}
+
+/** @brief Default preset rig for new empty scenes (Slice E #487). */
+inline const QString& lightingDefaultRig()
+{
+    static const QString k(QStringLiteral("Lighting/defaultRig"));
+    return k;
+}
+
+/** @brief Viewport background mode: 0=solid, 1=gradient, 2=HDR skybox. */
+inline const QString& lightingBackgroundMode()
+{
+    static const QString k(QStringLiteral("Lighting/backgroundMode"));
+    return k;
+}
+
+inline const QString& lightingSolidBackground()
+{
+    static const QString k(QStringLiteral("Lighting/solidBackground"));
+    return k;
+}
+
+inline const QString& lightingGradientTop()
+{
+    static const QString k(QStringLiteral("Lighting/gradientTop"));
+    return k;
+}
+
+inline const QString& lightingGradientBottom()
+{
+    static const QString k(QStringLiteral("Lighting/gradientBottom"));
+    return k;
+}
+
+/** @brief Global shadow quality preset (Slice F #488): 0=Off, 1=Low, 2=Medium, 3=High. */
+inline const QString& shadowQualityPreset()
+{
+    static const QString k(QStringLiteral("Lighting/shadowQualityPreset"));
+    return k;
+}
+
+inline const QString& shadowCascadeCount()
+{
+    static const QString k(QStringLiteral("Lighting/shadowCascadeCount"));
+    return k;
+}
+
+inline const QString& shadowSplitLambda()
+{
+    static const QString k(QStringLiteral("Lighting/shadowSplitLambda"));
+    return k;
+}
+
+inline const QString& shadowSpotResolution()
+{
+    static const QString k(QStringLiteral("Lighting/shadowSpotResolution"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

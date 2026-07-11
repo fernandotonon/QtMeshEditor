@@ -31,6 +31,8 @@ THE SOFTWARE.
 #include <QStandardPaths>
 #include <QDir>
 
+#include <vector>
+
 #include "GlobalDefinitions.h"
 
 #include "PrimitiveObject.h"
@@ -49,6 +51,9 @@ THE SOFTWARE.
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrBundledLibrary.h"
 #include "HDR/HdrViewportController.h"
+#include "LightManager.h"
+#include "LightLinking.h"
+#include "LightRigLibrary.h"
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
  #include <CoreFoundation/CoreFoundation.h>
@@ -108,6 +113,7 @@ void Manager::kill()
     if (m_pSingleton != nullptr)
     {
         TransformOperator::kill();
+        LightManager::kill();
         SelectionSet::kill();
         delete m_pSingleton;
         m_pSingleton = nullptr;
@@ -131,6 +137,7 @@ Manager::Manager(MainWindow* parent):
 
     HDREnvironmentManager::getSingleton();
     HdrViewportController::getSingleton();
+    LightManager::getSingleton()->tryConnectToManager();
 
     if (SelectionSet *sel = SelectionSet::getSingletonPtr())
         sel->tryConnectToManager();
@@ -206,20 +213,7 @@ void Manager::CreateEmptyScene()
     const bool previousState = mInitializingScene;
     mInitializingScene = true;
 
-    { //TODO: Add the hability of the user adding/removing lights
-        mSceneMgr->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
-
-        Ogre::Light* light = mSceneMgr->createLight();
-
-        light->setType(Ogre::Light::LT_DIRECTIONAL);
-
-        light->setDiffuseColour(1.0f, 1.0f, 1.0f);
-        light->setSpecularColour(.8f, .8f, .8f);// color of 'reflected' light
-
-        Ogre::SceneNode* lightSceneNode = mSceneMgr->getRootSceneNode()->createChildSceneNode();
-        lightSceneNode->attachObject(light);
-        lightSceneNode->setDirection(1, -1, 1);
-    }
+    LightRigLibrary::applyDefaultSceneLighting();
 
     m_pViewportGrid = new ViewportGrid();
 
@@ -268,6 +262,7 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
 
     sceneNode->attachObject(ent);
     emit entityCreated(ent);
+    LightLinking::onEntityCreated(ent);
     if(!mInitializingScene)
         SelectionSet::getSingleton()->selectOne(sceneNode);
     return ent;
@@ -625,6 +620,13 @@ void Manager::destroyAllUserRootNodes()
 
     SentryReporter::addBreadcrumb("scene", "Destroy all user root scene nodes");
 
+    // Rig-group lights are child scene nodes. destroySceneNode(name) uses
+    // removeAndDestroyAllChildren() by default, which tears down Ogre light nodes
+    // without unregistering them from LightManager — dangling handles → SIGSEGV.
+    emit sceneClearing();
+    if (auto* lights = LightManager::getSingletonPtr())
+        lights->deleteAllUserLights();
+
     Ogre::SceneNode* root = mSceneMgr->getRootSceneNode();
     QStringList names;
     for (const auto& child : root->getChildren())
@@ -645,7 +647,7 @@ void Manager::destroyAllUserRootNodes()
         destroySceneNode(name);
 }
 
-void Manager::destroySceneNode(Ogre::SceneNode* node)
+void Manager::destroySceneNode(Ogre::SceneNode* node, bool destroyChildrenFirst)
 {
     if(!node || !mSceneMgr || isForbiddenNodeName(node->getName().c_str()))
         return;
@@ -668,10 +670,43 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     }
     //TODO if custom class has to be provided for object, userany object should be inside so that this delete is not required...
 
+    if (destroyChildrenFirst)
+    {
+        // Destroy children first so sceneNodeDestroyed fires per child (e.g. rig-group
+        // lights unregister from LightManager before their Ogre objects are torn down).
+        std::vector<Ogre::SceneNode*> childNodes;
+        try
+        {
+            for (auto* child : node->getChildren())
+                childNodes.push_back(static_cast<Ogre::SceneNode*>(child));
+        }
+        catch (...)
+        {
+        }
+        for (Ogre::SceneNode* child : childNodes)
+        {
+            if (auto* lights = LightManager::getSingletonPtr())
+            {
+                if (lights->deleteLightBySceneNode(child))
+                    continue;
+            }
+            destroySceneNode(child, true);
+        }
+    }
+    else
+    {
+        try
+        {
+            node->removeAndDestroyAllChildren();
+        }
+        catch (...)
+        {
+        }
+    }
+
     emit sceneNodeDestroyed(node);  // emitted before destruction so listeners can clean up while entities are still valid
     destroyAllAttachedMovableObjects(node);
-    node->removeAndDestroyAllChildren();
-    
+
     // Safely destroy the scene node
     try {
         mSceneMgr->destroySceneNode(node);

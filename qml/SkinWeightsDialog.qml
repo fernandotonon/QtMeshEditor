@@ -5,17 +5,18 @@ import QtQuick.Window
 import MaterialEditorQML 1.0
 import PropertiesPanel 1.0
 
-// Issue #402: top-level Window for inverse-distance skin weights.
-// Same Inspector-styled idiom as QuadRetopoDialog / UvUnwrapDialog.
-// Operates on the currently selected entity — the mesh must have
-// a skeleton attached, otherwise the button disables itself.
+// Issue #402 (+ Skinning v2 #819): top-level Window for automatic
+// skin weights. Same Inspector-styled idiom as QuadRetopoDialog /
+// UvUnwrapDialog. Operates on the currently selected entity — the
+// mesh must have a skeleton attached, otherwise the button
+// disables itself.
 Window {
     id: dialog
     title: "Skin Weights"
     width: 560
-    height: 440
+    height: 560
     minimumWidth: 480
-    minimumHeight: 400
+    minimumHeight: 500
     flags: Qt.Dialog
     modality: Qt.ApplicationModal
     color: PropertiesPanelController.panelColor
@@ -26,6 +27,16 @@ Window {
     property double maxInfluenceDistance: 0.5
     property bool   skipUnweightedBones:  false
     property bool   replaceExisting:      true
+    property string algorithm:            "skintokens"
+    property int    voxelResolution:      64
+    property int    smoothIterations:     3
+
+    readonly property var algorithmIds: ["skintokens", "geodesic-voxel", "inverse-distance"]
+    readonly property var algorithmLabels: [
+        "SkinTokens ML (default)",
+        "Geodesic Voxel",
+        "Inverse Distance (legacy)"
+    ]
 
     property string lastStatus: ""
     property bool   lastWasError: false
@@ -42,22 +53,21 @@ Window {
     function runCompute() {
         if (SkinWeightsController.busy) return
         if (!SkinWeightsController.hasSkinnedSelection) return
-        const r = SkinWeightsController.computeWeightsForSelected(
+        // Async: the compute runs on a worker thread (the ML skinner
+        // takes minutes) — the result arrives via onWeightsApplied /
+        // onError below, progress via skinProgress/skinTotal.
+        const started = SkinWeightsController.computeWeightsForSelectedAsync(
             dialog.maxInfluences,
             dialog.falloff,
             dialog.maxInfluenceDistance,
             dialog.skipUnweightedBones,
-            dialog.replaceExisting)
-        if (r && r.applied) {
-            dialog.lastStatus =
-                "Done: " + r.totalBones + " bones, "
-                + r.totalVerticesProcessed + " verts, "
-                + r.totalAssignmentsBefore + " → "
-                + r.totalAssignmentsAfter + " assignments"
+            dialog.replaceExisting,
+            dialog.algorithm,
+            dialog.voxelResolution,
+            dialog.smoothIterations)
+        if (started) {
+            dialog.lastStatus = "Computing…"
             dialog.lastWasError = false
-        } else {
-            dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
-            dialog.lastWasError = true
         }
     }
 
@@ -208,12 +218,80 @@ Window {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             opacity: 0.85
-            text: "Compute per-vertex skin weights from the bind-pose distance "
-                + "to each bone segment. Inverse-distance heuristic (closest-"
-                + "point-on-bone smooth bind) — the same default Maya / 3dsMax "
-                + "use. Falloff controls the sharpness of the bind. The mesh "
-                + "must have a skeleton attached. Existing bone assignments "
+            text: "Compute per-vertex skin weights against the attached "
+                + "skeleton. SkinTokens ML (the default) predicts weights "
+                + "with a rig transformer and localises them geodesically — "
+                + "first use downloads ~2.3 GB of models, and it falls back "
+                + "to Geodesic Voxel (Maya's production bind) when models "
+                + "or ONNX are unavailable. Weights are smoothed and pruned "
+                + "to the influence cap afterwards. Existing assignments "
                 + "are replaced (or merged — see option)."
+        }
+
+        // Algorithm
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            InspectorLabel { text: "Algorithm:"; Layout.preferredWidth: 130 }
+            ThemedComboBox {
+                Layout.preferredWidth: 240
+                height: 24
+                font.pixelSize: 11
+                model: dialog.algorithmLabels
+                currentIndex: Math.max(0, dialog.algorithmIds.indexOf(dialog.algorithm))
+                onActivated: function(index) {
+                    dialog.algorithm = dialog.algorithmIds[index]
+                }
+            }
+            InspectorLabel {
+                text: "how weights are computed"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        // Voxel resolution (geodesic algorithms only)
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: dialog.algorithm !== "inverse-distance"
+            InspectorLabel { text: "Voxel resolution:"; Layout.preferredWidth: 130 }
+            InspectorNumberField {
+                Layout.preferredWidth: 80
+                value: dialog.voxelResolution
+                minValue: 8
+                maxValue: 256
+                isInt: true
+                onNewValue: dialog.voxelResolution = Math.round(v)
+            }
+            InspectorLabel {
+                text: "grid cells along the longest axis (higher = resolves thinner parts)"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        // Smoothing iterations
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            InspectorLabel { text: "Smoothing:"; Layout.preferredWidth: 130 }
+            InspectorNumberField {
+                Layout.preferredWidth: 80
+                value: dialog.smoothIterations
+                minValue: 0
+                maxValue: 50
+                isInt: true
+                onNewValue: dialog.smoothIterations = Math.round(v)
+            }
+            InspectorLabel {
+                text: "Laplacian relaxation iterations (0 = off; default 3)"
+                opacity: 0.7
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
         }
 
         // Max influences
@@ -305,6 +383,43 @@ Window {
 
         Item { Layout.fillHeight: true }
 
+        // Worker progress (ML decode steps + per-joint weight decode)
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: SkinWeightsController.busy
+            Rectangle {
+                Layout.fillWidth: true
+                height: 8
+                radius: 4
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                Rectangle {
+                    height: parent.height
+                    radius: 4
+                    color: PropertiesPanelController.highlightColor
+                    width: SkinWeightsController.skinTotal > 0
+                        ? parent.width * Math.min(1,
+                              SkinWeightsController.skinProgress
+                              / SkinWeightsController.skinTotal)
+                        : 0
+                }
+            }
+            InspectorLabel {
+                text: SkinWeightsController.skinDownloading
+                    ? "Downloading models…"
+                    : (SkinWeightsController.skinTotal > 0
+                        ? SkinWeightsController.skinProgress + " / "
+                          + SkinWeightsController.skinTotal
+                        : "Preparing…")
+            }
+            InspectorButton {
+                label: "Cancel"
+                Layout.preferredWidth: 70
+                onClicked: SkinWeightsController.cancelSkin()
+            }
+        }
+
         // Status line
         InspectorLabel {
             Layout.fillWidth: true
@@ -338,6 +453,18 @@ Window {
         function onError(msg) {
             dialog.lastStatus = "Failed: " + msg
             dialog.lastWasError = true
+        }
+        function onWeightsApplied(r) {
+            let status =
+                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
+                + r.totalBones + " bones, "
+                + r.totalVerticesProcessed + " verts, "
+                + r.totalAssignmentsBefore + " → "
+                + r.totalAssignmentsAfter + " assignments"
+            if (r.fallbackReason && r.fallbackReason.length > 0)
+                status += " — " + r.fallbackReason
+            dialog.lastStatus = status
+            dialog.lastWasError = false
         }
     }
 }

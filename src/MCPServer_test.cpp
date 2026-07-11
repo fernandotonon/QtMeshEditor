@@ -28,6 +28,7 @@
 #undef private
 
 #include "Manager.h"
+#include "LightManager.h"
 #include "mainwindow.h"
 #include "MaterialEditorQML.h"
 #include "MeshInfoOverlay.h"
@@ -5485,6 +5486,74 @@ TEST_F(MCPServerTest, PackTextures_AppearsInToolList)
         }
     }
     EXPECT_TRUE(found) << "pack_textures must be exposed in tools/list";
+}
+
+// ==========================================================================
+// SLICE H (#490): scene light MCP tools
+// ==========================================================================
+
+TEST_F(MCPServerTest, ListLightsToolsExposed)
+{
+    QJsonObject result = server->handleToolsList();
+    QJsonArray tools = result["tools"].toArray();
+    bool foundCreate = false;
+    bool foundList = false;
+    for (const QJsonValue& t : tools)
+    {
+        const QString name = t.toObject()["name"].toString();
+        if (name == QStringLiteral("create_light"))
+            foundCreate = true;
+        if (name == QStringLiteral("list_lights"))
+            foundList = true;
+    }
+    EXPECT_TRUE(foundCreate);
+    EXPECT_TRUE(foundList);
+}
+
+TEST_F(MCPServerTest, CreateLightAddsUserLight)
+{
+    const int before = LightManager::getSingleton()->lights().size();
+
+    QJsonObject args;
+    args[QStringLiteral("type")] = QStringLiteral("point");
+    args[QStringLiteral("position")] = QJsonArray{1.0, 2.0, 3.0};
+    args[QStringLiteral("intensity")] = 2.5;
+
+    QJsonObject result = server->callTool(QStringLiteral("create_light"), args);
+    ASSERT_FALSE(isError(result)) << getResultText(result).toStdString();
+
+    EXPECT_EQ(LightManager::getSingleton()->lights().size(), before + 1);
+}
+
+TEST_F(MCPServerTest, ListLightsReturnsJsonArray)
+{
+    QJsonObject createArgs;
+    createArgs[QStringLiteral("type")] = QStringLiteral("directional");
+    createArgs[QStringLiteral("position")] = QJsonArray{0.0, 5.0, 0.0};
+    ASSERT_FALSE(isError(server->callTool(QStringLiteral("create_light"), createArgs)));
+
+    QJsonObject result = server->callTool(QStringLiteral("list_lights"), QJsonObject());
+    ASSERT_FALSE(isError(result)) << getResultText(result).toStdString();
+
+    const QJsonDocument doc = QJsonDocument::fromJson(getResultText(result).toUtf8());
+    ASSERT_TRUE(doc.isObject());
+    EXPECT_TRUE(doc.object().contains(QStringLiteral("lights")));
+    EXPECT_GE(doc.object().value(QStringLiteral("lightCount")).toInt(), 1);
+}
+
+TEST_F(MCPServerTest, DeleteLightRemovesUserLight)
+{
+    QJsonObject createArgs;
+    createArgs[QStringLiteral("type")] = QStringLiteral("point");
+    createArgs[QStringLiteral("position")] = QJsonArray{0.0, 1.0, 0.0};
+    ASSERT_FALSE(isError(server->callTool(QStringLiteral("create_light"), createArgs)));
+
+    const QString name = LightManager::getSingleton()->lights().last().name;
+    QJsonObject deleteArgs;
+    deleteArgs[QStringLiteral("name")] = name;
+    QJsonObject result = server->callTool(QStringLiteral("delete_light"), deleteArgs);
+    ASSERT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_EQ(LightManager::getSingleton()->findLight(name), nullptr);
 }
 
 // ==========================================================================

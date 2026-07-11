@@ -46,6 +46,16 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightLinking.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ShadowController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsIO.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
@@ -74,6 +84,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudSession.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDiagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDialog.cpp
@@ -83,6 +97,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LightCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MoveKeyframeCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BulkKeyframeCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SetKeyframeValueCommand.cpp
@@ -146,9 +161,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshRefine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/TripoSGPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageCaptioner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
@@ -164,6 +181,12 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GeodesicVoxelBind.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinningDisplay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinMetrics.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinEvaluate.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinTokensPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRig.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRigController.cpp
@@ -287,6 +310,14 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ShadowController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsIO.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h
@@ -306,10 +337,15 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudDeepLink.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LightCommands.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.h
 
@@ -477,6 +513,11 @@ if(BUILD_TESTS)
 
     if(ENABLE_LOCAL_LLM)
         list(APPEND TEST_SUPPORT_LIBRARIES llama ggml)
+        # ImageCaptioner.cpp (in the test-common lib) uses mtmd under
+        # ENABLE_MTMD — link it where available (not Windows-MinGW).
+        if(QTMESH_HAVE_MTMD)
+            list(APPEND TEST_SUPPORT_LIBRARIES mtmd)
+        endif()
     endif()
 
     if(ENABLE_SENTRY)
@@ -514,6 +555,15 @@ if(BUILD_TESTS)
         BATCH_EXPORTER_TEST_SEAM
         QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    # Manager.cpp (compiled into this lib) picks plugins_d.cfg vs plugins.cfg at
+    # compile time via #ifdef DEBUG. The scoped-DEBUG fix (src/CMakeLists.txt)
+    # applied DEBUG to QtMeshEditor + UnitTests but NOT here, so the standalone
+    # per-file test executables (MaterialEditorQML_test, …) looked for the
+    # nonexistent plugins.cfg in a Debug build → Ogre init failed. Apply DEBUG
+    # here too (PRIVATE — can't leak into FetchContent deps).
+    if(QTMESH_DEFINE_DEBUG)
+        target_compile_definitions(qtmesh_test_common PRIVATE DEBUG)
+    endif()
     target_link_libraries(qtmesh_test_common PUBLIC ${TEST_SUPPORT_LIBRARIES})
 
     if(APPLE)

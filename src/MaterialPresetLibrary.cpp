@@ -1,4 +1,5 @@
 #include "MaterialPresetLibrary.h"
+#include "GamificationManager.h"
 #include "HDR/HDREnvironmentManager.h"
 #include "Manager.h"
 #include "RTShaderHelper.h"
@@ -240,6 +241,8 @@ QStringList MaterialPresetLibrary::presetNames() const
 void MaterialPresetLibrary::applyPreset(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
+
+    GamificationManager::noteFeature(QStringLiteral("material_editor"));
 
     const bool isHdrPreset = isHdrPresetName(name);
     if (isHdrPreset) {

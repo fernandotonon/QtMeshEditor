@@ -2011,3 +2011,252 @@ QtMeshCloudClient::FeedbackResult QtMeshCloudClient::submitFeedback(const QStrin
                                   QStringLiteral("warning"));
     return out;
 }
+
+// ---- Gamification (#796 / qtmesh-cloud#79) ----
+
+namespace {
+
+/// Shared body for POST /v1/events/editor and /v1/events/operations — both
+/// return `{accepted, newAchievements}` on 200 and the same error shapes.
+QtMeshCloudClient::GamificationEventsResult postGamificationBatch(
+    const QString& bearerToken,
+    const QString& path,
+    const QString& arrayField,
+    const QJsonArray& items,
+    int timeoutMs)
+{
+    QtMeshCloudClient::GamificationEventsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (items.isEmpty()) {
+        out.ok = true;
+        return out;
+    }
+    if (items.size() > QtMeshCloudClient::kGamificationMaxBatch) {
+        out.errorString = QStringLiteral("batch exceeds %1 events")
+                              .arg(QtMeshCloudClient::kGamificationMaxBatch);
+        return out;
+    }
+
+    const QUrl url(QtMeshCloudClient::apiBaseUrl() + path);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QJsonObject body;
+    body.insert(arrayField, items);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    QNetworkAccessManager nam;
+    const QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+
+    QJsonObject root;
+    QString parseError;
+    const bool parsed = parseJsonObjectBody(responseBody, root, parseError);
+
+    if (nerr == QNetworkReply::NoError && out.httpStatus == 200 && parsed) {
+        out.ok = true;
+        out.accepted = root.value(QStringLiteral("accepted")).toInt();
+        out.newAchievements = root.value(QStringLiteral("newAchievements")).toArray();
+        return out;
+    }
+
+    if (nerr != QNetworkReply::NoError)
+        out.errorString = transportErr;
+    else if (parsed && !jsonErrorCode(root).isEmpty())
+        out.errorString = jsonErrorCode(root);
+    else
+        out.errorString = QStringLiteral("HTTP %1").arg(out.httpStatus);
+    return out;
+}
+
+}  // namespace
+
+QtMeshCloudClient::GamificationEventsResult QtMeshCloudClient::postEditorEvents(
+    const QString& bearerToken, const QJsonArray& events, int timeoutMs)
+{
+    return postGamificationBatch(bearerToken, QStringLiteral("/v1/events/editor"),
+                                 QStringLiteral("events"), events, timeoutMs);
+}
+
+QtMeshCloudClient::GamificationEventsResult QtMeshCloudClient::postOperationEvents(
+    const QString& bearerToken, const QJsonArray& operations, int timeoutMs)
+{
+    return postGamificationBatch(bearerToken, QStringLiteral("/v1/events/operations"),
+                                 QStringLiteral("operations"), operations, timeoutMs);
+}
+
+QtMeshCloudClient::GamificationStatsResult QtMeshCloudClient::fetchGamificationStats(
+    const QString& bearerToken, int timeoutMs)
+{
+    GamificationStatsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/me/stats"));
+
+    QNetworkAccessManager nam;
+    const QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+
+    QJsonObject root;
+    QString parseError;
+    const bool parsed = parseJsonObjectBody(responseBody, root, parseError);
+    if (nerr == QNetworkReply::NoError && out.httpStatus == 200 && parsed) {
+        out.ok = true;
+        out.stats = root;
+        return out;
+    }
+
+    if (nerr != QNetworkReply::NoError)
+        out.errorString = transportErr;
+    else if (parsed && !jsonErrorCode(root).isEmpty())
+        out.errorString = jsonErrorCode(root);
+    else
+        out.errorString = QStringLiteral("HTTP %1").arg(out.httpStatus);
+    return out;
+}
+
+namespace {
+
+QtMeshCloudClient::GamificationPrefsResult parseGamificationPrefsReply(QNetworkReply* reply)
+{
+    QtMeshCloudClient::GamificationPrefsResult out;
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    QJsonObject root;
+    QString parseError;
+    const bool parsed = parseJsonObjectBody(responseBody, root, parseError);
+    if (nerr == QNetworkReply::NoError && out.httpStatus == 200 && parsed) {
+        // Server returns the prefs either at the root or under `prefs`.
+        const QJsonObject prefs = root.contains(QStringLiteral("prefs"))
+                                      ? root.value(QStringLiteral("prefs")).toObject()
+                                      : root;
+        out.ok = true;
+        out.sync = prefs.value(QStringLiteral("sync")).toBool(true);
+        out.usage = prefs.value(QStringLiteral("usage")).toBool(true);
+        out.ops = prefs.value(QStringLiteral("ops")).toBool(true);
+        out.profilePublic = prefs.value(QStringLiteral("profilePublic")).toBool(false);
+        return out;
+    }
+
+    if (nerr != QNetworkReply::NoError)
+        out.errorString = transportErr;
+    else if (parsed && !jsonErrorCode(root).isEmpty())
+        out.errorString = jsonErrorCode(root);
+    else
+        out.errorString = QStringLiteral("HTTP %1").arg(out.httpStatus);
+    return out;
+}
+
+}  // namespace
+
+QtMeshCloudClient::GamificationPrefsResult QtMeshCloudClient::fetchGamificationPrefs(
+    const QString& bearerToken, int timeoutMs)
+{
+    GamificationPrefsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/me/gamification/prefs"));
+
+    QNetworkAccessManager nam;
+    QNetworkReply* reply = nam.get(authorizedJsonRequest(url, bearerToken, timeoutMs));
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+    return parseGamificationPrefsReply(reply);
+}
+
+QtMeshCloudClient::GamificationPrefsResult QtMeshCloudClient::setGamificationPrefs(
+    const QString& bearerToken, const QJsonObject& patch, int timeoutMs)
+{
+    GamificationPrefsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/me/gamification/prefs"));
+    const QByteArray payload = QJsonDocument(patch).toJson(QJsonDocument::Compact);
+
+    QNetworkAccessManager nam;
+    QNetworkReply* reply = nam.put(authorizedJsonRequest(url, bearerToken, timeoutMs), payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+    return parseGamificationPrefsReply(reply);
+}
+
+QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteGamificationData(
+    const QString& bearerToken, int timeoutMs)
+{
+    UploadResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/me/gamification"));
+
+    QNetworkAccessManager nam;
+    QNetworkReply* reply = nam.deleteResource(authorizedJsonRequest(url, bearerToken, timeoutMs));
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+    if (nerr == QNetworkReply::NoError && out.httpStatus == 200) {
+        out.ok = true;
+        return out;
+    }
+    out.errorString = nerr != QNetworkReply::NoError
+                          ? transportErr
+                          : QStringLiteral("HTTP %1").arg(out.httpStatus);
+    return out;
+}
+
+QString QtMeshCloudClient::profileUrl(const QString& userSlug)
+{
+    const QString slug = userSlug.trimmed();
+    if (slug.isEmpty())
+        return {};
+    return QStringLiteral("https://qtmesh.dev/u/%1")
+        .arg(QString::fromUtf8(QUrl::toPercentEncoding(slug)));
+}

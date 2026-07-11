@@ -1,5 +1,6 @@
 #include "AIAssistManager.h"
 
+#include "GamificationManager.h"
 #include "NormalMapGenerator.h"
 #include "TextureUpscaler.h"
 #include "ModelDownloader.h"
@@ -285,6 +286,15 @@ PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
     if (!out.ok && out.error.isEmpty())
         out.error = QStringLiteral("one or more requested maps could not be written");
 
+    if (out.ok) {
+        const int mapsGenerated = (out.normalPath.isEmpty() ? 0 : 1)
+                                + (out.roughnessPath.isEmpty() ? 0 : 1)
+                                + (out.heightPath.isEmpty() ? 0 : 1);
+        GamificationManager::noteOperation(
+            QStringLiteral("pbr_synth"),
+            {{QStringLiteral("maps_generated"), mapsGenerated}});
+    }
+
     if (out.ok) emit synthesisCompleted(out.toVariantMap());
     else        emit synthesisError(out.error);
     return out;
@@ -316,6 +326,7 @@ QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool 
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.upscale"),
         QStringLiteral("upscale %1 x%2").arg(QFileInfo(srcPath).fileName()).arg(scale));
+    GamificationManager::noteFeature(QStringLiteral("pbr_synth"));
     emit upscaleStarted();
 
     auto failUp = [&](const QString& msg) -> QString {

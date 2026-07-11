@@ -21,6 +21,48 @@ Rectangle {
     property bool showAllModeTools: false
     property var bottomToolHost: null
 
+    // Themed checkbox matching Inspector palette (16px box + checkmark).
+    component InspectorCheckBox: CheckBox {
+        id: itcb
+        spacing: 6
+        property string accessibleLabel: ""
+        Accessible.name: accessibleLabel !== "" ? accessibleLabel : text
+        Accessible.checkable: true
+        Accessible.checked: itcb.checkState === Qt.Checked
+        indicator: Rectangle {
+            x: itcb.leftPadding
+            y: itcb.height / 2 - height / 2
+            implicitWidth: 16
+            implicitHeight: 16
+            radius: 2
+            color: itcb.checkState === Qt.Checked || itcb.checkState === Qt.PartiallyChecked
+                ? PropertiesPanelController.highlightColor
+                : PropertiesPanelController.inputColor
+            border.color: itcb.activeFocus
+                ? PropertiesPanelController.highlightColor
+                : PropertiesPanelController.borderColor
+            border.width: itcb.activeFocus ? 2 : 1
+            opacity: itcb.enabled ? 1.0 : 0.45
+            Text {
+                anchors.centerIn: parent
+                visible: itcb.checkState !== Qt.Unchecked
+                text: itcb.checkState === Qt.PartiallyChecked ? "—" : "✓"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: itcb.checkState === Qt.PartiallyChecked ? 10 : 12
+                font.bold: true
+            }
+        }
+        contentItem: Text {
+            visible: itcb.text !== ""
+            text: itcb.text
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+            leftPadding: itcb.indicator.width + itcb.spacing
+            verticalAlignment: Text.AlignVCenter
+            opacity: itcb.enabled ? 1.0 : 0.45
+        }
+    }
+
     // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
     // (replaces the old modal AutoRigDialog) ----
     property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
@@ -29,6 +71,7 @@ Rectangle {
     property int    rigAlgoIndex: 0             // pinocchio (offline) default
     property var    rigUpAxes: ["x", "y", "z"]
     property int    rigUpAxisIndex: 1           // +Y default
+    // Rigging always chains skin-weight computation (async, in background).
     property bool   rigAlsoSkin: true
     property bool   rigShowAdvanced: false      // up-axis picker
     property string rigStatus: ""
@@ -54,7 +97,7 @@ Rectangle {
                 + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts, "
                 + r.jointsRecentered + " recentered"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
                 + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         } else {
@@ -69,7 +112,7 @@ Rectangle {
         if (r && r.applied) {
             root.rigStatus = "Rigged from markers: " + r.boneCount + " bones, "
                 + r.markersApplied + " markers"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
             root.rigStatusError = false
         } else {
             root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
@@ -87,7 +130,7 @@ Rectangle {
             root.rigStatus = "Rigged (" + (r.algorithm ? r.algorithm : "pinocchio")
                 + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts"
-                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (root.rigAlsoSkin ? (r.skinned ? " — skinning in background…" : " (skinning failed to start)") : "")
                 + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         }
@@ -153,11 +196,13 @@ Rectangle {
             text: rcb.label
             color: PropertiesPanelController.textColor
             font.pixelSize: 11
-        }
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: rcb.toggled()
+            // Row positioners ignore fill anchors on children, so the
+            // click area lives INSIDE this item and spans the whole row.
+            MouseArea {
+                x: -20; width: rcb.width + 20; height: rcb.height
+                cursorShape: Qt.PointingHandCursor
+                onClicked: rcb.toggled()
+            }
         }
     }
 
@@ -723,6 +768,39 @@ Rectangle {
                 Component.onCompleted: content = animControlComponent
             }
 
+            // ---- Lighting (preset rigs + ambient/background, Slice E #487) ----
+            CollapsibleSection {
+                title: "Lighting"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    true)
+                expanded: false
+
+                Component.onCompleted: content = sceneLightingComponent
+            }
+
+            // ---- Light (#484 / #485) ----
+            CollapsibleSection {
+                title: "Light"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    LightPropertiesController.hasLightSelection)
+                expanded: false
+
+                Component.onCompleted: content = lightPropertiesComponent
+            }
+
+            // ---- Shadow (Slice F #488) ----
+            CollapsibleSection {
+                title: "Shadow"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    true)
+                expanded: false
+
+                Component.onCompleted: content = shadowToolsComponent
+            }
+
             // ---- Environment (HDR / IBL, Object mode) ----
             CollapsibleSection {
                 title: "Environment"
@@ -740,7 +818,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshDecimatorController.hasSelection)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = decimateComponent
             }
@@ -751,7 +829,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshLodController.hasSelection)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = lodComponent
             }
@@ -1535,6 +1613,7 @@ Rectangle {
             property var mgSteps: []
             property int mgActiveIdx: -1
             property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
+            property bool mgAiPending: false     // AI texture queued for onCompleted
 
             // A small local button factory (raw QML — the Themed* wrappers blank
             // this dynamically-loaded panel, so we style raw controls with the
@@ -1734,6 +1813,24 @@ Rectangle {
                 }
             }
 
+            // Auto-generated caption of the selected image (SmolVLM), computed
+            // in the background the moment the image is picked. Shown here so
+            // the user sees what the model "read" from the image — it becomes
+            // the texture prompt. "Describing…" while it's still running.
+            Text {
+                width: parent.width - 16
+                visible: MeshGenController.selectedImagePath.length > 0
+                    && (MeshGenController.captioning
+                        || MeshGenController.caption.length > 0)
+                text: MeshGenController.captioning
+                    ? "🔍 Describing image…"
+                    : "📝 " + MeshGenController.caption
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.italic: MeshGenController.captioning
+                wrapMode: Text.WordWrap
+            }
+
             // Resolution picker — marching-cubes grid resolution. Cost grows with
             // the cube of the value (the decoder queries resolution³ points), so
             // higher = more detail but much slower. Labels flag the trade-off.
@@ -1759,11 +1856,41 @@ Rectangle {
                 }
             }
 
-            // Model quality/size tier — the encoder downloads in the picked
-            // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
-            // MeshGenController quality int (0/1).
+            // Backend: TripoSR (fast, textured) vs TripoSG (rectified flow —
+            // higher-fidelity geometry, geometry-only, slower; models download
+            // on first use). Declared BEFORE the Model row so the tier picker
+            // can react to it.
             Row {
                 spacing: 6
+                Text {
+                    text: "Backend"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgBackendCombo
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    model: ["TripoSR (fast, textured)", "TripoSG (best geometry)"]
+                    currentIndex: 0
+                    // Switching to TripoSG snaps the tier picker to fp32 (its
+                    // only geometry tier); the int8 option is meaningless there.
+                    onCurrentIndexChanged: {
+                        if (currentIndex === 1)
+                            mgQualityCombo.currentIndex = 0
+                    }
+                }
+            }
+
+            // Model quality/size tier. TripoSR: fp32 (best/largest) vs int8
+            // (smallest), 1:1 with the MeshGenController quality int. TripoSG:
+            // fp32 ONLY — the quantized 1.5B DiT degrades geometry to blobs
+            // and is no faster on ARM, so the list collapses to the single
+            // real option and locks.
+            Row {
+                spacing: 6
+                property bool isSG: mgBackendCombo.currentIndex === 1
                 Text {
                     text: "Model"
                     color: PropertiesPanelController.textColor
@@ -1772,9 +1899,14 @@ Rectangle {
                 }
                 InspectorComboBox {
                     id: mgQualityCombo
-                    width: 150
-                    enabled: !MeshGenController.busy
-                    model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
+                    width: 190
+                    // TripoSG ships fp32 only (int8 degrades geometry); show
+                    // its size for consistency rather than a placeholder, and
+                    // lock the picker since there's nothing to switch to.
+                    enabled: !MeshGenController.busy && !parent.isSG
+                    model: parent.isSG
+                        ? ["fp32 (best, ~2GB)"]
+                        : ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                     currentIndex: 0
                 }
             }
@@ -1798,16 +1930,56 @@ Rectangle {
                 text: "Refine surface (re-project)"
                 checked: true
             }
+            // ---- Colour / texture stages, in execution order ----------------
+            // TripoSG (geometry-only) gets its colour SOLELY from the AI
+            // texture pass — so when TripoSG is the backend, that checkbox
+            // leads and the plain "Bake diffuse" (TripoSR field colour) is
+            // hidden. TripoSR keeps the classic bake → PBR → upscale chain.
+            property bool sgSelected: mgBackendCombo.currentIndex === 1
+
+            // AI texture (multi-view depth-ControlNet): front from the input
+            // photo, back/sides SD-generated from the shape, then projected.
+            // For TripoSG this is the only colour source; for TripoSR it's an
+            // optional higher-quality alternative to the field bake.
+            InspectorCheck {
+                id: mgAiTexture
+                text: "Generate texture (AI, front photo + generated back)"
+                checked: parent.sgSelected
+                enabled: !MeshGenController.busy
+                    && MaterialEditorQML.stableDiffusionEnabled
+            }
+            Text {
+                visible: mgAiTexture.checked && !MaterialEditorQML.sdModelLoaded
+                text: MaterialEditorQML.stableDiffusionEnabled
+                    ? "  ⚠ Load a Stable Diffusion model in AI Settings first."
+                    : "  ⚠ This build has no Stable Diffusion support."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+            // Plain diffuse bake (TripoSR field colour). Hidden for TripoSG,
+            // where colour is the AI texture pass only.
             InspectorCheck {
                 id: mgBake
                 text: "Bake diffuse texture"
                 checked: true
+                visible: !parent.sgSelected
+                enabled: !MeshGenController.busy
             }
             InspectorCheck {
                 id: mgPbr
                 text: "Generate PBR maps (normal + roughness)"
-                checked: true
-                enabled: !MeshGenController.busy && mgBake.checked
+                // Default OFF for TripoSG — the synthesized normal/roughness
+                // over its AI texture tends to look worse than the plain
+                // diffuse (user-verified); ON for TripoSR where it helps. The
+                // binding re-evaluates when the backend changes; the user can
+                // still toggle it per run.
+                checked: !parent.sgSelected
+                // Valid whenever there's a diffuse to derive from: the plain
+                // bake OR the AI texture. Runs after whichever produced it.
+                enabled: !MeshGenController.busy
+                    && (mgAiTexture.checked || mgBake.checked)
             }
             InspectorCheck {
                 id: mgUpscale
@@ -1824,34 +1996,70 @@ Rectangle {
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
                 onClicked: {
+                    var sg = mgBackendCombo.currentIndex === 1   // TripoSG
                     var steps = [{ key: "prep", label: "Prepare models" }]
-                    if (mgRemoveBg.checked)
+                    // The worker only posts a "background" stage on the TripoSR
+                    // path; TripoSG removes the bg inside its predict() dispatch
+                    // without a discrete progress event, so a "background" row
+                    // there would never resolve and look stuck.
+                    if (mgRemoveBg.checked && !sg)
                         steps.push({ key: "background", label: "Remove background" })
                     steps.push({ key: "encode", label: "Encode image" })
+                    if (sg)
+                        steps.push({ key: "denoise", label: "Denoise (flow steps)" })
                     steps.push({ key: "decode", label: "Reconstruct 3D" })
                     if (mgRefine.checked)
                         steps.push({ key: "refine", label: "Refine surface" })
-                    if (mgBake.checked)
+                    // AI texture requested + available? (TripoSG's ONLY colour
+                    // source; optional extra for TripoSR.)
+                    var aiTex = mgAiTexture.checked
+                        && MaterialEditorQML.stableDiffusionEnabled
+
+                    // Colour stages. For TripoSG we do NOT bake colour at build
+                    // time (no TripoSR field colouring) — colour is entirely the
+                    // AI texture pass. With no AI, TripoSG ships an uncoloured
+                    // (neutral clay) mesh. TripoSR keeps its own field bake.
+                    var buildBake = mgBake.checked && (!sg || !aiTex)
+                    // PBR: for TripoSG+AI it runs AFTER the AI texture (below),
+                    // not at build time. Otherwise it runs at build from the
+                    // build-time bake.
+                    var buildPbr = mgPbr.checked && buildBake
+
+                    if (buildBake)
                         steps.push({ key: "bake", label: "Bake texture" })
-                    else
+                    else if (!sg && !mgBake.checked)
                         steps.push({ key: "color", label: "Vertex colors" })
-                    if (mgUpscale.checked && mgBake.checked)
+                    if (mgUpscale.checked && buildBake)
                         steps.push({ key: "upscale", label: "Upscale texture 2×" })
                     steps.push({ key: "build",
-                                 label: (mgPbr.checked && mgBake.checked)
-                                        ? "Build mesh + PBR maps" : "Build mesh" })
+                                 label: buildPbr ? "Build mesh + PBR maps"
+                                                 : "Build mesh" })
+                    // AI texture pass (after the mesh is built): the front is
+                    // the pinned photo (no SD), the back/sides are generated,
+                    // then projection-baked, then PBR from that final texture.
+                    if (aiTex) {
+                        steps.push({ key: "aitex_gen",
+                                     label: "AI texture: generate views" })
+                        steps.push({ key: "aitex_bake",
+                                     label: "AI texture: project + bake" })
+                        if (mgPbr.checked)
+                            steps.push({ key: "aitex_pbr",
+                                         label: "PBR maps from AI texture" })
+                    }
                     mgRoot.mgSteps = steps
                     mgRoot.mgActiveIdx = 0
                     mgRoot.mgActiveProgress = -1
+                    mgRoot.mgAiPending = aiTex   // gate onCompleted's AI kickoff
 
                     MeshGenController.generateSelected(
                         mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
                         {
                             "smooth": mgSmooth.checked,
                             "refine": mgRefine.checked,
-                            "bake_texture": mgBake.checked,
-                            "generate_pbr": mgPbr.checked,
-                            "upscale_texture": mgUpscale.checked
+                            "bake_texture": buildBake,
+                            "generate_pbr": buildPbr,
+                            "upscale_texture": mgUpscale.checked && buildBake,
+                            "backend": sg ? "triposg" : "triposr"
                         })
                 }
             }
@@ -1962,8 +2170,101 @@ Rectangle {
                     mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
                     mgStatus.text = "Done: " + result.vertexCount + " verts, "
                         + result.triangleCount + " tris"
+
+                    // Optional AI texture pass: front from the input photo,
+                    // back/sides SD-generated (depth-ControlNet), then PBR from
+                    // that final texture. Runs on the just-built entity.
+                    if (mgRoot.mgAiPending && result.entityName) {
+                        mgRoot.mgAiPending = false
+                        if (!MaterialEditorQML.sdModelLoaded) {
+                            mgStatus.text = "Mesh built; skipped AI texture "
+                                + "(no SD model loaded — see AI Settings)."
+                            return
+                        }
+                        // Select the new entity so the multi-view bake targets
+                        // it, then kick off the generated views (+PBR).
+                        PropertiesPanelController.selectNodeByName(result.entityName)
+                        // Mark the first AI step active (leave build ✓); later
+                        // steps advance on the SD / bake / PBR signals.
+                        var pbrRows = mgPbr.checked ? 3 : 2
+                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length - pbrRows
+                        mgRoot.mgActiveProgress = -1
+                        mgStatus.text = "Mesh built — generating AI texture…"
+                        // Pass the caption computed in the BACKGROUND when the
+                        // image was picked (ready by now — no UI-blocking
+                        // captioning here). Empty falls back to a neutral prompt
+                        // inside generateMeshTextureMultiView.
+                        //
+                        // Views: front/back/left/right (MV-Adapter #805 slice 1
+                        // — its 6-view orthographic layout minus the two poles).
+                        // 4 equatorial views give full horizontal coverage +
+                        // seam overlap for the baker's cross-view blend, a clear
+                        // step up from the old 2 (front+back left the sides to
+                        // stretch/blur) without the ~3× cost of all 6. The two
+                        // poles (top/bottom) rarely help typical subjects.
+                        MaterialEditorQML.generateMeshTextureMultiView(
+                            MeshGenController.caption, 512, 512, 0.9,
+                            ["front", "back", "left", "right"],
+                            "",                       // no photo pinning
+                            mgPbr.checked)
+                    }
                 }
                 function onError(msg) { mgStatus.text = "Error: " + msg }
+            }
+            // Drive the AI-texture progress rows (generate → bake → optional
+            // PBR) from the SD + PBR-synth signals. Rows are found by key so
+            // the optional PBR row doesn't shift the indices.
+            Connections {
+                target: MaterialEditorQML
+                enabled: mgAiTexture.checked
+                function stepIdx(key) {
+                    for (var i = 0; i < mgRoot.mgSteps.length; i++)
+                        if (mgRoot.mgSteps[i].key === key) return i
+                    return -1
+                }
+                function onSdGenerationProgressChanged() {
+                    var i = stepIdx("aitex_gen")
+                    if (i < 0) return
+                    if (mgRoot.mgActiveIdx < i) mgRoot.mgActiveIdx = i
+                    if (mgRoot.mgActiveIdx === i)
+                        mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
+                }
+                function onSdTextureGenerated(path) {
+                    // Views done + projected/applied → mark the bake row ✓.
+                    var b = stepIdx("aitex_bake")
+                    if (b >= 0 && mgRoot.mgActiveIdx <= b) {
+                        var p = stepIdx("aitex_pbr")
+                        if (p < 0) { mgRoot.mgActiveIdx = mgRoot.mgSteps.length
+                                     mgStatus.text = "AI texture applied." }
+                        else       { mgRoot.mgActiveIdx = p    // PBR now running
+                                     mgRoot.mgActiveProgress = -1 }
+                    }
+                }
+                function onPbrSynthCompleted(res) {
+                    if (stepIdx("aitex_pbr") >= 0) {
+                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
+                        mgStatus.text = "AI texture + PBR applied."
+                    }
+                }
+                function onSdGenerationError(msg) {
+                    mgStatus.text = "AI texture error: " + msg
+                }
+                function onPbrSynthError(msg) {
+                    mgStatus.text = "PBR error: " + msg
+                }
+                // Relay the AI-texture step notices (simplify / unwrap / "view
+                // N/M — step X/Y" / bake) to the panel status line, so texture
+                // progress is visible HERE and not only in the Material Editor
+                // window. Also drive the live progress bar off the SD step
+                // fraction while the generate view is the active step.
+                function onSdGenerationNotice(msg) {
+                    mgStatus.text = msg
+                    var i = -1
+                    for (var k = 0; k < mgRoot.mgSteps.length; k++)
+                        if (mgRoot.mgSteps[k].key === "aitex_gen") { i = k; break }
+                    if (i >= 0 && mgRoot.mgActiveIdx === i)
+                        mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
+                }
             }
         }
     }
@@ -1987,7 +2288,8 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: "Auto-generate per-vertex bone weights for the selected "
-                    + "skinned mesh (inverse-distance smooth bind). Undoable."
+                    + "skinned mesh (geodesic voxel bind — volume-aware, no "
+                    + "cross-limb bleed). Undoable."
             }
 
             Rectangle {
@@ -2031,8 +2333,83 @@ Rectangle {
                     ToolTip.visible: containsMouse
                     ToolTip.delay: 500
                     ToolTip.text: SkinWeightsController.hasSkinnedSelection
-                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
+                        ? "Compute per-vertex bone weights via geodesic voxel bind (volume-aware, no cross-limb bleed). Mesh must have a skeleton."
                         : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+
+            // #819 Slice D: per-entity skinning display mode.
+            // Dual Quaternion (RTSS hardware skinning) preserves
+            // volume on twists — no candy-wrapper collapse. Display
+            // only: exported weights are unchanged.
+            Row {
+                id: skinDispRow
+                spacing: 6
+                visible: SkinWeightsController.hasSkinnedSelection
+
+                // Re-read the active mode when the selection changes.
+                property string activeMode: SkinWeightsController.skinningDisplayMode()
+                Connections {
+                    target: SkinWeightsController
+                    function onSelectionChanged() {
+                        skinDispRow.activeMode =
+                            SkinWeightsController.skinningDisplayMode()
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Display:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.8
+                }
+
+                Repeater {
+                    model: [
+                        { label: "Linear", mode: "linear" },
+                        { label: "Dual Quaternion", mode: "dual-quaternion" }
+                    ]
+
+                    Rectangle {
+                        id: dispBtn
+                        required property var modelData
+                        readonly property bool active:
+                            skinDispRow.activeMode === modelData.mode
+                        width: dispLabel.implicitWidth + 14
+                        height: 22
+                        radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : (dispMa.containsMouse
+                                ? PropertiesPanelController.headerColor
+                                : PropertiesPanelController.inputColor)
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+
+                        Text {
+                            id: dispLabel
+                            anchors.centerIn: parent
+                            text: dispBtn.modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: dispMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (SkinWeightsController.setSkinningDisplayMode(
+                                        dispBtn.modelData.mode))
+                                    skinDispRow.activeMode = dispBtn.modelData.mode
+                            }
+                            ToolTip.visible: containsMouse
+                            ToolTip.delay: 500
+                            ToolTip.text: dispBtn.modelData.mode === "dual-quaternion"
+                                ? "Render with dual-quaternion hardware skinning — preserves volume on twists (no candy-wrapper). Display only: exported weights are unchanged; engines re-skin with their own blend."
+                                : "Render with the default linear-blend skinning path."
+                        }
+                    }
                 }
             }
         }
@@ -2069,8 +2446,12 @@ Rectangle {
                 text: rigCol.marking
                     ? "Click each highlighted point on the mesh in the viewport."
                     : (rigCol.canRig
-                        ? "Embed a skeleton into this unrigged mesh. Optionally skin "
-                          + "in one click."
+                        ? "Embed a skeleton into this unrigged mesh, then compute "
+                          + "skin weights with "
+                          + (SkinWeightsController.mlSkinnerReady
+                             ? "the SkinTokens ML skinner"
+                             : "Geodesic Voxel (the SkinTokens ML models are not downloaded yet)")
+                          + "."
                         : "Select a static (unrigged) mesh to enable rigging.")
             }
 
@@ -2225,8 +2606,11 @@ Rectangle {
                     }
                 }
 
+                // Skinning opt-out — checked by default; unchecking rigs only.
                 RigCheckbox {
-                    label: "Also compute skin weights"
+                    label: SkinWeightsController.mlSkinnerReady
+                        ? "Compute skin weights (SkinTokens ML)"
+                        : "Compute skin weights (Geodesic Voxel)"
                     checked: root.rigAlsoSkin
                     onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
                 }
@@ -2275,13 +2659,19 @@ Rectangle {
                     wrapMode: Text.Wrap
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 10
+                    // The decoder's 2048 total is a SAFETY CAP, not a real
+                    // count — generation ends at EOS (typically ~180 tokens),
+                    // so show the token count instead of a bogus "/ 2048".
                     text: AutoRigController.rigDownloading
                         ? "Downloading UniRig model (~1.4 GB, first use only)…"
-                        : (AutoRigController.rigTotal > 0
+                        : (AutoRigController.rigTotal > 0 && AutoRigController.rigTotal < 2048
                             ? ("Predicting skeleton… step "
                                + AutoRigController.rigProgress + " / "
                                + AutoRigController.rigTotal)
-                            : "Preparing…")
+                            : (AutoRigController.rigTotal >= 2048
+                                ? ("Predicting skeleton… " + AutoRigController.rigProgress
+                                   + " tokens")
+                                : "Preparing…"))
                 }
 
                 // Determinate while decoding; indeterminate-looking (full-width
@@ -2299,11 +2689,14 @@ Rectangle {
                         radius: 2
                         color: PropertiesPanelController.highlightColor
                         readonly property real frac:
-                            AutoRigController.rigTotal > 0
-                                ? Math.max(0, Math.min(1,
-                                    AutoRigController.rigProgress
-                                    / AutoRigController.rigTotal))
-                                : 0
+                            AutoRigController.rigTotal >= 2048
+                                ? (AutoRigController.rigProgress
+                                   / (AutoRigController.rigProgress + 120.0))
+                                : (AutoRigController.rigTotal > 0
+                                    ? Math.max(0, Math.min(1,
+                                        AutoRigController.rigProgress
+                                        / AutoRigController.rigTotal))
+                                    : 0)
                         width: (parent.width - 2) * frac
                         Behavior on width { NumberAnimation { duration: 120 } }
                     }
@@ -3963,6 +4356,508 @@ Rectangle {
         }
     }
 
+    // ---- Light properties (Slice C #485) ----
+    Component {
+        id: lightPropertiesComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            function mixedLabel(isMixed, valueText) {
+                return isMixed ? qsTr("Mixed") : valueText
+            }
+
+            // Type
+            Text {
+                text: qsTr("Type")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.lightTypeChoices
+                enabled: !LightPropertiesController.mixedLightType
+                currentIndex: LightPropertiesController.mixedLightType
+                    ? 0
+                    : LightPropertiesController.lightType
+                onActivated: index => LightPropertiesController.lightType = index
+            }
+            Text {
+                visible: LightPropertiesController.mixedLightType
+                text: qsTr("Mixed types in selection")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+
+            // Enabled
+            Row {
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Enabled")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Enabled")
+                    tristate: true
+                    checkState: LightPropertiesController.mixedEnabled
+                        ? Qt.PartiallyChecked
+                        : (LightPropertiesController.enabled ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        LightPropertiesController.enabled = (checkState === Qt.Checked)
+                    }
+                }
+                Text {
+                    visible: LightPropertiesController.mixedEnabled
+                    text: qsTr("Mixed")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Colour
+            Text {
+                text: qsTr("Colour")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 8
+                width: parent.width - 16
+                Column {
+                    spacing: 2
+                    Text {
+                        text: qsTr("Diffuse")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    Rectangle {
+                        width: 40
+                        height: 22
+                        color: LightPropertiesController.mixedDiffuseColor
+                            ? PropertiesPanelController.inputColor
+                            : LightPropertiesController.diffuseColor
+                        border.color: diffuseColorBtn.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        border.width: diffuseColorBtn.activeFocus ? 2 : 1
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Pick diffuse color")
+                        Keys.onSpacePressed: LightPropertiesController.pickDiffuseColor()
+                        Keys.onReturnPressed: LightPropertiesController.pickDiffuseColor()
+                        Keys.onEnterPressed: LightPropertiesController.pickDiffuseColor()
+                        id: diffuseColorBtn
+                        Text {
+                            anchors.centerIn: parent
+                            visible: LightPropertiesController.mixedDiffuseColor
+                            text: "—"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LightPropertiesController.pickDiffuseColor()
+                        }
+                    }
+                }
+                Column {
+                    spacing: 2
+                    Text {
+                        text: qsTr("Specular")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    Rectangle {
+                        width: 40
+                        height: 22
+                        color: LightPropertiesController.mixedSpecularColor
+                            ? PropertiesPanelController.inputColor
+                            : LightPropertiesController.specularColor
+                        border.color: specularColorBtn.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        border.width: specularColorBtn.activeFocus ? 2 : 1
+                        activeFocusOnTab: !LightPropertiesController.colorsLinked
+                        enabled: !LightPropertiesController.colorsLinked
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Pick specular color")
+                        Keys.onSpacePressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        Keys.onReturnPressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        Keys.onEnterPressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        id: specularColorBtn
+                        Text {
+                            anchors.centerIn: parent
+                            visible: LightPropertiesController.mixedSpecularColor
+                            text: "—"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !LightPropertiesController.colorsLinked
+                            opacity: enabled ? 1.0 : 0.45
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LightPropertiesController.pickSpecularColor()
+                        }
+                    }
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Link")
+                    checked: LightPropertiesController.colorsLinked
+                    onToggled: LightPropertiesController.colorsLinked = checked
+                }
+            }
+
+            // Intensity
+            Text {
+                text: qsTr("Intensity")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Slider {
+                    id: intensitySlider
+                    width: parent.width - 56
+                    height: 22
+                    from: 0
+                    to: 10
+                    stepSize: 0.01
+                    value: LightPropertiesController.mixedIntensity
+                        ? 0
+                        : LightPropertiesController.intensity
+                    enabled: !LightPropertiesController.mixedIntensity
+                    onPressedChanged: {
+                        if (pressed)
+                            LightPropertiesController.beginSliderEdit(3)
+                        else
+                            LightPropertiesController.endSliderEdit(3)
+                    }
+                    onMoved: LightPropertiesController.intensity = value
+                    Connections {
+                        target: LightPropertiesController
+                        function onPropertiesChanged() {
+                            if (!intensitySlider.pressed)
+                                intensitySlider.value = LightPropertiesController.intensity
+                        }
+                    }
+                }
+                Text {
+                    width: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: LightPropertiesController.mixedIntensity
+                        ? qsTr("Mixed")
+                        : LightPropertiesController.intensity.toFixed(2)
+                }
+            }
+
+            // Range (point / spot)
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Range")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                visible: LightPropertiesController.isPointOrSpot
+                spacing: 6
+                width: parent.width - 16
+                Slider {
+                    id: rangeSlider
+                    width: parent.width - 56
+                    height: 22
+                    from: 0.01
+                    to: 100
+                    stepSize: 0.01
+                    value: LightPropertiesController.mixedRange
+                        ? 0.01
+                        : LightPropertiesController.range
+                    enabled: !LightPropertiesController.mixedRange
+                    onPressedChanged: {
+                        if (pressed)
+                            LightPropertiesController.beginSliderEdit(4)
+                        else
+                            LightPropertiesController.endSliderEdit(4)
+                    }
+                    onMoved: LightPropertiesController.range = value
+                    Connections {
+                        target: LightPropertiesController
+                        function onPropertiesChanged() {
+                            if (!rangeSlider.pressed)
+                                rangeSlider.value = LightPropertiesController.range
+                        }
+                    }
+                }
+                Text {
+                    width: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: LightPropertiesController.mixedRange
+                        ? qsTr("Mixed")
+                        : LightPropertiesController.range.toFixed(2)
+                }
+            }
+
+            // Attenuation
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Attenuation")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                visible: LightPropertiesController.isPointOrSpot
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.attenuationPresetChoices
+                enabled: !LightPropertiesController.mixedAttenuationPreset
+                currentIndex: LightPropertiesController.mixedAttenuationPreset
+                    ? 0
+                    : LightPropertiesController.attenuationPreset
+                onActivated: index => LightPropertiesController.attenuationPreset = index
+            }
+
+            // Advanced attenuation
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Advanced attenuation")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            Row {
+                visible: LightPropertiesController.isPointOrSpot
+                spacing: 4
+                width: parent.width - 16
+
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "C"
+                    value: LightPropertiesController.mixedAttenuationConstant
+                        ? 0 : LightPropertiesController.attenuationConstant
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationConstant = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "L"
+                    value: LightPropertiesController.mixedAttenuationLinear
+                        ? 0 : LightPropertiesController.attenuationLinear
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationLinear = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "Q"
+                    value: LightPropertiesController.mixedAttenuationQuadratic
+                        ? 0 : LightPropertiesController.attenuationQuadratic
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationQuadratic = val }
+                }
+            }
+
+            // Spot cone
+            Text {
+                visible: LightPropertiesController.isSpot
+                text: qsTr("Spot cone")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                visible: LightPropertiesController.isSpot
+                spacing: 4
+                width: parent.width - 16
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "In"
+                    value: LightPropertiesController.mixedSpotInnerAngle ? 0 : LightPropertiesController.spotInnerAngle
+                    color: "#c08040"
+                    step: 1
+                    decimals: 1
+                    onNewValue: function(val) { LightPropertiesController.spotInnerAngle = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "Out"
+                    value: LightPropertiesController.mixedSpotOuterAngle ? 0 : LightPropertiesController.spotOuterAngle
+                    color: "#c0a040"
+                    step: 1
+                    decimals: 1
+                    onNewValue: function(val) { LightPropertiesController.spotOuterAngle = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "F"
+                    value: LightPropertiesController.mixedSpotFalloff ? 0 : LightPropertiesController.spotFalloff
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.spotFalloff = val }
+                }
+            }
+
+            // Light linking (Slice I #491)
+            Text {
+                text: qsTr("Light linking")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Limit which meshes this light affects (32 mask channels). RTSS PBR may not honour masks on all passes.")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            ThemedComboBox {
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.linkModeChoices
+                enabled: !LightPropertiesController.mixedLinkMode
+                currentIndex: LightPropertiesController.mixedLinkMode
+                    ? -1
+                    : LightPropertiesController.linkMode
+                onActivated: index => LightPropertiesController.linkMode = index
+            }
+            Column {
+                visible: LightPropertiesController.linkMode !== 0
+                    && !LightPropertiesController.mixedLinkMode
+                spacing: 4
+                width: parent.width - 16
+                Repeater {
+                    model: LightPropertiesController.linkedEntityNames
+                    delegate: Row {
+                        width: parent.width
+                        spacing: 6
+                        Text {
+                            width: parent.width - removeBtn.width - 6
+                            text: modelData
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            id: removeBtn
+                            width: 18
+                            height: 18
+                            radius: 3
+                            color: removeMouse.pressed
+                                ? Qt.darker(PropertiesPanelController.inputColor, 1.2)
+                                : PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "×"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: removeMouse
+                                anchors.fill: parent
+                                onClicked: LightPropertiesController.removeLinkedEntity(modelData)
+                            }
+                        }
+                    }
+                }
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    ThemedComboBox {
+                        id: linkTargetPicker
+                        width: parent.width - addLinkBtn.width - 6
+                        height: 22
+                        font.pixelSize: 11
+                        model: LightPropertiesController.availableLinkTargets
+                        enabled: count > 0
+                        Connections {
+                            target: LightPropertiesController
+                            function onPropertiesChanged() {
+                                if (linkTargetPicker.count === 0)
+                                    linkTargetPicker.currentIndex = -1
+                                else if (linkTargetPicker.currentIndex < 0
+                                         || linkTargetPicker.currentIndex >= linkTargetPicker.count)
+                                    linkTargetPicker.currentIndex = 0
+                            }
+                        }
+                    }
+                    Rectangle {
+                        id: addLinkBtn
+                        width: 44
+                        height: 22
+                        radius: 3
+                        opacity: linkTargetPicker.count > 0 && linkTargetPicker.currentIndex >= 0
+                            ? 1.0
+                            : 0.45
+                        color: addLinkMouse.containsMouse
+                            && linkTargetPicker.count > 0
+                            && linkTargetPicker.currentIndex >= 0
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Add")
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: addLinkMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
+                                ? Qt.PointingHandCursor
+                                : Qt.ArrowCursor
+                            enabled: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
+                            onClicked: {
+                                if (linkTargetPicker.currentIndex >= 0)
+                                    LightPropertiesController.addLinkedEntity(
+                                        linkTargetPicker.currentText)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     component ModeToolShortcutButton: Button {
         id: shortcutButton
         implicitHeight: 24
@@ -4748,6 +5643,308 @@ Rectangle {
                 font.pixelSize: 10
                 color: "#60c060"
                 text: ""
+            }
+        }
+    }
+
+    // ---- Scene lighting (Object mode, Slice E #487) ----
+    Component {
+        id: sceneLightingComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Text {
+                text: "Preset rig"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            ThemedComboBox {
+                id: rigPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: SceneLightingController.rigNames
+                currentIndex: SceneLightingController.selectedRigIndex
+                onActivated: index => SceneLightingController.selectedRigIndex = index
+                Connections {
+                    target: SceneLightingController
+                    function onSelectedRigIndexChanged() {
+                        rigPicker.currentIndex = SceneLightingController.selectedRigIndex
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                InspectorCheckBox {
+                    id: replaceLightsCheck
+                    text: qsTr("Replace existing lights")
+                    checked: SceneLightingController.replaceExistingLights
+                    onToggled: SceneLightingController.replaceExistingLights = checked
+                }
+            }
+
+            Rectangle {
+                id: applyRigBtn
+                width: parent.width - 16
+                height: 24
+                radius: 3
+                color: applyRigMa.containsMouse || applyRigBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: applyRigBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: applyRigBtn.activeFocus ? 2 : 1
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("Apply preset rig")
+                Keys.onSpacePressed: applyRigMa.clicked(null)
+                Keys.onReturnPressed: applyRigMa.clicked(null)
+                Keys.onEnterPressed: applyRigMa.clicked(null)
+                Text {
+                    anchors.centerIn: parent
+                    text: "Apply preset rig"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: applyRigMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: SceneLightingController.applySelectedRig()
+                }
+            }
+        }
+    }
+
+    // ---- Shadow tools (Object mode, Slice F #488) ----
+    Component {
+        id: shadowToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Text {
+                text: qsTr("Quality")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                id: shadowQualityPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.qualityPresetNames
+                currentIndex: ShadowController.qualityPreset
+                onActivated: index => ShadowController.qualityPreset = index
+                Connections {
+                    target: ShadowController
+                    function onSettingsChanged() {
+                        shadowQualityPicker.currentIndex = ShadowController.qualityPreset
+                    }
+                }
+            }
+
+            Text {
+                visible: ShadowController.qualityPreset > 0
+                text: qsTr("Directional cascades")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            ThemedComboBox {
+                visible: ShadowController.qualityPreset > 0
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.cascadeCountChoices
+                currentIndex: Math.max(0, ShadowController.cascadeCount - 2)
+                onActivated: index => ShadowController.cascadeCount = index + 2
+            }
+
+            Text {
+                visible: ShadowController.qualityPreset > 0
+                text: qsTr("Spot shadow map")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            ThemedComboBox {
+                visible: ShadowController.qualityPreset > 0
+                id: spotShadowResPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.spotShadowResolutionChoices
+                onActivated: index => {
+                    const sizes = [512, 1024, 2048]
+                    ShadowController.spotShadowResolution = sizes[index]
+                }
+                Component.onCompleted: {
+                    const sizes = [512, 1024, 2048]
+                    currentIndex = Math.max(0, sizes.indexOf(ShadowController.spotShadowResolution))
+                }
+                Connections {
+                    target: ShadowController
+                    function onSettingsChanged() {
+                        const sizes = [512, 1024, 2048]
+                        spotShadowResPicker.currentIndex =
+                            Math.max(0, sizes.indexOf(ShadowController.spotShadowResolution))
+                    }
+                }
+            }
+
+            Row {
+                visible: ShadowController.qualityPreset > 0
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: qsTr("PSSM split λ")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 72
+                }
+                Slider {
+                    id: splitLambdaSlider
+                    width: parent.width - 96
+                    height: 22
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: ShadowController.splitLambda
+                    onMoved: ShadowController.splitLambda = value
+                    Connections {
+                        target: ShadowController
+                        function onSettingsChanged() {
+                            splitLambdaSlider.value = ShadowController.splitLambda
+                        }
+                    }
+                }
+                Text {
+                    width: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: ShadowController.splitLambda.toFixed(2)
+                }
+            }
+
+            Text {
+                visible: PropertiesPanelController.hasMeshInSelection
+                text: qsTr("Selection")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Row {
+                visible: PropertiesPanelController.hasMeshInSelection
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Receive shadows")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Receive shadows")
+                    tristate: true
+                    checkState: PropertiesPanelController.mixedReceiveShadows
+                        ? Qt.PartiallyChecked
+                        : (PropertiesPanelController.receiveShadows ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        const enabled = (checkState === Qt.Checked)
+                        if (PropertiesPanelController.receiveShadows !== enabled)
+                            PropertiesPanelController.receiveShadows = enabled
+                    }
+                }
+            }
+
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                text: qsTr("Light")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Row {
+                visible: LightPropertiesController.hasLightSelection
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Cast shadows")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Cast shadows")
+                    tristate: true
+                    checkState: LightPropertiesController.mixedCastShadows
+                        ? Qt.PartiallyChecked
+                        : (LightPropertiesController.castShadows ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        const enabled = (checkState === Qt.Checked)
+                        if (LightPropertiesController.castShadows !== enabled)
+                            LightPropertiesController.castShadows = enabled
+                    }
+                }
+            }
+
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                text: qsTr("Advanced shadow bias")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            Column {
+                visible: LightPropertiesController.hasLightSelection
+                spacing: 4
+                width: parent.width - 16
+                TransformField {
+                    width: parent.width
+                    labelWidth: 52
+                    inputWidth: 96
+                    label: "Depth"
+                    value: LightPropertiesController.mixedShadowDepthBias
+                        ? 0 : LightPropertiesController.shadowDepthBias
+                    color: "#808080"
+                    step: 0.00001
+                    decimals: 5
+                    onNewValue: function(val) { LightPropertiesController.shadowDepthBias = val }
+                }
+                TransformField {
+                    width: parent.width
+                    labelWidth: 52
+                    inputWidth: 96
+                    label: "Slope"
+                    value: LightPropertiesController.mixedShadowSlopeBias
+                        ? 0 : LightPropertiesController.shadowSlopeBias
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.shadowSlopeBias = val }
+                }
             }
         }
     }

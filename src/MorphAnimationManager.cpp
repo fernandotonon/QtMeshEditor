@@ -12,6 +12,7 @@ The MIT License
 
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
+#include "GamificationManager.h"
 #include "EditModeController.h"
 #include "EditableMesh.h"
 #include "SelectionSet.h"
@@ -636,6 +637,10 @@ bool MorphAnimationManager::addMorphTargetFromCurrentEdit(const QString& name)
     auto* undo = UndoManager::getSingleton();
     if (!undo) return false;
     undo->push(new AddMorphTargetCommand(entity, name, slices));
+
+    GamificationManager::noteOperation(
+        QStringLiteral("morph"),
+        {{QStringLiteral("targets_count"), morphTargetsForSelection().size()}});
 
     emit morphTargetsChanged();
     return true;

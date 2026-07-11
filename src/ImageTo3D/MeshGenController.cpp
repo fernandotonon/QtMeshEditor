@@ -1,12 +1,16 @@
 #include "MeshGenController.h"
 
+#include "GamificationManager.h"
+
 #include "MeshGenPredictor.h"
+#include "TripoSGPredictor.h"
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
 #include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
 #include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
+#include "ImageCaptioner.h"     // background SmolVLM caption of the picked image
 
 #include <OgreSceneNode.h>
 
@@ -17,6 +21,7 @@
 #include <QImage>
 #include <QCoreApplication>   // organizationName() — test-harness guard
 #include <QMetaObject>
+#include <QPointer>
 #include <QThread>
 
 #include <thread>
@@ -155,6 +160,51 @@ void MeshGenController::selectImage()
         QStringLiteral("MeshGenController selectImage %1").arg(QFileInfo(path).fileName()));
     emit selectedImageChanged();
     emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
+
+    // Caption the image in the BACKGROUND now, so it's ready by the time the
+    // (slow) mesh generation finishes and the AI texture pass needs it — no
+    // blocking the UI to caption. Shown under the thumbnail as it lands.
+    m_caption.clear();
+    startCaptioning(path);
+}
+
+void MeshGenController::startCaptioning(const QString& path)
+{
+    if (!ImageCaptioner::isAvailable() || path.isEmpty()) {
+        m_captioning = false;
+        emit captionChanged();
+        return;
+    }
+    m_captionForPath = path;
+    m_captioning = true;
+    emit captionChanged();
+
+    // Detached worker: ensure the model (first-use download) + caption, then
+    // marshal the result back to the main thread via a queued invocation.
+    QPointer<MeshGenController> self(this);
+    std::thread([self, path]() {
+        QString cap;
+        const QString model = ImageCaptioner::ensureModelBlocking();
+        if (!model.isEmpty()) {
+            QImage img(path);
+            if (!img.isNull())
+                cap = ImageCaptioner::caption(img);
+        }
+        if (!self) return;
+        QMetaObject::invokeMethod(self, "setCaptionResult", Qt::QueuedConnection,
+                                  Q_ARG(QString, cap), Q_ARG(QString, path));
+    }).detach();
+}
+
+void MeshGenController::setCaptionResult(const QString& caption, const QString& forPath)
+{
+    // Drop a stale result if the user picked a different image meanwhile.
+    if (forPath != m_captionForPath) return;
+    m_caption = caption;
+    m_captioning = false;
+    emit captionChanged();
+    if (!caption.isEmpty())
+        emit statusMessage(tr("Image described: \"%1\"").arg(caption));
 }
 
 void MeshGenController::generateSelected(int resolution, bool removeBackground,
@@ -216,6 +266,15 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
     const int  textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
+    // Backend: "triposr" (default, fast + textured) or "triposg" (rectified
+    // flow — higher-fidelity geometry, geometry-only, slower).
+    const bool useSG = options.value(QLatin1String("backend")).toString()
+                           .compare(QLatin1String("triposg"),
+                                    Qt::CaseInsensitive) == 0;
+    const int flowSteps = options.contains(QLatin1String("flow_steps"))
+        ? options.value(QLatin1String("flow_steps")).toInt() : 25;
+
+    GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
@@ -224,17 +283,39 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     setBusy(true);
     emit progress(QStringLiteral("prep"), 0, 1);
 
-    // Ensure models on the MAIN thread first — ensureModelBlocking() spins a local
-    // QEventLoop for the download, which must not run on the worker thread. Once
-    // present, the worker only reads the files (no event loop needed).
+    // Ensure the chosen backend's models on the MAIN thread first —
+    // ensureModelBlocking() spins a local QEventLoop for the download, which
+    // must not run on the worker thread. Once present, the worker only reads
+    // the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
-    const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(m_quality)) {
-        setBusy(false);
-        emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
-                      "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
-                      "the files in the ai_models/triposr/ cache."));
-        return;
+    if (useSG) {
+        // TripoSG always runs the fp32 DiT — the int8 tier is dropped
+        // (quantized geometry degrades to blobs; no ARM speed win).
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        if (enc.isEmpty()) {
+            setBusy(false);
+            emit error(tr("TripoSG models unavailable — they download on first "
+                          "use; if not hosted yet, set "
+                          "QTMESH_TRIPOSG_MODEL_BASE_URL or drop the files in "
+                          "the ai_models/triposg/ cache."));
+            return;
+        }
+        // TripoSG's colour bake queries TripoSR's image-conditioned colour
+        // field — ensure those models too (best-effort: if unavailable the
+        // predictor falls back to the clay look with a warning).
+        if (wantBake) {
+            emit statusMessage(tr("Checking colour model…"));
+            MeshGenPredictor::ensureModelBlocking(m_quality);
+        }
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(m_quality)) {
+            setBusy(false);
+            emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
+                          "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
+                          "the files in the ai_models/triposr/ cache."));
+            return;
+        }
     }
     if (removeBackground)
         BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
@@ -269,7 +350,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // connection so the GUI thread updates the bar.
     m_pending->worker = std::thread([this, image, res, rembg,
                                      wantSmooth, wantRefine, wantBake,
-                                     textureSize]() {
+                                     textureSize, useSG, flowSteps]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
                 Q_ARG(QString, stage), Q_ARG(int, done), Q_ARG(int, total));
@@ -279,7 +360,10 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // worker started), so this thread only reads files — no event loop
         // needed. (The encode stage is reported by the predictor itself.)
         QImage subject = image;
-        if (rembg) {
+        if (rembg && !useSG) {
+            // TripoSR path: composite over gray-128 (its training background).
+            // The TripoSG path leaves removal to the predictor dispatch, which
+            // composites over WHITE per its reference pipeline.
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
@@ -292,11 +376,17 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         MeshGenPredictor::Options opts;
         opts.sdfResolution   = res;
         opts.vertexColor     = true;
-        opts.removeBackground = false;   // already handled above
+        // TripoSR removal already ran above; TripoSG's white-background
+        // removal happens inside the predictor dispatch.
+        opts.removeBackground = rembg && useSG;
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
         opts.textureSize     = textureSize;
+        opts.backend         = useSG ? MeshGenPredictor::Backend::TripoSG
+                                     : MeshGenPredictor::Backend::TripoSR;
+        opts.flowSteps       = flowSteps;
+        opts.quality         = m_quality;
 
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
             Q_ARG(QString, tr("Reconstructing…")));
@@ -308,11 +398,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             if (total > 0) {
                 const char* name = nullptr;
                 switch (st) {
-                    case MeshGenPredictor::Stage::Encode: name = "encode"; break;
-                    case MeshGenPredictor::Stage::Decode: name = "decode"; break;
-                    case MeshGenPredictor::Stage::Refine: name = "refine"; break;
-                    case MeshGenPredictor::Stage::Bake:   name = "bake";   break;
-                    case MeshGenPredictor::Stage::Color:  name = "color";  break;
+                    case MeshGenPredictor::Stage::Encode:  name = "encode";  break;
+                    case MeshGenPredictor::Stage::Denoise: name = "denoise"; break;
+                    case MeshGenPredictor::Stage::Decode:  name = "decode";  break;
+                    case MeshGenPredictor::Stage::Refine:  name = "refine";  break;
+                    case MeshGenPredictor::Stage::Bake:    name = "bake";    break;
+                    case MeshGenPredictor::Stage::Color:   name = "color";   break;
                 }
                 if (name) post(QString::fromLatin1(name), done, total);
             }
@@ -387,6 +478,13 @@ void MeshGenController::buildOnMainThread()
         {"vertexCount", r.vertexCount},
         {"triangleCount", r.triangleCount},
     };
+    // Expose the built entity's name so QML can run a follow-up AI texture bake
+    // on it (the "Generate texture (AI)" option for the geometry-only TripoSG
+    // backend). The node has exactly one attached Entity.
+    if (node->numAttachedObjects() > 0) {
+        if (auto* obj = node->getAttachedObject(0))
+            out["entityName"] = QString::fromStdString(obj->getName());
+    }
     if (!r.warning.isEmpty()) out["warning"] = r.warning;
     emit statusMessage(!r.warning.isEmpty()
                            ? tr("Generated %1 verts, %2 tris (%3)")

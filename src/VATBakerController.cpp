@@ -10,6 +10,7 @@ The MIT License
 
 #include "VATBakerController.h"
 
+#include "GamificationManager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "VATBaker.h"
@@ -202,6 +203,12 @@ bool VATBakerController::bake(const QString& animationName,
             ? QStringLiteral("VAT bake ok: %1 frames × %2 vertices → %3")
                   .arg(result.frameCount).arg(result.vertexCount).arg(result.posTexPath)
             : QStringLiteral("VAT bake failed: %1").arg(result.error));
+
+    if (result.ok)
+        GamificationManager::noteOperation(
+            QStringLiteral("vat_bake"),
+            {{QStringLiteral("frames_baked"), result.frameCount},
+             {QStringLiteral("verts_baked"), result.vertexCount}});
 
     emit bakeFinished(result.ok, result.posTexPath, result.error);
     return true;

@@ -94,6 +94,7 @@ docs/*
 !docs/AUTO_UPDATER_DESIGN.md
 !docs/IMAGE_TO_3D_SPIKE_764.md
 !docs/IMAGE_TO_3D_QUALITY.md
+!docs/TRIPOSG_EXPORT_NOTES.md
 !docs/MESH_SEGMENTATION_STRATEGY.md
 
 # minisign — never commit secret keys
@@ -147,3 +148,9 @@ __pycache__/
 /monk_*.png
 /multiview_bake_*.png
 /multiview_bake_*i.png
+!docs/SKINNING_QUALITY.md
+!docs/img
+!docs/img/twist_bar_rest_lbs.png
+!docs/img/twist_bar_90_lbs.png
+!docs/img/twist_bar_90_lbs_vp.png
+!docs/img/twist_bar_90_dqs_vp.png

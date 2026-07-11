@@ -35,7 +35,8 @@ THE SOFTWARE.
 
 #define GIZMO_QUERY_FLAGS       0x01
 #define BONE_QUERY_FLAGS        0x02
-#define SCENE_QUERY_FLAGS       0xFC
+#define LIGHT_QUERY_FLAGS       0x04
+#define SCENE_QUERY_FLAGS       0xF8
 
 #define GUI_VISIBILITY_FLAGS    0x01
 #define SCENE_VISIBILITY_FLAGS  0xFE

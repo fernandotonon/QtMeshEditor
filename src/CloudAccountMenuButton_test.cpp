@@ -53,6 +53,12 @@ protected:
         QCoreApplication::setOrganizationName(QStringLiteral("QtMeshEditorTests"));
         QCoreApplication::setApplicationName(QStringLiteral("CloudAccountMenuButtonTest"));
         QSettings().clear();
+        // Mark the one-time legacy migration done so refresh() never probes
+        // the OS keychain from tests — on a dev machine with a real legacy
+        // session it would import the developer's token into the test scope
+        // (breaking every signed-out expectation) and can raise keychain
+        // prompts.
+        QSettings().setValue(AppSettingsKeys::cloudLegacyMigrationDone(), true);
         CloudCredentialStore::clearSession();
     }
 

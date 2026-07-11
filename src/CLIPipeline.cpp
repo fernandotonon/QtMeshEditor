@@ -1,8 +1,11 @@
 #include "CLIPipeline.h"
 #include "CloudCLIPipeline.h"
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "AlembicImporter.h"
+#include "SceneLightsIO.h"
+#include "SceneLightsCLI.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
 #include "MotionLibrary.h"
@@ -37,8 +40,10 @@
 #include "UvProject.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "SkinEvaluate.h"
 #include "AutoRig.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
 #include "MeshDecimator.h"
@@ -569,6 +574,16 @@ void CLIPipeline::printVersion()
     cliWrite(QString("qtmesh %1\n").arg(QTMESHEDITOR_VERSION));
 }
 
+void CLIPipeline::writeOutput(const QString& text)
+{
+    cliWrite(text);
+}
+
+void CLIPipeline::writeCliError(const QString& text)
+{
+    err() << text;
+}
+
 void CLIPipeline::printUsage()
 {
     cliWrite(
@@ -808,17 +823,34 @@ void CLIPipeline::printUsage()
         "  hdri [--list]                     List bundled HDRI catalog + on-disk status.\n"
         "  hdri --download <name>            Download one CC0 HDRI from Poly Haven into AppData/hdri/.\n"
         "  hdri --download-all               Download every downloadable catalog entry.\n"
+        "  light <file> --list [--json]      List scene lights (metadata / sidecar / Assimp fallback).\n"
+        "  light --list-rigs [--json]        List built-in light rig preset ids.\n"
+        "  light <file> --add directional|point|spot --pos x,y,z [--dir x,y,z]\n"
+        "                  [--colour #rrggbb] [--intensity N] -o <out>\n"
+        "  light <file> --remove <name> -o <out>\n"
+        "  light <file> --edit <name> [--intensity N] [--colour #rrggbb]\n"
+        "                  [--pos x,y,z] [--dir x,y,z] [--range N] [--enabled 0|1] -o <out>\n"
+        "  light <file> --apply-rig <rig_id> [--replace] -o <out>\n"
         "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
         "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
         "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
-        "  skin <file> [--max-influences N] [--falloff F] [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]\n"
-        "                                    Compute skin weights via inverse-distance heuristic (closest-point-on-\n"
-        "                                    bone smooth bind). Mesh must have a skeleton attached. Bones with no\n"
-        "                                    existing weights can be filtered with --skip-unweighted. --merge\n"
-        "                                    keeps existing weights instead of replacing them.\n"
+        "  skin <file> [--algo skintokens|geodesic-voxel|inverse-distance] [--max-influences N] [--falloff F]\n"
+        "              [--max-distance D] [--voxel-res N] [--smooth-iterations N] [--skip-unweighted] [--merge] -o <out> [--json]\n"
+        "                                    Compute skin weights. Default algo: skintokens (ML skinner, #819 —\n"
+        "                                    downloads ~2.3 GB models on first use; falls back to geodesic-voxel\n"
+        "                                    when models/ONNX are unavailable). Weights are Laplacian-smoothed + pruned\n"
+        "                                    (--smooth-iterations, 0 = off). Mesh must have a skeleton attached.\n"
+        "                                    --merge keeps existing weights instead of replacing them.\n"
+        "  skin <file> --evaluate [--voxel-res N] [--json]\n"
+        "                                    Skin-quality metrics on the EXISTING weights (#819): influence\n"
+        "                                    histogram, Laplacian smoothness energy, geodesic bleed fraction.\n"
+        "  skin <file> --compare <reference> [--json]\n"
+        "                                    Per-vertex weight diff vs a reference-skinned copy of the same asset\n"
+        "                                    (e.g. Mixamo) — vertices matched by position, bones by name. See\n"
+        "                                    docs/SKINNING_QUALITY.md for the comparison protocol.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -1475,6 +1507,12 @@ int CLIPipeline::run(int argc, char* argv[])
     // pollute the CLI pipeline output (JSON, info text, etc.)
     redirectStdout();
 
+    // --no-telemetry also suppresses gamification events at every call site
+    // for this process — without this, operation notes inside the subcommands
+    // would land in the persistent queue and flush on a later run (#796).
+    if (s_noTelemetry)
+        GamificationManager::setEmissionSuspended(true);
+
     // Telemetry: --no-telemetry permanently opts out.
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
@@ -1525,6 +1563,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "hdri") rc = cmdHdri(argc, argv);
+    else if (cmd == "light") rc = SceneLightsCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
@@ -1538,6 +1577,42 @@ int CLIPipeline::run(int argc, char* argv[])
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
         printUsage();
         rc = 2;
+    }
+
+    // Gamification discovery (#798): a successful subcommand counts as use of
+    // its feature cluster. Only queued/sent when the user enabled progress
+    // sync (consent, E-P6) and has a cloud session; --no-telemetry blocks it.
+    if (rc == 0 && !s_noTelemetry) {
+        static const QHash<QString, QString> cmdFeatureMap = {
+            {QStringLiteral("retopo"), QStringLiteral("retopo")},
+            {QStringLiteral("decimate"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("lod"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("optimize"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("vertex-cache"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("uv"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("skin"), QStringLiteral("skin_weights")},
+            {QStringLiteral("rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("anim"), QStringLiteral("animation_blend")},
+            {QStringLiteral("morph"), QStringLiteral("morph")},
+            {QStringLiteral("vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("bake-vertex-colors"), QStringLiteral("vertex_color_bake")},
+            {QStringLiteral("atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("atlas-apply"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("pack-textures"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("normal-from-height"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("isometric"), QStringLiteral("isometric_sprites")},
+            {QStringLiteral("turntable"), QStringLiteral("turntable")},
+            {QStringLiteral("scan"), QStringLiteral("cli_scan")},
+            {QStringLiteral("generate3d"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("material"), QStringLiteral("material_editor")},
+            {QStringLiteral("segment"), QStringLiteral("ai_assist")},
+        };
+        const QString feature = cmdFeatureMap.value(cmd);
+        if (!feature.isEmpty())
+            GamificationManager::noteFeature(feature, GamificationManager::Surface::Cli);
+        // One-shot process: flush whatever is queued (including operation
+        // events noted inside the subcommands) before _exit.
+        GamificationManager::instance()->flushBlocking(4000);
     }
 
     SentryReporter::finishTransaction(cliTxn);
@@ -1573,6 +1648,17 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.info", QString("Inspect .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
+
+    QJsonObject lightsPayload;
+    int lightsInFile = 0;
+    bool hasLightsInFile = false;
+    if (jsonOutput) {
+        QString lightError;
+        lightsPayload =
+            SceneLightsIO::lightsInfoJsonFromFile(fi.absoluteFilePath(), &lightError);
+        lightsInFile = lightsPayload.value(QStringLiteral("lightCount")).toInt();
+        hasLightsInFile = lightsInFile > 0;
+    }
 
     // Load the file; animation-only files produce no entity but populate animOnlySkeletons.
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
@@ -1617,6 +1703,12 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     }
 
     if (entities.isEmpty()) {
+        if (jsonOutput && hasLightsInFile) {
+            cliWrite(QString::fromUtf8(
+                QJsonDocument(lightsPayload).toJson(QJsonDocument::Indented)));
+            maybePrintCloudPromo(jsonOutput);
+            return 0;
+        }
         SentryReporter::captureMessage(QString("CLI info: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
@@ -1632,10 +1724,26 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             arr.append(doc.object());
         }
         // Single entity: emit object directly; multiple: emit array
-        if (arr.size() == 1)
-            cliWrite(QString::fromUtf8(QJsonDocument(arr[0].toObject()).toJson(QJsonDocument::Indented)));
-        else
-            cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)));
+        if (arr.size() == 1) {
+            QJsonObject root = arr[0].toObject();
+            if (hasLightsInFile) {
+                root.insert(QStringLiteral("lights"), lightsPayload.value(QStringLiteral("lights")));
+                root.insert(QStringLiteral("ambient"), lightsPayload.value(QStringLiteral("ambient")));
+                root.insert(QStringLiteral("lightCount"), lightsInFile);
+            }
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            if (hasLightsInFile) {
+                QJsonObject root;
+                root.insert(QStringLiteral("meshes"), arr);
+                root.insert(QStringLiteral("lights"), lightsPayload.value(QStringLiteral("lights")));
+                root.insert(QStringLiteral("ambient"), lightsPayload.value(QStringLiteral("ambient")));
+                root.insert(QStringLiteral("lightCount"), lightsInFile);
+                cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+            } else {
+                cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)));
+            }
+        }
     } else {
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());
@@ -1863,6 +1971,13 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     }
 
     cliWrite(report);
+    GamificationManager::noteOperation(
+        QStringLiteral("fix"),
+        {{QStringLiteral("verts_before"), static_cast<qint64>(vertsBefore)},
+         {QStringLiteral("verts_after"), static_cast<qint64>(vertsAfter)},
+         {QStringLiteral("tris_before"), static_cast<qint64>(trisBefore)},
+         {QStringLiteral("tris_after"), static_cast<qint64>(trisAfter)}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -6713,6 +6828,12 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     }
 
     emitDecimationReport(report, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("decimate_lod"),
+            {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+             {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
+            GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -7063,6 +7184,12 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
                             .arg(report.totalTrianglesBefore)
                             .arg(report.totalTrianglesAfter);
             s.details = MeshDecimator::toJson(report);
+            if (report.applied)
+                GamificationManager::noteOperation(
+                    QStringLiteral("optimize"),
+                    {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+                     {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
+                    GamificationManager::Surface::Cli);
             // Mirror cmdDecimate: when a positive reduction was asked for
             // but didn't apply, that's a hard error — the asset isn't
             // suitable for in-place reduction. Don't silently emit a
@@ -8743,13 +8870,21 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
         cliWrite(QuadRetopo::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("retopo"),
+        {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+         {QStringLiteral("tris_after"), report.totalTrianglesAfterRetopo},
+         {QStringLiteral("quad_ratio_after"), report.quadDominance()}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
 int CLIPipeline::cmdSkin(int argc, char* argv[])
 {
-    // Parse: skin <file> [--max-influences N] [--falloff F]
-    //        [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]
+    // Parse: skin <file> [--algo geodesic-voxel|inverse-distance|unirig]
+    //        [--max-influences N] [--falloff F] [--max-distance D]
+    //        [--voxel-res N] [--smooth-iterations N]
+    //        [--skip-unweighted] [--merge] -o <out> [--json]
     QString inputPath, outputPath;
     bool jsonOutput = false;
     int  maxInfluences = 4;
@@ -8757,6 +8892,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     double maxDistance = 0.5;
     bool skipUnweighted = false;
     bool replaceExisting = true;
+    QString algoName = QStringLiteral("skintokens");
+    int voxelRes = 64;
+    int smoothIterations = 3;
+    bool evaluateMode = false;      // #819 Slice E: metrics, no write
+    QString comparePath;            // #819 Slice E: reference-skin diff
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -8766,6 +8906,35 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         if (arg == "--merge") { replaceExisting = false; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--algo" && i + 1 < argc) {
+            algoName = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (algoName != "skintokens" && algoName != "geodesic-voxel"
+                && algoName != "inverse-distance"
+                && algoName != "unirig") {   // deprecated alias of skintokens
+                err() << "Error: --algo must be 'skintokens', "
+                         "'geodesic-voxel', or 'inverse-distance'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--voxel-res" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 8 || v > 256) {
+                err() << "Error: --voxel-res must be in [8, 256]." << Qt::endl;
+                return 2;
+            }
+            voxelRes = v; continue;
+        }
+        if (arg == "--smooth-iterations" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 0 || v > 50) {
+                err() << "Error: --smooth-iterations must be in [0, 50]." << Qt::endl;
+                return 2;
+            }
+            smoothIterations = v; continue;
         }
         if (arg == "--max-influences" && i + 1 < argc) {
             bool ok = false;
@@ -8794,6 +8963,10 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
             }
             maxDistance = v; continue;
         }
+        if (arg == "--evaluate") { evaluateMode = true; continue; }
+        if (arg == "--compare" && i + 1 < argc) {
+            comparePath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg; continue;
         }
@@ -8801,12 +8974,18 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh skin <file> [--max-influences N] [--falloff F] "
-                 "[--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]"
+        err() << "Usage: qtmesh skin <file> "
+                 "[--algo skintokens|geodesic-voxel|inverse-distance] "
+                 "[--max-influences N] [--falloff F] [--max-distance D] "
+                 "[--voxel-res N] [--smooth-iterations N] "
+                 "[--skip-unweighted] [--merge] -o <out> [--json]\n"
+                 "       qtmesh skin <file> --evaluate [--voxel-res N] [--json]\n"
+                 "       qtmesh skin <file> --compare <reference> [--json]"
               << Qt::endl;
         return 2;
     }
-    if (outputPath.isEmpty()) {
+    const bool analysisMode = evaluateMode || !comparePath.isEmpty();
+    if (outputPath.isEmpty() && !analysisMode) {
         err() << "Error: -o <output> required." << Qt::endl;
         return 2;
     }
@@ -8815,11 +8994,17 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     if (!fi.exists()) {
         err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
     }
+    if (!comparePath.isEmpty() && !QFileInfo::exists(comparePath)) {
+        err() << "Error: reference file not found: " << comparePath << Qt::endl;
+        return 1;
+    }
     if (!initOgreHeadless()) return 1;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
-        QString("skin .%1 maxInf=%2 falloff=%3")
-            .arg(fi.suffix()).arg(maxInfluences).arg(falloff));
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.skin.%1").arg(algoName),
+        QString("skin .%1 maxInf=%2 falloff=%3 voxelRes=%4 smooth=%5")
+            .arg(fi.suffix()).arg(maxInfluences).arg(falloff)
+            .arg(voxelRes).arg(smoothIterations));
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
@@ -8844,14 +9029,66 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     }
     Ogre::Entity* entity = meshEntities.first();
 
+    // ── #819 Slice E: metrics / reference-comparison modes ─────────
+    // Both analyse the EXISTING weights; nothing is written.
+    if (analysisMode) {
+        QJsonObject evalReport;
+        QString evalError;
+        if (!comparePath.isEmpty()) {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin.compare"),
+                QString("skin --compare .%1").arg(fi.suffix()));
+            // Import the reference into the same scene and diff the
+            // sets to find its entity.
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QString("Importing %1").arg(QFileInfo(comparePath).absoluteFilePath()));
+            MeshImporterExporter::importer(
+                {QFileInfo(comparePath).absoluteFilePath()});
+            Ogre::Entity* refEntity = nullptr;
+            for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+                if (e && e->getMovableType() == "Entity"
+                    && !meshEntities.contains(e)) {
+                    refEntity = e;
+                    break;
+                }
+            }
+            if (!refEntity) {
+                err() << "Error: failed to load reference " << comparePath
+                      << Qt::endl;
+                return 1;
+            }
+            evalReport = SkinEvaluate::compare(entity, refEntity, &evalError);
+        } else {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin.evaluate"),
+                QString("skin --evaluate .%1 voxelRes=%2")
+                    .arg(fi.suffix()).arg(voxelRes));
+            evalReport = SkinEvaluate::evaluate(entity, voxelRes, &evalError);
+        }
+        if (evalReport.isEmpty()) {
+            err() << "Error: " << (evalError.isEmpty()
+                    ? QStringLiteral("evaluation failed") : evalError)
+                  << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            cliWrite(QString::fromUtf8(
+                QJsonDocument(evalReport).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            cliWrite(SkinEvaluate::reportToText(evalReport));
+        }
+        return 0;
+    }
+
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluences;
     opts.falloff                = falloff;
     opts.maxInfluenceDistance   = maxDistance;
     opts.skipUnweightedBones    = skipUnweighted;
     opts.replaceExisting        = replaceExisting;
+    opts.voxelResolution        = voxelRes;
+    opts.smoothIterations       = smoothIterations;
 
-    const auto report = SkinWeights::computeAndApply(entity, opts);
+    const auto report = SkinWeights::computeAndApply(
+        entity, opts, SkinWeights::algorithmFromString(algoName));
     if (!report.applied) {
         err() << "Error: skin weights failed — " << report.error << Qt::endl;
         return 1;
@@ -8873,6 +9110,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         cliWrite(SkinWeights::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("skin_weights"),
+        {{QStringLiteral("verts_weighted"), report.totalVerticesProcessed},
+         {QStringLiteral("max_influences"), opts.maxInfluencesPerVertex}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -9016,6 +9258,11 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
                              : QString())
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("auto_rig"),
+        {{QStringLiteral("bones_created"), report.boneCount},
+         {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -9034,7 +9281,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
+    int flowSteps = 25;         // TripoSG rectified-flow steps
+    float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
+    MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -9047,6 +9297,43 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
+        if (arg == "--backend") {
+            if (i + 1 >= argc) {
+                err() << "Error: --backend requires triposr or triposg." << Qt::endl;
+                return 2;
+            }
+            const QString b = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (b == "triposr")      backend = MeshGenPredictor::Backend::TripoSR;
+            else if (b == "triposg") backend = MeshGenPredictor::Backend::TripoSG;
+            else { err() << "Error: --backend must be triposr or triposg." << Qt::endl; return 2; }
+            continue;
+        }
+        if (arg == "--flow-steps") {
+            if (i + 1 >= argc) {
+                err() << "Error: --flow-steps requires a value (e.g. 10, 25, 50)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            flowSteps = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            if (!okNum || flowSteps < 1 || flowSteps > 200) {
+                err() << "Error: --flow-steps must be an integer in [1..200]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--guidance") {
+            if (i + 1 >= argc) {
+                err() << "Error: --guidance requires a value (e.g. 7.0; 0 disables CFG)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            guidance = QString::fromLocal8Bit(argv[++i]).toFloat(&okNum);
+            if (!okNum || guidance < 0.0f || guidance > 30.0f) {
+                err() << "Error: --guidance must be in [0..30]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--texture-size") {
             if (i + 1 >= argc) {
                 err() << "Error: --texture-size requires a value (e.g. 512, 1024, 2048)." << Qt::endl;
@@ -9106,7 +9393,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
-                 "[--upscale-texture] [--no-pbr]"
+                 "[--upscale-texture] [--no-pbr] "
+                 "[--backend triposr|triposg] [--flow-steps 25] [--guidance 7.0]"
               << Qt::endl;
         return 2;
     }
@@ -9134,22 +9422,50 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: failed to read image: " << inputPath << Qt::endl; return 1;
     }
 
+    const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
-        QString("generate3d .%1 res=%2 color=%3")
-            .arg(fi.suffix()).arg(resolution).arg(vertexColor));
+        QString("generate3d .%1 res=%2 color=%3 backend=%4")
+            .arg(fi.suffix()).arg(resolution).arg(vertexColor)
+            .arg(useSG ? QStringLiteral("triposg") : QStringLiteral("triposr")));
 
-    // Download the model on first use (blocks; clear message when not hosted).
-    const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {
-        err() << "  (looked for models in: "
-              << QFileInfo(MeshGenPredictor::encoderModelPath(quality)).absolutePath()
-              << ")" << Qt::endl;
-        err() << "Error: TripoSR model unavailable. It downloads on first use from "
-                 "the QtMeshEditor models repo; if it is not hosted yet, export it "
-                 "with scripts/export-triposr-onnx.py and point "
-                 "QTMESH_TRIPOSR_MODEL_BASE_URL (or ai/triposrModelBaseUrl) at it, "
-                 "or drop the files in the ai_models/triposr/ cache." << Qt::endl;
-        return 1;
+    // Download the chosen backend's models on first use (blocks; clear
+    // message when not hosted).
+    if (useSG) {
+        if (quality == MeshGenPredictor::Quality::Int8)
+            err() << "Note: --quality int8 is not available for the triposg "
+                     "backend (the quantized DiT degrades geometry); using fp32."
+                  << Qt::endl;
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        if (enc.isEmpty()) {
+            err() << "  (looked for models in: "
+                  << QFileInfo(TripoSGPredictor::imageEncoderPath()).absolutePath()
+                  << ")" << Qt::endl;
+            err() << "Error: TripoSG models unavailable. They download on first use "
+                     "from the QtMeshEditor models repo; if not hosted yet, export "
+                     "them with scripts/export-triposg-onnx.py and point "
+                     "QTMESH_TRIPOSG_MODEL_BASE_URL (or ai/triposgModelBaseUrl) at "
+                     "them, or drop the files in the ai_models/triposg/ cache."
+                  << Qt::endl;
+            return 1;
+        }
+        // TripoSG's colour bake queries TripoSR's image-conditioned colour
+        // field — ensure those models too (best-effort: absent models fall
+        // back to the untextured clay result with a warning).
+        if (bake)
+            MeshGenPredictor::ensureModelBlocking(quality);
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {
+            err() << "  (looked for models in: "
+                  << QFileInfo(MeshGenPredictor::encoderModelPath(quality)).absolutePath()
+                  << ")" << Qt::endl;
+            err() << "Error: TripoSR model unavailable. It downloads on first use from "
+                     "the QtMeshEditor models repo; if it is not hosted yet, export it "
+                     "with scripts/export-triposr-onnx.py and point "
+                     "QTMESH_TRIPOSR_MODEL_BASE_URL (or ai/triposrModelBaseUrl) at it, "
+                     "or drop the files in the ai_models/triposr/ cache." << Qt::endl;
+            return 1;
+        }
     }
 
     if (!initOgreHeadless()) return 1;
@@ -9163,6 +9479,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.textureSize     = textureSize;
+    opts.backend         = backend;
+    opts.flowSteps       = flowSteps;
+    opts.guidanceScale   = guidance;
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);

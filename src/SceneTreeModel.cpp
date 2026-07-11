@@ -2,6 +2,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "GlobalDefinitions.h"
+#include "LightManager.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "SentryReporter.h"
@@ -53,6 +54,7 @@ QString SceneTreeItem::typeLabel() const
             return "Group";
         return "Node";
     }
+    case Light:     return "Light";
     case Entity:    return "Mesh";
     case SubEntity: return "Submesh";
     }
@@ -75,6 +77,12 @@ SceneTreeModel::SceneTreeModel(QObject* parent)
     connect(Manager::getSingleton(), &Manager::sceneNodeCreated, this, scheduleRebuild);
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, scheduleRebuild);
     connect(Manager::getSingleton(), &Manager::entityCreated, this, scheduleRebuild);
+    if (auto* lights = LightManager::getSingletonPtr())
+    {
+        connect(lights, &LightManager::lightCreated, this, scheduleRebuild);
+        connect(lights, &LightManager::lightDeleted, this, scheduleRebuild);
+        connect(lights, &LightManager::lightChanged, this, scheduleRebuild);
+    }
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged, this, &SceneTreeModel::updateSelection);
     // The user wants the material picker to refresh on selection change too, so
     // a freshly-selected entity's materials are immediately offered.
@@ -126,7 +134,11 @@ void SceneTreeModel::buildChildren(Ogre::SceneNode* sceneNode, SceneTreeItem* pa
          || name == "BevelGizmo_Handle")
             continue;
 
-        auto* nodeItem = new SceneTreeItem(name, SceneTreeItem::Node, childNode, parentItem);
+        auto* nodeItem = new SceneTreeItem(
+            name,
+            LightManager::sceneNodeIsUserLight(childNode) ? SceneTreeItem::Light : SceneTreeItem::Node,
+            childNode,
+            parentItem);
         parentItem->appendChild(nodeItem);
 
         // Add entities
@@ -216,6 +228,7 @@ QVariant SceneTreeModel::data(const QModelIndex& index, int role) const
         auto* sel = SelectionSet::getSingleton();
         switch (item->type()) {
         case SceneTreeItem::Node:
+        case SceneTreeItem::Light:
             return sel->contains(static_cast<Ogre::SceneNode*>(item->ogrePtr()));
         case SceneTreeItem::Entity:
             return sel->contains(static_cast<Ogre::Entity*>(item->ogrePtr()));
@@ -276,7 +289,8 @@ void SceneTreeModel::selectItem(int row, const QModelIndex& parentIndex, bool mu
         sel->clear();
 
     switch (item->type()) {
-    case SceneTreeItem::Node: {
+    case SceneTreeItem::Node:
+    case SceneTreeItem::Light: {
         auto* node = static_cast<Ogre::SceneNode*>(item->ogrePtr());
         if (multiSelect && sel->contains(node))
             sel->removeOne(node);

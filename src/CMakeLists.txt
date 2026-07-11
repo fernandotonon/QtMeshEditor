@@ -34,6 +34,16 @@ PrimitiveObject.cpp
 ViewportGrid.cpp
 AnimationWidget.cpp
 SelectionSet.cpp
+LightManager.cpp
+LightRigLibrary.cpp
+LightLinking.cpp
+LightVisualizer.cpp
+LightsController.cpp
+LightPropertiesController.cpp
+SceneLightingController.cpp
+ShadowController.cpp
+SceneLightsIO.cpp
+SceneLightsCLI.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
 MaterialComboDelegate.cpp
@@ -60,6 +70,7 @@ UndoManager.cpp
 SubMeshTransform.cpp
 SubEntityHighlight.cpp
 commands/TransformCommands.cpp
+commands/LightCommands.cpp
 commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
 commands/SetKeyframeValueCommand.cpp
@@ -98,6 +109,12 @@ UVTransform.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
+SkinWeightsPost.cpp
+GeodesicVoxelBind.cpp
+SkinningDisplay.cpp
+SkinMetrics.cpp
+SkinEvaluate.cpp
+SkinTokensPredictor.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
@@ -144,9 +161,11 @@ ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
+ImageTo3D/TripoSGPredictor.cpp
 ImageTo3D/MeshGenBuilder.cpp
 ImageTo3D/MeshGenController.cpp
 ImageTo3D/BackgroundRemover.cpp
+ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
@@ -169,6 +188,10 @@ CloudAccountMenuButton.cpp
 DependencyResolver.cpp
 ProjectPackager.cpp
 QtMeshCloudSession.cpp
+GamificationTypes.cpp
+GamificationEventQueue.cpp
+GamificationManager.cpp
+GamificationToast.cpp
 CloudUploadDialog.cpp
 CloudProjectsController.cpp
 CloudDeepLink.cpp
@@ -226,6 +249,14 @@ ViewportGrid.h
 ViewportSettingsKeys.h
 AnimationWidget.h
 SelectionSet.h
+LightManager.h
+LightRigLibrary.h
+LightVisualizer.h
+LightsController.h
+LightPropertiesController.h
+SceneLightingController.h
+ShadowController.h
+SceneLightsIO.h
 SelectionBoxObject.h
 ObjectItemModel.h
 MaterialComboDelegate.h
@@ -251,6 +282,7 @@ UndoManager.h
 SubMeshTransform.h
 SubEntityHighlight.h
 commands/TransformCommands.h
+commands/LightCommands.h
 commands/ApplyMaterialCommand.h
 PropertiesPanelController.h
 SceneTreeModel.h
@@ -271,6 +303,12 @@ commands/UvSeamCommands.h
 QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
+SkinWeightsPost.h
+GeodesicVoxelBind.h
+SkinningDisplay.h
+SkinMetrics.h
+SkinEvaluate.h
+SkinTokensPredictor.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h
@@ -310,6 +348,10 @@ CloudUploadPlanner.h
 DependencyResolver.h
 ProjectPackager.h
 QtMeshCloudSession.h
+GamificationTypes.h
+GamificationEventQueue.h
+GamificationManager.h
+GamificationToast.h
 CloudUploadDialog.h
 CloudProjectsController.h
 CloudDeepLink.h
@@ -639,9 +681,20 @@ elseif(WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME} advapi32)
 endif()
 
+# Debug macro, scoped to OUR target only (never the FetchContent deps — see
+# the QTMESH_DEFINE_DEBUG note in the top-level CMakeLists).
+if(QTMESH_DEFINE_DEBUG)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE DEBUG)
+endif()
+
 # Link llama.cpp if enabled
 if(ENABLE_LOCAL_LLM)
     target_link_libraries(${CMAKE_PROJECT_NAME} llama ggml)
+    # mtmd = multimodal (image captioning via SmolVLM, #764). Not on Win-MinGW
+    # (its llama-tools CLIs don't link there); ImageCaptioner degrades gracefully.
+    if(QTMESH_HAVE_MTMD)
+        target_link_libraries(${CMAKE_PROJECT_NAME} mtmd)
+    endif()
     if(APPLE)
         target_link_libraries(${CMAKE_PROJECT_NAME}
             "-framework Metal"
@@ -752,6 +805,10 @@ if(BUILD_TESTS)
     )
     target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    # Debug macro, scoped to the test target only (not FetchContent deps).
+    if(QTMESH_DEFINE_DEBUG)
+        target_compile_definitions(UnitTests PRIVATE DEBUG)
+    endif()
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests
@@ -785,9 +842,12 @@ if(BUILD_TESTS)
         target_link_libraries(UnitTests advapi32)
     endif()
 
-    # Link llama.cpp for tests if enabled
+    # Link llama.cpp for tests if enabled (mtmd for the captioner where present)
     if(ENABLE_LOCAL_LLM)
         target_link_libraries(UnitTests llama ggml)
+        if(QTMESH_HAVE_MTMD)
+            target_link_libraries(UnitTests mtmd)
+        endif()
     endif()
 
     # Link stable-diffusion.cpp for tests if enabled

@@ -1,4 +1,5 @@
 #include "LLMManager.h"
+#include "GamificationManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
 #include <QDebug>
@@ -475,6 +476,8 @@ void LLMManager::generateMaterial(const QString &prompt, const QString &currentM
         emit generationError("No model loaded. Please load a model first.");
         return;
     }
+
+    GamificationManager::noteFeature(QStringLiteral("ai_assist"));
 
     // LCOV_EXCL_START — requires a loaded LLM model
     // Store for potential retry

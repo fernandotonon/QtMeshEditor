@@ -19,6 +19,7 @@
 #include <OgreMaterialManager.h>
 #include <OgreRTShaderSystem.h>
 #include "CLIPipeline.h"
+#include "SceneLightsCLI.h"
 #include "ModelTurntableRenderer.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
@@ -3265,6 +3266,38 @@ TEST(CLIPipelineCmdHdri, ListCatalogExitsZero)
 {
     TestArgv args({"qtmesh", "hdri", "--list"});
     EXPECT_EQ(CLIPipeline::cmdHdri(args.argc(), args.argv()), 0);
+}
+
+// -- qtmesh light (Slice H, #490) --
+
+TEST(CLIPipelineCmdLight, ListRigsExitsZero)
+{
+    TestArgv args({"qtmesh", "light", "--list-rigs"});
+    EXPECT_EQ(SceneLightsCLI::run(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdLight, ListRigsJsonExitsZero)
+{
+    TestArgv args({"qtmesh", "light", "--list-rigs", "--json"});
+    EXPECT_EQ(SceneLightsCLI::run(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdLight, HelpExitsZero)
+{
+    TestArgv args({"qtmesh", "light", "--help"});
+    EXPECT_EQ(SceneLightsCLI::run(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdLight, MissingInputUsageError)
+{
+    TestArgv args({"qtmesh", "light", "--add", "point", "-o", "/tmp/out.gltf"});
+    EXPECT_EQ(SceneLightsCLI::run(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdLight, ListMissingFileFails)
+{
+    TestArgv args({"qtmesh", "light", "/tmp/nonexistent_cli_light_test.gltf", "--list"});
+    EXPECT_EQ(SceneLightsCLI::run(args.argc(), args.argv()), 1);
 }
 
 TEST(CLIPipelineCmdHdri, HelpExitsZero)

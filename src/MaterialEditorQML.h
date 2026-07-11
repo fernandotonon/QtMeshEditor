@@ -606,7 +606,9 @@ public slots:
     Q_INVOKABLE void generateMeshTextureMultiView(const QString &prompt,
                                                   int width = 0, int height = 0,
                                                   double controlStrength = 0.9,
-                                                  const QStringList &views = {});
+                                                  const QStringList &views = {},
+                                                  const QString &frontPhotoPath = {},
+                                                  bool generatePbr = false);
     // True when a skinned/static mesh is selected — drives the
     // "use selected mesh" checkbox enabled state.
     Q_INVOKABLE bool hasSelectedMesh() const;
@@ -914,6 +916,12 @@ private:
     // two never interfere. Implemented in the .cpp (sd-guarded).
     struct MultiViewBakeState;
     std::unique_ptr<MultiViewBakeState> m_multiViewBake;
+    // Decimate-to-budget + degenerate-clean + xatlas UV0 unwrap of a
+    // geometry-only mesh, done ONCE up front (before the depth renders / SD
+    // views) so every view + the final bake use the same final mesh, and the
+    // ~2s unwrap doesn't sit after the multi-minute SD passes looking hung.
+    // Returns false (with an emitted error) if unwrap can't produce UV0.
+    bool prepareMeshForTexturing(Ogre::Entity* entity);
     void startNextMultiViewGeneration();   // issue depth+generate for the current view
     void finishMultiViewBake();            // bake accumulated images + apply
 

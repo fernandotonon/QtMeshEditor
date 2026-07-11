@@ -48,6 +48,8 @@
 #include "AppConsoleLog.h"
 #include "AppSettingsKeys.h"
 #include "CloudAccountMenuButton.h"
+#include "GamificationManager.h"
+#include "GamificationToast.h"
 #include "CloudCredentialStore.h"
 #include "CloudDeepLink.h"
 #include "AppLaunchHandler.h"
@@ -65,6 +67,7 @@
 #include "OgreRenderTargetUtil.h"
 #include "QtInputManager.h"
 #include "Manager.h"
+#include "LightManager.h"
 #include <OgreCamera.h>
 
 #include "material.h"
@@ -85,6 +88,7 @@
 #include "MCPSettingsDialog.h"
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
+#include "LightVisualizer.h"
 #include "MeshInfoOverlay.h"
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
@@ -112,6 +116,11 @@
 #include "UVEditorController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "LightsController.h"
+#include "LightRigLibrary.h"
+#include "SceneLightingController.h"
+#include "ShadowController.h"
+#include "LightPropertiesController.h"
 #include "AutoRigController.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
@@ -133,6 +142,7 @@
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QToolButton>
 #include <QStyle>
 #include <QMenu>
@@ -378,23 +388,46 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(m_pTimer, &QTimer::timeout, this, [this](){
         if(m_pRoot && m_pRoot->getRenderSystem())
         {
+            // A transient render exception must NOT kill the render loop for
+            // the rest of the session (a permanently frozen viewport looks
+            // like an app hang). Skip the bad frame and keep going; only give
+            // up after many CONSECUTIVE failures (a persistent error would
+            // otherwise spam at timer frequency).
+            static int consecutiveRenderFailures = 0;
+            constexpr int kMaxConsecutiveRenderFailures = 300;
+            const auto onRenderError = [this](const QString& what) {
+                ++consecutiveRenderFailures;
+                if (consecutiveRenderFailures == 1) {
+                    fprintf(stderr, "RENDER ERROR: %s\n", qPrintable(what));
+                    SentryReporter::captureMessage(
+                        QString("Render error: %1").arg(what), "error");
+                    statusBar()->showMessage(
+                        tr("Render error (frame skipped): %1").arg(what), 15000);
+                }
+                if (consecutiveRenderFailures >= kMaxConsecutiveRenderFailures) {
+                    fprintf(stderr, "RENDER ERROR: %d consecutive failures — "
+                                    "stopping the render loop\n",
+                            consecutiveRenderFailures);
+                    SentryReporter::captureMessage(
+                        QString("Render loop stopped after %1 consecutive "
+                                "failures: %2")
+                            .arg(consecutiveRenderFailures).arg(what), "error");
+                    statusBar()->showMessage(
+                        tr("Rendering stopped — persistent render error: %1")
+                            .arg(what));
+                    if (m_pTimer) m_pTimer->stop();
+                }
+            };
             try {
                 OgreRenderTargetUtil::restoreEditorRenderTarget();
                 m_pRoot->renderOneFrame();
+                consecutiveRenderFailures = 0;
             } catch (Ogre::Exception& e) {
-                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
-                SentryReporter::captureMessage(
-                    QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QString::fromStdString(e.getFullDescription()));
             } catch (std::exception& e) {
-                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
-                SentryReporter::captureMessage(
-                    QString("Render error (std): %1").arg(e.what()), "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QString::fromUtf8(e.what()));
             } catch (...) {
-                fprintf(stderr, "RENDER ERROR (unknown)\n");
-                SentryReporter::captureMessage("Render error (unknown)", "error");
-                if(m_pTimer) m_pTimer->stop();
+                onRenderError(QStringLiteral("unknown exception"));
             }
         }
     });
@@ -456,6 +489,8 @@ MainWindow::~MainWindow()
     m_meshInfoOverlay = nullptr;
     delete m_normalVisualizer;
     m_normalVisualizer = nullptr;
+    delete m_lightVisualizer;
+    m_lightVisualizer = nullptr;
 
     // Stop MCP server if running
     if (m_mcpServer) {
@@ -535,6 +570,9 @@ MainWindow::~MainWindow()
         UVEditorController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        LightsController::kill();
+        LightPropertiesController::kill();
+        SceneLightingController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
         MeshDepthRenderer::shutdown();
@@ -542,10 +580,13 @@ MainWindow::~MainWindow()
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
         if (manager->getMainWindow() == this)
             Manager::kill();
+    } else {
+        ShadowController::kill();
     }
 }
 
@@ -720,6 +761,26 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<LightsController>(
+            "PropertiesPanel", 1, 0, "LightsController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LightsController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<LightPropertiesController>(
+            "PropertiesPanel", 1, 0, "LightPropertiesController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LightPropertiesController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<SceneLightingController>(
+            "PropertiesPanel", 1, 0, "SceneLightingController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return SceneLightingController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ShadowController>(
+            "PropertiesPanel", 1, 0, "ShadowController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ShadowController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<AutoRigController>(
             "PropertiesPanel", 1, 0, "AutoRigController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -770,6 +831,14 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return WelcomeScreenController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<GamificationManager>("WelcomeScreen", 1, 0, "GamificationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return GamificationManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<GamificationManager>("PropertiesPanel", 1, 0, "GamificationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return GamificationManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -893,6 +962,12 @@ void MainWindow::initToolBar()
 #endif
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+        if (m_propertiesPanel->status() != QQuickWidget::Ready)
+        {
+            const auto errors = m_propertiesPanel->errors();
+            for (const QQmlError& error : errors)
+                qWarning() << "PropertiesPanel QML:" << error.toString();
+        }
         if (auto* root = m_propertiesPanel->rootObject()) {
             root->setProperty("bottomToolHost",
                               QVariant::fromValue(static_cast<QObject*>(this)));
@@ -1257,6 +1332,75 @@ void MainWindow::initToolBar()
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     QAction* addPrimitiveAction = ui->objectsToolbar->addWidget(addPrimitiveButton);
     addPrimitiveAction->setObjectName("modeObjectPrimitiveAction");
+
+    auto addLightButton = new QToolButton(ui->objectsToolbar);
+    addLightButton->setText(QStringLiteral("\u2600"));
+    addLightButton->setToolTip(tr("Add Light"));
+    addLightButton->setPopupMode(QToolButton::InstantPopup);
+    QFont lightFont = addLightButton->font();
+    lightFont.setPixelSize(15);
+    addLightButton->setFont(lightFont);
+    addLightButton->setStyleSheet(QStringLiteral(
+        "QToolButton { color: #6cdc6c; border: none; padding: 2px 4px; }"
+        "QToolButton:hover:enabled { color: #8cef8c; }"
+        "QToolButton:pressed:enabled { color: #4cb84c; }"
+        "QToolButton:disabled { color: #b8b8b8; }"));
+
+    auto addLightMenu = new QMenu(addLightButton);
+    auto addDirectional = addLightMenu->addAction(tr("Directional Light"));
+    auto addPoint = addLightMenu->addAction(tr("Point Light"));
+    auto addSpot = addLightMenu->addAction(tr("Spot Light"));
+    addLightMenu->addSeparator();
+    auto addDirectionalViewport = addLightMenu->addAction(tr("Directional at Viewport Center"));
+    auto addPointViewport = addLightMenu->addAction(tr("Point at Viewport Center"));
+    auto addSpotViewport = addLightMenu->addAction(tr("Spot at Viewport Center"));
+
+    connect(addDirectional, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add directional light"));
+        LightsController::instance()->addDirectionalLight();
+    });
+    connect(addPoint, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add point light"));
+        LightsController::instance()->addPointLight();
+    });
+    connect(addSpot, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add spot light"));
+        LightsController::instance()->addSpotLight();
+    });
+    connect(addDirectionalViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add directional light at viewport"));
+        LightsController::instance()->addDirectionalLightAtViewport();
+    });
+    connect(addPointViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add point light at viewport"));
+        LightsController::instance()->addPointLightAtViewport();
+    });
+    connect(addSpotViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add spot light at viewport"));
+        LightsController::instance()->addSpotLightAtViewport();
+    });
+    addLightMenu->addSeparator();
+    QMenu* presetRigMenu = addLightMenu->addMenu(tr("Preset Rig…"));
+    for (const QString& rigId : LightRigLibrary::rigIds())
+    {
+        QAction* rigAction = presetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
+        connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ui.action"),
+                QStringLiteral("Apply preset rig from toolbar: %1").arg(rigId));
+            SceneLightingController::instance()->applyRig(rigId, true);
+        });
+    }
+
+    addLightButton->setMenu(addLightMenu);
+    QAction* addLightAction = ui->objectsToolbar->addWidget(addLightButton);
+    addLightAction->setObjectName("modeObjectLightAction");
 
     // Topology tools — toolbar shortcuts for Extrude / Bevel. They
     // delegate to the same EditModeController actions the Inspector
@@ -2345,6 +2489,14 @@ void MainWindow::initToolBar()
     m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
 
+    // viewport light icons + helper gizmos (Slice D #486)
+    m_lightVisualizer = new LightVisualizer(Manager::getSingleton()->getSceneMgr(), this);
+    connect(ui->actionShow_Light_Icons, &QAction::toggled, m_lightVisualizer, &LightVisualizer::setIconsVisible);
+    connect(ui->actionShow_Selected_Light_Gizmo_Only,
+            &QAction::toggled,
+            m_lightVisualizer,
+            &LightVisualizer::setSelectedGizmosOnly);
+
     // Sub-entity selection highlight (auto-connects to SelectionSet signals)
     SubEntityHighlight::getSingleton();
 
@@ -2510,6 +2662,41 @@ void MainWindow::initToolBar()
     }
 
     // AI Settings menu
+    QMenu* sceneMenu = menuBar()->addMenu(tr("&Scene"));
+    sceneMenu->setObjectName("menuScene");
+    QMenu* addLightSceneMenu = sceneMenu->addMenu(tr("Add Light"));
+    addLightSceneMenu->addAction(tr("Directional Light"), this, []() {
+        LightsController::instance()->addDirectionalLight();
+    });
+    addLightSceneMenu->addAction(tr("Point Light"), this, []() {
+        LightsController::instance()->addPointLight();
+    });
+    addLightSceneMenu->addAction(tr("Spot Light"), this, []() {
+        LightsController::instance()->addSpotLight();
+    });
+    addLightSceneMenu->addSeparator();
+    addLightSceneMenu->addAction(tr("Directional at Viewport Center"), this, []() {
+        LightsController::instance()->addDirectionalLightAtViewport();
+    });
+    addLightSceneMenu->addAction(tr("Point at Viewport Center"), this, []() {
+        LightsController::instance()->addPointLightAtViewport();
+    });
+    addLightSceneMenu->addAction(tr("Spot at Viewport Center"), this, []() {
+        LightsController::instance()->addSpotLightAtViewport();
+    });
+    addLightSceneMenu->addSeparator();
+    QMenu* scenePresetRigMenu = addLightSceneMenu->addMenu(tr("Preset Rig…"));
+    for (const QString& rigId : LightRigLibrary::rigIds())
+    {
+        QAction* rigAction = scenePresetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
+        connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ui.action"),
+                QStringLiteral("Apply preset rig from menu: %1").arg(rigId));
+            SceneLightingController::instance()->applyRig(rigId, true);
+        });
+    }
+
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     aiMenu->setObjectName("menuAI");
     QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
@@ -2671,10 +2858,46 @@ void MainWindow::setupCloudAccountStatusControl()
     cloudAction->setObjectName(QStringLiteral("modeAnyCloudAccountAction"));
     updateCloudAuthActions();
     updateCloudUploadActionState();
+
+    // Gamification (#796): one restrained toast on unlock, and the one-time
+    // non-blocking consent prompt the first time an event would be recorded.
+    auto* gamify = GamificationManager::instance();
+    connect(gamify, &GamificationManager::achievementsUnlocked, this,
+            [this](const QVariantList& achievements) {
+                GamificationToast::showAchievements(this, achievements);
+            });
+    connect(gamify, &GamificationManager::statsChanged, this, [this]() {
+        if (m_cloudAccountControl)
+            m_cloudAccountControl->refresh();
+    });
+    connect(gamify, &GamificationManager::consentPromptRequested, this, [this]() {
+        auto* prompt = new QMessageBox(this);
+        prompt->setAttribute(Qt::WA_DeleteOnClose);
+        prompt->setWindowModality(Qt::NonModal);
+        prompt->setIcon(QMessageBox::Question);
+        prompt->setWindowTitle(tr("Sync your QtMesh progress?"));
+        prompt->setText(tr("Track the tools you discover and your editing milestones "
+                           "on your QtMesh Cloud profile?"));
+        prompt->setInformativeText(tr(
+            "Only feature names, counts and numeric before/after metrics are sent — "
+            "never your models, textures or file names. You can change this anytime "
+            "in Preferences."));
+        QPushButton* enable = prompt->addButton(tr("Enable sync"), QMessageBox::AcceptRole);
+        prompt->addButton(tr("Not now"), QMessageBox::RejectRole);
+        connect(prompt, &QMessageBox::finished, this, [prompt, enable]() {
+            auto* gamify = GamificationManager::instance();
+            if (prompt->clickedButton() == enable)
+                gamify->acceptConsent();
+            else
+                gamify->declineConsent();
+        });
+        prompt->show();
+    });
 }
 
 void MainWindow::updateCloudAuthActions()
 {
+    GamificationManager::instance()->handleSessionChanged();
     if (m_cloudAccountControl)
         m_cloudAccountControl->refresh();
     updateCloudUploadActionState();
@@ -3160,6 +3383,7 @@ void MainWindow::startCloudPackageUpload(QtMeshCloudSession* session,
 
                 m_cloudUploadProgress->finish(true, tr("Upload complete"));
                 statusBar()->showMessage(tr("Uploaded to QtMesh Cloud."), 5000);
+                GamificationManager::noteFeature(QStringLiteral("cloud_upload"));
 
                 QMessageBox done(this);
                 if (!error.isEmpty()) {
@@ -3597,6 +3821,24 @@ void MainWindow::duplicateSelected()
     if (!sel || sel->getNodesCount() == 0) return;
 
     QList<Ogre::SceneNode*> sources = sel->getNodesSelectionList();
+  if (!sources.isEmpty())
+  {
+    bool allLights = true;
+    for (Ogre::SceneNode* src : sources)
+    {
+      if (!LightManager::sceneNodeIsUserLight(src))
+      {
+        allLights = false;
+        break;
+      }
+    }
+    if (allLights)
+    {
+      LightsController::instance()->duplicateSelectedLights();
+      return;
+    }
+  }
+
     QList<Ogre::SceneNode*> clones;
 
     for (Ogre::SceneNode* src : sources) {
@@ -4700,9 +4942,9 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
                 HdrEnvironmentController::instance()->setActiveWidget(widget);
             });
 
-    if(!mDockWidgetList.isEmpty())
+    if (!mDockWidgetList.isEmpty())
     {
-        QColor c =  mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
+        QColor c = mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
         pOgreViewport->getOgreWidget()->setBackgroundColor(c);
     }
 

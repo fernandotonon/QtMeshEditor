@@ -9,13 +9,15 @@ Row {
     property color color: "#c04040"
     property real step: 0.1
     property int decimals: step >= 1 ? 0 : 3
+    property int labelWidth: 16
+    property int inputWidth: -1
     signal newValue(real val)
 
     spacing: 2
     width: (parent ? parent.width : 180) / 3 - 3
 
     Rectangle {
-        width: 16
+        width: root.labelWidth
         height: 22
         color: root.color
         radius: 2
@@ -31,7 +33,9 @@ Row {
 
     Rectangle {
         id: inputBg
-        width: parent.width - 18
+        width: root.inputWidth >= 0
+            ? root.inputWidth
+            : Math.max(0, parent.width - root.labelWidth - root.spacing)
         height: 22
         color: PropertiesPanelController.inputColor
         border.color: input.activeFocus ? root.color : PropertiesPanelController.borderColor

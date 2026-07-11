@@ -1,4 +1,5 @@
 #include "MaterialEditorQML.h"
+#include "GamificationManager.h"
 #include "HDR/HdrMaterialScript.h"
 #include "MaterialPreviewRenderer.h"
 #include "Manager.h"
@@ -8,6 +9,11 @@
 #include "MeshDepthRenderer.h"
 #include "MultiViewTextureBaker.h"
 #include "TexturePaintBuffer.h"
+#include "ImageTo3D/BackgroundRemover.h"
+#include "ImageTo3D/ImageCaptioner.h"
+#include "UvUnwrap.h"
+#include "EditableMesh.h"
+#include "MeshDecimator.h"   // cap the texture-path mesh before unwrap
 #include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -353,6 +359,7 @@ static void wirePbrSlotsForFFP(Ogre::Material* mat)
 bool MaterialEditorQML::applyMaterial()
 {
     SentryReporter::addBreadcrumb("ui.material", "Apply material");
+    GamificationManager::noteFeature(QStringLiteral("material_editor"));
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
         const QString scriptForOgre = HdrMaterialScript::stripEnvironmentLines(m_materialText);
@@ -3558,6 +3565,8 @@ QString MaterialEditorQML::packTextureChannels(const QString& redPath,
     spec.includeAlpha    = includeAlpha;
 
     auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    if (r.ok)
+        GamificationManager::noteFeature(QStringLiteral("texture_atlas"));
     return r.ok ? QString() : r.error;
 }
 
@@ -3626,6 +3635,9 @@ QString MaterialEditorQML::generateNormalMap(const QString& sourcePath,
     spec.invertG = invertG;
 
     auto r = NormalMapGenerator::generateToFile(spec, outputPath);
+    if (r.ok)
+        GamificationManager::noteOperation(QStringLiteral("pbr_synth"),
+                                           {{QStringLiteral("maps_generated"), 1}});
     return r.ok ? QString() : r.error;
 }
 
@@ -3735,6 +3747,10 @@ QString MaterialEditorQML::packAtlas(const QStringList& sourcePaths,
     if (!r.ok) return r.error;
     SentryReporter::addBreadcrumb("file.export",
         QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outputPath).fileName()));
+    GamificationManager::noteOperation(
+        QStringLiteral("texture_atlas"),
+        {{QStringLiteral("textures_packed"), static_cast<int>(r.tiles.size())},
+         {QStringLiteral("atlas_size"), atlasWidth}});
 
     if (!manifestPath.isEmpty()) {
         const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
@@ -4560,6 +4576,10 @@ struct MaterialEditorQML::MultiViewBakeState {
     std::vector<MeshDepthRenderer::View> views;   // resolved camera views
     std::vector<MultiViewTextureBaker::View> baked; // accumulated image+matrices
     size_t current = 0;                            // index of the view being generated
+    // Synthesize + bind #404 PBR maps (normal + roughness) FROM the freshly
+    // baked atlas after the bake applies it — so the maps match the final
+    // (AI) diffuse, not a throwaway one. Set by the generate3d GUI flow.
+    bool    generatePbrAfter = false;
 };
 
 namespace {
@@ -4573,17 +4593,44 @@ MeshDepthRenderer::View resolveDepthView(const QString& name)
     if (n == "bottom") return MeshDepthRenderer::bottom();
     return MeshDepthRenderer::front();
 }
+
+// True if every submesh of the entity's mesh exposes a UV0 (TEXCOORD 0) in
+// whichever vertex data it uses. The multi-view baker projects onto an
+// EXISTING UV0 atlas, so a UV-less mesh (e.g. a geometry-only TripoSG result)
+// must be unwrapped first.
+bool entityHasUv0(Ogre::Entity* entity)
+{
+    if (!entity || !entity->getMesh()) return false;
+    const Ogre::MeshPtr& mesh = entity->getMesh();
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        const Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        const Ogre::VertexData* vd = sm->useSharedVertices
+            ? mesh->sharedVertexData : sm->vertexData;
+        if (!vd || !vd->vertexDeclaration
+            || !vd->vertexDeclaration->findElementBySemantic(
+                   Ogre::VES_TEXTURE_COORDINATES, 0))
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
                                                      int width, int height,
                                                      double controlStrength,
-                                                     const QStringList &views)
+                                                     const QStringList &views,
+                                                     const QString &frontPhotoPath,
+                                                     bool generatePbr)
 {
-    if (prompt.isEmpty()) {
-        emit sdGenerationError("Please enter a texture prompt");
-        return;
-    }
+    // No hard requirement for a prompt: the describe-then-generate flow may
+    // arrive with an empty caption (model not yet downloaded / captioner
+    // unavailable), and the code below falls back to a neutral texture prompt.
+    // Just note it so the user knows the result is generic rather than
+    // image-described.
+    if (prompt.isEmpty() && frontPhotoPath.isEmpty())
+        emit sdGenerationNotice(tr("No image description available — using a "
+                                   "neutral texture prompt."));
 #ifdef ENABLE_STABLE_DIFFUSION
     SDManager *sdManager = SDManager::instance();
     if (!sdManager->isModelLoaded()) {
@@ -4605,7 +4652,36 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     // LCOV_EXCL_START — requires a loaded SD model + a mesh
     auto st = std::make_unique<MultiViewBakeState>();
     st->entityName = QString::fromStdString(entity->getName());
-    st->prompt = prompt;
+
+    // Describe-then-generate: when an input photo is supplied (the image-to-3D
+    // path) and no explicit prompt was given, CAPTION the photo with the local
+    // vision model (SmolVLM) and use that as the prompt for EVERY view. This
+    // replaces the old "pin the raw photo as the front view" approach — all
+    // views are now SD-generated from the caption + depth, so there's no
+    // photo-projection orientation/registration artifact, and front + back are
+    // stylistically consistent (shared caption + locked seed).
+    QString effectivePrompt = prompt;
+    if (effectivePrompt.isEmpty() && !frontPhotoPath.isEmpty()
+        && ImageCaptioner::isAvailable()) {
+        emit sdGenerationNotice(tr("Describing the image…"));
+        const QString capModel = ImageCaptioner::ensureModelBlocking();
+        if (!capModel.isEmpty()) {
+            QImage p(frontPhotoPath);
+            const QString cap = p.isNull() ? QString()
+                : ImageCaptioner::caption(p);
+            if (!cap.isEmpty()) {
+                effectivePrompt = cap;
+                emit sdGenerationNotice(tr("Image description: \"%1\"").arg(cap));
+            }
+        }
+        if (effectivePrompt.isEmpty())
+            emit sdGenerationNotice(tr("Image captioning unavailable — using a "
+                                       "neutral texture prompt."));
+    }
+    st->prompt = effectivePrompt.isEmpty()
+        ? QStringLiteral("high quality seamless PBR texture, consistent colours, "
+                         "matching the subject, even lighting")
+        : effectivePrompt;
     st->width = width > 0 ? width : 512;
     st->height = height > 0 ? height : 512;
     st->controlStrength = static_cast<float>(std::clamp(controlStrength, 0.0, 1.0));
@@ -4622,6 +4698,10 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     for (const QString& vn : viewNames)
         st->views.push_back(resolveDepthView(vn));
 
+    // Describe-then-generate: every view is SD-generated from the caption
+    // above (no raw-photo pinning), so nothing else to stash here.
+    st->generatePbrAfter = generatePbr;
+
     if (st->controlNetPath.isEmpty()) {
         emit sdGenerationNotice(
             "No ControlNet depth model found — multi-view bake will follow the "
@@ -4634,6 +4714,18 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
         QStringLiteral("entity=%1 views=%2 size=%3")
             .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
 
+    // Decimate + unwrap the mesh NOW, before any depth render / SD view — so
+    // (a) all views AND the final bake share the same decimated+unwrapped
+    // geometry (they were previously mismatched: views from the full mesh,
+    // bake from the decimated one), and (b) the ~2s unwrap runs up front
+    // instead of after the multi-minute SD passes (where a stale
+    // "unwrapping…" status made it look frozen for an hour). Depth renders and
+    // SD then proceed on the final mesh.
+    if (!prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
+    }
+
     m_multiViewBake = std::move(st);
     startNextMultiViewGeneration();
     // LCOV_EXCL_STOP
@@ -4641,6 +4733,57 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength); Q_UNUSED(views);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
 #endif
+}
+
+bool MaterialEditorQML::prepareMeshForTexturing(Ogre::Entity* entity)
+{
+    if (!entity) return false;
+    if (entityHasUv0(entity)) return true;   // already unwrapped
+
+    // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching cubes +
+    // Taubin smoothing (image-to-3D) leave slivers that xatlas can't
+    // parameterize — they collapse to lines in UV and produce the "streaks
+    // across the atlas + untextured patches" symptom.
+    {
+        EditableMesh em;
+        if (em.loadFromEntity(entity)) {
+            const int removed = em.removeDegenerateTriangles(1e-5f);
+            if (removed > 0) {
+                em.commitToEntity(entity);
+                emit sdGenerationNotice(
+                    tr("Cleaned %1 degenerate triangles before unwrap.").arg(removed));
+            }
+        }
+    }
+    // Decimate to a fixed TRIANGLE BUDGET before unwrap. Image-to-3D meshes are
+    // 80k+ tris; single-threaded xatlas (used to dodge its scheduler deadlock)
+    // takes many minutes on that. ~16k tris textures cleanly and unwraps in
+    // ~seconds. Meshopt backend — Ogre's MeshLodGenerator SIGSEGVs on these.
+    {
+        EditableMesh em;
+        int tris = 0;
+        if (em.loadFromEntity(entity))
+            tris = static_cast<int>(em.totalTriangleCount());
+        constexpr int kTextureTriBudget = 16000;
+        const double reduction =
+            MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
+        if (reduction > 0.01) {
+            emit sdGenerationNotice(
+                tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
+                    .arg(tris).arg(kTextureTriBudget));
+            MeshDecimator::decimateEntity(entity, reduction,
+                                          MeshDecimator::Algorithm::Meshopt);
+        }
+    }
+    emit sdGenerationNotice(tr("Auto-unwrapping UVs…"));
+    const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
+    if (!ur.applied || !entityHasUv0(entity)) {
+        emit sdGenerationError(QStringLiteral(
+            "AI texture: auto UV unwrap failed%1 — cannot bake.")
+            .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
+        return false;
+    }
+    return true;
 }
 
 void MaterialEditorQML::startNextMultiViewGeneration()
@@ -4681,6 +4824,7 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     MultiViewTextureBaker::View bv;
     bv.viewProj = rr.projMatrix * rr.viewMatrix;
     bv.camDirection = rr.camDirection;
+
     s.baked.push_back(bv);  // image filled on completion
 
     m_sdGenerationProgress = 0.0f;
@@ -4706,6 +4850,15 @@ void MaterialEditorQML::finishMultiViewBake()
         }
     }
     if (!entity) { emit sdGenerationError("Mesh gone before bake."); emit sdIsGeneratingChanged(); return; }
+
+    // The mesh was already decimated + unwrapped up front (in
+    // generateMeshTextureMultiView, before the depth renders + SD) so every
+    // view and this bake share the same final geometry. Safety net: if UV0 is
+    // somehow still missing (e.g. this path was reached directly), prepare now.
+    if (!entityHasUv0(entity) && !prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
+    }
 
     QString geoErr;
     std::vector<MultiViewTextureBaker::Triangle> tris =
@@ -4765,6 +4918,13 @@ void MaterialEditorQML::finishMultiViewBake()
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture_multiview"),
         QStringLiteral("baked %1 texels from %2 views (%3 dilated)")
             .arg(rep.pixelsWritten).arg(s->baked.size()).arg(rep.pixelsDilated));
+
+    // PBR AFTER the AI texture (issue: PBR was previously synthesized during
+    // mesh build from a throwaway diffuse, then the AI bake replaced the
+    // diffuse — leaving normal/roughness that didn't match the colours). Now
+    // synthesize + bind from the freshly-applied AI diffuse so the maps match.
+    if (s->generatePbrAfter && aiPbrAvailable())
+        generatePbrFromDiffuse();
 #endif
 }
 
@@ -4793,6 +4953,19 @@ void MaterialEditorQML::onSDGenerationProgress()
     int total = sdManager->generationTotalSteps();
     m_sdGenerationProgress = (total > 0) ? static_cast<float>(step) / total : 0.0f;
     emit sdGenerationProgressChanged();
+    // During a multi-view bake, surface an unambiguous "view N/M — step X/Y"
+    // status so the (multi-minute) SD generation clearly reads as ALIVE rather
+    // than frozen. m_multiViewBake->current is the view whose image is pending.
+    if (m_multiViewBake && total > 0) {
+        const int nViews = static_cast<int>(m_multiViewBake->views.size());
+        const int viewIdx = static_cast<int>(m_multiViewBake->current) + 1;
+        const QString vn = (m_multiViewBake->current < m_multiViewBake->views.size())
+            ? QString::fromLatin1(m_multiViewBake->views[m_multiViewBake->current].name)
+            : QString();
+        emit sdGenerationNotice(
+            tr("AI texture: %1 view %2/%3 — step %4/%5")
+                .arg(vn).arg(viewIdx).arg(nViews).arg(step).arg(total));
+    }
 }
 
 void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
@@ -4824,7 +4997,27 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     if (!entity || entity->getNumSubEntities() == 0) return;
     Ogre::SubEntity* sub0 = entity->getSubEntity(0);
     if (!sub0 || !sub0->getMaterial()) return;
-    const QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+    QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+
+    // Geometry-only meshes (TripoSG image->3D) share ONE "MeshGen/NeutralClay"
+    // material. If we textured that shared material in place, every generated
+    // mesh in the scene would get this bake. Clone it to a per-entity material
+    // and rebind every sub-entity first, so the texture is isolated to THIS
+    // mesh. (Shared textured materials are left alone — cloning them would
+    // just duplicate an already-correct binding.)
+    if (matName.startsWith("MeshGen/")) {
+        const std::string uniqueMat =
+            entityName.toStdString() + "/mat";
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        Ogre::MaterialPtr cloned = matMgr.getByName(uniqueMat,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        if (!cloned)
+            cloned = sub0->getMaterial()->clone(uniqueMat);
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterialName(uniqueMat,
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        matName = QString::fromStdString(uniqueMat);
+    }
 
     // Make sure the freshly-written PNG exists as a loadable texture
     // resource. The generated_textures dir is registered as a
@@ -4908,6 +5101,29 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
             // Rebuild the editor's TUS list so the rename + selection
             // are consistent.
             updateTextureUnitList();
+        } else {
+            // The material has NO texture unit at all — this is the
+            // geometry-only "MeshGen/NeutralClay" case the TripoSG
+            // image->3D path produces. The multi-view bake succeeded and
+            // wrote a valid diffuse PNG, but there was nowhere to bind it,
+            // so the mesh kept rendering flat clay. Create a named
+            // "diffuse_map" TUS now so setTextureName() below has a slot
+            // and the PBR/FFP wiring picks it up.
+            Ogre::TextureUnitState* tus =
+                pass->createTextureUnitState(textureFileName.toStdString());
+            tus->setName("diffuse_map");
+            // A flat clay diffuse colour would MODULATE the new texture to
+            // a muddy tint; reset to white so the baked colours show true.
+            pass->setDiffuse(Ogre::ColourValue::White);
+            // The TripoSR+AI-texture path repurposes "MeshGen/VertexColor",
+            // which has per-vertex colour tracking enabled (setVertexColourTracking
+            // on the decoder colours in MeshGenBuilder). Left on, the baked AI
+            // diffuse would be multiplied by the old decoder vertex colours
+            // instead of replacing them — disable tracking so the texture shows
+            // true. (No-op for NeutralClay, which never enabled it.)
+            pass->setVertexColourTracking(Ogre::TVC_NONE);
+            diffuseTusIndex = static_cast<int>(pass->getNumTextureUnitStates()) - 1;
+            updateTextureUnitList();
         }
     }
     setSelectedTextureUnitIndex(diffuseTusIndex);
@@ -4916,6 +5132,50 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     // clear it first so the assignment always fires.
     m_textureName.clear();
     setTextureName(textureFileName);
+
+    // When we just CREATED a brand-new diffuse_map TUS on a material RTSS had
+    // already generated shaders for (the geometry-only NeutralClay case), the
+    // light invalidate/validate in setTextureName's regen path does NOT rebuild
+    // the RTSS technique from the now-changed FFP pass — so the viewport keeps
+    // rendering the old TUS-less generated technique and the mesh stays clay.
+    // Force the FULL rebuild: drop all shader techniques, re-wire FFP slots,
+    // recompile, and re-bind sub-entities (same path as a material-text edit).
+    updateMaterialText();
+
+    // updateMaterialText's removeAllShaderBasedTechniques() uses an AUTODETECT
+    // group and, for a freshly-cloned material, sometimes leaves the STALE
+    // (TUS-less) RTSS technique in place — RTShaderHelper then just re-validates
+    // that existing empty technique instead of rebuilding it, so the viewport
+    // keeps rendering an untextured shader (the mesh stays clay even though
+    // FFP tech 0 has the diffuse_map). Remove the shader technique explicitly
+    // against the material's REAL group, re-wire the FFP diffuse slot, then let
+    // RTSS regenerate from tech 0 on the next frame.
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        try {
+            shaderGen->removeAllShaderBasedTechniques(
+                m_ogreMaterial->getName(), m_ogreMaterial->getGroup());
+        } catch (const Ogre::Exception&) {}
+        // removeAllShaderBasedTechniques only drops techniques the
+        // ShaderGenerator is TRACKING. For a freshly clone()d material it often
+        // isn't tracking the cloned RTSS technique, so the stale, TUS-less
+        // ShaderGeneratorDefaultScheme technique survives — the viewport renders
+        // it and the mesh stays clay (confirmed: tusCount 0 even 1.5s later).
+        // Remove that scheme's technique DIRECTLY off the material so RTSS is
+        // forced to regenerate it from FFP tech 0 (which has the diffuse_map)
+        // via handleSchemeNotFound on the next render.
+        const Ogre::String rtssScheme =
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+        for (unsigned short ti = m_ogreMaterial->getNumTechniques(); ti-- > 0; ) {
+            if (m_ogreMaterial->getTechnique(ti)->getSchemeName() == rtssScheme)
+                m_ogreMaterial->removeTechnique(ti);
+        }
+        wirePbrSlotsForFFP(m_ogreMaterial.get());
+        m_ogreMaterial->compile();
+        // Re-bind every sub-entity so it re-resolves its technique against the
+        // recompiled material (setMaterialName(sameName) can keep a stale ptr).
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterial(m_ogreMaterial);
+    }
 }
 
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
@@ -4951,7 +5211,13 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
             return;
         }
         s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
-        emit sdTextureGenerated(outputPath);  // let the preview update per view
+        // NOTE: do NOT emit sdTextureGenerated here. That signal drives the
+        // panel's "AI texture applied" completion logic — emitting it per view
+        // made view 0 prematurely mark the bake ✓ and froze the status at the
+        // last SD notice ("view 4/4 — step 12/12"), because subsequent progress
+        // updates are gated on the aitex_gen step still being active. The final
+        // sdTextureGenerated fires once from finishMultiViewBake after the real
+        // bake + apply. (Per-view preview is not worth the false completion.)
         ++s.current;
         if (s.current < s.views.size()) {
             startNextMultiViewGeneration();   // next view
