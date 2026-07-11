@@ -70,27 +70,65 @@ public:
     Q_INVOKABLE double weightForSelection(const QString& name) const;
     Q_INVOKABLE bool setWeightForSelection(const QString& name, double w);
 
-    /// Weight keyframing over time (Slice 2, #519). A single mesh Animation
-    /// named `kWeightClipName` ("MorphAnim") holds one VAT_POSE track per
-    /// target's pose; each keyframe references the pose at the influence
-    /// (= weight) recorded at that time. This is what glTF exports as a
-    /// morph-weights animation. Distinct from the static per-target Animation
-    /// (named exactly the target name) that only carries the shape.
+    /// Weight keyframing over time (Slice 2, #519). Morph targets are the shared
+    /// SHAPES (smile, browRaise, jawOpen…); a "morph clip" is a named mesh
+    /// Animation that keyframes those shapes' weights over time (smile / angry /
+    /// surprised). A clip holds one VAT_POSE track per target's pose; each
+    /// keyframe references the pose at the influence (= weight) at that time.
+    /// Each clip exports as a separate glTF morph-weights animation. Multiple
+    /// clips share the same targets. Distinct from the static per-target
+    /// Animation (named exactly the target name) that only carries the shape.
 
-    /// Record `weight` for target `name` at `time` seconds on the weight clip
+    /// The currently-active morph clip that keyframe edits write to (default
+    /// `kWeightClipName`). Every keyframe method below operates on THIS clip.
+    Q_PROPERTY(QString activeMorphClip READ activeMorphClip WRITE setActiveMorphClip
+               NOTIFY morphClipsChanged)
+    QString activeMorphClip() const { return m_activeMorphClip; }
+    void setActiveMorphClip(const QString& name);
+
+    /// Named morph (weight) clips on the selected entity — mesh VAT_POSE
+    /// animations that are NOT per-target shape clips. For the clip dropdown.
+    Q_INVOKABLE QStringList morphClips() const;
+
+    /// Create an empty morph clip named `name` and make it active. Returns false
+    /// if the name is empty / already exists / no selection.
+    Q_INVOKABLE bool createMorphClip(const QString& name);
+
+    /// Delete a morph clip (its Animation + AnimationState). Returns false on
+    /// no-op. Does NOT touch the shared targets/poses.
+    Q_INVOKABLE bool deleteMorphClip(const QString& name);
+
+    /// Rename a morph clip. Rejects the reserved default name collisions.
+    Q_INVOKABLE bool renameMorphClip(const QString& oldName, const QString& newName);
+
+    /// Record `weight` for target `name` at `time` on the ACTIVE morph clip
     /// (creates the clip/track/keyframe as needed, updates in place otherwise).
     /// Extends the clip length to cover `time`. Returns false on no-op.
     Q_INVOKABLE bool setMorphWeightKeyframe(const QString& name, double time, double weight);
 
-    /// Remove the weight keyframe for `name` at (approximately) `time`.
+    /// Remove the active clip's weight keyframe for `name` at (approx) `time`.
     Q_INVOKABLE bool clearMorphWeightKeyframe(const QString& name, double time);
 
-    /// Keyframe times (seconds) for `name`'s weight track on the selection,
-    /// ascending. Empty if none. For the dope sheet.
+    /// Move a weight keyframe from `oldTime` to `newTime` on the active clip,
+    /// preserving its weight (dope-sheet drag). False on no-op/not-found/collision.
+    Q_INVOKABLE bool moveMorphWeightKeyframe(const QString& name,
+                                             double oldTime, double newTime);
+
+    /// The weight stored at (approx) `time` for `name` on the active clip, or -1.
+    Q_INVOKABLE double morphWeightAt(const QString& name, double time) const;
+
+    /// Active clip's keyframe times (seconds) for `name`, ascending. Empty if
+    /// none. For the dope sheet.
     Q_INVOKABLE QVariantList morphWeightKeyframeTimes(const QString& name) const;
 
-    /// The weight-animation clip name used across the app + glTF export.
+    /// Default morph-clip name (used when no clip is named explicitly + the
+    /// first clip created). Also the glTF export fallback name.
     static const char* kWeightClipName;
+
+    /// Make the ACTIVE morph clip the playable animation on the selected entity:
+    /// select it in the Animation Control panel + enable its AnimationState so
+    /// the timeline scrubs/plays the keyed weights. No-op if it doesn't exist.
+    Q_INVOKABLE bool activateWeightClip();
 
     /// Authoring (slice A3). All three push a QUndoCommand on the
     /// shared UndoManager stack so Ctrl+Z reverses the change. All
@@ -132,10 +170,16 @@ signals:
     /// Emitted when the morph-target list visible to the Inspector
     /// could have changed (selection moved, scene reloaded, etc.).
     void morphTargetsChanged();
+    /// Emitted when the morph-clip list or the active clip changes.
+    void morphClipsChanged();
 
 private:
     explicit MorphAnimationManager(QObject* parent = nullptr);
     ~MorphAnimationManager() override;
+
+    // The clip that keyframe edits target. Defaults to kWeightClipName so
+    // existing single-clip behaviour is preserved until the user makes more.
+    QString m_activeMorphClip;
 
     static MorphAnimationManager* s_instance;
 };

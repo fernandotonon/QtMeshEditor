@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import AnimationControl 1.0
+import PropertiesPanel 1.0
 
 // Multi-bone dope sheet with multi-select, bulk move, and copy/paste.
 // One row per animated bone with diamond markers at each keyframe time.
@@ -164,6 +165,15 @@ Rectangle {
         function onKeyframeTicksChanged()  { root.rows = AnimationControlController.allBoneRows() }
     }
 
+    // Morph weight keyframes changed (add/move/delete/key-at-playhead) → rebuild
+    // the morph band so its diamonds reflect the new times immediately.
+    Connections {
+        target: MorphAnimationManager
+        function onMorphTargetsChanged() {
+            root.morphRows = AnimationControlController.allMorphRows()
+        }
+    }
+
     // Cross-platform "primary" modifier — Ctrl on Win/Linux, Cmd (Meta) on macOS.
     function isPrimaryModifier(modifiers) {
         return (modifiers & Qt.ControlModifier) || (modifiers & Qt.MetaModifier)
@@ -205,12 +215,15 @@ Rectangle {
     }
 
     // ── Empty-state placeholder ──────────────────────────────────────────────
+    // Only "empty" when there are neither bone rows NOR morph rows — a mesh with
+    // morph targets (and no skeleton) still has a populated dope sheet, so the
+    // "select a rigged mesh" message must not show for it.
     Text {
         anchors.centerIn: parent
-        visible: root.rows.length === 0
+        visible: root.rows.length === 0 && root.morphRows.length === 0
         text: AnimationControlController.hasAnimation
               ? "No animated bones in this clip."
-              : "Select a rigged mesh and an animation to view its keyframes."
+              : "Select a rigged mesh, or add morph targets, to view keyframes."
         color: AnimationControlController.disabledTextColor
         font.pixelSize: 12
     }
@@ -891,8 +904,17 @@ Rectangle {
         id: morphBand
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: parent.bottom
         visible: morphRowsRep.count > 0
+
+        // When there ARE bone tracks, the band docks to the BOTTOM under them
+        // (capped at 40% so it can't shove the bone rows off-screen). When there
+        // are NO bone tracks (morph-only mesh), it fills the whole sheet from the
+        // header down — otherwise it left an empty gap where the old skeleton
+        // message used to sit.
+        readonly property bool boneRowsPresent: root.rows.length > 0
+        anchors.top: boneRowsPresent ? undefined : (header.visible ? header.bottom : parent.top)
+        anchors.bottom: parent.bottom
+        anchors.topMargin: boneRowsPresent ? 0 : 2
 
         // Cap the band at ~40% of the dope-sheet height so high-count
         // blendshape rigs (Mixamo characters routinely ship 50+) can't
@@ -903,9 +925,10 @@ Rectangle {
         readonly property int maxBandHeight:
             Math.max(morphHeader.height + root.rowHeight + 6,
                      Math.floor(root.height * 0.4))
-        height: visible
-                ? Math.min(naturalContentHeight, maxBandHeight)
-                : 0
+        // Morph-only: fill (top+bottom anchors set height). With bones: capped.
+        height: !visible ? 0
+                : boneRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
+                : undefined
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1
@@ -977,27 +1000,102 @@ Rectangle {
                             }
                         }
 
-                        // Right side: diamond per keyframe time. Sharing
-                        // the bone-row timeline math so they line up
-                        // vertically. `clip: true` so off-screen diamonds
-                        // (from pan/zoom) don't bleed into the name strip
-                        // or neighboring rows, matching the bone tracks.
+                        // Right side: interactive diamonds. Drag to move the
+                        // keyframe time, right-click to delete, double-click an
+                        // empty spot to add a key at that time (weight = the
+                        // target's current weight). Shares the bone-row timeline
+                        // math so morph + bone diamonds line up vertically.
                         Item {
+                            id: morphTrackArea
+                            property string morphName: modelData.name
                             anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
                             anchors.right: parent.right
                             height: root.rowHeight
                             clip: true
+
+                            Rectangle {
+                                anchors.left: parent.left; anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                height: 1
+                                color: AnimationControlController.borderColor
+                                opacity: 0.4
+                            }
+
+                            // Empty-area handler: double-click adds a key at the
+                            // clicked time. Sits UNDER the diamonds so their own
+                            // MouseAreas win for drag/delete.
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                onDoubleClicked: function(mouse) {
+                                    var t = mouse.x / root.pxPerSec + root.viewStart
+                                    if (t < 0) t = 0
+                                    var w = MorphAnimationManager.weightForSelection(morphTrackArea.morphName)
+                                    MorphAnimationManager.setMorphWeightKeyframe(
+                                        morphTrackArea.morphName, t, w)
+                                    MorphAnimationManager.activateWeightClip()
+                                    AnimationControlController.sliderValue = Math.round(t * 1000)
+                                }
+                            }
+
                             Repeater {
                                 model: modelData.keyTimes
                                 Rectangle {
+                                    id: morphDiamond
                                     property real keyTime: modelData
-                                    x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                                    property real dragPreviewTime: keyTime
+                                    property real displayTime: dragMorph.dragging ? dragPreviewTime : keyTime
+                                    x: (displayTime - root.viewStart) * root.pxPerSec - width / 2
                                     anchors.verticalCenter: parent.verticalCenter
-                                    width: 10; height: 10
+                                    width: dragMorph.dragging ? 14 : 10
+                                    height: width
                                     rotation: 45
-                                    color: "#88ccff"  // visually distinct from bone keys (yellow)
+                                    color: dragMorph.dragging ? "#ffaa55" : "#88ccff"
                                     border.color: AnimationControlController.borderColor
                                     border.width: 1
+
+                                    MouseArea {
+                                        id: dragMorph
+                                        anchors.fill: parent
+                                        anchors.margins: -3
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        cursorShape: Qt.SizeHorCursor
+                                        preventStealing: true
+                                        property bool dragging: false
+                                        property real pressX: 0
+                                        property real originalTime: 0
+                                        onPressed: function(mouse) {
+                                            root.forceActiveFocus()
+                                            if (mouse.button === Qt.RightButton) {
+                                                MorphAnimationManager.clearMorphWeightKeyframe(
+                                                    morphTrackArea.morphName, morphDiamond.keyTime)
+                                                mouse.accepted = true
+                                                return
+                                            }
+                                            originalTime = morphDiamond.keyTime
+                                            pressX = mouse.x
+                                            dragging = true
+                                            AnimationControlController.sliderValue =
+                                                Math.round(morphDiamond.keyTime * 1000)
+                                            mouse.accepted = true
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            if (!dragging) return
+                                            var dt = (mouse.x - pressX) / root.pxPerSec
+                                            var target = originalTime + dt
+                                            if (target < 0) target = 0
+                                            morphDiamond.dragPreviewTime = target
+                                        }
+                                        onReleased: function(mouse) {
+                                            if (!dragging) return
+                                            dragging = false
+                                            var target = morphDiamond.dragPreviewTime
+                                            if (Math.abs(target - originalTime) > 0.001) {
+                                                MorphAnimationManager.moveMorphWeightKeyframe(
+                                                    morphTrackArea.morphName, originalTime, target)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

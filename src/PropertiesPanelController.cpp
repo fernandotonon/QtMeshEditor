@@ -879,6 +879,13 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
 {
     if (newName.isEmpty() || oldName == newName) return false;
 
+    // Morph (weight) clips are mesh-level VAT_POSE animations, not skeletal —
+    // the skeleton rename path below can't handle them (and would crash on a
+    // null skeleton). If this is a morph clip, delegate to the manager's
+    // mesh-aware rename instead.
+    if (MorphAnimationManager::instance()->morphClips().contains(oldName))
+        return MorphAnimationManager::instance()->renameMorphClip(oldName, newName);
+
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     for (Ogre::Entity* ent : entities)
     {

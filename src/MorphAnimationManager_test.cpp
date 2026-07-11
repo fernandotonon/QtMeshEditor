@@ -289,6 +289,55 @@ TEST_F(MorphAnimationManagerSceneTest, WeightKeyframingBuildsMorphAnimClip) {
     sel->clear();
 }
 
+TEST_F(MorphAnimationManagerSceneTest, MultipleNamedMorphClipsShareTargets) {
+    auto mesh = createMorphTestMesh("Morph_MultiClip");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_MultiClipEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+    auto* sel = SelectionSet::getSingleton();
+    sel->clear();
+    sel->append(node);
+
+    auto* m = MorphAnimationManager::instance();
+    m->setActiveMorphClip(QStringLiteral("smile"));
+
+    // Two distinct clips over the SAME shared targets (JawOpen, Smile).
+    ASSERT_TRUE(m->createMorphClip(QStringLiteral("smile")));
+    EXPECT_EQ(m->activeMorphClip(), QStringLiteral("smile"));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"), 0.0, 0.0));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"), 1.0, 1.0));
+
+    ASSERT_TRUE(m->createMorphClip(QStringLiteral("angry")));
+    EXPECT_EQ(m->activeMorphClip(), QStringLiteral("angry"));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("JawOpen"), 0.0, 0.0));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("JawOpen"), 0.5, 1.0));
+
+    // Both clips exist as separate mesh animations; targets are unchanged.
+    QStringList clips = m->morphClips();
+    EXPECT_TRUE(clips.contains(QStringLiteral("smile")));
+    EXPECT_TRUE(clips.contains(QStringLiteral("angry")));
+    EXPECT_TRUE(mesh->hasAnimation("smile"));
+    EXPECT_TRUE(mesh->hasAnimation("angry"));
+
+    // Keyframe times are per-clip: angry's JawOpen has 2 keys; switch to smile
+    // and JawOpen has none there (smile only keyed Smile).
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("JawOpen")).size(), 2);
+    m->setActiveMorphClip(QStringLiteral("smile"));
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("JawOpen")).size(), 0);
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).size(), 2);
+
+    // Rename + delete a clip; targets survive.
+    const size_t posesBefore = mesh->getPoseCount();
+    EXPECT_TRUE(m->renameMorphClip(QStringLiteral("angry"), QStringLiteral("mad")));
+    EXPECT_TRUE(mesh->hasAnimation("mad"));
+    EXPECT_FALSE(mesh->hasAnimation("angry"));
+    EXPECT_TRUE(m->deleteMorphClip(QStringLiteral("mad")));
+    EXPECT_FALSE(mesh->hasAnimation("mad"));
+    EXPECT_EQ(mesh->getPoseCount(), posesBefore);  // shared targets untouched
+    sel->clear();
+}
+
 TEST_F(MorphAnimationManagerSceneTest, NoSelectionGivesEmptyList) {
     auto* m = MorphAnimationManager::instance();
     EXPECT_TRUE(m->morphTargetsForSelection().isEmpty());

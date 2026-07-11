@@ -939,9 +939,9 @@ static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::strin
 // submesh carries morph targets, so non-morph meshes are entirely unaffected.
 static aiAnimation* buildMorphWeightAiAnimation(const aiScene* scene,
                                                 const Ogre::MeshPtr& mesh,
-                                                const std::string& meshNodeName)
+                                                const std::string& meshNodeName,
+                                                const std::string& clip)
 {
-    const std::string clip = MorphAnimationManager::kWeightClipName;
     if (!mesh->hasAnimation(clip)) return nullptr;
     Ogre::Animation* weightClip = mesh->getAnimation(clip);
     if (!weightClip) return nullptr;
@@ -1015,7 +1015,7 @@ static aiAnimation* buildMorphWeightAiAnimation(const aiScene* scene,
     if (morphChannels.empty()) return nullptr;
 
     auto* anim = new aiAnimation();  // NOSONAR — Assimp owns
-    anim->mName = aiString(std::string(MorphAnimationManager::kWeightClipName));
+    anim->mName = aiString(clip);
     anim->mTicksPerSecond = 1.0;  // times are seconds, matching buildAiAnimation
     anim->mDuration = weightClip->getLength();
     anim->mNumMorphMeshChannels = static_cast<unsigned int>(morphChannels.size());
@@ -1148,8 +1148,25 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     const std::string meshNodeName = hasSkeleton
         ? std::string(entity->getName()) + "_mesh"
         : std::string(entity->getName());
-    if (aiAnimation* morphAnim = buildMorphWeightAiAnimation(scene, mesh, meshNodeName))
-        animations.push_back(morphAnim);
+    // Export EVERY morph (weight) clip — smile / angry / surprised — as its own
+    // glTF morph-weights animation. A morph clip is a mesh Animation carrying a
+    // VAT_POSE track that is NOT a per-target shape clip (named exactly a pose
+    // name). Shape clips are the static single-key blend-shape definitions; the
+    // targets themselves are emitted via aiMesh::mAnimMeshes.
+    for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai)
+    {
+        Ogre::Animation* a = mesh->getAnimation(ai);
+        if (!a) continue;
+        const std::string nm = a->getName();
+        // Skip per-target shape clips (name == a pose name).
+        bool isShapeClip = false;
+        for (const Ogre::Pose* p : mesh->getPoseList())
+            if (p && p->getName() == nm) { isShapeClip = true; break; }
+        if (isShapeClip) continue;
+        if (aiAnimation* morphAnim =
+                buildMorphWeightAiAnimation(scene, mesh, meshNodeName, nm))
+            animations.push_back(morphAnim);
+    }
 
     if (!animations.empty())
     {

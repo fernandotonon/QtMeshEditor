@@ -499,7 +499,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.EditMode,
                     EditModeController.editModeActive)
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = vertexMorphComponent
             }
@@ -6428,6 +6428,12 @@ Rectangle {
                 function onSelectionChanged() { refreshAnimData() }
                 function onAnimationStateChanged() { refreshAnimData() }
             }
+            // Morph clips (create/delete/rename) are mesh animations that show
+            // in this list too — refresh when they change.
+            Connections {
+                target: MorphAnimationManager
+                function onMorphClipsChanged() { refreshAnimData() }
+            }
 
             // ── Generate from text (#411, experimental) ──────────────────────
             // Lives in the Animations group and shows for any skeleton-bearing
@@ -7101,15 +7107,10 @@ Rectangle {
         // Authoring (add/rename/delete) lands in A3.
         Rectangle {
             width: parent.width - 16
-            // Show when the mesh already has targets, OR when an entity is
-            // selected so the FIRST target can be authored. Without the
-            // second clause the panel (and its "+ Add…" button) was gated on
-            // targetCount > 0 — a chicken-and-egg that made it impossible to
-            // create the first morph target from the UI. The Add button
-            // stays disabled outside Edit Mode (with a tooltip) so the empty
-            // panel just advertises the feature + the entry path.
-            visible: morphCol.targetCount > 0
-                     || PropertiesPanelController.hasEntitySelection
+            // Always visible inside this section — the section itself is already
+            // gated on Edit Mode (see the CollapsibleSection). Showing it
+            // unconditionally is what lets the user create the FIRST clip +
+            // target on a mesh that has none yet (the chicken-and-egg fix).
             height: morphCol.implicitHeight + 12
             color: PropertiesPanelController.headerColor
             border.color: PropertiesPanelController.borderColor
@@ -7128,6 +7129,12 @@ Rectangle {
                 property var targets: MorphAnimationManager.morphTargetsForSelection() || []
                 property int targetCount: targets.length
                 property string filter: ""
+
+                // Shared drag-reorder state (one drag at a time). Rows read these
+                // so the insertion indicator can render on the LANDING row even
+                // though the drag gesture is owned by the dragged row's grip.
+                property int dragFromIndex: -1   // row being dragged (-1 = idle)
+                property int dragToIndex: -1     // proposed landing index
                 // Bumped on `morphWeightChanged`; sliders bind their
                 // `value` to a function call gated on this counter so
                 // weight changes from any code path (Reset all,
@@ -7261,6 +7268,176 @@ Rectangle {
                             onClicked: {
                                 for (var i = 0; i < morphCol.targets.length; ++i)
                                     MorphAnimationManager.setWeightForSelection(morphCol.targets[i], 0)
+                            }
+                        }
+                    }
+                }
+
+                // Morph-clip selector (smile / angry / surprised …). The targets
+                // below are SHARED across clips; each clip keyframes them to
+                // different values over time. Keying (◈ / dope sheet) writes to
+                // the active clip. Each clip exports as its own glTF animation.
+                RowLayout {
+                    id: clipRow
+                    width: parent.width
+                    spacing: 4
+                    // Clips animate existing targets, so the selector only makes
+                    // sense once at least one target exists. (Also matches the
+                    // backend guard that rejects clip creation with no targets.)
+                    visible: morphCol.targetCount > 0
+                    // Bumped to force re-read of morphClips() when it changes.
+                    property int clipTick: 0
+                    Connections {
+                        target: MorphAnimationManager
+                        // Refresh the clip list + selection when clips change
+                        // (create/delete/rename) or the active clip is switched.
+                        function onMorphClipsChanged() {
+                            clipRow.clipTick++
+                            clipCombo.syncIndex()
+                        }
+                    }
+                    Text {
+                        text: "Clip:"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    ThemedComboBox {
+                        id: clipCombo
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 20
+                        font.pixelSize: 10
+                        // clipTick in the expression forces re-evaluation when
+                        // the clip list changes.
+                        property var clips: (clipRow.clipTick,
+                                             MorphAnimationManager.morphClips())
+                        model: clips.length > 0 ? clips
+                               : [MorphAnimationManager.activeMorphClip]
+                        Component.onCompleted: syncIndex()
+                        onClipsChanged: syncIndex()
+                        function syncIndex() {
+                            var a = MorphAnimationManager.activeMorphClip
+                            var i = model.indexOf(a)
+                            currentIndex = i >= 0 ? i : 0
+                        }
+                        onActivated: {
+                            if (currentIndex >= 0 && currentIndex < model.length)
+                                MorphAnimationManager.activeMorphClip = model[currentIndex]
+                        }
+                    }
+                    // New clip
+                    Rectangle {
+                        Layout.preferredWidth: 40; Layout.preferredHeight: 20; radius: 3
+                        color: newClipMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text { anchors.centerIn: parent; text: "+ New"
+                               color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                        MouseArea {
+                            id: newClipMa
+                            anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { newClipField.text = ""; newClipError.text = ""
+                                         newClipPopup.open() }
+                        }
+                    }
+                    // Delete active clip
+                    Rectangle {
+                        Layout.preferredWidth: 20; Layout.preferredHeight: 20; radius: 3
+                        visible: clipCombo.clips.length > 0
+                        color: delClipMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : "transparent"
+                        Text { anchors.centerIn: parent; text: "×"
+                               color: PropertiesPanelController.textColor
+                               font.pixelSize: 12; font.bold: true }
+                        MouseArea {
+                            id: delClipMa
+                            anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: MorphAnimationManager.deleteMorphClip(
+                                           MorphAnimationManager.activeMorphClip)
+                            ToolTip.visible: containsMouse
+                            ToolTip.text: "Delete the active morph clip (targets are kept)"
+                        }
+                    }
+                }
+
+                // New-clip name popup.
+                Popup {
+                    id: newClipPopup
+                    modal: true; focus: true; width: 240; padding: 10
+                    onOpened: newClipField.forceActiveFocus()
+                    background: Rectangle {
+                        color: PropertiesPanelController.panelColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1; radius: 4
+                    }
+                    contentItem: Column {
+                        spacing: 6
+                        Text { text: "New morph clip name (e.g. smile, angry):"
+                               color: PropertiesPanelController.textColor; font.pixelSize: 11 }
+                        TextField {
+                            id: newClipField
+                            width: 220; font.pixelSize: 11
+                            color: PropertiesPanelController.textColor
+                            selectByMouse: true
+                            placeholderText: "clip name"
+                            background: Rectangle {
+                                color: PropertiesPanelController.inputColor
+                                border.color: newClipField.activeFocus
+                                       ? PropertiesPanelController.highlightColor
+                                       : PropertiesPanelController.borderColor
+                                border.width: 1; radius: 3
+                            }
+                            onAccepted: newClipConfirm.confirm()
+                            onTextChanged: newClipError.text = ""
+                        }
+                        Text {
+                            id: newClipError
+                            text: ""; visible: text.length > 0
+                            color: "#d65d5d"; font.pixelSize: 10; width: 220; wrapMode: Text.Wrap
+                        }
+                        Row {
+                            spacing: 6
+                            Rectangle {
+                                width: 60; height: 20; radius: 3
+                                color: newClipConfirm.containsMouse
+                                       ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                       : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor
+                                Text { anchors.centerIn: parent; text: "Create"
+                                       color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                                MouseArea {
+                                    id: newClipConfirm
+                                    anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    function confirm() {
+                                        var n = newClipField.text.trim()
+                                        if (n.length === 0) { newClipError.text = "Name cannot be empty."; return }
+                                        if (MorphAnimationManager.createMorphClip(n))
+                                            newClipPopup.close()
+                                        else
+                                            newClipError.text = "Couldn't create: name already in use?"
+                                    }
+                                    onClicked: confirm()
+                                }
+                            }
+                            Rectangle {
+                                width: 60; height: 20; radius: 3
+                                color: newClipCancel.containsMouse
+                                       ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                       : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor
+                                Text { anchors.centerIn: parent; text: "Cancel"
+                                       color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                                MouseArea {
+                                    id: newClipCancel
+                                    anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: newClipPopup.close()
+                                }
                             }
                         }
                     }
@@ -7415,14 +7592,135 @@ Rectangle {
                 }
 
                 // One row per target. Hidden when filter doesn't match.
+                // Rows are drag-to-reorder via the grip handle (☰): the grip's
+                // MouseArea tracks vertical movement and computes the target
+                // index from the drag distance, then calls
+                // MorphAnimationManager.moveMorphTargetToIndex (undoable) on
+                // release. Manual Y-tracking is used rather than Drag/DropArea
+                // because a layout-managed (Row) child can't reliably drive the
+                // attached Drag property. Reorder needs the full-list index, so
+                // the grip is hidden while filtering.
                 Repeater {
+                    id: morphRepeater
                     model: morphCol.targets
-                    Row {
+                    Item {
+                        id: morphRowItem
                         width: morphCol.width
-                        spacing: 4
                         visible: morphCol.filter === ""
                               || modelData.toLowerCase().indexOf(morphCol.filter.toLowerCase()) >= 0
                         height: visible ? 22 : 0
+                        property string targetName: modelData
+                        property int rowIndex: index
+                        // Row stride = height(22) + Column spacing(4).
+                        readonly property int rowStride: 26
+                        // Live proposed drop index while dragging (-1 = idle).
+                        property int dropIndex: -1
+                        // Live vertical offset the dragged row follows the cursor by.
+                        property real dragDy: 0
+
+                        // The row being dragged floats above its neighbours.
+                        readonly property bool isDragged:
+                            morphCol.dragFromIndex === morphRowItem.rowIndex
+                        z: isDragged ? 10 : 0
+
+                        // Dragged-row background (moves with the cursor).
+                        Rectangle {
+                            anchors.fill: parent
+                            y: morphRowItem.dragDy
+                            visible: morphRowItem.isDragged
+                            color: Qt.rgba(PropertiesPanelController.highlightColor.r,
+                                           PropertiesPanelController.highlightColor.g,
+                                           PropertiesPanelController.highlightColor.b, 0.25)
+                            border.color: PropertiesPanelController.highlightColor
+                            border.width: 1
+                            radius: 2
+                        }
+
+                        // Insertion indicator: a bright line marking the LANDING
+                        // slot (the shared dragToIndex), rendered on that row.
+                        // Shown on every row EXCEPT the dragged one so the target
+                        // reads clearly even though the list doesn't reflow live.
+                        Rectangle {
+                            visible: morphCol.dragFromIndex >= 0
+                                     && !morphRowItem.isDragged
+                                     && morphCol.dragToIndex === morphRowItem.rowIndex
+                            width: parent.width; height: 2; radius: 1
+                            color: PropertiesPanelController.highlightColor
+                            // Bottom edge when dropping below the origin ("lands
+                            // after this row"), top edge when dropping above.
+                            y: (morphCol.dragToIndex > morphCol.dragFromIndex)
+                               ? parent.height - height : 0
+                        }
+
+                    Row {
+                        anchors.fill: parent
+                        spacing: 4
+                        // The content follows the cursor vertically while dragging.
+                        y: morphRowItem.dragDy
+
+                        // Drag handle (☰) — the only drag-initiating surface, so
+                        // the slider / rename / buttons keep their own gestures.
+                        Item {
+                            id: morphGrip
+                            width: 14; height: 22
+                            visible: morphCol.filter === "" && morphCol.targetCount > 1
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                anchors.centerIn: parent
+                                text: "☰"
+                                color: PropertiesPanelController.textColor
+                                opacity: gripMa.dragging ? 1.0 : 0.6
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                id: gripMa
+                                anchors.fill: parent
+                                cursorShape: gripMa.dragging ? Qt.ClosedHandCursor
+                                                             : Qt.OpenHandCursor
+                                preventStealing: true
+                                property bool dragging: false
+                                property real pressY: 0
+                                property int startIndex: 0
+                                onPressed: function(mouse) {
+                                    pressY = mouse.y
+                                    startIndex = morphRowItem.rowIndex
+                                    dragging = true
+                                    morphRowItem.dragDy = 0
+                                    morphCol.dragFromIndex = morphRowItem.rowIndex
+                                    morphCol.dragToIndex = morphRowItem.rowIndex
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (!dragging) return
+                                    var dy = (mouse.y - pressY)
+                                    // Move the row visual with the cursor.
+                                    morphRowItem.dragDy = dy
+                                    var shift = Math.round(dy / morphRowItem.rowStride)
+                                    var target = morphRowItem.rowIndex + shift
+                                    if (target < 0) target = 0
+                                    if (target > morphCol.targetCount - 1)
+                                        target = morphCol.targetCount - 1
+                                    morphCol.dragToIndex = target
+                                }
+                                onReleased: function(mouse) {
+                                    if (!dragging) return
+                                    dragging = false
+                                    var target = morphCol.dragToIndex
+                                    var from = morphCol.dragFromIndex
+                                    morphCol.dragFromIndex = -1
+                                    morphCol.dragToIndex = -1
+                                    morphRowItem.dragDy = 0
+                                    if (target >= 0 && target !== from)
+                                        MorphAnimationManager.moveMorphTargetToIndex(
+                                            morphRowItem.targetName, target)
+                                }
+                                onCanceled: {
+                                    dragging = false
+                                    morphCol.dragFromIndex = -1
+                                    morphCol.dragToIndex = -1
+                                    morphRowItem.dragDy = 0
+                                }
+                            }
+                        }
 
                         // Name — double-click to rename in place,
                         // matching the per-animation rename UX above.
@@ -7432,9 +7730,15 @@ Rectangle {
                             text: modelData
                             color: PropertiesPanelController.textColor
                             font.pixelSize: 10
-                            width: 120
-                            elide: Text.ElideRight
+                            width: morphCol.filter === "" && morphCol.targetCount > 1 ? 106 : 120
+                            // Middle ellipsis: morph names often share long
+                            // prefixes (LeftEyebrow… / LeftEyeBlink…) AND
+                            // meaningful suffixes (_01, _L), so elide the middle.
+                            elide: Text.ElideMiddle
                             anchors.verticalCenter: parent.verticalCenter
+                            ToolTip.visible: nameHover.hovered && truncated
+                            ToolTip.text: modelData
+                            HoverHandler { id: nameHover }
                             MouseArea {
                                 anchors.fill: parent
                                 onDoubleClicked: {
@@ -7480,9 +7784,9 @@ Rectangle {
                         Slider {
                             id: weightSlider
                             from: 0; to: 1; stepSize: 0.01
-                            // name(120) + weight(36) + key(16) + up(16) +
-                            // down(16) + delete(18) + row spacings ≈ 272.
-                            width: parent.width - 272
+                            // grip(14) + name(106) + weight(36) + key(16) +
+                            // delete(18) + row spacings ≈ 220 reserved.
+                            width: parent.width - 220
                             // Bind to `weightTick` so changes that
                             // bypass user drag (Reset all, MCP, future
                             // dope-sheet scrubs) refresh the readout.
@@ -7527,58 +7831,14 @@ Rectangle {
                                     var t = AnimationControlController.sliderValue / 1000.0
                                     MorphAnimationManager.setMorphWeightKeyframe(
                                         modelData, t, weightSlider.value)
+                                    // Make the weight clip the active, playable
+                                    // animation so scrubbing/playing shows the
+                                    // keyed weights immediately (otherwise the
+                                    // key exists but nothing drives it).
+                                    MorphAnimationManager.activateWeightClip()
                                 }
                                 ToolTip.visible: containsMouse
                                 ToolTip.text: "Key this weight at the timeline playhead"
-                            }
-                        }
-                        // Move up (▲) — reorder via ReorderMorphTargetsCommand
-                        // (undoable). Disabled on the first row. Reorder is only
-                        // meaningful with no filter applied (the index maps to
-                        // the full list), so hide the arrows while filtering.
-                        Rectangle {
-                            width: 16; height: 18; radius: 3
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: morphCol.filter === "" && morphCol.targetCount > 1
-                            opacity: index > 0 ? 1.0 : 0.3
-                            color: morphUpMa.containsMouse && index > 0
-                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                   : "transparent"
-                            Text {
-                                anchors.centerIn: parent
-                                text: "▲"; color: PropertiesPanelController.textColor
-                                font.pixelSize: 9
-                            }
-                            MouseArea {
-                                id: morphUpMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: index > 0
-                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                onClicked: MorphAnimationManager.moveMorphTarget(modelData, -1)
-                            }
-                        }
-                        // Move down (▼) — disabled on the last row.
-                        Rectangle {
-                            width: 16; height: 18; radius: 3
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: morphCol.filter === "" && morphCol.targetCount > 1
-                            opacity: index < morphCol.targetCount - 1 ? 1.0 : 0.3
-                            color: morphDownMa.containsMouse && index < morphCol.targetCount - 1
-                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                   : "transparent"
-                            Text {
-                                anchors.centerIn: parent
-                                text: "▼"; color: PropertiesPanelController.textColor
-                                font.pixelSize: 9
-                            }
-                            MouseArea {
-                                id: morphDownMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: index < morphCol.targetCount - 1
-                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                onClicked: MorphAnimationManager.moveMorphTarget(modelData, 1)
                             }
                         }
                         // Delete (×) — drops the pose + animation
@@ -7605,7 +7865,8 @@ Rectangle {
                                 onClicked: MorphAnimationManager.deleteMorphTarget(modelData)
                             }
                         }
-                    }
+                    }  // Row
+                    }  // morphRowItem (drag/drop wrapper)
                 }
             }
         }

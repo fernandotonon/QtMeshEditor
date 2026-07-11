@@ -230,6 +230,13 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
     if (m_selectedSkeleton && m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
         Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
         m_sliderMaximum = static_cast<int>(anim->getLength() * 1000);
+    } else if (Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+               mesh && mesh->hasAnimation(m_selectedAnimation)) {
+        // Mesh-level (VAT_POSE) clip — morph-weight animation or Alembic vertex
+        // cache. These have no skeleton; take the length off the mesh Animation
+        // so the timeline scrubs (skeleton-only derivation left it at 0).
+        m_sliderMaximum = static_cast<int>(
+            mesh->getAnimation(m_selectedAnimation)->getLength() * 1000);
     }
 
     // Reset loop region to span the whole animation whenever a new clip is
@@ -396,10 +403,20 @@ void AnimationControlController::setSliderValue(int ms)
 
 void AnimationControlController::setAnimationLength(double length)
 {
-    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return;
-    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
+    if (m_selectedAnimation.empty()) return;
 
-    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    // Resolve the Animation from the skeleton (skeletal clip) OR the mesh
+    // (VAT_POSE morph-weight / vertex-cache clip). Length is settable for both.
+    Ogre::Animation* anim = nullptr;
+    if (m_selectedSkeleton && m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
+        anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    } else if (m_selectedEntity) {
+        if (Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+            mesh && mesh->hasAnimation(m_selectedAnimation))
+            anim = mesh->getAnimation(m_selectedAnimation);
+    }
+    if (!anim) return;
+
     anim->setLength(static_cast<float>(length));
     m_sliderMaximum = static_cast<int>(length * 1000);
 
@@ -982,7 +999,11 @@ QVariantList AnimationControlController::allMorphRows() const
             return any;
         };
 
-        if (!appendTrackTimes(MorphAnimationManager::kWeightClipName))
+        // Read the ACTIVE morph clip's keys (the one the user is editing), so
+        // switching clips in the dropdown shows that clip's diamonds. Fall back
+        // to the static shape-only clip when the active clip has no key here.
+        if (!appendTrackTimes(
+                MorphAnimationManager::instance()->activeMorphClip().toStdString()))
             appendTrackTimes(poseName);  // static shape-only clip
 
         QVariantMap row;

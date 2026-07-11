@@ -116,7 +116,13 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
     if(_newName.isEmpty())
         return false;
 
-    if(!_ent || !_ent->getSkeleton()->hasAnimation(_oldName.toStdString().data()))
+    // Guard the skeleton null case: a morph-only / vertex-cache mesh has no
+    // skeleton, and its clips live on the mesh (VAT_POSE), not here. Callers
+    // must route those to the mesh-animation rename path — bail (don't crash)
+    // rather than dereference a null skeleton.
+    if(!_ent || !_ent->hasSkeleton())
+        return false;
+    if(!_ent->getSkeleton()->hasAnimation(_oldName.toStdString().data()))
         return false;
 
     auto *sk = _ent->getSkeleton();

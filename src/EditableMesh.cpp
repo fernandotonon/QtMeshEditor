@@ -612,6 +612,14 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         // n-gon submeshes downstream.
         if (!sawNGon) sub.faces.clear();
 
+        // Snapshot the bind positions so morph-target authoring can diff the
+        // edited vertices against the pre-edit baseline. (loadFromEntity does
+        // this too; the n-gon path must match or morph capture sees orig=0 and
+        // reports "nothing moved" — the OBJ morph bug.)
+        sub.originalPositions.reserve(sub.vertices.size());
+        for (const auto& v : sub.vertices)
+            sub.originalPositions.push_back(v.position);
+
         m_subMeshes.push_back(std::move(sub));
     }
 
