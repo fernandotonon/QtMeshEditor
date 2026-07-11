@@ -93,6 +93,45 @@ TEST(MotionLibrary, IgnoresWrongSizedCmuRest)
     EXPECT_FALSE(lib.hasCmuRest());
 }
 
+TEST(MotionLibrary, ParsesPerClipRestWorldAndRestDir)
+{
+    // v3 clips extracted by --dump-canonical carry per-clip restWorld (22
+    // source-bind quats) + restDir (22 canonical bind bone directions) that
+    // switch the retarget to the bind-referenced path. Absent → empty.
+    MotionLibrary plain;
+    ASSERT_TRUE(plain.loadFromJson(miniLib())) << plain.error().toStdString();
+    EXPECT_TRUE(plain.clip(0).restWorld.empty());
+    EXPECT_TRUE(plain.clip(0).restDir.empty());
+
+    QByteArray rest = ",\"restWorld\":[";
+    for (int j = 0; j < 22; ++j) rest += (j ? ",[0,0,0.5,0.866]" : "[0,0,0.5,0.866]");
+    rest += "],\"restDir\":[";
+    for (int j = 0; j < 22; ++j) rest += (j ? ",[0,1,0]" : "[0,1,0]");
+    rest += "]";
+    QByteArray v3 = miniLib();
+    const int at = v3.indexOf("\"quats\"");             // first (walk) clip
+    const int end = v3.indexOf("},", at);               // its closing brace
+    ASSERT_GT(end, 0);
+    v3.insert(end, rest);
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(v3)) << lib.error().toStdString();
+    ASSERT_EQ(lib.clip(0).restWorld.size(), 22u);
+    ASSERT_EQ(lib.clip(0).restDir.size(), 22u);
+    EXPECT_NEAR(lib.clip(0).restWorld[3][2], 0.5f, 1e-6f);
+    EXPECT_NEAR(lib.clip(0).restDir[3][1], 1.0f, 1e-6f);
+    EXPECT_TRUE(lib.clip(1).restWorld.empty());   // only the walk clip got it
+
+    // Wrong-sized arrays are ignored, clip still loads.
+    QByteArray badSz = miniLib();
+    badSz.insert(badSz.indexOf("},", badSz.indexOf("\"quats\"")),
+                 ",\"restWorld\":[[0,0,0,1]],\"restDir\":[[0,1,0]]");
+    MotionLibrary lib2;
+    ASSERT_TRUE(lib2.loadFromJson(badSz)) << lib2.error().toStdString();
+    EXPECT_TRUE(lib2.clip(0).restWorld.empty());
+    EXPECT_TRUE(lib2.clip(0).restDir.empty());
+    EXPECT_EQ(lib2.clipCount(), 2);
+}
+
 TEST(MotionLibrary, MatchesDirectActionWord)
 {
     MotionLibrary lib;

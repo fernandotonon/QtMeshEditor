@@ -2003,6 +2003,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     int fps = 30;
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
+    std::vector<std::array<float, 3>> clipDirs;
     QString clipSource;
 
     bool gotClip = false;
@@ -2052,7 +2053,9 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         quats = clip.quats;
         fps = clip.fps;
         worldFrame = lib.isWorldFrame();
-        cmuRest = lib.cmuRestWorld();
+        cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
+                                         : clip.restWorld;
+        clipDirs = clip.restDir;
         clipSource = QStringLiteral("template");
         // Optionally retime the clip to a requested duration by frame stride/pad.
         if (duration > 0.05f) {
@@ -2085,7 +2088,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                 worldFrame, cmuRest,
                                                 /*refineWithModel=*/false,
-                                                /*refineStride=*/8, yaw180);
+                                                /*refineStride=*/8, yaw180,
+                                                clipDirs);
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
@@ -2417,6 +2421,24 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 frames.append(row);
             }
             co["quats"] = frames;
+            QJsonArray rest;
+            for (const auto& q : c.restWorld) {
+                QJsonArray quat;
+                for (float v : q)
+                    quat.append(static_cast<double>(
+                        std::round(v * 100000.0f) / 100000.0f));
+                rest.append(quat);
+            }
+            co["restWorld"] = rest;
+            QJsonArray dirs;
+            for (const auto& v : c.restDir) {
+                QJsonArray vec;
+                for (float x : v)
+                    vec.append(static_cast<double>(
+                        std::round(x * 100000.0f) / 100000.0f));
+                dirs.append(vec);
+            }
+            co["restDir"] = dirs;
             clipArr.append(co);
         }
         root["clips"] = clipArr;

@@ -985,6 +985,56 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         }
     }
 
+    // BIND-pose world orientation per canonical role (conjugated into the
+    // canonical frame) — the reference the bind-referenced retarget deltas
+    // against. Captured while the skeleton is still at bind from the
+    // conjugation block above.
+    std::vector<std::array<float, 4>> restWorld(
+        static_cast<size_t>(J), {0.f, 0.f, 0.f, 1.f});
+    std::vector<std::array<float, 3>> restDir(
+        static_cast<size_t>(J), {0.f, 0.f, 0.f});
+    {
+        skel->reset(true);
+        skel->_updateTransforms();
+        for (int j = 0; j < J; ++j) {
+            Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+            if (!b) continue;
+            const Ogre::Quaternion w =
+                C * b->_getDerivedOrientation() * C.Inverse();
+            restWorld[static_cast<size_t>(j)] = {
+                static_cast<float>(w.x), static_cast<float>(w.y),
+                static_cast<float>(w.z), static_cast<float>(w.w)};
+        }
+        // Canonical-topology bind bone directions (conjugated by C): role →
+        // its canonical child joint, leaf roles take the incoming direction.
+        // The retarget computes the target's directions the same way and
+        // aligns per bone — the general fix for cross-rig bone-axis
+        // conventions (identity-rest rigs carry no info in restWorld).
+        const auto dirBetween = [&](int a, int bIdx,
+                                    std::array<float, 3>& out) {
+            const Ogre::Bone* ba = roleBone[static_cast<size_t>(a)];
+            const Ogre::Bone* bb = roleBone[static_cast<size_t>(bIdx)];
+            if (!ba || !bb) return false;
+            Ogre::Vector3 v = bb->_getDerivedPosition()
+                              - ba->_getDerivedPosition();
+            if (v.squaredLength() < 1e-12f) return false;
+            v = C * v;
+            v.normalise();
+            out = {static_cast<float>(v.x), static_cast<float>(v.y),
+                   static_cast<float>(v.z)};
+            return true;
+        };
+        for (int j = 0; j < J; ++j) {
+            const int child = MotionInbetween::canonicalChildOf(j);
+            if (child >= 0
+                && dirBetween(j, child, restDir[static_cast<size_t>(j)]))
+                continue;
+            const int parent = MotionInbetween::canonicalParentOf(j);
+            if (parent >= 0)
+                dirBetween(parent, j, restDir[static_cast<size_t>(j)]);
+        }
+    }
+
     // Sample by applying each Animation DIRECTLY to the skeleton instance —
     // deterministic regardless of the entity's animation-state bookkeeping
     // (state-set application proved instance-dependent for hand-built
@@ -1026,6 +1076,8 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             clip.quats.push_back(std::move(pose));
         }
         clip.frames = static_cast<int>(clip.quats.size());
+        clip.restWorld = restWorld;
+        clip.restDir = restDir;
         out.push_back(std::move(clip));
     }
 
@@ -1091,7 +1143,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     const std::vector<std::array<float, 4>>& cmuRestWorld,
     bool refineWithModel,
     int refineStride,
-    bool yaw180)
+    bool yaw180,
+    const std::vector<std::array<float, 3>>& clipRestDir)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -1180,6 +1233,231 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Animation* anim = skel->createAnimation(animName, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
+
+    // ===== BIND-REFERENCED WORLD RETARGET (preferred when available) =====
+    // Clips extracted by --dump-canonical carry the SOURCE rig's bind-pose
+    // world orientations (restWorld). Both rigs' binds are T-poses, so the
+    // correspondence source-bind ↔ target-bind is exact:
+    //     Δworld(f) = Ws(f) · Ws_bind⁻¹          (canonical world axes)
+    //     Wt(f)     = Δworld(f) · Wt_bind
+    //     local(f)  = Wt_parent(f)⁻¹ · Wt(f)     (hierarchy-ordered)
+    // Generated clips therefore reference the TARGET BIND — no pose from any
+    // other animation is involved (the standing-pose harvest below is only
+    // the fallback for restWorld-less clips, e.g. the CMU-built libraries).
+    bool haveRestWorld = false;
+    if (worldFrame
+        && cmuRestWorld.size() == static_cast<size_t>(
+               MotionInbetween::canonicalJointCount())) {
+        for (const auto& q : cmuRestWorld)
+            if (std::abs(q[0]) > 1e-5f || std::abs(q[1]) > 1e-5f
+                || std::abs(q[2]) > 1e-5f || std::abs(1.f - std::abs(q[3])) > 1e-5f) {
+                haveRestWorld = true;
+                break;
+            }
+    }
+    if (haveRestWorld) {
+        const int Jc = MotionInbetween::canonicalJointCount();
+        // Target bind worlds/locals/positions, read at binding pose.
+        skel->reset(true);
+        skel->_updateTransforms();
+        std::vector<Ogre::Quaternion> bindWorld(static_cast<size_t>(nBones));
+        std::vector<Ogre::Quaternion> bindLocal(static_cast<size_t>(nBones));
+        std::vector<Ogre::Vector3> bindPos(static_cast<size_t>(nBones));
+        std::vector<int> parentIdx(static_cast<size_t>(nBones), -1);
+        for (int i = 0; i < nBones; ++i) {
+            Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+            bindWorld[static_cast<size_t>(i)] = b->_getDerivedOrientation();
+            bindLocal[static_cast<size_t>(i)] = b->getOrientation();
+            bindPos[static_cast<size_t>(i)] = b->_getDerivedPosition();
+            if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+                parentIdx[static_cast<size_t>(i)] = p->getHandle();
+        }
+        // Per-role shortest-arc alignment R0: rotate the TARGET's bind bone
+        // direction onto the SOURCE's (both canonical-topology directions in
+        // canonical world axes). With Wt(f) = Δs(f)·R0·Wt_bind every target
+        // bone POINTS where the source bone points each frame, with twist
+        // transported by Δs — cross-rig bone-axis conventions cancel.
+        // (restWorld alone degenerates on identity-rest rigs like Mixamo.)
+        std::vector<int> roleBoneIdx(static_cast<size_t>(Jc), -1);
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[i] >= 0 && boneToCanon[i] < Jc
+                && roleBoneIdx[static_cast<size_t>(boneToCanon[i])] < 0)
+                roleBoneIdx[static_cast<size_t>(boneToCanon[i])] = i;
+        auto restQ = [&](int c) {
+            const auto& q = cmuRestWorld[static_cast<size_t>(c)];
+            return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
+        };
+        // TARGET-frame conjugation Ct: the clip directions live in the
+        // CANONICAL frame (the extractor conjugates the source by its own
+        // bind-geometry-derived frame), while this skeleton's bind data is
+        // in its RAW file frame (Mixamo FBX rigs are commonly rotated).
+        // Derive Ct exactly like the extractor (up = hip→head, left =
+        // rhip→lhip) and express canonical directions in target space via
+        // Ct⁻¹ before aiming.
+        Ogre::Quaternion Ct = Ogre::Quaternion::IDENTITY;
+        {
+            auto rolePos = [&](int role) -> const Ogre::Vector3* {
+                const int i = (role >= 0 && role < Jc)
+                    ? roleBoneIdx[static_cast<size_t>(role)] : -1;
+                return i >= 0 ? &bindPos[static_cast<size_t>(i)] : nullptr;
+            };
+            const Ogre::Vector3* hip = rolePos(0);
+            const Ogre::Vector3* head = rolePos(5);
+            if (!head) head = rolePos(3);
+            const Ogre::Vector3* lSide = rolePos(19);
+            const Ogre::Vector3* rSide = rolePos(15);
+            if (!lSide || !rSide) { lSide = rolePos(11); rSide = rolePos(7); }
+            if (hip && head && lSide && rSide) {
+                Ogre::Vector3 up = *head - *hip;
+                Ogre::Vector3 left = *lSide - *rSide;
+                if (up.squaredLength() > 1e-12f
+                    && left.squaredLength() > 1e-12f) {
+                    up.normalise();
+                    left = left - up * left.dotProduct(up);
+                    if (left.squaredLength() > 1e-12f) {
+                        left.normalise();
+                        const Ogre::Vector3 fwd = left.crossProduct(up);
+                        Ogre::Matrix3 src;
+                        src.SetColumn(0, left);
+                        src.SetColumn(1, up);
+                        src.SetColumn(2, fwd);
+                        Ct = Ogre::Quaternion(src).Inverse();
+                        Ct.normalise();
+                    }
+                }
+            }
+        }
+        const Ogre::Quaternion CtInv = Ct.Inverse();
+
+        // PER-FRAME DIRECTION MATCHING. "Bind" poses are NOT trustworthy
+        // T-poses across importers (Assimp's reset pose for Mixamo FBX is
+        // whatever the file stored), so bind-to-bind delta transplant breaks
+        // cross-rig. Each rig IS self-consistent though: the source bone's
+        // constant LOCAL direction axis a_s = Ws_bind⁻¹·ds_bind rotates to
+        // ds(f) = Ws(f)·a_s each frame, and the target bone is aimed at
+        // exactly that world direction: Wt(f) = arc(dt_bind → ds(f))·Wt_bind.
+        // Twist about the bone is intentionally not transported (roll is the
+        // least visible DoF; the hip's facing-yaw staying locked matches the
+        // clip-facing design).
+        std::vector<Ogre::Vector3> srcLocalAxis(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        std::vector<Ogre::Vector3> tgtBindDir(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        if (!clipRestDir.empty()) {
+            auto targetDir = [&](int role) -> Ogre::Vector3 {
+                const int child = MotionInbetween::canonicalChildOf(role);
+                const int parent = MotionInbetween::canonicalParentOf(role);
+                const int a = roleBoneIdx[static_cast<size_t>(role)];
+                if (a >= 0 && child >= 0) {
+                    const int bIdx = roleBoneIdx[static_cast<size_t>(child)];
+                    if (bIdx >= 0) {
+                        Ogre::Vector3 v = bindPos[static_cast<size_t>(bIdx)]
+                                          - bindPos[static_cast<size_t>(a)];
+                        if (v.squaredLength() > 1e-12f) return v;
+                    }
+                }
+                if (a >= 0 && parent >= 0) {
+                    const int pIdx = roleBoneIdx[static_cast<size_t>(parent)];
+                    if (pIdx >= 0) {
+                        Ogre::Vector3 v = bindPos[static_cast<size_t>(a)]
+                                          - bindPos[static_cast<size_t>(pIdx)];
+                        if (v.squaredLength() > 1e-12f) return v;
+                    }
+                }
+                return Ogre::Vector3::ZERO;
+            };
+            for (int c = 0; c < Jc; ++c) {
+                const auto& sd = clipRestDir[static_cast<size_t>(c)];
+                Ogre::Vector3 srcDir(sd[0], sd[1], sd[2]);
+                Ogre::Vector3 tgtDir = targetDir(c);
+                if (srcDir.squaredLength() > 1e-8f
+                    && tgtDir.squaredLength() > 1e-8f) {
+                    srcDir.normalise();
+                    tgtDir.normalise();
+                    srcLocalAxis[static_cast<size_t>(c)] =
+                        restQ(c).Inverse() * srcDir;
+                    tgtBindDir[static_cast<size_t>(c)] = tgtDir;
+                }
+            }
+        }
+        // Hierarchy order: parents before children (indices may not be).
+        std::vector<int> order;
+        order.reserve(static_cast<size_t>(nBones));
+        {
+            std::vector<char> placed(static_cast<size_t>(nBones), 0);
+            bool progress = true;
+            while (static_cast<int>(order.size()) < nBones && progress) {
+                progress = false;
+                for (int i = 0; i < nBones; ++i) {
+                    if (placed[static_cast<size_t>(i)]) continue;
+                    const int pi = parentIdx[static_cast<size_t>(i)];
+                    if (pi < 0 || placed[static_cast<size_t>(pi)]) {
+                        order.push_back(i);
+                        placed[static_cast<size_t>(i)] = 1;
+                        progress = true;
+                    }
+                }
+            }
+            for (int i = 0; i < nBones; ++i)   // cycles/orphans: append
+                if (!placed[static_cast<size_t>(i)]) order.push_back(i);
+        }
+        auto clipQ = [&](int frame, int joint) -> Ogre::Quaternion {
+            const auto& q = clipQuats[frame][joint];
+            return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+        };
+        std::vector<Ogre::NodeAnimationTrack*> tracks(
+            static_cast<size_t>(nBones), nullptr);
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[i] >= 0 && boneToCanon[i] < Jc) {
+                tracks[static_cast<size_t>(i)] = anim->createNodeTrack(
+                    static_cast<unsigned short>(i),
+                    skel->getBone(static_cast<unsigned short>(i)));
+                ++res.tracksWritten;
+            }
+        std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
+        for (int f = 0; f < frames; ++f) {
+            for (int i : order) {
+                const int pi = parentIdx[static_cast<size_t>(i)];
+                const Ogre::Quaternion Wp = (pi >= 0)
+                    ? W[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
+                const int c = boneToCanon[i];
+                Ogre::Quaternion local;
+                if (c >= 0 && c < Jc
+                    && srcLocalAxis[static_cast<size_t>(c)].squaredLength()
+                           > 1e-8f) {
+                    Ogre::Vector3 dCan =
+                        clipQ(f, c) * srcLocalAxis[static_cast<size_t>(c)];
+                    if (yaw180) { dCan.x = -dCan.x; dCan.z = -dCan.z; }
+                    const Ogre::Vector3 ds = CtInv * dCan;
+                    const Ogre::Quaternion R =
+                        tgtBindDir[static_cast<size_t>(c)].getRotationTo(ds);
+                    const Ogre::Quaternion Wt =
+                        R * bindWorld[static_cast<size_t>(i)];
+                    local = Wp.Inverse() * Wt;
+                    W[static_cast<size_t>(i)] = Wt;
+                } else {
+                    local = bindLocal[static_cast<size_t>(i)];
+                    W[static_cast<size_t>(i)] = Wp * local;
+                }
+                if (auto* trk = tracks[static_cast<size_t>(i)]) {
+                    // Ogre skeleton keyframes are DELTAS applied onto the
+                    // binding pose (NodeAnimationTrack::applyToNode rotates
+                    // the reset bone) — convert the absolute local target.
+                    Ogre::TransformKeyFrame* kf =
+                        trk->createNodeKeyFrame(f * dt);
+                    kf->setRotation(
+                        bindLocal[static_cast<size_t>(i)].Inverse() * local);
+                    kf->setTranslate(Ogre::Vector3::ZERO);
+                    kf->setScale(Ogre::Vector3::UNIT_SCALE);
+                }
+            }
+        }
+        res.ok = true;
+        res.canonicalJoints = distinct;
+        res.frames = frames;
+        res.length = length;
+        return res;
+    }
 
     // The rig's natural STANDING pose. Mixamo skeletons have an identity bone
     // rest pose — the real standing orientation lives in frame 0 of their

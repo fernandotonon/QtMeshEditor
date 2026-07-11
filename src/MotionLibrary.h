@@ -35,6 +35,15 @@ public:
         // order (size frames × 22). Rotation only; translation/scale are the
         // caller's (the retarget writes rotation keyframes).
         std::vector<std::vector<std::array<float, 4>>> quats;
+        // Optional (schema v3 clips extracted by --dump-canonical): the
+        // SOURCE rig's bind-pose world orientation per canonical joint.
+        // Present → the retarget runs bind-referenced (deltas vs the source
+        // bind onto the target bind); absent (CMU-built libraries) → the
+        // standing-pose path.
+        std::vector<std::array<float, 4>> restWorld;
+        // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
+        // enables the direction-aligned bind-referenced retarget.
+        std::vector<std::array<float, 3>> restDir;
     };
 
     MotionLibrary() = default;

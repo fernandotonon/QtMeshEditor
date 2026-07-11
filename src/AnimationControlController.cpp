@@ -1693,6 +1693,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     int fps = 30;
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;
+    std::vector<std::array<float, 3>> clipDirs;
     bool gotClip = false;
 
     if (useModel) {
@@ -1724,7 +1725,12 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         }
         const MotionLibrary::Clip& clip = lib.clip(idx);
         quats = clip.quats; fps = clip.fps;
-        worldFrame = lib.isWorldFrame(); cmuRest = lib.cmuRestWorld();
+        worldFrame = lib.isWorldFrame();
+        // Prefer the clip's own source-bind orientations (bind-referenced
+        // retarget); the library-level block is the v2 CMU legacy.
+        cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
+                                         : clip.restWorld;
+        clipDirs = clip.restDir;
         clipSource = QStringLiteral("template");
         if (duration > 0.05) {
             const int want = std::max(2, int(duration * clip.fps));
@@ -1744,7 +1750,8 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
-                                                      /*refineStride=*/8, yaw180);
+                                                      /*refineStride=*/8, yaw180,
+                                                      clipDirs);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

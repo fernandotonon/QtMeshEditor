@@ -180,7 +180,8 @@ public:
         const std::vector<std::array<float, 4>>& cmuRestWorld = {},
         bool refineWithModel = false,
         int refineStride = 8,
-        bool yaw180 = false);
+        bool yaw180 = false,
+        const std::vector<std::array<float, 3>>& clipRestDir = {});
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
@@ -193,6 +194,19 @@ public:
         int resolvedRoles = 0;  ///< canonical roles matched on this rig (≤22)
         /// frames × 22 × [x,y,z,w]; unresolved roles hold identity.
         std::vector<std::vector<std::array<float, 4>>> quats;
+        /// The SOURCE rig's BIND-pose world orientation per canonical role
+        /// (same conjugated frame as `quats`). Enables the bind-referenced
+        /// retarget: world deltas are taken against the source bind and
+        /// applied onto the target bind — no pose from any other animation
+        /// is ever involved. 22 × [x,y,z,w]; identity for unresolved roles.
+        std::vector<std::array<float, 4>> restWorld;
+        /// Canonical-frame BIND bone directions per role (unit vectors,
+        /// canonical topology: role → its canonical child joint; leaf roles
+        /// use the incoming direction). The target computes its own bind
+        /// directions the same way; a shortest-arc alignment between the two
+        /// makes every retargeted bone POINT where the source bone points.
+        /// 22 × [x,y,z]; zero for unresolved roles.
+        std::vector<std::array<float, 3>> restDir;
     };
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
