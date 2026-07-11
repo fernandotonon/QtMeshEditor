@@ -194,18 +194,21 @@ public:
         int resolvedRoles = 0;  ///< canonical roles matched on this rig (≤22)
         /// frames × 22 × [x,y,z,w]; unresolved roles hold identity.
         std::vector<std::vector<std::array<float, 4>>> quats;
-        /// The SOURCE rig's BIND-pose world orientation per canonical role
-        /// (same conjugated frame as `quats`). Enables the bind-referenced
-        /// retarget: world deltas are taken against the source bind and
-        /// applied onto the target bind — no pose from any other animation
+        /// The SOURCE rig's REFERENCE world orientation per canonical role,
+        /// measured at the clip's calmest ANIMATED frame (same conjugated
+        /// frame as `quats` — never the bind/reset pose, which on many
+        /// scraped rigs differs from the animation worlds by a constant
+        /// global armature rotation). Enables the bind-referenced retarget
+        /// onto the TARGET's bind — no pose from any other target animation
         /// is ever involved. 22 × [x,y,z,w]; identity for unresolved roles.
         std::vector<std::array<float, 4>> restWorld;
-        /// Canonical-frame BIND bone directions per role (unit vectors,
-        /// canonical topology: role → its canonical child joint; leaf roles
-        /// use the incoming direction). The target computes its own bind
-        /// directions the same way; a shortest-arc alignment between the two
-        /// makes every retargeted bone POINT where the source bone points.
-        /// 22 × [x,y,z]; zero for unresolved roles.
+        /// Canonical-frame bone directions per role at the same reference
+        /// frame (unit vectors, canonical topology: role → its canonical
+        /// child joint; leaf roles use the incoming direction). Combined
+        /// with restWorld this gives the source bone's constant LOCAL
+        /// direction axis; the target computes its own bind directions the
+        /// same way, so every retargeted bone POINTS where the source bone
+        /// points each frame. 22 × [x,y,z]; zero for unresolved roles.
         std::vector<std::array<float, 3>> restDir;
     };
 
