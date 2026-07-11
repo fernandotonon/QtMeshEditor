@@ -37,6 +37,11 @@ SelectionSet.cpp
 LightManager.cpp
 LightRigLibrary.cpp
 LightLinking.cpp
+LightGroupLibrary.cpp
+LightGroupController.cpp
+ViewportLightSoloController.cpp
+IesProfile.cpp
+AreaLight.cpp
 LightVisualizer.cpp
 LightsController.cpp
 LightPropertiesController.cpp

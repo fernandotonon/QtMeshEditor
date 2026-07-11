@@ -63,6 +63,16 @@ class LightPropertiesController : public QObject
     Q_PROPERTY(QStringList linkedEntityNames READ linkedEntityNames NOTIFY propertiesChanged)
     Q_PROPERTY(QStringList linkModeChoices READ linkModeChoices CONSTANT)
     Q_PROPERTY(QStringList availableLinkTargets READ availableLinkTargets NOTIFY propertiesChanged)
+    Q_PROPERTY(QString iesProfilePath READ iesProfilePath NOTIFY propertiesChanged)
+    Q_PROPERTY(bool hasIesProfile READ hasIesProfile NOTIFY propertiesChanged)
+    Q_PROPERTY(bool areaLightsEnabled READ areaLightsEnabled CONSTANT)
+#ifdef ENABLE_AREA_LIGHTS
+    Q_PROPERTY(QString areaShape READ areaShape WRITE setAreaShape NOTIFY propertiesChanged)
+    Q_PROPERTY(double areaWidth READ areaWidth WRITE setAreaWidth NOTIFY propertiesChanged)
+    Q_PROPERTY(double areaHeight READ areaHeight WRITE setAreaHeight NOTIFY propertiesChanged)
+    Q_PROPERTY(int areaSampleCount READ areaSampleCount WRITE setAreaSampleCount NOTIFY propertiesChanged)
+    Q_PROPERTY(QStringList areaShapeChoices READ areaShapeChoices CONSTANT)
+#endif
 
 public:
     static LightPropertiesController* instance();
@@ -152,6 +162,24 @@ public:
     QStringList linkedEntityNames() const;
     QStringList linkModeChoices() const;
     QStringList availableLinkTargets() const;
+
+    QString iesProfilePath() const;
+    bool hasIesProfile() const;
+    bool areaLightsEnabled() const;
+    Q_INVOKABLE void browseIesProfile();
+    Q_INVOKABLE void clearIesProfile();
+
+#ifdef ENABLE_AREA_LIGHTS
+    QString areaShape() const;
+    void setAreaShape(const QString& shape);
+    double areaWidth() const;
+    void setAreaWidth(double value);
+    double areaHeight() const;
+    void setAreaHeight(double value);
+    int areaSampleCount() const;
+    void setAreaSampleCount(int count);
+    QStringList areaShapeChoices() const;
+#endif
 
     Q_INVOKABLE void addLinkedEntity(const QString& entityName);
     Q_INVOKABLE void removeLinkedEntity(const QString& entityName);

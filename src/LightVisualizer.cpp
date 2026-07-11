@@ -1,6 +1,7 @@
 #include "LightVisualizer.h"
 
 #include "GlobalDefinitions.h"
+#include "IesProfile.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -125,6 +126,56 @@ void addSpotGizmo(Ogre::ManualObject* mo,
         const Ogre::Vector3 offset = u * std::cos(t) + v * std::sin(t);
         addLine(mo, apex, outerCenter + offset * outerRadius, colour);
     }
+}
+
+void addIesPolarGizmo(Ogre::ManualObject* mo,
+                      const IesProfile& profile,
+                      float scale,
+                      const Ogre::ColourValue& colour)
+{
+    const QVector<float> slice = profile.polarSlice();
+    if (slice.size() < 2)
+        return;
+
+    const Ogre::Vector3 forward = Ogre::Vector3::NEGATIVE_UNIT_Z;
+    const Ogre::Vector3 u = orthoBasisU(forward);
+
+    Ogre::Vector3 prev = Ogre::Vector3::ZERO;
+    for (int i = 0; i < slice.size(); ++i)
+    {
+        const float angleDeg = profile.verticalAnglesDeg.value(i, 0.0f);
+        const float angleRad = Ogre::Degree(angleDeg).valueRadians();
+        const float radius = slice[i] * scale;
+        const Ogre::Vector3 dir =
+            (forward * std::cos(angleRad) + u * std::sin(angleRad)).normalisedCopy();
+        const Ogre::Vector3 point = dir * radius;
+        if (i > 0)
+            addLine(mo, prev, point, colour);
+        prev = point;
+    }
+    if (slice.size() > 1)
+        addLine(mo, prev, Ogre::Vector3::ZERO, colour);
+}
+
+void addAreaRectangleGizmo(Ogre::ManualObject* mo, float width, float height, const Ogre::ColourValue& colour)
+{
+    const float hw = width * 0.5f;
+    const float hh = height * 0.5f;
+    const Ogre::Vector3 corners[4] = {
+        {hw, hh, 0}, {-hw, hh, 0}, {-hw, -hh, 0}, {hw, -hh, 0}};
+    for (int i = 0; i < 4; ++i)
+        addLine(mo, corners[i], corners[(i + 1) % 4], colour);
+}
+
+void addAreaDiskGizmo(Ogre::ManualObject* mo, float radius, const Ogre::ColourValue& colour)
+{
+    addWireCircle(mo, Ogre::Vector3::ZERO, Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Y, radius, colour,
+                  kConeSegments);
+}
+
+void addAreaLineGizmo(Ogre::ManualObject* mo, float length, const Ogre::ColourValue& colour)
+{
+    addLine(mo, Ogre::Vector3(-length * 0.5f, 0, 0), Ogre::Vector3(length * 0.5f, 0, 0), colour);
 }
 
 QImage makeIconImage(const QString& kind)
@@ -516,25 +567,51 @@ void LightVisualizer::rebuildGizmoGeometry(OverlayData& data, const LightHandle&
 
     const float alpha = selected ? 1.0f : 0.5f;
     const Ogre::ColourValue colour = tintColour(handle.light->getDiffuseColour(), alpha, selected);
+    const LightSnapshot snapshot = LightSnapshot::fromHandle(handle);
 
     data.gizmo->clear();
     data.gizmo->begin(mGizmoMaterial->getName(), Ogre::RenderOperation::OT_LINE_LIST);
 
-    switch (handle.light->getType())
+#ifdef ENABLE_AREA_LIGHTS
+    const QString areaShape = snapshot.areaShape.trimmed().toLower();
+    if (!areaShape.isEmpty())
     {
-    case Ogre::Light::LT_DIRECTIONAL:
-        addDirectionalGizmo(data.gizmo, colour);
-        break;
-    case Ogre::Light::LT_SPOTLIGHT:
-        addSpotGizmo(data.gizmo,
-                     handle.light->getAttenuationRange(),
-                     handle.light->getSpotlightInnerAngle().valueDegrees(),
-                     handle.light->getSpotlightOuterAngle().valueDegrees(),
-                     colour);
-        break;
-    default:
-        addPointGizmo(data.gizmo, handle.light->getAttenuationRange(), colour);
-        break;
+        if (areaShape == QStringLiteral("rectangle"))
+            addAreaRectangleGizmo(data.gizmo, snapshot.areaWidth, snapshot.areaHeight, colour);
+        else if (areaShape == QStringLiteral("disk"))
+            addAreaDiskGizmo(data.gizmo, std::max(0.05f, snapshot.areaWidth * 0.5f), colour);
+        else if (areaShape == QStringLiteral("line"))
+            addAreaLineGizmo(data.gizmo, snapshot.areaWidth, colour);
+    }
+    else
+#endif
+    {
+        switch (handle.light->getType())
+        {
+        case Ogre::Light::LT_DIRECTIONAL:
+            addDirectionalGizmo(data.gizmo, colour);
+            break;
+        case Ogre::Light::LT_SPOTLIGHT:
+            addSpotGizmo(data.gizmo,
+                         handle.light->getAttenuationRange(),
+                         handle.light->getSpotlightInnerAngle().valueDegrees(),
+                         handle.light->getSpotlightOuterAngle().valueDegrees(),
+                         colour);
+            break;
+        default:
+            addPointGizmo(data.gizmo, handle.light->getAttenuationRange(), colour);
+            break;
+        }
+    }
+
+    if (!snapshot.iesProfilePath.isEmpty())
+    {
+        const IesProfile profile = IesProfile::parseFile(snapshot.iesProfilePath);
+        if (profile.valid)
+        {
+            const float scale = std::max(0.2f, handle.light->getAttenuationRange() * 0.35f);
+            addIesPolarGizmo(data.gizmo, profile, scale, colour);
+        }
     }
 
     data.gizmo->end();

@@ -2,6 +2,7 @@
 
 #include "LightManager.h"
 #include "LightLinking.h"
+#include "LightGroupLibrary.h"
 #include "LightRigLibrary.h"
 #include "Manager.h"
 #include "ShadowController.h"
@@ -215,6 +216,18 @@ QJsonObject snapshotToJson(const LightSnapshot& snapshot)
     obj.insert(QStringLiteral("linkMode"), LightLinking::modeToString(snapshot.linkMode));
     obj.insert(QStringLiteral("linkedEntities"), QJsonArray::fromStringList(snapshot.linkedEntityNames));
     obj.insert(QStringLiteral("linkChannelBit"), static_cast<int>(snapshot.linkChannelBit));
+    if (!snapshot.iesProfilePath.isEmpty())
+        obj.insert(QStringLiteral("iesProfilePath"), snapshot.iesProfilePath);
+#ifdef ENABLE_AREA_LIGHTS
+    if (!snapshot.areaShape.isEmpty())
+        obj.insert(QStringLiteral("areaShape"), snapshot.areaShape);
+    if (snapshot.areaWidth != 1.0f)
+        obj.insert(QStringLiteral("areaWidth"), snapshot.areaWidth);
+    if (snapshot.areaHeight != 1.0f)
+        obj.insert(QStringLiteral("areaHeight"), snapshot.areaHeight);
+    if (snapshot.areaSampleCount != 4)
+        obj.insert(QStringLiteral("areaSampleCount"), snapshot.areaSampleCount);
+#endif
     return obj;
 }
 
@@ -273,6 +286,13 @@ bool snapshotFromJson(const QJsonObject& obj, LightSnapshot& snapshot)
     }
     snapshot.linkChannelBit =
         static_cast<uint32_t>(obj.value(QStringLiteral("linkChannelBit")).toInt(0));
+    snapshot.iesProfilePath = obj.value(QStringLiteral("iesProfilePath")).toString();
+#ifdef ENABLE_AREA_LIGHTS
+    snapshot.areaShape = obj.value(QStringLiteral("areaShape")).toString();
+    snapshot.areaWidth = static_cast<float>(obj.value(QStringLiteral("areaWidth")).toDouble(1.0));
+    snapshot.areaHeight = static_cast<float>(obj.value(QStringLiteral("areaHeight")).toDouble(1.0));
+    snapshot.areaSampleCount = obj.value(QStringLiteral("areaSampleCount")).toInt(4);
+#endif
     return true;
 }
 
@@ -534,12 +554,15 @@ SceneLightsDocument captureFromScene()
     for (const auto& child : root->getChildren())
     {
         auto* node = static_cast<Ogre::SceneNode*>(child);
-        if (!LightRigLibrary::sceneNodeIsRigGroup(node))
+        const bool isRig = LightRigLibrary::sceneNodeIsRigGroup(node);
+        const bool isCollection = LightGroupLibrary::sceneNodeIsLightGroup(node);
+        if (!isRig && !isCollection)
             continue;
 
         RigGroupExport group;
         group.name = QString::fromStdString(node->getName());
         group.rigId = rigIdFromSceneNode(node);
+        group.isUserCollection = isCollection;
         group.preserveGrouping = true;
         groupIndexByNode[node] = doc.rigGroups.size();
         doc.rigGroups.append(group);
@@ -591,7 +614,10 @@ bool applyToLightManager(const SceneLightsDocument& doc, bool useDefaultWhenEmpt
         if (!rigNode)
             continue;
 
-        LightRigLibrary::tagRigGroupNode(rigNode);
+        if (group.isUserCollection)
+            LightGroupLibrary::tagLightGroupNode(rigNode);
+        else
+            LightRigLibrary::tagRigGroupNode(rigNode);
         if (!group.rigId.isEmpty())
         {
             rigNode->getUserObjectBindings().setUserAny(
@@ -624,6 +650,8 @@ QByteArray documentToJson(const SceneLightsDocument& doc)
         obj.insert(QStringLiteral("name"), group.name);
         if (!group.rigId.isEmpty())
             obj.insert(QStringLiteral("rigId"), group.rigId);
+        if (group.isUserCollection)
+            obj.insert(QStringLiteral("groupKind"), QStringLiteral("collection"));
         obj.insert(QStringLiteral("preserveGrouping"), group.preserveGrouping);
         QJsonArray lightsArr;
         for (const LightSnapshot& snapshot : group.lights)
@@ -661,6 +689,8 @@ bool documentFromJson(const QByteArray& json, SceneLightsDocument& out)
         RigGroupExport group;
         group.name = obj.value(QStringLiteral("name")).toString();
         group.rigId = obj.value(QStringLiteral("rigId")).toString();
+        group.isUserCollection =
+            obj.value(QStringLiteral("groupKind")).toString() == QStringLiteral("collection");
         group.preserveGrouping = obj.value(QStringLiteral("preserveGrouping")).toBool(true);
         const QJsonArray lightsArr = obj.value(QStringLiteral("lights")).toArray();
         for (const QJsonValue& lightValue : lightsArr)

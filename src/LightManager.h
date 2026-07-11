@@ -50,6 +50,17 @@ struct LightSnapshot
     float shadowDepthBias = 0.00005f;
     float shadowSlopeBias = 1.0f;
 
+    /// Slice I (#491): IES photometric profile path (point/spot).
+    QString iesProfilePath;
+
+#ifdef ENABLE_AREA_LIGHTS
+    /// Area-light approximation (#491) — rectangle / disk / line via child point lights.
+    QString areaShape; ///< empty = punctual, "rectangle", "disk", "line"
+    float areaWidth = 1.0f;
+    float areaHeight = 1.0f;
+    int areaSampleCount = 4;
+#endif
+
     /// Slice I (#491): entity include/exclude via Ogre light masks (bits 1..31).
     LightLinking::Mode linkMode = LightLinking::Mode::None;
     QStringList linkedEntityNames;

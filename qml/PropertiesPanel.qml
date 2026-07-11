@@ -4829,6 +4829,176 @@ Rectangle {
                     }
                 }
             }
+
+            // IES profile (Slice I #491)
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("IES profile")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                width: parent.width - 16
+                elide: Text.ElideMiddle
+                text: LightPropertiesController.hasIesProfile
+                    ? LightPropertiesController.iesProfilePath
+                    : qsTr("No IES file loaded")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.85
+            }
+            Row {
+                visible: LightPropertiesController.isPointOrSpot
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: (parent.width - 62) / 2
+                    height: 22
+                    radius: 3
+                    color: browseIesMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Browse…")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: browseIesMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: LightPropertiesController.browseIesProfile()
+                    }
+                }
+                Rectangle {
+                    width: 56
+                    height: 22
+                    radius: 3
+                    opacity: LightPropertiesController.hasIesProfile ? 1.0 : 0.45
+                    color: clearIesMa.containsMouse && LightPropertiesController.hasIesProfile
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Clear")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: clearIesMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: LightPropertiesController.hasIesProfile
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: LightPropertiesController.clearIesProfile()
+                    }
+                }
+            }
+
+            // Area light (Slice I #491)
+            Text {
+                visible: LightPropertiesController.areaLightsEnabled
+                    && LightPropertiesController.isPointOrSpot
+                text: qsTr("Area light")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                visible: LightPropertiesController.areaLightsEnabled
+                    && LightPropertiesController.isPointOrSpot
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Approximates area lighting with multiple point samples. Parent light is hidden while active.")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            ThemedComboBox {
+                visible: LightPropertiesController.areaLightsEnabled
+                    && LightPropertiesController.isPointOrSpot
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: [qsTr("Punctual"), qsTr("Rectangle"), qsTr("Disk"), qsTr("Line")]
+                currentIndex: {
+                    const s = LightPropertiesController.areaShape
+                    if (s === "rectangle") return 1
+                    if (s === "disk") return 2
+                    if (s === "line") return 3
+                    return 0
+                }
+                onActivated: index => {
+                    const shapes = ["", "rectangle", "disk", "line"]
+                    LightPropertiesController.areaShape = shapes[index]
+                }
+            }
+            Row {
+                visible: LightPropertiesController.areaLightsEnabled
+                    && LightPropertiesController.isPointOrSpot
+                    && LightPropertiesController.areaShape !== ""
+                spacing: 6
+                width: parent.width - 16
+                TransformField {
+                    width: LightPropertiesController.areaShape === "line"
+                        ? parent.width
+                        : (parent.width - 6) / 2
+                    label: LightPropertiesController.areaShape === "line" ? qsTr("Length") : qsTr("Width")
+                    value: LightPropertiesController.areaWidth
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.areaWidth = val }
+                }
+                TransformField {
+                    visible: LightPropertiesController.areaShape === "rectangle"
+                    width: (parent.width - 6) / 2
+                    label: qsTr("Height")
+                    value: LightPropertiesController.areaHeight
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.areaHeight = val }
+                }
+            }
+            Row {
+                visible: LightPropertiesController.areaLightsEnabled
+                    && LightPropertiesController.isPointOrSpot
+                    && LightPropertiesController.areaShape !== ""
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Samples")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: parent.width - 72
+                    height: 22
+                    from: 2
+                    to: 16
+                    stepSize: 1
+                    value: LightPropertiesController.areaSampleCount
+                    onMoved: LightPropertiesController.areaSampleCount = value
+                }
+                Text {
+                    width: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: LightPropertiesController.areaSampleCount
+                }
+            }
         }
     }
 
@@ -5695,6 +5865,200 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: SceneLightingController.applySelectedRig()
+                }
+            }
+
+            Text {
+                text: qsTr("Light collections")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Select 2+ lights, name a group, and create. Transform/enable the group node as one unit.")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: parent.width - createGroupBtn.width - 6
+                    height: 22
+                    radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    TextInput {
+                        id: lightGroupNameField
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        text: qsTr("LightGroup")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        verticalAlignment: TextInput.AlignVCenter
+                        selectByMouse: true
+                    }
+                }
+                Rectangle {
+                    id: createGroupBtn
+                    width: 56
+                    height: 22
+                    radius: 3
+                    opacity: LightGroupController.canGroupSelection ? 1.0 : 0.45
+                    color: createGroupMa.containsMouse && LightGroupController.canGroupSelection
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Group")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: createGroupMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: LightGroupController.canGroupSelection
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: LightGroupController.createGroupFromSelection(lightGroupNameField.text)
+                    }
+                }
+            }
+            Row {
+                visible: LightGroupController.hasLightGroupSelection
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Selected group")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                    text: LightGroupController.selectedGroupName
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    font.italic: true
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            Row {
+                visible: LightGroupController.hasLightGroupSelection
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: (parent.width - 6) / 2
+                    height: 22
+                    radius: 3
+                    color: enableGroupMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Enable")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: enableGroupMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: LightGroupController.setSelectedGroupEnabled(true)
+                    }
+                }
+                Rectangle {
+                    width: (parent.width - 6) / 2
+                    height: 22
+                    radius: 3
+                    color: disableGroupMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Disable")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: disableGroupMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: LightGroupController.setSelectedGroupEnabled(false)
+                    }
+                }
+            }
+            Rectangle {
+                visible: LightGroupController.hasLightGroupSelection
+                width: parent.width - 16
+                height: 22
+                radius: 3
+                color: dissolveGroupMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.controlBgColor
+                border.color: PropertiesPanelController.borderColor
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("Dissolve group")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: dissolveGroupMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: LightGroupController.dissolveSelectedGroup()
+                }
+            }
+
+            Text {
+                text: qsTr("Viewport solo")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Per-viewport audit: show only one light in the active viewport (runtime only).")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            ThemedComboBox {
+                id: viewportSoloPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                enabled: ViewportLightSoloController.hasActiveViewport
+                model: [qsTr("All lights")].concat(ViewportLightSoloController.lightNames)
+                currentIndex: {
+                    const solo = ViewportLightSoloController.activeViewportSoloLight
+                    if (!solo || solo.length === 0)
+                        return 0
+                    const idx = ViewportLightSoloController.lightNames.indexOf(solo)
+                    return idx >= 0 ? idx + 1 : 0
+                }
+                onActivated: index => {
+                    if (index <= 0)
+                        ViewportLightSoloController.activeViewportSoloLight = ""
+                    else
+                        ViewportLightSoloController.activeViewportSoloLight = model[index]
+                }
+                Connections {
+                    target: ViewportLightSoloController
+                    function onActiveViewportSoloChanged() { viewportSoloPicker.currentIndex = viewportSoloPicker.currentIndex }
+                    function onLightsChanged() { viewportSoloPicker.currentIndex = viewportSoloPicker.currentIndex }
                 }
             }
         }

@@ -89,6 +89,8 @@
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
 #include "LightVisualizer.h"
+#include "LightGroupController.h"
+#include "ViewportLightSoloController.h"
 #include "MeshInfoOverlay.h"
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
@@ -572,6 +574,8 @@ MainWindow::~MainWindow()
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
+        LightGroupController::kill();
+        ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
         MeshDepthRenderer::shutdown();
@@ -774,6 +778,16 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SceneLightingController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SceneLightingController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<LightGroupController>(
+            "PropertiesPanel", 1, 0, "LightGroupController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LightGroupController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ViewportLightSoloController>(
+            "PropertiesPanel", 1, 0, "ViewportLightSoloController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ViewportLightSoloController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<ShadowController>(
             "PropertiesPanel", 1, 0, "ShadowController",
@@ -2653,6 +2667,7 @@ void MainWindow::initToolBar()
                     if (auto* ctrl = HdrViewportController::getSingletonPtr())
                         ctrl->setActiveWidget(widget);
                     HdrEnvironmentController::instance()->setActiveWidget(widget);
+                    ViewportLightSoloController::instance()->setActiveWidget(widget);
                 });
     }
 
@@ -4935,6 +4950,7 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
                 if (auto* ctrl = HdrViewportController::getSingletonPtr())
                     ctrl->setActiveWidget(widget);
                 HdrEnvironmentController::instance()->setActiveWidget(widget);
+                ViewportLightSoloController::instance()->setActiveWidget(widget);
             });
 
     if (!mDockWidgetList.isEmpty())

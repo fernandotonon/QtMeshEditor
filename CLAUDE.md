@@ -203,6 +203,10 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **Intensity units**: GUI/CLI/MCP use Ogre `powerScale` (Inspector “Intensity”). glTF export writes both `qtmesh.scene.lights` (exact) and best-effort KHR punctual intensity derived from `powerScale × diffuse luminance`. FBX lights are Assimp best-effort; use the `.lights.json` sidecar for bit-exact round-trip.
 - **Sentry breadcrumbs**: `scene.light.create|delete|duplicate|rename|edit|shadow_toggle|apply_rig|gizmo_toggle` on core ops; `ui.action` on menu/toolbar clicks.
 - **Light linking (Slice I #491)**: per-light include/exclude lists map to Ogre `Light::setLightMask` / `Entity::setLightMask` (32 channel bits; bit 0 reserved; max 31 simultaneous link rules). Persisted in `qtmesh.scene.lights` JSON as `linkMode`, `linkedEntities`, `linkChannelBit`. Exclude sets excluded entities to the channel bit only (no overlap with the light's inverted mask). Combining include + exclude on the same entity is best-effort. RTSS PBR may not honour masks on every pass.
+- **Light collections (#491)**: user-created groups via `LightGroupLibrary` / `LightGroupController` — select 2+ lights, parent under a tagged `light_group` scene node; transform/enable/disable as one unit. Persisted in scene JSON as `rigGroups[]` with `groupKind: "collection"`.
+- **Viewport solo (#491)**: `ViewportLightSoloController` — per-viewport runtime toggle to show only one light during that viewport's render pass (`OgreWidget::frameEnded` begin/end hooks). Inspector picker under Scene → Lighting.
+- **IES profiles (#491)**: `IesProfile` LM-63 parser + `IesLightApply` maps beam/field angles to spotlight cones (approximation; not full shader 1D texture yet). Inspector Browse/Clear; polar plot overlay in `LightVisualizer`. Persisted as `iesProfilePath` in scene JSON.
+- **Area lights (#491, `ENABLE_AREA_LIGHTS`)**: multi-point proxy approximation on rectangle/disk/line shapes; parent light hidden while active. Inspector shape/size/samples; wire gizmo in `LightVisualizer`. Persisted as `areaShape`, `areaWidth`, `areaHeight`, `areaSampleCount`.
 
 ### Debug Overlays
 
