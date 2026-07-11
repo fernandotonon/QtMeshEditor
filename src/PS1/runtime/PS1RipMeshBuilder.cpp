@@ -686,20 +686,34 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             // when the user toggles a flip / changes scale (#424).
             node->getUserObjectBindings().setUserAny(
                 "ps1RipPlacementScale", Ogre::Any(placementScale));
+
+            // #816: tracked groups reconstruct in OBJECT space centered on the
+            // object's own model origin, so two identical props at different GTE
+            // translations dedupe to one mesh whose centroid (inst.px/py/pz) is
+            // ~the same for both — placing at the centroid would stack them.
+            // The distinct world position is inst.trWorld (the GTE translation
+            // in editor units). Position tracked instances there; the group's
+            // GTE rotation must also be re-applied or every copy renders in its
+            // rest orientation (Codex review: feed trWorld through the
+            // normalizer too, not just the rotation). Untracked instances keep
+            // the v1 centroid placement.
+            const float px = inst.hasMatrix ? inst.trWorld[0] : inst.px;
+            const float py = inst.hasMatrix ? inst.trWorld[1] : inst.py;
+            const float pz = inst.hasMatrix ? inst.trWorld[2] : inst.pz;
+
+            // Base position for the live-normalizer re-apply path — must match
+            // the position actually used below (trWorld for tracked instances)
+            // or a flip/scale toggle would snap tracked copies back to the
+            // centroid.
             node->getUserObjectBindings().setUserAny(
-                "ps1RipBasePosition", Ogre::Any(Ogre::Vector3(inst.px, inst.py, inst.pz)));
+                "ps1RipBasePosition", Ogre::Any(Ogre::Vector3(px, py, pz)));
 
             float scaleOut[3];
             float posOut[3];
             Ps1CoordinateNormalizer::composeNodeTransform(
-                normalize, placementScale, inst.px, inst.py, inst.pz, scaleOut, posOut);
+                normalize, placementScale, px, py, pz, scaleOut, posOut);
             node->setScale(scaleOut[0], scaleOut[1], scaleOut[2]);
             node->setPosition(posOut[0], posOut[1], posOut[2]);
-            // #816: tracked groups reconstruct in object/model space, so the
-            // group's GTE rotation must be re-applied per instance or every
-            // placed copy renders in its rest orientation. Position keeps the
-            // v1 centroid placement above; `trWorld` stays stored on the
-            // instance for a future full-matrix placement pass.
             if (inst.hasMatrix) {
                 float editorRot[9];
                 editorRotationFromGte(inst.rot, editorRot);

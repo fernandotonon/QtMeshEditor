@@ -404,8 +404,14 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     });
     connect(m_manager, &PS1RipManager::inCoreHooksState, this, [this](bool active) {
         // Per-core capability surface (#813): tracked in-core capture only
-        // works with the qtmesh beetle fork in PS1Cores/.
-        m_statusLabel->setText(m_statusLabel->text()
+        // works with the qtmesh beetle fork in PS1Cores/. Strip any prior
+        // hook-state suffix before re-appending so repeated signals (or an
+        // active→unavailable transition) don't stack duplicates (CodeRabbit).
+        QString base = m_statusLabel->text();
+        const int sep = base.indexOf(QStringLiteral(" · in-core hooks:"));
+        if (sep >= 0)
+            base.truncate(sep);
+        m_statusLabel->setText(base
                                + (active ? tr(" · in-core hooks: active")
                                          : tr(" · in-core hooks: unavailable (stock core)")));
     });

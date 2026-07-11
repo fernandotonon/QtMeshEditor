@@ -799,7 +799,11 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
                     expandBounds(*statsOut, acc.vertices[static_cast<int>(idx)]);
             }
         }
-        statsOut->finalizeSlabMetric();
+        // NB: slabLike is NOT finalized here — buildParts folds snapshot's
+        // model-mesh vertices into the same bounds afterward, so finalizing now
+        // would compute the canary on an incomplete AABB for mixed captures
+        // (CodeRabbit review). buildParts calls finalizeSlabMetric() once the
+        // bounds are fully populated.
     }
     return out;
 }
@@ -986,6 +990,13 @@ PartsBuildResult buildParts(const CaptureSnapshot &snapshot,
             statsOut->totalVertices += verts;
         }
     }
+
+    // Finalize the slab canary once ALL vertices (matrix-group prims AND
+    // model-meshes) are folded into the bounds — moved here from
+    // buildMatrixGroups so mixed captures don't report a stale metric
+    // (CodeRabbit review).
+    if (statsOut)
+        statsOut->finalizeSlabMetric();
 
     return out;
 }

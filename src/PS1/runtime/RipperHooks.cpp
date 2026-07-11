@@ -258,8 +258,17 @@ void RipperHooks::onGteRecords(const qtmesh_rip_gte_record *recs, uint32_t count
     for (uint32_t i = 0; i < count; ++i) {
         const GteRecordEntry &rec = recs[i];
         const uint32_t bufferIdx = m_buffer->addGteRecord(rec);
-        if (bufferIdx != UINT32_MAX)
-            m_gteRingToBuffer.insert(rec.seq % QTMESH_RIP_GTE_RING_ENTRIES, bufferIdx);
+        const uint32_t slot = rec.seq % QTMESH_RIP_GTE_RING_ENTRIES;
+        if (bufferIdx != UINT32_MAX) {
+            m_gteRingToBuffer.insert(slot, bufferIdx);
+        } else {
+            // Record dropped by the session cap: remove any stale map entry for
+            // this ring slot so a later shadow can't resolve it to an OLDER
+            // buffered record (whose sx/sy might still pass the epsilon on
+            // repeating geometry) and get marked GteTracked with wrong
+            // object-space data. Degrade to DepthOnly instead (Codex review).
+            m_gteRingToBuffer.remove(slot);
+        }
 
         // Feed each unique (rt, tr, ofx/ofy/h) into the existing matrix table
         // so per-draw matrix tagging and reconstruction benefit immediately
