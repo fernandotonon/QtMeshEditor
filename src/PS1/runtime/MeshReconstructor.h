@@ -17,6 +17,15 @@ struct ReconstructedInstance {
     float px = 0.0f;
     float py = 0.0f;
     float pz = 0.0f;
+    /** Full GTE matrix of the part's group when it was grouped by a resolved
+     *  in-core record (#816). `rot` is the raw GTE rotation, row-major and
+     *  unit-normalised from 4.12 fixed (still in the GTE camera convention —
+     *  `PS1RipMeshBuilder::editorRotationFromGte` converts axes); `trWorld`
+     *  is the GTE translation in editor units (×0.01, Y/Z negated, matching
+     *  `GteInverse::modelToEditor`). Defaults keep pre-#816 fixtures valid. */
+    float rot[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    float trWorld[3] = {0.0f, 0.0f, 0.0f};
+    bool hasMatrix = false;
 };
 
 /** Per-`PrimRecord` provenance: where this draw call landed in the

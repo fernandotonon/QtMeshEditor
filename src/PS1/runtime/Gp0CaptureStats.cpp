@@ -3,6 +3,8 @@
 QString Gp0CaptureStats::primarySourceLabel() const
 {
     switch (primarySource) {
+    case Gp0CaptureSource::InCoreHook:
+        return QStringLiteral("gp0_incore");
     case Gp0CaptureSource::DirectHook:
         return QStringLiteral("gp0_hook");
     case Gp0CaptureSource::RamOrderingTable:

@@ -334,6 +334,18 @@ private:
     QJsonObject toolCloudDeleteProject(const QJsonObject &args);
     QJsonObject toolCloudUpload(const QJsonObject &args);
 
+    // PS1 runtime ripper (#412) — headless drive-and-verify surface. Guarded
+    // by ENABLE_PS1_RIP; each returns a structured error when the build lacks
+    // the feature. All run on the MCP main thread (QSocketNotifier) and block
+    // on a local QEventLoop while the worker boots/captures.
+    QJsonObject toolPs1RipStart(const QJsonObject &args);
+    QJsonObject toolPs1RipStop(const QJsonObject &args);
+    QJsonObject toolPs1RipStatus(const QJsonObject &args);
+    QJsonObject toolPs1RipRunFrames(const QJsonObject &args);
+    QJsonObject toolPs1RipCapture(const QJsonObject &args);
+    QJsonObject toolPs1RipStats(const QJsonObject &args);
+    QJsonObject toolPs1RipClear(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

@@ -23,6 +23,11 @@ set_target_properties(qtmesh_ps1core_stub PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/PS1Cores"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/PS1Cores"
 )
+if(APPLE)
+    # MODULE libraries default to .so on macOS, but EmuCoreLoader resolves
+    # host plugins with the platform dylib suffix.
+    set_target_properties(qtmesh_ps1core_stub PROPERTIES SUFFIX ".dylib")
+endif()
 
 if(BUILD_TESTS AND TARGET UnitTests)
     add_dependencies(UnitTests qtmesh_ps1core_stub)

@@ -9,8 +9,23 @@ int MeshReconstructionStats::gteInversePercent() const
         return 0;
     // Model-mesh verts are trusted-by-construction (already in model space), so they
     // count toward the "quality" numerator the same way GTE-inverted verts do (#674).
-    const int trusted = gteInverseVertices + modelMeshVertices;
+    // Tier-0 tracked verts (#816) are exact object-space reads, trusted the same way.
+    const int trusted = gteInverseVertices + modelMeshVertices + gteTrackedVertices;
     return (trusted * 100) / totalVertices;
+}
+
+int MeshReconstructionStats::gteTrackedPercent() const
+{
+    if (totalVertices <= 0)
+        return 0;
+    return (gteTrackedVertices * 100) / totalVertices;
+}
+
+int MeshReconstructionStats::depthOnlyPercent() const
+{
+    if (totalVertices <= 0)
+        return 0;
+    return (depthOnlyVertices * 100) / totalVertices;
 }
 
 bool MeshReconstructionStats::hasBounds() const

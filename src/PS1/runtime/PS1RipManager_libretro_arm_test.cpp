@@ -73,6 +73,11 @@ protected:
 TEST_F(PS1RipManagerLibretroArmTest, ArmCaptureWhileLibretroSessionRuns)
 {
     skipUnlessLibretroAssetsReady();
+    // GTEST_SKIP() inside the helper only returns from the helper, not from
+    // this test body — re-check the skip state here so the assertions below
+    // don't run (and fail) when the libretro plugin / BIOS aren't present.
+    if (IsSkipped())
+        return;
 
     const QString biosPath = requireTestBiosPath();
     const QString isoPath = requireTestIsoPath();
@@ -102,6 +107,8 @@ TEST_F(PS1RipManagerLibretroArmTest, ArmCaptureWhileLibretroSessionRuns)
 TEST_F(PS1RipManagerLibretroArmTest, ArmThenCaptureFrame)
 {
     skipUnlessLibretroAssetsReady();
+    if (IsSkipped())
+        return;
 
     const QString biosPath = requireTestBiosPath();
     const QString isoPath = requireTestIsoPath();

@@ -31,6 +31,7 @@ public:
     void ingestCaptureFrame() override;
     PsxVramMirrorMode lastVramMirrorMode() const override;
     QString lastError() const override { return m_lastError; }
+    bool inCoreHooksActive() const override { return m_ripInterfaceRegistered; }
     void setJoypadButton(unsigned port, unsigned buttonId, bool pressed) override;
     void resetJoypad(unsigned port = 0) override;
 
@@ -40,6 +41,9 @@ private:
     bool ensureInitialized(QString *errorOut);
     bool loadGame(QString *errorOut);
     void unloadGame();
+    void registerRipInterface();
+    void unregisterRipInterface();
+    void syncRipArmedState();
     void applyMemoryMap(const retro_memory_map *map);
     void refreshVramPointer();
     void mirrorFramebufferToVram();
@@ -51,6 +55,14 @@ private:
     static void videoRefreshCallback(const void *data, unsigned width, unsigned height, size_t pitch);
     static void inputPollCallback();
     static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index, unsigned id);
+
+    // qtmesh rip ABI trampolines (#813-#815). Fire synchronously inside
+    // retro_run on the worker thread — the same thread that already calls
+    // every other EmuHooks method, so no extra locking (EmuHooks.h:15-16).
+    static void ripOnGp0Draw(void *ctx, const uint32_t *words, uint32_t wordCount,
+                             const qtmesh_rip_vertex_shadow *verts, uint32_t vertCount);
+    static void ripOnGteRecords(void *ctx, const qtmesh_rip_gte_record *recs, uint32_t count);
+    static void ripOnFrameEnd(void *ctx, uint32_t frame);
 
     static LibretroEmuCore *s_active;
 
@@ -72,6 +84,9 @@ private:
     QHash<QByteArray, QByteArray> m_coreVariableStorage;
     const uint16_t *m_vramPtr = nullptr;
     size_t m_vramBytes = 0;
+    qtmesh_rip_host_iface m_ripIface{};
+    bool m_ripInterfaceRegistered = false;
+    bool m_ripArmedMirror = false;
     bool m_vramUsesFramebufferFallback = false;
     PsxVramMirrorMode m_lastVramMirrorMode = PsxVramMirrorMode::Unknown;
 

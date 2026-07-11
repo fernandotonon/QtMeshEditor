@@ -52,6 +52,20 @@ void CaptureBuffer::addDrawMode(const DrawModeRecord &mode)
     m_drawModes.append(mode);
 }
 
+uint32_t CaptureBuffer::addGteRecord(const GteRecordEntry &record)
+{
+    // 256k entries ≈ 22 MB — roomy for multi-frame scene captures while
+    // bounding a long-running live session (#814). Prim ingest is unaffected;
+    // vertices that lose their record degrade to DepthOnly at resolve time.
+    constexpr int kMaxGteRecords = 256 * 1024;
+    if (m_gteRecords.size() >= kMaxGteRecords) {
+        ++m_droppedGteRecords;
+        return UINT32_MAX;
+    }
+    m_gteRecords.append(record);
+    return static_cast<uint32_t>(m_gteRecords.size() - 1);
+}
+
 bool CaptureBuffer::addModelMesh(const CapturedModelMesh &mesh)
 {
     if (mesh.mesh.isEmpty())
@@ -70,6 +84,8 @@ void CaptureBuffer::clear()
     m_matrices.clear();
     m_drawModes.clear();
     m_modelMeshes.clear();
+    m_gteRecords.clear();
+    m_droppedGteRecords = 0;
     m_modelMeshHashes.clear();
     m_matrixIndexByHash.clear();
     m_matrixUseCount.clear();

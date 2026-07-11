@@ -98,11 +98,15 @@ signals:
     void sessionStarted(const QString &coreId);
     void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);
     void sessionStopped();
+    /** In-core rip hook availability for the booted core (#813) — forwarded
+     *  from the worker right after sessionStarted. */
+    void inCoreHooksState(bool active);
     void framePresented(const QImage &frame, quint64 frameIndex);
     void frameCaptured(const QString &captureId);
     void meshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                    int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                   bool hasCameraMatrix, int gteInversePercent, bool slabLike,
+                   bool hasCameraMatrix, int gteInversePercent, int gteTrackedPercent,
+                   int depthOnlyPercent, bool slabLike,
                    int primsWithMatrixId, int primsTotal, PsxVramMirrorMode vramMirrorMode,
                    Gp0CaptureStats captureStats);
     void sceneCaptured(const QString &captureId);

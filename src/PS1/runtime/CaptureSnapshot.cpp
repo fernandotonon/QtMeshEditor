@@ -8,6 +8,7 @@ CaptureSnapshot CaptureSnapshot::fromBuffer(const CaptureBuffer &buffer,
     snap.prims = buffer.prims();
     snap.matrices = buffer.matrices();
     snap.modelMeshes = buffer.modelMeshes();
+    snap.gteRecords = buffer.gteRecords();
     snap.cameraMatrixId = buffer.cameraMatrixId();
     snap.vramCells = vramCells;
     return snap;

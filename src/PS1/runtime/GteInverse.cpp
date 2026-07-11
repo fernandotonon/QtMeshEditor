@@ -80,6 +80,13 @@ bool modelToScreen(const MatrixRecord &matrix, int mx, int my, int mz, int &sx, 
 
 bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx, float &my, float &mz)
 {
+    return screenToModel(matrix, static_cast<float>(sx), static_cast<float>(sy),
+                         static_cast<float>(sz), mx, my, mz);
+}
+
+bool screenToModel(const MatrixRecord &matrix, float sx, float sy, float sz, float &mx, float &my,
+                   float &mz)
+{
     const double h = matrix.h != 0 ? static_cast<double>(matrix.h) : kFixedUnit;
     if (h == 0.0)
         return false;
@@ -92,9 +99,9 @@ bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx
     // model-space point (~RT^T·(-TR)/4096). The mesh exists with zero extent,
     // which renders as nothing in the viewport. Refuse the inverse so callers
     // fall back to psxScreenToWorld — the screen-space "blob" is ugly but at
-    // least visible. Real per-vertex depth needs an in-core GTE hook (#676)
-    // or a RAM scanner that recovers the SZ FIFO contents.
-    if (sz == 0)
+    // least visible. The float path carries the same contract: viewW == 0
+    // means "depth unknown" in the PGXP vertex shadow (#815/#816).
+    if (sz == 0.0f)
         return false;
 
     const double ir2 = static_cast<double>(sz);
@@ -106,6 +113,8 @@ bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx
     // from the standard pinhole equation.
     const double ir0 = (static_cast<double>(sx) - ofxPixel) * ir2 / h;
     const double ir1 = (static_cast<double>(sy) - ofyPixel) * ir2 / h;
+    if (!std::isfinite(ir0) || !std::isfinite(ir1) || !std::isfinite(ir2))
+        return false;
 
     const double irMinusTr[3] = {
         ir0 - static_cast<double>(matrix.tr[0]),
@@ -135,8 +144,12 @@ void psxScreenToWorld(float sx, float sy, float sz, float &wx, float &wy, float 
 void modelToEditor(float mx, float my, float mz, float &wx, float &wy, float &wz)
 {
     constexpr float kScale = 0.01f;
-    wx = mx * kScale;
-    wy = -my * kScale;
+    // PS1 model space -> editor: scale by 0.01, negate Y/Z (PS1 Y-down/Z-away
+    // vs editor Y-up/Z-toward), then rotate 180° about Z ((x,y) -> (-x,-y)) so
+    // captured meshes come out upright instead of upside-down. The Z-rotation
+    // folds into the existing negations: X = -(mx), Y = +(my), Z = -(mz).
+    wx = -mx * kScale;
+    wy = my * kScale;
     wz = -mz * kScale;
 }
 

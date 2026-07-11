@@ -2,6 +2,7 @@
 #define LIBRETROHOST_H
 
 #include "libretro/libretro_api.h"
+#include "libretro/qtmesh_rip_abi.h"
 
 #include <QLibrary>
 #include <QString>
@@ -12,6 +13,13 @@ public:
     bool load(const QString &corePath, QString *errorOut = nullptr);
     void unload();
     bool isLoaded() const { return m_library.isLoaded(); }
+
+    /** True when the loaded core exports the qtmesh rip ABI (#813) — i.e. it
+     *  is the rip-instrumented beetle fork. Stock cores return false. */
+    bool hasRipInterface() const
+    {
+        return qtmesh_rip_abi_version && qtmesh_rip_set_interface && qtmesh_rip_set_armed;
+    }
 
     retro_init_t retro_init = nullptr;
     retro_deinit_t retro_deinit = nullptr;
@@ -29,6 +37,15 @@ public:
     retro_reset_t retro_reset = nullptr;
     retro_get_memory_data_t retro_get_memory_data = nullptr;
     retro_get_memory_size_t retro_get_memory_size = nullptr;
+
+    // Optional qtmesh rip ABI (#813). Resolved best-effort after the 16
+    // mandatory symbols; nullptr on stock cores (not an error).
+    using qtmesh_rip_abi_version_t = uint32_t (*)(void);
+    using qtmesh_rip_set_interface_t = int (*)(const qtmesh_rip_host_iface *);
+    using qtmesh_rip_set_armed_t = void (*)(int);
+    qtmesh_rip_abi_version_t qtmesh_rip_abi_version = nullptr;
+    qtmesh_rip_set_interface_t qtmesh_rip_set_interface = nullptr;
+    qtmesh_rip_set_armed_t qtmesh_rip_set_armed = nullptr;
 
 private:
     template<typename T>

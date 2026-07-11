@@ -92,6 +92,45 @@ public:
         return false;
     }
 
+    /**
+     * In-core GTE record flush (#814): every RTPS/RTPT transform the
+     * rip-instrumented core observed this frame, delivered once per frame
+     * immediately before @ref onCoreFrameEnd. Fires on the worker thread
+     * inside retro_run.
+     */
+    virtual void onGteRecords(const qtmesh_rip_gte_record *recs, uint32_t count)
+    {
+        (void)recs;
+        (void)count;
+    }
+
+    /**
+     * In-core GP0 draw hook (#815): one executed GP0 command (complete
+     * packet) with per-vertex PGXP shadows carrying precise coords, view
+     * depth and GTE record provenance. Fires during retro_run, before the
+     * frame's GTE record flush — implementations must buffer draws until
+     * @ref onCoreFrameEnd resolves them against the record table.
+     */
+    virtual void onGpuDrawTracked(const uint32_t *words, uint32_t wordCount,
+                                  const qtmesh_rip_vertex_shadow *shadows, uint32_t shadowCount)
+    {
+        (void)words;
+        (void)wordCount;
+        (void)shadows;
+        (void)shadowCount;
+    }
+
+    /** In-core frame boundary (#813): fired once per retro_run while armed. */
+    virtual void onCoreFrameEnd(uint32_t frame) { (void)frame; }
+
+    /**
+     * True when the in-core GP0 stream delivered draws for the frame being
+     * captured — Gp0HookDispatch uses this to suppress the heuristic RAM
+     * GP0/GTE passes, which could only add duplicates and false positives
+     * next to a true packet stream (#815).
+     */
+    virtual bool inCoreStreamActiveThisFrame() const { return false; }
+
     /** Live armed capture: shared dedupe keys across frames (nullptr when not accumulating). */
     virtual QSet<QString> *livePrimDedupeKeys() { return nullptr; }
 

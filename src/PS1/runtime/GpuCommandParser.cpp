@@ -461,11 +461,19 @@ QString GpuCommandParser::primsToCsv(const QVector<PrimRecord> &prims)
 {
     QString out;
     QTextStream stream(&out);
-    stream << "kind,vertexCount,matrixId,tpage,clut,x0,y0,u0,v0\n";
+    // Columns are append-only: downstream diff tooling (A/B harness, #817)
+    // keys on the original prefix.
+    stream << "kind,vertexCount,matrixId,tpage,clut,x0,y0,u0,v0,"
+              "frame,provenance0,gteRecord0,viewW0\n";
     for (const PrimRecord &p : prims) {
         stream << static_cast<int>(p.kind) << ',' << static_cast<int>(p.vertexCount) << ','
                << p.matrixId << ',' << p.tpage << ',' << p.clut << ',' << p.verts[0].x << ','
-               << p.verts[0].y << ',' << p.verts[0].u << ',' << p.verts[0].v << '\n';
+               << p.verts[0].y << ',' << p.verts[0].u << ',' << p.verts[0].v << ',' << p.frame
+               << ',' << static_cast<int>(p.verts[0].provenance) << ','
+               << (p.verts[0].gteRecordIndex == UINT32_MAX
+                       ? -1
+                       : static_cast<qint64>(p.verts[0].gteRecordIndex))
+               << ',' << p.verts[0].viewW << '\n';
     }
     return out;
 }

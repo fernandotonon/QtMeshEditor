@@ -808,6 +808,13 @@ if(BUILD_TESTS)
     if(QTMESH_DEFINE_DEBUG)
         target_compile_definitions(UnitTests PRIVATE DEBUG)
     endif()
+    # Opt-in local integration tests that boot a real libretro core against a
+    # user-supplied BIOS+ISO (env-gated at runtime too). Off in CI.
+    option(ENABLE_PS1_LIBRETRO_INTEGRATION_TESTS
+        "Compile PS1 libretro integration tests (need local BIOS/ISO)" OFF)
+    if(ENABLE_PS1_LIBRETRO_INTEGRATION_TESTS)
+        target_compile_definitions(UnitTests PRIVATE QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS)
+    endif()
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests
@@ -887,6 +894,25 @@ if(BUILD_TESTS)
             target_compile_definitions(UnitTests PRIVATE HAVE_QT_GAMEPAD)
             target_link_libraries(UnitTests Qt6::Gamepad)
         endif()
+
+        # Test-only fake libretro core exporting the qtmesh rip ABI (#817):
+        # lets InCoreRipCapture_test exercise the full in-core capture chain
+        # (handshake → GTE records → GP0 correlation → provenance) through the
+        # real plugin trampolines with zero ROMs/BIOS. Plain C, no Qt.
+        add_library(fake_rip_core MODULE
+            ${CMAKE_SOURCE_DIR}/tests/fake_rip_core/fake_rip_core.c)
+        target_include_directories(fake_rip_core PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/PS1/runtime)
+        set_target_properties(fake_rip_core PROPERTIES
+            PREFIX ""
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        if(APPLE)
+            # MODULE libraries default to .so even on macOS; the test resolves
+            # the artifact with the platform's shared-library suffix.
+            set_target_properties(fake_rip_core PROPERTIES SUFFIX ".dylib")
+        endif()
+        add_dependencies(UnitTests fake_rip_core)
     endif()
 
     # On macOS, create symlinks from Ogre plugin .framework bundles into the

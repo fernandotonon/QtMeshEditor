@@ -147,6 +147,13 @@ void PS1RipWorker::startEmulation()
     m_paused = false;
     scheduleNextFrame(0);
     emit emulationStarted(m_core ? m_core->coreId() : QString());
+
+    const bool inCoreHooks = m_core && m_core->inCoreHooksActive();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.core.incore_hooks"),
+        inCoreHooks ? QStringLiteral("active")
+                    : QStringLiteral("unavailable (stock core or QTMESH_PS1_RIP_INCORE=0)"));
+    emit inCoreHooksState(inCoreHooks);
 }
 
 void PS1RipWorker::stopEmulation()

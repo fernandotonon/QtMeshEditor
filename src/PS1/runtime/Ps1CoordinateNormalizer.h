@@ -61,6 +61,35 @@ struct Ps1NormalizerSettings {
      *  3 = up to 4^3 = 64 sub-tris per input prim. */
     int perspectiveMaxDepth = 3;
 
+    /** "Clean up" filter (#816 follow-up): when true, MeshReconstructor keeps
+     *  only vertices placed by the in-core GTE path — Tier 0 (GteTracked) and
+     *  Tier 1 (DepthOnly) — and drops every triangle that references a Tier 2
+     *  screen-space-fallback vertex. Those Tier-2 prims are the HUD text,
+     *  camera-facing sprites, particles and 2D overlays that get dumped into
+     *  the same frame's draw list; excluding them leaves the real world
+     *  geometry and turns the overlapping "spiky blob" into recognizable
+     *  models. No effect on RAM-scan (all-None) captures, which would filter
+     *  to empty — guarded at the call site. */
+    bool trackedGeometryOnly = false;
+
+    /** Degenerate-triangle cull (#816 spike follow-up): drop any reconstructed
+     *  triangle whose longest edge exceeds `spikeEdgeFactor` × the part's
+     *  median edge length. A spanning "spike" triangle (a corner that landed in
+     *  the wrong model space) has one enormously long edge, so this removes the
+     *  visible artifact directly, regardless of its root cause — complementary
+     *  to the per-part radius outlier policy. 0 or negative disables it.
+     *  Default 12.0: loose enough to keep legitimately elongated PS1 geometry
+     *  (thin platforms, long walls) while catching the runaway spans. */
+    float spikeEdgeFactor = 12.0f;
+
+    /** Mesh cleanup pass (Step 4): weld coincident vertices (same position,
+     *  UV and colour within epsilon) so the raw unindexed triangle soup shares
+     *  vertices, then recompute smoothed per-vertex normals from the welded
+     *  faces. Turns the flat-shaded facet look into solid surfaces and shrinks
+     *  the vertex count. Off by default (opt-in — welding changes vertex IDs,
+     *  which some downstream steps assume are 1:1 with the capture). */
+    bool cleanupWeldNormals = false;
+
     bool isDefault() const;
     bool flipsAreActive() const { return flipX || flipY || flipZ; }
 

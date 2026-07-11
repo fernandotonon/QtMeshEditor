@@ -95,6 +95,11 @@ TEST_F(EmuCoreLoaderTest, LoadsLibretroWhenMednafenCorePresent)
     const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
 #if defined(Q_OS_WIN)
     const QString mednafenPath = coresDir.filePath(QStringLiteral("mednafen_psx_libretro.dll"));
+#elif defined(Q_OS_MACOS)
+    // The install script's buildbot fallback drops a LINUX .so into PS1Cores;
+    // it exists on disk but can never be dlopened here — only accept a real
+    // Mach-O core so the test skips instead of failing on that artifact.
+    const QString mednafenPath = coresDir.filePath(QStringLiteral("mednafen_psx_libretro.dylib"));
 #else
     const QString mednafenPath = coresDir.filePath(QStringLiteral("mednafen_psx_libretro.so"));
 #endif

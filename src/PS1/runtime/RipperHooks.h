@@ -5,6 +5,9 @@
 #include "EmuHooks.h"
 #include "Gp0CaptureStats.h"
 
+#include <QHash>
+#include <QVector>
+
 #include <atomic>
 #include <cstdint>
 
@@ -55,6 +58,18 @@ public:
     uint32_t onGteMatrix(const MatrixRecord &matrix) override;
     void onGpuPrim(const PrimRecord &prim) override;
     bool onModelMesh(const CapturedModelMesh &mesh) override;
+
+    // In-core rip stream (#814/#815). All three fire on the worker thread
+    // inside retro_run; draws are buffered until the frame's GTE record flush
+    // arrives so gte_record ring indices can be resolved.
+    void onGteRecords(const qtmesh_rip_gte_record *recs, uint32_t count) override;
+    void onGpuDrawTracked(const uint32_t *words, uint32_t wordCount,
+                          const qtmesh_rip_vertex_shadow *shadows, uint32_t shadowCount) override;
+    void onCoreFrameEnd(uint32_t frame) override;
+    bool inCoreStreamActiveThisFrame() const override;
+
+    /** In-core prims dropped by the per-frame cap since the last stats pass. */
+    int inCoreOverflowDropped() const { return m_inCoreOverflowDropped; }
     void onVramWrite(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                      const uint16_t *pixels) override;
     void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;
@@ -63,6 +78,12 @@ public:
 
 private:
     QString primDedupeKey(const PrimRecord &prim) const;
+    void resolveTrackedDraws(uint32_t frame);
+
+    struct PendingTrackedDraw {
+        QVector<uint32_t> words;
+        QVector<qtmesh_rip_vertex_shadow> shadows;
+    };
 
     std::atomic<bool> *m_armed = nullptr;
     CaptureBuffer *m_buffer = nullptr;
@@ -76,6 +97,21 @@ private:
     int m_directHookPrimPass = 0;
     Gp0CaptureStats m_lastStats;
     bool m_lastStatsFresh = false;
+
+    // In-core stream state (#814/#815).
+    QVector<PendingTrackedDraw> m_pendingTrackedDraws;
+    /** GTE ring slot → index into CaptureBuffer::gteRecords for the latest
+     *  record seen at that slot. Persists across frames (a display list may
+     *  reuse shadows tagged in an earlier frame); cleared with live state. */
+    QHash<uint32_t, uint32_t> m_gteRingToBuffer;
+    /** Sticky while armed: the fork's GP0 stream has delivered draws, so the
+     *  heuristic RAM GP0/GTE passes stay suppressed (#815). */
+    bool m_inCoreStreamSeen = false;
+    int m_inCorePrimsPass = 0;
+    int m_gteRecordsPass = 0;
+    int m_inCoreOverflowDropped = 0;
+    DrawModeRecord m_inCoreCurrentMode{};
+    uint32_t m_inCoreCurrentMatrixId = UINT32_MAX;
 };
 
 #endif // RIPPERHOOKS_H

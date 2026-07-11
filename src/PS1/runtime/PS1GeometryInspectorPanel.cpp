@@ -70,6 +70,19 @@ QString PS1GeometryInspectorModel::primKindLabel(PrimKind kind)
     return QStringLiteral("?");
 }
 
+QString PS1GeometryInspectorModel::provenanceLabel(CapturedAssetProvenance provenance)
+{
+    switch (provenance) {
+    case CapturedAssetProvenance::Tracked:
+        return QStringLiteral("tracked");
+    case CapturedAssetProvenance::Depth:
+        return QStringLiteral("depth");
+    case CapturedAssetProvenance::Screen:
+        return QStringLiteral("screen");
+    }
+    return QStringLiteral("?");
+}
+
 QVariant PS1GeometryInspectorModel::data(const QModelIndex &index, int role) const
 {
     if (!m_store || !index.isValid())
@@ -100,10 +113,20 @@ QVariant PS1GeometryInspectorModel::data(const QModelIndex &index, int role) con
             return row.materialName;
         case ColTriangles:
             return row.triangleCount;
+        case ColProvenance:
+            return provenanceLabel(row.provenance);
+        case ColRemove:
+            // Trash glyph the user clicks to discard the row (restore glyph
+            // when already discarded). The click is handled in the view.
+            return row.discarded ? QStringLiteral("↺") : QStringLiteral("🗑");
         default:
             return {};
         }
     }
+    if (role == Qt::TextAlignmentRole && index.column() == ColRemove)
+        return static_cast<int>(Qt::AlignCenter);
+    if (role == Qt::ToolTipRole && index.column() == ColRemove)
+        return row.discarded ? tr("Restore this mesh") : tr("Discard this mesh");
     if (role == Qt::ForegroundRole) {
         if (row.discarded)
             return QColor(Qt::gray);
@@ -155,6 +178,10 @@ QVariant PS1GeometryInspectorModel::headerData(int section, Qt::Orientation orie
         return tr("material");
     case ColTriangles:
         return tr("triangles");
+    case ColProvenance:
+        return tr("src");
+    case ColRemove:
+        return QString();
     default:
         return {};
     }
@@ -302,7 +329,14 @@ PS1GeometryInspectorPanel::PS1GeometryInspectorPanel(PS1CapturedAssets *store, Q
     m_tableView->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tableView->setSortingEnabled(true);
     m_tableView->verticalHeader()->setVisible(false);
-    m_tableView->horizontalHeader()->setStretchLastSection(true);
+    // Let the material column absorb slack; keep the trash column a fixed,
+    // always-visible narrow width so the 🗑 glyph never gets stranded in a
+    // stretched last column past the horizontal scroll.
+    QHeaderView *hh = m_tableView->horizontalHeader();
+    hh->setStretchLastSection(false);
+    hh->setSectionResizeMode(PS1GeometryInspectorModel::ColMaterial, QHeaderView::Stretch);
+    hh->setSectionResizeMode(PS1GeometryInspectorModel::ColRemove, QHeaderView::Fixed);
+    m_tableView->setColumnWidth(PS1GeometryInspectorModel::ColRemove, 32);
     m_tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tableView->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tableView->setAlternatingRowColors(true);
@@ -375,6 +409,19 @@ void PS1GeometryInspectorPanel::onActivated(const QModelIndex &index)
     const CapturedAssetRow row = m_model->rowAt(src.row());
     if (row.rowIndex == 0)
         return;
+
+    // Clicking the trash column toggles discard directly — the visible
+    // one-click affordance the context-menu "Discard" also drives.
+    if (src.column() == PS1GeometryInspectorModel::ColRemove) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ui.action"),
+            QStringLiteral("ps1_rip_inspector_discard=%1 set=%2")
+                .arg(row.rowIndex)
+                .arg(row.discarded ? 0 : 1));
+        emit discardRowRequested(row.rowIndex);
+        return;
+    }
+
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("ps1_rip_inspector_highlight=%1").arg(row.rowIndex));
     emit highlightRow(row.rowIndex);

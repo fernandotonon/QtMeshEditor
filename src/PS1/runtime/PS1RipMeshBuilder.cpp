@@ -15,6 +15,8 @@
 
 #include <OgreAxisAlignedBox.h>
 #include <OgreEntity.h>
+#include <OgreMatrix3.h>
+#include <OgreQuaternion.h>
 #include <OgreVector3.h>
 #include <OgreImage.h>
 #include <OgreResourceGroupManager.h>
@@ -684,15 +686,42 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             // when the user toggles a flip / changes scale (#424).
             node->getUserObjectBindings().setUserAny(
                 "ps1RipPlacementScale", Ogre::Any(placementScale));
+
+            // #816: tracked groups reconstruct in OBJECT space centered on the
+            // object's own model origin, so two identical props at different GTE
+            // translations dedupe to one mesh whose centroid (inst.px/py/pz) is
+            // ~the same for both — placing at the centroid would stack them.
+            // The distinct world position is inst.trWorld (the GTE translation
+            // in editor units). Position tracked instances there; the group's
+            // GTE rotation must also be re-applied or every copy renders in its
+            // rest orientation (Codex review: feed trWorld through the
+            // normalizer too, not just the rotation). Untracked instances keep
+            // the v1 centroid placement.
+            const float px = inst.hasMatrix ? inst.trWorld[0] : inst.px;
+            const float py = inst.hasMatrix ? inst.trWorld[1] : inst.py;
+            const float pz = inst.hasMatrix ? inst.trWorld[2] : inst.pz;
+
+            // Base position for the live-normalizer re-apply path — must match
+            // the position actually used below (trWorld for tracked instances)
+            // or a flip/scale toggle would snap tracked copies back to the
+            // centroid.
             node->getUserObjectBindings().setUserAny(
-                "ps1RipBasePosition", Ogre::Any(Ogre::Vector3(inst.px, inst.py, inst.pz)));
+                "ps1RipBasePosition", Ogre::Any(Ogre::Vector3(px, py, pz)));
 
             float scaleOut[3];
             float posOut[3];
             Ps1CoordinateNormalizer::composeNodeTransform(
-                normalize, placementScale, inst.px, inst.py, inst.pz, scaleOut, posOut);
+                normalize, placementScale, px, py, pz, scaleOut, posOut);
             node->setScale(scaleOut[0], scaleOut[1], scaleOut[2]);
             node->setPosition(posOut[0], posOut[1], posOut[2]);
+            if (inst.hasMatrix) {
+                float editorRot[9];
+                editorRotationFromGte(inst.rot, editorRot);
+                const Ogre::Matrix3 m3(editorRot[0], editorRot[1], editorRot[2],
+                                       editorRot[3], editorRot[4], editorRot[5],
+                                       editorRot[6], editorRot[7], editorRot[8]);
+                node->setOrientation(Ogre::Quaternion(m3));
+            }
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {
@@ -727,4 +756,17 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             .arg(totalTris)
             .arg(captureSet.instances.size()));
     return true;
+}
+
+void PS1RipMeshBuilder::editorRotationFromGte(const float rot[9], float out[9])
+{
+    // Editor space maps GTE vectors by (x,y,z) -> (-x, y, -z): the Y/Z negate
+    // (PS1 Y-down/Z-away) folded with the 180°-about-Z upright rotation, exactly
+    // as GteInverse::modelToEditor now does. Conjugating a rotation by that basis
+    // S = diag(-1, 1, -1) gives out = S·R·S, i.e. out[r][c] = s(r)·s(c)·R[r][c].
+    // Keep this in lockstep with modelToEditor or instances rotate wrong (#816).
+    static constexpr float kSign[3] = {-1.0f, 1.0f, -1.0f};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            out[r * 3 + c] = kSign[r] * kSign[c] * rot[r * 3 + c];
 }

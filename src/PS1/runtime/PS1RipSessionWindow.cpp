@@ -54,6 +54,8 @@ constexpr auto kSettingsGroup = "ps1Rip";
 constexpr auto kBiosKey = "biosPath";
 constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
+constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
+constexpr auto kCleanupKey = "cleanupWeldNormals";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -182,7 +184,16 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(stepAct, &QAction::triggered, this, &PS1RipSessionWindow::onStep);
     auto *resetAct = toolbar->addAction(tr("Reset"));
     connect(resetAct, &QAction::triggered, this, &PS1RipSessionWindow::onReset);
-    toolbar->addSeparator();
+
+    // Capture + clean-up controls live on their OWN toolbar row so they never
+    // get pushed off the right edge (under the tiny >> overflow chevron) by the
+    // transport buttons on a normal-width window — the reason these were
+    // "invisible" before. addToolBarBreak() forces the second row.
+    addToolBarBreak();
+    QToolBar *captureBar = addToolBar(tr("Capture"));
+    captureBar->setMovable(false);
+    toolbar = captureBar; // the capture + clean-up group below appends here
+
     m_captureUi.armCaptureAct = toolbar->addAction(tr("Arm Capture"));
     m_captureUi.armCaptureAct->setCheckable(true);
     connect(m_captureUi.armCaptureAct, &QAction::toggled, this, [this](bool on) {
@@ -257,9 +268,67 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kDedupeStrictKey), on);
     });
     toolbar->addWidget(strictDedupe);
+
+    // "Clean up" filter: keep only in-core tracked/depth geometry, dropping the
+    // screen-space HUD/sprite/2D junk that clutters the whole-frame draw list.
+    // Applies to the next Capture Frame (the reconstruction reads the current
+    // normalizer settings). No-op on RAM-scan captures (forced off in the
+    // manager when the capture has no GTE records).
+    auto *trackedOnly = new QCheckBox(tr("Tracked only"), this);
+    trackedOnly->setToolTip(tr("Clean up: keep only real in-core 3D geometry "
+                               "(tracked + depth); drop HUD / sprites / 2D overlays. "
+                               "Takes effect on the next Capture Frame."));
+    trackedOnly->setChecked(
+        settings.value(ps1SettingsKey(kTrackedOnlyKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.trackedGeometryOnly = trackedOnly->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(trackedOnly, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.trackedGeometryOnly = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      on ? QStringLiteral("ps1_rip_tracked_only_on")
+                                         : QStringLiteral("ps1_rip_tracked_only_off"));
+        QSettings().setValue(ps1SettingsKey(kTrackedOnlyKey), on);
+    });
+    toolbar->addWidget(trackedOnly);
+
+    // Mesh cleanup: weld coincident vertices + recompute smoothed normals so
+    // captured meshes shade as solid surfaces instead of flat facets. Applies
+    // to the next Capture Frame.
+    auto *smoothMesh = new QCheckBox(tr("Smooth"), this);
+    smoothMesh->setToolTip(tr("Clean up: weld duplicate vertices and recompute "
+                              "smoothed normals (solid surfaces instead of flat facets). "
+                              "Takes effect on the next Capture Frame."));
+    smoothMesh->setChecked(settings.value(ps1SettingsKey(kCleanupKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupWeldNormals = smoothMesh->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(smoothMesh, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupWeldNormals = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      on ? QStringLiteral("ps1_rip_smooth_on")
+                                         : QStringLiteral("ps1_rip_smooth_off"));
+        QSettings().setValue(ps1SettingsKey(kCleanupKey), on);
+    });
+    toolbar->addWidget(smoothMesh);
+
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
+
+    auto *clearMeshesAct = toolbar->addAction(tr("Clear Meshes"));
+    clearMeshesAct->setToolTip(tr("Remove all captured meshes from the scene — the live "
+                                  "preview and every promoted mesh from earlier captures"));
+    connect(clearMeshesAct, &QAction::triggered, this,
+            &PS1RipSessionWindow::onClearCapturedMeshes);
 
     // Persist the duration whenever it changes so a session restart keeps the
     // user's last preference. Sentry breadcrumb fires here too so we can
@@ -332,6 +401,19 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
             m_statusLabel->setText(tr("Running (stub — test pattern only)"));
         else
             m_statusLabel->setText(tr("Running (core: %1)").arg(coreId));
+    });
+    connect(m_manager, &PS1RipManager::inCoreHooksState, this, [this](bool active) {
+        // Per-core capability surface (#813): tracked in-core capture only
+        // works with the qtmesh beetle fork in PS1Cores/. Strip any prior
+        // hook-state suffix before re-appending so repeated signals (or an
+        // active→unavailable transition) don't stack duplicates (CodeRabbit).
+        QString base = m_statusLabel->text();
+        const int sep = base.indexOf(QStringLiteral(" · in-core hooks:"));
+        if (sep >= 0)
+            base.truncate(sep);
+        m_statusLabel->setText(base
+                               + (active ? tr(" · in-core hooks: active")
+                                         : tr(" · in-core hooks: unavailable (stock core)")));
     });
     connect(m_manager, &PS1RipManager::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {
@@ -1070,6 +1152,41 @@ void PS1RipSessionWindow::onDumpVram()
     m_manager->dumpVRAM();
 }
 
+void PS1RipSessionWindow::onClearCapturedMeshes()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("ps1_rip_clear_meshes"));
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return;
+
+    // Each new capture already purges its own live preview (PS1Capture_*), but
+    // promoted meshes (PS1Imported_*) are deliberately kept so they survive the
+    // next capture — which means they pile up across a session with no way to
+    // clear them. This removes BOTH families so the user can reset the scene.
+    int removed = 0;
+    QStringList toRemove;
+    for (Ogre::SceneNode *node : mgr->getSceneNodes()) {
+        const QString name = QString::fromStdString(node->getName());
+        if (name.startsWith(QStringLiteral("PS1Capture_"))
+            || name.startsWith(QStringLiteral("PS1Imported_")))
+            toRemove.append(name);
+    }
+    for (const QString &name : toRemove) {
+        mgr->destroySceneNode(name);
+        ++removed;
+    }
+
+    // Drop the inspector/browser rows for the live preview too, so the tables
+    // don't point at nodes that no longer exist.
+    if (PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr())
+        store->clear();
+
+    m_statusLabel->setText(removed == 0
+                               ? tr("No captured meshes to clear")
+                               : tr("Cleared %n captured mesh(es)", nullptr, removed));
+}
+
 void PS1RipSessionWindow::onCaptureFrame()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_capture_frame"));
@@ -1205,7 +1322,8 @@ void PS1RipSessionWindow::refreshCaptureStatusFooter()
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
                                     int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
-                                    int gteInversePercent, bool slabLike,
+                                    int gteInversePercent, int gteTrackedPercent,
+                                    int depthOnlyPercent, bool slabLike,
                                     int primsWithMatrixId, int primsTotal,
                                     PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats)
 {
@@ -1213,6 +1331,10 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
                              : tr("camera matrix unknown");
     QString matrixStats = tr("GTE inverse %1%").arg(gteInversePercent);
+    // #816: tiered-reconstruction share — tracked = exact object-space verts
+    // from in-core GTE records, depth = PGXP subpixel inversion. Together
+    // with the inverse % this tells users which capture path fed the mesh.
+    matrixStats += tr(" · tracked %1% · depth %2%").arg(gteTrackedPercent).arg(depthOnlyPercent);
     // #675: surface the prim → matrix association ratio so users can tell at a glance
     // whether the bottleneck is the inverse math (`tag X/X` with low %) or the matrix
     // association (`tag 0/N`). Without this you'd have to read the Sentry breadcrumb

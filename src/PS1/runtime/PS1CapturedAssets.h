@@ -11,6 +11,14 @@
 #include <QString>
 #include <QVector>
 
+/** Reconstruction tier that placed a prim's vertices (#816). Majority over
+ *  the prim's vertices; ties resolve toward the higher tier. */
+enum class CapturedAssetProvenance : uint8_t {
+    Screen = 0, /* Tier 2: legacy screen-space inversion / fallback */
+    Depth,      /* Tier 1: PGXP depth-only inversion */
+    Tracked,    /* Tier 0: exact object-space GTE record */
+};
+
 /**
  * One row in the geometry inspector table (#426).
  *
@@ -58,6 +66,8 @@ struct CapturedAssetRow
     /** Convenience flags for filter chips in the inspector / browser. */
     bool textured = false;
     bool colored = false;
+    /** Dominant reconstruction tier for the prim's vertices (#816). */
+    CapturedAssetProvenance provenance = CapturedAssetProvenance::Screen;
     /** User toggled "Hide submesh" — UI honours by hiding the corresponding
      *  Ogre SceneNode in the live capture (#426). */
     bool hidden = false;

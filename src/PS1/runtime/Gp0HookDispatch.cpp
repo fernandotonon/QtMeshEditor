@@ -486,9 +486,18 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     const size_t scanSize = clampPs1RamSize(byteSize);
     const bool liveFrame = accumulate;
 
+    // #814/#815: when the rip-instrumented core's in-core stream is active,
+    // every heuristic screen-space pass is suppressed — real GTE records and
+    // packet-for-packet GP0 draws must not be polluted by RAM-scan false
+    // positives or duplicates. Model-space scanners (TMD/HMD) stay on: they
+    // are a complementary exact source, not a screen-space heuristic.
+    // QTMESH_PS1_RIP_INCORE=0 disables in-core registration at the plugin
+    // level, which restores today's behavior wholesale (#813).
+    const bool inCoreStream = hooks->inCoreStreamActiveThisFrame();
+
     hooks->beginGpuCapturePass(accumulate);
     hooks->onFrameBegin();
-    if (scanGteRam) {
+    if (scanGteRam && !inCoreStream) {
         PsxGteInstructionCapture::captureFromSystemRam(ram, scanSize, hooks);
         PsxGteRamScanner::captureFromSystemRam(ram, scanSize, hooks);
     }
@@ -497,8 +506,9 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     // #674 model-space RAM scanners: look for Sony SDK TMD (0x00000041) blobs in main RAM
     // and emit them as fully-formed model-space meshes via EmuHooks::onModelMesh. Unlike
     // the screen-space GP0 path below, these bypass MeshReconstructor::screenToModel
-    // entirely — they're the only reliable way to recover model-space geometry from
-    // closed-source retail games until #676 (forked mednafen with in-core GTE hook) lands.
+    // entirely — alongside the in-core capture chain (#813-#817, the forked-beetle
+    // GTE/GP0 hooks; the old #676 reference was stale) they recover model-space
+    // geometry from closed-source retail games.
     // Disable per-format with QTMESH_PS1_TMD_SCANNER=0; HMD is opt-in via QTMESH_PS1_HMD_SCANNER=1.
     const bool tmdScannerDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_TMD_SCANNER")
                                     && qEnvironmentVariableIntValue("QTMESH_PS1_TMD_SCANNER") == 0;
@@ -519,12 +529,17 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     // QTMESH_PS1_GP0_FIFO_BRIDGE=0 for the legacy RAM-only baseline.
     const bool fifoBridgeDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_GP0_FIFO_BRIDGE")
                                     && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_FIFO_BRIDGE") == 0;
-    if (!fifoBridgeDisabled)
+    if (!fifoBridgeDisabled && !inCoreStream)
         hooks->submitFifoChainsFromRam(ram, scanSize);
 
     QSet<QString> *seen = hooks->livePrimDedupeKeys();
-    if (qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
-        && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0) {
+    if (inCoreStream) {
+        // RAM GP0 passes skipped — the in-core stream already ingested this
+        // frame's prims at onCoreFrameEnd. Stats totals are finalized by
+        // RipperHooks::endGpuCapturePass.
+        stats.totalPrims = hooks->capturePrimCount();
+    } else if (qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
+               && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0) {
         stats = captureFromSystemRamLegacy(ram, scanSize, hooks);
     } else {
         stats = captureFromSystemRam(ram, scanSize, hooks, seen);

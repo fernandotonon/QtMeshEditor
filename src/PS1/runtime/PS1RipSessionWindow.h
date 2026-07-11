@@ -67,6 +67,9 @@ private slots:
     void onError(const QString &message);
     void onDumpVram();
     void onCaptureFrame();
+    /** Remove every captured mesh from the scene — the live preview plus all
+     *  promoted (`PS1Imported_*`) meshes accumulated across captures. */
+    void onClearCapturedMeshes();
     /** Pull the duration spinbox value, ask the manager to start a scene
      *  capture, persist the duration to QSettings (#425). */
     void onCaptureScene();
@@ -83,7 +86,8 @@ private slots:
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                     bool hasCameraMatrix, int gteInversePercent, bool slabLike,
+                     bool hasCameraMatrix, int gteInversePercent, int gteTrackedPercent,
+                     int depthOnlyPercent, bool slabLike,
                      int primsWithMatrixId, int primsTotal, PsxVramMirrorMode vramMirrorMode,
                      Gp0CaptureStats captureStats);
     void onPausedChanged(bool paused);

@@ -39,6 +39,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxMipsGteRunner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructionStats.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
+${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1CoordinateNormalizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1CapturedAssets.cpp

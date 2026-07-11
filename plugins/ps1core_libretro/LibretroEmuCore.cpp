@@ -30,18 +30,31 @@ constexpr size_t kPsxVramBytes = static_cast<size_t>(kPsxVramWidth) * kPsxVramHe
 QStringList libretroCoreCandidates()
 {
     // Software-capable cores only (#660). beetle_psx_hw keeps VRAM on the GPU.
+    // The rip-instrumented fork (#813) comes first: it behaves 100% stock when
+    // the rip interface is not armed, and enables in-core GTE/GP0 capture.
     QStringList names;
 #if defined(Q_OS_WIN)
-    names << QStringLiteral("mednafen_psx_libretro.dll")
+    names << QStringLiteral("beetle_psx_qtmesh_libretro.dll")
+          << QStringLiteral("mednafen_psx_libretro.dll")
           << QStringLiteral("beetle_psx_libretro.dll");
 #elif defined(Q_OS_MACOS)
-    names << QStringLiteral("mednafen_psx_libretro.dylib")
+    names << QStringLiteral("beetle_psx_qtmesh_libretro.dylib")
+          << QStringLiteral("mednafen_psx_libretro.dylib")
           << QStringLiteral("beetle_psx_libretro.dylib");
 #else
-    names << QStringLiteral("mednafen_psx_libretro.so")
+    names << QStringLiteral("beetle_psx_qtmesh_libretro.so")
+          << QStringLiteral("mednafen_psx_libretro.so")
           << QStringLiteral("beetle_psx_libretro.so");
 #endif
     return names;
+}
+
+bool ripInCoreDisabledByEnv()
+{
+    // QTMESH_PS1_RIP_INCORE=0 skips rip-interface registration even when the
+    // fork is loaded — the A/B switch against the RAM-scan heuristics (#813).
+    return qEnvironmentVariableIsSet("QTMESH_PS1_RIP_INCORE")
+           && qEnvironmentVariableIntValue("QTMESH_PS1_RIP_INCORE") == 0;
 }
 
 QString envCorePath()
@@ -273,6 +286,7 @@ LibretroEmuCore::LibretroEmuCore()
 LibretroEmuCore::~LibretroEmuCore()
 {
     unloadGame();
+    unregisterRipInterface();
     if (m_initialized && m_host.retro_deinit) {
         m_host.retro_deinit();
         m_initialized = false;
@@ -307,7 +321,22 @@ QString LibretroEmuCore::resolveLibretroCorePath(QString *errorOut)
     const QString appDir = QCoreApplication::applicationDirPath();
     // Only load cores shipped next to the app (or via env). Distro libretro builds are often
     // too old to load .iso images and can segfault the host process.
-    const QStringList searchDirs = {QDir(appDir).filePath(QStringLiteral("PS1Cores"))};
+    // Search PS1Cores/ next to the binary AND, on macOS, next to the .app bundle:
+    // the plugin CMake writes cores to <build>/bin/PS1Cores, which is beside the
+    // .app, not inside Contents/MacOS/ (mirrors EmuCoreLoader::coreSearchPaths).
+    QStringList searchDirs = {QDir(appDir).filePath(QStringLiteral("PS1Cores"))};
+#if defined(Q_OS_MACOS)
+    {
+        QDir bundleDir(appDir);
+        if (bundleDir.dirName() == QLatin1String("MacOS")) {
+            bundleDir.cdUp();                     // Contents
+            if (bundleDir.dirName() == QLatin1String("Contents"))
+                bundleDir.cdUp();                 // .app
+            bundleDir.cdUp();                     // dir containing the .app (dev: <build>/bin)
+            searchDirs << bundleDir.filePath(QStringLiteral("PS1Cores"));
+        }
+    }
+#endif
 
     for (const QString &dirPath : searchDirs) {
         const QDir dir(dirPath);
@@ -413,7 +442,91 @@ bool LibretroEmuCore::ensureInitialized(QString *errorOut)
                           << (si.library_version ? si.library_version : "")
                           << "path:" << m_corePath;
     }
+
+    registerRipInterface();
     return true;
+}
+
+void LibretroEmuCore::registerRipInterface()
+{
+    m_ripInterfaceRegistered = false;
+    m_ripArmedMirror = false;
+
+    if (!m_host.hasRipInterface())
+        return;
+
+    if (ripInCoreDisabledByEnv()) {
+        qInfo() << "[ps1-rip] in-core hooks disabled by QTMESH_PS1_RIP_INCORE=0";
+        return;
+    }
+
+    const uint32_t coreAbi = m_host.qtmesh_rip_abi_version();
+    if (coreAbi != QTMESH_RIP_ABI_VERSION) {
+        qWarning().noquote()
+            << QStringLiteral("[ps1-rip] core rip ABI v%1 does not match host v%2 — "
+                              "running as stock core (rebuild the fork or update QtMeshEditor)")
+                   .arg(coreAbi)
+                   .arg(QTMESH_RIP_ABI_VERSION);
+        return;
+    }
+
+    m_ripIface = qtmesh_rip_host_iface{};
+    m_ripIface.abi_version = QTMESH_RIP_ABI_VERSION;
+    m_ripIface.ctx = this;
+    m_ripIface.on_gp0_draw = &LibretroEmuCore::ripOnGp0Draw;
+    m_ripIface.on_gte_records = &LibretroEmuCore::ripOnGteRecords;
+    m_ripIface.on_frame_end = &LibretroEmuCore::ripOnFrameEnd;
+
+    if (m_host.qtmesh_rip_set_interface(&m_ripIface) != 0) {
+        qWarning() << "[ps1-rip] core refused rip interface registration";
+        return;
+    }
+
+    m_ripInterfaceRegistered = true;
+    qInfo() << "[ps1-rip] in-core rip hooks registered (ABI v" << coreAbi << ")";
+}
+
+void LibretroEmuCore::unregisterRipInterface()
+{
+    if (!m_ripInterfaceRegistered)
+        return;
+    if (m_host.qtmesh_rip_set_interface)
+        m_host.qtmesh_rip_set_interface(nullptr);
+    m_ripInterfaceRegistered = false;
+    m_ripArmedMirror = false;
+}
+
+void LibretroEmuCore::syncRipArmedState()
+{
+    if (!m_ripInterfaceRegistered || !m_host.qtmesh_rip_set_armed)
+        return;
+    const bool armed = m_hooks && m_hooks->isCaptureEnabled();
+    if (armed == m_ripArmedMirror)
+        return;
+    m_ripArmedMirror = armed;
+    m_host.qtmesh_rip_set_armed(armed ? 1 : 0);
+}
+
+void LibretroEmuCore::ripOnGp0Draw(void *ctx, const uint32_t *words, uint32_t wordCount,
+                                   const qtmesh_rip_vertex_shadow *verts, uint32_t vertCount)
+{
+    auto *self = static_cast<LibretroEmuCore *>(ctx);
+    if (self && self->m_hooks)
+        self->m_hooks->onGpuDrawTracked(words, wordCount, verts, vertCount);
+}
+
+void LibretroEmuCore::ripOnGteRecords(void *ctx, const qtmesh_rip_gte_record *recs, uint32_t count)
+{
+    auto *self = static_cast<LibretroEmuCore *>(ctx);
+    if (self && self->m_hooks)
+        self->m_hooks->onGteRecords(recs, count);
+}
+
+void LibretroEmuCore::ripOnFrameEnd(void *ctx, uint32_t frame)
+{
+    auto *self = static_cast<LibretroEmuCore *>(ctx);
+    if (self && self->m_hooks)
+        self->m_hooks->onCoreFrameEnd(frame);
 }
 
 bool LibretroEmuCore::loadGame(QString *errorOut)
@@ -468,6 +581,9 @@ void LibretroEmuCore::unloadGame()
 {
     if (!m_gameLoaded)
         return;
+    // The rip iface ctx is this object — unregister before the core tears the
+    // game down so no callback can fire into a dying session (#813).
+    unregisterRipInterface();
     if (m_host.retro_unload_game)
         m_host.retro_unload_game();
     m_gameLoaded = false;
@@ -513,6 +629,11 @@ void LibretroEmuCore::runFrame()
         }
         return;
     }
+
+    // Mirror the worker's armed state into the core before the frame runs so
+    // the in-core hooks (and PGXP mode forcing) engage exactly with capture
+    // arming (#813). Cheap: only calls into the core on a state change.
+    syncRipArmedState();
 
     m_host.retro_run();
     syncVramFromCore();

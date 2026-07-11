@@ -1,6 +1,8 @@
 #ifndef CAPTURETYPES_H
 #define CAPTURETYPES_H
 
+#include "libretro/qtmesh_rip_abi.h"
+
 #include <cstdint>
 
 /** PS1 GPU primitive kinds decoded from GP0 (#418). */
@@ -14,6 +16,16 @@ enum class PrimKind : uint8_t {
     Sprite,
 };
 
+/**
+ * Where a captured vertex's 3D data came from (#815/#816). Determines which
+ * reconstruction tier MeshReconstructor::vertexFromPsx can use.
+ */
+enum class PsxVertexProvenance : uint8_t {
+    None = 0,       /* RAM-scan capture, screen XY only (pre-in-core world) */
+    DepthOnly,      /* PGXP w valid, no resolvable GTE record */
+    GteTracked,     /* full record: object-space vertex + matrix available */
+};
+
 struct PsxVertex {
     int32_t x = 0;
     int32_t y = 0;
@@ -23,6 +35,14 @@ struct PsxVertex {
     uint8_t b = 0;
     int16_t u = 0;
     int16_t v = 0;
+    /** PGXP subpixel screen coords (in-core hook path, #815). */
+    float preciseX = 0.0f;
+    float preciseY = 0.0f;
+    /** PGXP view-space depth; 0 = unknown. */
+    float viewW = 0.0f;
+    /** Index into CaptureSnapshot::gteRecords, or UINT32_MAX. */
+    uint32_t gteRecordIndex = UINT32_MAX;
+    uint8_t provenance = static_cast<uint8_t>(PsxVertexProvenance::None);
 };
 
 /** One draw call lifted from the GPU command stream. */
@@ -35,7 +55,13 @@ struct PrimRecord {
     uint8_t semiTrans = 0;
     uint32_t drawModeBits = 0;
     uint32_t matrixId = 0;
+    /** Core frame counter at capture time (0 for RAM-scan captures). */
+    uint32_t frame = 0;
 };
+
+/** One in-core GTE transform record as stored in the capture buffer (#814).
+ *  The ABI struct already carries the core frame counter and seq id. */
+using GteRecordEntry = qtmesh_rip_gte_record;
 
 /** GP0 0xE1–0xE6 drawing environment snapshot. */
 struct DrawModeRecord {
