@@ -919,8 +919,7 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     if (!entity || !entity->hasSkeleton() || fps <= 0)
         return out;
     Ogre::SkeletonInstance* skel = entity->getSkeleton();
-    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
-    if (!skel || !states)
+    if (!skel)
         return out;
 
     const int J = MotionInbetween::canonicalJointCount();
@@ -939,12 +938,6 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     }
     if (resolved == 0)
         return out;
-
-    // Remember enabled states so sampling leaves the entity as found.
-    std::vector<std::pair<Ogre::AnimationState*, bool>> prev;
-    for (auto& it : states->getAnimationStates())
-        prev.emplace_back(it.second, it.second->getEnabled());
-    for (auto& p : prev) p.first->setEnabled(false);
 
     // ── source-frame → canonical-frame conjugation ─────────────────────
     // Scraped rigs live in arbitrary file frames (Blender FBX armatures are
@@ -992,13 +985,18 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         }
     }
 
-    for (auto& it : states->getAnimationStates()) {
-        Ogre::AnimationState* st = it.second;
-        const QString name = QString::fromStdString(st->getAnimationName());
+    // Sample by applying each Animation DIRECTLY to the skeleton instance —
+    // deterministic regardless of the entity's animation-state bookkeeping
+    // (state-set application proved instance-dependent for hand-built
+    // skeletons), and it leaves the entity's enabled states untouched.
+    for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+        Ogre::Animation* anim = skel->getAnimation(a);
+        if (!anim) continue;
+        const QString name = QString::fromStdString(anim->getName());
         if (!onlyAnimation.isEmpty()
             && name.compare(onlyAnimation, Qt::CaseInsensitive) != 0)
             continue;
-        const float length = st->getLength();
+        const float length = anim->getLength();
         if (length <= 0.0f)
             continue;
 
@@ -1009,11 +1007,10 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             std::max(2, static_cast<int>(std::lround(length * fps)) + 1);
         clip.quats.reserve(static_cast<size_t>(frames));
 
-        st->setEnabled(true);
         for (int f = 0; f < frames; ++f) {
-            st->setTimePosition(std::min(length,
+            skel->reset(true);
+            anim->apply(skel, std::min(length,
                 static_cast<float>(f) / static_cast<float>(fps)));
-            skel->setAnimationState(*states);
             skel->_updateTransforms();
             std::vector<std::array<float, 4>> pose(
                 static_cast<size_t>(J), {0.f, 0.f, 0.f, 1.f});
@@ -1028,12 +1025,13 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             }
             clip.quats.push_back(std::move(pose));
         }
-        st->setEnabled(false);
         clip.frames = static_cast<int>(clip.quats.size());
         out.push_back(std::move(clip));
     }
 
-    for (auto& p : prev) p.first->setEnabled(p.second);
+    // Restore the bind pose so the on-screen entity isn't left mid-clip.
+    skel->reset(true);
+    skel->_updateTransforms();
     return out;
 }
 
