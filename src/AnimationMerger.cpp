@@ -1204,10 +1204,49 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 && a->getName().rfind("generated_", 0) != 0) { ref = a; break; }
         }
         if (ref) {
-            for (const auto& [h, trk] : ref->_getNodeTrackList()) {
+            // Harvest at the reference animation's CALMEST frame, not
+            // blindly frame 0 — authored clips often OPEN on a stylized
+            // pose (a dance intro, a wind-up), and composing every
+            // generated clip onto that bakes the style into the neutral
+            // ("generations look based on the previous animation's first
+            // frame"). The calmest frame is the closest thing the rig has
+            // to a relaxed standing pose. Pure track math — nothing is
+            // applied to the live skeleton.
+            const float len = ref->getLength();
+            const int samples = std::clamp(
+                static_cast<int>(std::lround(len * 30.0f)) + 1, 2, 301);
+            const auto& tracks = ref->_getNodeTrackList();
+            std::vector<double> energy(static_cast<size_t>(samples), 0.0);
+            for (const auto& [h, trk] : tracks) {
+                if (!trk || trk->getNumKeyFrames() == 0) continue;
+                Ogre::Quaternion prevQ;
+                for (int f = 0; f < samples; ++f) {
+                    const float t = len * static_cast<float>(f)
+                                    / static_cast<float>(samples - 1);
+                    Ogre::TransformKeyFrame kf(nullptr, 0.0f);
+                    trk->getInterpolatedKeyFrame(ref->_getTimeIndex(t), &kf);
+                    const Ogre::Quaternion q = kf.getRotation();
+                    if (f > 0) {
+                        const double d = std::min(1.0, std::abs(
+                            static_cast<double>(q.Dot(prevQ))));
+                        energy[static_cast<size_t>(f)] += 2.0 * std::acos(d);
+                    }
+                    prevQ = q;
+                }
+            }
+            // energy[f] = motion between samples f-1 and f; energy[0] is 0
+            // by construction, so start the argmin at frame 1.
+            int calm = 1;
+            for (int f = 2; f < samples; ++f)
+                if (energy[static_cast<size_t>(f)]
+                        < energy[static_cast<size_t>(calm)])
+                    calm = f;
+            const float tCalm = len * static_cast<float>(calm)
+                                / static_cast<float>(samples - 1);
+            for (const auto& [h, trk] : tracks) {
                 if (!trk || trk->getNumKeyFrames() == 0) continue;
                 Ogre::TransformKeyFrame f0(nullptr, 0.0f);
-                trk->getInterpolatedKeyFrame(ref->_getTimeIndex(0.0f), &f0);
+                trk->getInterpolatedKeyFrame(ref->_getTimeIndex(tCalm), &f0);
                 standPose[h] = { f0.getRotation(), f0.getTranslate(), f0.getScale(), true };
             }
         }
