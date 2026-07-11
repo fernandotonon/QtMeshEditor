@@ -4057,6 +4057,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         std::vector<std::vector<std::array<float, 4>>> quats;
         int fps = 30; bool worldFrame = false;
         std::vector<std::array<float, 4>> cmuRest;
+        std::vector<std::array<float, 3>> clipDirs;
         bool gotClip = false;
 
         if (useModel) {
@@ -4067,6 +4068,10 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 if (mr.ok) {
                     action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
                     worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
+                    // Borrow a template clip's reference directions so the
+                    // retarget synthesizes a BIND-referenced base pose (no
+                    // harvest from the rig's other animations).
+                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
                 }
             }
         }
@@ -4086,7 +4091,10 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             }
             const MotionLibrary::Clip& clip = lib.clip(idx);
             quats = clip.quats; fps = clip.fps;
-            worldFrame = lib.isWorldFrame(); cmuRest = lib.cmuRestWorld();
+            worldFrame = lib.isWorldFrame();
+            cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
+                                             : clip.restWorld;
+            clipDirs = clip.restDir;
             clipSource = QStringLiteral("template");
             if (duration > 0.05) {
                 const int want = std::max(2, int(duration * clip.fps));
@@ -4106,7 +4114,8 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         const auto r = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                         worldFrame, cmuRest,
                                                         /*refineWithModel=*/false,
-                                                        /*refineStride=*/8, yaw180);
+                                                        /*refineStride=*/8, yaw180,
+                                                        clipDirs);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         entity->refreshAvailableAnimationState();

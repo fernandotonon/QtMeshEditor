@@ -54,6 +54,7 @@ qtmesh anim model.fbx --bake-fps 60 --animation "Run" -o out.fbx  # bake one ani
 qtmesh anim model.fbx --in-between --gap-frames 30 -o filled.fbx  # AI in-betweening: fill the clip with 30 predicted keyframes (RMIB ONNX; smooth spline fallback) (#409)
 qtmesh anim model.fbx --in-between --gap-frames 12 --start-time 0.5 --end-time 1.5 --animation "Jump" -o out.fbx  # fill a specific window of one animation
 qtmesh anim model.fbx --in-between --gap-frames 12 --no-model -o out.fbx  # force the deterministic spline fallback (skip the ML model)
+qtmesh anim model.fbx --dump-canonical clips.json  # #839: extract every skeletal animation onto the 22-joint canonical skeleton (world-frame quats, bind-geometry-derived axis conjugation) — feeds scripts/build-motion-library-v5.py
 qtmesh anim rigged.fbx --generate "walking confidently" -o out.glb  # text-to-motion (#411, experimental): match a permissive CMU clip → retarget onto the rig. Actions: walk/run/jump/dance/march/kick/punch/wave/climb/idle (+ synonyms). Library downloads on first use; needs a humanoid rig
 qtmesh anim rigged.fbx --generate "jump" --duration 2 -o out.glb  # retime the template to N seconds
 qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export single frame

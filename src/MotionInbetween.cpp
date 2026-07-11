@@ -74,6 +74,34 @@ char sideOf(const QString& n)
 
 int MotionInbetween::canonicalJointCount() { return kCanonCount; }
 
+namespace {
+// hip abdomen chest neck neck1 head | rcollar rshoulder relbow rhand |
+// lcollar lshoulder lelbow lhand | rbuttock rhip rknee rfoot |
+// lbuttock lhip lknee lfoot
+constexpr int kCanonParent[22] = {
+    -1, 0, 1, 2, 3, 4,
+     2, 6, 7, 8,
+     2, 10, 11, 12,
+     0, 14, 15, 16,
+     0, 18, 19, 20};
+constexpr int kCanonChild[22] = {
+     1, 2, 3, 4, 5, -1,
+     7, 8, 9, -1,
+    11, 12, 13, -1,
+    15, 16, 17, -1,
+    19, 20, 21, -1};
+} // namespace
+
+int MotionInbetween::canonicalParentOf(int i)
+{
+    return (i >= 0 && i < kCanonCount) ? kCanonParent[i] : -1;
+}
+
+int MotionInbetween::canonicalChildOf(int i)
+{
+    return (i >= 0 && i < kCanonCount) ? kCanonChild[i] : -1;
+}
+
 QString MotionInbetween::canonicalJointName(int i)
 {
     if (i < 0 || i >= kCanonCount) return {};

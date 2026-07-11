@@ -120,6 +120,31 @@ bool MotionLibrary::parse(const QByteArray& json)
             clip.quats.push_back(std::move(pose));
         }
         clip.frames = static_cast<int>(clip.quats.size());
+        // Optional per-clip source-bind orientations (bind-referenced
+        // retarget). Malformed/absent → empty, the standing-pose path runs.
+        const QJsonArray rest = co.value("restWorld").toArray();
+        if (rest.size() == kCanonJoints) {
+            clip.restWorld.reserve(kCanonJoints);
+            for (int j = 0; j < kCanonJoints; ++j) {
+                const QJsonArray q = rest[j].toArray();
+                clip.restWorld.push_back({
+                    static_cast<float>(q.at(0).toDouble()),
+                    static_cast<float>(q.at(1).toDouble()),
+                    static_cast<float>(q.at(2).toDouble()),
+                    static_cast<float>(q.at(3).toDouble(1.0))});
+            }
+        }
+        const QJsonArray rdir = co.value("restDir").toArray();
+        if (rdir.size() == kCanonJoints) {
+            clip.restDir.reserve(kCanonJoints);
+            for (int j = 0; j < kCanonJoints; ++j) {
+                const QJsonArray v = rdir[j].toArray();
+                clip.restDir.push_back({
+                    static_cast<float>(v.at(0).toDouble()),
+                    static_cast<float>(v.at(1).toDouble()),
+                    static_cast<float>(v.at(2).toDouble())});
+            }
+        }
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
@@ -239,4 +264,39 @@ QString MotionLibrary::ensureLibraryBlocking()
     if (timedOut && dl) dl->cancelDownload();
 
     return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
+}
+
+std::vector<std::array<float, 3>> MotionLibrary::referenceDirsForPrompt(
+    const QString& prompt)
+{
+    MotionLibrary lib;
+    if (!libraryPresent() || !lib.loadFromFile(libraryPath()))
+        return {};
+    // Deterministically pick the most COMPLETE direction set (some scraped
+    // clips resolve fewer roles — an incomplete reference leaves those bones
+    // at the raw T-pose). Prefer clips matching the prompt's action.
+    QString action;
+    const int matched = lib.matchPrompt(prompt, &action);
+    auto score = [](const Clip& c) {
+        int n = 0;
+        for (const auto& d : c.restDir)
+            if (std::abs(d[0]) > 1e-6f || std::abs(d[1]) > 1e-6f
+                || std::abs(d[2]) > 1e-6f)
+                ++n;
+        return n;
+    };
+    const Clip* best = nullptr;
+    int bestScore = 0;
+    bool bestMatchesAction = false;
+    for (const Clip& c : lib.m_clips) {
+        const int n = score(c);
+        if (n == 0) continue;
+        const bool m = matched >= 0
+            && c.action.compare(action, Qt::CaseInsensitive) == 0;
+        if (!best || (m && !bestMatchesAction)
+            || (m == bestMatchesAction && n > bestScore)) {
+            best = &c; bestScore = n; bestMatchesAction = m;
+        }
+    }
+    return best ? best->restDir : std::vector<std::array<float, 3>>{};
 }

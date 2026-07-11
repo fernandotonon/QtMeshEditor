@@ -35,6 +35,15 @@ public:
         // order (size frames × 22). Rotation only; translation/scale are the
         // caller's (the retarget writes rotation keyframes).
         std::vector<std::vector<std::array<float, 4>>> quats;
+        // Optional (schema v3 clips extracted by --dump-canonical): the
+        // SOURCE rig's bind-pose world orientation per canonical joint.
+        // Present → the retarget runs bind-referenced (deltas vs the source
+        // bind onto the target bind); absent (CMU-built libraries) → the
+        // standing-pose path.
+        std::vector<std::array<float, 4>> restWorld;
+        // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
+        // enables the direction-aligned bind-referenced retarget.
+        std::vector<std::array<float, 3>> restDir;
     };
 
     MotionLibrary() = default;
@@ -82,6 +91,16 @@ public:
     // QTMESH_MOTION_NO_DOWNLOAD + base-URL override QTMESH_MOTION_LIBRARY_BASE_URL
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
+
+    // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
+    // model output carries no reference triple, so its base pose is
+    // synthesized from a TEMPLATE clip's restDir instead of harvesting the
+    // rig's other animations (which contaminated generations with e.g. a
+    // dance stance). Prefers a clip matching `prompt`, falls back to any
+    // clip carrying restDir. Reads the LOCAL library only (no download);
+    // returns empty when unavailable — callers then keep the harvest path.
+    static std::vector<std::array<float, 3>> referenceDirsForPrompt(
+        const QString& prompt);
 
 private:
     bool parse(const QByteArray& json);

@@ -112,6 +112,11 @@ public:
     static int canonicalJointCount();              // 22
     // Canonical joint name at index i (CMU core-body name), 0..count-1.
     static QString canonicalJointName(int i);
+    /// Canonical skeleton topology (22 joints): parent index (-1 for hip)
+    /// and the primary child used for bone-direction computation (-1 for
+    /// leaf joints: head, hands, feet).
+    static int canonicalParentOf(int i);
+    static int canonicalChildOf(int i);
     // Map an arbitrary skeleton bone name to a canonical joint index, or -1 if
     // it doesn't correspond to one of the 22 roles. Case-insensitive; tolerates
     // common prefixes (mixamorig:, mixamorig1:, bip01 …) and side spellings

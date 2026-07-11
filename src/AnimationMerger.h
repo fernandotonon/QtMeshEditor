@@ -180,7 +180,47 @@ public:
         const std::vector<std::array<float, 4>>& cmuRestWorld = {},
         bool refineWithModel = false,
         int refineStride = 8,
-        bool yaw180 = false);
+        bool yaw180 = false,
+        const std::vector<std::array<float, 3>>& clipRestDir = {});
+
+    /// One skeletal animation extracted onto the 22-joint canonical skeleton
+    /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
+    /// per canonical role, the source bone's WORLD orientation — exactly the
+    /// "frame":"world" convention the v3 motion library stores, so extracted
+    /// clips ride the existing retarget unchanged (delta vs clip frame 0).
+    struct CanonicalClip {
+        QString animation;      ///< source animation name
+        int frames = 0;         ///< sampled frame count at `fps`
+        int resolvedRoles = 0;  ///< canonical roles matched on this rig (≤22)
+        /// frames × 22 × [x,y,z,w]; unresolved roles hold identity.
+        std::vector<std::vector<std::array<float, 4>>> quats;
+        /// The SOURCE rig's REFERENCE world orientation per canonical role,
+        /// measured at the clip's calmest ANIMATED frame (same conjugated
+        /// frame as `quats` — never the bind/reset pose, which on many
+        /// scraped rigs differs from the animation worlds by a constant
+        /// global armature rotation). Enables the bind-referenced retarget
+        /// onto the TARGET's bind — no pose from any other target animation
+        /// is ever involved. 22 × [x,y,z,w]; identity for unresolved roles.
+        std::vector<std::array<float, 4>> restWorld;
+        /// Canonical-frame bone directions per role at the same reference
+        /// frame (unit vectors, canonical topology: role → its canonical
+        /// child joint; leaf roles use the incoming direction). Combined
+        /// with restWorld this gives the source bone's constant LOCAL
+        /// direction axis; the target computes its own bind directions the
+        /// same way, so every retargeted bone POINTS where the source bone
+        /// points each frame. 22 × [x,y,z]; zero for unresolved roles.
+        std::vector<std::array<float, 3>> restDir;
+    };
+
+    /// Sample every (or one) skeletal animation of `entity` at `fps` and
+    /// express each canonical joint's world orientation per frame. Bone→role
+    /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher
+    /// the retarget uses, so extraction and application are consistent by
+    /// construction. Animations whose rig resolves 0 roles are skipped.
+    static std::vector<CanonicalClip> extractCanonicalClips(
+        Ogre::Entity* entity,
+        int fps = 30,
+        const QString& onlyAnimation = {});
 
     /// True when the entity's mesh appears to FACE −Z (the retarget and the
     /// CMU clips assume +Z): detected from the foot region — toe mass extends
