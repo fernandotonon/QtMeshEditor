@@ -326,22 +326,32 @@ Live runs on Crash Bandicoot Warped (proper MODE2/2352 `.cue`, in-core hooks act
 confirm the chain produces recognizable, non-slab 3D at scale (single frames up to ~800k
 tris). Two title-dependent characteristics to be aware of:
 
-- **Tracked-vs-depth ratio varies by scene and engine.** Different Warped moments
-  reconstructed anywhere from 73% GteTracked down to ~43%, with the remainder arriving as
-  DepthOnly (PGXP-precise screen + view depth, inverted per-draw — still real 3D, just via
-  the well-posed inverse rather than the exact object-space record). The `rip_tag`
-  GTE→GP0 correlation (#815) survives the CPU path for a large fraction of vertices but not
-  all; games that recombine SXY through CPU ops PGXP's tag-drop rules treat conservatively
-  land more vertices in DepthOnly. Both tiers are usable; improving the tracked share is
-  future fork work (audit which `pgxp_cpu.c` ops the title uses to move screen coords and
-  widen tag survival where it's provably a pure move).
-- **Accumulation dilutes the tracked ratio.** The live worker ingests the in-core stream
-  every armed frame and accumulates across frames (cross-frame dedupe on), so a long armed
-  window mixes many frames' geometry — the tracked *percentage* drops as depth-tier prims
-  from other frames pile in (120 frames → 77% tracked; 600 frames → 43%; hundreds → single
-  digits) even though the absolute tracked count grows. For the cleanest single-object
-  tracked ratio, arm briefly and capture one frame; for whole-scene coverage, accumulate.
-  The `tracked_only` clean-up filter drops the screen-space Tier-2 junk regardless.
+- **Tracked-vs-depth ratio is a function of capture LENGTH, not tag survival.** A short
+  single-frame capture on Warped reconstructs ~90-93% GteTracked; a long accumulation drops
+  to single digits, the rest arriving as DepthOnly (PGXP-precise screen + view depth,
+  inverted per-draw — still real 3D via the well-posed inverse, just not the exact
+  object-space record). **Root cause (measured, Step 3 investigation):** the `rip_tag`
+  itself survives perfectly — instrumenting the fork showed MFC2 GTE→CPU tag survival at
+  **100%** and GP0-draw-site tag validity at **100% of XY-valid vertices**. The loss is
+  entirely host-side and entirely the sx/sy *backstop* in `RipperHooks::resolveTrackedDraws`:
+  the host maps a shadow's ring index (`seq % 65536`) to a captured record, but the core's
+  65536-entry ring wraps within a busy multi-frame accumulation (a scene pushes >200k
+  records), so `m_gteRingToBuffer` — which persists across the whole capture — ends up
+  resolving an earlier frame's draw to a *later* frame's record that reused the slot; the
+  sx/sy mismatch then correctly rejects it and the vertex degrades to DepthOnly. A short
+  capture never wraps, so it stays ~100% tracked.
+  - **Practical guidance:** for the highest tracked ratio, **arm briefly and capture ONE
+    frame** (or a short scene) of the object you want. Long accumulations still reconstruct
+    fully — they just tilt toward the DepthOnly tier, which is equally usable geometry.
+  - **A proper fix is non-trivial:** the naive "reset the ring map per frame" makes it
+    *worse* (0% tracked), because the worker's accumulate path interleaves `onGteRecords` /
+    `onGpuDrawTracked` / `onCoreFrameEnd` across `retro_run` ticks in a way that doesn't line
+    up with the record `frame` counter — a frame's buffered draws are resolved against a map
+    populated by a different tick. The real fix needs the ABI to carry the full monotonic
+    `seq` in each vertex shadow (not just `seq & MASK`) so the host can validate the exact
+    record identity instead of a wrapping ring slot — an ABI-version bump and fork change.
+    Deferred; the short-capture path already delivers ~90%+ tracked today.
+  - The `tracked_only` clean-up filter drops the screen-space Tier-2 junk regardless of ratio.
 
 ## Model-space RAM scanners (#674)
 
