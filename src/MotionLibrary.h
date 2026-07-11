@@ -92,6 +92,16 @@ public:
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
 
+    // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
+    // model output carries no reference triple, so its base pose is
+    // synthesized from a TEMPLATE clip's restDir instead of harvesting the
+    // rig's other animations (which contaminated generations with e.g. a
+    // dance stance). Prefers a clip matching `prompt`, falls back to any
+    // clip carrying restDir. Reads the LOCAL library only (no download);
+    // returns empty when unavailable — callers then keep the harvest path.
+    static std::vector<std::array<float, 3>> referenceDirsForPrompt(
+        const QString& prompt);
+
 private:
     bool parse(const QByteArray& json);
     std::vector<Clip> m_clips;

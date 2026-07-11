@@ -265,3 +265,38 @@ QString MotionLibrary::ensureLibraryBlocking()
 
     return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
 }
+
+std::vector<std::array<float, 3>> MotionLibrary::referenceDirsForPrompt(
+    const QString& prompt)
+{
+    MotionLibrary lib;
+    if (!libraryPresent() || !lib.loadFromFile(libraryPath()))
+        return {};
+    // Deterministically pick the most COMPLETE direction set (some scraped
+    // clips resolve fewer roles — an incomplete reference leaves those bones
+    // at the raw T-pose). Prefer clips matching the prompt's action.
+    QString action;
+    const int matched = lib.matchPrompt(prompt, &action);
+    auto score = [](const Clip& c) {
+        int n = 0;
+        for (const auto& d : c.restDir)
+            if (std::abs(d[0]) > 1e-6f || std::abs(d[1]) > 1e-6f
+                || std::abs(d[2]) > 1e-6f)
+                ++n;
+        return n;
+    };
+    const Clip* best = nullptr;
+    int bestScore = 0;
+    bool bestMatchesAction = false;
+    for (const Clip& c : lib.m_clips) {
+        const int n = score(c);
+        if (n == 0) continue;
+        const bool m = matched >= 0
+            && c.action.compare(action, Qt::CaseInsensitive) == 0;
+        if (!best || (m && !bestMatchesAction)
+            || (m == bestMatchesAction && n > bestScore)) {
+            best = &c; bestScore = n; bestMatchesAction = m;
+        }
+    }
+    return best ? best->restDir : std::vector<std::array<float, 3>>{};
+}

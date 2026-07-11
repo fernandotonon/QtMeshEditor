@@ -1704,6 +1704,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             if (mr.ok) {
                 action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
                 worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
+                // Borrow a template clip's reference directions so the
+                // retarget synthesizes a BIND-referenced base pose (no
+                // harvest from the rig's other animations).
+                clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
             }
         }
         if (!gotClip)

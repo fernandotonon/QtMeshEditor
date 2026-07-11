@@ -2022,6 +2022,11 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                 quats = mr.clip.quats;
                 fps = mr.clip.fps;
                 worldFrame = mr.worldFrame;  // v4 models: world-frame quats
+                // Model clips carry no reference triple — borrow a template
+                // clip's canonical bone directions so the retarget can
+                // synthesize a BIND-referenced base pose instead of
+                // harvesting the rig's other animations (contamination).
+                clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
                 clipSource = QStringLiteral("model");
                 gotClip = true;
             } else {
