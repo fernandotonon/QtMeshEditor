@@ -157,9 +157,17 @@ qtmesh cloud list [--json]                    # list cloud projects
 qtmesh cloud upload model.fbx [--name Hero] [--include "*.png,*.fbx"] [--exclude "*.tmp"]
                                               # [--no-scan] [--no-confirm] [--json]
 qtmesh cloud delete <project-id>              # delete a cloud project
+# PS1 runtime ripper (#431, experimental; needs -DENABLE_PS1_RIP=ON + the beetle rip fork in PS1Cores/):
+qtmesh ps1 capture game.cue --bios scph1001.bin --frames 600 -o out.gltf   # boot, capture one frame, export a scene
+qtmesh ps1 capture game.cue --bios scph1001.bin --scene 5s --tracked-only --smooth --drop-slivers -o out.glb  # 5s scene + cleanup toggles (#428)
+qtmesh ps1 capture game.cue --bios scph1001.bin --script inputs.json -o out.gltf  # reproducible input: [{"frame":60,"button":"start"}, ...]
+qtmesh ps1 capture game.cue --bios scph1001.bin --auto-input -o out.gltf    # mash Start/Cross to get past menus (no script)
+qtmesh ps1 dump-vram game.cue --bios scph1001.bin --frames 300 -o vram.png  # snapshot the GPU VRAM mirror to PNG
+# On Linux the libretro core needs a GL context — run headless under Xvfb:
+#   xvfb-run -a qtmesh ps1 capture game.cue --bios scph1001.bin -o out.gltf
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `light`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `segment`, `generate3d`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `light`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `segment`, `generate3d`, `ps1`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 

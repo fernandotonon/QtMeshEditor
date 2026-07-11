@@ -261,6 +261,19 @@ public:
     /// glTF/FBX exporter round-trip from C5 first.
     static int cmdNodeAnim(int argc, char* argv[]);
 
+    /// Headless PS1 runtime ripper (#431). Sub-actions:
+    ///   qtmesh ps1 capture <iso> --bios <bios> [--frames N | --scene Ns]
+    ///                            [--script input.json] [--auto-input]
+    ///                            [--tracked-only] [--smooth] [--drop-slivers]
+    ///                            [--dedupe-strict] [-o out.gltf] [--json]
+    ///   qtmesh ps1 dump-vram <iso> --bios <bios> [--frames N] -o vram.png [--json]
+    /// Boots the disc through PS1RipManager on its worker thread, pumps the
+    /// event loop (the CLI has no exec() loop), drives capture/scene, then
+    /// exports the reconstructed scene via MeshImporterExporter. Requires Xvfb
+    /// on Linux for the libretro core's GL context. ENABLE_PS1_RIP-guarded —
+    /// prints a build-flag message and returns 1 when compiled out.
+    static int cmdPs1(int argc, char* argv[]);
+
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
 };

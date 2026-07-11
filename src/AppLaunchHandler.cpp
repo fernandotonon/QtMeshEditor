@@ -30,7 +30,7 @@ bool isCliSubcommand(const QString& arg)
         QStringLiteral("skin"), QStringLiteral("rig"), QStringLiteral("segment"),
         QStringLiteral("generate3d"),
         QStringLiteral("morph"),
-        QStringLiteral("nodeanim"), QStringLiteral("cloud"),
+        QStringLiteral("nodeanim"), QStringLiteral("ps1"), QStringLiteral("cloud"),
     };
     return kSubcommands.contains(arg);
 }
