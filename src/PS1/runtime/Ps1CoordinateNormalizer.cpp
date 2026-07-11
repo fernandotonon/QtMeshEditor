@@ -28,7 +28,12 @@ bool Ps1NormalizerSettings::isDefault() const
         && flipX == d.flipX && flipY == d.flipY && flipZ == d.flipZ
         && perspectiveCorrectUVs == d.perspectiveCorrectUVs
         && nearlyEqual(perspectiveTolerance, d.perspectiveTolerance)
-        && perspectiveMaxDepth == d.perspectiveMaxDepth;
+        && perspectiveMaxDepth == d.perspectiveMaxDepth
+        && trackedGeometryOnly == d.trackedGeometryOnly
+        && nearlyEqual(spikeEdgeFactor, d.spikeEdgeFactor)
+        && cleanupWeldNormals == d.cleanupWeldNormals
+        && cleanupRemoveZeroArea == d.cleanupRemoveZeroArea
+        && nearlyEqual(zeroAreaEpsilon, d.zeroAreaEpsilon);
 }
 
 void Ps1CoordinateNormalizer::composeNodeTransform(const Ps1NormalizerSettings &settings,
@@ -132,6 +137,11 @@ void Ps1CoordinateNormalizer::save(QSettings &settings, const QString &prefix,
     settings.setValue(prefix + QStringLiteral("/perspectiveCorrectUVs"), value.perspectiveCorrectUVs);
     settings.setValue(prefix + QStringLiteral("/perspectiveTolerance"), value.perspectiveTolerance);
     settings.setValue(prefix + QStringLiteral("/perspectiveMaxDepth"), value.perspectiveMaxDepth);
+    settings.setValue(prefix + QStringLiteral("/trackedGeometryOnly"), value.trackedGeometryOnly);
+    settings.setValue(prefix + QStringLiteral("/spikeEdgeFactor"), value.spikeEdgeFactor);
+    settings.setValue(prefix + QStringLiteral("/cleanupWeldNormals"), value.cleanupWeldNormals);
+    settings.setValue(prefix + QStringLiteral("/cleanupRemoveZeroArea"), value.cleanupRemoveZeroArea);
+    settings.setValue(prefix + QStringLiteral("/zeroAreaEpsilon"), value.zeroAreaEpsilon);
 }
 
 Ps1NormalizerSettings Ps1CoordinateNormalizer::load(QSettings &settings, const QString &prefix)
@@ -157,6 +167,20 @@ Ps1NormalizerSettings Ps1CoordinateNormalizer::load(QSettings &settings, const Q
                                              out.perspectiveMaxDepth).toInt();
     if (out.perspectiveMaxDepth < 0 || out.perspectiveMaxDepth > 6)
         out.perspectiveMaxDepth = 3;
+    out.trackedGeometryOnly = settings.value(prefix + QStringLiteral("/trackedGeometryOnly"),
+                                             out.trackedGeometryOnly).toBool();
+    out.spikeEdgeFactor = settings.value(prefix + QStringLiteral("/spikeEdgeFactor"),
+                                         out.spikeEdgeFactor).toFloat();
+    if (!(out.spikeEdgeFactor >= 0.0f && out.spikeEdgeFactor <= 1000.0f))
+        out.spikeEdgeFactor = 12.0f;
+    out.cleanupWeldNormals = settings.value(prefix + QStringLiteral("/cleanupWeldNormals"),
+                                            out.cleanupWeldNormals).toBool();
+    out.cleanupRemoveZeroArea = settings.value(prefix + QStringLiteral("/cleanupRemoveZeroArea"),
+                                               out.cleanupRemoveZeroArea).toBool();
+    out.zeroAreaEpsilon = settings.value(prefix + QStringLiteral("/zeroAreaEpsilon"),
+                                         out.zeroAreaEpsilon).toFloat();
+    if (!(out.zeroAreaEpsilon > 0.0f && out.zeroAreaEpsilon <= 1.0f))
+        out.zeroAreaEpsilon = 1.0e-7f;
     return out;
 }
 
@@ -174,5 +198,10 @@ QString Ps1CoordinateNormalizer::describe(const Ps1NormalizerSettings &settings)
                          .arg(settings.perspectiveTolerance, 0, 'g', 3)
                          .arg(settings.perspectiveMaxDepth));
     }
+    if (settings.trackedGeometryOnly) parts.append(QStringLiteral("trackedOnly"));
+    if (settings.cleanupWeldNormals) parts.append(QStringLiteral("weldNormals"));
+    if (settings.cleanupRemoveZeroArea) parts.append(QStringLiteral("removeZeroArea"));
+    if (!nearlyEqual(settings.spikeEdgeFactor, Ps1NormalizerSettings{}.spikeEdgeFactor))
+        parts.append(QStringLiteral("spike=%1").arg(settings.spikeEdgeFactor, 0, 'g', 3));
     return parts.join(QLatin1Char(','));
 }

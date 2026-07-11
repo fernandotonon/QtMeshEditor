@@ -132,6 +132,14 @@ struct AssetInfo {
     // submeshes. Non-manifold input breaks boolean ops / fluid sims /
     // 3D printing.
     double nonManifoldEdgesRatio = -1.0;
+    // Fraction (0..1) of triangles with ~zero cross-product area (collinear /
+    // duplicate-vertex slivers). -1 when the asset has no triangulated
+    // submeshes. Common in raw PS1 captures (#428).
+    double ps1RipZeroAreaRatio = -1.0;
+    // Fraction (0..1) of triangles whose UV0 triangle has ~zero area (all three
+    // UVs coincident/collinear). -1 when UV0 isn't present or the asset has no
+    // triangulated submeshes. Common on PS1 flat-shaded/untextured prims (#428).
+    double ps1RipDegenerateUvRatio = -1.0;
 
     bool loadError = false;
     QString errorMessage;

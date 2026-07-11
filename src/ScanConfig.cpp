@@ -289,6 +289,10 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
         detectOverlappingUvsPct = r["detect_overlapping_uvs_pct"].toDouble();
     if (r.contains("detect_non_manifold_edges_pct"))
         detectNonManifoldEdgesPct = r["detect_non_manifold_edges_pct"].toDouble();
+    if (r.contains("ps1-rip-zero-area"))
+        ps1RipZeroAreaPct = r["ps1-rip-zero-area"].toDouble();
+    if (r.contains("ps1-rip-degenerate-uv"))
+        ps1RipDegenerateUvPct = r["ps1-rip-degenerate-uv"].toDouble();
     // Budget rules (#365)
     if (r.contains("max_triangle_count"))
         maxTriangleCount = r["max_triangle_count"].toInt();

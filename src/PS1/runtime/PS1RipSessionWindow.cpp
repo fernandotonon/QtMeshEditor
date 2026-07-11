@@ -56,6 +56,7 @@ constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
 constexpr auto kCleanupKey = "cleanupWeldNormals";
+constexpr auto kRemoveZeroAreaKey = "cleanupRemoveZeroArea";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -319,6 +320,29 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kCleanupKey), on);
     });
     toolbar->addWidget(smoothMesh);
+
+    // Mesh cleanup: drop zero-area (sliver) triangles from the raw capture
+    // (#428). Complements Smooth — welding shares verts, this removes the
+    // collinear / duplicate-vertex triangles PS1 quad-splits leave behind.
+    auto *removeZeroArea = new QCheckBox(tr("Drop slivers"), this);
+    removeZeroArea->setToolTip(tr("Clean up: remove zero-area (collinear / duplicate-vertex) "
+                                  "sliver triangles common in PS1 captures. Takes effect on "
+                                  "the next Capture Frame."));
+    removeZeroArea->setChecked(settings.value(ps1SettingsKey(kRemoveZeroAreaKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupRemoveZeroArea = removeZeroArea->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(removeZeroArea, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupRemoveZeroArea = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cleanup.zero_area"),
+                                      on ? QStringLiteral("on") : QStringLiteral("off"));
+        QSettings().setValue(ps1SettingsKey(kRemoveZeroAreaKey), on);
+    });
+    toolbar->addWidget(removeZeroArea);
 
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));

@@ -192,6 +192,17 @@ void PS1RipManager::initializeWorkerThread()
                     return;
                 }
 
+                // #428 cleanup-pipeline breadcrumbs — one per step actually run,
+                // with the drop count so crash diagnostics show what the cleanup
+                // removed from this capture.
+                if (normalize.cleanupWeldNormals)
+                    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cleanup.weld_normals"),
+                                                  QStringLiteral("applied"));
+                if (normalize.cleanupRemoveZeroArea)
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("ps1.rip.cleanup.zero_area"),
+                        QStringLiteral("dropped=%1").arg(reconStats.zeroAreaTrianglesDropped));
+
                 PS1RipMeshBuilder::BuildResult built;
                 QString buildErr;
                 try {

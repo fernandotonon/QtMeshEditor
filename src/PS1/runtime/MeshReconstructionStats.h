@@ -14,6 +14,8 @@ struct MeshReconstructionStats {
     int depthOnlyVertices = 0;
     /** Tier 0/1 vertices dropped by the per-part outlier policy (> 8 × p99 radius, #816). */
     int outlierDroppedVertices = 0;
+    /** Triangles dropped by the zero-area cleanup cull (#428 cleanup pipeline). */
+    int zeroAreaTrianglesDropped = 0;
     /** Prims whose tracked vertices resolved to more than one GTE matrix (skinned, #816). */
     int mixedMatrixPrims = 0;
     int primsTotal = 0;
