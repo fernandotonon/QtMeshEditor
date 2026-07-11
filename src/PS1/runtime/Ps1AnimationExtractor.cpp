@@ -23,6 +23,11 @@ quint64 mix(quint64 h, quint64 v)
 
 } // namespace
 
+QVector<Ps1MatrixTrack> Ps1AnimationExtractor::extract(const QVector<GteRecordEntry> &records)
+{
+    return extract(records, Options{});
+}
+
 bool Ps1AnimationExtractor::matricesDiffer(const int32_t aRt[9], const int32_t aTr[3],
                                            const int32_t bRt[9], const int32_t bTr[3])
 {

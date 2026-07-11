@@ -67,13 +67,10 @@ public:
      *  there are no records or nothing qualifies. Deterministic. */
     static QVector<Ps1MatrixTrack> extract(const QVector<GteRecordEntry> &records,
                                            const Options &opts);
-    /** Convenience overload using default Options. Separate overload (rather
-     *  than `= {}`) so the nested struct's in-class initializers don't need to
-     *  be visible at the default-argument site. */
-    static QVector<Ps1MatrixTrack> extract(const QVector<GteRecordEntry> &records)
-    {
-        return extract(records, Options{});
-    }
+    /** Convenience overload using default Options. Defined in the .cpp (not
+     *  inline) so there's exactly one emitted definition and no dependence on
+     *  the nested struct's initializers at a header default-argument site. */
+    static QVector<Ps1MatrixTrack> extract(const QVector<GteRecordEntry> &records);
 
     /** True when the two matrices differ beyond a small fixed-point epsilon.
      *  Exposed for testing. */
