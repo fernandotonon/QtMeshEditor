@@ -6756,8 +6756,10 @@ QJsonObject MCPServer::toolPs1RipCapture(const QJsonObject &args)
         return makeErrorResult("No active PS1 session — call ps1rip_start first");
 
     const bool trackedOnly = args.value(QStringLiteral("tracked_only")).toBool();
+    const bool smooth = args.value(QStringLiteral("smooth")).toBool();
     Ps1NormalizerSettings ns = mgr->normalizerSettings();
     ns.trackedGeometryOnly = trackedOnly;
+    ns.cleanupWeldNormals = smooth;
     mgr->setNormalizerSettings(ns);
 
     QJsonObject built;
@@ -8899,6 +8901,8 @@ QJsonArray MCPServer::buildToolsList()
         props["tracked_only"] = QJsonObject{{"type", "boolean"},
             {"description", "Clean-up filter: keep only in-core tracked+depth 3D geometry, drop "
                             "HUD/sprite/2D screen-space prims (default false)."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"},
+            {"description", "Weld duplicate vertices + recompute smoothed normals (default false)."}};
         props["scene_seconds"] = QJsonObject{{"type", "integer"},
             {"description", "If > 0, accumulate a multi-second scene capture instead of one frame."}};
         props["timeout_ms"] = QJsonObject{{"type", "integer"},

@@ -808,9 +808,89 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
  *  produced which submesh index in `texKeyToSubMesh` so the per-prim
  *  provenance pass can resolve `prim → (groupKey, texKey) → submeshIndex`
  *  (#679 review feedback, key generalised for #816). */
+/** Mesh cleanup (Step 4): weld coincident vertices then recompute smoothed
+ *  per-vertex normals. The captured stream is unindexed triangle soup (3 fresh
+ *  verts per tri), so shading is flat/faceted and vertex counts are 3× the
+ *  unique geometry. This quantizes position/uv/colour to a grid, merges
+ *  identical vertices into shared indices, and area-weight-averages the face
+ *  normals into each shared vertex. In-place on one submesh. */
+void weldAndSmoothSubMesh(ReconstructedSubMesh &sub)
+{
+    if (sub.indices.size() < 3 || sub.vertices.isEmpty())
+        return;
+
+    // Quantize to a fine grid so float noise doesn't defeat the weld. 1e-4
+    // editor units (~0.01 model units) is well below PS1 vertex spacing.
+    constexpr double kPosQuant = 10000.0; // 1/1e-4
+    constexpr double kUvQuant = 4096.0;
+    auto keyOf = [&](const ReconstructedVertex &v) {
+        auto q = [](float f, double s) {
+            return static_cast<long long>(std::llround(static_cast<double>(f) * s));
+        };
+        // Fold position (dominant), uv and colour into a string key. Colour
+        // matters: a shared corner with two vertex colours must stay split so
+        // the gouraud shading survives.
+        return QStringLiteral("%1,%2,%3|%4,%5|%6")
+            .arg(q(v.px, kPosQuant)).arg(q(v.py, kPosQuant)).arg(q(v.pz, kPosQuant))
+            .arg(q(v.u, kUvQuant)).arg(q(v.v, kUvQuant))
+            .arg(v.diffuseArgb);
+    };
+
+    QHash<QString, uint32_t> uniqueIndex;
+    QVector<ReconstructedVertex> welded;
+    welded.reserve(sub.vertices.size());
+    QVector<uint32_t> newIdx;
+    newIdx.reserve(sub.indices.size());
+    for (const uint32_t oldIdx : sub.indices) {
+        const ReconstructedVertex &v = sub.vertices[static_cast<int>(oldIdx)];
+        const QString k = keyOf(v);
+        auto it = uniqueIndex.constFind(k);
+        uint32_t idx;
+        if (it == uniqueIndex.constEnd()) {
+            idx = static_cast<uint32_t>(welded.size());
+            ReconstructedVertex nv = v;
+            nv.nx = nv.ny = nv.nz = 0.0f; // accumulate below
+            welded.append(nv);
+            uniqueIndex.insert(k, idx);
+        } else {
+            idx = it.value();
+        }
+        newIdx.append(idx);
+    }
+
+    // Area-weighted face normals accumulated into each shared vertex, then
+    // normalized. Cross-product magnitude already encodes 2× triangle area, so
+    // adding the raw cross product weights by area for free.
+    for (int t = 0; t + 2 < newIdx.size(); t += 3) {
+        ReconstructedVertex &a = welded[static_cast<int>(newIdx[t])];
+        ReconstructedVertex &b = welded[static_cast<int>(newIdx[t + 1])];
+        ReconstructedVertex &c = welded[static_cast<int>(newIdx[t + 2])];
+        const float ux = b.px - a.px, uy = b.py - a.py, uz = b.pz - a.pz;
+        const float vx = c.px - a.px, vy = c.py - a.py, vz = c.pz - a.pz;
+        const float nx = uy * vz - uz * vy;
+        const float ny = uz * vx - ux * vz;
+        const float nz = ux * vy - uy * vx;
+        a.nx += nx; a.ny += ny; a.nz += nz;
+        b.nx += nx; b.ny += ny; b.nz += nz;
+        c.nx += nx; c.ny += ny; c.nz += nz;
+    }
+    for (ReconstructedVertex &v : welded) {
+        const float len = std::sqrt(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz);
+        if (len > 1e-6f) {
+            v.nx /= len; v.ny /= len; v.nz /= len;
+        } else {
+            v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f; // degenerate — point up
+        }
+    }
+
+    sub.vertices = welded;
+    sub.indices = newIdx;
+}
+
 ReconstructedMesh meshFromMatrixGroup(const PartGroupKey &key,
                                       const QHash<quint64, SubMeshAccumulator> &texGroups,
-                                      QHash<quint64, int> *texKeyToSubMesh = nullptr)
+                                      QHash<quint64, int> *texKeyToSubMesh = nullptr,
+                                      bool cleanup = false)
 {
     ReconstructedMesh result;
     result.meshName = key.first == 0
@@ -830,9 +910,11 @@ ReconstructedMesh meshFromMatrixGroup(const PartGroupKey &key,
         sub.materialName = acc.materialName;
         sub.vertices = acc.vertices;
         sub.indices = acc.indices;
+        if (cleanup)
+            weldAndSmoothSubMesh(sub);
         result.subMeshes.append(sub);
-        result.vertexCount += acc.vertices.size();
-        result.triangleCount += acc.indices.size() / 3;
+        result.vertexCount += sub.vertices.size();
+        result.triangleCount += sub.indices.size() / 3;
     }
     return result;
 }
@@ -867,7 +949,8 @@ PartsBuildResult buildParts(const CaptureSnapshot &snapshot,
          ++groupIt) {
         QHash<quint64, int> texKeyToSubMesh;
         ReconstructedMesh part =
-            meshFromMatrixGroup(groupIt.key(), groupIt.value().byTexKey, &texKeyToSubMesh);
+            meshFromMatrixGroup(groupIt.key(), groupIt.value().byTexKey, &texKeyToSubMesh,
+                                settings.cleanupWeldNormals);
         if (part.isEmpty())
             continue;
         out.partIndexByGroupKey.insert(groupIt.key(), out.parts.size());

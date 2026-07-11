@@ -82,6 +82,14 @@ struct Ps1NormalizerSettings {
      *  (thin platforms, long walls) while catching the runaway spans. */
     float spikeEdgeFactor = 12.0f;
 
+    /** Mesh cleanup pass (Step 4): weld coincident vertices (same position,
+     *  UV and colour within epsilon) so the raw unindexed triangle soup shares
+     *  vertices, then recompute smoothed per-vertex normals from the welded
+     *  faces. Turns the flat-shaded facet look into solid surfaces and shrinks
+     *  the vertex count. Off by default (opt-in — welding changes vertex IDs,
+     *  which some downstream steps assume are 1:1 with the capture). */
+    bool cleanupWeldNormals = false;
+
     bool isDefault() const;
     bool flipsAreActive() const { return flipX || flipY || flipZ; }
 

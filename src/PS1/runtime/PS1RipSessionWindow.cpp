@@ -55,6 +55,7 @@ constexpr auto kBiosKey = "biosPath";
 constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
+constexpr auto kCleanupKey = "cleanupWeldNormals";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
@@ -294,6 +295,30 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kTrackedOnlyKey), on);
     });
     toolbar->addWidget(trackedOnly);
+
+    // Mesh cleanup: weld coincident vertices + recompute smoothed normals so
+    // captured meshes shade as solid surfaces instead of flat facets. Applies
+    // to the next Capture Frame.
+    auto *smoothMesh = new QCheckBox(tr("Smooth"), this);
+    smoothMesh->setToolTip(tr("Clean up: weld duplicate vertices and recompute "
+                              "smoothed normals (solid surfaces instead of flat facets). "
+                              "Takes effect on the next Capture Frame."));
+    smoothMesh->setChecked(settings.value(ps1SettingsKey(kCleanupKey), false).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupWeldNormals = smoothMesh->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(smoothMesh, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.cleanupWeldNormals = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      on ? QStringLiteral("ps1_rip_smooth_on")
+                                         : QStringLiteral("ps1_rip_smooth_off"));
+        QSettings().setValue(ps1SettingsKey(kCleanupKey), on);
+    });
+    toolbar->addWidget(smoothMesh);
 
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));

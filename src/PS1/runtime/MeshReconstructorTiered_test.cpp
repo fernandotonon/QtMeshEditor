@@ -564,6 +564,52 @@ TEST(MeshReconstructorTieredTest, DegenerateTriangleCullDropsSpanningTriangle)
     (void)withSpan;
 }
 
+TEST(MeshReconstructorTieredTest, CleanupWeldsVerticesAndComputesNormals)
+{
+    // Without cleanup the tracked cube is unindexed soup: 12 tris × 3 = 36
+    // verts, zero normals. With cleanup it welds to the 8 cube corners and
+    // every vertex gets a unit normal.
+    MatrixRecord matrix = rotationMatrix(0.0, 0.0, 0.0);
+    matrix.tr[2] = 5000;
+    const CaptureSnapshot snap = cubeSnapshot(matrix, FixtureTier::Tracked);
+
+    MeshReconstructionStats raw;
+    const ReconstructedCaptureSet noClean =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, &raw);
+    int rawVerts = 0;
+    bool rawHasNormals = false;
+    for (const auto &m : noClean.uniqueMeshes)
+        for (const auto &sm : m.subMeshes) {
+            rawVerts += sm.vertices.size();
+            for (const auto &v : sm.vertices)
+                if (v.nx != 0.0f || v.ny != 0.0f || v.nz != 0.0f) rawHasNormals = true;
+        }
+    EXPECT_EQ(rawVerts, 36) << "raw capture is unindexed 3-verts-per-tri soup";
+    EXPECT_FALSE(rawHasNormals) << "raw capture has no normals";
+
+    Ps1NormalizerSettings clean;
+    clean.cleanupWeldNormals = true;
+    MeshReconstructionStats cs;
+    const ReconstructedCaptureSet cleaned =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, clean, &cs);
+    ASSERT_FALSE(cleaned.isEmpty());
+    int cleanVerts = 0, normalized = 0;
+    for (const auto &m : cleaned.uniqueMeshes)
+        for (const auto &sm : m.subMeshes)
+            for (const auto &v : sm.vertices) {
+                ++cleanVerts;
+                const float len = std::sqrt(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz);
+                if (std::fabs(len - 1.0f) < 1e-3f) ++normalized;
+            }
+    // Vertex colours on the fixture are uniform, so the cube welds toward its
+    // 8 corners — far fewer than the 36 soup verts.
+    EXPECT_LT(cleanVerts, rawVerts) << "cleanup must weld coincident vertices";
+    EXPECT_LE(cleanVerts, 8) << "a cube welds to its 8 corners";
+    EXPECT_EQ(normalized, cleanVerts) << "every welded vertex gets a unit normal";
+    // Geometry preserved: still the same cube.
+    EXPECT_LE(maxCornerError(cleaned), 0.01f);
+}
+
 TEST(MeshReconstructorTieredTest, EditorRotationFromGtePins90DegreeYRotation)
 {
     // 90° around Y in the GTE camera basis: model (x,y,z) -> camera (z,y,-x).
