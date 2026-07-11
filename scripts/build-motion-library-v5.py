@@ -42,7 +42,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 CANON_COUNT = 22
 FPS = 30
@@ -75,12 +74,20 @@ KEYWORDS = [
 ]
 
 
+STOPWORDS = {"armature", "action", "anim", "animation", "animations",
+             "mixamo", "com", "take", "takes", "fbx", "rig", "rigged",
+             "character", "model", "mesh", "skeleton", "base", "layer",
+             "scene", "root", "main", "default", "final", "new", "test"}
+# junk that survives normalization but is not an action
+BAD_ACTIONS = {"ation", "bot", "jad", "loose", "pose", "still", "static"}
+
+
 def norm_anim_name(name):
     n = name.lower()
     n = re.sub(r"^.*\|", "", n)                 # "Armature|Walk" → "walk"
-    n = re.sub(r"(armature|action|anim|mixamo\.com|takes?)", " ", n)
-    n = re.sub(r"[^a-z]+", " ", n)
-    return " ".join(n.split())
+    n = re.sub(r"[^a-z]+", " ", n)               # squash first, THEN drop
+    words = [w for w in n.split() if w not in STOPWORDS]
+    return " ".join(words)
 
 
 def action_for(anim_name, tags):
@@ -90,7 +97,9 @@ def action_for(anim_name, tags):
             return action                        # None = deliberate skip
     # single clean word → keep verbatim (widens the prompt vocabulary)
     words = n.split()
-    if len(words) == 1 and 3 <= len(words[0]) <= 16:
+    if len(words) == 1 and 3 <= len(words[0]) <= 16 \
+            and words[0] not in BAD_ACTIONS \
+            and not any(sw in words[0] for sw in STOPWORDS if len(sw) > 3):
         return words[0]
     for t in tags or []:
         for kw, action in KEYWORDS:
@@ -155,6 +164,12 @@ def find_qtmesh(explicit):
 
 
 def manifest_lookup(manifest, dirname):
+    # Exact join on the recorded on-disk dir (newer manifests), slug-based
+    # fuzzy fallback for corpora scraped before `dir` was recorded.
+    for a in manifest.get("assets", []):
+        d = a.get("dir", "")
+        if d and (d.endswith("/" + dirname) or d == dirname):
+            return a
     for a in manifest.get("assets", []):
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", a.get("title", "")).strip("_")
         if dirname in (slug[:80],) or dirname in slug:
@@ -202,23 +217,30 @@ def main():
                     if not fn.lower().endswith(MODEL_EXTS):
                         continue
                     fpath = os.path.join(root, fn)
-                    with tempfile.NamedTemporaryFile(
-                            suffix=".json", delete=False) as tf:
-                        tmp = tf.name
-                    try:
-                        r = subprocess.run(
-                            [qtmesh, "anim", fpath, "--dump-canonical", tmp],
-                            capture_output=True, text=True, timeout=600)
-                        if r.returncode != 0 or not os.path.getsize(tmp):
-                            continue
-                        dump = json.load(open(tmp))
-                    except Exception:
-                        continue
-                    finally:
+                    # Sidecar cache: extraction dominates rebuild time, so
+                    # dumps persist next to the model file and are reused
+                    # when newer than it (delete *.canonical.json to force).
+                    cache = fpath + ".canonical.json"
+                    dump = None
+                    if os.path.exists(cache) \
+                            and os.path.getmtime(cache) >= os.path.getmtime(fpath):
                         try:
-                            os.remove(tmp)
-                        except OSError:
-                            pass
+                            dump = json.load(open(cache))
+                        except Exception:
+                            dump = None
+                    if dump is None:
+                        try:
+                            r = subprocess.run(
+                                [qtmesh, "anim", fpath,
+                                 "--dump-canonical", cache],
+                                capture_output=True, text=True, timeout=600)
+                            if r.returncode != 0 \
+                                    or not os.path.exists(cache) \
+                                    or not os.path.getsize(cache):
+                                continue
+                            dump = json.load(open(cache))
+                        except Exception:
+                            continue
                     joints = joints or dump.get("joints")
                     for c in dump.get("clips", []):
                         if c.get("resolvedRoles", 0) < args.min_roles:

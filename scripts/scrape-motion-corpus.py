@@ -392,7 +392,9 @@ def scrape_packs(out_raw, max_per_pack=8):
 
 def write_outputs(out_dir, assets):
     for a in assets:
-        a.pop("_dir", None)
+        d = a.pop("_dir", None)
+        if d:
+            a["dir"] = os.path.relpath(d, out_dir)
     # Incremental: merge with any manifest already in the corpus dir so
     # successive runs (different sources/queries) accumulate; an asset seen
     # again (same source_url) is replaced by the fresh record.
