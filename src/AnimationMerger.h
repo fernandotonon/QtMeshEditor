@@ -257,7 +257,7 @@ public:
     /// its widen/tuck value (the keyframes carry over; the tracked angle must
     /// too, or the next slider drag mis-computes its delta). No-op if there was
     /// no tracked angle or the names match.
-    static void migrateArmSpaceKey(const std::string& skeletonName,
+    static void migrateArmSpaceKey(Ogre::Skeleton* skel,
                                    const std::string& oldAnim,
                                    const std::string& newAnim);
 

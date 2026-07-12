@@ -21,11 +21,31 @@
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
 static QMap<QString, int> s_skeletonUpAxis;
 
-// #854: last-applied arm-space angle per (skeleton, animation), session
-// scoped. adjustArmSpace() reads it to make each apply absolute+idempotent;
-// currentArmSpace() exposes it so a UI can seed the slider with the clip's
-// real value (never persisted — export bakes the keyframes).
-static std::map<std::pair<std::string, std::string>, float> g_armSpaceApplied;
+// #854: last-applied arm-space angle, tracked PER SKELETON INSTANCE (not a
+// process-global map — that pollutes across entities and across tests that
+// share a process). Stored on the skeleton's first bone via UserObjectBindings
+// under a per-animation key, so it lives and dies with the skeleton and is
+// naturally isolated. Session-scoped only; export bakes the final keyframes.
+namespace {
+std::string armSpaceKey(const std::string& animName)
+{
+    return "qtme.armspace." + animName;
+}
+float getStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName)
+{
+    if (!skel || skel->getNumBones() == 0) return 0.0f;
+    const Ogre::Any& a = skel->getBone(0)->getUserObjectBindings()
+                             .getUserAny(armSpaceKey(animName));
+    return a.has_value() ? Ogre::any_cast<float>(a) : 0.0f;
+}
+void setStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName,
+                       float degrees)
+{
+    if (!skel || skel->getNumBones() == 0) return;
+    skel->getBone(0)->getUserObjectBindings().setUserAny(
+        armSpaceKey(animName), Ogre::Any(degrees));
+}
+} // namespace
 
 void AnimationMerger::registerSkeletonUpAxis(const std::string& name, int upAxis) {
     s_skeletonUpAxis[QString::fromStdString(name)] = upAxis;
@@ -243,21 +263,21 @@ void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
     // widened keyframes were copied above, so the tracked angle must follow
     // or currentArmSpace() would report 0 for the renamed clip and the next
     // slider drag would compute a wrong (absolute-from-0) delta.
-    migrateArmSpaceKey(skel->getName(), oldName, newName);
+    migrateArmSpaceKey(skel, oldName, newName);
 
     skel->removeAnimation(oldName);
 }
 
-void AnimationMerger::migrateArmSpaceKey(const std::string& skeletonName,
+void AnimationMerger::migrateArmSpaceKey(Ogre::Skeleton* skel,
                                          const std::string& oldAnim,
                                          const std::string& newAnim)
 {
-    if (oldAnim == newAnim) return;
-    const std::pair<std::string, std::string> oldKey(skeletonName, oldAnim);
-    if (auto it = g_armSpaceApplied.find(oldKey);
-        it != g_armSpaceApplied.end()) {
-        g_armSpaceApplied[{skeletonName, newAnim}] = it->second;
-        g_armSpaceApplied.erase(it);
+    if (!skel || oldAnim == newAnim || skel->getNumBones() == 0) return;
+    auto& uob = skel->getBone(0)->getUserObjectBindings();
+    const Ogre::Any& a = uob.getUserAny(armSpaceKey(oldAnim));
+    if (a.has_value()) {
+        setStoredArmSpace(skel, newAnim, Ogre::any_cast<float>(a));
+        uob.eraseUserAny(armSpaceKey(oldAnim));
     }
 }
 
@@ -1328,9 +1348,7 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
                                        const std::string& animName)
 {
-    if (!skel) return 0.0f;
-    const auto it = g_armSpaceApplied.find({skel->getName(), animName});
-    return it != g_armSpaceApplied.end() ? it->second : 0.0f;
+    return getStoredArmSpace(skel, animName);
 }
 
 bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
@@ -1345,16 +1363,12 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
 
     // Idempotent absolute application: revert whatever we applied before,
     // then apply the new absolute angle. The net delta this call injects is
-    // (degrees − stored). The last-applied angle per (skeleton, animation) is
-    // tracked in the file-scoped g_armSpaceApplied map (Ogre::Animation has no
-    // UserObjectBindings) — which is exactly what slider scrubbing needs, and
-    // currentArmSpace() exposes it so a UI can seed the slider with the clip's
-    // real value. Export bakes the final keyframes, so cross-session
-    // persistence isn't required. Zeroing restores the clip bit-near-exactly.
-    const std::pair<std::string, std::string> key(skel->getName(), animName);
-    float stored = 0.0f;
-    if (auto it = g_armSpaceApplied.find(key); it != g_armSpaceApplied.end())
-        stored = it->second;
+    // (degrees − stored). The last-applied angle is tracked PER SKELETON
+    // INSTANCE (on bone[0]'s UserObjectBindings, keyed by animation) — not a
+    // process-global map, which would pollute across entities and tests.
+    // currentArmSpace() exposes it so a UI can seed the slider. Export bakes
+    // the final keyframes, so cross-session persistence isn't required.
+    const float stored = getStoredArmSpace(skel, animName);
     const float delta = degrees - stored;
     if (std::abs(delta) < 1e-4f)
         return true;   // already at target — nothing to do (still success)
@@ -1452,27 +1466,7 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     if (!touchedAny)
         return false;   // no arm role on this rig
 
-    g_armSpaceApplied[key] = degrees;
-
-    if (!qEnvironmentVariableIsEmpty("QTMESH_ARMSPACE_DEBUG")) {
-        // Measure the right-shoulder world direction right here, so we can
-        // tell an apply/compose bug from a downstream measurement artifact.
-        const int si = tb.roleBoneIdx[7];
-        const int ci = tb.roleBoneIdx[8];
-        if (si >= 0 && ci >= 0) {
-            skel->reset(true);
-            anim->apply(skel, anim->getLength() * 0.5f);
-            skel->_updateTransforms();
-            Ogre::Vector3 d =
-                skel->getBone(static_cast<unsigned short>(ci))->_getDerivedPosition()
-                - skel->getBone(static_cast<unsigned short>(si))->_getDerivedPosition();
-            d.normalise();
-            fprintf(stderr, "[armspace-core] degrees=%.1f stored_before=%.1f "
-                    "delta=%.1f -> Rdir=(%.3f,%.3f,%.3f)\n",
-                    degrees, stored, delta, d.x, d.y, d.z);
-            fflush(stderr);
-        }
-    }
+    setStoredArmSpace(skel, animName, degrees);
     return true;
 }
 
@@ -1573,9 +1567,12 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     if (skel->hasAnimation(animName))
         skel->removeAnimation(animName);
     // #854: the freshly (re)created clip has NO arm-space applied. A stale
-    // entry from a prior generation of the same name would make a re-request
-    // of that same angle a no-op (delta 0) on the new keyframes — forget it.
-    g_armSpaceApplied.erase({skel->getName(), animName});
+    // stored angle from a prior generation of the same name would make a
+    // re-request of that same angle a no-op (delta 0) on the new keyframes —
+    // forget it.
+    if (skel->getNumBones() > 0)
+        skel->getBone(0)->getUserObjectBindings().eraseUserAny(
+            armSpaceKey(animName));
     Ogre::Animation* anim = skel->createAnimation(animName, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);

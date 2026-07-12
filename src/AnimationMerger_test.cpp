@@ -1065,7 +1065,6 @@ TEST_F(AnimationMergerTest, ArmSpaceWidensAndTucksArms)
 
 TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
 {
-    qputenv("QTMESH_ARMSPACE_DEBUG", "1");
     Ogre::Entity* ent = makeArmRigEntity("armspace_idem");
     ASSERT_NE(ent, nullptr);
     Ogre::SkeletonInstance* skel = ent->getSkeleton();
@@ -1088,15 +1087,8 @@ TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
     // Back to 0 restores the original pose bit-near-exactly.
     AnimationMerger::adjustArmSpace(skel, "clip", 0.0f);
     EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip"), 0.0f);
-    const Ogre::Vector3 restored = armWorldDir(skel, "RightArm", "RightForeArm");
-    fprintf(stderr, "[armspace-dbg3] base=(%.3f,%.3f,%.3f) at10=(%.3f,%.3f,%.3f) "
-            "deg(base,at10)=%.1f ref10=(%.3f,%.3f,%.3f) deg(base,ref10)=%.1f "
-            "restored=(%.3f,%.3f,%.3f) deg(base,restored)=%.1f\n",
-            base.x, base.y, base.z, at10.x, at10.y, at10.z,
-            degBetween(base, at10), ref10.x, ref10.y, ref10.z,
-            degBetween(base, ref10), restored.x, restored.y, restored.z,
-            degBetween(base, restored));
-    EXPECT_GT(base.dotProduct(restored), 0.9999f);
+    EXPECT_GT(base.dotProduct(armWorldDir(skel, "RightArm", "RightForeArm")),
+              0.9999f);
 }
 
 TEST_F(AnimationMergerTest, ArmSpaceLeavesNonArmBonesUntouched)
