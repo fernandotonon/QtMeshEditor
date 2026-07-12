@@ -13,6 +13,7 @@
 #include <functional>
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <vector>
 #include <cmath>
 
@@ -1298,6 +1299,123 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
     return tb;
 }
 } // namespace
+
+bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
+                                     const std::string& animName,
+                                     float degrees)
+{
+    if (!skel || !skel->hasAnimation(animName))
+        return false;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim)
+        return false;
+
+    // Idempotent absolute application: revert whatever we applied before,
+    // then apply the new absolute angle. The net delta this call injects is
+    // (degrees − stored). Ogre::Animation carries no UserObjectBindings, so
+    // the last-applied angle is tracked in a session-scoped map keyed by
+    // (skeleton, animation) — which is exactly what slider scrubbing needs;
+    // export bakes the final keyframes, so cross-session persistence isn't
+    // required. Zeroing the angle restores the clip bit-near-exactly.
+    static std::map<std::pair<std::string, std::string>, float> s_applied;
+    const std::pair<std::string, std::string> key(skel->getName(), animName);
+    float stored = 0.0f;
+    if (auto it = s_applied.find(key); it != s_applied.end())
+        stored = it->second;
+    const float delta = degrees - stored;
+    if (std::abs(delta) < 1e-4f)
+        return true;   // already at target — nothing to do (still success)
+
+    // Bone → canonical role (same matcher as the retarget).
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+
+    // Torso FORWARD axis in world space: the retarget's Ct maps the target's
+    // raw frame onto canonical axes (X=left, Y=up, Z=forward), so Ct⁻¹·+Z is
+    // the rig's forward direction in its own world.
+    const Ogre::Vector3 fwd =
+        (tb.Ct.Inverse() * Ogre::Vector3::UNIT_Z).normalisedCopy();
+
+    // Per side: swing about the torso forward axis, sign mirrored between
+    // sides so a POSITIVE `degrees` swings BOTH arms AWAY from the body
+    // (widen) and negative tucks them in. About canonical +Z (forward) with
+    // +Y up / +X left, a NEGATIVE rotation lifts the right arm outward and a
+    // positive one lifts the left, so the right side takes −ang. Collars get
+    // a fractional share (a small part of the reach).
+    const Ogre::Radian ang = Ogre::Radian(Ogre::Degree(delta));
+    const float kCollarShare = 0.25f;
+    const Ogre::Quaternion swingR(-ang, fwd);
+    const Ogre::Quaternion swingL(ang, fwd);
+    const Ogre::Quaternion swingRc(ang * (-kCollarShare), fwd);
+    const Ogre::Quaternion swingLc(ang * kCollarShare, fwd);
+
+    // Distribute the role's swing across duplicate bones (multi-segment
+    // shoulders) so the chain's total matches the requested angle.
+    std::vector<int> canonDup(
+        static_cast<size_t>(MotionInbetween::canonicalJointCount()), 0);
+    for (int i = 0; i < nBones; ++i)
+        if (boneToCanon[static_cast<size_t>(i)] >= 0)
+            ++canonDup[static_cast<size_t>(boneToCanon[static_cast<size_t>(i)])];
+
+    // Roles that carry an arm-space swing → the world swing for that role.
+    auto worldSwingForRole = [&](int c) -> const Ogre::Quaternion* {
+        switch (c) {
+            case 7:  return &swingR;    // rshoulder
+            case 11: return &swingL;    // lshoulder
+            case 6:  return &swingRc;   // rcollar (fractional)
+            case 10: return &swingLc;   // lcollar (fractional)
+            default: return nullptr;
+        }
+    };
+
+    bool touchedAny = false;
+    for (int i = 0; i < nBones; ++i) {
+        const int c = boneToCanon[static_cast<size_t>(i)];
+        const Ogre::Quaternion* Sworld = worldSwingForRole(c);
+        if (!Sworld)
+            continue;
+        Ogre::NodeAnimationTrack* trk = nullptr;
+        if (anim->hasNodeTrack(static_cast<unsigned short>(i)))
+            trk = anim->getNodeTrack(static_cast<unsigned short>(i));
+        if (!trk || trk->getNumKeyFrames() == 0)
+            continue;
+
+        // Fractional swing when the role spans several bones.
+        const int dup = std::max(1, canonDup[static_cast<size_t>(c)]);
+        Ogre::Quaternion S = *Sworld;
+        if (dup > 1)
+            S = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                        Ogre::Quaternion::IDENTITY, S,
+                                        /*shortestPath=*/true);
+
+        // applyToNode composes the keyframe as localApplied = bindLocal · kf,
+        // and world = W_parent · localApplied = W_shoulder_bind · kf. To add
+        // a world swing S at this bone (parents untouched), the new keyframe
+        // is L · kf where L conjugates S into the bone's bind-local frame:
+        //   L = W_bind⁻¹ · S · W_bind
+        const Ogre::Quaternion Wbind = tb.bindWorld[static_cast<size_t>(i)];
+        const Ogre::Quaternion L = Wbind.Inverse() * S * Wbind;
+
+        const unsigned short nk = trk->getNumKeyFrames();
+        for (unsigned short k = 0; k < nk; ++k) {
+            Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
+            kf->setRotation(L * kf->getRotation());
+        }
+        touchedAny = true;
+    }
+
+    if (!touchedAny)
+        return false;   // no arm role on this rig
+
+    s_applied[key] = degrees;
+    return true;
+}
 
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,

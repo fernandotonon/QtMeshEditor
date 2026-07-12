@@ -337,7 +337,15 @@ public:
     /// false = the reliable template-clip retarget.
     Q_INVOKABLE QVariantMap generateMotion(const QString& prompt,
                                            double duration = 0.0,
-                                           bool useModel = false);
+                                           bool useModel = false,
+                                           double armSpaceDeg = 0.0);
+
+    /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
+    /// the selected entity. Positive `degrees` widens the arms away from the
+    /// body, negative tucks them in, 0 restores the original. ABSOLUTE +
+    /// idempotent, so it maps directly to a slider (apply on release). Returns
+    /// true on success. Refreshes the viewport via notifyExternalAnimationEdit.
+    Q_INVOKABLE bool adjustArmSpace(const QString& animName, double degrees);
 
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a

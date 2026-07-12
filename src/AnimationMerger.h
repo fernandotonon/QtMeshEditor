@@ -212,6 +212,32 @@ public:
         std::vector<std::array<float, 3>> restDir;
     };
 
+    /// Post-process a generated animation to widen (+) or tuck (−) the arm
+    /// chains, à la Mixamo's "Character Arm-Space" (#854). Rescues arm-into-
+    /// torso clipping / too-wide arms on rigs whose proportions differ from
+    /// the source clip, without touching the retarget math.
+    ///
+    /// Mechanics: for each bone mapped to a shoulder role (canonical 7 right,
+    /// 11 left) — plus a fractional share on the collars (6/10) — a swing of
+    /// `degrees` about the torso's FORWARD axis (from the target bind frame,
+    /// mirrored per side: + swings both arms away from the body) is injected
+    /// into WORLD space and folded back into the bone's local keyframe deltas.
+    /// Elbows/hands inherit through the hierarchy (keyframes are parent-
+    /// relative), so only the shoulders/collars are rewritten. The full angle
+    /// is split across duplicate role bones so multi-segment shoulders don't
+    /// over-rotate.
+    ///
+    /// IDEMPOTENT: the net applied angle is stored on the animation via
+    /// UserObjectBindings ("qtme.armspace"); re-applying first reverts the
+    /// stored angle, so `adjustArmSpace(20)` then `adjustArmSpace(10)` ==
+    /// `adjustArmSpace(10)` from the original, and `adjustArmSpace(0)`
+    /// restores the clip bit-near-exactly. `degrees` is the ABSOLUTE target.
+    /// Returns false (no-op) if the animation is missing or no arm role
+    /// resolves on the rig.
+    static bool adjustArmSpace(Ogre::Skeleton* skel,
+                               const std::string& animName,
+                               float degrees);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

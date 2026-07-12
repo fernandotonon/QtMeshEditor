@@ -7953,6 +7953,10 @@ Rectangle {
             spacing: 4
 
             property var entityGroups: PropertiesPanelController.animationData()
+            // #854: the clip the arm-space slider targets — set when Generate
+            // runs, cleared on selection change so the slider only shows for a
+            // freshly generated clip.
+            property string lastGeneratedAnim: ""
 
             function refreshAnimData() {
                 entityGroups = PropertiesPanelController.animationData()
@@ -7960,7 +7964,7 @@ Rectangle {
 
             Connections {
                 target: PropertiesPanelController
-                function onSelectionChanged() { refreshAnimData() }
+                function onSelectionChanged() { lastGeneratedAnim = ""; refreshAnimData() }
                 function onAnimationStateChanged() { refreshAnimData() }
             }
 
@@ -8008,8 +8012,10 @@ Rectangle {
                             ? "Generating (experimental model)…"
                             : "Generating… (first use downloads the motion library)"
                         genStatus.isError = false
-                        AnimationControlController.generateMotion(genPromptIn.text, 0.0,
-                                                                  useModelChk.checked)
+                        var gr = AnimationControlController.generateMotion(
+                                     genPromptIn.text, 0.0, useModelChk.checked,
+                                     armSpaceSlider.value)
+                        if (gr && gr.animation) lastGeneratedAnim = gr.animation
                         genBtnBusy = false
                         // generateMotion adds an AnimationState synchronously, but
                         // it lives on AnimationControlController — the Inspector
@@ -8044,6 +8050,44 @@ Rectangle {
                     text: "Use trained model (experimental)"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            // ── Arm space (#854): Mixamo-style widen/tuck post-process ────────
+            // Absolute + idempotent, so the slider maps straight to the applied
+            // angle. Applies on release to the selected generated_* clip.
+            Row {
+                width: parent.width - 16; spacing: 6
+                visible: lastGeneratedAnim.indexOf("generated_") === 0
+                Text {
+                    text: "Arm space"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 62
+                }
+                Slider {
+                    id: armSpaceSlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 62 - 42 - 12
+                    from: -30; to: 45; value: 0; stepSize: 1
+                    // The op is ABSOLUTE + idempotent, so re-rewriting per pixel
+                    // is wasteful; apply on release instead. On release, if this
+                    // clip already exists, restyle it directly; otherwise the
+                    // value rides the next Generate.
+                    onPressedChanged: {
+                        if (!pressed
+                            && lastGeneratedAnim.indexOf("generated_") === 0) {
+                            AnimationControlController.adjustArmSpace(
+                                lastGeneratedAnim, value)
+                            refreshAnimData()
+                        }
+                    }
+                }
+                Text {
+                    text: (armSpaceSlider.value > 0 ? "+" : "")
+                          + Math.round(armSpaceSlider.value) + "°"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 42; horizontalAlignment: Text.AlignRight
                 }
             }
             Text {

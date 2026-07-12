@@ -1659,8 +1659,38 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
     return out;
 }
 
+bool AnimationControlController::adjustArmSpace(const QString& animName,
+                                                double degrees)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return false;
+    Ogre::Entity* entity = nullptr;
+    for (auto* e : mgr->getEntities()) {
+        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
+        if (m_selectedEntityName.empty()
+            || e->getName() == m_selectedEntityName) { entity = e; break; }
+    }
+    if (!entity) return false;
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    const std::string an = animName.toStdString();
+    if (!skel || !skel->hasAnimation(an)) return false;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+        QStringLiteral("GUI arm_space %1 deg").arg(degrees));
+    if (!AnimationMerger::adjustArmSpace(skel.get(), an,
+                                         static_cast<float>(degrees)))
+        return false;
+
+    // Refresh the viewport (the animation state's keyframes changed underneath
+    // it) exactly as the generate path does.
+    entity->refreshAvailableAnimationState();
+    notifyExternalAnimationEdit();
+    return true;
+}
+
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
-                                                       double duration, bool useModel)
+                                                       double duration, bool useModel,
+                                                       double armSpaceDeg)
 {
     QVariantMap out;
     out["ok"] = false;
@@ -1758,6 +1788,11 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       clipDirs);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
+
+    // #854: optional Mixamo-style arm-space post-process.
+    if (std::abs(armSpaceDeg) > 1e-4)
+        AnimationMerger::adjustArmSpace(skel.get(), animName,
+                                        static_cast<float>(armSpaceDeg));
 
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all

@@ -2002,7 +2002,8 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 
 int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
-                                 bool jsonOutput, bool useModel)
+                                 bool jsonOutput, bool useModel,
+                                 float armSpaceDeg)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2120,6 +2121,18 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     }
     err() << "(source: " << clipSource << ")" << Qt::endl;
 
+    // #854: optional Mixamo-style arm-space post-process before export.
+    if (std::abs(armSpaceDeg) > 1e-4f) {
+        if (AnimationMerger::adjustArmSpace(skel.get(), animName, armSpaceDeg)) {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ai.assist.text_to_motion"),
+                QStringLiteral("arm_space %1 deg").arg(armSpaceDeg));
+            err() << "(arm-space: " << armSpaceDeg << " deg)" << Qt::endl;
+        } else
+            err() << "Note: arm-space adjustment skipped (no arm roles)."
+                  << Qt::endl;
+    }
+
     auto* node = entity->getParentSceneNode();
     const QString fmt = formatForExtension(outputPath);
     if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
@@ -2170,6 +2183,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
+    float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
+    bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -2257,6 +2272,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             generateDuration = QString(argv[++i]).toFloat();
             continue;
         }
+        if (arg == "--arm-space" && i + 1 < argc) {
+            armSpaceDeg = QString(argv[++i]).toFloat();
+            armSpaceSet = true;
+            continue;
+        }
         if (arg == "--simplify") { simplifyMode = true; continue; }
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
@@ -2311,7 +2331,50 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
-                               generateUseModel);
+                               generateUseModel, armSpaceDeg);
+    }
+
+    // #854 standalone: post-adjust the arm space of an EXISTING animation
+    // (no --generate). `qtmesh anim <file> --arm-space <deg> --animation <name> -o out`.
+    if (armSpaceSet) {
+        if (animationFilter.isEmpty()) {
+            err() << "Error: --arm-space (standalone) requires --animation <name>."
+                  << Qt::endl;
+            return 2;
+        }
+        if (!initOgreHeadless()) return 1;
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* entity = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { entity = e; break; }
+        if (!entity) {
+            err() << "Error: " << filePath << " has no skinned mesh." << Qt::endl;
+            return 1;
+        }
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const std::string an = animationFilter.toStdString();
+        if (!skel->hasAnimation(an)) {
+            err() << "Error: animation '" << animationFilter << "' not found."
+                  << Qt::endl;
+            return 1;
+        }
+        if (!AnimationMerger::adjustArmSpace(skel.get(), an, armSpaceDeg)) {
+            err() << "Error: arm-space adjustment failed (no arm roles on this rig)."
+                  << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+            QStringLiteral("arm_space %1 deg").arg(armSpaceDeg));
+        const QString out = outputPath.isEmpty() ? filePath : outputPath;
+        auto* node = entity->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("Adjusted arm space of '%1' to %2 deg → %3\n")
+                     .arg(animationFilter).arg(armSpaceDeg)
+                     .arg(QFileInfo(out).fileName()));
+        return 0;
     }
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode

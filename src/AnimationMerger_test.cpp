@@ -963,3 +963,131 @@ TEST_F(AnimationMergerTest, ExtractCanonicalClipsSamplesWorldFrame)
 
     sceneMgr->destroyEntity(ent);
 }
+
+// ── #854: arm-space post-process ────────────────────────────────────────────
+
+namespace {
+// Minimal humanoid with a torso + both arm chains, T-posed (arms out along
+// ±X), one identity-keyframe animation on every bone so adjustArmSpace has
+// tracks to rewrite. Returns the skeleton (bind pose set) + anim name.
+Ogre::SkeletonPtr makeArmRig(const Ogre::String& name)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* parent) {
+        auto* b = skel->createBone(n, h++);
+        b->setPosition(p);
+        if (parent) parent->addChild(b);
+        return b;
+    };
+    // spine up +Y, legs for the Ct frame, arms out along ±X (T-pose)
+    auto* hips  = bone("Hips",         {0, 1.0f, 0},   nullptr);
+    auto* chest = bone("Spine",        {0, 0.3f, 0},   hips);
+    auto* head  = bone("Head",         {0, 0.4f, 0},   chest);
+    bone("LeftUpLeg",  {0.15f, -0.1f, 0}, hips);
+    bone("RightUpLeg", {-0.15f, -0.1f, 0}, hips);
+    // right arm out along −X (rig's right), left along +X
+    auto* rsh = bone("RightArm",     {-0.2f, 0.1f, 0}, chest);
+    bone("RightForeArm",             {-0.3f, 0, 0},    rsh);
+    auto* lsh = bone("LeftArm",      {0.2f, 0.1f, 0},  chest);
+    bone("LeftForeArm",              {0.3f, 0, 0},     lsh);
+    skel->setBindingPose();
+    // Identity animation: one keyframe per bone at t=0 and t=1.
+    auto* anim = skel->createAnimation("clip", 1.0f);
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        auto* trk = anim->createNodeTrack(i, skel->getBone(i));
+        trk->createNodeKeyFrame(0.0f);
+        trk->createNodeKeyFrame(1.0f);
+    }
+    return skel;
+}
+
+// World direction of an arm bone (down its length toward the child) at t.
+Ogre::Vector3 armWorldDir(Ogre::SkeletonPtr skel, const char* boneName,
+                          const char* childName, float t)
+{
+    skel->getAnimation("clip")->apply(skel.get(), t);
+    skel->_updateTransforms();
+    const Ogre::Vector3 a = skel->getBone(boneName)->_getDerivedPosition();
+    const Ogre::Vector3 b = skel->getBone(childName)->_getDerivedPosition();
+    return (b - a).normalisedCopy();
+}
+} // namespace
+
+TEST(AnimationMergerArmSpaceTest, WidensAndTucksArms)
+{
+    auto skel = makeArmRig("armspace_widen");
+    const Ogre::Vector3 rBase =
+        armWorldDir(skel, "RightArm", "RightForeArm", 0.5f);
+
+    // +30° must widen: the right arm's downward (−Y) component increases as it
+    // swings out/down in the frontal plane; the sideways spread grows.
+    ASSERT_TRUE(AnimationMerger::adjustArmSpace(skel.get(), "clip", 30.0f));
+    const Ogre::Vector3 rWide =
+        armWorldDir(skel, "RightArm", "RightForeArm", 0.5f);
+    // The arm actually moved by ~30° about the forward (Z) axis.
+    const float ang = std::acos(std::min(1.0f, rBase.dotProduct(rWide)))
+                      * 180.0f / static_cast<float>(M_PI);
+    EXPECT_NEAR(ang, 30.0f, 4.0f);
+
+    // Symmetry: the left arm swings by the same angle, mirrored.
+    auto skelL = makeArmRig("armspace_widenL");
+    const Ogre::Vector3 lBase =
+        armWorldDir(skelL, "LeftArm", "LeftForeArm", 0.5f);
+    AnimationMerger::adjustArmSpace(skelL.get(), "clip", 30.0f);
+    const Ogre::Vector3 lWide =
+        armWorldDir(skelL, "LeftArm", "LeftForeArm", 0.5f);
+    const float angL = std::acos(std::min(1.0f, lBase.dotProduct(lWide)))
+                       * 180.0f / static_cast<float>(M_PI);
+    EXPECT_NEAR(angL, 30.0f, 4.0f);
+}
+
+TEST(AnimationMergerArmSpaceTest, IdempotentAbsoluteApplication)
+{
+    auto skel = makeArmRig("armspace_idem");
+    const Ogre::Vector3 base =
+        armWorldDir(skel, "RightArm", "RightForeArm", 0.5f);
+
+    // Apply 20 then 10 → must equal applying 10 from the original (absolute).
+    AnimationMerger::adjustArmSpace(skel.get(), "clip", 20.0f);
+    AnimationMerger::adjustArmSpace(skel.get(), "clip", 10.0f);
+    const Ogre::Vector3 at10 =
+        armWorldDir(skel, "RightArm", "RightForeArm", 0.5f);
+
+    auto ref = makeArmRig("armspace_idem_ref");
+    AnimationMerger::adjustArmSpace(ref.get(), "clip", 10.0f);
+    const Ogre::Vector3 ref10 =
+        armWorldDir(ref, "RightArm", "RightForeArm", 0.5f);
+    EXPECT_GT(at10.dotProduct(ref10), 0.9999f);   // same direction
+
+    // Back to 0 restores the original bind-referenced pose bit-near-exactly.
+    AnimationMerger::adjustArmSpace(skel.get(), "clip", 0.0f);
+    const Ogre::Vector3 restored =
+        armWorldDir(skel, "RightArm", "RightForeArm", 0.5f);
+    EXPECT_GT(base.dotProduct(restored), 0.99999f);
+}
+
+TEST(AnimationMergerArmSpaceTest, LeavesNonArmBonesUntouched)
+{
+    auto skel = makeArmRig("armspace_legs");
+    const Ogre::Vector3 legBase =
+        armWorldDir(skel, "Hips", "LeftUpLeg", 0.5f);
+    const Ogre::Vector3 spineBase =
+        armWorldDir(skel, "Hips", "Spine", 0.5f);
+
+    AnimationMerger::adjustArmSpace(skel.get(), "clip", 40.0f);
+    const Ogre::Vector3 legAfter =
+        armWorldDir(skel, "Hips", "LeftUpLeg", 0.5f);
+    const Ogre::Vector3 spineAfter =
+        armWorldDir(skel, "Hips", "Spine", 0.5f);
+    EXPECT_GT(legBase.dotProduct(legAfter), 0.99999f);
+    EXPECT_GT(spineBase.dotProduct(spineAfter), 0.99999f);
+}
+
+TEST(AnimationMergerArmSpaceTest, NoOpWhenAnimationMissing)
+{
+    auto skel = makeArmRig("armspace_missing");
+    EXPECT_FALSE(AnimationMerger::adjustArmSpace(skel.get(), "nope", 20.0f));
+    EXPECT_FALSE(AnimationMerger::adjustArmSpace(nullptr, "clip", 20.0f));
+}
