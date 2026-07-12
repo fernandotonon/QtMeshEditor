@@ -21,6 +21,7 @@ QtInputManager.cpp
 SpaceCamera.cpp
 SkeletonDebug.cpp
 SkeletonTransform.cpp
+SkeletonEditor.cpp
 MeshImporterExporter.cpp
 EditorViewport.cpp
 ViewportTitleBar.cpp
@@ -92,6 +93,7 @@ commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
+commands/SkeletonBoneCommands.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
 UvSeamData.cpp
@@ -238,6 +240,7 @@ QtMouseListener.h
 SpaceCamera.h
 SkeletonDebug.h
 SkeletonTransform.h
+SkeletonEditor.h
 MeshImporterExporter.h
 EditorViewport.h
 ViewportTitleBar.h

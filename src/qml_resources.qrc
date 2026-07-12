@@ -12,6 +12,8 @@
     <file alias="UvUnwrapDialog.qml">../qml/UvUnwrapDialog.qml</file>
     <file alias="QuadRetopoDialog.qml">../qml/QuadRetopoDialog.qml</file>
     <file alias="SkinWeightsDialog.qml">../qml/SkinWeightsDialog.qml</file>
+    <file alias="RemoveBoneDialog.qml">../qml/RemoveBoneDialog.qml</file>
+    <file alias="RenameBoneDialog.qml">../qml/RenameBoneDialog.qml</file>
     <file alias="IsometricSpritesDialog.qml">../qml/IsometricSpritesDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>

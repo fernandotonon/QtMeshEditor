@@ -124,6 +124,7 @@
 #include "ShadowController.h"
 #include "LightPropertiesController.h"
 #include "AutoRigController.h"
+#include "SkeletonEditor.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
@@ -798,6 +799,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "AutoRigController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AutoRigController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<SkeletonEditor>(
+            "PropertiesPanel", 1, 0, "SkeletonEditor",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return SkeletonEditor::qmlInstance(engine, nullptr);
             });
 #ifdef ENABLE_AUTO_UPDATER
         qmlRegisterSingletonType<UpdaterController>(

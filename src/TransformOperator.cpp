@@ -1159,32 +1159,18 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         if(mTransformState == TS_SELECT)
         {
-            // Light / bone viewport picks before box-select. Walk hits
-            // front-to-back and accept the first tagged movable.
+            // Bone viewport picks before box-select (lights are scene-tree only
+            // in select mode — gizmo hits would block mesh/entity selection).
             if (m_pRayQuery)
             {
                 m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
-                m_pRayQuery->setQueryMask(LIGHT_QUERY_FLAGS | BONE_QUERY_FLAGS);
+                m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
                 m_pRayQuery->setSortByDistance(true);
                 Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
                 for (const auto& hit : res)
                 {
                     if (!hit.movable)
                         continue;
-
-                    const QString lightName = LightVisualizer::lightNameForMovable(hit.movable);
-                    if (!lightName.isEmpty())
-                    {
-                        Ogre::SceneNode* node = Manager::getSingleton()->getSceneNode(lightName);
-                        if (node)
-                        {
-                            SelectionSet::getSingleton()->selectOne(node);
-                            SentryReporter::addBreadcrumb(
-                                QStringLiteral("ui.action"),
-                                QStringLiteral("Light picked: %1").arg(lightName));
-                        }
-                        return;
-                    }
 
                     Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
                     if (!boneName.empty())

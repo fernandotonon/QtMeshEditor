@@ -59,6 +59,14 @@ void BoneWeightOverlay::setVisible(bool visible)
     }
 }
 
+void BoneWeightOverlay::rebuildVisuals()
+{
+    if (!mVisible)
+        return;
+    destroyOverlay();
+    buildOverlay();
+}
+
 void BoneWeightOverlay::destroyOverlay()
 {
     if (mOverlay)

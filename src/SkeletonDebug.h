@@ -26,6 +26,9 @@ public:
     bool namesShown() const {return mShowNames;}
     bool bonesShown() const {return mShowBones;}
 
+    /// Rebuild bone/axis visuals after skeleton structure changes (bone CRUD / undo).
+    void rebuildVisuals();
+
     void update() const;
     short selectedBoneIndex() const { return mLastSelectedBone; }
 
@@ -40,6 +43,7 @@ signals:
 private:
     std::vector<Ogre::Entity*> mAxisEntities;
     std::vector<Ogre::Entity*> mBoneEntities;
+    std::map<std::string, Ogre::Entity*, std::less<>> mBoneVisualByName;
 
     float mBoneSize;
 
@@ -64,6 +68,7 @@ private:
     void createBoneMesh();
     std::map<std::string, Ogre::Entity*, std::less<>> createBoneVisuals();
     void createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt);
+    void onTimerTick();
 
     QTimer mTimer;
     short mLastSelectedBone = -1;

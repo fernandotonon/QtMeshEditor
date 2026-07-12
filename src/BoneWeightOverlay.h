@@ -18,6 +18,9 @@ public:
     void setVisible(bool visible);
     bool isVisible() const { return mVisible; }
 
+    /// Rebuild heat-map geometry after skeleton / mesh skin changes.
+    void rebuildVisuals();
+
     static Ogre::ColourValue weightToColor(float weight);
 
 private:

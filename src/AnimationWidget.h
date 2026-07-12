@@ -25,6 +25,9 @@ public:
     bool isBoneWeightsShown(Ogre::Entity* entity) const;
     bool toggleSkeletonDebug(Ogre::Entity* entity, bool show);
     bool toggleBoneWeights(Ogre::Entity* entity, bool show);
+    /// Recreate skeleton/weight overlays after rig structure edits
+    /// (entity->_initialise invalidates TagPoint attachments).
+    void rebuildSkeletonOverlays(Ogre::Entity* entity);
     SkeletonDebug* getSkeletonDebug(Ogre::Entity* entity) const;
     BoneWeightOverlay* getBoneWeightOverlay(Ogre::Entity* entity) const;
 

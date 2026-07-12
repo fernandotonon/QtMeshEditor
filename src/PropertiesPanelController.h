@@ -248,6 +248,10 @@ public:
     Q_INVOKABLE bool isPlaying() const { return mPlaying; }
     Q_INVOKABLE void toggleSkeletonDebug(const QString& entityName, bool show);
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
+    /// Apply skeleton overlay visibility without pushing undo (used by undo commands).
+    void applySkeletonDebug(const QString& entityName, bool show);
+    /// Rebuild skeleton/weight viewport overlays after bone CRUD.
+    Q_INVOKABLE void refreshSkeletonOverlays(const QString& entityName);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
     /// Remove an animation from the entity's skeleton (irreversible). Disables
     /// debug overlays + playback first (rename-style safety) so stale pointers

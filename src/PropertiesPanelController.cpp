@@ -17,6 +17,7 @@
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
 #include "commands/ApplyMaterialCommand.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "OgreWidget.h"
@@ -1101,7 +1102,7 @@ void PropertiesPanelController::setPlaying(bool playing)
     }
 }
 
-void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, bool show)
+void PropertiesPanelController::applySkeletonDebug(const QString& entityName, bool show)
 {
     if (!mAnimationWidget) return;
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
@@ -1116,6 +1117,23 @@ void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, b
     }
 }
 
+void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, bool show)
+{
+    if (!mAnimationWidget) return;
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities)
+    {
+        if (QString::fromStdString(ent->getName()) == entityName)
+        {
+            if (mAnimationWidget->isSkeletonDebugActive(ent) == show)
+                return;
+            UndoManager::getSingleton()->push(
+                new ToggleSkeletonDebugCommand(entityName, show));
+            return;
+        }
+    }
+}
+
 void PropertiesPanelController::toggleBoneWeights(const QString& entityName, bool show)
 {
     if (!mAnimationWidget) return;
@@ -1125,6 +1143,21 @@ void PropertiesPanelController::toggleBoneWeights(const QString& entityName, boo
         if (QString::fromStdString(ent->getName()) == entityName)
         {
             mAnimationWidget->toggleBoneWeights(ent, show);
+            emit animationStateChanged();
+            return;
+        }
+    }
+}
+
+void PropertiesPanelController::refreshSkeletonOverlays(const QString& entityName)
+{
+    if (!mAnimationWidget) return;
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities)
+    {
+        if (QString::fromStdString(ent->getName()) == entityName)
+        {
+            mAnimationWidget->rebuildSkeletonOverlays(ent);
             emit animationStateChanged();
             return;
         }
