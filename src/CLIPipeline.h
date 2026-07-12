@@ -92,7 +92,8 @@ public:
     // #411 text-to-motion (template-clip MVP): prompt → library clip → retarget.
     static int cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                float duration, const QString& outputPath,
-                               bool jsonOutput, bool useModel = false);
+                               bool jsonOutput, bool useModel = false,
+                               float armSpaceDeg = 0.0f);
     static int cmdValidate(int argc, char* argv[]);
     static int cmdLod(int argc, char* argv[]);
     static int cmdPose(int argc, char* argv[]);

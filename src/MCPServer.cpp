@@ -650,6 +650,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("bake_animation_fps"), &MCPServer::toolBakeAnimationFps},
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
+        {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
@@ -4122,6 +4123,15 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipDirs);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
+        // #854: optional Mixamo-style arm-space post-process. Echo whether it
+        // took effect so an MCP caller can tell the rig had no arm roles
+        // (rather than silently getting an unadjusted clip).
+        const double armSpace = args.value("arm_space").toDouble(0.0);
+        bool armSpaceApplied = false;
+        if (std::abs(armSpace) > 1e-4)
+            armSpaceApplied = AnimationMerger::adjustArmSpace(
+                skel.get(), animName, static_cast<float>(armSpace));
+
         entity->refreshAvailableAnimationState();
         // Exclusively enable the generated clip — enabled states BLEND in
         // Ogre, and mixing with the import's auto-enabled animation renders
@@ -4156,10 +4166,85 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         content["frames"] = r.frames; content["length"] = r.length;
         content["tracks_written"] = r.tracksWritten; content["canonical_joints"] = r.canonicalJoints;
         content["entity"] = QString::fromStdString(entity->getName());
+        if (std::abs(armSpace) > 1e-4) content["arm_space_applied"] = armSpaceApplied;
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+            QStringLiteral("MCP adjust_arm_space"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString animName = args.value("animation_name").toString();
+        if (animName.isEmpty())
+            return makeErrorResult("Error: animation_name is required.");
+        const double degrees = args.value("arm_space").toDouble(
+            args.value("degrees").toDouble(0.0));
+
+        const QString entityName = args.value("entity_name").toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
+                continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) {
+                entity = ent; break;
+            }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: no skinned mesh found to adjust.")
+                : QString("Error: skinned entity '%1' not found.").arg(entityName));
+
+        // Edit the mesh's MASTER skeleton, not the entity's SkeletonInstance:
+        // the exporter serializes the master (same as every other animation-
+        // edit tool), so editing the instance would return success while the
+        // written file kept the unadjusted clip. Animations are shared between
+        // master and instance, so the live viewport still updates.
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const std::string an = animName.toStdString();
+        if (!skel || !skel->hasAnimation(an))
+            return makeErrorResult(
+                QString("Error: animation '%1' not found on entity.").arg(animName));
+
+        if (!AnimationMerger::adjustArmSpace(skel.get(), an,
+                                             static_cast<float>(degrees)))
+            return makeErrorResult(
+                "Error: arm-space adjustment failed (no arm roles on this rig).");
+
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
+
+        const QString outPath = args.value("output_path").toString();
+        if (!outPath.isEmpty()) {
+            auto* node = entity->getParentSceneNode();
+            if (MeshImporterExporter::exporter(
+                    node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
+                return makeErrorResult(
+                    QString("Error: adjusted arm space but export to %1 failed")
+                        .arg(outPath));
+        }
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["animation"] = animName;
+        content["arm_space"] = degrees;
+        content["entity"] = QString::fromStdString(entity->getName());
+        if (!outPath.isEmpty()) content["exported"] = outPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
     } catch (std::exception& e) {
@@ -8030,6 +8115,7 @@ QJsonArray MCPServer::buildToolsList()
         props["duration"] = QJsonObject{{"type", "number"}, {"description", "Optional clip length in seconds (retimes the template). Default: the clip's native length."}};
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the new animation (e.g. /tmp/out.glb). If omitted, the animation is applied in-session only."}};
         props["model"] = QJsonObject{{"type", "boolean"}, {"description", "EXPERIMENTAL: use the trained from-scratch text-to-motion ONNX model instead of the template clip. Falls back to the template library automatically if the model is unavailable or the action isn't in its vocabulary. Default false (template). Quality is action-dependent (locomotion better than gestures)."}};
+        props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Optional Mixamo-style arm-space post-process in degrees (#854): positive widens the arms away from the body, negative tucks them in. Default 0. Rescues arm-into-torso clipping on rigs whose proportions differ from the clip."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
@@ -8040,6 +8126,25 @@ QJsonArray MCPServer::buildToolsList()
             "docs/TEXT_TO_MOTION_SPIKE_411.md for why the template approach ships first.)",
             props,
             QJsonArray{"prompt"}
+        );
+    }
+
+    // adjust_arm_space
+    {
+        QJsonObject props;
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to adjust, e.g. \"generated_walk\"."}};
+        props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Absolute arm-space angle in degrees: positive widens the arms away from the body, negative tucks them in, 0 restores the original. Idempotent — re-applying reverts the previous value first."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity. If omitted, uses the first skinned entity."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the adjusted animation. If omitted, applied in-session only."}};
+        appendTool(
+            "adjust_arm_space",
+            "Mixamo-style arm-space post-process (#854): swing the arm chains of an existing animation outward "
+            "(widen) or inward (tuck) to rescue arm-into-torso clipping on rigs whose proportions differ from "
+            "the source clip. Only the shoulders/collars are rewritten; elbows/hands follow through the "
+            "hierarchy, and legs/spine are untouched. The angle is ABSOLUTE and idempotent (re-applying reverts "
+            "the prior value), so it maps directly to a UI slider.",
+            props,
+            QJsonArray{"animation_name", "arm_space"}
         );
     }
 

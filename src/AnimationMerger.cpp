@@ -13,12 +13,39 @@
 #include <functional>
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <vector>
 #include <cmath>
 
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
 static QMap<QString, int> s_skeletonUpAxis;
+
+// #854: last-applied arm-space angle, tracked PER SKELETON INSTANCE (not a
+// process-global map — that pollutes across entities and across tests that
+// share a process). Stored on the skeleton's first bone via UserObjectBindings
+// under a per-animation key, so it lives and dies with the skeleton and is
+// naturally isolated. Session-scoped only; export bakes the final keyframes.
+namespace {
+std::string armSpaceKey(const std::string& animName)
+{
+    return "qtme.armspace." + animName;
+}
+float getStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName)
+{
+    if (!skel || skel->getNumBones() == 0) return 0.0f;
+    const Ogre::Any& a = skel->getBone(0)->getUserObjectBindings()
+                             .getUserAny(armSpaceKey(animName));
+    return a.has_value() ? Ogre::any_cast<float>(a) : 0.0f;
+}
+void setStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName,
+                       float degrees)
+{
+    if (!skel || skel->getNumBones() == 0) return;
+    skel->getBone(0)->getUserObjectBindings().setUserAny(
+        armSpaceKey(animName), Ogre::Any(degrees));
+}
+} // namespace
 
 void AnimationMerger::registerSkeletonUpAxis(const std::string& name, int upAxis) {
     s_skeletonUpAxis[QString::fromStdString(name)] = upAxis;
@@ -232,7 +259,26 @@ void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
         }
     }
 
+    // #854: carry the arm-space applied-angle over to the new name — the
+    // widened keyframes were copied above, so the tracked angle must follow
+    // or currentArmSpace() would report 0 for the renamed clip and the next
+    // slider drag would compute a wrong (absolute-from-0) delta.
+    migrateArmSpaceKey(skel, oldName, newName);
+
     skel->removeAnimation(oldName);
+}
+
+void AnimationMerger::migrateArmSpaceKey(Ogre::Skeleton* skel,
+                                         const std::string& oldAnim,
+                                         const std::string& newAnim)
+{
+    if (!skel || oldAnim == newAnim || skel->getNumBones() == 0) return;
+    auto& uob = skel->getBone(0)->getUserObjectBindings();
+    const Ogre::Any& a = uob.getUserAny(armSpaceKey(oldAnim));
+    if (a.has_value()) {
+        setStoredArmSpace(skel, newAnim, Ogre::any_cast<float>(a));
+        uob.eraseUserAny(armSpaceKey(oldAnim));
+    }
 }
 
 int AnimationMerger::resampleAnimation(Ogre::Skeleton* skel,
@@ -1299,6 +1345,131 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
 }
 } // namespace
 
+float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
+                                       const std::string& animName)
+{
+    return getStoredArmSpace(skel, animName);
+}
+
+bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
+                                     const std::string& animName,
+                                     float degrees)
+{
+    if (!skel || !skel->hasAnimation(animName))
+        return false;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim)
+        return false;
+
+    // Idempotent absolute application: revert whatever we applied before,
+    // then apply the new absolute angle. The net delta this call injects is
+    // (degrees − stored). The last-applied angle is tracked PER SKELETON
+    // INSTANCE (on bone[0]'s UserObjectBindings, keyed by animation) — not a
+    // process-global map, which would pollute across entities and tests.
+    // currentArmSpace() exposes it so a UI can seed the slider. Export bakes
+    // the final keyframes, so cross-session persistence isn't required.
+    const float stored = getStoredArmSpace(skel, animName);
+    const float delta = degrees - stored;
+    if (std::abs(delta) < 1e-4f)
+        return true;   // already at target — nothing to do (still success)
+
+    // Bone → canonical role (same matcher as the retarget).
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+
+    // Torso FORWARD axis in world space: the retarget's Ct maps the target's
+    // raw frame onto canonical axes (X=left, Y=up, Z=forward), so Ct⁻¹·+Z is
+    // the rig's forward direction in its own world.
+    const Ogre::Vector3 fwd =
+        (tb.Ct.Inverse() * Ogre::Vector3::UNIT_Z).normalisedCopy();
+
+    // Per side: swing about the torso forward axis, sign mirrored between
+    // sides so a POSITIVE `degrees` swings BOTH arms AWAY from the body
+    // (widen) and negative tucks them in. About canonical +Z (forward) with
+    // +Y up / +X left, a NEGATIVE rotation lifts the right arm outward and a
+    // positive one lifts the left, so the right side takes −ang. Collars get
+    // a fractional share (a small part of the reach).
+    const Ogre::Radian ang = Ogre::Radian(Ogre::Degree(delta));
+    const float kCollarShare = 0.25f;
+    const Ogre::Quaternion swingR(-ang, fwd);
+    const Ogre::Quaternion swingL(ang, fwd);
+    const Ogre::Quaternion swingRc(ang * (-kCollarShare), fwd);
+    const Ogre::Quaternion swingLc(ang * kCollarShare, fwd);
+
+    // Distribute the role's swing across duplicate bones (multi-segment
+    // shoulders) so the chain's total matches the requested angle.
+    std::vector<int> canonDup(
+        static_cast<size_t>(MotionInbetween::canonicalJointCount()), 0);
+    for (int i = 0; i < nBones; ++i)
+        if (boneToCanon[static_cast<size_t>(i)] >= 0)
+            ++canonDup[static_cast<size_t>(boneToCanon[static_cast<size_t>(i)])];
+
+    // Roles that carry an arm-space swing → the world swing for that role.
+    auto worldSwingForRole = [&](int c) -> const Ogre::Quaternion* {
+        switch (c) {
+            case 7:  return &swingR;    // rshoulder
+            case 11: return &swingL;    // lshoulder
+            case 6:  return &swingRc;   // rcollar (fractional)
+            case 10: return &swingLc;   // lcollar (fractional)
+            default: return nullptr;
+        }
+    };
+
+    bool touchedAny = false;
+    for (int i = 0; i < nBones; ++i) {
+        const int c = boneToCanon[static_cast<size_t>(i)];
+        const Ogre::Quaternion* Sworld = worldSwingForRole(c);
+        if (!Sworld)
+            continue;
+        Ogre::NodeAnimationTrack* trk = nullptr;
+        if (anim->hasNodeTrack(static_cast<unsigned short>(i)))
+            trk = anim->getNodeTrack(static_cast<unsigned short>(i));
+        if (!trk || trk->getNumKeyFrames() == 0)
+            continue;
+
+        // Fractional swing when the role spans several bones.
+        const int dup = std::max(1, canonDup[static_cast<size_t>(c)]);
+        Ogre::Quaternion S = *Sworld;
+        if (dup > 1)
+            S = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                        Ogre::Quaternion::IDENTITY, S,
+                                        /*shortestPath=*/true);
+
+        // applyToNode composes the keyframe as localApplied = bindLocal · kf,
+        // and world = W_parent · localApplied = W_shoulder_bind · kf. To add
+        // a world swing S at this bone (parents untouched), the new keyframe
+        // is L · kf where L conjugates S into the bone's bind-local frame:
+        //   L = W_bind⁻¹ · S · W_bind
+        const Ogre::Quaternion Wbind = tb.bindWorld[static_cast<size_t>(i)];
+        const Ogre::Quaternion L = Wbind.Inverse() * S * Wbind;
+
+        const unsigned short nk = trk->getNumKeyFrames();
+        for (unsigned short k = 0; k < nk; ++k) {
+            Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
+            kf->setRotation(L * kf->getRotation());
+        }
+        // TransformKeyFrame::setRotation does NOT invalidate the track's
+        // interpolation caches (rotation spline / derived data), so a
+        // following apply() would replay the PRE-edit rotations — the edit
+        // appears to lag one call behind. Flag the track dirty so the next
+        // evaluation rebuilds from the new keyframes.
+        trk->_keyFrameDataChanged();
+        touchedAny = true;
+    }
+
+    if (!touchedAny)
+        return false;   // no arm role on this rig
+
+    setStoredArmSpace(skel, animName, degrees);
+    return true;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,
@@ -1395,6 +1566,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
 
     if (skel->hasAnimation(animName))
         skel->removeAnimation(animName);
+    // #854: the freshly (re)created clip has NO arm-space applied. A stale
+    // stored angle from a prior generation of the same name would make a
+    // re-request of that same angle a no-op (delta 0) on the new keyframes —
+    // forget it.
+    if (skel->getNumBones() > 0)
+        skel->getBone(0)->getUserObjectBindings().eraseUserAny(
+            armSpaceKey(animName));
     Ogre::Animation* anim = skel->createAnimation(animName, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);

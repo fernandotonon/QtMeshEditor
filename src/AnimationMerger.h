@@ -212,6 +212,54 @@ public:
         std::vector<std::array<float, 3>> restDir;
     };
 
+    /// Post-process a generated animation to widen (+) or tuck (−) the arm
+    /// chains, à la Mixamo's "Character Arm-Space" (#854). Rescues arm-into-
+    /// torso clipping / too-wide arms on rigs whose proportions differ from
+    /// the source clip, without touching the retarget math.
+    ///
+    /// Mechanics: for each bone mapped to a shoulder role (canonical 7 right,
+    /// 11 left) — plus a fractional share on the collars (6/10) — a swing of
+    /// `degrees` about the torso's FORWARD axis (from the target bind frame,
+    /// mirrored per side: + swings both arms away from the body) is injected
+    /// into WORLD space and folded back into the bone's local keyframe deltas.
+    /// Elbows/hands inherit through the hierarchy (keyframes are parent-
+    /// relative), so only the shoulders/collars are rewritten. The full angle
+    /// is split across duplicate role bones so multi-segment shoulders don't
+    /// over-rotate.
+    ///
+    /// ABSOLUTE + IDEMPOTENT: `degrees` is the target angle, not a nudge. The
+    /// last-applied angle is tracked PER SKELETON INSTANCE on bone[0]'s
+    /// UserObjectBindings (key "qtme.armspace.<anim>") — isolated per entity,
+    /// never a process-global, and NOT persisted to disk (export bakes the
+    /// final keyframes). Each call reverts the stored angle before applying
+    /// the new one (delta = new − stored), so `adjustArmSpace(20)` then
+    /// `adjustArmSpace(10)` == `adjustArmSpace(10)` from the original, and
+    /// `adjustArmSpace(0)` restores the clip bit-near-exactly. NB: the binding
+    /// is in-memory only, so a fresh CLI process (which loads the baked clip)
+    /// sees `stored == 0` — calling `adjustArmSpace(0)` there is a no-op.
+    /// Use currentArmSpace() to read the tracked value; applyMotionClip clears
+    /// it when it regenerates a clip, and migrateArmSpaceKey() moves it on
+    /// rename. Returns false (no-op) if the animation is missing or no arm
+    /// role resolves on the rig.
+    static bool adjustArmSpace(Ogre::Skeleton* skel,
+                               const std::string& animName,
+                               float degrees);
+
+    /// The arm-space angle currently applied to `animName` (0 if none) — the
+    /// value adjustArmSpace last stored this session. Lets a UI seed its
+    /// slider with the clip's real state instead of assuming 0.
+    static float currentArmSpace(Ogre::Skeleton* skel,
+                                 const std::string& animName);
+
+    /// Move the tracked arm-space angle from oldAnim to newAnim on the given
+    /// skeleton. Call from every animation-rename path so a renamed clip keeps
+    /// its widen/tuck value (the keyframes carry over; the tracked angle must
+    /// too, or the next slider drag mis-computes its delta). No-op if there was
+    /// no tracked angle or the names match.
+    static void migrateArmSpaceKey(Ogre::Skeleton* skel,
+                                   const std::string& oldAnim,
+                                   const std::string& newAnim);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

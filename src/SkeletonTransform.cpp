@@ -27,6 +27,7 @@ THE SOFTWARE.
 */
 
 #include "SkeletonTransform.h"
+#include "AnimationMerger.h"
 
 #include <QDebug>
 #include <QFile>
@@ -162,6 +163,11 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
             newKeyFrame->setScale(keyFrame->getScale());
         }
     }
+
+    // #854: keep the arm-space widen/tuck value tied to the renamed clip
+    // (the keyframes were copied above; migrate the tracked angle too).
+    AnimationMerger::migrateArmSpaceKey(
+        sk, _oldName.toStdString(), _newName.toStdString());
 
     //Remove the old animation
     sk->removeAnimation(_oldName.toStdString());
