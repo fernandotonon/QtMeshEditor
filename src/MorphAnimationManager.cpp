@@ -388,11 +388,23 @@ QVariantList MorphAnimationManager::morphWeightKeyframeTimes(const QString& name
     Ogre::MeshPtr mesh = ents.first()->getMesh();
     if (!mesh) return out;
 
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return out;
     Ogre::VertexAnimationTrack* track =
         weightTrackFor(mesh.get(), name.toStdString(), m_activeMorphClip.toStdString(), false);
     if (!track) return out;
-    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
-        out.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+    // Targets on the same submesh SHARE one VAT_POSE track, so a keyframe on the
+    // track may belong to a DIFFERENT target. Only report times of keyframes
+    // that actually reference THIS pose — otherwise "JawOpen" would report the
+    // "Smile" keys on the shared track (matches the dope-sheet's per-pose rows).
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        bool refsThisPose = false;
+        for (const auto& ref : kf->getPoseReferences())
+            if (ref.poseIndex == static_cast<unsigned short>(pi)) { refsThisPose = true; break; }
+        if (refsThisPose)
+            out.append(static_cast<double>(kf->getTime()));
+    }
     return out;
 }
 
