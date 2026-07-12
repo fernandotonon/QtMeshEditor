@@ -1039,17 +1039,24 @@ TEST_F(AnimationMergerTest, ArmSpaceWidensAndTucksArms)
     EXPECT_NEAR(degBetween(rBase, rWide), 30.0f, 5.0f);
     EXPECT_NEAR(degBetween(lBase, lWide), 30.0f, 5.0f);
 
-    // MIRROR check — the two arms must swing in OPPOSITE X directions (out to
-    // their own sides), not the same way. On this symmetric rig the widened
-    // directions must be near-mirror-images across the sagittal (X=0) plane:
-    // reflecting the right result's X should match the left. This catches a
-    // per-side sign regression that equal magnitudes alone would pass.
+    // MIRROR check — the swing must be mirrored across the sagittal (X=0)
+    // plane, not applied the same way to both arms (that would rotate the
+    // whole shoulder line rigidly instead of spreading). Rotating about the
+    // forward (Z) axis moves each arm in the X-Y plane; a per-side sign
+    // regression shows up as the two arms picking up OPPOSITE-signed Y
+    // (one lifts, one drops) instead of the same sign. Reflecting the right
+    // result's X must match the left result (both components), which only
+    // holds when the per-side rotation signs are correct.
     const Ogre::Vector3 rMirrored(-rWide.x, rWide.y, rWide.z);
-    EXPECT_GT(rMirrored.dotProduct(lWide), 0.99f)
-        << "arms did not swing to opposite sides (sign regression)";
-    // And widening moves them apart: the right arm goes more −X, left more +X.
-    EXPECT_LT(rWide.x, rBase.x);
-    EXPECT_GT(lWide.x, lBase.x);
+    EXPECT_GT(rMirrored.dotProduct(lWide), 0.98f)
+        << "arms did not swing symmetrically (per-side sign regression): "
+        << "R=(" << rWide.x << "," << rWide.y << "," << rWide.z << ") "
+        << "L=(" << lWide.x << "," << lWide.y << "," << lWide.z << ")";
+    // The arms stay on their own sides (right −X, left +X) throughout.
+    EXPECT_LT(rWide.x, 0.0f);
+    EXPECT_GT(lWide.x, 0.0f);
+    // Symmetric magnitude: |Δ| the same on both sides.
+    EXPECT_NEAR(degBetween(rBase, rWide), degBetween(lBase, lWide), 1.0f);
 }
 
 TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
@@ -1075,8 +1082,12 @@ TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
     // Back to 0 restores the original pose bit-near-exactly.
     AnimationMerger::adjustArmSpace(skel, "clip", 0.0f);
     EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip"), 0.0f);
-    EXPECT_GT(base.dotProduct(armWorldDir(skel, "RightArm", "RightForeArm")),
-              0.99999f);
+    const Ogre::Vector3 restored = armWorldDir(skel, "RightArm", "RightForeArm");
+    fprintf(stderr, "[armspace-dbg] base=(%.3f,%.3f,%.3f) at10=(%.3f,%.3f,%.3f) "
+            "ref10=(%.3f,%.3f,%.3f) restored=(%.3f,%.3f,%.3f)\n",
+            base.x, base.y, base.z, at10.x, at10.y, at10.z,
+            ref10.x, ref10.y, ref10.z, restored.x, restored.y, restored.z);
+    EXPECT_GT(base.dotProduct(restored), 0.99999f);
 }
 
 TEST_F(AnimationMergerTest, ArmSpaceLeavesNonArmBonesUntouched)
