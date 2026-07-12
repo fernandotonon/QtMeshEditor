@@ -81,6 +81,35 @@ head 2690 / torso 583 / L-arm 809 / R-arm 768 / L-leg 492 / R-leg 486
 against rig-truth 2767 / 933 / 652 / 661 / 443 / 430 (boundary bleed at the
 shoulders/hips, correct lateralisation everywhere).
 
+## #788 retrain verdict (July 2026): published v2 weights STAY
+
+#788 asked for a retrain with the #787 exterior-capsule-cap data fix,
+gated on ≥ v2's 94.7% rig-truth accuracy. Six full-recipe retrains were
+run (three seeds with the plain fix, three with an additional
+junction-cap suppression fix) and NONE cleared the bar:
+
+| model | rig-truth (3 OOD chars) | held-out CC0 rigs (6 files) |
+|---|---|---|
+| v2 published (pre-fix) | **94.7%** | 97.0% |
+| exterior-cap fix, seeds 0/1/2 | 92.6 / 89.0 / 87.0 | 97.4 / 97.5 / 97.9 |
+| + junction-cap suppression, seeds 0/1/2 | 92.7 / 88.1 / 87.5 | 95.9 / 97.5 / 97.2 |
+
+Diagnosis: the exterior-cap fix concentrates a limb capsule's
+attachment-end cap points on the junction-facing hemisphere — limb-labelled
+points exactly on the torso boundary — so limbs over-claim shoulders/hips
+(torso recall 0.80 → 0.50-0.68). Suppressing attachment-end caps entirely
+(a limb has no real surface at its torso junction; now in
+`capsule_surf(cap0/cap1)`) recovers torso recall at seed 0 but does not
+reach v2's number; v2 also sits ~2σ above the retrain distribution
+(mean ≈ 89.5%), i.e. its 94.7% is partly a fortunate draw on a 3-file
+(2-distinct-character) eval. Every post-fix model BEATS v2 on the
+6-file held-out real set — the fixed script generalises at least as well —
+but the issue's explicit bar is the rig-truth set, so the published
+weights are unchanged and script↔weights correspondence is deliberately
+NOT restored. Before any republish: widen the OOD eval set (more
+non-Quaternius rigged characters) so the bar measures generalisation
+rather than a 2-character draw, and grow the mined corpus.
+
 ## Category strategy (ADOPTED — #818 Track B2, implemented 2026-07)
 
 The pre-B2 C++ contract was one 7-class body-centric label set
