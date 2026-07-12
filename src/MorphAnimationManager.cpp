@@ -10,8 +10,9 @@ The MIT License
 
 #include "MorphAnimationManager.h"
 
+#include "AnimationControlController.h"
+#include "PropertiesPanelController.h"
 #include "GamificationManager.h"
-
 #include "EditModeController.h"
 #include "EditableMesh.h"
 #include "SelectionSet.h"
@@ -22,8 +23,12 @@ The MIT License
 #include <QCoreApplication>
 #include <QThread>
 
+#include <OgreAnimation.h>
 #include <OgreAnimationState.h>
+#include <OgreAnimationTrack.h>
 #include <OgreEntity.h>
+#include <OgreKeyFrame.h>
+#include <OgreLogManager.h>
 #include <OgreMesh.h>
 #include <OgrePose.h>
 
@@ -55,7 +60,19 @@ MorphAnimationManager* MorphAnimationManager::instance()
 MorphAnimationManager* MorphAnimationManager::qmlInstance(QQmlEngine*, QJSEngine*)
 {
     assertMainThread();
-    return instance();
+    auto* inst = instance();
+    // This is a process-wide singleton shared across EVERY QQuickWidget's
+    // QQmlEngine (Inspector, dope sheet, curve editor — each has its own
+    // engine). Without CppOwnership, an engine treats the returned object as
+    // JavaScript-owned and its GC may delete the shared s_instance out from
+    // under the other engines (and the C++ callers of instance()), leaving a
+    // dangling pointer → SIGSEGV. Every sibling singleton (PropertiesPanel-
+    // Controller, AnimationControlController, ThemeManager, …) pins ownership
+    // here; this one must too. Missing this only became a live crash once the
+    // dope sheet started importing PropertiesPanel + binding to this singleton
+    // (a SECOND engine wrapping the same object).
+    QQmlEngine::setObjectOwnership(inst, QQmlEngine::CppOwnership);
+    return inst;
 }
 
 void MorphAnimationManager::kill()
@@ -66,7 +83,9 @@ void MorphAnimationManager::kill()
     s_instance = nullptr;
 }
 
-MorphAnimationManager::MorphAnimationManager(QObject* parent) : QObject(parent)
+MorphAnimationManager::MorphAnimationManager(QObject* parent)
+    : QObject(parent),
+      m_activeMorphClip(QString::fromUtf8(kWeightClipName))
 {
     if (auto* sel = SelectionSet::getSingleton()) {
         connect(sel, &SelectionSet::selectionChanged,
@@ -165,6 +184,428 @@ bool MorphAnimationManager::setWeightForSelection(const QString& name, double w)
     return setWeight(ents.first(), name, static_cast<float>(w));
 }
 
+const char* MorphAnimationManager::kWeightClipName = "MorphAnim";
+
+namespace {
+
+// Find the pose index (into mesh->getPoseList()) for the first pose named
+// `name`. -1 if none. Weight keyframing references the pose by this index.
+int poseIndexForName(Ogre::Mesh* mesh, const std::string& name)
+{
+    const auto& poses = mesh->getPoseList();
+    for (unsigned short i = 0; i < poses.size(); ++i)
+        if (poses[i] && poses[i]->getName() == name) return i;
+    return -1;
+}
+
+// The weight-animation track for a target lives on the named `clip`, keyed on
+// the pose's target submesh handle. Fetch-or-create the clip + track. Returns
+// nullptr if the pose doesn't exist.
+Ogre::VertexAnimationTrack* weightTrackFor(Ogre::Mesh* mesh, const std::string& name,
+                                           const std::string& clip, bool create)
+{
+    const int pi = poseIndexForName(mesh, name);
+    if (pi < 0) return nullptr;
+    const unsigned short handle = mesh->getPoseList()[pi]->getTarget();
+
+    Ogre::Animation* anim = mesh->hasAnimation(clip)
+        ? mesh->getAnimation(clip)
+        : (create ? mesh->createAnimation(clip, 0.0f) : nullptr);
+    if (!anim) return nullptr;
+
+    if (anim->hasVertexTrack(handle))
+        return anim->getVertexTrack(handle);
+    if (!create) return nullptr;
+    return anim->createVertexTrack(handle, Ogre::VAT_POSE);
+}
+
+// Is `animName` a per-target SHAPE clip (named exactly a pose name)? Those are
+// not user-facing "morph clips"; the weight clips are everything else that
+// carries a VAT_POSE track and isn't a pose name.
+bool isPoseShapeClip(Ogre::Mesh* mesh, const std::string& animName)
+{
+    for (const Ogre::Pose* p : mesh->getPoseList())
+        if (p && p->getName() == animName) return true;
+    return false;
+}
+
+} // namespace
+
+bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
+                                                   double time, double weight)
+{
+    assertMainThread();
+    if (name.isEmpty() || time < 0.0) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+
+    const std::string clip = m_activeMorphClip.toStdString();
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return false;
+    Ogre::VertexAnimationTrack* track =
+        weightTrackFor(mesh.get(), name.toStdString(), clip, true);
+    if (!track) return false;
+
+    const float t = static_cast<float>(time);
+    const float w = std::clamp(static_cast<float>(weight), 0.0f, 1.0f);
+
+    // Update in place if a keyframe already exists at ~t, else create one.
+    Ogre::VertexPoseKeyFrame* kf = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* k = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        if (std::abs(k->getTime() - t) < 1e-4f) { kf = k; break; }
+    }
+    if (!kf) kf = track->createVertexPoseKeyFrame(t);
+
+    // A VAT_POSE keyframe holds a LIST of pose references. Targets on the same
+    // submesh share one track, so a keyframe at time t may already reference
+    // OTHER targets' poses — clearing them all would clobber a sibling target
+    // keyed at the same time. Update only THIS pose's reference (or add it),
+    // leaving the others intact. updatePoseReference is add-or-update in Ogre.
+    kf->updatePoseReference(static_cast<unsigned short>(pi), w);
+
+    // Extend the clip length to cover the new time.
+    Ogre::Animation* anim = mesh->getAnimation(clip);
+    if (anim && t > anim->getLength())
+        anim->setLength(t);
+
+    // Refresh the entity's animation-state mirror so the new clip is playable.
+    entity->refreshAvailableAnimationState();
+    emit morphTargetsChanged();
+    // The clip only becomes a playable AnimationState once it has a track
+    // (created on the first key here) — signal the clip list so the Animation
+    // Mode list picks it up now, not just on create/delete/rename.
+    emit morphClipsChanged();
+    SentryReporter::addBreadcrumb("scene.anim.morph",
+        QStringLiteral("key weight '%1' @%2 = %3").arg(name).arg(t).arg(w));
+    return true;
+}
+
+bool MorphAnimationManager::clearMorphWeightKeyframe(const QString& name, double time)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return false;
+
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return false;
+    Ogre::VertexAnimationTrack* track =
+        weightTrackFor(mesh.get(), name.toStdString(), m_activeMorphClip.toStdString(), false);
+    if (!track) return false;
+    const float t = static_cast<float>(time);
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        if (std::abs(kf->getTime() - t) >= 1e-4f) continue;
+        // Remove only THIS pose's reference (siblings on the shared track keyed
+        // at the same time must survive). Drop the whole keyframe only when no
+        // pose references remain.
+        bool hasThis = false;
+        for (const auto& ref : kf->getPoseReferences())
+            if (ref.poseIndex == static_cast<unsigned short>(pi)) { hasThis = true; break; }
+        if (!hasThis) return false;
+        kf->removePoseReference(static_cast<unsigned short>(pi));
+        if (kf->getPoseReferences().empty())
+            track->removeKeyFrame(i);
+        emit morphTargetsChanged();
+        return true;
+    }
+    return false;
+}
+
+double MorphAnimationManager::morphWeightAt(const QString& name, double time) const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return -1.0;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return -1.0;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return -1.0;
+
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return -1.0;
+    Ogre::VertexAnimationTrack* track =
+        weightTrackFor(mesh.get(), name.toStdString(), m_activeMorphClip.toStdString(), false);
+    if (!track) return -1.0;
+    const float t = static_cast<float>(time);
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        if (std::abs(kf->getTime() - t) >= 1e-4f) continue;
+        for (const auto& ref : kf->getPoseReferences())
+            if (ref.poseIndex == static_cast<unsigned short>(pi))
+                return static_cast<double>(ref.influence);
+    }
+    return -1.0;
+}
+
+bool MorphAnimationManager::moveMorphWeightKeyframe(const QString& name,
+                                                    double oldTime, double newTime)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+    if (std::abs(oldTime - newTime) < 1e-4) return false;
+    if (newTime < 0.0) return false;
+
+    // Preserve the weight from the source key; reject if there's already a key
+    // at the destination (avoid silently merging two keys).
+    const double w = morphWeightAt(name, oldTime);
+    if (w < 0.0) return false;                 // no source key
+    if (morphWeightAt(name, newTime) >= 0.0) return false;  // destination occupied
+
+    if (!clearMorphWeightKeyframe(name, oldTime)) return false;
+    return setMorphWeightKeyframe(name, newTime, w);
+}
+
+bool MorphAnimationManager::activateWeightClip()
+{
+    assertMainThread();
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    const std::string clip = m_activeMorphClip.toStdString();
+    if (!mesh || !mesh->hasAnimation(clip)) return false;
+
+    // Make sure the entity mirrors the clip as a playable AnimationState and
+    // enable it (weight tracks only apply while the state is enabled). Disable
+    // any OTHER morph clip so two emotion clips don't fight over the same poses.
+    entity->refreshAvailableAnimationState();
+    if (auto* states = entity->getAllAnimationStates()) {
+        for (const auto& [nm, st] : states->getAnimationStates())
+            if (!isPoseShapeClip(mesh.get(), nm) && nm != clip
+                && mesh->hasAnimation(nm))
+                st->setEnabled(false);
+    }
+    if (entity->hasAnimationState(clip)) {
+        Ogre::AnimationState* st = entity->getAnimationState(clip);
+        st->setEnabled(true);
+        st->setLoop(true);
+    }
+
+    // Select it in the Animation Control panel so the timeline slider scrubs it
+    // (its length + slider maximum come from the mesh Animation now).
+    if (auto* acc = AnimationControlController::instance())
+        acc->selectAnimation(QString::fromStdString(entity->getName()),
+                             m_activeMorphClip);
+    return true;
+}
+
+QVariantList MorphAnimationManager::morphWeightKeyframeTimes(const QString& name) const
+{
+    QVariantList out;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return out;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return out;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return out;
+
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return out;
+    Ogre::VertexAnimationTrack* track =
+        weightTrackFor(mesh.get(), name.toStdString(), m_activeMorphClip.toStdString(), false);
+    if (!track) return out;
+    // Targets on the same submesh SHARE one VAT_POSE track, so a keyframe on the
+    // track may belong to a DIFFERENT target. Only report times of keyframes
+    // that actually reference THIS pose — otherwise "JawOpen" would report the
+    // "Smile" keys on the shared track (matches the dope-sheet's per-pose rows).
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        bool refsThisPose = false;
+        for (const auto& ref : kf->getPoseReferences())
+            if (ref.poseIndex == static_cast<unsigned short>(pi)) { refsThisPose = true; break; }
+        if (refsThisPose)
+            out.append(static_cast<double>(kf->getTime()));
+    }
+    return out;
+}
+
+// ── Morph clip management (multiple named weight clips) ──────────────────────
+
+void MorphAnimationManager::setActiveMorphClip(const QString& name)
+{
+    if (name.isEmpty() || name == m_activeMorphClip) return;
+    m_activeMorphClip = name;
+    emit morphClipsChanged();
+    emit morphTargetsChanged();  // dope sheet reads the active clip's keys
+}
+
+QStringList MorphAnimationManager::morphClips() const
+{
+    QStringList out;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return out;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return out;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return out;
+
+    // A morph (weight) clip = any MESH-level Animation that is NOT a per-target
+    // shape clip (those are named exactly a pose name). Skeletal clips live on
+    // the skeleton, not the mesh, so they never appear here. We deliberately do
+    // NOT require a VAT_POSE track: a freshly-created clip has no tracks until
+    // its first keyframe, and it must still show in the dropdown.
+    for (unsigned short i = 0; i < mesh->getNumAnimations(); ++i) {
+        Ogre::Animation* a = mesh->getAnimation(i);
+        if (!a) continue;
+        const std::string nm = a->getName();
+        if (isPoseShapeClip(mesh.get(), nm)) continue;
+        out << QString::fromStdString(nm);
+    }
+
+    // Auto-adopt an existing clip as active when the current active clip isn't
+    // on this mesh (e.g. right after IMPORTING a model whose clip is named
+    // "Sniff" while the app default is "MorphAnim"). Without this the dope sheet
+    // + keying would target a non-existent clip and show nothing until the user
+    // manually picked the imported clip from the dropdown. const_cast is safe:
+    // this only mutates the transient active-clip selector, not scene data.
+    if (!out.isEmpty() && !out.contains(m_activeMorphClip)) {
+        auto* self = const_cast<MorphAnimationManager*>(this);
+        self->m_activeMorphClip = out.first();
+        // Defer the signal so we don't emit inside a const getter the QML may be
+        // mid-binding on; a queued emit refreshes the dropdown + dope sheet.
+        QMetaObject::invokeMethod(self, [self]() {
+            emit self->morphClipsChanged();
+            emit self->morphTargetsChanged();
+        }, Qt::QueuedConnection);
+    }
+    return out;
+}
+
+bool MorphAnimationManager::createMorphClip(const QString& name)
+{
+    assertMainThread();
+    if (name.trimmed().isEmpty()) return false;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+    // A morph clip animates existing morph TARGETS. With no poses there is
+    // nothing to key, and creating an empty VAT-less animation on a plain mesh
+    // (e.g. an unmorphed OBJ) then refreshing/rendering its AnimationState is
+    // what crashed. Require at least one target first — the user sculpts +Add
+    // before making clips. (m_activeMorphClip still tracks the intended name.)
+    if (mesh->getPoseCount() == 0)
+        return false;
+    const std::string nm = name.trimmed().toStdString();
+    if (mesh->hasAnimation(nm)) return false;   // name collision
+
+    mesh->createAnimation(nm, 0.0f);            // empty; tracks added on first key
+    entity->refreshAvailableAnimationState();
+    m_activeMorphClip = name.trimmed();
+    emit morphClipsChanged();
+    emit morphTargetsChanged();
+    SentryReporter::addBreadcrumb("scene.anim.morph",
+        QStringLiteral("create morph clip '%1'").arg(name.trimmed()));
+    return true;
+}
+
+bool MorphAnimationManager::deleteMorphClip(const QString& name)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh || !mesh->hasAnimation(name.toStdString())) return false;
+    if (isPoseShapeClip(mesh.get(), name.toStdString())) return false;  // that's a target
+
+    // Stop playback and drop the state before removing the animation.
+    if (auto* ppc = PropertiesPanelController::instance()) ppc->setPlaying(false);
+    if (auto* states = entity->getAllAnimationStates()) {
+        if (states->hasAnimationState(name.toStdString()))
+            states->getAnimationState(name.toStdString())->setEnabled(false);
+    }
+    mesh->removeAnimation(name.toStdString());
+    if (auto* states = entity->getAllAnimationStates()) {
+        if (states->hasAnimationState(name.toStdString()))
+            states->removeAnimationState(name.toStdString());
+    }
+    entity->refreshAvailableAnimationState();
+
+    // If the active clip was deleted, fall back to another (or the default).
+    if (m_activeMorphClip == name) {
+        const QStringList remaining = morphClips();
+        m_activeMorphClip = remaining.isEmpty()
+            ? QString::fromUtf8(kWeightClipName) : remaining.first();
+    }
+    emit morphClipsChanged();
+    emit morphTargetsChanged();
+    return true;
+}
+
+bool MorphAnimationManager::renameMorphClip(const QString& oldName, const QString& newName)
+{
+    assertMainThread();
+    if (oldName.isEmpty() || newName.trimmed().isEmpty() || oldName == newName)
+        return false;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    const std::string on = oldName.toStdString();
+    const std::string nn = newName.trimmed().toStdString();
+    if (!mesh || !mesh->hasAnimation(on) || mesh->hasAnimation(nn)) return false;
+    if (isPoseShapeClip(mesh.get(), on)) return false;  // that's a target, not a clip
+
+    // Stop playback + disable the old clip's state before recreating/removing
+    // the animation — the render loop reads the clip's tracks every frame, so
+    // mutating it while its AnimationState is active leaves a stale reference
+    // (mirrors the delete path).
+    if (auto* ppc = PropertiesPanelController::instance()) ppc->setPlaying(false);
+    if (auto* states = entity->getAllAnimationStates()) {
+        if (states->hasAnimationState(on))
+            states->getAnimationState(on)->setEnabled(false);
+    }
+
+    // Rebuild the Animation under the new name copying every VAT_POSE track +
+    // keyframe + pose reference, then drop the old one. (Ogre has no rename.)
+    Ogre::Animation* src = mesh->getAnimation(on);
+    Ogre::Animation* dst = mesh->createAnimation(nn, src->getLength());
+    for (const auto& [handle, srcTrack] : src->_getVertexTrackList()) {
+        if (!srcTrack || srcTrack->getAnimationType() != Ogre::VAT_POSE) continue;
+        Ogre::VertexAnimationTrack* dstTrack =
+            dst->createVertexTrack(handle, Ogre::VAT_POSE);
+        for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k) {
+            auto* skf = static_cast<Ogre::VertexPoseKeyFrame*>(srcTrack->getKeyFrame(k));
+            auto* dkf = dstTrack->createVertexPoseKeyFrame(skf->getTime());
+            for (const auto& ref : skf->getPoseReferences())
+                dkf->addPoseReference(ref.poseIndex, ref.influence);
+        }
+    }
+    if (auto* states = entity->getAllAnimationStates()) {
+        if (states->hasAnimationState(on))
+            states->removeAnimationState(on);
+    }
+    mesh->removeAnimation(on);
+    entity->refreshAvailableAnimationState();
+    if (m_activeMorphClip == oldName) m_activeMorphClip = newName.trimmed();
+    emit morphClipsChanged();
+    emit morphTargetsChanged();
+    return true;
+}
+
 namespace {
 
 // Walk the per-submesh edited positions on the EditableMesh and diff
@@ -206,7 +647,9 @@ std::vector<MorphPoseSlice> capturePoseSlicesFromEdit(
         if (bindPositions.size() != subs[s].vertices.size()) continue;
 
         MorphPoseSlice slice;
-        slice.submeshHandle = static_cast<unsigned short>(s + 1);
+        // Shared geometry poses target handle 0; per-submesh use 1-based.
+        slice.submeshHandle = subs[s].usesSharedVertices
+            ? 0 : static_cast<unsigned short>(s + 1);
         for (size_t vi = 0; vi < bindPositions.size(); ++vi) {
             const Ogre::Vector3 delta =
                 subs[s].vertices[vi].position - bindPositions[vi];
@@ -314,6 +757,59 @@ bool MorphAnimationManager::deleteMorphTarget(const QString& name)
     auto* undo = UndoManager::getSingleton();
     if (!undo) return false;
     undo->push(new DeleteMorphTargetCommand(entity, name));
+
+    emit morphTargetsChanged();
+    return true;
+}
+
+bool MorphAnimationManager::moveMorphTarget(const QString& name, int delta)
+{
+    assertMainThread();
+    if (name.isEmpty() || delta == 0) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+
+    const QStringList order = morphTargetsFor(entity);
+    const int from = order.indexOf(name);
+    if (from < 0) return false;
+    int to = from + delta;
+    if (to < 0) to = 0;
+    if (to > order.size() - 1) to = order.size() - 1;
+    if (to == from) return false;   // already at the edge → no-op
+
+    return moveMorphTargetToIndex(name, to);
+}
+
+bool MorphAnimationManager::moveMorphTargetToIndex(const QString& name, int toIndex)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+
+    const QStringList oldOrder = morphTargetsFor(entity);
+    const int from = oldOrder.indexOf(name);
+    if (from < 0) return false;
+    int to = toIndex;
+    if (to < 0) to = 0;
+    if (to > oldOrder.size() - 1) to = oldOrder.size() - 1;
+    if (to == from) return false;
+
+    QStringList newOrder = oldOrder;
+    newOrder.move(from, to);
+    if (newOrder == oldOrder) return false;
+
+    auto* undo = UndoManager::getSingleton();
+    if (!undo) return false;
+    undo->push(new ReorderMorphTargetsCommand(entity, oldOrder, newOrder));
 
     emit morphTargetsChanged();
     return true;

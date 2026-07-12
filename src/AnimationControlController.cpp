@@ -1,6 +1,7 @@
 #include "AnimationControlController.h"
 #include "GamificationManager.h"
 #include "PropertiesPanelController.h"
+#include "MorphAnimationManager.h"
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -230,6 +231,13 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
     if (m_selectedSkeleton && m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
         Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
         m_sliderMaximum = static_cast<int>(anim->getLength() * 1000);
+    } else if (Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+               mesh && mesh->hasAnimation(m_selectedAnimation)) {
+        // Mesh-level (VAT_POSE) clip — morph-weight animation or Alembic vertex
+        // cache. These have no skeleton; take the length off the mesh Animation
+        // so the timeline scrubs (skeleton-only derivation left it at 0).
+        m_sliderMaximum = static_cast<int>(
+            mesh->getAnimation(m_selectedAnimation)->getLength() * 1000);
     }
 
     // Reset loop region to span the whole animation whenever a new clip is
@@ -455,10 +463,20 @@ void AnimationControlController::setSliderValue(int ms)
 
 void AnimationControlController::setAnimationLength(double length)
 {
-    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return;
-    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
+    if (m_selectedAnimation.empty()) return;
 
-    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    // Resolve the Animation from the skeleton (skeletal clip) OR the mesh
+    // (VAT_POSE morph-weight / vertex-cache clip). Length is settable for both.
+    Ogre::Animation* anim = nullptr;
+    if (m_selectedSkeleton && m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
+        anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    } else if (m_selectedEntity) {
+        if (Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+            mesh && mesh->hasAnimation(m_selectedAnimation))
+            anim = mesh->getAnimation(m_selectedAnimation);
+    }
+    if (!anim) return;
+
     anim->setLength(static_cast<float>(length));
     m_sliderMaximum = static_cast<int>(length * 1000);
 
@@ -1009,23 +1027,55 @@ QVariantList AnimationControlController::allMorphRows() const
         if (poseName.empty()) continue;
 
         QVariantList keyTimes;
-        if (mesh->hasAnimation(poseName)) {
-            // The importer (MeshProcessor) groups same-named poses
-            // across submeshes into a single Animation with one
-            // VAT_POSE track per submesh. Pull only the track
-            // matching this pose's target handle — otherwise a
-            // shape that appears on body + head would show its
-            // diamonds twice in the dope sheet.
-            Ogre::Animation* anim = mesh->getAnimation(poseName);
-            const unsigned short handle = pose->getTarget();
-            if (anim->hasVertexTrack(handle)) {
-                Ogre::VertexAnimationTrack* track = anim->getVertexTrack(handle);
-                if (track && track->getAnimationType() == Ogre::VAT_POSE) {
-                    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
-                        keyTimes.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+        const unsigned short handle = pose->getTarget();
+
+        // Prefer the animated-weight track on the shared "MorphAnim" clip
+        // (Slice 2 #519 — multiple keyframes at varying influence). Fall back
+        // to the static per-target Animation (single shape keyframe at t=0)
+        // when the target has no weight animation yet.
+        auto appendTrackTimes = [&](const std::string& clipName) -> bool {
+            if (!mesh->hasAnimation(clipName)) return false;
+            Ogre::Animation* anim = mesh->getAnimation(clipName);
+            if (!anim->hasVertexTrack(handle)) return false;
+            Ogre::VertexAnimationTrack* track = anim->getVertexTrack(handle);
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) return false;
+            // A MorphAnim track carries keyframes for every target on this
+            // handle; keep only the ones that reference THIS pose so each row
+            // shows its own diamonds.
+            bool any = false;
+            for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+                auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+                bool refsThisPose = false;
+                for (const auto& ref : kf->getPoseReferences()) {
+                    const Ogre::Pose* rp =
+                        (ref.poseIndex < mesh->getPoseList().size())
+                            ? mesh->getPoseList()[ref.poseIndex] : nullptr;
+                    if (rp && rp->getName() == poseName) { refsThisPose = true; break; }
+                }
+                if (refsThisPose) {
+                    keyTimes.append(static_cast<double>(kf->getTime()));
+                    any = true;
                 }
             }
+            return any;
+        };
+
+        // Read the ACTIVE morph clip's keys (the one the user is editing), so
+        // switching clips in the dropdown shows that clip's diamonds. If the
+        // active clip isn't on this mesh (e.g. right after IMPORTING a model
+        // whose clip is "Sniff" while the app default is still "MorphAnim", and
+        // the auto-adopt signal hasn't landed yet), resolve the first real morph
+        // clip on the mesh directly — don't depend on active-clip timing. Fall
+        // back to the static shape-only clip when neither has a key here.
+        std::string clipToRead =
+            MorphAnimationManager::instance()->activeMorphClip().toStdString();
+        if (!mesh->hasAnimation(clipToRead)) {
+            const QStringList clips = MorphAnimationManager::instance()->morphClips();
+            if (!clips.isEmpty())
+                clipToRead = clips.first().toStdString();
         }
+        if (!appendTrackTimes(clipToRead))
+            appendTrackTimes(poseName);  // static shape-only clip
 
         QVariantMap row;
         row[QStringLiteral("name")]     = QString::fromStdString(poseName);

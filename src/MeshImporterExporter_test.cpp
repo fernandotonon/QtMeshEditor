@@ -590,8 +590,29 @@ TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllForma
 
 TEST(MeshImporterExporterStandaloneTest, ImportFileDialogFilterFromExtensionList_BuildsRows)
 {
+    // Per-format rows are emitted only for extensions actually present. With
+    // just .fbx/.obj, the named FBX + OBJ rows show, but Alembic / PlayStation
+    // (whose extensions aren't in the list) do not.
     QString f = MeshImporterExporter::importFileDialogFilterFromExtensionList(QStringLiteral(".fbx .obj"));
     EXPECT_TRUE(f.startsWith(QStringLiteral("All supported (*.fbx *.obj);;")));
+    EXPECT_TRUE(f.contains(QStringLiteral("FBX (*.fbx)")));
+    EXPECT_TRUE(f.contains(QStringLiteral("Wavefront OBJ (*.obj)")));
+    EXPECT_FALSE(f.contains(QStringLiteral("Alembic vertex cache (*.abc)")));
+    EXPECT_FALSE(f.contains(QStringLiteral("PlayStation")));
+    EXPECT_TRUE(f.endsWith(QStringLiteral("All files (*.*)")));
+}
+
+TEST(MeshImporterExporterStandaloneTest, ImportFileDialogFilterFromExtensionList_NamedRowsGatedByExtension)
+{
+    // Full valid list → the Alembic + PlayStation named rows appear, and the
+    // per-format rows are present. Order: All supported first, All files last.
+    QString f = MeshImporterExporter::importFileDialogFilterFromExtensionList(
+        QStringLiteral(".fbx .obj .gltf .glb .dae .stl .ply .abc .rsd .tmd"));
+    EXPECT_TRUE(f.startsWith(QStringLiteral("All supported (")));
+    EXPECT_TRUE(f.contains(QStringLiteral("*.abc")));         // in All supported
+    EXPECT_TRUE(f.contains(QStringLiteral("Alembic vertex cache (*.abc)")));
+    EXPECT_TRUE(f.contains(QStringLiteral("glTF 2.0 (*.gltf *.glb *.vrm)")));
+    EXPECT_TRUE(f.contains(QStringLiteral("Collada (*.dae)")));
     EXPECT_TRUE(f.contains(QStringLiteral("PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)")));
     EXPECT_TRUE(f.endsWith(QStringLiteral("All files (*.*)")));
 }
@@ -2014,6 +2035,8 @@ TEST_F(MeshImporterExporterTest, ImportFileDialogFilter_UsesManagerExtensions)
     EXPECT_FALSE(filter.isEmpty());
     EXPECT_TRUE(filter.contains(QStringLiteral(".obj")));
     EXPECT_TRUE(filter.contains(QStringLiteral("PlayStation RSD / TMD / Psy-Q PLY")));
+    // .abc is in Manager's valid-extension list → the Alembic row shows.
+    EXPECT_TRUE(filter.contains(QStringLiteral("Alembic vertex cache (*.abc)")));
 }
 
 TEST_F(MeshImporterExporterTest, Importer_PlayStationTmd_CreatesEntity)

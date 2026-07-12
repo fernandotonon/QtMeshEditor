@@ -594,6 +594,12 @@ void EditModeController::exitEditMode(bool commitChanges)
     // would be surprising mid-cut.
     if (m_knifeSession.active) cancelKnife();
 
+    // A morph sculpt session is non-destructive: restore the base BEFORE the
+    // normal commit so exiting Edit Mode never bakes the sculpt into the base.
+    // endMorphSculpt() restores the snapshot into the editable mesh; the commit
+    // below then writes those (pristine) positions back.
+    if (m_morphSculptActive) endMorphSculpt();
+
     if (commitChanges && m_editableMesh && m_editEntity) {
         bool ok = m_editableMesh->commitToEntity(m_editEntity);
         refreshNormalVisualizer();
@@ -651,6 +657,69 @@ void EditModeController::exitEditMode(bool commitChanges)
 
 void EditModeController::notifyMeshDataChanged()
 {
+    emit meshDataChanged();
+}
+
+bool EditModeController::beginMorphSculpt()
+{
+    // Requires an active Edit Mode session on a real mesh.
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return false;
+    if (m_morphSculptActive)
+        return true;  // already sculpting
+
+    // Snapshot the CURRENT vertex positions per submesh. These are the base
+    // shape the morph deltas are measured against and what we restore on exit,
+    // so morph authoring never permanently changes the base mesh (Blender
+    // shape-key / Maya blend-shape behaviour).
+    m_morphBaseSnapshot.clear();
+    const auto& subs = m_editableMesh->subMeshes();
+    m_morphBaseSnapshot.reserve(subs.size());
+    for (const auto& sub : subs) {
+        std::vector<Ogre::Vector3> snap;
+        snap.reserve(sub.vertices.size());
+        for (const auto& v : sub.vertices)
+            snap.push_back(v.position);
+        m_morphBaseSnapshot.push_back(std::move(snap));
+    }
+
+    m_morphSculptActive = true;
+    SentryReporter::addBreadcrumb("scene.anim.morph", "begin morph sculpt");
+    emit morphSculptChanged();
+    return true;
+}
+
+void EditModeController::endMorphSculpt()
+{
+    if (!m_morphSculptActive)
+        return;
+    m_morphSculptActive = false;
+
+    // Restore the pristine base positions captured at begin, then push them to
+    // the GPU so the viewport shows the unaltered base. Any captured target
+    // already lives on the mesh as a Pose + weight, independent of the base.
+    if (m_editableMesh && m_editEntity &&
+        m_morphBaseSnapshot.size() == m_editableMesh->subMeshes().size())
+    {
+        for (size_t s = 0; s < m_morphBaseSnapshot.size(); ++s) {
+            const auto& snap = m_morphBaseSnapshot[s];
+            const size_t n = std::min(snap.size(),
+                                      m_editableMesh->subMeshes()[s].vertices.size());
+            for (size_t vi = 0; vi < n; ++vi)
+                m_editableMesh->setVertexPosition(s, vi, snap[vi]);
+        }
+        if (m_normalsMode == 0)
+            m_editableMesh->recalculateNormals();
+        else
+            m_editableMesh->recalculateNormalsFlat();
+        m_editableMesh->commitToEntity(m_editEntity);
+        refreshNormalVisualizer();
+        updateSelectionOverlay();
+    }
+
+    m_morphBaseSnapshot.clear();
+    SentryReporter::addBreadcrumb("scene.anim.morph", "end morph sculpt (base restored)");
+    emit morphSculptChanged();
     emit meshDataChanged();
 }
 

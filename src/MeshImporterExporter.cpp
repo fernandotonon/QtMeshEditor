@@ -27,6 +27,7 @@ THE SOFTWARE.
 */
 
 #include "MeshImporterExporter.h"
+#include "AlembicImporter.h"
 #include "FeedbackReportHelper.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
@@ -43,6 +44,10 @@ THE SOFTWARE.
 #include <QHash>
 #include <QRegularExpression>
 #include <QSet>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QByteArray>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -61,6 +66,7 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "AnimationMerger.h"
+#include "MorphAnimationManager.h"
 #include "LightManager.h"
 #include "Manager.h"
 #include "SceneLightsIO.h"
@@ -90,6 +96,10 @@ THE SOFTWARE.
 #include <OgreRTShaderSystem.h>
 #include <OgreDataStream.h>
 #include <OgrePixelFormat.h>
+#include <OgreAnimation.h>
+#include <OgreAnimationTrack.h>
+#include <OgreKeyFrame.h>
+#include <OgrePose.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -214,21 +224,54 @@ bool isTextureSerializable(const Ogre::TexturePtr& tex)
 // abort the rest of the export).
 void saveTextureAsImage(const Ogre::TexturePtr& tex, const QFileInfo& file)
 {
+    const QString saveName = MeshImporterExporter::exportTextureName(
+        QString::fromStdString(tex->getName()));
+    const QString outPath = file.path() + "/" + saveName;
+
+    // PREFER copying the ORIGINAL texture file byte-for-byte when it's findable
+    // on disk. `convertToImage` re-packs the GPU texture, which THROWS for GPU
+    // formats Ogre can't pack back to a saveable image (e.g. the "pack to
+    // PF_UNKNOWN" failure on some compressed/BGR textures) — losing the texture
+    // entirely. A file copy is lossless and sidesteps the repack. Fall back to
+    // convertToImage only when the source file can't be located.
+    const QString texName = QString::fromStdString(tex->getName());
+    QString srcPath;
+    // 1) Ogre resource group's on-disk location for this named texture.
+    try {
+        const Ogre::String grp =
+            Ogre::ResourceGroupManager::getSingleton().findGroupContainingResource(
+                tex->getName());
+        Ogre::FileInfoListPtr fil =
+            Ogre::ResourceGroupManager::getSingleton().findResourceFileInfo(
+                grp, tex->getName());
+        if (fil && !fil->empty())
+            srcPath = QString::fromStdString(
+                fil->front().archive->getName() + "/" + fil->front().filename);
+    } catch (const Ogre::Exception&) { /* not in a group — try raw path */ }
+    // 2) The texture name may itself be an absolute/relative path.
+    if (srcPath.isEmpty() && QFileInfo::exists(texName))
+        srcPath = texName;
+
+    if (!srcPath.isEmpty() && QFileInfo(srcPath).isFile()
+        && QFileInfo(srcPath).canonicalFilePath() != QFileInfo(outPath).canonicalFilePath()) {
+        QFile::remove(outPath);           // overwrite a stale copy
+        if (QFile::copy(srcPath, outPath))
+            return;                       // lossless copy succeeded
+        // else fall through to the repack attempt
+    }
+
     try {
         Ogre::Image img;
         tex->convertToImage(img, true);
-        const QString saveName = MeshImporterExporter::exportTextureName(
-            QString::fromStdString(tex->getName()));
-        const std::string outPath = (file.path() + "/" + saveName).toStdString();
-        // `Ogre::Image::save` returns void; failures throw and land
-        // in the catch arms below.
-        img.save(outPath);
+        img.save(outPath.toStdString());
     } catch (const Ogre::Exception& ex) {
         Ogre::LogManager::getSingleton().logError(
-            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what()
+            + " (and no source file to copy)");
     } catch (const std::exception& ex) {
         Ogre::LogManager::getSingleton().logError(
-            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what()
+            + " (and no source file to copy)");
     }
 }
 
@@ -1171,12 +1214,35 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     }
 
     // --- Animations ---
+    // Skeletal animations first (unchanged), then optionally one morph-weight
+    // animation from the mesh's "MorphAnim" clip. Both are gathered into a
+    // vector so the mAnimations array is sized to hold exactly what exists —
+    // this covers the no-skeleton + morph-only case (mAnimations was previously
+    // left null) and the has-skeleton + morph case (grow past the skeleton
+    // count) without special-casing either.
+    std::vector<aiAnimation*> animations;
     if (hasSkeleton && skeleton->getNumAnimations() > 0)
     {
-        scene->mNumAnimations = skeleton->getNumAnimations();
-        scene->mAnimations = new aiAnimation*[scene->mNumAnimations];
         for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
-            scene->mAnimations[ai] = buildAiAnimation(skeleton->getAnimation(ai));
+            animations.push_back(buildAiAnimation(skeleton->getAnimation(ai)));
+    }
+
+    // NOTE: morph-target SHAPES export fine (via aiMesh::mAnimMeshes above),
+    // but morph-WEIGHT animation over time is NOT emitted through Assimp:
+    // Assimp's glTF2/FBX exporters only translate aiAnimation NODE channels
+    // (translation/rotation/scale) — they ignore aiAnimation::mMorphMeshChannels
+    // entirely. An aiAnimation carrying only a morph channel also fails Assimp's
+    // ValidateDataStructure ("mNumChannels is 0"), and a no-op node channel
+    // added to satisfy it exports as a stray TRS animation on the mesh node that
+    // corrupts reimport (froze the viewport). So we deliberately do NOT push a
+    // morph-weight aiAnimation here. Round-tripping weights needs a post-write
+    // glTF JSON injection (target.path="weights") — tracked as a follow-up.
+    if (!animations.empty())
+    {
+        scene->mNumAnimations = static_cast<unsigned int>(animations.size());
+        scene->mAnimations = new aiAnimation*[scene->mNumAnimations];  // NOSONAR — Assimp owns
+        for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai)
+            scene->mAnimations[ai] = animations[ai];
     }
 
     return scene;
@@ -2254,7 +2320,23 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             Ogre::SceneNode *sn;
             const Ogre::Entity *en;
 
-            if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
+            if(!file.suffix().compare("abc",Qt::CaseInsensitive))
+            {
+                // Alembic vertex-animation cache (#519 Slice B). Delegates to
+                // the guarded reader; a build without -DENABLE_ALEMBIC returns
+                // a clear error rather than falling through to Assimp (which
+                // can't read .abc). The importer builds the base mesh + a
+                // VAT_POSE clip and creates the entity itself.
+                QString abcErr;
+                Ogre::SceneNode* abcNode =
+                    AlembicImporter::importToScene(file.absoluteFilePath(), &abcErr);
+                if (!abcNode) {
+                    Ogre::LogManager::getSingleton().logError(
+                        "Alembic import failed: " + abcErr.toStdString());
+                }
+                continue;
+            }
+            else if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
                 tryLoadSidecarMaterialScript(file);
                 const Ogre::String meshResName = file.fileName().toStdString();
@@ -2832,25 +2914,454 @@ QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
     const QString& spaceSeparatedDotExtensions)
 {
     const QStringList parts = spaceSeparatedDotExtensions.split(' ', Qt::SkipEmptyParts);
-    QStringList globs;
+    QStringList globs;                // "*.ext" for the "All supported" row
+    QSet<QString> present;            // lower-cased ".ext" set for lookups
     globs.reserve(parts.size());
     for (QString ext : parts) {
-        ext = ext.trimmed();
-        if (ext.startsWith('.'))
+        ext = ext.trimmed().toLower();
+        if (ext.startsWith('.')) {
             globs.append(QLatin1Char('*') + ext);
+            present.insert(ext);
+        }
     }
     const QString allSupported = globs.join(QLatin1Char(' '));
-    return QStringLiteral(
-               "All supported (%1);;"
-               "PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply);;"
-               "All files (*.*)")
-        .arg(allSupported);
+
+    // Named per-format rows, in a sensible priority order. Each is emitted only
+    // if at least one of its extensions is in the valid list (so the dialog
+    // never advertises a format the loader can't handle). Grouped rows (e.g.
+    // glTF *.gltf/*.glb) show if ANY member is present. Anything valid but not
+    // named here still loads via "All supported" / "All files".
+    struct NamedFilter { const char* label; QStringList exts; };
+    const QList<NamedFilter> named = {
+        {"FBX (*.fbx)",                    {".fbx"}},
+        {"glTF 2.0 (*.gltf *.glb *.vrm)",  {".gltf", ".glb", ".vrm"}},
+        {"Wavefront OBJ (*.obj)",          {".obj"}},
+        {"Collada (*.dae)",                {".dae"}},
+        {"Ogre Mesh (*.mesh *.mesh.xml)",  {".mesh"}},
+        {"STL (*.stl)",                    {".stl"}},
+        {"PLY (*.ply)",                    {".ply"}},
+        {"3DS (*.3ds)",                    {".3ds"}},
+        {"Blender (*.blend)",              {".blend"}},
+        {"DirectX X (*.x)",                {".x"}},
+        {"Biovision BVH (*.bvh)",          {".bvh"}},
+        {"LightWave (*.lwo *.lws *.lxo)",  {".lwo", ".lws", ".lxo"}},
+        {"Alembic vertex cache (*.abc)",   {".abc"}},
+        {"PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)", {".rsd", ".tmd", ".ply"}},
+    };
+
+    QStringList rows;
+    rows.reserve(named.size() + 2);
+    rows << QStringLiteral("All supported (%1)").arg(allSupported);
+    for (const NamedFilter& nf : named) {
+        bool any = false;
+        for (const QString& e : nf.exts)
+            if (present.contains(e)) { any = true; break; }
+        if (any)
+            rows << QString::fromLatin1(nf.label);
+    }
+    rows << QStringLiteral("All files (*.*)");
+    return rows.join(QStringLiteral(";;"));
 }
 
 QString MeshImporterExporter::importFileDialogFilter()
 {
     return importFileDialogFilterFromExtensionList(Manager::getSingleton()->getValidFileExtention());
 }
+
+namespace {
+
+// ─── glTF morph-target WEIGHT animation post-processor ───────────────────────
+//
+// Assimp's glTF2 exporter cannot write morph-weight animation channels (its
+// ExportAnimations only emits node TRS channels), so after Assimp writes the
+// .gltf/.glb we inject the standard glTF `weights` animation channel into the
+// JSON ourselves. See the glTF 2.0 spec — "Animations" / morph-target weights.
+//
+// Data source (Ogre): morph WEIGHT clips are MESH-level Ogre::Animations that
+// are NOT named after a pose (a pose-named animation is a per-target SHAPE
+// clip). Each weight clip carries one Ogre::VertexAnimationTrack (VAT_POSE)
+// per submesh target handle; each Ogre::VertexPoseKeyFrame has a time and a
+// list of {poseIndex, influence} references — influence == that target's
+// weight at that time. Poses are enumerated in mesh->getPoseList() order,
+// which matches the glTF morph target order Assimp exported from
+// aiMesh::mAnimMeshes.
+//
+// Robustness: the whole helper is wrapped in try/catch and never throws out of
+// the exporter. On any parse/shape failure it logs a warning and leaves the
+// file exactly as Assimp wrote it (shapes still round-trip).
+
+// A decoded morph weight clip: sorted distinct keyframe times + a flat weight
+// matrix (K rows × numTargets cols, row-major).
+struct MorphWeightClip {
+    std::string name;
+    std::vector<float> times;    // K
+    std::vector<float> weights;  // K * numTargets
+};
+
+// Is `animName` a per-target SHAPE clip (named exactly a pose name)?
+bool gltfIsPoseShapeClip(const Ogre::Mesh* mesh, const std::string& animName)
+{
+    for (const Ogre::Pose* p : mesh->getPoseList())
+        if (p && p->getName() == animName) return true;
+    return false;
+}
+
+// Enumerate the entity's mesh morph WEIGHT clips and decode each into a
+// dense time/weight matrix of width `numTargets` (pose-list order).
+std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
+                                                     int numTargets)
+{
+    std::vector<MorphWeightClip> out;
+    if (!entity || numTargets <= 0) return out;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return out;
+
+    for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai) {
+        Ogre::Animation* anim = mesh->getAnimation(ai);
+        if (!anim) continue;
+        const std::string nm = anim->getName();
+        if (gltfIsPoseShapeClip(mesh.get(), nm)) continue;  // shape clip, not a weight clip
+
+        // Gather the sorted set of distinct keyframe times across every
+        // VAT_POSE track on this clip, and record each pose reference.
+        std::set<float> timeSet;
+        for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+            (void)handle;
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k)
+                timeSet.insert(track->getKeyFrame(k)->getTime());
+        }
+        if (timeSet.empty()) continue;  // no keyed tracks → nothing to export
+
+        std::vector<float> times(timeSet.begin(), timeSet.end());
+
+        MorphWeightClip clip;
+        clip.name = nm;
+        clip.times = times;
+        clip.weights.assign(times.size() * static_cast<size_t>(numTargets), 0.0f);
+
+        // For each time build the weight vector from the pose references.
+        for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+            (void)handle;
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k) {
+                auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(k));
+                const float t = kf->getTime();
+                // Locate the row index for this time.
+                auto it = std::lower_bound(times.begin(), times.end(), t);
+                if (it == times.end()) continue;
+                const size_t row = static_cast<size_t>(it - times.begin());
+                for (const auto& ref : kf->getPoseReferences()) {
+                    if (ref.poseIndex >= static_cast<unsigned short>(numTargets))
+                        continue;  // out of range for this glTF mesh — skip
+                    clip.weights[row * static_cast<size_t>(numTargets) + ref.poseIndex]
+                        = ref.influence;
+                }
+            }
+        }
+        out.push_back(std::move(clip));
+    }
+    return out;
+}
+
+// Serialise a float vector little-endian into a byte buffer.
+void appendFloatsLE(QByteArray& buf, const std::vector<float>& v)
+{
+    const size_t base = static_cast<size_t>(buf.size());
+    buf.resize(static_cast<int>(base + v.size() * sizeof(float)));
+    std::memcpy(buf.data() + base, v.data(), v.size() * sizeof(float));
+}
+
+// Find the glTF node that owns the morph mesh. Strategy: prefer the node whose
+// referenced mesh's first primitive has a `targets` array of length ==
+// poseCount; fall back to the first node that references a mesh with any
+// targets. Sets *outNumTargets. Returns the node index, or -1 on failure.
+int findMorphNode(const QJsonObject& root, int poseCount, int* outNumTargets)
+{
+    if (!root.contains("nodes") || !root.contains("meshes")) return -1;
+    const QJsonArray nodes = root.value("nodes").toArray();
+    const QJsonArray meshes = root.value("meshes").toArray();
+
+    auto targetsForMesh = [&](int meshIdx) -> int {
+        if (meshIdx < 0 || meshIdx >= meshes.size()) return 0;
+        const QJsonObject m = meshes.at(meshIdx).toObject();
+        const QJsonArray prims = m.value("primitives").toArray();
+        if (prims.isEmpty()) return 0;
+        const QJsonObject p0 = prims.at(0).toObject();
+        if (!p0.contains("targets")) return 0;
+        return p0.value("targets").toArray().size();
+    };
+
+    int fallbackNode = -1, fallbackTargets = 0;
+    for (int n = 0; n < nodes.size(); ++n) {
+        const QJsonObject node = nodes.at(n).toObject();
+        if (!node.contains("mesh")) continue;
+        const int meshIdx = node.value("mesh").toInt(-1);
+        const int nt = targetsForMesh(meshIdx);
+        if (nt <= 0) continue;
+        if (nt == poseCount) { *outNumTargets = nt; return n; }  // exact match
+        if (fallbackNode < 0) { fallbackNode = n; fallbackTargets = nt; }
+    }
+    if (fallbackNode >= 0) { *outNumTargets = fallbackTargets; return fallbackNode; }
+    return -1;
+}
+
+// Inject morph-weight animations into an already-written .gltf/.glb file.
+// No-op (leaves the file untouched) if the entity has no morph weight clips,
+// the file has no morph targets, or anything fails to parse.
+void injectMorphWeightAnimations(const QString& filePath,
+                                 const Ogre::Entity* entity,
+                                 bool isBinary)
+{
+    try {
+        if (!entity) return;
+        Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh || mesh->getPoseCount() == 0) return;
+
+        // Quick early-out: does the mesh carry any weight clips at all?
+        // (Cheaper than a full parse; poseCount already > 0 here.)
+        bool anyWeightClip = false;
+        for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai) {
+            Ogre::Animation* a = mesh->getAnimation(ai);
+            if (a && !gltfIsPoseShapeClip(mesh.get(), a->getName())) {
+                anyWeightClip = true;
+                break;
+            }
+        }
+        if (!anyWeightClip) return;
+
+        // ── Read the file (GLB: split header/JSON/BIN; glTF: whole file) ──
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly)) return;
+        const QByteArray whole = f.readAll();
+        f.close();
+
+        QByteArray jsonBytes;
+        QByteArray binChunk;          // GLB buffer 0 (copied verbatim)
+        bool haveBinChunk = false;
+
+        if (isBinary) {
+            // GLB layout: 12-byte header, then chunks (4-byte length + 4-byte
+            // type + data). JSON chunk type 0x4E4F534A ("JSON"), BIN chunk
+            // type 0x004E4942 ("BIN\0").
+            if (whole.size() < 12) return;
+            const auto rdU32 = [&](int off) -> quint32 {
+                return static_cast<quint8>(whole[off])
+                     | (static_cast<quint8>(whole[off + 1]) << 8)
+                     | (static_cast<quint8>(whole[off + 2]) << 16)
+                     | (static_cast<quint8>(whole[off + 3]) << 24);
+            };
+            const quint32 magic = rdU32(0);
+            if (magic != 0x46546C67u /*'glTF'*/) return;
+            int off = 12;
+            while (off + 8 <= whole.size()) {
+                const quint32 clen = rdU32(off);
+                const quint32 ctype = rdU32(off + 4);
+                const int dataOff = off + 8;
+                if (dataOff + static_cast<int>(clen) > whole.size()) return;
+                const QByteArray data = whole.mid(dataOff, static_cast<int>(clen));
+                if (ctype == 0x4E4F534Au) {          // JSON
+                    jsonBytes = data;
+                } else if (ctype == 0x004E4942u) {   // BIN
+                    binChunk = data;
+                    haveBinChunk = true;
+                }
+                off = dataOff + static_cast<int>(clen);
+            }
+            if (jsonBytes.isEmpty()) return;
+        } else {
+            jsonBytes = whole;
+        }
+
+        QJsonParseError perr;
+        QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) return;
+        QJsonObject root = doc.object();
+
+        // ── Locate the morph node + authoritative target count ──
+        int numTargets = 0;
+        const int nodeIdx = findMorphNode(root, static_cast<int>(mesh->getPoseCount()),
+                                          &numTargets);
+        if (nodeIdx < 0 || numTargets <= 0) return;
+
+        // ── Decode the weight clips against numTargets ──
+        std::vector<MorphWeightClip> clips = collectMorphWeightClips(entity, numTargets);
+        if (clips.empty()) return;
+
+        // ── Build the extra data-URI buffer + accessors/bufferViews ──
+        // All weight data lives in a NEW buffer encoded as a base64 data URI,
+        // so we never touch the existing GLB BIN chunk (buffer 0) or the
+        // existing .gltf buffers — much simpler and safe.
+        QByteArray extraBuf;
+
+        QJsonArray accessors = root.value("accessors").toArray();
+        QJsonArray bufferViews = root.value("bufferViews").toArray();
+        QJsonArray buffers = root.value("buffers").toArray();
+        QJsonArray animations = root.value("animations").toArray();
+
+        const int newBufferIndex = buffers.size();  // appended below
+
+        for (const MorphWeightClip& clip : clips) {
+            const int K = static_cast<int>(clip.times.size());
+            if (K == 0) continue;
+
+            // — input (times) accessor —
+            const int timesByteOffset = extraBuf.size();
+            appendFloatsLE(extraBuf, clip.times);
+            const int timesBv = bufferViews.size();
+            {
+                QJsonObject bv;
+                bv["buffer"] = newBufferIndex;
+                bv["byteOffset"] = timesByteOffset;
+                bv["byteLength"] = static_cast<int>(clip.times.size() * sizeof(float));
+                bufferViews.append(bv);
+            }
+            float tmin = clip.times.front(), tmax = clip.times.front();
+            for (float t : clip.times) { tmin = std::min(tmin, t); tmax = std::max(tmax, t); }
+            const int inputAccessor = accessors.size();
+            {
+                QJsonObject acc;
+                acc["bufferView"] = timesBv;
+                acc["byteOffset"] = 0;
+                acc["componentType"] = 5126;   // FLOAT
+                acc["count"] = K;
+                acc["type"] = "SCALAR";
+                acc["min"] = QJsonArray{ static_cast<double>(tmin) };
+                acc["max"] = QJsonArray{ static_cast<double>(tmax) };
+                accessors.append(acc);
+            }
+
+            // — output (weights) accessor —
+            const int weightsByteOffset = extraBuf.size();
+            appendFloatsLE(extraBuf, clip.weights);
+            const int weightsBv = bufferViews.size();
+            {
+                QJsonObject bv;
+                bv["buffer"] = newBufferIndex;
+                bv["byteOffset"] = weightsByteOffset;
+                bv["byteLength"] = static_cast<int>(clip.weights.size() * sizeof(float));
+                bufferViews.append(bv);
+            }
+            const int outputAccessor = accessors.size();
+            {
+                QJsonObject acc;
+                acc["bufferView"] = weightsBv;
+                acc["byteOffset"] = 0;
+                acc["componentType"] = 5126;   // FLOAT
+                acc["count"] = K * numTargets;
+                acc["type"] = "SCALAR";
+                accessors.append(acc);
+            }
+
+            // — animation entry (sampler index is animation-local) —
+            QJsonObject sampler;
+            sampler["input"] = inputAccessor;
+            sampler["output"] = outputAccessor;
+            sampler["interpolation"] = "LINEAR";
+
+            QJsonObject targetObj;
+            targetObj["node"] = nodeIdx;
+            targetObj["path"] = "weights";
+
+            QJsonObject channel;
+            channel["sampler"] = 0;   // first (only) sampler within this animation
+            channel["target"] = targetObj;
+
+            QJsonObject animObj;
+            animObj["name"] = QString::fromStdString(clip.name);
+            animObj["samplers"] = QJsonArray{ sampler };
+            animObj["channels"] = QJsonArray{ channel };
+            animations.append(animObj);
+        }
+
+        if (extraBuf.isEmpty()) return;  // nothing to inject after all
+
+        // — append the data-URI buffer —
+        {
+            QJsonObject buf;
+            const QByteArray b64 = extraBuf.toBase64();
+            buf["uri"] = QStringLiteral("data:application/octet-binary;base64,")
+                         + QString::fromLatin1(b64);
+            buf["byteLength"] = extraBuf.size();
+            buffers.append(buf);
+        }
+
+        root["accessors"] = accessors;
+        root["bufferViews"] = bufferViews;
+        root["buffers"] = buffers;
+        root["animations"] = animations;
+
+        // ── Re-serialise ──
+        const QByteArray newJson =
+            QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+        QFile out(filePath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+
+        if (isBinary) {
+            // Re-emit the GLB container: header + JSON chunk (space-padded to
+            // 4-byte alignment) + the ORIGINAL unchanged BIN chunk (buffer 0).
+            // The injected weight data lives in the data-URI buffer inside the
+            // JSON, so the BIN chunk is copied byte-for-byte.
+            QByteArray jsonPadded = newJson;
+            while (jsonPadded.size() % 4 != 0) jsonPadded.append(' ');
+
+            const auto wrU32 = [&](QByteArray& b, quint32 v) {
+                b.append(static_cast<char>(v & 0xFF));
+                b.append(static_cast<char>((v >> 8) & 0xFF));
+                b.append(static_cast<char>((v >> 16) & 0xFF));
+                b.append(static_cast<char>((v >> 24) & 0xFF));
+            };
+
+            // BIN chunk data padded to 4-byte alignment with zero bytes.
+            QByteArray binPadded;
+            if (haveBinChunk) {
+                binPadded = binChunk;
+                while (binPadded.size() % 4 != 0) binPadded.append('\0');
+            }
+
+            quint32 total = 12;                             // header
+            total += 8 + static_cast<quint32>(jsonPadded.size());  // JSON chunk
+            if (haveBinChunk)
+                total += 8 + static_cast<quint32>(binPadded.size());  // BIN chunk
+
+            QByteArray glb;
+            wrU32(glb, 0x46546C67u);   // magic 'glTF'
+            wrU32(glb, 2u);            // version
+            wrU32(glb, total);         // total length
+
+            wrU32(glb, static_cast<quint32>(jsonPadded.size()));
+            wrU32(glb, 0x4E4F534Au);   // 'JSON'
+            glb.append(jsonPadded);
+
+            if (haveBinChunk) {
+                wrU32(glb, static_cast<quint32>(binPadded.size()));
+                wrU32(glb, 0x004E4942u);   // 'BIN\0'
+                glb.append(binPadded);
+            }
+
+            out.write(glb);
+        } else {
+            out.write(newJson);
+        }
+        out.close();
+
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("file.export"),
+            QStringLiteral("Injected %1 morph-weight animation(s) into %2")
+                .arg(clips.size()).arg(filePath));
+    } catch (const std::exception& ex) {
+        Ogre::LogManager::getSingleton().logWarning(
+            std::string("injectMorphWeightAnimations failed (left file as-is): ")
+            + ex.what());
+    } catch (...) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "injectMorphWeightAnimations failed with unknown exception "
+            "(left file as-is)");
+    }
+}
+
+} // namespace
 
 QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* parent)
 {
@@ -3444,6 +3955,15 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // For FBX we aim for a single-file export (embedded textures), so skip sidecars.
                 if (_format != "FBX Binary (*.fbx)")
                     exportMaterial(e, file);
+
+                // Assimp's glTF2 exporter drops morph-target WEIGHT animation
+                // channels. Post-process the written file to inject the
+                // standard glTF `weights` channels from Ogre's mesh weight
+                // clips. No-op when the mesh has no morph weight animation;
+                // never throws out of the exporter.
+                if (formatId == "gltf2" || formatId == "glb2")
+                    injectMorphWeightAnimations(file.filePath(), e,
+                                                /*isBinary=*/formatId == "glb2");
             }
 
             delete scene;

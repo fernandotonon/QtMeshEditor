@@ -306,6 +306,24 @@ if(ENABLE_ONNX)
     message(STATUS "AI PBR map synthesis enabled with ONNX Runtime")
 endif()
 ##############################################################
+#  Alembic — mesh / vertex animation import (#519, Anim Slice B)
+##############################################################
+# Vendored (BSD) reader for baked per-vertex caches (cloth / sims / fluids /
+# Houdini + Blender exports). Default OFF: the Alembic + Imath build is
+# non-trivial across the three target platforms. VertexAnimationManager + Ogre
+# VAT_POSE playback work WITHOUT Alembic; this flag adds the .abc reader
+# (cmake/Alembic.cmake, FetchContent). The C++ #ifdef ENABLE_ALEMBIC guards the
+# reader so a build without it still compiles and skips .abc with a clear message.
+option(ENABLE_ALEMBIC "Enable Alembic (.abc) vertex-animation import" OFF)
+
+if(ENABLE_ALEMBIC)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Alembic.cmake)
+    add_definitions(-DENABLE_ALEMBIC)
+    message(STATUS "Alembic vertex-animation import enabled")
+else()
+    message(STATUS "Alembic vertex-animation import disabled (VAT_POSE playback still available)")
+endif()
+##############################################################
 #  PS1 runtime geometry extraction (experimental)
 ##############################################################
 option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)

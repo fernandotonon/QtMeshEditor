@@ -159,6 +159,8 @@ HDR/HdrBundledLibrary.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
+VertexAnimationManager.cpp
+AlembicImporter.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
@@ -718,6 +720,10 @@ endif()
 # Link ONNX Runtime if enabled (#404 — AI PBR map synthesis). The imported
 # target is a SHARED lib, so copy it next to the binary at build time or it
 # won't be found at runtime.
+if(ENABLE_ALEMBIC)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_alembic)
+endif()
+
 if(ENABLE_ONNX)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_onnx)
     if(QTMESH_ONNX_LIB_DIR)
@@ -862,6 +868,10 @@ if(BUILD_TESTS)
     # Link stable-diffusion.cpp for tests if enabled
     if(ENABLE_STABLE_DIFFUSION)
         target_link_libraries(UnitTests stable-diffusion)
+    endif()
+
+    if(ENABLE_ALEMBIC)
+        target_link_libraries(UnitTests qtmesh_alembic)
     endif()
 
     # Link ONNX Runtime for tests if enabled (#404)

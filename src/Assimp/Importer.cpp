@@ -182,15 +182,25 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     // Process materials
     materialProcessor.loadScene(scene);
 
-    // Process the skeleton whenever the scene has bones (skinned mesh) or animations.
-    // A mesh can be skinned without having any animations (e.g. a rigged bind-pose).
+    // Process the skeleton whenever the scene has bones (skinned mesh) or a
+    // SKELETAL animation (one with node channels). A mesh can be skinned without
+    // animations (rigged bind-pose). Crucially, a MORPH-only animation
+    // (aiAnimation with mMorphMeshChannels but zero mNumChannels) must NOT
+    // trigger skeleton creation: doing so builds an empty skeleton, and
+    // setBindingPose() → deriveRootBone() then asserts on the empty bone list,
+    // producing a mesh that fails to load/render. So require at least one node
+    // channel, not merely HasAnimations().
     bool hasBones = false;
     for(unsigned i = 0; i < scene->mNumMeshes && !hasBones; ++i)
         hasBones = scene->mMeshes[i]->mNumBones > 0;
 
+    bool hasSkeletalAnim = false;
+    for(unsigned i = 0; i < scene->mNumAnimations && !hasSkeletalAnim; ++i)
+        hasSkeletalAnim = scene->mAnimations[i]->mNumChannels > 0;
+
     const bool isZup = (m_sceneUpAxis == 2);
 
-    if(hasBones || scene->HasAnimations()) {
+    if(hasBones || hasSkeletalAnim) {
         skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
         BoneProcessor boneProcessor;
         // Create bones at their native FBX-space positions (no Z-up bake yet).
@@ -227,6 +237,14 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     MeshProcessor meshProcessor(skeleton, isZup);
     meshProcessor.processNode(scene->mRootNode, scene);
     Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(modelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, materialProcessor);
+
+    // Consume authored morph-WEIGHT animation channels (aiAnimation::
+    // mMorphMeshChannels) into mesh-level VAT_POSE weight clips. Must run AFTER
+    // createMesh — the morph poses these clips reference only exist once the
+    // mesh + poses have been built by MeshProcessor. No-op when the scene has
+    // no morph channels or the mesh has no poses.
+    if (ogreMesh && scene->HasAnimations())
+        AnimationProcessor::processMorphWeightAnimations(ogreMesh, scene);
 
     return ogreMesh;
 }

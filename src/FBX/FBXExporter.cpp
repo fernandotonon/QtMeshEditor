@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include <fstream>
 #include <vector>
 #include <map>
+#include <set>
 #include <cstring>
 #include <cmath>
 #include <cstdint>
@@ -881,6 +882,28 @@ private:
             }
         }
 
+        // Morph weight-animation A5 — count AnimationStack / Layer /
+        // CurveNode / Curve for morph WEIGHT clips. These are ADDED to
+        // (not merged with) the skeletal anim counts above, mirroring
+        // how writeMorphAnimations() emits a separate stack+layer per
+        // morph clip. Per morph clip:
+        //   +1 AnimationStack, +1 AnimationLayer
+        //   +N AnimationCurveNode ("Number"/DeformPercent), +N AnimationCurve
+        // where N = distinct animated channels (poses) in that clip.
+        // Must EXACTLY match writeMorphAnimations() or the file is
+        // malformed. Independent of skeleton presence.
+        {
+            std::vector<Ogre::Animation*> morphClips = collectMorphWeightClips();
+            for (Ogre::Animation* clip : morphClips) {
+                int animatedChannels = countMorphAnimatedChannels(clip);
+                if (animatedChannels == 0) continue; // nothing to write → no stack
+                animStackCount     += 1;
+                animLayerCount     += 1;
+                animCurveNodeCount += animatedChannels;
+                animCurveCount     += animatedChannels;
+            }
+        }
+
         int totalObjects = 1 + modelCount + geomCount + matCount + nodeAttrCount +
                            deformerCount + poseCount + textureCount + videoCount +
                            animStackCount + animLayerCount +
@@ -968,6 +991,13 @@ private:
             if (m_skeleton->getNumAnimations() > 0)
                 writeAnimations();
         }
+        // Morph weight-animation A5 — DeformPercent animation for the
+        // BlendShapeChannels written above. MUST run after
+        // writeBlendShapeDeformers() (needs m_poseChannelIds populated)
+        // and is independent of the skeleton — a pure-morph mesh with
+        // no skeleton still animates its weights.
+        if (!m_skeletonOnly)
+            writeMorphAnimations();
 
         m_w.endNode(); // Objects
     }
@@ -1600,6 +1630,99 @@ private:
         }
     }
 
+    // ── Morph weight clip enumeration (A5) ───────────────────────
+    // A morph WEIGHT clip is a MESH-level Ogre::Animation that is NOT
+    // a per-target shape clip (those are named exactly a pose name).
+    // Mirrors MorphAnimationManager::morphClips() / isPoseShapeClip().
+    static bool isPoseShapeClipName(const Ogre::Mesh* mesh, const std::string& name)
+    {
+        for (const Ogre::Pose* p : mesh->getPoseList())
+            if (p && p->getName() == name) return true;
+        return false;
+    }
+
+    std::vector<Ogre::Animation*> collectMorphWeightClips() const
+    {
+        std::vector<Ogre::Animation*> clips;
+        if (!m_mesh) return clips;
+        // No poses → no channels a weight clip could animate.
+        if (m_mesh->getPoseList().empty()) return clips;
+        for (unsigned short i = 0; i < m_mesh->getNumAnimations(); ++i)
+        {
+            Ogre::Animation* a = m_mesh->getAnimation(i);
+            if (!a) continue;
+            if (isPoseShapeClipName(m_mesh, a->getName())) continue;
+            // Must carry at least one VAT_POSE track with keyframes,
+            // otherwise there is nothing to animate.
+            bool hasWeightKeys = false;
+            for (const auto& [handle, track] : a->_getVertexTrackList())
+            {
+                (void)handle;
+                if (track && track->getAnimationType() == Ogre::VAT_POSE
+                    && track->getNumKeyFrames() > 0) { hasWeightKeys = true; break; }
+            }
+            if (hasWeightKeys) clips.push_back(a);
+        }
+        return clips;
+    }
+
+    // Does pose `p` get an exported BlendShapeChannel? True iff its
+    // target handle matches a submesh whose geometry is emitted — the
+    // exact condition writeBlendShapeDeformers() uses to create the
+    // channel. Count-safe: does NOT depend on m_poseChannelIds (which
+    // is only populated during writeObjects, after the count pass).
+    bool poseHasExportedChannel(const Ogre::Pose* p) const
+    {
+        if (!p || !m_mesh) return false;
+        const unsigned short target = p->getTarget();
+        for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
+        {
+            const Ogre::SubMesh* subMesh = m_mesh->getSubMesh(si);
+            const Ogre::VertexData* vData = subMesh->useSharedVertices
+                ? m_mesh->sharedVertexData : subMesh->vertexData;
+            if (!vData || vData->vertexCount == 0) continue; // no geometry emitted
+            const unsigned short handle = subMesh->useSharedVertices
+                ? 0 : static_cast<unsigned short>(si + 1);
+            if (handle == target) return true;
+        }
+        return false;
+    }
+
+    // Distinct poses referenced by any keyframe of any VAT_POSE track
+    // in `clip` that also have an exported BlendShapeChannel. Each such
+    // pose yields exactly one "Number" AnimationCurveNode + one
+    // AnimationCurve when the clip is written.
+    std::vector<const Ogre::Pose*> animatedChannelPoses(Ogre::Animation* clip) const
+    {
+        std::vector<const Ogre::Pose*> ordered; // preserve deterministic order
+        std::set<const Ogre::Pose*> seen;
+        const Ogre::PoseList& poseList = m_mesh->getPoseList();
+        for (const auto& [handle, track] : clip->_getVertexTrackList())
+        {
+            (void)handle;
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short ki = 0; ki < track->getNumKeyFrames(); ++ki)
+            {
+                auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(ki));
+                for (const auto& ref : kf->getPoseReferences())
+                {
+                    if (ref.poseIndex >= poseList.size()) continue;
+                    const Ogre::Pose* p = poseList[ref.poseIndex];
+                    if (!p || seen.count(p)) continue;
+                    if (!poseHasExportedChannel(p)) continue;
+                    seen.insert(p);
+                    ordered.push_back(p);
+                }
+            }
+        }
+        return ordered;
+    }
+
+    int countMorphAnimatedChannels(Ogre::Animation* clip) const
+    {
+        return static_cast<int>(animatedChannelPoses(clip).size());
+    }
+
     // ── Morph A4b: BlendShape deformers (morph targets) ──────────
     //
     // FBX represents blend shapes as a chain of nodes hanging off
@@ -1655,6 +1778,14 @@ private:
                 int64_t channelId = nextId();
                 int64_t shapeId = nextId();
                 m_channelConns.push_back({channelId, blendShapeId, shapeId, p->getName()});
+                // Morph weight-animation A5 — remember which FBX
+                // BlendShapeChannel corresponds to this Ogre::Pose so
+                // writeMorphAnimations() can attach a DeformPercent
+                // AnimationCurveNode to it. Keyed by the pose POINTER
+                // (pose names aren't guaranteed unique across submeshes,
+                // but the pointer is; morph clips reference poses by
+                // index into m_mesh->getPoseList()).
+                m_poseChannelIds[p] = channelId;
 
                 // BlendShapeChannel — the user-facing weight target.
                 m_w.beginNode("Deformer");
@@ -1973,6 +2104,224 @@ private:
         m_w.endNode(); // AnimationCurveNode
     }
 
+    // ── Morph weight animation (A5) ──────────────────────────────
+    //
+    // Animates each BlendShapeChannel's DeformPercent (0..100) over
+    // time so authored morph weight clips round-trip through FBX. The
+    // object/connection graph MIRRORS the skeletal path exactly, but
+    // targets BlendShapeChannels instead of bone Models:
+    //
+    //   AnimationStack (one per morph clip)
+    //     ↑OO AnimationLayer
+    //         ↑OO AnimationCurveNode ("Number", d|DeformPercent)
+    //             — OP→ BlendShapeChannel (property "DeformPercent")
+    //             ↑OO AnimationCurve (OP→ node, channel "d|DeformPercent")
+    //
+    // Assimp's FBXConverter::ProcessMorphAnimDatas reads the
+    // "d|DeformPercent" curve on any AnimationCurveNode whose Target is
+    // a BlendShapeChannel and emits aiMeshMorphAnim keys with
+    // value=channelIndex, weight=value/100 — which our import side
+    // (AnimationProcessor::processMorphWeightAnimations) rebuilds into
+    // VAT_POSE weight keyframes.
+    void writeMorphAnimations()
+    {
+        if (!m_mesh) return;
+        const Ogre::PoseList& poseList = m_mesh->getPoseList();
+
+        std::vector<Ogre::Animation*> morphClips = collectMorphWeightClips();
+        for (Ogre::Animation* clip : morphClips)
+        {
+            // Distinct animated poses (== FBX channels) for this clip.
+            std::vector<const Ogre::Pose*> channelPoses = animatedChannelPoses(clip);
+            if (channelPoses.empty()) continue; // matches the count pre-pass skip
+
+            int64_t stackId = nextId();
+            int64_t layerId = nextId();
+            m_morphAnimStackIds.push_back(stackId);
+            m_morphAnimLayerToStack.push_back({layerId, stackId});
+
+            const double duration = clip->getLength();
+            const int64_t startTime = 0;
+            const int64_t stopTime = static_cast<int64_t>(duration * FBX_TICKS_PER_SECOND);
+
+            // AnimationStack
+            m_w.beginNode("AnimationStack");
+            m_w.writePropertyL(stackId);
+            m_w.writePropertyS(clip->getName() + std::string("\x00\x01", 2) + "AnimStack");
+            m_w.writePropertyS("");
+            m_w.endProperties();
+
+            m_w.beginNode("Properties70");
+            m_w.endProperties();
+            writeP70KTime("LocalStart", startTime);
+            writeP70KTime("LocalStop", stopTime);
+            m_w.endNode(); // Properties70
+
+            m_w.endNode(); // AnimationStack
+
+            // AnimationLayer
+            m_w.beginNode("AnimationLayer");
+            m_w.writePropertyL(layerId);
+            m_w.writePropertyS(clip->getName() + "_Layer" + std::string("\x00\x01", 2) + "AnimLayer");
+            m_w.writePropertyS("");
+            m_w.endProperties();
+
+            m_w.beginNode("Properties70");
+            m_w.endProperties();
+            writeP70Number("Weight", 100.0);
+            m_w.endNode(); // Properties70
+
+            m_w.endNode(); // AnimationLayer
+
+            // One DeformPercent curve node + curve per animated channel.
+            for (const Ogre::Pose* p : channelPoses)
+            {
+                auto chIt = m_poseChannelIds.find(p);
+                if (chIt == m_poseChannelIds.end()) continue; // no exported channel
+                const int64_t channelId = chIt->second;
+                const unsigned short targetHandle = p->getTarget();
+
+                // Collect this pose's weight over time from whichever
+                // VAT_POSE track drives its target submesh. A pose is
+                // referenced at a keyframe's time with an influence in
+                // 0..1; FBX DeformPercent is 0..100.
+                std::vector<int64_t> keyTimes;
+                std::vector<double>  keyWeights; // 0..100
+                const Ogre::VertexAnimationTrack* track =
+                    clip->hasVertexTrack(targetHandle)
+                        ? clip->getVertexTrack(targetHandle)
+                        : nullptr;
+                if (track && track->getAnimationType() == Ogre::VAT_POSE)
+                {
+                    // Find this pose's index in the mesh pose list.
+                    unsigned short poseIdx = 0;
+                    bool haveIdx = false;
+                    for (unsigned short i = 0; i < poseList.size(); ++i)
+                        if (poseList[i] == p) { poseIdx = i; haveIdx = true; break; }
+
+                    if (haveIdx)
+                    {
+                        for (unsigned short ki = 0; ki < track->getNumKeyFrames(); ++ki)
+                        {
+                            auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(
+                                track->getKeyFrame(ki));
+                            float influence = 0.0f;
+                            bool referenced = false;
+                            for (const auto& ref : kf->getPoseReferences())
+                            {
+                                if (ref.poseIndex == poseIdx)
+                                {
+                                    influence = ref.influence;
+                                    referenced = true;
+                                    break;
+                                }
+                            }
+                            // A keyframe on this track that does not list
+                            // our pose means the pose is at rest (0) there.
+                            (void)referenced;
+                            keyTimes.push_back(static_cast<int64_t>(
+                                kf->getTime() * FBX_TICKS_PER_SECOND));
+                            keyWeights.push_back(static_cast<double>(influence) * 100.0);
+                        }
+                    }
+                }
+
+                if (keyTimes.empty())
+                {
+                    // Degenerate safety: a channel we counted must emit a
+                    // curve node + curve or the object counts break. Emit
+                    // a single 0-weight key at t=0.
+                    keyTimes.push_back(0);
+                    keyWeights.push_back(0.0);
+                }
+
+                // AnimationCurveNode — single "Number" channel
+                // (DeformPercent), default = first weight.
+                int64_t curveNodeId = nextId();
+                writeDeformPercentCurveNode(curveNodeId,
+                                            keyWeights.empty() ? 0.0 : keyWeights[0]);
+                m_morphCurveNodeConns.push_back({curveNodeId, layerId, channelId});
+
+                // AnimationCurve — the DeformPercent key data.
+                int64_t curveId = nextId();
+                writeAnimationCurveRecord(curveId, keyTimes, keyWeights);
+                m_morphCurveConns.push_back({curveId, curveNodeId});
+            }
+        }
+    }
+
+    // A single-scalar "Number" AnimationCurveNode carrying the
+    // DeformPercent property (mirrors writeAnimCurveNode but with one
+    // channel named "DeformPercent" instead of d|X/Y/Z, matching the
+    // property Assimp's prop_whitelist looks for on a channel node).
+    void writeDeformPercentCurveNode(int64_t id, double defaultValue)
+    {
+        m_w.beginNode("AnimationCurveNode");
+        m_w.writePropertyL(id);
+        m_w.writePropertyS(std::string("DeformPercent") + std::string("\x00\x01", 2)
+                           + "AnimCurveNode");
+        m_w.writePropertyS("");
+        m_w.endProperties();
+
+        m_w.beginNode("Properties70");
+        m_w.endProperties();
+
+        m_w.beginNode("P");
+        m_w.writePropertyS("d|DeformPercent"); m_w.writePropertyS("Number");
+        m_w.writePropertyS(""); m_w.writePropertyS("A"); m_w.writePropertyD(defaultValue);
+        m_w.endProperties(); m_w.endNodeLeaf();
+
+        m_w.endNode(); // Properties70
+        m_w.endNode(); // AnimationCurveNode
+    }
+
+    // Emit an AnimationCurve record from raw (time,value) arrays. Same
+    // record shape the skeletal writeCurve lambda uses, factored out so
+    // the morph path reuses the exact key-attr wiring.
+    void writeAnimationCurveRecord(int64_t curveId,
+                                   const std::vector<int64_t>& times,
+                                   const std::vector<double>& vals)
+    {
+        m_w.beginNode("AnimationCurve");
+        m_w.writePropertyL(curveId);
+        m_w.writePropertyS(std::string("\x00\x01", 2) + "AnimCurve");
+        m_w.writePropertyS("");
+        m_w.endProperties();
+
+        m_w.beginNode("Default"); m_w.writePropertyD(vals.empty() ? 0.0 : vals[0]); m_w.endProperties(); m_w.endNodeLeaf();
+
+        m_w.beginNode("KeyVer"); m_w.writePropertyI(4008); m_w.endProperties(); m_w.endNodeLeaf();
+
+        m_w.beginNode("KeyTime");
+        m_w.writePropertyArrayL(times);
+        m_w.endProperties();
+        m_w.endNodeLeaf();
+
+        m_w.beginNode("KeyValueFloat");
+        std::vector<float> fVals(vals.begin(), vals.end());
+        m_w.writePropertyArrayF(fVals);
+        m_w.endProperties();
+        m_w.endNodeLeaf();
+
+        // AttrFlags — interpolation: cubic (same as skeletal curves).
+        m_w.beginNode("KeyAttrFlags");
+        m_w.writePropertyArrayI({24840});
+        m_w.endProperties();
+        m_w.endNodeLeaf();
+
+        m_w.beginNode("KeyAttrDataFloat");
+        m_w.writePropertyArrayF({0.0f, 0.0f, 0.0218f, 0.0f});
+        m_w.endProperties();
+        m_w.endNodeLeaf();
+
+        m_w.beginNode("KeyAttrRefCount");
+        m_w.writePropertyArrayI({static_cast<int32_t>(times.size())});
+        m_w.endProperties();
+        m_w.endNodeLeaf();
+
+        m_w.endNode(); // AnimationCurve
+    }
+
     // ── BindPose ─────────────────────────────────────────────────
     void writeBindPose()
     {
@@ -2279,6 +2628,25 @@ private:
                 writeConnection("OO", ch.channelId, ch.blendShapeId);
                 writeConnection("OO", ch.shapeGeomId, ch.channelId);
             }
+
+            // Morph weight-animation A5 — DeformPercent curve graph.
+            // Independent of the skeleton: a pure-morph mesh animates
+            // its BlendShapeChannel weights with no bones involved.
+            //   AnimationStack → scene root (id 0)
+            //   AnimationLayer → AnimationStack
+            //   AnimationCurveNode → AnimationLayer (OO)
+            //   AnimationCurveNode → BlendShapeChannel (OP "DeformPercent")
+            //   AnimationCurve → AnimationCurveNode (OP "d|DeformPercent")
+            for (auto stackId : m_morphAnimStackIds)
+                writeConnection("OO", stackId, 0);
+            for (const auto& [layerId, stackId] : m_morphAnimLayerToStack)
+                writeConnection("OO", layerId, stackId);
+            for (const auto& acn : m_morphCurveNodeConns) {
+                writeConnection("OO", acn.curveNodeId, acn.layerId);
+                writeConnection("OP", acn.curveNodeId, acn.channelId, "DeformPercent");
+            }
+            for (const auto& ac : m_morphCurveConns)
+                writeConnection("OP", ac.curveId, ac.curveNodeId, "d|DeformPercent");
         }
 
         if (m_hasSkeleton)
@@ -2552,6 +2920,37 @@ private:
         std::string channel;
     };
     std::vector<AnimCurveConn> m_animCurveConns;
+
+    // ── Morph weight animation (A5) ──────────────────────────────
+    // Maps each exported Ogre::Pose to the FBX BlendShapeChannel ID
+    // writeBlendShapeDeformers() assigned it. writeMorphAnimations()
+    // uses it to wire a "Number" AnimationCurveNode (property
+    // "DeformPercent") to the channel that pose animates.
+    std::map<const Ogre::Pose*, int64_t> m_poseChannelIds;
+
+    // AnimationStack/Layer for each morph WEIGHT clip (separate from
+    // the skeletal m_animStackIds so the skeletal path is untouched).
+    std::vector<int64_t> m_morphAnimStackIds;
+    std::vector<std::pair<int64_t, int64_t>> m_morphAnimLayerToStack; // layer→stack
+
+    // DeformPercent AnimationCurveNode → BlendShapeChannel (OP) and
+    // → AnimationLayer (OO). Distinct from the skeletal T/R/S nodes:
+    // channelId is a BlendShapeChannel, property is always
+    // "DeformPercent".
+    struct MorphCurveNodeConn {
+        int64_t curveNodeId;
+        int64_t layerId;
+        int64_t channelId;      // the BlendShapeChannel this drives
+    };
+    std::vector<MorphCurveNodeConn> m_morphCurveNodeConns;
+
+    // AnimationCurve → DeformPercent AnimationCurveNode (OP,
+    // channel "d|DeformPercent").
+    struct MorphCurveConn {
+        int64_t curveId;
+        int64_t curveNodeId;
+    };
+    std::vector<MorphCurveConn> m_morphCurveConns;
 };
 
 // ═══════════════════════════════════════════════════════════════════

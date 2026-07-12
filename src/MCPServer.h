@@ -276,6 +276,15 @@ private:
     /// Light — pure state poke on a live entity.
     QJsonObject toolSetMorphWeight(const QJsonObject &args);
 
+    /// Vertex-anim B3 (#519): import an Alembic (.abc) vertex cache into the
+    /// live scene as a VAT_POSE-animated mesh. Args: `file` (path). Heavy —
+    /// decodes the cache + builds an entity. Needs a build with ENABLE_ALEMBIC.
+    QJsonObject toolImportAlembic(const QJsonObject &args);
+
+    /// Vertex-anim B3 (#519): enable + play a vertex-animation clip on an
+    /// entity. Args: `entity`, `animation`. Light — state poke on a live entity.
+    QJsonObject toolPlayVertexAnimation(const QJsonObject &args);
+
     /// Node-anim C6: list node-animation clips on the live scene.
     /// No args. Light — pure read.
     QJsonObject toolListNodeAnimations(const QJsonObject &args);

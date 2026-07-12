@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "AlembicImporter.h"
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
 #include "AnimationMerger.h"
@@ -1358,6 +1359,19 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         }
     }
 
+    // Mesh-level (VAT_POSE) animations — morph-weight clips + Alembic vertex
+    // caches. These live on the Ogre::Mesh, not the skeleton, so the skeletal
+    // loop above never sees them; report them too so round-trip checks (and
+    // `qtmesh info`) reflect morph/vertex animation.
+    for (unsigned short a = 0; a < mesh->getNumAnimations(); ++a) {
+        auto* anim = mesh->getAnimation(a);
+        if (!anim) continue;
+        info.animations.append({
+            QString::fromStdString(anim->getName()),
+            anim->getLength()
+        });
+    }
+
     // Bounding box
     auto bb = mesh->getBounds();
     info.bbMin = bb.getMinimum();
@@ -2155,6 +2169,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     //    or: anim <file> --decimate-step S [-o <output>] [--animation <name>]
     QString filePath, oldName, newName, outputPath, animationFilter;
     bool listMode = false;
+    bool infoMode = false;   // #519: `anim <file>.abc --info` — vertex-cache metadata
     bool analyzeMode = false;
     bool renameMode = false;
     bool mergeMode = false;
@@ -2193,6 +2208,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         QString arg(argv[i]);
         if (arg == "anim" || arg == "--cli") continue;
         if (arg == "--list") { listMode = true; continue; }
+        if (arg == "--info") { infoMode = true; continue; }
         if (arg == "--analyze") { analyzeMode = true; continue; }
         if (arg == "--json") { jsonOutput = true; continue; }
         if (arg == "--rename" && i + 2 < argc) {
@@ -2301,6 +2317,47 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     filePath = positional[0];
+
+    // #519: `anim <file>.abc --info [--json]` — vertex-cache metadata (frames,
+    // verts, fps, duration, storage) read from the Alembic header without
+    // decoding all frames. Only meaningful for .abc; other formats fall through
+    // to the normal anim modes.
+    if (infoMode && QFileInfo(filePath).suffix().compare("abc", Qt::CaseInsensitive) == 0) {
+        SentryReporter::addBreadcrumb("cli.anim",
+            QString("Anim info .abc %1").arg(QFileInfo(filePath).fileName()));
+        if (!AlembicImporter::available()) {
+            err() << "Error: Alembic support not compiled in (rebuild with "
+                     "-DENABLE_ALEMBIC=ON)." << Qt::endl;
+            return 1;
+        }
+        const AlembicImporter::InfoResult info = AlembicImporter::readInfo(filePath);
+        if (!info.ok) {
+            err() << "Error: " << info.error << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject o;
+            o["file"]        = QFileInfo(filePath).fileName();
+            o["mesh"]        = info.meshName;
+            o["frames"]      = info.frameCount;
+            o["vertices"]    = info.vertexCount;
+            o["triangles"]   = info.faceCount;
+            o["fps"]         = info.fps;
+            o["durationSec"] = info.durationSec;
+            o["storage"]     = info.storage;
+            cliWrite(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)) + "\n");
+        } else {
+            cliWrite(QString("Alembic vertex cache: %1\n").arg(QFileInfo(filePath).fileName()));
+            cliWrite(QString("  mesh:      %1\n").arg(info.meshName));
+            cliWrite(QString("  frames:    %1\n").arg(info.frameCount));
+            cliWrite(QString("  vertices:  %1\n").arg(info.vertexCount));
+            cliWrite(QString("  triangles: %1\n").arg(info.faceCount));
+            cliWrite(QString("  fps:       %1\n").arg(info.fps));
+            cliWrite(QString("  duration:  %1s\n").arg(info.durationSec, 0, 'f', 3));
+            cliWrite(QString("  storage:   %1\n").arg(info.storage));
+        }
+        return 0;
+    }
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.

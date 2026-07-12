@@ -10,6 +10,7 @@
 #include "NormalMapGenerator.h"
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
+#include "AlembicImporter.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
 #include "PrimitiveObject.h"
@@ -691,6 +692,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
+        {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
+        {QStringLiteral("play_vertex_animation"), &MCPServer::toolPlayVertexAnimation},
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
         {QStringLiteral("set_node_keyframe"), &MCPServer::toolSetNodeKeyframe},
@@ -741,6 +744,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
         QStringLiteral("list_morph_targets"),
+        QStringLiteral("import_alembic"),
         QStringLiteral("cloud_upload")
     };
     return heavyTools.contains(name);
@@ -6377,6 +6381,72 @@ QJsonObject MCPServer::toolSetMorphWeight(const QJsonObject &args)
 }
 
 // ---------------------------------------------------------------------------
+// Vertex-anim B3 (#519) — Alembic import + vertex-clip playback.
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolImportAlembic(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "import_alembic");
+
+    const QString filePath = args.value("file").toString();
+    if (filePath.isEmpty())
+        return makeErrorResult("Error: missing required 'file' argument");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+    if (!AlembicImporter::available())
+        return makeErrorResult(
+            "Error: this build has no Alembic support. Rebuild with -DENABLE_ALEMBIC=ON.");
+
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing Alembic cache %1").arg(filePath));
+
+    // importToScene creates scene nodes / entities, which can throw
+    // Ogre::Exception — run through runOgreOp so a failure returns a clean MCP
+    // error instead of taking down the server (matches the other Ogre tools).
+    return runOgreOp([&]() -> QJsonObject {
+        QString err;
+        Ogre::SceneNode* node = AlembicImporter::importToScene(filePath, &err);
+        if (!node)
+            return makeErrorResult(
+                err.isEmpty() ? QString("Error: failed to import %1").arg(filePath) : err);
+
+        // Report the node + the vertex clips the import produced so the agent
+        // can immediately drive play_vertex_animation.
+        QJsonObject content;
+        content["ok"] = true;
+        content["file"] = filePath;
+        content["node"] = QString::fromStdString(node->getName());
+
+        QStringList entities, clips;
+        for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity") continue;
+            auto* ent = static_cast<Ogre::Entity*>(obj);
+            entities.append(QString::fromStdString(ent->getName()));
+            if (auto* m = VertexAnimationManager::instance()) {
+                for (const QString& c : m->vertexClipsFor(ent))
+                    if (!clips.contains(c)) clips.append(c);
+            }
+        }
+        QJsonArray entArr, clipArr;
+        for (const QString& e : entities) entArr.append(e);
+        for (const QString& c : clips) clipArr.append(c);
+        content["entities"] = entArr;
+        content["vertexClips"] = clipArr;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    });
+}
+
+QJsonObject MCPServer::toolPlayVertexAnimation(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "play_vertex_animation");
+    // A vertex clip surfaces as an ordinary AnimationState, so playback is
+    // identical to play_animation — delegate to keep one code path.
+    return toolPlayAnimation(args);
+}
+
+// ---------------------------------------------------------------------------
 // Node-anim C6 — clip + keyframe authoring on the live scene.
 // ---------------------------------------------------------------------------
 // These tools operate on the LIVE scene (not a transient import) — same
@@ -9064,6 +9134,44 @@ QJsonArray MCPServer::buildToolsList()
             "Drives the matching Ogre::AnimationState so the mesh deforms in real time. "
             "Returns the actual weight after clamping. Returns an error if no entity is "
             "selected or the named target doesn't exist on the selection.",
+            props,
+            required
+        );
+    }
+
+    // import_alembic
+    {
+        QJsonObject props;
+        props["file"] = QJsonObject{{"type", "string"}, {"description", "Path to an Alembic (.abc) vertex cache."}};
+        QJsonArray required;
+        required.append("file");
+        appendTool(
+            "import_alembic",
+            "Import an Alembic (.abc) vertex cache into the live scene. Decodes the first "
+            "animated polymesh into a fixed-topology frame set and builds a VAT_POSE-animated "
+            "Ogre entity (cloth/sim/fluid bakes from Houdini/Blender). Returns the created node, "
+            "entities, and vertex-animation clip names — drive them with play_vertex_animation. "
+            "Requires a build with ENABLE_ALEMBIC=ON.",
+            props,
+            required
+        );
+    }
+
+    // play_vertex_animation
+    {
+        QJsonObject props;
+        props["entity"]    = QJsonObject{{"type", "string"}, {"description", "Entity name (from import_alembic)."}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Vertex-animation clip name."}};
+        props["play"]      = QJsonObject{{"type", "boolean"}, {"description", "true to play (default), false to stop."}};
+        props["loop"]      = QJsonObject{{"type", "boolean"}, {"description", "Loop the clip (default true)."}};
+        QJsonArray required;
+        required.append("entity");
+        required.append("animation");
+        appendTool(
+            "play_vertex_animation",
+            "Play / stop a vertex-animation clip on a live entity. The clip surfaces as an "
+            "ordinary Ogre::AnimationState, so this behaves like play_animation for skeletal "
+            "clips. Returns an error if the entity or clip is not found.",
             props,
             required
         );
