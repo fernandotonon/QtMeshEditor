@@ -153,6 +153,24 @@ annotation. The `--dump-training-data` schema stays the same
 (`qtmesh-meshseg-training-v1`: points + labels), so the training script needs
 no changes per category — only a new miner path and a label-set table.
 
+### v1 category-model results (July 2026, held-out synthetic val)
+
+| model | val acc | notes |
+|---|---|---|
+| meshseg_vegetation.onnx | 93.8% | broadleaf/pine/palm/dead/bush regimes |
+| meshseg_vehicle.onnx | 93.5% | car/truck/plane/helicopter |
+| meshseg_building.onnx | 86.9% | hardest — many small parts (windows, chimneys) |
+| meshseg_category.onnx | 99.1% | 4-way Auto dispatcher (incl. mined real bodies) |
+
+End-to-end through `qtmesh segment` (ONNX build): the Auto path correctly
+classified procedural tree/car/house/human test meshes and produced sane
+part splits on each (some boundary bleed on low-detail primitives — the
+models train on dense 4096-point surface clouds, so very low-poly meshes
+lean on the duplicate-padding path and degrade; real assets are fine).
+All four + the body model are hosted on the aggregate HF repo (`segment/`)
+and on dedicated standalone repos
+(`QtMeshEditor-mesh-segmentation-{vegetation,vehicle,building,category}`).
+
 ### Implementation status
 
 1. (done, v2) Fix humanoids + basic quadrupeds with the existing 7-class model.
