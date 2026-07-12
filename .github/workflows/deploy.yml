@@ -2164,14 +2164,14 @@ jobs:
             }
             ok=0
             for attempt in 1 2 3; do
-                echo "create-dmg attempt $attempt…"
+                echo "create-dmg attempt ${attempt}..."
                 if make_pretty_dmg; then ok=1; break; fi
-                echo "create-dmg attempt $attempt failed; detaching stray mounts and retrying"
+                echo "create-dmg attempt ${attempt} failed; detaching stray mounts and retrying"
                 hdiutil detach "/Volumes/QtMeshEditor Installer" -force 2>/dev/null || true
                 sleep 5
             done
             if [ "$ok" -ne 1 ]; then
-                echo "create-dmg failed 3× — falling back to a plain hdiutil DMG"
+                echo "create-dmg failed 3x - falling back to a plain hdiutil DMG"
                 rm -f "$DMG"
                 staging="$(mktemp -d)"
                 cp -R "$APP" "$staging/"
