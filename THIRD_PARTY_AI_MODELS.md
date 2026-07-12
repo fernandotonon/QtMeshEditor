@@ -236,10 +236,14 @@ the binary). Attribution + licenses for the models and their training data:
 - **Hosting:** every `meshseg*.onnx` (body + the category models + the
   classifier) is hosted in the
   [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
-  HF repo under `segment/` and downloads on first use to
-  `AppData/ai_models/segment/` (one shared override
+  HF repo under `segment/` (the app's download source) and downloads on first
+  use to `AppData/ai_models/segment/` (one shared override
   `QTMESH_SEGMENT_MODEL_BASE_URL` / `QSettings ai/segmentModelBaseUrl`;
   offline guard `QTMESH_SEGMENT_NO_DOWNLOAD` covers the whole family).
+  Each model also has a dedicated standalone HF repo with its own model card
+  (`QtMeshEditor-mesh-segmentation` for body, plus
+  `…-mesh-segmentation-{vegetation,vehicle,building,category}`), refreshed
+  from the aggregate via `scripts/sync-hf-model-repos.sh`.
 - **Fallback:** when ONNX is disabled, the model can't be fetched, or inference
   fails, the feature uses a deterministic **geometric** segmenter (connected-
   component islands + an up-axis/lateral spatial heuristic, refined by rig
