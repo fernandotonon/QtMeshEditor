@@ -2138,19 +2138,49 @@ jobs:
             file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
-      run: | 
+      run: |
+            set -euo pipefail
             brew install create-dmg
-            sudo create-dmg \
-            --volname "QtMeshEditor Installer" \
-            --volicon "${{github.workspace}}/resources/icon.icns" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "QtMeshEditor.app" 200 190 \
-            --app-drop-link 600 185 \
-            QtMeshEditor-${{github.ref_name}}-MacOS.dmg \
-            ${{github.workspace}}/bin/QtMeshEditor.app
-    
+            DMG="QtMeshEditor-${{github.ref_name}}-MacOS.dmg"
+            APP="${{github.workspace}}/bin/QtMeshEditor.app"
+
+            # create-dmg mounts a disk image and AppleScript-positions the
+            # icons; on CI that mount/detach races and fails intermittently
+            # (seen on PRs #866/#867). Retry a few times, and if it still
+            # fails fall back to a plain hdiutil DMG so packaging never blocks
+            # the build on a transient tooling flake. The pretty layout is
+            # only cosmetic — the fallback DMG installs identically.
+            make_pretty_dmg() {
+                rm -f "$DMG"
+                sudo create-dmg \
+                    --volname "QtMeshEditor Installer" \
+                    --volicon "${{github.workspace}}/resources/icon.icns" \
+                    --window-pos 200 120 \
+                    --window-size 800 400 \
+                    --icon-size 100 \
+                    --icon "QtMeshEditor.app" 200 190 \
+                    --app-drop-link 600 185 \
+                    "$DMG" "$APP"
+            }
+            ok=0
+            for attempt in 1 2 3; do
+                echo "create-dmg attempt $attempt…"
+                if make_pretty_dmg; then ok=1; break; fi
+                echo "create-dmg attempt $attempt failed; detaching stray mounts and retrying"
+                hdiutil detach "/Volumes/QtMeshEditor Installer" -force 2>/dev/null || true
+                sleep 5
+            done
+            if [ "$ok" -ne 1 ]; then
+                echo "create-dmg failed 3× — falling back to a plain hdiutil DMG"
+                rm -f "$DMG"
+                staging="$(mktemp -d)"
+                cp -R "$APP" "$staging/"
+                ln -s /Applications "$staging/Applications"
+                hdiutil create -volname "QtMeshEditor Installer" \
+                    -srcfolder "$staging" -ov -format UDZO "$DMG"
+            fi
+            ls -la "$DMG"
+
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v4
       with:
