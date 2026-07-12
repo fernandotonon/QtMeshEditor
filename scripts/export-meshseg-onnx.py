@@ -127,20 +127,34 @@ def sphere_surf(c, r, n, rng, squash=None):
     return c + p
 
 
-def capsule_surf(p0, p1, r, n, rng):
-    """Points on a capsule surface (cylinder side + spherical caps)."""
+def capsule_surf(p0, p1, r, n, rng, cap0=True, cap1=True):
+    """Points on a capsule surface (cylinder side + spherical caps).
+
+    cap0/cap1 disable sampling the p0/p1 end cap. Use for ATTACHMENT ends
+    (an arm's shoulder end, a leg's hip end, a neck's torso end): a real
+    character has NO surface at the limb-torso junction — the limb fuses
+    into the body. Sampling that cap plants limb-labelled points exactly on
+    the torso boundary and teaches the model to over-claim it (the #788
+    retrain regression: with the exterior-cap fix those points all landed
+    on the junction-facing hemisphere and torso recall fell 0.80 → 0.50-0.68)."""
     p0 = np.asarray(p0, float); p1 = np.asarray(p1, float)
     axis = p1 - p0; L = np.linalg.norm(axis) + 1e-9; u = axis / L
-    # area split: side 2πrL vs caps 4πr²
-    side_frac = L / (L + 2 * r)
+    ncaps = int(cap0) + int(cap1)
+    # area split: side 2πrL vs caps 2πr² each
+    side_frac = L / (L + ncaps * r) if ncaps else 1.0
     ns = int(n * side_frac); nc = n - ns
     # side: random t along axis, random dir ⊥ axis
     t = rng.random((ns, 1))
     d = _unit_dirs(ns, rng); d -= (d @ u)[:, None] * u
     d /= np.linalg.norm(d, axis=1, keepdims=True) + 1e-9
     side = p0 + t * axis + d * r
+    if nc <= 0:
+        return side
     caps_dir = _unit_dirs(nc, rng)
-    which = rng.random(nc) < 0.5
+    if cap0 and cap1:
+        which = rng.random(nc) < 0.5
+    else:
+        which = np.full(nc, bool(cap0))   # all points on the one enabled cap
     # keep caps on the EXTERIOR: reflect directions pointing into the shaft
     # onto the outward hemisphere (p0 cap faces -u, p1 cap faces +u) — a full
     # sphere would put half the cap points inside the cylinder, off-surface
@@ -231,12 +245,14 @@ def make_humanoid(rng):
                       s=np.array([torsoW / (torsoH / 2), 1, torsoD / (torsoH / 2)]):
                       sphere_surf(c, r, n, rng, s), TORSO, torsoH * torsoW * 4))
 
-    # neck + head (both HEAD — bone-name convention maps neck→head)
+    # neck + head (both HEAD — bone-name convention maps neck→head). Both neck
+    # ends are junctions (torso below, head sphere above) — no caps.
     neckL = torsoH * rng.uniform(0.05, 0.25)
     neckTop = np.array([0, pel + torsoH + neckL, 0])
     parts.append((lambda n, a=np.array([0, pel + torsoH, 0]), b=neckTop,
                   r=headR * rng.uniform(0.25, 0.5):
-                  capsule_surf(a, b, r, n, rng), HEAD, neckL * headR * 2))
+                  capsule_surf(a, b, r, n, rng, cap0=False, cap1=False),
+                  HEAD, neckL * headR * 2))
     headC = neckTop + np.array([0, headR * rng.uniform(0.75, 1.0), 0])
     hsq = np.array([rng.uniform(0.8, 1.2), rng.uniform(0.8, 1.25), rng.uniform(0.75, 1.1)])
     parts.append((lambda n, c=headC, r=headR, s=hsq:
@@ -258,8 +274,10 @@ def make_humanoid(rng):
     for sx, l in ((+1, LARM), (-1, RARM)):        # LEFT at +X (rig-prior convention)
         sh = np.array([sx * (torsoW + armR * 0.5), shoulderY, 0])
         segs, wrist = _pose_arm(sh, sx, armLen, armR, rng)
-        for a, b in segs:
-            parts.append((lambda n, a=a, b=b, r=armR: capsule_surf(a, b, r, n, rng),
+        # No cap at the shoulder end (segment 0's p0) — arm-torso junction.
+        for si, (a, b) in enumerate(segs):
+            parts.append((lambda n, a=a, b=b, r=armR, c0=si > 0:
+                          capsule_surf(a, b, r, n, rng, cap0=c0),
                           l, armLen * armR))
         handR = armR * rng.uniform(1.1, 1.7)
         parts.append((lambda n, c=wrist, r=handR: sphere_surf(c, r, n, rng),
@@ -269,7 +287,9 @@ def make_humanoid(rng):
     for sx, l in ((+1, LLEG), (-1, RLEG)):
         hip = np.array([sx * torsoW * rng.uniform(0.4, 0.75), pel, 0])
         ankle = hip + np.array([sx * stance * legL, -legL, rng.uniform(-0.05, 0.05)])
-        parts.append((lambda n, a=hip, b=ankle, r=legR: capsule_surf(a, b, r, n, rng),
+        # No cap at the hip end — leg-torso junction.
+        parts.append((lambda n, a=hip, b=ankle, r=legR:
+                      capsule_surf(a, b, r, n, rng, cap0=False),
                       l, legL * legR))
         # foot box pointing FORWARD (+Z) — the model's main facing cue
         footL = legR * rng.uniform(1.6, 3.0)
@@ -297,7 +317,8 @@ def make_quadruped(rng):
     headC = b1 + np.array([0, np.sin(neckA) * neckL + headR * 0.3,
                            np.cos(neckA) * neckL])
     parts.append((lambda n, a=b1, b=headC, r=headR * 0.45:
-                  capsule_surf(a, b, r, n, rng), HEAD, neckL * headR))
+                  capsule_surf(a, b, r, n, rng, cap0=False, cap1=False),
+                  HEAD, neckL * headR))
     parts.append((lambda n, c=headC, r=headR: sphere_surf(c, r, n, rng),
                   HEAD, headR * headR * 8))
     if rng.random() < 0.7:      # muzzle forward
@@ -319,7 +340,8 @@ def make_quadruped(rng):
             hip = np.array([sx * bodyR * 0.8, y0 - bodyR * 0.3, zf * bodyL * 0.38])
             foot = hip + np.array([0, -(legL + bodyR * 0.7 - bodyR * 0.3), 0])
             parts.append((lambda n, a=hip, b=foot, r=legR:
-                          capsule_surf(a, b, r, n, rng), l, legL * legR * 2))
+                          capsule_surf(a, b, r, n, rng, cap0=False),
+                          l, legL * legR * 2))
             if rng.random() < 0.5:  # hoof/paw, slight +Z
                 parts.append((lambda n, c=foot + np.array([0, 0, legR * 0.5]),
                               h=np.array([legR, legR * 0.6, legR * 1.6]):
@@ -346,21 +368,22 @@ def make_biped_tail(rng):
     neckL = bodyR * rng.uniform(0.8, 2.5); neckA = rng.uniform(0.5, 1.3)
     headC = b1 + np.array([0, np.sin(neckA) * neckL + headR * 0.3, np.cos(neckA) * neckL])
     parts.append((lambda n, a=b1, b=headC, r=headR * 0.45:
-                  capsule_surf(a, b, r, n, rng), HEAD, neckL * headR))
+                  capsule_surf(a, b, r, n, rng, cap0=False, cap1=False),
+                  HEAD, neckL * headR))
     parts.append((lambda n, c=headC, r=headR,
                   s=np.array([0.9, 0.9, rng.uniform(1.0, 1.6)]):
                   sphere_surf(c, r, n, rng, s), HEAD, headR * headR * 8))
-    if rng.random() < 0.5:      # tiny arms
+    if rng.random() < 0.5:      # tiny arms (no cap at the body junction)
         for sx, l in ((+1, LARM), (-1, RARM)):
             sh = b1 + np.array([sx * bodyR * 0.9, 0, 0])
             w = sh + np.array([sx * 0.1, -bodyR * rng.uniform(0.5, 1.2), bodyR * 0.6])
             parts.append((lambda n, a=sh, b=w, r=legR * 0.5:
-                          capsule_surf(a, b, r, n, rng), l, bodyR * legR))
+                          capsule_surf(a, b, r, n, rng, cap0=False), l, bodyR * legR))
     for sx, l in ((+1, LLEG), (-1, RLEG)):
         hip = np.array([sx * bodyR * 0.85, y0 - bodyR * 0.2, rng.uniform(-0.1, 0.1)])
         foot = np.array([hip[0], 0.0, hip[2]])
         parts.append((lambda n, a=hip, b=foot, r=legR:
-                      capsule_surf(a, b, r, n, rng), l, legL * legR * 2))
+                      capsule_surf(a, b, r, n, rng, cap0=False), l, legL * legR * 2))
         footL = legR * rng.uniform(1.6, 2.6)
         parts.append((lambda n, c=foot + np.array([0, legR * 0.4, footL * 0.4]),
                       h=np.array([legR, legR * 0.5, footL]): box_surf(c, h, n, rng),
