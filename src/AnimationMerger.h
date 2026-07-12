@@ -228,20 +228,19 @@ public:
     /// over-rotate.
     ///
     /// ABSOLUTE + IDEMPOTENT: `degrees` is the target angle, not a nudge. The
-    /// last-applied angle is tracked in a SESSION-LOCAL static map keyed by
-    /// (skeleton name, animation name) — Ogre::Animation has no
-    /// UserObjectBindings, and the value is NOT persisted (export bakes the
+    /// last-applied angle is tracked PER SKELETON INSTANCE on bone[0]'s
+    /// UserObjectBindings (key "qtme.armspace.<anim>") — isolated per entity,
+    /// never a process-global, and NOT persisted to disk (export bakes the
     /// final keyframes). Each call reverts the stored angle before applying
     /// the new one (delta = new − stored), so `adjustArmSpace(20)` then
     /// `adjustArmSpace(10)` == `adjustArmSpace(10)` from the original, and
-    /// `adjustArmSpace(0)` restores the clip bit-near-exactly. NB: because the
-    /// map is session-local, a fresh CLI process sees `stored == 0`, so
-    /// re-opening an already-exported widened clip and calling
-    /// `adjustArmSpace(0)` is a no-op (the keyframes are baked). Use
-    /// currentArmSpace() to read the tracked value; applyMotionClip clears it
-    /// when it regenerates a clip, and migrateArmSpaceKey() moves it on rename.
-    /// Returns false (no-op) if the animation is missing or no arm role
-    /// resolves on the rig.
+    /// `adjustArmSpace(0)` restores the clip bit-near-exactly. NB: the binding
+    /// is in-memory only, so a fresh CLI process (which loads the baked clip)
+    /// sees `stored == 0` — calling `adjustArmSpace(0)` there is a no-op.
+    /// Use currentArmSpace() to read the tracked value; applyMotionClip clears
+    /// it when it regenerates a clip, and migrateArmSpaceKey() moves it on
+    /// rename. Returns false (no-op) if the animation is missing or no arm
+    /// role resolves on the rig.
     static bool adjustArmSpace(Ogre::Skeleton* skel,
                                const std::string& animName,
                                float degrees);
