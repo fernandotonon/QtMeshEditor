@@ -136,10 +136,14 @@ protected:
     }
 
     // World direction of a bone toward its child, at t=0.5 of `anim`.
+    // NB: Ogre's Animation::apply ACCUMULATES onto the current pose (it calls
+    // node->rotate, not set), so reset to bind first — otherwise each
+    // measurement compounds the previous apply and the pose appears to lag.
     static Ogre::Vector3 armWorldDir(Ogre::SkeletonInstance* skel,
                                      const char* boneName, const char* childName,
                                      const char* anim = "clip")
     {
+        skel->reset(true);
         skel->getAnimation(anim)->apply(skel, 0.5f);
         skel->_updateTransforms();
         const Ogre::Vector3 a = skel->getBone(boneName)->_getDerivedPosition();
