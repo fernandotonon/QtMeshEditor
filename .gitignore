@@ -154,3 +154,6 @@ __pycache__/
 !docs/img/twist_bar_90_lbs.png
 !docs/img/twist_bar_90_lbs_vp.png
 !docs/img/twist_bar_90_dqs_vp.png
+!docs/MOCAP_SPIKE.md
+.mocap_work/
+.venv-mocap/
