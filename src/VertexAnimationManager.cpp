@@ -83,7 +83,13 @@ VertexAnimationManager* VertexAnimationManager::instance()
 VertexAnimationManager* VertexAnimationManager::qmlInstance(QQmlEngine*, QJSEngine*)
 {
     assertMainThread();
-    return instance();
+    auto* inst = instance();
+    // Process-wide singleton shared across every QQuickWidget's QQmlEngine.
+    // Pin CppOwnership so no engine's GC can delete the shared instance and
+    // leave a dangling pointer for the others — matching every sibling
+    // singleton's qmlInstance (see MorphAnimationManager for the full note).
+    QQmlEngine::setObjectOwnership(inst, QQmlEngine::CppOwnership);
+    return inst;
 }
 
 void VertexAnimationManager::kill()

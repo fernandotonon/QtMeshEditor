@@ -60,7 +60,19 @@ MorphAnimationManager* MorphAnimationManager::instance()
 MorphAnimationManager* MorphAnimationManager::qmlInstance(QQmlEngine*, QJSEngine*)
 {
     assertMainThread();
-    return instance();
+    auto* inst = instance();
+    // This is a process-wide singleton shared across EVERY QQuickWidget's
+    // QQmlEngine (Inspector, dope sheet, curve editor — each has its own
+    // engine). Without CppOwnership, an engine treats the returned object as
+    // JavaScript-owned and its GC may delete the shared s_instance out from
+    // under the other engines (and the C++ callers of instance()), leaving a
+    // dangling pointer → SIGSEGV. Every sibling singleton (PropertiesPanel-
+    // Controller, AnimationControlController, ThemeManager, …) pins ownership
+    // here; this one must too. Missing this only became a live crash once the
+    // dope sheet started importing PropertiesPanel + binding to this singleton
+    // (a SECOND engine wrapping the same object).
+    QQmlEngine::setObjectOwnership(inst, QQmlEngine::CppOwnership);
+    return inst;
 }
 
 void MorphAnimationManager::kill()
