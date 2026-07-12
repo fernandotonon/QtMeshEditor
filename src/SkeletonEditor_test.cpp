@@ -139,6 +139,33 @@ TEST_F(SkeletonEditorTest, RemoveBoneTransfersWeightsToParent) {
     EXPECT_TRUE(rootWeighted);
 }
 
+TEST_F(SkeletonEditorTest, PromoteChildrenPreservesWorldTransform) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Promote");
+    ASSERT_NE(entity, nullptr);
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    Ogre::Bone* child = skel->getBone("Child");
+    Ogre::Bone* tip = skel->createBone("Tip", 2);
+    child->addChild(tip);
+    tip->setPosition(Ogre::Vector3(0, 1, 0));
+    tip->setInitialState();
+    entity->_initialise(true);
+
+    const Ogre::Vector3 tipWorldBefore = tip->_getDerivedPosition();
+
+    SkeletonEditor::RemoveOptions opts;
+    opts.removeChildren = false;
+    opts.transferWeightsToParent = false;
+    const auto result = SkeletonEditor::removeBone(entity, QStringLiteral("Child"), opts);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    skel = entity->getMesh()->getSkeleton();
+    ASSERT_TRUE(skel->hasBone("Tip"));
+    EXPECT_FALSE(skel->hasBone("Child"));
+    Ogre::Bone* tipAfter = skel->getBone("Tip");
+    EXPECT_NEAR(tipAfter->_getDerivedPosition().y, tipWorldBefore.y, 1e-4f);
+}
+
 TEST_F(SkeletonEditorTest, CreateAndUndoViaCommand) {
     Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_UndoCreate");
     ASSERT_NE(entity, nullptr);

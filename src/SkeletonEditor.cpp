@@ -124,6 +124,24 @@ unsigned short nearestKeptAncestor(unsigned short handle,
     return it == oldToNew.end() ? std::numeric_limits<unsigned short>::max() : it->second;
 }
 
+void worldToNewParentLocal(Ogre::Bone* bone,
+                           Ogre::Bone* newParent,
+                           Ogre::Vector3& outPos,
+                           Ogre::Quaternion& outRot,
+                           Ogre::Vector3& outScale)
+{
+    const Ogre::Vector3 wPos = bone->_getDerivedPosition();
+    const Ogre::Quaternion wRot = bone->_getDerivedOrientation();
+    const Ogre::Vector3 pScale = newParent->_getDerivedScale();
+    const Ogre::Vector3 cScale = bone->_getDerivedScale();
+    outPos = newParent->convertWorldToLocalPosition(wPos);
+    outRot = newParent->convertWorldToLocalOrientation(wRot);
+    outScale = Ogre::Vector3(
+        cScale.x / std::max(pScale.x, Ogre::Real(1e-8)),
+        cScale.y / std::max(pScale.y, Ogre::Real(1e-8)),
+        cScale.z / std::max(pScale.z, Ogre::Real(1e-8)));
+}
+
 } // namespace
 
 SkeletonEditor* SkeletonEditor::s_singleton = nullptr;
@@ -277,9 +295,9 @@ bool SkeletonEditor::restoreSnapshot(Ogre::Entity* entity, const Snapshot& snaps
     std::unordered_map<std::string, Ogre::Bone*> bonesByName;
     for (const auto& bd : snapshot.bones) {
         Ogre::Bone* bone = skel->createBone(bd.name, bd.handle);
-        bone->setPosition(bd.position);
-        bone->setOrientation(bd.orientation);
-        bone->setScale(bd.scale);
+        bone->setPosition(bd.initialPosition);
+        bone->setOrientation(bd.initialOrientation);
+        bone->setScale(bd.initialScale);
         bonesByName[bd.name] = bone;
     }
     for (const auto& bd : snapshot.bones) {
@@ -295,6 +313,14 @@ bool SkeletonEditor::restoreSnapshot(Ogre::Entity* entity, const Snapshot& snaps
         it->second->setInitialState();
     }
     skel->setBindingPose();
+
+    for (const auto& bd : snapshot.bones) {
+        auto it = bonesByName.find(bd.name);
+        if (it == bonesByName.end()) continue;
+        it->second->setPosition(bd.position);
+        it->second->setOrientation(bd.orientation);
+        it->second->setScale(bd.scale);
+    }
 
     for (const auto& ad : snapshot.animations) {
         if (skel->hasAnimation(ad.name)) continue;
@@ -491,6 +517,31 @@ bool SkeletonEditor::rebuildSkeletonWithoutBones(Ogre::Entity* entity,
     for (auto& subAssign : filtered.submeshAssignments) {
         if (!subAssign.empty()) remapAssignments(subAssign);
     }
+
+    std::unordered_map<std::string, std::string> originalParent;
+    for (const auto& bd : snap.bones)
+        originalParent[bd.name] = bd.parentName;
+
+    auto reparentLocals = [&](bool bindingPose) {
+        if (bindingPose)
+            oldSkel->setBindingPose();
+        for (auto& kept : filtered.bones) {
+            const auto pit = originalParent.find(kept.name);
+            if (pit == originalParent.end() || pit->second == kept.parentName)
+                continue;
+            if (kept.parentName.empty()) continue;
+            if (!oldSkel->hasBone(kept.name) || !oldSkel->hasBone(kept.parentName))
+                continue;
+            Ogre::Bone* bone = oldSkel->getBone(kept.name);
+            Ogre::Bone* newParent = oldSkel->getBone(kept.parentName);
+            Ogre::Vector3& pos = bindingPose ? kept.initialPosition : kept.position;
+            Ogre::Quaternion& rot = bindingPose ? kept.initialOrientation : kept.orientation;
+            Ogre::Vector3& scale = bindingPose ? kept.initialScale : kept.scale;
+            worldToNewParentLocal(bone, newParent, pos, rot, scale);
+        }
+    };
+    reparentLocals(false);
+    reparentLocals(true);
 
     return restoreSnapshot(entity, filtered, error);
 }
