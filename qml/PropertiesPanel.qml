@@ -8351,6 +8351,20 @@ Rectangle {
                     }
                 }
 
+                // One-line explainer so the two concepts don't get conflated:
+                // SHAPES are the sculpted deformations; CLIPS animate their
+                // weights over time. Authored top-to-bottom (shapes first).
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.6
+                    font.pixelSize: 9
+                    font.italic: true
+                    text: "Shapes = sculpted poses.  Clips = animate shape weights over time."
+                }
+
+                // ── Section 1: SHAPES (morph targets) ───────────────────────
                 // RowLayout (not a plain Row with a magic-number spacer):
                 // the old `Item { width: parent.width - 320 }` went negative
                 // on a narrow Inspector, overlapping the title with the
@@ -8362,7 +8376,7 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         elide: Text.ElideRight
-                        text: "Morph Targets (" + morphCol.targetCount + ")"
+                        text: "1 · Shapes (" + morphCol.targetCount + ")"
                         color: PropertiesPanelController.textColor
                         font.pixelSize: 11
                         font.bold: true
@@ -8438,8 +8452,10 @@ Rectangle {
                                 addError.text = ""
                                 addNamePopup.open()
                             }
-                            ToolTip.visible: containsMouse && !enabled
-                            ToolTip.text: "Click “Sculpt” first, then move vertices to shape the target."
+                            ToolTip.visible: containsMouse
+                            ToolTip.text: enabled
+                                ? "Save the current sculpt as a new shape (morph target)"
+                                : "Click “Sculpt” first, then move vertices to shape the target."
                         }
                     }
                     // Reset all: walks every target and sets weight to 0.
@@ -8468,6 +8484,19 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // ── Section 2: ANIMATION CLIPS ──────────────────────────────
+                // Section header, shown only once shapes exist (clips animate
+                // shapes, so they're meaningless without any).
+                Text {
+                    width: parent.width
+                    visible: morphCol.targetCount > 0
+                    topPadding: 6
+                    text: "2 · Animation clips"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
                 }
 
                 // Morph-clip selector (smile / angry / surprised …). The targets
@@ -8537,6 +8566,8 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: { newClipField.text = ""; newClipError.text = ""
                                          newClipPopup.open() }
+                            ToolTip.visible: containsMouse
+                            ToolTip.text: "New animation clip (e.g. smile) that keyframes the shapes' weights over time"
                         }
                     }
                     // Delete active clip
@@ -8663,7 +8694,7 @@ Rectangle {
                     contentItem: Column {
                         spacing: 6
                         Text {
-                            text: "New morph target name:"
+                            text: "New shape name (a sculpted pose, e.g. Smile):"
                             color: PropertiesPanelController.textColor
                             font.pixelSize: 11
                         }

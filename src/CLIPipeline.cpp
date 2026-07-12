@@ -1340,6 +1340,19 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         }
     }
 
+    // Mesh-level (VAT_POSE) animations — morph-weight clips + Alembic vertex
+    // caches. These live on the Ogre::Mesh, not the skeleton, so the skeletal
+    // loop above never sees them; report them too so round-trip checks (and
+    // `qtmesh info`) reflect morph/vertex animation.
+    for (unsigned short a = 0; a < mesh->getNumAnimations(); ++a) {
+        auto* anim = mesh->getAnimation(a);
+        if (!anim) continue;
+        info.animations.append({
+            QString::fromStdString(anim->getName()),
+            anim->getLength()
+        });
+    }
+
     // Bounding box
     auto bb = mesh->getBounds();
     info.bbMin = bb.getMinimum();

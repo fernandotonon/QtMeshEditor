@@ -141,8 +141,18 @@ void buildPosesFromSlices(Ogre::Mesh* mesh,
         kf->addPoseReference(poseIndices[i], 1.0f);
     }
 
-    if (entity)
+    if (entity) {
+        // Adding poses / a VAT_POSE animation to an already-loaded mesh means
+        // the entity's pose (software + hardware) vertex-animation buffers were
+        // never allocated — the importer sets poses up BEFORE the entity is
+        // built, but here we add them to a LIVE entity. Re-initialise so Ogre
+        // rebuilds those buffers; without it the render loop applies a pose
+        // animation against null buffers and crashes (skinned meshes especially,
+        // where skeletal + pose animation combine). Mirrors the AutoRig path,
+        // which likewise re-initialises after mutating a live entity's mesh.
+        entity->_initialise(true);
         entity->refreshAvailableAnimationState();
+    }
 }
 
 } // namespace

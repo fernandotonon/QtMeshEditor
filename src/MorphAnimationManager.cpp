@@ -264,6 +264,10 @@ bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
     // Refresh the entity's animation-state mirror so the new clip is playable.
     entity->refreshAvailableAnimationState();
     emit morphTargetsChanged();
+    // The clip only becomes a playable AnimationState once it has a track
+    // (created on the first key here) — signal the clip list so the Animation
+    // Mode list picks it up now, not just on create/delete/rename.
+    emit morphClipsChanged();
     SentryReporter::addBreadcrumb("scene.anim.morph",
         QStringLiteral("key weight '%1' @%2 = %3").arg(name).arg(t).arg(w));
     return true;
@@ -423,6 +427,23 @@ QStringList MorphAnimationManager::morphClips() const
         const std::string nm = a->getName();
         if (isPoseShapeClip(mesh.get(), nm)) continue;
         out << QString::fromStdString(nm);
+    }
+
+    // Auto-adopt an existing clip as active when the current active clip isn't
+    // on this mesh (e.g. right after IMPORTING a model whose clip is named
+    // "Sniff" while the app default is "MorphAnim"). Without this the dope sheet
+    // + keying would target a non-existent clip and show nothing until the user
+    // manually picked the imported clip from the dropdown. const_cast is safe:
+    // this only mutates the transient active-clip selector, not scene data.
+    if (!out.isEmpty() && !out.contains(m_activeMorphClip)) {
+        auto* self = const_cast<MorphAnimationManager*>(this);
+        self->m_activeMorphClip = out.first();
+        // Defer the signal so we don't emit inside a const getter the QML may be
+        // mid-binding on; a queued emit refreshes the dropdown + dope sheet.
+        QMetaObject::invokeMethod(self, [self]() {
+            emit self->morphClipsChanged();
+            emit self->morphTargetsChanged();
+        }, Qt::QueuedConnection);
     }
     return out;
 }

@@ -44,6 +44,10 @@ THE SOFTWARE.
 #include <QHash>
 #include <QRegularExpression>
 #include <QSet>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QByteArray>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -92,6 +96,10 @@ THE SOFTWARE.
 #include <OgreRTShaderSystem.h>
 #include <OgreDataStream.h>
 #include <OgrePixelFormat.h>
+#include <OgreAnimation.h>
+#include <OgreAnimationTrack.h>
+#include <OgreKeyFrame.h>
+#include <OgrePose.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -1068,121 +1076,6 @@ static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::strin
     return anim;
 }
 
-// Build a morph-weight aiAnimation from the mesh's "MorphAnim" clip so an
-// authored blend-shape weight-over-time animation round-trips to glTF.
-//
-// Ogre stores morph weight animation on ONE mesh Animation named
-// `MorphAnimationManager::kWeightClipName` ("MorphAnim"). That clip has one
-// VAT_POSE VertexAnimationTrack per submesh target handle (handle 0 = shared
-// vertex data, handle si+1 = submesh si's dedicated vertex data). Each
-// VertexPoseKeyFrame on a track carries a list of {poseIndex, influence}
-// references — influence is the target's weight at that keyframe time; poses
-// not referenced at a time are weight 0.
-//
-// Assimp models this as an aiAnimation whose mMorphMeshChannels holds one
-// aiMeshMorphAnim per animated NODE/mesh. Each aiMeshMorphAnim's mName is the
-// NODE the target mesh attaches to, and its mKeys are per-distinct-time
-// aiMeshMorphKey entries. A key's parallel mValues/mWeights arrays are indexed
-// by anim-mesh index (0..mNumAnimMeshes-1 == aiMesh::mAnimMeshes[i]), so we map
-// each pose (by name) to its anim-mesh slot on that mesh and scatter the
-// keyframe influences into the matching slot (0 elsewhere).
-//
-// `new` allocations cross the Assimp C-API ownership boundary — aiAnimation's
-// dtor frees mMorphMeshChannels and each channel's mKeys (and the per-key
-// mValues/mWeights via aiMeshMorphKey's dtor) — so raw new[] matches every
-// other aiScene field in this file (no double-free in the manual
-// scene->mAnimations cleanup paths, which just delete each aiAnimation).
-//
-// Returns nullptr (emitting nothing) when there is no weight clip or no
-// submesh carries morph targets, so non-morph meshes are entirely unaffected.
-static aiAnimation* buildMorphWeightAiAnimation(const aiScene* scene,
-                                                const Ogre::MeshPtr& mesh,
-                                                const std::string& meshNodeName,
-                                                const std::string& clip)
-{
-    if (!mesh->hasAnimation(clip)) return nullptr;
-    Ogre::Animation* weightClip = mesh->getAnimation(clip);
-    if (!weightClip) return nullptr;
-
-    const unsigned int numSub = mesh->getNumSubMeshes();
-    std::vector<aiMeshMorphAnim*> morphChannels;
-
-    // One channel per submesh that actually got morph targets (mAnimMeshes).
-    // All submeshes attach to the single node `meshNodeName` in buildAiScene,
-    // so every channel carries that node name; the anim-mesh index space is
-    // per-mesh, which is exactly what a per-mesh channel expresses.
-    for (unsigned int si = 0; si < numSub; ++si)
-    {
-        aiMesh* aiM = scene->mMeshes[si];
-        if (!aiM || aiM->mNumAnimMeshes == 0) continue;
-
-        // The weight track for this submesh lives under its target handle.
-        const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
-        const unsigned short targetHandle = subMesh->useSharedVertices
-            ? 0
-            : static_cast<unsigned short>(si + 1);
-        if (!weightClip->hasVertexTrack(targetHandle)) continue;
-        Ogre::VertexAnimationTrack* track = weightClip->getVertexTrack(targetHandle);
-        if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
-
-        // Map pose name -> anim-mesh slot on this mesh (mAnimMeshes[i].mName is
-        // the Ogre pose name; see attachMorphTargetsToAiMesh).
-        std::map<std::string, unsigned int, std::less<>> poseNameToSlot;
-        for (unsigned int i = 0; i < aiM->mNumAnimMeshes; ++i)
-            if (aiM->mAnimMeshes[i])
-                poseNameToSlot[aiM->mAnimMeshes[i]->mName.C_Str()] = i;
-
-        const auto numKf = track->getNumKeyFrames();
-        if (numKf == 0) continue;
-
-        auto* channel = new aiMeshMorphAnim();  // NOSONAR — Assimp owns
-        channel->mName = aiString(meshNodeName);
-        channel->mNumKeys = static_cast<unsigned int>(numKf);
-        channel->mKeys = new aiMeshMorphKey[numKf];  // NOSONAR — Assimp owns
-
-        const Ogre::PoseList& poseList = mesh->getPoseList();
-        for (unsigned short ki = 0; ki < numKf; ++ki)
-        {
-            auto* kf = track->getVertexPoseKeyFrame(ki);
-            aiMeshMorphKey& key = channel->mKeys[ki];
-            key.mTime = kf->getTime();  // seconds; parent mTicksPerSecond = 1.0
-            // Parallel arrays over ALL anim-meshes on this mesh: mValues[i] is
-            // the anim-mesh index, mWeights[i] its weight at mTime (default 0).
-            key.mNumValuesAndWeights = aiM->mNumAnimMeshes;
-            key.mValues = new unsigned int[aiM->mNumAnimMeshes];   // NOSONAR — Assimp owns
-            key.mWeights = new double[aiM->mNumAnimMeshes];        // NOSONAR — Assimp owns
-            for (unsigned int i = 0; i < aiM->mNumAnimMeshes; ++i)
-            {
-                key.mValues[i] = i;
-                key.mWeights[i] = 0.0;
-            }
-            // Scatter each referenced pose's influence into its anim-mesh slot.
-            for (const auto& ref : kf->getPoseReferences())
-            {
-                if (ref.poseIndex >= poseList.size()) continue;
-                const Ogre::Pose* p = poseList[ref.poseIndex];
-                if (!p) continue;
-                auto it = poseNameToSlot.find(p->getName());
-                if (it != poseNameToSlot.end())
-                    key.mWeights[it->second] = static_cast<double>(ref.influence);
-            }
-        }
-        morphChannels.push_back(channel);
-    }
-
-    if (morphChannels.empty()) return nullptr;
-
-    auto* anim = new aiAnimation();  // NOSONAR — Assimp owns
-    anim->mName = aiString(clip);
-    anim->mTicksPerSecond = 1.0;  // times are seconds, matching buildAiAnimation
-    anim->mDuration = weightClip->getLength();
-    anim->mNumMorphMeshChannels = static_cast<unsigned int>(morphChannels.size());
-    anim->mMorphMeshChannels = new aiMeshMorphAnim*[anim->mNumMorphMeshChannels];  // NOSONAR — Assimp owns
-    for (unsigned int ci = 0; ci < anim->mNumMorphMeshChannels; ++ci)
-        anim->mMorphMeshChannels[ci] = morphChannels[ci];
-    return anim;
-}
-
 // Build an aiScene directly from an Ogre Entity, bypassing the XML round-trip
 static aiScene* buildAiScene(const Ogre::Entity* entity)
 {
@@ -1301,31 +1194,16 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
             animations.push_back(buildAiAnimation(skeleton->getAnimation(ai)));
     }
 
-    // The node every submesh attaches to (see node wiring above): the dedicated
-    // "<name>_mesh" node when there's a skeleton, else the root node itself.
-    const std::string meshNodeName = hasSkeleton
-        ? std::string(entity->getName()) + "_mesh"
-        : std::string(entity->getName());
-    // Export EVERY morph (weight) clip — smile / angry / surprised — as its own
-    // glTF morph-weights animation. A morph clip is a mesh Animation carrying a
-    // VAT_POSE track that is NOT a per-target shape clip (named exactly a pose
-    // name). Shape clips are the static single-key blend-shape definitions; the
-    // targets themselves are emitted via aiMesh::mAnimMeshes.
-    for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai)
-    {
-        Ogre::Animation* a = mesh->getAnimation(ai);
-        if (!a) continue;
-        const std::string nm = a->getName();
-        // Skip per-target shape clips (name == a pose name).
-        bool isShapeClip = false;
-        for (const Ogre::Pose* p : mesh->getPoseList())
-            if (p && p->getName() == nm) { isShapeClip = true; break; }
-        if (isShapeClip) continue;
-        if (aiAnimation* morphAnim =
-                buildMorphWeightAiAnimation(scene, mesh, meshNodeName, nm))
-            animations.push_back(morphAnim);
-    }
-
+    // NOTE: morph-target SHAPES export fine (via aiMesh::mAnimMeshes above),
+    // but morph-WEIGHT animation over time is NOT emitted through Assimp:
+    // Assimp's glTF2/FBX exporters only translate aiAnimation NODE channels
+    // (translation/rotation/scale) — they ignore aiAnimation::mMorphMeshChannels
+    // entirely. An aiAnimation carrying only a morph channel also fails Assimp's
+    // ValidateDataStructure ("mNumChannels is 0"), and a no-op node channel
+    // added to satisfy it exports as a stray TRS animation on the mesh node that
+    // corrupts reimport (froze the viewport). So we deliberately do NOT push a
+    // morph-weight aiAnimation here. Round-tripping weights needs a post-write
+    // glTF JSON injection (target.path="weights") — tracked as a follow-up.
     if (!animations.empty())
     {
         scene->mNumAnimations = static_cast<unsigned int>(animations.size());
@@ -3057,6 +2935,401 @@ QString MeshImporterExporter::importFileDialogFilter()
     return importFileDialogFilterFromExtensionList(Manager::getSingleton()->getValidFileExtention());
 }
 
+namespace {
+
+// ─── glTF morph-target WEIGHT animation post-processor ───────────────────────
+//
+// Assimp's glTF2 exporter cannot write morph-weight animation channels (its
+// ExportAnimations only emits node TRS channels), so after Assimp writes the
+// .gltf/.glb we inject the standard glTF `weights` animation channel into the
+// JSON ourselves. See the glTF 2.0 spec — "Animations" / morph-target weights.
+//
+// Data source (Ogre): morph WEIGHT clips are MESH-level Ogre::Animations that
+// are NOT named after a pose (a pose-named animation is a per-target SHAPE
+// clip). Each weight clip carries one Ogre::VertexAnimationTrack (VAT_POSE)
+// per submesh target handle; each Ogre::VertexPoseKeyFrame has a time and a
+// list of {poseIndex, influence} references — influence == that target's
+// weight at that time. Poses are enumerated in mesh->getPoseList() order,
+// which matches the glTF morph target order Assimp exported from
+// aiMesh::mAnimMeshes.
+//
+// Robustness: the whole helper is wrapped in try/catch and never throws out of
+// the exporter. On any parse/shape failure it logs a warning and leaves the
+// file exactly as Assimp wrote it (shapes still round-trip).
+
+// A decoded morph weight clip: sorted distinct keyframe times + a flat weight
+// matrix (K rows × numTargets cols, row-major).
+struct MorphWeightClip {
+    std::string name;
+    std::vector<float> times;    // K
+    std::vector<float> weights;  // K * numTargets
+};
+
+// Is `animName` a per-target SHAPE clip (named exactly a pose name)?
+bool gltfIsPoseShapeClip(const Ogre::Mesh* mesh, const std::string& animName)
+{
+    for (const Ogre::Pose* p : mesh->getPoseList())
+        if (p && p->getName() == animName) return true;
+    return false;
+}
+
+// Enumerate the entity's mesh morph WEIGHT clips and decode each into a
+// dense time/weight matrix of width `numTargets` (pose-list order).
+std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
+                                                     int numTargets)
+{
+    std::vector<MorphWeightClip> out;
+    if (!entity || numTargets <= 0) return out;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return out;
+
+    for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai) {
+        Ogre::Animation* anim = mesh->getAnimation(ai);
+        if (!anim) continue;
+        const std::string nm = anim->getName();
+        if (gltfIsPoseShapeClip(mesh.get(), nm)) continue;  // shape clip, not a weight clip
+
+        // Gather the sorted set of distinct keyframe times across every
+        // VAT_POSE track on this clip, and record each pose reference.
+        std::set<float> timeSet;
+        for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+            (void)handle;
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k)
+                timeSet.insert(track->getKeyFrame(k)->getTime());
+        }
+        if (timeSet.empty()) continue;  // no keyed tracks → nothing to export
+
+        std::vector<float> times(timeSet.begin(), timeSet.end());
+
+        MorphWeightClip clip;
+        clip.name = nm;
+        clip.times = times;
+        clip.weights.assign(times.size() * static_cast<size_t>(numTargets), 0.0f);
+
+        // For each time build the weight vector from the pose references.
+        for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+            (void)handle;
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k) {
+                auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(k));
+                const float t = kf->getTime();
+                // Locate the row index for this time.
+                auto it = std::lower_bound(times.begin(), times.end(), t);
+                if (it == times.end()) continue;
+                const size_t row = static_cast<size_t>(it - times.begin());
+                for (const auto& ref : kf->getPoseReferences()) {
+                    if (ref.poseIndex >= static_cast<unsigned short>(numTargets))
+                        continue;  // out of range for this glTF mesh — skip
+                    clip.weights[row * static_cast<size_t>(numTargets) + ref.poseIndex]
+                        = ref.influence;
+                }
+            }
+        }
+        out.push_back(std::move(clip));
+    }
+    return out;
+}
+
+// Serialise a float vector little-endian into a byte buffer.
+void appendFloatsLE(QByteArray& buf, const std::vector<float>& v)
+{
+    const size_t base = static_cast<size_t>(buf.size());
+    buf.resize(static_cast<int>(base + v.size() * sizeof(float)));
+    std::memcpy(buf.data() + base, v.data(), v.size() * sizeof(float));
+}
+
+// Find the glTF node that owns the morph mesh. Strategy: prefer the node whose
+// referenced mesh's first primitive has a `targets` array of length ==
+// poseCount; fall back to the first node that references a mesh with any
+// targets. Sets *outNumTargets. Returns the node index, or -1 on failure.
+int findMorphNode(const QJsonObject& root, int poseCount, int* outNumTargets)
+{
+    if (!root.contains("nodes") || !root.contains("meshes")) return -1;
+    const QJsonArray nodes = root.value("nodes").toArray();
+    const QJsonArray meshes = root.value("meshes").toArray();
+
+    auto targetsForMesh = [&](int meshIdx) -> int {
+        if (meshIdx < 0 || meshIdx >= meshes.size()) return 0;
+        const QJsonObject m = meshes.at(meshIdx).toObject();
+        const QJsonArray prims = m.value("primitives").toArray();
+        if (prims.isEmpty()) return 0;
+        const QJsonObject p0 = prims.at(0).toObject();
+        if (!p0.contains("targets")) return 0;
+        return p0.value("targets").toArray().size();
+    };
+
+    int fallbackNode = -1, fallbackTargets = 0;
+    for (int n = 0; n < nodes.size(); ++n) {
+        const QJsonObject node = nodes.at(n).toObject();
+        if (!node.contains("mesh")) continue;
+        const int meshIdx = node.value("mesh").toInt(-1);
+        const int nt = targetsForMesh(meshIdx);
+        if (nt <= 0) continue;
+        if (nt == poseCount) { *outNumTargets = nt; return n; }  // exact match
+        if (fallbackNode < 0) { fallbackNode = n; fallbackTargets = nt; }
+    }
+    if (fallbackNode >= 0) { *outNumTargets = fallbackTargets; return fallbackNode; }
+    return -1;
+}
+
+// Inject morph-weight animations into an already-written .gltf/.glb file.
+// No-op (leaves the file untouched) if the entity has no morph weight clips,
+// the file has no morph targets, or anything fails to parse.
+void injectMorphWeightAnimations(const QString& filePath,
+                                 const Ogre::Entity* entity,
+                                 bool isBinary)
+{
+    try {
+        if (!entity) return;
+        Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh || mesh->getPoseCount() == 0) return;
+
+        // Quick early-out: does the mesh carry any weight clips at all?
+        // (Cheaper than a full parse; poseCount already > 0 here.)
+        bool anyWeightClip = false;
+        for (unsigned short ai = 0; ai < mesh->getNumAnimations(); ++ai) {
+            Ogre::Animation* a = mesh->getAnimation(ai);
+            if (a && !gltfIsPoseShapeClip(mesh.get(), a->getName())) {
+                anyWeightClip = true;
+                break;
+            }
+        }
+        if (!anyWeightClip) return;
+
+        // ── Read the file (GLB: split header/JSON/BIN; glTF: whole file) ──
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly)) return;
+        const QByteArray whole = f.readAll();
+        f.close();
+
+        QByteArray jsonBytes;
+        QByteArray binChunk;          // GLB buffer 0 (copied verbatim)
+        bool haveBinChunk = false;
+
+        if (isBinary) {
+            // GLB layout: 12-byte header, then chunks (4-byte length + 4-byte
+            // type + data). JSON chunk type 0x4E4F534A ("JSON"), BIN chunk
+            // type 0x004E4942 ("BIN\0").
+            if (whole.size() < 12) return;
+            const auto rdU32 = [&](int off) -> quint32 {
+                return static_cast<quint8>(whole[off])
+                     | (static_cast<quint8>(whole[off + 1]) << 8)
+                     | (static_cast<quint8>(whole[off + 2]) << 16)
+                     | (static_cast<quint8>(whole[off + 3]) << 24);
+            };
+            const quint32 magic = rdU32(0);
+            if (magic != 0x46546C67u /*'glTF'*/) return;
+            int off = 12;
+            while (off + 8 <= whole.size()) {
+                const quint32 clen = rdU32(off);
+                const quint32 ctype = rdU32(off + 4);
+                const int dataOff = off + 8;
+                if (dataOff + static_cast<int>(clen) > whole.size()) return;
+                const QByteArray data = whole.mid(dataOff, static_cast<int>(clen));
+                if (ctype == 0x4E4F534Au) {          // JSON
+                    jsonBytes = data;
+                } else if (ctype == 0x004E4942u) {   // BIN
+                    binChunk = data;
+                    haveBinChunk = true;
+                }
+                off = dataOff + static_cast<int>(clen);
+            }
+            if (jsonBytes.isEmpty()) return;
+        } else {
+            jsonBytes = whole;
+        }
+
+        QJsonParseError perr;
+        QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) return;
+        QJsonObject root = doc.object();
+
+        // ── Locate the morph node + authoritative target count ──
+        int numTargets = 0;
+        const int nodeIdx = findMorphNode(root, static_cast<int>(mesh->getPoseCount()),
+                                          &numTargets);
+        if (nodeIdx < 0 || numTargets <= 0) return;
+
+        // ── Decode the weight clips against numTargets ──
+        std::vector<MorphWeightClip> clips = collectMorphWeightClips(entity, numTargets);
+        if (clips.empty()) return;
+
+        // ── Build the extra data-URI buffer + accessors/bufferViews ──
+        // All weight data lives in a NEW buffer encoded as a base64 data URI,
+        // so we never touch the existing GLB BIN chunk (buffer 0) or the
+        // existing .gltf buffers — much simpler and safe.
+        QByteArray extraBuf;
+
+        QJsonArray accessors = root.value("accessors").toArray();
+        QJsonArray bufferViews = root.value("bufferViews").toArray();
+        QJsonArray buffers = root.value("buffers").toArray();
+        QJsonArray animations = root.value("animations").toArray();
+
+        const int newBufferIndex = buffers.size();  // appended below
+
+        for (const MorphWeightClip& clip : clips) {
+            const int K = static_cast<int>(clip.times.size());
+            if (K == 0) continue;
+
+            // — input (times) accessor —
+            const int timesByteOffset = extraBuf.size();
+            appendFloatsLE(extraBuf, clip.times);
+            const int timesBv = bufferViews.size();
+            {
+                QJsonObject bv;
+                bv["buffer"] = newBufferIndex;
+                bv["byteOffset"] = timesByteOffset;
+                bv["byteLength"] = static_cast<int>(clip.times.size() * sizeof(float));
+                bufferViews.append(bv);
+            }
+            float tmin = clip.times.front(), tmax = clip.times.front();
+            for (float t : clip.times) { tmin = std::min(tmin, t); tmax = std::max(tmax, t); }
+            const int inputAccessor = accessors.size();
+            {
+                QJsonObject acc;
+                acc["bufferView"] = timesBv;
+                acc["byteOffset"] = 0;
+                acc["componentType"] = 5126;   // FLOAT
+                acc["count"] = K;
+                acc["type"] = "SCALAR";
+                acc["min"] = QJsonArray{ static_cast<double>(tmin) };
+                acc["max"] = QJsonArray{ static_cast<double>(tmax) };
+                accessors.append(acc);
+            }
+
+            // — output (weights) accessor —
+            const int weightsByteOffset = extraBuf.size();
+            appendFloatsLE(extraBuf, clip.weights);
+            const int weightsBv = bufferViews.size();
+            {
+                QJsonObject bv;
+                bv["buffer"] = newBufferIndex;
+                bv["byteOffset"] = weightsByteOffset;
+                bv["byteLength"] = static_cast<int>(clip.weights.size() * sizeof(float));
+                bufferViews.append(bv);
+            }
+            const int outputAccessor = accessors.size();
+            {
+                QJsonObject acc;
+                acc["bufferView"] = weightsBv;
+                acc["byteOffset"] = 0;
+                acc["componentType"] = 5126;   // FLOAT
+                acc["count"] = K * numTargets;
+                acc["type"] = "SCALAR";
+                accessors.append(acc);
+            }
+
+            // — animation entry (sampler index is animation-local) —
+            QJsonObject sampler;
+            sampler["input"] = inputAccessor;
+            sampler["output"] = outputAccessor;
+            sampler["interpolation"] = "LINEAR";
+
+            QJsonObject targetObj;
+            targetObj["node"] = nodeIdx;
+            targetObj["path"] = "weights";
+
+            QJsonObject channel;
+            channel["sampler"] = 0;   // first (only) sampler within this animation
+            channel["target"] = targetObj;
+
+            QJsonObject animObj;
+            animObj["name"] = QString::fromStdString(clip.name);
+            animObj["samplers"] = QJsonArray{ sampler };
+            animObj["channels"] = QJsonArray{ channel };
+            animations.append(animObj);
+        }
+
+        if (extraBuf.isEmpty()) return;  // nothing to inject after all
+
+        // — append the data-URI buffer —
+        {
+            QJsonObject buf;
+            const QByteArray b64 = extraBuf.toBase64();
+            buf["uri"] = QStringLiteral("data:application/octet-binary;base64,")
+                         + QString::fromLatin1(b64);
+            buf["byteLength"] = extraBuf.size();
+            buffers.append(buf);
+        }
+
+        root["accessors"] = accessors;
+        root["bufferViews"] = bufferViews;
+        root["buffers"] = buffers;
+        root["animations"] = animations;
+
+        // ── Re-serialise ──
+        const QByteArray newJson =
+            QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+        QFile out(filePath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+
+        if (isBinary) {
+            // Re-emit the GLB container: header + JSON chunk (space-padded to
+            // 4-byte alignment) + the ORIGINAL unchanged BIN chunk (buffer 0).
+            // The injected weight data lives in the data-URI buffer inside the
+            // JSON, so the BIN chunk is copied byte-for-byte.
+            QByteArray jsonPadded = newJson;
+            while (jsonPadded.size() % 4 != 0) jsonPadded.append(' ');
+
+            const auto wrU32 = [&](QByteArray& b, quint32 v) {
+                b.append(static_cast<char>(v & 0xFF));
+                b.append(static_cast<char>((v >> 8) & 0xFF));
+                b.append(static_cast<char>((v >> 16) & 0xFF));
+                b.append(static_cast<char>((v >> 24) & 0xFF));
+            };
+
+            // BIN chunk data padded to 4-byte alignment with zero bytes.
+            QByteArray binPadded;
+            if (haveBinChunk) {
+                binPadded = binChunk;
+                while (binPadded.size() % 4 != 0) binPadded.append('\0');
+            }
+
+            quint32 total = 12;                             // header
+            total += 8 + static_cast<quint32>(jsonPadded.size());  // JSON chunk
+            if (haveBinChunk)
+                total += 8 + static_cast<quint32>(binPadded.size());  // BIN chunk
+
+            QByteArray glb;
+            wrU32(glb, 0x46546C67u);   // magic 'glTF'
+            wrU32(glb, 2u);            // version
+            wrU32(glb, total);         // total length
+
+            wrU32(glb, static_cast<quint32>(jsonPadded.size()));
+            wrU32(glb, 0x4E4F534Au);   // 'JSON'
+            glb.append(jsonPadded);
+
+            if (haveBinChunk) {
+                wrU32(glb, static_cast<quint32>(binPadded.size()));
+                wrU32(glb, 0x004E4942u);   // 'BIN\0'
+                glb.append(binPadded);
+            }
+
+            out.write(glb);
+        } else {
+            out.write(newJson);
+        }
+        out.close();
+
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("file.export"),
+            QStringLiteral("Injected %1 morph-weight animation(s) into %2")
+                .arg(clips.size()).arg(filePath));
+    } catch (const std::exception& ex) {
+        Ogre::LogManager::getSingleton().logWarning(
+            std::string("injectMorphWeightAnimations failed (left file as-is): ")
+            + ex.what());
+    } catch (...) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "injectMorphWeightAnimations failed with unknown exception "
+            "(left file as-is)");
+    }
+}
+
+} // namespace
+
 QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* parent)
 {
     if(!_sn)
@@ -3649,6 +3922,15 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // For FBX we aim for a single-file export (embedded textures), so skip sidecars.
                 if (_format != "FBX Binary (*.fbx)")
                     exportMaterial(e, file);
+
+                // Assimp's glTF2 exporter drops morph-target WEIGHT animation
+                // channels. Post-process the written file to inject the
+                // standard glTF `weights` channels from Ogre's mesh weight
+                // clips. No-op when the mesh has no morph weight animation;
+                // never throws out of the exporter.
+                if (formatId == "gltf2" || formatId == "glb2")
+                    injectMorphWeightAnimations(file.filePath(), e,
+                                                /*isBinary=*/formatId == "glb2");
             }
 
             delete scene;
