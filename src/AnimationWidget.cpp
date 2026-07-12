@@ -158,6 +158,19 @@ bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
     return true;
 }
 
+void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
+{
+    if (!entity || !entity->hasSkeleton())
+        return;
+
+    if (mShowSkeleton.contains(entity))
+        mShowSkeleton.value(entity)->rebuildVisuals();
+    if (mWeightOverlays.contains(entity))
+        mWeightOverlays.value(entity)->rebuildVisuals();
+
+    updateSkeletonTable();
+}
+
 SkeletonDebug* AnimationWidget::getSkeletonDebug(Ogre::Entity* entity) const
 {
     if (mShowSkeleton.contains(entity))

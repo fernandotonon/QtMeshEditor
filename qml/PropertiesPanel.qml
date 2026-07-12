@@ -76,6 +76,8 @@ Rectangle {
     property bool   rigShowAdvanced: false      // up-axis picker
     property string rigStatus: ""
     property bool   rigStatusError: false
+    property string boneEditStatus: ""
+    property bool   boneEditError: false
 
     function runAutoRig() {
         if (AutoRigController.busy || !AutoRigController.hasRiggableSelection) return
@@ -2717,8 +2719,28 @@ Rectangle {
                 }
                 function onSelectionChanged() {
                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                    skeletonToolsCol.ensureBoneListBound()
                 }
             }
+            Connections {
+                target: SkeletonEditor
+                function onSkeletonStructureChanged() {
+                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                    skeletonToolsCol.ensureBoneListBound()
+                }
+            }
+
+            function ensureBoneListBound() {
+                if (!PropertiesPanelController.hasSkeletonSelection) return
+                var groups = PropertiesPanelController.skeletonData()
+                if (groups.length === 0) return
+                var ent = groups[0].entity
+                if (AnimationControlController.selectedEntityName !== ent
+                        || AnimationControlController.boneNames.length === 0)
+                    AnimationControlController.bindSkeletonForEntity(ent)
+            }
+
+            Component.onCompleted: skeletonToolsCol.ensureBoneListBound()
 
             Text {
                 width: parent.width - 16
@@ -2781,6 +2803,276 @@ Rectangle {
                         Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
                     }
                 }
+            }
+
+            Rectangle {
+                width: skeletonToolsCol.width - 16
+                height: 1
+                color: PropertiesPanelController.borderColor
+                opacity: 0.5
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Pick a bone to edit. New bones attach under the selected bone (or the root if none)."
+            }
+
+            // Bone picker (moved from Animation Control — rig edits live here)
+            Text {
+                text: "Bone:"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+
+            Item {
+                id: skelBoneSelector
+                width: skeletonToolsCol.width - 16
+                height: 24
+                property bool dropdownOpen: false
+                opacity: SkeletonEditor.hasSkeletonSelection ? 1.0 : 0.45
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 3
+                    color: skelBoneSelectorMouse.pressed ? Qt.darker(PropertiesPanelController.inputColor, 1.2)
+                         : skelBoneSelectorMouse.containsMouse ? Qt.lighter(PropertiesPanelController.inputColor, 1.1)
+                         : PropertiesPanelController.inputColor
+                    border.color: skelBoneSelector.dropdownOpen ? PropertiesPanelController.highlightColor
+                                                                : PropertiesPanelController.borderColor
+                    border.width: 1
+
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 4
+                        spacing: 4
+                        Text {
+                            text: {
+                                const picked = AnimationControlController.selectedBone
+                                if (picked.length > 0)
+                                    return picked
+                                return "(none)"
+                            }
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 18
+                        }
+                        Text {
+                            text: skelBoneSelector.dropdownOpen ? "\u25B2" : "\u25BC"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    MouseArea {
+                        id: skelBoneSelectorMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: SkeletonEditor.hasSkeletonSelection
+                        onClicked: {
+                            skelBoneSelector.dropdownOpen = !skelBoneSelector.dropdownOpen
+                            if (skelBoneSelector.dropdownOpen) {
+                                skelBoneFilter.text = ""
+                                skelBoneFilter.forceActiveFocus()
+                            }
+                        }
+                    }
+                }
+
+                Connections {
+                    target: AnimationControlController
+                    function onBoneListChanged() { skelBoneSelector.dropdownOpen = false }
+                }
+
+                Popup {
+                    visible: skelBoneSelector.dropdownOpen
+                    x: 0
+                    y: skelBoneSelector.height + 2
+                    width: skelBoneSelector.width
+                    height: Math.min(skelBoneListView.contentHeight + 30, 160)
+                    padding: 0
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                    onClosed: skelBoneSelector.dropdownOpen = false
+
+                    background: Rectangle {
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        radius: 3
+                    }
+
+                    Column {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        Rectangle {
+                            width: parent.width
+                            height: 26
+                            color: PropertiesPanelController.panelColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            radius: 3
+
+                            TextInput {
+                                id: skelBoneFilter
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 11
+                                clip: true
+                                verticalAlignment: TextInput.AlignVCenter
+
+                                property var filtered: {
+                                    var q = text.toLowerCase()
+                                    var bones = AnimationControlController.boneNames
+                                    if (q.length === 0) return bones
+                                    var r = []
+                                    for (var i = 0; i < bones.length; i++)
+                                        if (bones[i].toLowerCase().indexOf(q) >= 0) r.push(bones[i])
+                                    return r
+                                }
+
+                                Keys.onEscapePressed: skelBoneSelector.dropdownOpen = false
+                                Keys.onReturnPressed: {
+                                    if (filtered.length > 0) {
+                                        AnimationControlController.selectBone(filtered[0])
+                                        skelBoneSelector.dropdownOpen = false
+                                    }
+                                }
+                            }
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                text: "Type to filter..."
+                                font.pixelSize: 11
+                                font.italic: true
+                                color: PropertiesPanelController.borderColor
+                                visible: skelBoneFilter.text.length === 0 && !skelBoneFilter.activeFocus
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        ListView {
+                            id: skelBoneListView
+                            width: parent.width
+                            height: parent.height - 26
+                            model: skelBoneFilter.filtered
+                            clip: true
+
+                            delegate: Rectangle {
+                                width: skelBoneListView.width
+                                height: 22
+                                color: skelBoneDelegateMouse.containsMouse
+                                    ? PropertiesPanelController.highlightColor
+                                    : PropertiesPanelController.inputColor
+
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData
+                                    color: skelBoneDelegateMouse.containsMouse ? "white"
+                                                                             : PropertiesPanelController.textColor
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                }
+                                MouseArea {
+                                    id: skelBoneDelegateMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: {
+                                        AnimationControlController.selectBone(modelData)
+                                        skelBoneSelector.dropdownOpen = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row {
+                spacing: 4
+                width: skeletonToolsCol.width - 16
+
+                Repeater {
+                    model: [
+                        { label: "+ Bone", action: "create", needsBone: false },
+                        { label: "Duplicate", action: "duplicate", needsBone: true },
+                        { label: "Remove", action: "remove", needsBone: true },
+                        { label: "Rename", action: "rename", needsBone: true }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: Math.max(52, labelText.implicitWidth + 12)
+                        height: 22
+                        radius: 3
+                        color: btnMa.containsMouse
+                            ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                            : PropertiesPanelController.headerColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        opacity: (SkeletonEditor.hasSkeletonSelection
+                                  && (!modelData.needsBone || AnimationControlController.selectedBone.length > 0))
+                                 ? 1.0 : 0.45
+
+                        Text {
+                            id: labelText
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: btnMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: SkeletonEditor.hasSkeletonSelection
+                                    && (!modelData.needsBone || AnimationControlController.selectedBone.length > 0)
+                            onClicked: {
+                                root.boneEditError = false
+                                root.boneEditStatus = ""
+                                if (modelData.action === "create") {
+                                    if (SkeletonEditor.createBoneForSelected("")) {
+                                        root.boneEditStatus = "Bone created."
+                                    } else {
+                                        root.boneEditError = true
+                                        root.boneEditStatus = "Could not create bone."
+                                    }
+                                } else if (modelData.action === "duplicate") {
+                                    if (SkeletonEditor.duplicateSelectedBone()) {
+                                        root.boneEditStatus = "Bone duplicated."
+                                    } else {
+                                        root.boneEditError = true
+                                        root.boneEditStatus = "Select a bone first."
+                                    }
+                                } else if (modelData.action === "remove") {
+                                    root.openRemoveBoneDialog()
+                                } else if (modelData.action === "rename") {
+                                    root.openRenameBoneDialog()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                visible: root.boneEditStatus.length > 0
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                text: root.boneEditStatus
+                color: root.boneEditError ? "#cc4444" : "#3a8c3a"
             }
         }
     }
@@ -7318,9 +7610,86 @@ Rectangle {
         }
     }
 
-    // Issue #407: native auto-rig now lives inline in the Inspector Rigging
-    // section (riggingToolsComponent) — no modal dialog. The old AutoRigDialog
-    // Loader / openAutoRigDialog() were removed.
+    Loader {
+        id: removeBoneLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/RemoveBoneDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!removeBoneLoader.wired) {
+                removeBoneLoader.wired = true
+                item.promoteChildrenRequested.connect(function() {
+                    if (SkeletonEditor.removeSelectedBone(false, true)) {
+                        root.boneEditStatus = "Bone removed (children promoted)."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Remove failed."
+                    }
+                })
+                item.removeSubtreeRequested.connect(function() {
+                    if (SkeletonEditor.removeSelectedBone(true, true)) {
+                        root.boneEditStatus = "Bone subtree removed."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Remove failed."
+                    }
+                })
+            }
+            item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+    function openRemoveBoneDialog() {
+        if (AnimationControlController.selectedBone.length === 0) {
+            root.boneEditError = true
+            root.boneEditStatus = "Select a bone first."
+            return
+        }
+        if (!removeBoneLoader.active) {
+            removeBoneLoader.active = true
+        } else if (removeBoneLoader.item) {
+            removeBoneLoader.item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+
+    Loader {
+        id: renameBoneLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/RenameBoneDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!renameBoneLoader.wired) {
+                renameBoneLoader.wired = true
+                item.renameRequested.connect(function(newName) {
+                    if (SkeletonEditor.renameSelectedBone(newName)) {
+                        root.boneEditStatus = "Bone renamed."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Rename failed (duplicate name or invalid selection)."
+                    }
+                })
+            }
+            item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+    function openRenameBoneDialog() {
+        if (AnimationControlController.selectedBone.length === 0) {
+            root.boneEditError = true
+            root.boneEditStatus = "Select a bone first."
+            return
+        }
+        if (!renameBoneLoader.active) {
+            renameBoneLoader.active = true
+        } else if (renameBoneLoader.item) {
+            renameBoneLoader.item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
 
     Loader {
         id: isometricSpritesLoader

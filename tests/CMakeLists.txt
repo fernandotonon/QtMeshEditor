@@ -32,6 +32,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SpaceCamera.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonDebug.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonEditor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.cpp
@@ -153,6 +154,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonBoneCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UvSeamCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvSeamData.cpp

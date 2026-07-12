@@ -37,54 +37,87 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
     createAxesMesh();
     createBoneMesh();
 
-    auto mapEntities = createBoneVisuals();
+    mBoneVisualByName = createBoneVisuals();
 
     showAxes(false);
     showBones(false);
     showNames(false);
 
-    connect(&mTimer, &QTimer::timeout, this, [this, mapEntities](){
-        short currentSelected = -1;
-        for(auto* ent: mBoneEntities){
-            ent->setMaterial(mBoneMatPtr);
-            ent->setVisible(mShowBones);
+    connect(&mTimer, &QTimer::timeout, this, &SkeletonDebug::onTimerTick);
+    mTimer.start(0);
+}
+
+void SkeletonDebug::onTimerTick()
+{
+    if (!mEntity || !mEntity->hasSkeleton())
+        return;
+
+    short currentSelected = -1;
+    for (auto* ent : mBoneEntities) {
+        ent->setMaterial(mBoneMatPtr);
+        ent->setVisible(mShowBones);
+    }
+    for (Ogre::Bone* root : mEntity->getSkeleton()->getRootBones()) {
+        auto it = mBoneVisualByName.find(root->getName());
+        if (it != mBoneVisualByName.end() && it->second) {
+            it->second->setMaterial(mBoneMatRootPtr);
+            it->second->setVisible(mShowBones);
         }
-        // Paint skeleton roots yellow so users can identify which bones
-        // are root (translatable). Walk getRootBones() and color the
-        // matching visual entities. Selected highlight (red) wins over
-        // root-yellow when both apply.
-        for (Ogre::Bone* root : mEntity->getSkeleton()->getRootBones()) {
-            auto it = mapEntities.find(root->getName());
-            if (it != mapEntities.end() && it->second) {
-                it->second->setMaterial(mBoneMatRootPtr);
-                it->second->setVisible(mShowBones);
-            }
-        }
-        for(auto* bone : mEntity->getSkeleton()->getBones())
-        {
-            if(!bone->getUserObjectBindings().getUserAny("selected").has_value())
-                continue;
+    }
+    for (auto* bone : mEntity->getSkeleton()->getBones()) {
+        if (!bone->getUserObjectBindings().getUserAny("selected").has_value())
+            continue;
+        if (!Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
+            continue;
 
-            if(!Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
-                continue;
+        currentSelected = bone->getHandle();
 
-            currentSelected = bone->getHandle();
+        auto it = mBoneVisualByName.find(bone->getName());
+        if (it == mBoneVisualByName.end() || !it->second)
+            continue;
 
-            if(mapEntities.find(bone->getName()) == mapEntities.end())
-                continue;
+        it->second->setMaterial(mBoneMatSelectedPtr);
+        it->second->setVisible(mShowBones);
+    }
 
-            Ogre::Entity* ent = mapEntities.find(bone->getName())->second;
-            ent->setMaterial(mBoneMatSelectedPtr);
-            ent->setVisible(mShowBones);
-        }
+    if (currentSelected != mLastSelectedBone) {
+        mLastSelectedBone = currentSelected;
+        if (currentSelected >= 0)
+            emit boneSelected(static_cast<unsigned short>(currentSelected));
+    }
+}
 
-        if (currentSelected != mLastSelectedBone)
-        {
-            mLastSelectedBone = currentSelected;
-            if (currentSelected >= 0)
-                emit boneSelected(static_cast<unsigned short>(currentSelected));
-        }
-    });
+void SkeletonDebug::rebuildVisuals()
+{
+    if (!mEntity || !mEntity->hasSkeleton())
+        return;
+
+    const bool wasAxes = mShowAxes;
+    const bool wasBones = mShowBones;
+    const bool wasNames = mShowNames;
+
+    mTimer.stop();
+    mEntity->detachAllObjectsFromBone();
+
+    for (auto* ent : mBoneEntities)
+        mSceneMan->destroyEntity(ent);
+    mBoneEntities.clear();
+
+    for (auto* ent : mAxisEntities)
+        mSceneMan->destroyEntity(ent);
+    mAxisEntities.clear();
+
+    mBoneVisualByName.clear();
+    mBoneVisualByName = createBoneVisuals();
+
+    // Force visibility onto freshly created entities — showBones/showAxes early-
+    // return when the flag is already true, which would leave new meshes hidden.
+    mShowAxes = false;
+    mShowBones = false;
+    mShowNames = false;
+    showAxes(wasAxes);
+    showBones(wasBones);
+    showNames(wasNames);
     mTimer.start(0);
 }
 

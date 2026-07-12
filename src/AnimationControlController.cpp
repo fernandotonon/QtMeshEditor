@@ -248,23 +248,71 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
 
 // ── Bone list ─────────────────────────────────────────────────────────────────
 
-void AnimationControlController::refreshBoneList()
+void AnimationControlController::rebindSelectedSkeleton()
 {
+    if (!m_selectedEntity) return;
+    m_selectedSkeleton = m_selectedEntity->getSkeleton();
+}
+
+void AnimationControlController::bindSkeletonForEntity(const QString& entityName)
+{
+    if (entityName.isEmpty()) return;
+    for (Ogre::Entity* entity : SelectionSet::getSingleton()->getResolvedEntities()) {
+        if (entity->getName() != entityName.toStdString()) continue;
+        if (!entity->hasSkeleton()) return;
+        const QString keepBone = selectedBone();
+        m_selectedEntity = entity;
+        m_selectedEntityName = entity->getName();
+        m_selectedSkeleton = entity->getSkeleton();
+        refreshBoneList(keepBone);
+        return;
+    }
+}
+
+void AnimationControlController::refreshBoneList(const QString& preferSelectBone)
+{
+    const QString previousBone = QString::fromStdString(m_selectedBone);
+
     m_boneNames.clear();
-    m_selectedTrack   = nullptr;
-    m_currentKeyframe = nullptr;
-    m_selectedBone.clear();
+    m_selectedTrack     = nullptr;
+    m_currentKeyframe   = nullptr;
+    // Keep m_selectedBone until we pick the replacement below so QML dropdown
+    // never flashes "(none)" during list rebuilds (bone CRUD / undo).
 
     if (!m_selectedSkeleton || m_selectedAnimation.empty()) {
+        if (m_selectedSkeleton) {
+            for (unsigned short i = 0; i < m_selectedSkeleton->getNumBones(); ++i)
+                m_boneNames << QString::fromStdString(m_selectedSkeleton->getBone(i)->getName());
+        }
         emit boneListChanged();
-        emit keyframeTicksChanged();
-        emit currentKeyframeChanged();
+        QString toSelect = !preferSelectBone.isEmpty() ? preferSelectBone : previousBone;
+        if (!toSelect.isEmpty() && m_boneNames.contains(toSelect))
+            selectBone(toSelect);
+        else if (!m_boneNames.isEmpty())
+            selectBone(m_boneNames.first());
+        else {
+            m_selectedBone.clear();
+            emit boneListChanged();
+            emit keyframeTicksChanged();
+            emit currentKeyframeChanged();
+        }
         return;
     }
     if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
+        for (unsigned short i = 0; i < m_selectedSkeleton->getNumBones(); ++i)
+            m_boneNames << QString::fromStdString(m_selectedSkeleton->getBone(i)->getName());
         emit boneListChanged();
-        emit keyframeTicksChanged();
-        emit currentKeyframeChanged();
+        QString toSelect = !preferSelectBone.isEmpty() ? preferSelectBone : previousBone;
+        if (!toSelect.isEmpty() && m_boneNames.contains(toSelect))
+            selectBone(toSelect);
+        else if (!m_boneNames.isEmpty())
+            selectBone(m_boneNames.first());
+        else {
+            m_selectedBone.clear();
+            emit boneListChanged();
+            emit keyframeTicksChanged();
+            emit currentKeyframeChanged();
+        }
         return;
     }
 
@@ -276,7 +324,9 @@ void AnimationControlController::refreshBoneList()
     Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
     QSet<QString> trackedNames;
     for (const auto& pair : anim->_getNodeTrackList()) {
-        QString name = QString::fromStdString(pair.second->getAssociatedNode()->getName());
+        Ogre::Node* node = pair.second->getAssociatedNode();
+        if (!node) continue;
+        QString name = QString::fromStdString(node->getName());
         m_boneNames << name;
         trackedNames.insert(name);
     }
@@ -288,9 +338,17 @@ void AnimationControlController::refreshBoneList()
 
     emit boneListChanged();
 
-    if (!m_boneNames.isEmpty())
-        selectBone(m_boneNames.first());
+    QString toSelect = !preferSelectBone.isEmpty() ? preferSelectBone : previousBone;
+    if (!toSelect.isEmpty() && !m_boneNames.contains(toSelect))
+        toSelect.clear();
+    if (toSelect.isEmpty() && !m_boneNames.isEmpty())
+        toSelect = m_boneNames.first();
+
+    if (!toSelect.isEmpty())
+        selectBone(toSelect);
     else {
+        m_selectedBone.clear();
+        emit boneListChanged();
         emit keyframeTicksChanged();
         emit currentKeyframeChanged();
     }
@@ -370,7 +428,8 @@ void AnimationControlController::selectBone(const QString& boneName)
     {
         Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
         for (const auto& pair : anim->_getNodeTrackList()) {
-            if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
+            Ogre::Node* node = pair.second->getAssociatedNode();
+            if (node && node->getName() == m_selectedBone) {
                 m_selectedTrack = pair.second;
                 break;
             }
@@ -598,7 +657,8 @@ void AnimationControlController::onUndoRedoCommandApplied()
     {
         Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
         for (const auto& pair : anim->_getNodeTrackList()) {
-            if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
+            Ogre::Node* node = pair.second->getAssociatedNode();
+            if (node && node->getName() == m_selectedBone) {
                 m_selectedTrack = pair.second;
                 break;
             }

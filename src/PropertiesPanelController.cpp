@@ -17,6 +17,7 @@
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
 #include "commands/ApplyMaterialCommand.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "OgreWidget.h"
@@ -33,6 +34,22 @@
 #include <QSettings>
 #include <QPalette>
 #include <Ogre.h>
+
+namespace {
+
+Ogre::Entity* entityByName(const QString& entityName)
+{
+    const std::string name = entityName.toStdString();
+    if (auto* mgr = Manager::getSingletonPtr()) {
+        for (Ogre::Entity* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (ent->getName() == name) return ent;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
 
 PropertiesPanelController* PropertiesPanelController::m_pSingleton = nullptr;
 
@@ -1101,6 +1118,15 @@ void PropertiesPanelController::setPlaying(bool playing)
     }
 }
 
+void PropertiesPanelController::applySkeletonDebug(const QString& entityName, bool show)
+{
+    if (!mAnimationWidget) return;
+    Ogre::Entity* ent = entityByName(entityName);
+    if (!ent) return;
+    mAnimationWidget->toggleSkeletonDebug(ent, show);
+    emit animationStateChanged();
+}
+
 void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, bool show)
 {
     if (!mAnimationWidget) return;
@@ -1109,8 +1135,10 @@ void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, b
     {
         if (QString::fromStdString(ent->getName()) == entityName)
         {
-            mAnimationWidget->toggleSkeletonDebug(ent, show);
-            emit animationStateChanged();
+            if (mAnimationWidget->isSkeletonDebugActive(ent) == show)
+                return;
+            UndoManager::getSingleton()->push(
+                new ToggleSkeletonDebugCommand(entityName, show));
             return;
         }
     }
@@ -1129,6 +1157,15 @@ void PropertiesPanelController::toggleBoneWeights(const QString& entityName, boo
             return;
         }
     }
+}
+
+void PropertiesPanelController::refreshSkeletonOverlays(const QString& entityName)
+{
+    if (!mAnimationWidget) return;
+    Ogre::Entity* ent = entityByName(entityName);
+    if (!ent) return;
+    mAnimationWidget->rebuildSkeletonOverlays(ent);
+    emit animationStateChanged();
 }
 
 bool PropertiesPanelController::renameAnimation(const QString& entityName, const QString& oldName, const QString& newName)

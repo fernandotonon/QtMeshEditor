@@ -175,6 +175,14 @@ public:
     // QML-invokable actions
     Q_INVOKABLE void selectAnimation(const QString& entityName, const QString& animName);
     Q_INVOKABLE void selectBone(const QString& boneName);
+
+    /// Re-fetch the skeleton instance after in-place rig edits that call
+    /// entity->_initialise(true) (bone CRUD, etc.) — the old pointer dangles.
+    void rebindSelectedSkeleton();
+    /// Bind the skeleton of a skinned entity for rig editing (animation clip optional).
+    Q_INVOKABLE void bindSkeletonForEntity(const QString& entityName);
+    Q_INVOKABLE void refreshBoneList(const QString& preferSelectBone = {});
+
     Q_INVOKABLE void addKeyframe();
     Q_INVOKABLE void deleteKeyframe();
     Q_INVOKABLE void prevKeyframe();
@@ -391,7 +399,6 @@ public:
 
 private:
     void setAnimationFrame(int ms);
-    void refreshBoneList();
     void refreshSliderTicks();
     void pushKeyframeValues();
     void notifyOgreUpdate();
