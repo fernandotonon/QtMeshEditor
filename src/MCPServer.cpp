@@ -4119,11 +4119,14 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipDirs);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
-        // #854: optional Mixamo-style arm-space post-process.
+        // #854: optional Mixamo-style arm-space post-process. Echo whether it
+        // took effect so an MCP caller can tell the rig had no arm roles
+        // (rather than silently getting an unadjusted clip).
         const double armSpace = args.value("arm_space").toDouble(0.0);
+        bool armSpaceApplied = false;
         if (std::abs(armSpace) > 1e-4)
-            AnimationMerger::adjustArmSpace(skel.get(), animName,
-                                            static_cast<float>(armSpace));
+            armSpaceApplied = AnimationMerger::adjustArmSpace(
+                skel.get(), animName, static_cast<float>(armSpace));
 
         entity->refreshAvailableAnimationState();
         // Exclusively enable the generated clip — enabled states BLEND in
@@ -4159,6 +4162,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         content["frames"] = r.frames; content["length"] = r.length;
         content["tracks_written"] = r.tracksWritten; content["canonical_joints"] = r.canonicalJoints;
         content["entity"] = QString::fromStdString(entity->getName());
+        if (std::abs(armSpace) > 1e-4) content["arm_space_applied"] = armSpaceApplied;
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
@@ -4173,7 +4177,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
 QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
 {
     try {
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
             QStringLiteral("MCP adjust_arm_space"));
 
         Manager* mgr = Manager::getSingletonPtr();
@@ -4196,15 +4200,22 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
             }
         }
         if (!entity)
-            return makeErrorResult("Error: no matching rigged entity.");
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: no skinned mesh found to adjust.")
+                : QString("Error: skinned entity '%1' not found.").arg(entityName));
 
-        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        // Edit the mesh's MASTER skeleton, not the entity's SkeletonInstance:
+        // the exporter serializes the master (same as every other animation-
+        // edit tool), so editing the instance would return success while the
+        // written file kept the unadjusted clip. Animations are shared between
+        // master and instance, so the live viewport still updates.
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
         const std::string an = animName.toStdString();
         if (!skel || !skel->hasAnimation(an))
             return makeErrorResult(
                 QString("Error: animation '%1' not found on entity.").arg(animName));
 
-        if (!AnimationMerger::adjustArmSpace(skel, an,
+        if (!AnimationMerger::adjustArmSpace(skel.get(), an,
                                              static_cast<float>(degrees)))
             return makeErrorResult(
                 "Error: arm-space adjustment failed (no arm roles on this rig).");

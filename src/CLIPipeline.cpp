@@ -2125,7 +2125,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     if (std::abs(armSpaceDeg) > 1e-4f) {
         if (AnimationMerger::adjustArmSpace(skel.get(), animName, armSpaceDeg)) {
             SentryReporter::addBreadcrumb(
-                QStringLiteral("ai.assist.text_to_motion"),
+                QStringLiteral("ai.tool_call"),
                 QStringLiteral("arm_space %1 deg").arg(armSpaceDeg));
             err() << "(arm-space: " << armSpaceDeg << " deg)" << Qt::endl;
         } else
@@ -2363,7 +2363,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                   << Qt::endl;
             return 1;
         }
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
             QStringLiteral("arm_space %1 deg").arg(armSpaceDeg));
         const QString out = outputPath.isEmpty() ? filePath : outputPath;
         auto* node = entity->getParentSceneNode();

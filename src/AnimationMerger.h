@@ -227,11 +227,19 @@ public:
     /// is split across duplicate role bones so multi-segment shoulders don't
     /// over-rotate.
     ///
-    /// IDEMPOTENT: the net applied angle is stored on the animation via
-    /// UserObjectBindings ("qtme.armspace"); re-applying first reverts the
-    /// stored angle, so `adjustArmSpace(20)` then `adjustArmSpace(10)` ==
-    /// `adjustArmSpace(10)` from the original, and `adjustArmSpace(0)`
-    /// restores the clip bit-near-exactly. `degrees` is the ABSOLUTE target.
+    /// ABSOLUTE + IDEMPOTENT: `degrees` is the target angle, not a nudge. The
+    /// last-applied angle is tracked in a SESSION-LOCAL static map keyed by
+    /// (skeleton name, animation name) — Ogre::Animation has no
+    /// UserObjectBindings, and the value is NOT persisted (export bakes the
+    /// final keyframes). Each call reverts the stored angle before applying
+    /// the new one (delta = new − stored), so `adjustArmSpace(20)` then
+    /// `adjustArmSpace(10)` == `adjustArmSpace(10)` from the original, and
+    /// `adjustArmSpace(0)` restores the clip bit-near-exactly. NB: because the
+    /// map is session-local, a fresh CLI process sees `stored == 0`, so
+    /// re-opening an already-exported widened clip and calling
+    /// `adjustArmSpace(0)` is a no-op (the keyframes are baked). Use
+    /// currentArmSpace() to read the tracked value; applyMotionClip clears it
+    /// when it regenerates a clip, and migrateArmSpaceKey() moves it on rename.
     /// Returns false (no-op) if the animation is missing or no arm role
     /// resolves on the rig.
     static bool adjustArmSpace(Ogre::Skeleton* skel,

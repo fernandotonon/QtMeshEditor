@@ -1546,6 +1546,10 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
 
     if (skel->hasAnimation(animName))
         skel->removeAnimation(animName);
+    // #854: the freshly (re)created clip has NO arm-space applied. A stale
+    // entry from a prior generation of the same name would make a re-request
+    // of that same angle a no-op (delta 0) on the new keyframes — forget it.
+    g_armSpaceApplied.erase({skel->getName(), animName});
     Ogre::Animation* anim = skel->createAnimation(animName, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);

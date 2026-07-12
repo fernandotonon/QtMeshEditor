@@ -1034,10 +1034,22 @@ TEST_F(AnimationMergerTest, ArmSpaceWidensAndTucksArms)
 
     // +30° swings each arm ~30° about the torso forward axis (widen).
     ASSERT_TRUE(AnimationMerger::adjustArmSpace(skel, "clip", 30.0f));
-    const float angR = degBetween(rBase, armWorldDir(skel, "RightArm", "RightForeArm"));
-    const float angL = degBetween(lBase, armWorldDir(skel, "LeftArm", "LeftForeArm"));
-    EXPECT_NEAR(angR, 30.0f, 5.0f);
-    EXPECT_NEAR(angL, 30.0f, 5.0f);   // symmetric per side
+    const Ogre::Vector3 rWide = armWorldDir(skel, "RightArm", "RightForeArm");
+    const Ogre::Vector3 lWide = armWorldDir(skel, "LeftArm", "LeftForeArm");
+    EXPECT_NEAR(degBetween(rBase, rWide), 30.0f, 5.0f);
+    EXPECT_NEAR(degBetween(lBase, lWide), 30.0f, 5.0f);
+
+    // MIRROR check — the two arms must swing in OPPOSITE X directions (out to
+    // their own sides), not the same way. On this symmetric rig the widened
+    // directions must be near-mirror-images across the sagittal (X=0) plane:
+    // reflecting the right result's X should match the left. This catches a
+    // per-side sign regression that equal magnitudes alone would pass.
+    const Ogre::Vector3 rMirrored(-rWide.x, rWide.y, rWide.z);
+    EXPECT_GT(rMirrored.dotProduct(lWide), 0.99f)
+        << "arms did not swing to opposite sides (sign regression)";
+    // And widening moves them apart: the right arm goes more −X, left more +X.
+    EXPECT_LT(rWide.x, rBase.x);
+    EXPECT_GT(lWide.x, lBase.x);
 }
 
 TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)

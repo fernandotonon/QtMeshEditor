@@ -1677,7 +1677,7 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
     const std::string an = animName.toStdString();
     if (!skel || !skel->hasAnimation(an)) return false;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("GUI arm_space %1 deg").arg(degrees));
     if (!AnimationMerger::adjustArmSpace(skel.get(), an,
                                          static_cast<float>(degrees)))
