@@ -1010,10 +1010,18 @@ jobs:
       # Cache compiler outputs across CI runs so the test build (the
       # slowest step in this job, dominated by ~500 .cpp compiles)
       # gets near-instant replays for files that haven't changed.
-      # The cache survives across PRs via the shared key prefix.
+      #
+      # The key MUST be unique per run (github.run_id) so the action
+      # uploads a FRESH cache after every build. GitHub cache entries are
+      # immutable — with a static key the cache is written once and then
+      # never updated, so its hit rate decays to ~0 as the code drifts.
+      # `restore-keys` then pulls the most recent prior cache as the base,
+      # so each run starts warm and saves back the updated cache.
       uses: hendrikmuhs/ccache-action@v1.2
       with:
-        key: sonar-tests-${{ runner.os }}
+        key: sonar-tests-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: |
+          sonar-tests-${{ runner.os }}-
         max-size: 2G
         # ccache wraps gcc/g++ so build-wrapper still sees every
         # invocation it needs to record for SonarCloud.
@@ -1074,6 +1082,12 @@ jobs:
         CCACHE_NOHASHDIR: "true"
       run: |
           echo "=== Running build-wrapper for SonarCloud analysis ==="
+
+          # Zero the ccache hit/miss counters so the post-build `ccache -s`
+          # reflects ONLY this run's compiles (hit rate = how effective the
+          # restored cache was for this build). The cached objects themselves
+          # are untouched — this clears statistics, not the cache.
+          ccache -z || true
 
           # NB: no `make clean` — ccache handles correctness via its hash,
           # and incremental builds let unchanged TUs replay as cached hits.
