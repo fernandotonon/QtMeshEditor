@@ -244,6 +244,15 @@ public:
     static float currentArmSpace(Ogre::Skeleton* skel,
                                  const std::string& animName);
 
+    /// Move the tracked arm-space angle from oldAnim to newAnim on the given
+    /// skeleton. Call from every animation-rename path so a renamed clip keeps
+    /// its widen/tuck value (the keyframes carry over; the tracked angle must
+    /// too, or the next slider drag mis-computes its delta). No-op if there was
+    /// no tracked angle or the names match.
+    static void migrateArmSpaceKey(const std::string& skeletonName,
+                                   const std::string& oldAnim,
+                                   const std::string& newAnim);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

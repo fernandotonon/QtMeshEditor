@@ -135,11 +135,12 @@ protected:
         return sm->createEntity(name + "_ent", mesh);
     }
 
-    // World direction of a bone toward its child, at t=0.5 of "clip".
+    // World direction of a bone toward its child, at t=0.5 of `anim`.
     static Ogre::Vector3 armWorldDir(Ogre::SkeletonInstance* skel,
-                                     const char* boneName, const char* childName)
+                                     const char* boneName, const char* childName,
+                                     const char* anim = "clip")
     {
-        skel->getAnimation("clip")->apply(skel, 0.5f);
+        skel->getAnimation(anim)->apply(skel, 0.5f);
         skel->_updateTransforms();
         const Ogre::Vector3 a = skel->getBone(boneName)->_getDerivedPosition();
         const Ogre::Vector3 b = skel->getBone(childName)->_getDerivedPosition();
@@ -1087,4 +1088,30 @@ TEST_F(AnimationMergerTest, ArmSpaceNoOpWhenAnimationMissing)
     ASSERT_NE(ent, nullptr);
     EXPECT_FALSE(AnimationMerger::adjustArmSpace(ent->getSkeleton(), "nope", 20.0f));
     EXPECT_FALSE(AnimationMerger::adjustArmSpace(nullptr, "clip", 20.0f));
+}
+
+TEST_F(AnimationMergerTest, ArmSpaceFollowsAnimationRename)
+{
+    Ogre::Entity* ent = makeArmRigEntity("armspace_rename");
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+
+    AnimationMerger::adjustArmSpace(skel, "clip", 25.0f);
+    ASSERT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip"), 25.0f);
+
+    // Rename the clip — the tracked angle must move with it (and the old key
+    // must be gone), so a UI targeting the renamed clip sees 25, not 0.
+    AnimationMerger::renameAnimation(skel, "clip", "walk_wide");
+    EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "walk_wide"), 25.0f);
+    EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip"), 0.0f);
+
+    // And a follow-up adjust on the new name computes its delta from 25:
+    // going back to 0 restores the bind pose (would over-rotate if it thought
+    // the clip were at 0).
+    const Ogre::Vector3 wide = armWorldDir(skel, "RightArm", "RightForeArm",
+                                           "walk_wide");
+    AnimationMerger::adjustArmSpace(skel, "walk_wide", 0.0f);
+    const Ogre::Vector3 neutral = armWorldDir(skel, "RightArm", "RightForeArm",
+                                              "walk_wide");
+    EXPECT_GT(degBetween(wide, neutral), 15.0f);   // it actually moved back
 }

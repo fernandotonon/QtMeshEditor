@@ -239,7 +239,26 @@ void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
         }
     }
 
+    // #854: carry the arm-space applied-angle over to the new name — the
+    // widened keyframes were copied above, so the tracked angle must follow
+    // or currentArmSpace() would report 0 for the renamed clip and the next
+    // slider drag would compute a wrong (absolute-from-0) delta.
+    migrateArmSpaceKey(skel->getName(), oldName, newName);
+
     skel->removeAnimation(oldName);
+}
+
+void AnimationMerger::migrateArmSpaceKey(const std::string& skeletonName,
+                                         const std::string& oldAnim,
+                                         const std::string& newAnim)
+{
+    if (oldAnim == newAnim) return;
+    const std::pair<std::string, std::string> oldKey(skeletonName, oldAnim);
+    if (auto it = g_armSpaceApplied.find(oldKey);
+        it != g_armSpaceApplied.end()) {
+        g_armSpaceApplied[{skeletonName, newAnim}] = it->second;
+        g_armSpaceApplied.erase(it);
+    }
 }
 
 int AnimationMerger::resampleAnimation(Ogre::Skeleton* skel,
