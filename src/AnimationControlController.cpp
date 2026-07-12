@@ -1001,10 +1001,20 @@ QVariantList AnimationControlController::allMorphRows() const
         };
 
         // Read the ACTIVE morph clip's keys (the one the user is editing), so
-        // switching clips in the dropdown shows that clip's diamonds. Fall back
-        // to the static shape-only clip when the active clip has no key here.
-        if (!appendTrackTimes(
-                MorphAnimationManager::instance()->activeMorphClip().toStdString()))
+        // switching clips in the dropdown shows that clip's diamonds. If the
+        // active clip isn't on this mesh (e.g. right after IMPORTING a model
+        // whose clip is "Sniff" while the app default is still "MorphAnim", and
+        // the auto-adopt signal hasn't landed yet), resolve the first real morph
+        // clip on the mesh directly — don't depend on active-clip timing. Fall
+        // back to the static shape-only clip when neither has a key here.
+        std::string clipToRead =
+            MorphAnimationManager::instance()->activeMorphClip().toStdString();
+        if (!mesh->hasAnimation(clipToRead)) {
+            const QStringList clips = MorphAnimationManager::instance()->morphClips();
+            if (!clips.isEmpty())
+                clipToRead = clips.first().toStdString();
+        }
+        if (!appendTrackTimes(clipToRead))
             appendTrackTimes(poseName);  // static shape-only clip
 
         QVariantMap row;

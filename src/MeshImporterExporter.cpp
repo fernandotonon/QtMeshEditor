@@ -224,21 +224,54 @@ bool isTextureSerializable(const Ogre::TexturePtr& tex)
 // abort the rest of the export).
 void saveTextureAsImage(const Ogre::TexturePtr& tex, const QFileInfo& file)
 {
+    const QString saveName = MeshImporterExporter::exportTextureName(
+        QString::fromStdString(tex->getName()));
+    const QString outPath = file.path() + "/" + saveName;
+
+    // PREFER copying the ORIGINAL texture file byte-for-byte when it's findable
+    // on disk. `convertToImage` re-packs the GPU texture, which THROWS for GPU
+    // formats Ogre can't pack back to a saveable image (e.g. the "pack to
+    // PF_UNKNOWN" failure on some compressed/BGR textures) — losing the texture
+    // entirely. A file copy is lossless and sidesteps the repack. Fall back to
+    // convertToImage only when the source file can't be located.
+    const QString texName = QString::fromStdString(tex->getName());
+    QString srcPath;
+    // 1) Ogre resource group's on-disk location for this named texture.
+    try {
+        const Ogre::String grp =
+            Ogre::ResourceGroupManager::getSingleton().findGroupContainingResource(
+                tex->getName());
+        Ogre::FileInfoListPtr fil =
+            Ogre::ResourceGroupManager::getSingleton().findResourceFileInfo(
+                grp, tex->getName());
+        if (fil && !fil->empty())
+            srcPath = QString::fromStdString(
+                fil->front().archive->getName() + "/" + fil->front().filename);
+    } catch (const Ogre::Exception&) { /* not in a group — try raw path */ }
+    // 2) The texture name may itself be an absolute/relative path.
+    if (srcPath.isEmpty() && QFileInfo::exists(texName))
+        srcPath = texName;
+
+    if (!srcPath.isEmpty() && QFileInfo(srcPath).isFile()
+        && QFileInfo(srcPath).canonicalFilePath() != QFileInfo(outPath).canonicalFilePath()) {
+        QFile::remove(outPath);           // overwrite a stale copy
+        if (QFile::copy(srcPath, outPath))
+            return;                       // lossless copy succeeded
+        // else fall through to the repack attempt
+    }
+
     try {
         Ogre::Image img;
         tex->convertToImage(img, true);
-        const QString saveName = MeshImporterExporter::exportTextureName(
-            QString::fromStdString(tex->getName()));
-        const std::string outPath = (file.path() + "/" + saveName).toStdString();
-        // `Ogre::Image::save` returns void; failures throw and land
-        // in the catch arms below.
-        img.save(outPath);
+        img.save(outPath.toStdString());
     } catch (const Ogre::Exception& ex) {
         Ogre::LogManager::getSingleton().logError(
-            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what()
+            + " (and no source file to copy)");
     } catch (const std::exception& ex) {
         Ogre::LogManager::getSingleton().logError(
-            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what()
+            + " (and no source file to copy)");
     }
 }
 

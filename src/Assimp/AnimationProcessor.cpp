@@ -105,6 +105,18 @@ void AnimationProcessor::processMorphWeightAnimations(const Ogre::MeshPtr& mesh,
                 ? scene->mRootNode->FindNode(morph->mName)
                 : nullptr;
             const aiMesh* srcMesh = meshForMorphChannel(scene, node);
+            // FALLBACK node resolution: some exporters (our glTF weights inject
+            // after mesh-split) name the morph channel's node after a SPLIT
+            // submesh (e.g. "sniff_submesh0*0") that FindNode can't match to the
+            // scene node holding the mesh. When the direct node lookup fails,
+            // scan ALL meshes for the first one carrying anim-meshes — a
+            // single-morph-mesh model (the common case) resolves unambiguously.
+            if (!srcMesh) {
+                for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi) {
+                    const aiMesh* cand = scene->mMeshes[mi];
+                    if (cand && cand->mNumAnimMeshes > 0) { srcMesh = cand; break; }
+                }
+            }
             if (!srcMesh)
                 continue;
 
