@@ -2141,15 +2141,21 @@ jobs:
       run: |
             set -euo pipefail
             brew install create-dmg
-            DMG="QtMeshEditor-${{github.ref_name}}-MacOS.dmg"
+            # github.ref_name is "867/merge" on a PR — the slash makes
+            # create-dmg treat "QtMeshEditor-867/merge-MacOS.dmg" as a path,
+            # cd into the nonexistent "QtMeshEditor-867/" dir, and write the
+            # DMG under the wrong name (the real, deterministic cause of the
+            # macOS Pack failures on PRs, not a create-dmg flake). Sanitize
+            # any '/' out of the basename. Release tags (X.Y.Z) are unaffected.
+            REF="$(echo "${{github.ref_name}}" | tr '/' '-')"
+            DMG="QtMeshEditor-${REF}-MacOS.dmg"
             APP="${{github.workspace}}/bin/QtMeshEditor.app"
 
-            # create-dmg mounts a disk image and AppleScript-positions the
-            # icons; on CI that mount/detach races and fails intermittently
-            # (seen on PRs #866/#867). Retry a few times, and if it still
+            # create-dmg also mounts a disk image + AppleScript-positions the
+            # icons, which can race on CI. Retry a few times, and if it still
             # fails fall back to a plain hdiutil DMG so packaging never blocks
             # the build on a transient tooling flake. The pretty layout is
-            # only cosmetic — the fallback DMG installs identically.
+            # only cosmetic - the fallback DMG installs identically.
             make_pretty_dmg() {
                 rm -f "$DMG"
                 sudo create-dmg \
