@@ -1453,6 +1453,26 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
         return false;   // no arm role on this rig
 
     g_armSpaceApplied[key] = degrees;
+
+    if (!qEnvironmentVariableIsEmpty("QTMESH_ARMSPACE_DEBUG")) {
+        // Measure the right-shoulder world direction right here, so we can
+        // tell an apply/compose bug from a downstream measurement artifact.
+        const int si = tb.roleBoneIdx[7];
+        const int ci = tb.roleBoneIdx[8];
+        if (si >= 0 && ci >= 0) {
+            skel->reset(true);
+            anim->apply(skel, anim->getLength() * 0.5f);
+            skel->_updateTransforms();
+            Ogre::Vector3 d =
+                skel->getBone(static_cast<unsigned short>(ci))->_getDerivedPosition()
+                - skel->getBone(static_cast<unsigned short>(si))->_getDerivedPosition();
+            d.normalise();
+            fprintf(stderr, "[armspace-core] degrees=%.1f stored_before=%.1f "
+                    "delta=%.1f -> Rdir=(%.3f,%.3f,%.3f)\n",
+                    degrees, stored, delta, d.x, d.y, d.z);
+            fflush(stderr);
+        }
+    }
     return true;
 }
 

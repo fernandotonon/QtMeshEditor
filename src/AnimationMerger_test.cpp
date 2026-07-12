@@ -1065,6 +1065,7 @@ TEST_F(AnimationMergerTest, ArmSpaceWidensAndTucksArms)
 
 TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
 {
+    qputenv("QTMESH_ARMSPACE_DEBUG", "1");
     Ogre::Entity* ent = makeArmRigEntity("armspace_idem");
     ASSERT_NE(ent, nullptr);
     Ogre::SkeletonInstance* skel = ent->getSkeleton();
