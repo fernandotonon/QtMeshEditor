@@ -1440,6 +1440,12 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
             Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
             kf->setRotation(L * kf->getRotation());
         }
+        // TransformKeyFrame::setRotation does NOT invalidate the track's
+        // interpolation caches (rotation spline / derived data), so a
+        // following apply() would replay the PRE-edit rotations — the edit
+        // appears to lag one call behind. Flag the track dirty so the next
+        // evaluation rebuilds from the new keyframes.
+        trk->_keyFrameDataChanged();
         touchedAny = true;
     }
 
