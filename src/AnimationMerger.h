@@ -238,6 +238,12 @@ public:
                                const std::string& animName,
                                float degrees);
 
+    /// The arm-space angle currently applied to `animName` (0 if none) — the
+    /// value adjustArmSpace last stored this session. Lets a UI seed its
+    /// slider with the clip's real state instead of assuming 0.
+    static float currentArmSpace(Ogre::Skeleton* skel,
+                                 const std::string& animName);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

@@ -1660,15 +1660,17 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
 }
 
 bool AnimationControlController::adjustArmSpace(const QString& animName,
-                                                double degrees)
+                                                double degrees,
+                                                const QString& entityName)
 {
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return false;
+    const std::string want = entityName.isEmpty()
+        ? m_selectedEntityName : entityName.toStdString();
     Ogre::Entity* entity = nullptr;
     for (auto* e : mgr->getEntities()) {
         if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
-        if (m_selectedEntityName.empty()
-            || e->getName() == m_selectedEntityName) { entity = e; break; }
+        if (want.empty() || e->getName() == want) { entity = e; break; }
     }
     if (!entity) return false;
     Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
@@ -1681,11 +1683,42 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
                                          static_cast<float>(degrees)))
         return false;
 
-    // Refresh the viewport (the animation state's keyframes changed underneath
-    // it) exactly as the generate path does.
+    // Re-pose the mesh NOW, even when the clip is paused. Rewriting keyframes
+    // doesn't move the bones until the animation state re-applies; when
+    // playback is stopped nothing ticks it, so the viewport would stay frozen
+    // on the pre-edit pose until the user hits play. Mark the state dirty and
+    // re-stamp its current time to force an immediate re-evaluation (the same
+    // idiom as notifyOgreUpdate, but targeting THIS entity + clip so it works
+    // for any animation, not just the selected one).
     entity->refreshAvailableAnimationState();
+    if (auto* states = entity->getAllAnimationStates()) {
+        states->_notifyDirty();
+        if (states->hasAnimationState(an)) {
+            auto* st = states->getAnimationState(an);
+            if (st->getEnabled())
+                st->setTimePosition(st->getTimePosition());
+        }
+    }
     notifyExternalAnimationEdit();
     return true;
+}
+
+double AnimationControlController::currentArmSpace(const QString& animName,
+                                                   const QString& entityName)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return 0.0;
+    const std::string want = entityName.isEmpty()
+        ? m_selectedEntityName : entityName.toStdString();
+    for (auto* e : mgr->getEntities()) {
+        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
+        if (want.empty() || e->getName() == want) {
+            Ogre::SkeletonPtr skel = e->getMesh()->getSkeleton();
+            return skel ? AnimationMerger::currentArmSpace(
+                              skel.get(), animName.toStdString()) : 0.0;
+        }
+    }
+    return 0.0;
 }
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
@@ -1829,6 +1862,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     out["action"] = action;
     out["source"] = clipSource;
     out["animation"] = QString::fromStdString(animName);
+    out["entity"] = QString::fromStdString(entity->getName());
     out["frames"] = res.frames;
     out["length"] = res.length;
     out["tracksWritten"] = res.tracksWritten;

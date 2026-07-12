@@ -7953,18 +7953,45 @@ Rectangle {
             spacing: 4
 
             property var entityGroups: PropertiesPanelController.animationData()
-            // #854: the clip the arm-space slider targets — set when Generate
-            // runs, cleared on selection change so the slider only shows for a
-            // freshly generated clip.
+            // #854: the clip the arm-space slider targets. Defaults to the last
+            // generated clip, but the per-row arm button can point it at ANY
+            // animation. Cleared on selection change.
             property string lastGeneratedAnim: ""
+            property string armSpaceAnim: ""
+            property string armSpaceEntity: ""
 
             function refreshAnimData() {
                 entityGroups = PropertiesPanelController.animationData()
             }
 
+            // #854: point the arm-space slider at a clip. The adjustment
+            // STICKS to that clip (so it exports widened) and is independent
+            // per clip. Generation always produces a CLEAN clip (slider value
+            // never bakes into it), and the slider is seeded with the target
+            // clip's ACTUAL current angle — so switching clips shows the truth
+            // and a fresh generate shows 0. Closing the panel / reselecting
+            // just detaches the slider (no revert; the clip keeps its edit).
+            function setArmSpaceTarget(animName, entity) {
+                armSpaceAnim = animName
+                armSpaceEntity = entity
+                var cur = AnimationControlController.currentArmSpace(animName, entity)
+                armSpaceSlider.value = cur
+                armSpaceSlider.lastApplied = cur
+            }
+            function detachArmSpace() {
+                armSpaceAnim = ""
+                armSpaceEntity = ""
+                armSpaceSlider.value = 0
+                armSpaceSlider.lastApplied = 0
+            }
+
             Connections {
                 target: PropertiesPanelController
-                function onSelectionChanged() { lastGeneratedAnim = ""; refreshAnimData() }
+                function onSelectionChanged() {
+                    lastGeneratedAnim = ""
+                    detachArmSpace()
+                    refreshAnimData()
+                }
                 function onAnimationStateChanged() { refreshAnimData() }
             }
 
@@ -7988,6 +8015,27 @@ Rectangle {
                         verticalAlignment: TextInput.AlignVCenter
                         color: PropertiesPanelController.textColor; font.pixelSize: 11
                         clip: true
+                        // selectByMouse lets a click position the caret AND take
+                        // keyboard focus — without it a bare TextInput embedded
+                        // in a QQuickWidget stays unfocused on click (the other
+                        // working fields in this panel all set it). activeFocus-
+                        // OnPress is the default but stated for clarity.
+                        selectByMouse: true
+                        activeFocusOnPress: true
+                        // Belt-and-suspenders focus grab: after using the
+                        // arm-space slider / arm buttons (which take focus and
+                        // can leave the QQuickWidget's focus on the viewport),
+                        // a plain click here didn't always re-focus the field.
+                        // Force it on press and let the event through (accepted
+                        // = false) so selectByMouse still positions the caret.
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onPressed: function(mouse) {
+                                genPromptIn.forceActiveFocus()
+                                mouse.accepted = false
+                            }
+                        }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             visible: !genPromptIn.text && !genPromptIn.activeFocus
@@ -8012,10 +8060,19 @@ Rectangle {
                             ? "Generating (experimental model)…"
                             : "Generating… (first use downloads the motion library)"
                         genStatus.isError = false
+                        // Generate a CLEAN clip — arm-space is always an
+                        // explicit post-adjustment starting from 0, never baked
+                        // into generation (a leftover slider value silently
+                        // skewing every new clip is exactly the bug this fixes).
                         var gr = AnimationControlController.generateMotion(
                                      genPromptIn.text, 0.0, useModelChk.checked,
-                                     armSpaceSlider.value)
-                        if (gr && gr.animation) lastGeneratedAnim = gr.animation
+                                     0.0)
+                        if (gr && gr.animation) {
+                            lastGeneratedAnim = gr.animation
+                            // Point the slider at the fresh clip at a neutral 0
+                            // (reverts any prior target — see setArmSpaceTarget).
+                            setArmSpaceTarget(gr.animation, gr.entity || "")
+                        }
                         genBtnBusy = false
                         // generateMotion adds an AnimationState synchronously, but
                         // it lives on AnimationControlController — the Inspector
@@ -8053,34 +8110,42 @@ Rectangle {
                 }
             }
             // ── Arm space (#854): Mixamo-style widen/tuck post-process ────────
-            // Absolute + idempotent, so the slider maps straight to the applied
-            // angle. Applies on release to the selected generated_* clip.
+            // Targets `armSpaceAnim` — the last generated clip by default, or
+            // any animation the user picks via the per-row arm button below.
+            // The op is ABSOLUTE + idempotent, so dragging can re-apply live at
+            // each value (no accumulation) and the slider maps straight to the
+            // stored angle.
             Row {
                 width: parent.width - 16; spacing: 6
-                visible: lastGeneratedAnim.indexOf("generated_") === 0
+                visible: armSpaceAnim.length > 0
                 Text {
                     text: "Arm space"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                     width: 62
+                    elide: Text.ElideRight
                 }
                 Slider {
                     id: armSpaceSlider
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - 62 - 42 - 12
                     from: -30; to: 45; value: 0; stepSize: 1
-                    // The op is ABSOLUTE + idempotent, so re-rewriting per pixel
-                    // is wasteful; apply on release instead. On release, if this
-                    // clip already exists, restyle it directly; otherwise the
-                    // value rides the next Generate.
-                    onPressedChanged: {
-                        if (!pressed
-                            && lastGeneratedAnim.indexOf("generated_") === 0) {
+                    // Live update: adjustArmSpace is absolute+idempotent, so
+                    // firing it per value while dragging just re-applies (never
+                    // accumulates). Throttle to whole degrees via stepSize so we
+                    // rewrite keyframes at most ~75 times across the range.
+                    property real lastApplied: 0
+                    onValueChanged: {
+                        if (armSpaceAnim.length > 0
+                            && Math.round(value) !== Math.round(lastApplied)) {
+                            lastApplied = value
                             AnimationControlController.adjustArmSpace(
-                                lastGeneratedAnim, value)
-                            refreshAnimData()
+                                armSpaceAnim, value, armSpaceEntity)
                         }
                     }
+                    // Refresh the Inspector list only on release (the viewport
+                    // itself updates live inside adjustArmSpace).
+                    onPressedChanged: { if (!pressed) refreshAnimData() }
                 }
                 Text {
                     text: (armSpaceSlider.value > 0 ? "+" : "")
@@ -8089,6 +8154,16 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: 42; horizontalAlignment: Text.AlignRight
                 }
+            }
+            // Label showing which clip the slider affects (only when it's not
+            // the obvious just-generated one).
+            Text {
+                visible: armSpaceAnim.length > 0
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "↑ adjusting \"" + armSpaceAnim + "\" (0 = no change). The "
+                      + "edit stays on this clip; click ↔ again to detach."
+                color: PropertiesPanelController.textColor; opacity: 0.5
+                font.pixelSize: 9
             }
             Text {
                 id: genStatus
@@ -8594,6 +8669,49 @@ Rectangle {
                                                 simplifyResultPopup.animName = modelData.name
                                                 simplifyResultPopup.open()
                                                 simplifyBtn.cachedAnalysis = null  // invalidate after mutation
+                                            }
+                                        }
+                                    }
+
+                                    // Arm space (#854) — point the arm-space
+                                    // slider (above) at THIS clip. Works on any
+                                    // skeletal animation, not just generated
+                                    // ones. Highlights when it's the active target.
+                                    Rectangle {
+                                        id: armBtn
+                                        visible: grp.hasSkeleton
+                                        width: 22; height: 18; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        property bool active: armSpaceAnim === modelData.name
+                                                              && armSpaceEntity === grp.entity
+                                        color: active ? PropertiesPanelController.highlightColor
+                                             : armMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
+                                             : armMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                                             : PropertiesPanelController.headerColor
+                                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "↔"  // ↔ widen/tuck
+                                            color: armBtn.active ? "white"
+                                                 : PropertiesPanelController.textColor
+                                            font.pixelSize: 12
+                                        }
+                                        ToolTip.visible: armMouse.containsMouse
+                                        ToolTip.delay: 600
+                                        ToolTip.text: "Arm space — retarget the widen/tuck slider to this animation"
+                                        MouseArea {
+                                            id: armMouse; anchors.fill: parent; hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                // Toggle: detach if it's already
+                                                // the target (the clip keeps its
+                                                // edit), else target this clip
+                                                // (seeded with its real angle).
+                                                if (armBtn.active)
+                                                    detachArmSpace()
+                                                else
+                                                    setArmSpaceTarget(
+                                                        modelData.name, grp.entity)
                                             }
                                         }
                                     }

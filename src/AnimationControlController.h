@@ -345,7 +345,15 @@ public:
     /// body, negative tucks them in, 0 restores the original. ABSOLUTE +
     /// idempotent, so it maps directly to a slider (apply on release). Returns
     /// true on success. Refreshes the viewport via notifyExternalAnimationEdit.
-    Q_INVOKABLE bool adjustArmSpace(const QString& animName, double degrees);
+    /// `entityName` empty → the selected entity, else the first skinned mesh;
+    /// pass it to target a clip on a specific entity (the per-row GUI control).
+    Q_INVOKABLE bool adjustArmSpace(const QString& animName, double degrees,
+                                    const QString& entityName = QString());
+
+    /// The arm-space angle currently applied to `animName` (0 if none) — so
+    /// the GUI slider can show the clip's real value when (re)targeting it.
+    Q_INVOKABLE double currentArmSpace(const QString& animName,
+                                       const QString& entityName = QString());
 
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a

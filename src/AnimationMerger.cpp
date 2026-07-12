@@ -21,6 +21,12 @@
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
 static QMap<QString, int> s_skeletonUpAxis;
 
+// #854: last-applied arm-space angle per (skeleton, animation), session
+// scoped. adjustArmSpace() reads it to make each apply absolute+idempotent;
+// currentArmSpace() exposes it so a UI can seed the slider with the clip's
+// real value (never persisted — export bakes the keyframes).
+static std::map<std::pair<std::string, std::string>, float> g_armSpaceApplied;
+
 void AnimationMerger::registerSkeletonUpAxis(const std::string& name, int upAxis) {
     s_skeletonUpAxis[QString::fromStdString(name)] = upAxis;
 }
@@ -1300,6 +1306,14 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
 }
 } // namespace
 
+float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
+                                       const std::string& animName)
+{
+    if (!skel) return 0.0f;
+    const auto it = g_armSpaceApplied.find({skel->getName(), animName});
+    return it != g_armSpaceApplied.end() ? it->second : 0.0f;
+}
+
 bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
                                      const std::string& animName,
                                      float degrees)
@@ -1312,15 +1326,15 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
 
     // Idempotent absolute application: revert whatever we applied before,
     // then apply the new absolute angle. The net delta this call injects is
-    // (degrees − stored). Ogre::Animation carries no UserObjectBindings, so
-    // the last-applied angle is tracked in a session-scoped map keyed by
-    // (skeleton, animation) — which is exactly what slider scrubbing needs;
-    // export bakes the final keyframes, so cross-session persistence isn't
-    // required. Zeroing the angle restores the clip bit-near-exactly.
-    static std::map<std::pair<std::string, std::string>, float> s_applied;
+    // (degrees − stored). The last-applied angle per (skeleton, animation) is
+    // tracked in the file-scoped g_armSpaceApplied map (Ogre::Animation has no
+    // UserObjectBindings) — which is exactly what slider scrubbing needs, and
+    // currentArmSpace() exposes it so a UI can seed the slider with the clip's
+    // real value. Export bakes the final keyframes, so cross-session
+    // persistence isn't required. Zeroing restores the clip bit-near-exactly.
     const std::pair<std::string, std::string> key(skel->getName(), animName);
     float stored = 0.0f;
-    if (auto it = s_applied.find(key); it != s_applied.end())
+    if (auto it = g_armSpaceApplied.find(key); it != g_armSpaceApplied.end())
         stored = it->second;
     const float delta = degrees - stored;
     if (std::abs(delta) < 1e-4f)
@@ -1413,7 +1427,7 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     if (!touchedAny)
         return false;   // no arm role on this rig
 
-    s_applied[key] = degrees;
+    g_armSpaceApplied[key] = degrees;
     return true;
 }
 
