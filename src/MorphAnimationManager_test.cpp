@@ -338,6 +338,41 @@ TEST_F(MorphAnimationManagerSceneTest, MultipleNamedMorphClipsShareTargets) {
     sel->clear();
 }
 
+TEST_F(MorphAnimationManagerSceneTest, SharedTrackTwoTargetsSameTimeCoexist) {
+    // JawOpen and Smile are on the SAME submesh → they share one VAT_POSE track.
+    // Keying both at the same time in the same clip must not clobber each other,
+    // and clearing one must leave the other. (CodeRabbit regression.)
+    auto mesh = createMorphTestMesh("Morph_SharedTrack");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_SharedTrackEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+    auto* sel = SelectionSet::getSingleton();
+    sel->clear();
+    sel->append(node);
+
+    auto* m = MorphAnimationManager::instance();
+    m->setActiveMorphClip(QStringLiteral("expr"));
+    ASSERT_TRUE(m->createMorphClip(QStringLiteral("expr")));
+
+    // Both targets keyed at t=0.5 on the shared track.
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("JawOpen"), 0.5, 0.3));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"),   0.5, 0.8));
+
+    // Each target reports its own single key at 0.5 (not the sibling's).
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("JawOpen")).size(), 1);
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).size(), 1);
+    EXPECT_NEAR(m->morphWeightAt(QStringLiteral("JawOpen"), 0.5), 0.3, 1e-4);
+    EXPECT_NEAR(m->morphWeightAt(QStringLiteral("Smile"),   0.5), 0.8, 1e-4);
+
+    // Clearing JawOpen leaves Smile's key on the shared keyframe intact.
+    EXPECT_TRUE(m->clearMorphWeightKeyframe(QStringLiteral("JawOpen"), 0.5));
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("JawOpen")).size(), 0);
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).size(), 1);
+    EXPECT_NEAR(m->morphWeightAt(QStringLiteral("Smile"), 0.5), 0.8, 1e-4);
+    sel->clear();
+}
+
 TEST_F(MorphAnimationManagerSceneTest, NoSelectionGivesEmptyList) {
     auto* m = MorphAnimationManager::instance();
     EXPECT_TRUE(m->morphTargetsForSelection().isEmpty());

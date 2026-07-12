@@ -155,6 +155,91 @@ void buildPosesFromSlices(Ogre::Mesh* mesh,
     }
 }
 
+// ─── Weight-clip preserve/restore across a pose reorder ──────────────
+// Morph weight clips (mesh Animations that aren't per-target shape clips)
+// reference poses by INDEX. A reorder rebuilds poses in a new order, so those
+// indices become stale. Snapshot each weight clip's keyframes by pose NAME
+// before the reorder, then rebuild them against the new pose indices after.
+
+// name != a pose name → it's a weight clip, not a shape clip.
+bool isWeightClip(Ogre::Mesh* mesh, const std::string& animName)
+{
+    for (const Ogre::Pose* p : mesh->getPoseList())
+        if (p && p->getName() == animName) return false;
+    return true;
+}
+
+struct WeightClipSnapshot {
+    std::string name;
+    float length = 0.0f;
+    // time -> (poseName -> weight)
+    std::vector<std::pair<float, std::map<std::string, float>>> keys;
+};
+
+std::vector<WeightClipSnapshot> snapshotWeightClips(Ogre::Mesh* mesh)
+{
+    std::vector<WeightClipSnapshot> out;
+    for (unsigned short a = 0; a < mesh->getNumAnimations(); ++a) {
+        Ogre::Animation* anim = mesh->getAnimation(a);
+        if (!anim || !isWeightClip(mesh, anim->getName())) continue;
+        WeightClipSnapshot snap;
+        snap.name = anim->getName();
+        snap.length = anim->getLength();
+        // Merge all VAT_POSE tracks' keyframes keyed by time; resolve each pose
+        // reference's index -> name against the CURRENT pose list.
+        std::map<float, std::map<std::string, float>> byTime;
+        for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+            if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k) {
+                auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(k));
+                for (const auto& ref : kf->getPoseReferences()) {
+                    if (ref.poseIndex >= mesh->getPoseList().size()) continue;
+                    const Ogre::Pose* p = mesh->getPoseList()[ref.poseIndex];
+                    if (p) byTime[kf->getTime()][p->getName()] = ref.influence;
+                }
+            }
+        }
+        for (auto& [t, m] : byTime) snap.keys.push_back({t, std::move(m)});
+        out.push_back(std::move(snap));
+    }
+    return out;
+}
+
+// Rebuild the snapshotted weight clips against the (reordered) pose list,
+// resolving pose names to their NEW indices + submesh handles.
+void rebuildWeightClips(Ogre::Mesh* mesh, const std::vector<WeightClipSnapshot>& snaps,
+                        Ogre::Entity* entity)
+{
+    auto poseIndex = [&](const std::string& name) -> int {
+        const auto& pl = mesh->getPoseList();
+        for (unsigned short i = 0; i < pl.size(); ++i)
+            if (pl[i] && pl[i]->getName() == name) return i;
+        return -1;
+    };
+    for (const auto& snap : snaps) {
+        if (mesh->hasAnimation(snap.name)) mesh->removeAnimation(snap.name);
+        Ogre::Animation* anim = mesh->createAnimation(snap.name, snap.length);
+        for (const auto& [t, weights] : snap.keys) {
+            for (const auto& [poseName, w] : weights) {
+                const int pi = poseIndex(poseName);
+                if (pi < 0) continue;
+                const unsigned short handle = mesh->getPoseList()[pi]->getTarget();
+                Ogre::VertexAnimationTrack* track = anim->hasVertexTrack(handle)
+                    ? anim->getVertexTrack(handle)
+                    : anim->createVertexTrack(handle, Ogre::VAT_POSE);
+                Ogre::VertexPoseKeyFrame* kf = nullptr;
+                for (unsigned short ki = 0; ki < track->getNumKeyFrames(); ++ki) {
+                    auto* e = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(ki));
+                    if (std::abs(e->getTime() - t) < 1e-4f) { kf = e; break; }
+                }
+                if (!kf) kf = track->createVertexPoseKeyFrame(t);
+                kf->updatePoseReference(static_cast<unsigned short>(pi), w);
+            }
+        }
+    }
+    if (entity) entity->refreshAvailableAnimationState();
+}
+
 } // namespace
 
 // ──────────────── AddMorphTargetCommand ─────────────────────────────
@@ -295,6 +380,13 @@ void ReorderMorphTargetsCommand::applyOrder(const QStringList& order)
     // desired name-order. removePosesByName drops each target's poses +
     // Animation; buildPosesFromSlices recreates them (and their keyframe
     // references) fresh, in call order → the new display order.
+    //
+    // Weight clips (smile/angry/…) reference poses by index too but AREN'T
+    // rebuilt by the shape teardown below (their names differ from pose names),
+    // so their keyframes would point at the wrong target after the reorder.
+    // Snapshot them by pose NAME first, then rebuild against the new indices.
+    const std::vector<WeightClipSnapshot> weightClips = snapshotWeightClips(mesh.get());
+
     for (const QString& n : order)
         removePosesByName(mesh.get(), n, mEntity);
     for (const QString& n : order) {
@@ -302,6 +394,9 @@ void ReorderMorphTargetsCommand::applyOrder(const QStringList& order)
         if (it != mSnapshot.end())
             buildPosesFromSlices(mesh.get(), n, it->second, mEntity);
     }
+
+    // Re-key the weight clips to the reordered poses (by name → new index).
+    rebuildWeightClips(mesh.get(), weightClips, mEntity);
 }
 
 void ReorderMorphTargetsCommand::redo()

@@ -1152,17 +1152,25 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
 {
     if (newName.isEmpty() || oldName == newName) return false;
 
-    // Morph (weight) clips are mesh-level VAT_POSE animations, not skeletal —
-    // the skeleton rename path below can't handle them (and would crash on a
-    // null skeleton). If this is a morph clip, delegate to the manager's
-    // mesh-aware rename instead.
-    if (MorphAnimationManager::instance()->morphClips().contains(oldName))
-        return MorphAnimationManager::instance()->renameMorphClip(oldName, newName);
-
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     for (Ogre::Entity* ent : entities)
     {
         if (QString::fromStdString(ent->getName()) != entityName) continue;
+
+        // Morph (weight) clips are mesh-level VAT_POSE animations, not skeletal
+        // — the skeleton rename path below can't handle them (and would crash on
+        // a null skeleton). Detect it on THIS named entity's mesh (not the
+        // first-selected one — respects the entityName arg under multi-select)
+        // and delegate to the manager's mesh-aware rename.
+        Ogre::MeshPtr mesh = ent->getMesh();
+        if (mesh && mesh->hasAnimation(oldName.toStdString())) {
+            bool isPoseName = false;
+            for (const Ogre::Pose* p : mesh->getPoseList())
+                if (p && p->getName() == oldName.toStdString()) { isPoseName = true; break; }
+            if (!isPoseName)  // a weight clip, not a per-target shape clip
+                return MorphAnimationManager::instance()->renameMorphClip(oldName, newName);
+        }
+
         if (Manager::getSingleton()->hasAnimationName(ent, newName)) return false;
 
         // Disable skeleton debug/weights and stop playback before rename

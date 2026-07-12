@@ -251,10 +251,12 @@ bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
     }
     if (!kf) kf = track->createVertexPoseKeyFrame(t);
 
-    // A VAT_POSE keyframe holds a list of pose references; for a weight track
-    // each keyframe references exactly this target's pose at influence = weight.
-    kf->removeAllPoseReferences();
-    kf->addPoseReference(static_cast<unsigned short>(pi), w);
+    // A VAT_POSE keyframe holds a LIST of pose references. Targets on the same
+    // submesh share one track, so a keyframe at time t may already reference
+    // OTHER targets' poses — clearing them all would clobber a sibling target
+    // keyed at the same time. Update only THIS pose's reference (or add it),
+    // leaving the others intact. updatePoseReference is add-or-update in Ogre.
+    kf->updatePoseReference(static_cast<unsigned short>(pi), w);
 
     // Extend the clip length to cover the new time.
     Ogre::Animation* anim = mesh->getAnimation(clip);
@@ -285,16 +287,27 @@ bool MorphAnimationManager::clearMorphWeightKeyframe(const QString& name, double
     Ogre::MeshPtr mesh = ents.first()->getMesh();
     if (!mesh) return false;
 
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return false;
     Ogre::VertexAnimationTrack* track =
         weightTrackFor(mesh.get(), name.toStdString(), m_activeMorphClip.toStdString(), false);
     if (!track) return false;
     const float t = static_cast<float>(time);
     for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-        if (std::abs(track->getKeyFrame(i)->getTime() - t) < 1e-4f) {
+        auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        if (std::abs(kf->getTime() - t) >= 1e-4f) continue;
+        // Remove only THIS pose's reference (siblings on the shared track keyed
+        // at the same time must survive). Drop the whole keyframe only when no
+        // pose references remain.
+        bool hasThis = false;
+        for (const auto& ref : kf->getPoseReferences())
+            if (ref.poseIndex == static_cast<unsigned short>(pi)) { hasThis = true; break; }
+        if (!hasThis) return false;
+        kf->removePoseReference(static_cast<unsigned short>(pi));
+        if (kf->getPoseReferences().empty())
             track->removeKeyFrame(i);
-            emit morphTargetsChanged();
-            return true;
-        }
+        emit morphTargetsChanged();
+        return true;
     }
     return false;
 }
@@ -543,6 +556,16 @@ bool MorphAnimationManager::renameMorphClip(const QString& oldName, const QStrin
     const std::string nn = newName.trimmed().toStdString();
     if (!mesh || !mesh->hasAnimation(on) || mesh->hasAnimation(nn)) return false;
     if (isPoseShapeClip(mesh.get(), on)) return false;  // that's a target, not a clip
+
+    // Stop playback + disable the old clip's state before recreating/removing
+    // the animation — the render loop reads the clip's tracks every frame, so
+    // mutating it while its AnimationState is active leaves a stale reference
+    // (mirrors the delete path).
+    if (auto* ppc = PropertiesPanelController::instance()) ppc->setPlaying(false);
+    if (auto* states = entity->getAllAnimationStates()) {
+        if (states->hasAnimationState(on))
+            states->getAnimationState(on)->setEnabled(false);
+    }
 
     // Rebuild the Animation under the new name copying every VAT_POSE track +
     // keyframe + pose reference, then drop the old one. (Ogre has no rename.)
