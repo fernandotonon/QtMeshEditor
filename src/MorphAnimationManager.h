@@ -125,6 +125,18 @@ public:
     /// first clip created). Also the glTF export fallback name.
     static const char* kWeightClipName;
 
+    /// Entity-explicit weight-keyframe writer — the core of
+    /// setMorphWeightKeyframe without the SelectionSet/active-clip coupling,
+    /// for batch writers (mocap recording #873) that target a specific entity
+    /// and clip. Handles the shared-track subtlety (targets on the same
+    /// submesh share one VAT_POSE track; only THIS pose's reference at `time`
+    /// is added/updated) and extends the clip length. Does NOT emit signals
+    /// or refresh animation states — callers batch-refresh once via
+    /// `entity->refreshAvailableAnimationState()` after the last key.
+    static bool writeWeightKeyOn(Ogre::Entity* entity, const std::string& clip,
+                                 const std::string& targetName, float time,
+                                 float weight);
+
     /// Make the ACTIVE morph clip the playable animation on the selected entity:
     /// select it in the Animation Control panel + enable its AnimationState so
     /// the timeline scrubs/plays the keyed weights. No-op if it doesn't exist.

@@ -167,6 +167,9 @@ Mocap/FaceCapMapper.cpp
 Mocap/FaceCapPose.cpp
 Mocap/FaceCapGeom.cpp
 Mocap/FaceCapPredictor.cpp
+Mocap/MocapRecorder.cpp
+Mocap/MocapCLI.cpp
+commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp

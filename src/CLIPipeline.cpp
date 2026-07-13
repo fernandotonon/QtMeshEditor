@@ -6,6 +6,7 @@
 #include "AlembicImporter.h"
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
+#include "Mocap/MocapCLI.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
 #include "MotionLibrary.h"
@@ -591,7 +592,10 @@ void CLIPipeline::writeOutput(const QString& text)
 
 void CLIPipeline::writeCliError(const QString& text)
 {
-    err() << text;
+    // Explicit flush: the CLI exits via _exit(), which skips the static
+    // QTextStream's destructor — without this the error text is silently
+    // lost in the stream buffer.
+    err() << text << Qt::flush;
 }
 
 void CLIPipeline::printUsage()
@@ -866,6 +870,12 @@ void CLIPipeline::printUsage()
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
         "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
         "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
+        "  mocap <video> --face --mesh <meshfile> [-o out.glb] [--clip-name NAME] [--fps N]\n"
+        "              [--smooth-cutoff HZ] [--no-smooth] [--map overrides.json] [--no-head]\n"
+        "              [--frames-dir DIR] [--json]\n"
+        "                                    Performance capture: facial expressions from a video onto the\n"
+        "                                    mesh's ARKit-style morph targets as a weight clip, plus head\n"
+        "                                    rotation (needs -DENABLE_MOCAP; body capture lands with #874).\n"
         "\n"
         "  ps1 capture <iso> --bios <bios> [--frames N | --scene Ns] [--script in.json]\n"
         "              [--auto-input] [--tracked-only] [--smooth] [--drop-slivers]\n"
@@ -1596,6 +1606,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "hdri") rc = cmdHdri(argc, argv);
     else if (cmd == "light") rc = SceneLightsCLI::run(argc, argv);
+    else if (cmd == "mocap") rc = MocapCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
