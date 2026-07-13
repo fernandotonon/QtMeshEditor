@@ -75,6 +75,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FootContact.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.cpp

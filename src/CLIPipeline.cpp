@@ -2017,7 +2017,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
-                                 float armSpaceDeg)
+                                 float armSpaceDeg, bool footPin)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2147,6 +2147,19 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                   << Qt::endl;
     }
 
+    // #856: foot-contact cleanup — ON by default (--no-foot-pin disables).
+    if (footPin) {
+        const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+        if (fp.ok && fp.spans > 0) {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ai.tool_call"),
+                QStringLiteral("foot_pin %1 spans").arg(fp.spans));
+            err() << "(foot-pin: " << fp.spans << " contact span(s), "
+                  << fp.keyframesAdjusted << " keyframes)" << Qt::endl;
+        } else if (!fp.ok)
+            err() << "Note: foot-pin skipped (" << fp.error << ")." << Qt::endl;
+    }
+
     auto* node = entity->getParentSceneNode();
     const QString fmt = formatForExtension(outputPath);
     if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
@@ -2200,6 +2213,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
+    bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
+    bool footPinSet = false;          // --foot-pin given (standalone post-process)
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -2293,6 +2308,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             armSpaceSet = true;
             continue;
         }
+        // #856 foot-contact cleanup: ON by default during --generate
+        // (--no-foot-pin opts out); --foot-pin alone post-processes an
+        // EXISTING animation (standalone, needs --animation).
+        if (arg == "--no-foot-pin") { generateFootPin = false; continue; }
+        if (arg == "--foot-pin") { footPinSet = true; continue; }
         if (arg == "--simplify") { simplifyMode = true; continue; }
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
@@ -2388,7 +2408,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
-                               generateUseModel, armSpaceDeg);
+                               generateUseModel, armSpaceDeg, generateFootPin);
     }
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
@@ -2430,6 +2450,45 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         cliWrite(QString("Adjusted arm space of '%1' to %2 deg → %3\n")
                      .arg(animationFilter).arg(armSpaceDeg)
+                     .arg(QFileInfo(out).fileName()));
+        return 0;
+    }
+
+    // #856 standalone: pin the feet of an EXISTING animation (no --generate).
+    // `qtmesh anim <file> --foot-pin --animation <name> -o out`.
+    if (footPinSet) {
+        if (animationFilter.isEmpty()) {
+            err() << "Error: --foot-pin (standalone) requires --animation <name>."
+                  << Qt::endl;
+            return 2;
+        }
+        if (!initOgreHeadless()) return 1;
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* entity = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { entity = e; break; }
+        if (!entity) {
+            err() << "Error: " << filePath << " has no skinned mesh." << Qt::endl;
+            return 1;
+        }
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const auto fp = AnimationMerger::pinFeet(
+            skel.get(), animationFilter.toStdString());
+        if (!fp.ok) {
+            err() << "Error: foot-pin failed: " << fp.error << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+            QStringLiteral("foot_pin %1 spans").arg(fp.spans));
+        const QString out = outputPath.isEmpty() ? filePath : outputPath;
+        auto* node = entity->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("Pinned feet of '%1' (%2 span(s), %3 keyframes) → %4\n")
+                     .arg(animationFilter).arg(fp.spans)
+                     .arg(fp.keyframesAdjusted)
                      .arg(QFileInfo(out).fileName()));
         return 0;
     }

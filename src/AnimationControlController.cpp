@@ -1833,7 +1833,7 @@ double AnimationControlController::currentArmSpace(const QString& animName,
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                        double duration, bool useModel,
-                                                       double armSpaceDeg)
+                                                       double armSpaceDeg, bool footPin)
 {
     QVariantMap out;
     out["ok"] = false;
@@ -1936,6 +1936,13 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     if (std::abs(armSpaceDeg) > 1e-4)
         AnimationMerger::adjustArmSpace(skel.get(), animName,
                                         static_cast<float>(armSpaceDeg));
+
+    // #856: foot-contact cleanup — ON by default (checkbox opts out).
+    if (footPin) {
+        const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+        if (fp.ok && fp.spans > 0)
+            out["footPinSpans"] = fp.spans;
+    }
 
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all

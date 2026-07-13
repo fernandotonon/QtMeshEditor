@@ -343,10 +343,13 @@ public:
     /// (MotionGenerator/ONNX); it falls back to the template library automatically
     /// when the model is unavailable or the action isn't in its vocab. Default
     /// false = the reliable template-clip retarget.
+    /// `footPin` (default true) runs the #856 foot-contact cleanup on the
+    /// generated clip (contact detection + two-bone IK pinning).
     Q_INVOKABLE QVariantMap generateMotion(const QString& prompt,
                                            double duration = 0.0,
                                            bool useModel = false,
-                                           double armSpaceDeg = 0.0);
+                                           double armSpaceDeg = 0.0,
+                                           bool footPin = true);
 
     /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
     /// the selected entity. Positive `degrees` widens the arms away from the

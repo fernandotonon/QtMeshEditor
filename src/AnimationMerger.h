@@ -260,6 +260,37 @@ public:
                                    const std::string& oldAnim,
                                    const std::string& newAnim);
 
+    /// Outcome of pinFeet.
+    struct FootPinResult {
+        bool ok = false;
+        QString error;
+        int spans = 0;            ///< contact spans pinned (both feet)
+        int keyframesAdjusted = 0;
+    };
+
+    /// #856 — foot-contact cleanup. Retargeted clips slide/float feet on rigs
+    /// whose proportions differ from the source (the direction retarget
+    /// transfers bone DIRECTIONS, not world foot positions). Per foot role,
+    /// detect contact spans (foot near the clip's ground level AND nearly
+    /// stationary horizontally — FootContact::detectContacts, canonical-frame,
+    /// leg-length-scaled thresholds) and lock the foot's world position to its
+    /// span-start position with an analytic two-bone hip–knee–foot IK
+    /// (FootContact::solveKnee — keeps segment lengths and the pose's own
+    /// bend plane), blending in/out over `blendFrames` at span edges so knees
+    /// don't pop. Rewrites ONLY the thigh/shin/foot keyframes (foot keeps its
+    /// original world orientation); everything else untouched. Pure track
+    /// math — nothing is applied to the live skeleton.
+    ///
+    /// Effectively idempotent: a second run detects the already-planted spans
+    /// and re-pins to the same targets (near-no-op). The application is
+    /// recorded on bone[0]'s UserObjectBindings ("qtme.footpin.<anim>") so a
+    /// UI can reflect state; applyMotionClip clears it on clip regeneration.
+    /// Designed for generated clips (dense uniform keyframes); sparse
+    /// authored clips get keyframe-rate detection (approximate).
+    static FootPinResult pinFeet(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 int blendFrames = 3);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

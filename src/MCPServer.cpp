@@ -651,6 +651,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
+        {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
@@ -4132,6 +4133,13 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             armSpaceApplied = AnimationMerger::adjustArmSpace(
                 skel.get(), animName, static_cast<float>(armSpace));
 
+        // #856: foot-contact cleanup — ON by default (foot_pin:false opts out).
+        int footPinSpans = -1;
+        if (args.value("foot_pin").toBool(true)) {
+            const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+            footPinSpans = fp.ok ? fp.spans : -1;
+        }
+
         entity->refreshAvailableAnimationState();
         // Exclusively enable the generated clip — enabled states BLEND in
         // Ogre, and mixing with the import's auto-enabled animation renders
@@ -4167,6 +4175,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         content["tracks_written"] = r.tracksWritten; content["canonical_joints"] = r.canonicalJoints;
         content["entity"] = QString::fromStdString(entity->getName());
         if (std::abs(armSpace) > 1e-4) content["arm_space_applied"] = armSpaceApplied;
+        if (footPinSpans >= 0) content["foot_pin_spans"] = footPinSpans;
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
@@ -4241,6 +4250,76 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
         content["ok"] = true;
         content["animation"] = animName;
         content["arm_space"] = degrees;
+        content["entity"] = QString::fromStdString(entity->getName());
+        if (!outPath.isEmpty()) content["exported"] = outPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolPinFeet(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+            QStringLiteral("MCP pin_feet"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString animName = args.value("animation_name").toString();
+        if (animName.isEmpty())
+            return makeErrorResult("Error: animation_name is required.");
+
+        const QString entityName = args.value("entity_name").toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
+                continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) {
+                entity = ent; break;
+            }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: no skinned mesh found.")
+                : QString("Error: skinned entity '%1' not found.").arg(entityName));
+
+        // Edit the mesh's MASTER skeleton (exporter serializes the master;
+        // animations are shared, so the live viewport still updates).
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const std::string an = animName.toStdString();
+        if (!skel || !skel->hasAnimation(an))
+            return makeErrorResult(
+                QString("Error: animation '%1' not found on entity.").arg(animName));
+
+        const auto fp = AnimationMerger::pinFeet(skel.get(), an);
+        if (!fp.ok)
+            return makeErrorResult(
+                QString("Error: foot-pin failed: %1").arg(fp.error));
+
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
+
+        const QString outPath = args.value("output_path").toString();
+        if (!outPath.isEmpty()) {
+            auto* node = entity->getParentSceneNode();
+            if (MeshImporterExporter::exporter(
+                    node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
+                return makeErrorResult(
+                    QString("Error: pinned feet but export to %1 failed")
+                        .arg(outPath));
+        }
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["animation"] = animName;
+        content["spans"] = fp.spans;
+        content["keyframes_adjusted"] = fp.keyframesAdjusted;
         content["entity"] = QString::fromStdString(entity->getName());
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
@@ -8134,6 +8213,7 @@ QJsonArray MCPServer::buildToolsList()
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the new animation (e.g. /tmp/out.glb). If omitted, the animation is applied in-session only."}};
         props["model"] = QJsonObject{{"type", "boolean"}, {"description", "EXPERIMENTAL: use the trained from-scratch text-to-motion ONNX model instead of the template clip. Falls back to the template library automatically if the model is unavailable or the action isn't in its vocabulary. Default false (template). Quality is action-dependent (locomotion better than gestures)."}};
         props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Optional Mixamo-style arm-space post-process in degrees (#854): positive widens the arms away from the body, negative tucks them in. Default 0. Rescues arm-into-torso clipping on rigs whose proportions differ from the clip."}};
+        props["foot_pin"] = QJsonObject{{"type", "boolean"}, {"description", "Foot-contact cleanup (#856): detect ground-contact spans and IK-pin the feet so they plant instead of skating. Default true; set false to keep the raw retarget."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
@@ -8163,6 +8243,24 @@ QJsonArray MCPServer::buildToolsList()
             "the prior value), so it maps directly to a UI slider.",
             props,
             QJsonArray{"animation_name", "arm_space"}
+        );
+    }
+
+    // pin_feet
+    {
+        QJsonObject props;
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to clean up, e.g. \"generated_walk\"."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity. If omitted, uses the first skinned entity."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the cleaned animation. If omitted, applied in-session only."}};
+        appendTool(
+            "pin_feet",
+            "Foot-contact cleanup (#856): detect frames where each foot is near the clip's ground level and "
+            "nearly stationary (contact spans) and lock the foot's world position to its span-start position "
+            "with an analytic two-bone hip-knee-foot IK, blending in/out at span edges so knees don't pop. "
+            "Fixes foot skating/floating on retargeted clips whose rig proportions differ from the source. "
+            "Only the thigh/shin/foot keyframes are rewritten; effectively idempotent.",
+            props,
+            QJsonArray{"animation_name"}
         );
     }
 

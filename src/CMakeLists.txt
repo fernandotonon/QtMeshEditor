@@ -65,6 +65,7 @@ SentryReporter.cpp
 BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
+FootContact.cpp
 CLIPipeline.cpp
 ConsoleLogSanitize.cpp
 MeshInfoOverlay.cpp
@@ -280,6 +281,7 @@ SentryReporter.h
 BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
+FootContact.h
 CLIPipeline.h
 MeshInfoOverlay.h
 RTShaderHelper.h

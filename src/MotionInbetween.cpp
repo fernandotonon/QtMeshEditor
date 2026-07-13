@@ -153,7 +153,7 @@ int MotionInbetween::canonicalIndexForBone(const QString& boneName)
         if (has({"elbow", "forearm", "lowerarm"}))       return 8;   // relbow
         if (has({"hand", "wrist"}))                      return 9;   // rhand
         if (has({"buttock"}))                            return 14;  // rbuttock
-        if (has({"upleg", "thigh", "hip", "femur"}))     return 15;  // rhip
+        if (has({"upleg", "upperleg", "thigh", "hip", "femur"})) return 15;  // rhip
         if (has({"knee", "leg", "shin", "calf"}) && !has({"upleg","thigh"})) return 16; // rknee
         if (has({"foot", "ankle"}))                      return 17;  // rfoot
     } else if (side == 'l') {
@@ -163,7 +163,7 @@ int MotionInbetween::canonicalIndexForBone(const QString& boneName)
         if (has({"elbow", "forearm", "lowerarm"}))       return 12;  // lelbow
         if (has({"hand", "wrist"}))                      return 13;  // lhand
         if (has({"buttock"}))                            return 18;  // lbuttock
-        if (has({"upleg", "thigh", "hip", "femur"}))     return 19;  // lhip
+        if (has({"upleg", "upperleg", "thigh", "hip", "femur"})) return 19;  // lhip
         if (has({"knee", "leg", "shin", "calf"}) && !has({"upleg","thigh"})) return 20; // lknee
         if (has({"foot", "ankle"}))                      return 21;  // lfoot
     }
