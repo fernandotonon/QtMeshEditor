@@ -376,29 +376,29 @@ bool MocapController::startPreview(const QString& deviceId)
     // beginPreview() once granted. checkPermission() short-circuits the prompt
     // on repeat runs.
     QCameraPermission camPerm;
-    switch (qApp->checkPermission(camPerm)) {
-    case Qt::PermissionStatus::Granted:
+    if (qApp->checkPermission(camPerm) == Qt::PermissionStatus::Granted)
         return beginPreview(deviceId);
-    case Qt::PermissionStatus::Denied:
-        setStatusMessage(tr("Camera access is denied — enable it for "
-                            "QtMeshEditor in System Settings → Privacy & "
-                            "Security → Camera, then try again."));
-        emit errorOccurred(d->status);
-        return false;
-    case Qt::PermissionStatus::Undetermined:
-        setStatusMessage(tr("Requesting camera access…"));
-        qApp->requestPermission(camPerm, this,
-            [this, deviceId](const QPermission& result) {
-                if (result.status() == Qt::PermissionStatus::Granted) {
-                    beginPreview(deviceId);
-                } else {
-                    setStatusMessage(tr("Camera access was not granted."));
-                    emit errorOccurred(d->status);
-                }
-            });
-        return true;  // async; the callback finishes the job
-    }
-    return false;
+
+    // Not granted yet — ALWAYS go through requestPermission(). It is the only
+    // call that shows the OS dialog (checkPermission never prompts); on the
+    // first run macOS presents it, and if the user previously denied it the
+    // request returns Denied without a dialog, which we turn into the
+    // open-Settings hint. We do NOT short-circuit on a pre-checked Denied,
+    // so clicking Preview always makes a real attempt at the prompt.
+    setStatusMessage(tr("Requesting camera access…"));
+    qApp->requestPermission(camPerm, this,
+        [this, deviceId](const QPermission& result) {
+            if (result.status() == Qt::PermissionStatus::Granted) {
+                beginPreview(deviceId);
+            } else {
+                setStatusMessage(
+                    tr("Camera access was not granted. If no prompt appeared, "
+                       "enable it for QtMeshEditor in System Settings → "
+                       "Privacy & Security → Camera, then click Preview again."));
+                emit errorOccurred(d->status);
+            }
+        });
+    return true;  // async; the callback finishes the job
 }
 
 bool MocapController::beginPreview(const QString& deviceId)
