@@ -13,8 +13,8 @@
 # uploaded next to the weights as the license requires.
 #
 # Prereqs:
-#   pip install -U "huggingface_hub[cli]"
-#   huggingface-cli login          # a token with write access to the repo
+#   pip install -U huggingface_hub
+#   hf auth login                  # a token with write access to the repo
 #   scripts/export-facecap-onnx.py already run → OUT_DIR holds face/ + pose/
 #
 # Usage:
@@ -28,7 +28,9 @@ upload() {  # <local> <repo-path>
     local src="$1" dst="$2"
     if [ -f "$src" ]; then
         echo ">> uploading $src -> $REPO:$dst"
-        huggingface-cli upload "$REPO" "$src" "$dst"
+        # `hf upload <repo> <local> <path-in-repo>` (huggingface_hub >= 1.0;
+        # the old `huggingface-cli upload` was removed).
+        hf upload "$REPO" "$src" "$dst"
     else
         echo "!! skip (missing): $src"
     fi
