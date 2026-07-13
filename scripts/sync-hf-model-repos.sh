@@ -25,6 +25,12 @@
 #   u2net      → QtMeshEditor-u2net-onnx       (Apache, U²-Net / rembg)
 #   smolvlm    → QtMeshEditor-smolvlm-gguf     (Apache, HuggingFaceTB SmolVLM Q8_0)
 #   motion     → QtMeshEditor-t2m              (CC0,    in-house; template clip library)
+#   mocap-* (5, #869; Apache, converted Google MediaPipe graphs):
+#     blazeface       → QtMeshEditor-blazeface-onnx       (face detector)
+#     facemesh        → QtMeshEditor-facemesh-onnx        (478 face landmarks)
+#     faceblendshapes → QtMeshEditor-faceblendshapes-onnx (52 ARKit blendshapes)
+#     blazepose       → QtMeshEditor-blazepose-onnx       (person detector)
+#     poselandmarks   → QtMeshEditor-poselandmarks-onnx   (33 world landmarks)
 set -euo pipefail
 
 OWNER=fernandotonon
@@ -42,6 +48,11 @@ declare -A REPOS=(
   [u2net]=QtMeshEditor-u2net-onnx
   [smolvlm]=QtMeshEditor-smolvlm-gguf
   [motion]=QtMeshEditor-t2m
+  [blazeface]=QtMeshEditor-blazeface-onnx
+  [facemesh]=QtMeshEditor-facemesh-onnx
+  [faceblendshapes]=QtMeshEditor-faceblendshapes-onnx
+  [blazepose]=QtMeshEditor-blazepose-onnx
+  [poselandmarks]=QtMeshEditor-poselandmarks-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -53,6 +64,11 @@ declare -A FILES=(
   [u2net]="rembg/u2net.onnx"
   [smolvlm]="caption/SmolVLM-500M-Instruct-Q8_0.gguf caption/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"
   [motion]="motion/motion-library.json"
+  [blazeface]="mocap/face/face_detector.onnx"
+  [facemesh]="mocap/face/face_landmarks.onnx"
+  [faceblendshapes]="mocap/face/face_blendshapes.onnx"
+  [blazepose]="mocap/pose/pose_detector.onnx"
+  [poselandmarks]="mocap/pose/pose_landmarks.onnx"
 )
 
 sync_one() {
@@ -60,8 +76,9 @@ sync_one() {
   echo "=== $model → $repo"
   for f in ${FILES[$model]}; do
     echo "  $f"
-    huggingface-cli download "$AGG" "$f" --local-dir "$WORK" --quiet
-    huggingface-cli upload "$repo" "$WORK/$f" "$(basename "$f")" --quiet
+    # `hf` replaces the removed `huggingface-cli` (huggingface_hub >= 1.0).
+    hf download "$AGG" "$f" --local-dir "$WORK" --quiet
+    hf upload "$repo" "$WORK/$f" "$(basename "$f")" --quiet
     rm -f "$WORK/$f"          # multi-GB files — don't accumulate
   done
 }

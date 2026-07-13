@@ -14,7 +14,13 @@ the binary). Attribution + licenses for the models and their training data:
 > [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx),
 > [`QtMeshEditor-realesrgan-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-realesrgan-onnx),
 > [`QtMeshEditor-u2net-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-u2net-onnx),
-> [`QtMeshEditor-smolvlm-gguf`](https://huggingface.co/fernandotonon/QtMeshEditor-smolvlm-gguf)
+> [`QtMeshEditor-smolvlm-gguf`](https://huggingface.co/fernandotonon/QtMeshEditor-smolvlm-gguf),
+> and the five performance-capture (#869) MediaPipe graphs
+> [`QtMeshEditor-blazeface-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-blazeface-onnx),
+> [`QtMeshEditor-facemesh-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx),
+> [`QtMeshEditor-faceblendshapes-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-faceblendshapes-onnx),
+> [`QtMeshEditor-blazepose-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-blazepose-onnx),
+> [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx)
 > (plus the in-house
 > [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
 > [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
