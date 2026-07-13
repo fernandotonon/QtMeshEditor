@@ -138,6 +138,7 @@
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
 #include "ImageTo3D/MeshGenController.h"
+#include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
 #include "EditorModeController.h"
@@ -580,6 +581,7 @@ MainWindow::~MainWindow()
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
+        MocapController::kill();
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
@@ -765,6 +767,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SkinWeightsController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MocapController>(
+            "PropertiesPanel", 1, 0, "MocapController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MocapController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<LightsController>(
             "PropertiesPanel", 1, 0, "LightsController",

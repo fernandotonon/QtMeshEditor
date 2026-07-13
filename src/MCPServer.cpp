@@ -20,6 +20,7 @@
 #include "Mocap/PoseIKSolver.h"
 #include "Mocap/VideoFrameSource.h"
 #include "commands/RecordMocapClipCommand.h"
+#include "Mocap/MocapController.h"
 #endif
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
@@ -706,6 +707,9 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
         {QStringLiteral("capture_face_from_video"), &MCPServer::toolCaptureFaceFromVideo},
         {QStringLiteral("capture_body_from_video"), &MCPServer::toolCaptureBodyFromVideo},
+        {QStringLiteral("list_capture_devices"), &MCPServer::toolListCaptureDevices},
+        {QStringLiteral("start_live_capture"), &MCPServer::toolStartLiveCapture},
+        {QStringLiteral("stop_live_capture"), &MCPServer::toolStopLiveCapture},
         {QStringLiteral("play_vertex_animation"), &MCPServer::toolPlayVertexAnimation},
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
@@ -6636,6 +6640,81 @@ QJsonObject MCPServer::toolCaptureFaceFromVideo(const QJsonObject &args)
 #endif // ENABLE_MOCAP
 }
 
+QJsonObject MCPServer::toolListCaptureDevices(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_capture_devices");
+#ifndef ENABLE_MOCAP
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    QJsonArray devices;
+    for (const auto& dev : CameraFrameSource::availableDevices()) {
+        QJsonObject o;
+        o["id"] = dev.id;
+        o["description"] = dev.description;
+        devices.append(o);
+    }
+    QJsonObject content;
+    content["devices"] = devices;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolStartLiveCapture(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "start_live_capture");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getMainWindow())
+        return makeErrorResult(
+            "Error: live capture needs the GUI (run with --with-mcp, not --mcp).");
+    auto* c = MocapController::instance();
+    if (c->state() != MocapController::Idle)
+        return makeErrorResult("Error: a live capture session is already running");
+    if (!c->startPreview(args.value("device_id").toString()))
+        return makeErrorResult(QString("Error: %1").arg(c->statusMessage()));
+    QJsonObject content;
+    content["ok"] = true;
+    content["state"] = "previewing";
+    content["matchedChannels"] = c->matchedChannelCount();
+    content["headAvailable"] = c->headAvailable();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolStopLiveCapture(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "stop_live_capture");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    auto* c = MocapController::instance();
+    if (c->state() == MocapController::Idle)
+        return makeErrorResult("Error: no live capture session is running");
+    if (args.value("record").toBool(false)
+        && c->state() == MocapController::Recording)
+        c->stopRecording();
+    c->stopPreview();
+    QJsonObject content;
+    content["ok"] = true;
+    content["status"] = c->statusMessage();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
 QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "capture_body_from_video");
@@ -9605,6 +9684,36 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // live capture (epic #869, Slice F #875) — GUI-attached sessions only
+    {
+        QJsonObject props;
+        appendTool(
+            "list_capture_devices",
+            "List the available camera devices for live performance capture "
+            "(id + description). Requires a build with ENABLE_MOCAP=ON.",
+            props, QJsonArray());
+    }
+    {
+        QJsonObject props;
+        props["device_id"] = QJsonObject{{"type", "string"}, {"description", "Camera id from list_capture_devices (default camera when omitted)."}};
+        QJsonArray required;
+        appendTool(
+            "start_live_capture",
+            "Start a live webcam performance-capture preview driving the SELECTED entity's "
+            "morph targets + Head bone (the GUI Performance Capture panel's session). Only "
+            "works in --with-mcp (GUI) mode. Follow with stop_live_capture.",
+            props, required);
+    }
+    {
+        QJsonObject props;
+        props["record"] = QJsonObject{{"type", "boolean"}, {"description", "true: stop and commit the recording in progress (if any) before stopping the preview."}};
+        appendTool(
+            "stop_live_capture",
+            "Stop the live performance-capture preview started by start_live_capture, "
+            "restoring the entity's prior state exactly.",
+            props, QJsonArray());
     }
 
     // import_alembic

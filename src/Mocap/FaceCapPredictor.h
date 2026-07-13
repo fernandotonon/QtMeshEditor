@@ -22,6 +22,7 @@
 #ifdef ENABLE_MOCAP
 
 #include <QImage>
+#include <QMetaType>
 #include <QString>
 
 #include <array>
@@ -37,6 +38,7 @@ struct FaceSample {
     std::array<float, 3> headTranslation{0.f, 0.f, 0.f};    // px units
     float confidence = 0.f;                              // 0 = no face
 };
+Q_DECLARE_METATYPE(FaceSample)
 
 class FaceCapPredictor {
 public:

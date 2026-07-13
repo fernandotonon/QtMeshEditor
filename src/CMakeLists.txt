@@ -171,6 +171,7 @@ Mocap/MocapRecorder.cpp
 Mocap/PoseCapPredictor.cpp
 Mocap/PoseIKSolver.cpp
 Mocap/MocapCLI.cpp
+Mocap/MocapController.cpp
 commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp

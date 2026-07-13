@@ -609,6 +609,31 @@ Rectangle {
                 Component.onCompleted: content = skinningToolsComponent
             }
 
+            // ---- Performance Capture (Animation mode, epic #869) ----
+            // Live webcam capture: preview drives the selected entity's
+            // morph targets + Head bone in real time; Record writes an
+            // ordinary undoable clip. Gated on a selection that has either
+            // ARKit-style morph targets or a resolvable Head bone; disabled
+            // builds show the rebuild hint inside the section.
+            CollapsibleSection {
+                id: performanceCaptureSection
+                title: "Performance Capture"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && PropertiesPanelController.hasEntitySelection
+                expanded: false
+
+                Component.onCompleted: content = performanceCaptureComponent
+
+                // never leave the camera running when the section disappears
+                // (mode change / deselect) — the AutoRig marker-session
+                // precedent.
+                onSectionVisibleChanged: if (!sectionVisible
+                        && MocapController.available
+                        && MocapController.state !== 0)
+                    MocapController.stopPreview()
+            }
+
             // ---- Rigging (Animation mode) ----
             // Issue #407: native auto-rig. Shown in Animation Mode for a
             // STATIC (skeleton-less) selection — embedding a skeleton is the
@@ -2275,6 +2300,211 @@ Rectangle {
     // Issue #402: auto skin weights. The "Compute Skin Weights…"
     // button opens the dialog; it disables on static meshes
     // (no skeleton). The operation is undoable (Ctrl+Z).
+    Component {
+        id: performanceCaptureComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            readonly property bool mocapReady: MocapController.available
+            readonly property bool previewing: MocapController.state >= 2
+            readonly property bool recording: MocapController.state === 3
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: mocapReady
+                    ? "Webcam performance capture: Preview drives the selection's "
+                      + "ARKit-style morph targets and Head bone live; Record writes "
+                      + "an undoable clip onto the timeline. Body capture runs "
+                      + "offline via 'qtmesh mocap --body'."
+                    : MocapController.unavailableReason
+            }
+
+            // device picker + preview toggle
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                visible: mocapReady
+
+                ComboBox {
+                    id: mocapDeviceCombo
+                    width: parent.width - previewBtn.width - 6
+                    model: MocapController.availableDevices
+                    textRole: "description"
+                    valueRole: "id"
+                    enabled: MocapController.state === 0
+                    Component.onCompleted: MocapController.refreshDevices()
+                }
+
+                Rectangle {
+                    id: previewBtn
+                    width: 70
+                    height: 26
+                    radius: 3
+                    color: previewMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        text: MocapController.state === 0 ? "Preview" : "Stop"
+                    }
+                    MouseArea {
+                        id: previewMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            if (MocapController.state === 0)
+                                MocapController.startPreview(
+                                    mocapDeviceCombo.currentValue !== undefined
+                                        ? mocapDeviceCombo.currentValue : "")
+                            else
+                                MocapController.stopPreview()
+                        }
+                    }
+                }
+            }
+
+            // camera preview + HUD
+            Rectangle {
+                width: parent.width - 16
+                height: visible ? 140 : 0
+                visible: mocapReady && MocapController.previewDataUrl !== ""
+                color: "black"
+                radius: 3
+
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    fillMode: Image.PreserveAspectFit
+                    source: MocapController.previewDataUrl
+                    cache: false
+                }
+                Rectangle {
+                    width: 10; height: 10; radius: 5
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: 6
+                    color: MocapController.faceDetected ? "#4caf50" : "#f44336"
+                }
+                Text {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.margins: 4
+                    color: "white"
+                    font.pixelSize: 10
+                    style: Text.Outline
+                    styleColor: "black"
+                    text: MocapController.liveFps.toFixed(0) + " fps"
+                        + (recording
+                           ? "  ● REC " + MocapController.recordingSeconds.toFixed(1) + "s"
+                           : "")
+                }
+            }
+
+            // channel summary
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                visible: mocapReady && previewing
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: MocapController.matchedChannelCount + " morph channels matched"
+                    + (MocapController.headAvailable ? " + Head bone" : "")
+                    + (MocapController.unmatchedChannels.length > 0
+                       ? " (" + MocapController.unmatchedChannels.length
+                         + " capture channels unmatched)"
+                       : "")
+            }
+
+            // clip name + record controls
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                visible: mocapReady && previewing
+
+                TextField {
+                    id: mocapClipName
+                    width: parent.width - calibrateBtn.width - recordBtn.width - 12
+                    text: MocapController.clipName
+                    font.pixelSize: 11
+                    enabled: !recording
+                    onEditingFinished: MocapController.clipName = text
+                }
+                Rectangle {
+                    id: calibrateBtn
+                    width: 64
+                    height: 26
+                    radius: 3
+                    color: calibrateMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        text: "Neutral"
+                    }
+                    MouseArea {
+                        id: calibrateMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: MocapController.calibrateNeutral()
+                    }
+                }
+                Rectangle {
+                    id: recordBtn
+                    width: 70
+                    height: 26
+                    radius: 3
+                    color: recording ? "#b23b3b"
+                        : (recordMa.containsMouse
+                           ? PropertiesPanelController.highlightColor
+                           : PropertiesPanelController.headerColor)
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        color: recording ? "white" : PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        text: recording ? "■ Stop" : "● Record"
+                    }
+                    MouseArea {
+                        id: recordMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: recording ? MocapController.stopRecording()
+                                             : MocapController.startRecording()
+                    }
+                }
+            }
+
+            // status line
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                visible: mocapReady && MocapController.statusMessage !== ""
+                color: PropertiesPanelController.textColor
+                opacity: 0.9
+                font.pixelSize: 10
+                font.italic: true
+                text: MocapController.statusMessage
+            }
+        }
+    }
+
     Component {
         id: skinningToolsComponent
 

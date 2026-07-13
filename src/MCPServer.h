@@ -283,6 +283,9 @@ private:
     QJsonObject toolImportAlembic(const QJsonObject &args);
     QJsonObject toolCaptureFaceFromVideo(const QJsonObject &args);
     QJsonObject toolCaptureBodyFromVideo(const QJsonObject &args);
+    QJsonObject toolListCaptureDevices(const QJsonObject &args);
+    QJsonObject toolStartLiveCapture(const QJsonObject &args);
+    QJsonObject toolStopLiveCapture(const QJsonObject &args);
 
     /// Vertex-anim B3 (#519): enable + play a vertex-animation clip on an
     /// entity. Args: `entity`, `animation`. Light — state poke on a live entity.
