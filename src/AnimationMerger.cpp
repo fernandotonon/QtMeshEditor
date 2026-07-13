@@ -1643,6 +1643,98 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 const auto& q = clipQuats[frame][joint];
                 return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
             };
+            // #857: STABILIZED TWIST TRANSPORT. The aim above transports the
+            // bone's DIRECTION but inherits the target bind's roll — gesture-
+            // heavy clips (dance, wave) lose forearm/spine roll and read
+            // flat. Decompose the source's frame rotation into swing (the
+            // direction, already transported) + twist about the bone axis:
+            //     Δ(f)   = Ws(f) · Ws_bind⁻¹              (canonical axes)
+            //     aim(f) = arc(d_bind → d(f))
+            //     θ(f)   = signed angle of aim(f)⁻¹·Δ(f) about d_bind
+            // θ is wrapped to (−π,π] then UNWRAPPED across frames (a ±180°
+            // pop near the shortest-arc degeneracy would otherwise flip the
+            // roll direction mid-clip once a gain ≠ 1 scales it) and composed
+            // on the target about the SAME pole the source decomposed about:
+            //     Qbase  = arc(dt_bind → d_ref) · Wt_bind      (once per bone)
+            //     Wt(f)  = twist(θ·gain, ds) · arc(d_ref → ds) · Qbase
+            // Recomposing per-frame from the TARGET BIND direction instead
+            // (the pre-#857 form) decomposes about a different pole than the
+            // source did — the roll component "between" the two poles leaks
+            // into swing and inflates amplitude (measured: Mixamo self-parity
+            // arm amp +38%, elbow error 3.3°→6.3°). With matched poles the
+            // per-frame relative motion is the source's world delta exactly,
+            // conjugated into target axes — direction stays absolute, roll
+            // transports losslessly, self-parity drops below the aim-only
+            // baseline. Per-role gains: collars damped (they share the
+            // shoulder line's roll), everything else transports fully.
+            static const float kTwistGain[22] = {
+                1.f, 1.f, 1.f, 1.f, 1.f, 1.f,   // spine chain + head
+                0.5f, 1.f, 1.f, 1.f,            // rcollar damped, right arm
+                0.5f, 1.f, 1.f, 1.f,            // lcollar damped, left arm
+                1.f, 1.f, 1.f, 1.f,             // right leg + foot
+                1.f, 1.f, 1.f, 1.f };           // left leg + foot
+            constexpr float kTwistCap = 2.618f;  // 150° — runaway-unwrap guard
+            std::vector<std::vector<float>> twistTheta(
+                static_cast<size_t>(frames),
+                std::vector<float>(static_cast<size_t>(Jc), 0.0f));
+            {
+                constexpr float kTau = 2.0f * static_cast<float>(M_PI);
+                std::vector<float> prev(static_cast<size_t>(Jc), 0.0f);
+                std::vector<char> has(static_cast<size_t>(Jc), 0);
+                for (int f = 0; f < frames; ++f)
+                    for (int c = 0; c < Jc; ++c) {
+                        const Ogre::Vector3& as =
+                            srcLocalAxis[static_cast<size_t>(c)];
+                        if (as.squaredLength() <= 1e-8f) continue;
+                        const auto& rq = cmuRestWorld[static_cast<size_t>(c)];
+                        const Ogre::Quaternion restQ(rq[3], rq[0], rq[1], rq[2]);
+                        const auto& sd = clipRestDir[static_cast<size_t>(c)];
+                        Ogre::Vector3 dbind(sd[0], sd[1], sd[2]);
+                        dbind.normalise();
+                        const Ogre::Quaternion Wf = clipQ(f, c);
+                        const Ogre::Vector3 d = Wf * as;
+                        const Ogre::Quaternion delta = Wf * restQ.Inverse();
+                        const Ogre::Quaternion aim = dbind.getRotationTo(d);
+                        const Ogre::Quaternion tw = aim.Inverse() * delta;
+                        float th = 2.0f * std::atan2(
+                            tw.x * dbind.x + tw.y * dbind.y + tw.z * dbind.z,
+                            tw.w);
+                        th = std::remainder(th, kTau);
+                        if (has[static_cast<size_t>(c)])
+                            th += kTau * std::round(
+                                (prev[static_cast<size_t>(c)] - th) / kTau);
+                        prev[static_cast<size_t>(c)] = th;
+                        has[static_cast<size_t>(c)] = 1;
+                        twistTheta[static_cast<size_t>(f)]
+                                  [static_cast<size_t>(c)] =
+                            std::clamp(th, -kTwistCap, kTwistCap);
+                    }
+            }
+            // Reference-aligned roll baseline per bone: aim the target bind
+            // at the source's REFERENCE direction once, so every per-frame
+            // swing below decomposes about the source's own pole.
+            std::vector<Ogre::Vector3> dref(static_cast<size_t>(Jc),
+                                            Ogre::Vector3::ZERO);
+            for (int c = 0; c < Jc; ++c) {
+                const auto& sd = clipRestDir[static_cast<size_t>(c)];
+                Ogre::Vector3 v(sd[0], sd[1], sd[2]);
+                if (v.squaredLength() > 1e-8f) {
+                    v.normalise();
+                    dref[static_cast<size_t>(c)] = CtInv * v;
+                }
+            }
+            std::vector<Ogre::Quaternion> Qbase(static_cast<size_t>(nBones),
+                                                Ogre::Quaternion::IDENTITY);
+            for (int i = 0; i < nBones; ++i) {
+                const int c = boneToCanon[i];
+                if (c >= 0 && c < Jc
+                    && srcLocalAxis[static_cast<size_t>(c)].squaredLength()
+                           > 1e-8f)
+                    Qbase[static_cast<size_t>(i)] =
+                        tb.tgtBindDir[static_cast<size_t>(c)]
+                            .getRotationTo(dref[static_cast<size_t>(c)])
+                        * tb.bindWorld[static_cast<size_t>(i)];
+            }
             std::vector<Ogre::NodeAnimationTrack*> tracks(
                 static_cast<size_t>(nBones), nullptr);
             for (int i = 0; i < nBones; ++i)
@@ -1675,10 +1767,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             (clipQ(f, c)
                              * srcLocalAxis[static_cast<size_t>(c)]);
                         const Ogre::Quaternion R =
-                            tb.tgtBindDir[static_cast<size_t>(c)]
-                                .getRotationTo(ds);
-                        const Ogre::Quaternion Wt =
-                            R * tb.bindWorld[static_cast<size_t>(i)];
+                            dref[static_cast<size_t>(c)].getRotationTo(ds);
+                        Ogre::Quaternion Wt =
+                            R * Qbase[static_cast<size_t>(i)];
+                        // #857: re-apply the source's roll about the aimed
+                        // direction (the swing above deliberately dropped it).
+                        const float th = twistTheta[static_cast<size_t>(f)]
+                                                   [static_cast<size_t>(c)]
+                                         * kTwistGain[c];
+                        if (std::abs(th) > 1e-5f) {
+                            Ogre::Vector3 axis = ds;
+                            axis.normalise();
+                            Wt = Ogre::Quaternion(Ogre::Radian(th), axis) * Wt;
+                        }
                         local = Wp.Inverse() * Wt;
                         W[static_cast<size_t>(i)] = Wt;
                     } else {
