@@ -768,6 +768,18 @@ endif()
 # Performance capture (epic #869): Qt Multimedia for the frame sources
 if(ENABLE_MOCAP)
     target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Multimedia)
+    # macOS: the camera/microphone PERMISSION backends ship as STATIC Qt
+    # plugins (libqdarwin*permission.a). Merely linking QtMultimedia does NOT
+    # pull them in — without an explicit import, QCameraPermission's
+    # requestPermission() logs "Could not find permission plugin" and returns
+    # Denied instantly, so macOS never shows the prompt and the app never
+    # appears under Privacy & Security → Camera. Import them so the request
+    # reaches TCC. (Qt's QDarwin{Camera,Microphone}PermissionPlugin.)
+    if(APPLE)
+        qt_import_plugins(${CMAKE_PROJECT_NAME}
+            INCLUDE Qt6::QDarwinCameraPermissionPlugin
+                    Qt6::QDarwinMicrophonePermissionPlugin)
+    endif()
 endif()
 
 if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
