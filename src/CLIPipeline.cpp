@@ -9749,18 +9749,36 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 int CLIPipeline::cmdSegment(int argc, char* argv[])
 {
     // Parse: segment <file> [--json] [--no-model] [--up-axis x|y|z]
+    //                        [--category auto|body|vegetation|vehicle|building]
     //                        [--dump-training-data <out.json>]
     QString inputPath;
     QString dumpPath;
     bool jsonOutput = false;
     bool noModel = false;
     int upAxis = 1;   // +Y default
+    MeshSegmenter::Category category = MeshSegmenter::Category::Auto;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "segment" || arg == "--cli") continue;
         if (arg == "--json")     { jsonOutput = true; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--category") {
+            if (i + 1 >= argc) {
+                err() << "Error: --category requires a value (auto, body, "
+                         "vegetation, vehicle, or building)." << Qt::endl;
+                return 2;
+            }
+            bool ok = false;
+            category = MeshSegmenter::categoryFromName(
+                QString::fromLocal8Bit(argv[++i]), &ok);
+            if (!ok) {
+                err() << "Error: --category must be auto, body, vegetation, "
+                         "vehicle, or building." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--dump-training-data") {
             if (i + 1 >= argc) {
                 err() << "Error: --dump-training-data requires an output path." << Qt::endl;
@@ -9787,6 +9805,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
+                 "[--category auto|body|vegetation|vehicle|building] "
                  "[--dump-training-data <out.json>]" << Qt::endl;
         return 2;
     }
@@ -9795,7 +9814,9 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
-        QString("segment .%1 noModel=%2").arg(fi.suffix()).arg(noModel));
+        QString("segment .%1 noModel=%2 category=%3")
+            .arg(fi.suffix()).arg(noModel)
+            .arg(MeshSegmenter::categoryName(category)));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     Ogre::Entity* entity = nullptr;
@@ -9861,7 +9882,10 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         root["upAxis"]      = upAxis;     // miner records the source up axis
         root["vertexCount"] = vertexCount;
         root["resolved"]    = rigResolved;
-        root["partCount"]   = MeshSegmenter::partCount();
+        // Body-label channel count (the miner dumps BODY rig labels 0..6), not
+        // the global multi-category vocabulary size.
+        root["partCount"]   = MeshSegmenter::categoryChannelCount(
+                                  MeshSegmenter::Category::Body);
         root["points"]      = pts;        // flat [x,y,z, …] normalised to unit box
         root["labels"]      = labs;       // per-vertex part index (0=unknown)
         QFile out(dumpPath);
@@ -9876,12 +9900,21 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         return 0;
     }
 
-    QString modelPath;
-    if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();
-
     MeshSegmenter::Options opts;
     opts.upAxis = upAxis;
     opts.forceFallback = noModel;
+    opts.category = category;
+    // Auto → run the category classifier (first-use download); an explicit
+    // --category skips it. --no-model keeps everything offline (Auto → body).
+    if (!noModel)
+        opts.category = MeshSegmenter::resolveCategoryBlocking(
+            verts.data(), vertexCount, opts);
+    else if (opts.category == MeshSegmenter::Category::Auto)
+        opts.category = MeshSegmenter::Category::Body;
+
+    QString modelPath;
+    if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+
     const MeshSegmenter::Result r = MeshSegmenter::predict(
         verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
         modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
@@ -9901,6 +9934,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         QJsonObject root;
         root["mesh"] = fi.fileName();
         root["method"] = r.usedModel ? "model" : "geometric_fallback";
+        root["category"] = MeshSegmenter::categoryName(r.category);
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             root["fallbackReason"] = r.fallbackReason;
         root["vertexCount"] = vertexCount;
@@ -9920,9 +9954,10 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         root["faceLabels"] = fl;
         cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
     } else {
-        cliWrite(QString("Segmented %1 — %2 verts, %3 faces via %4\n")
+        cliWrite(QString("Segmented %1 — %2 verts, %3 faces via %4 (category: %5)\n")
                      .arg(fi.fileName()).arg(vertexCount).arg(r.faceLabels.size())
-                     .arg(r.usedModel ? "model" : "geometric fallback"));
+                     .arg(r.usedModel ? "model" : "geometric fallback")
+                     .arg(MeshSegmenter::categoryName(r.category)));
         for (int p = 0; p < P; ++p) {
             if (vCount[p] == 0 && fCount[p] == 0) continue;
             cliWrite(QString("  %1: %2 verts, %3 faces\n")

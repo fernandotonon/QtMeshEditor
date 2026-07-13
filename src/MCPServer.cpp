@@ -4283,8 +4283,6 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             AutoRig::rigPriorPartLabels(entity, vertexCount);
 
         const bool noModel = args.value("no_model").toBool(false);
-        QString modelPath;
-        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();
 
         MeshSegmenter::Options opts;
         opts.forceFallback = noModel;
@@ -4295,6 +4293,24 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             else if (upAxisStr == "z") opts.upAxis = 2;
             else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
         }
+        const QString categoryStr = args.value("category").toString();
+        if (!categoryStr.isEmpty()) {
+            bool okCat = false;
+            opts.category = MeshSegmenter::categoryFromName(categoryStr, &okCat);
+            if (!okCat)
+                return makeErrorResult("Error: category must be 'auto', 'body', "
+                                       "'vegetation', 'vehicle', or 'building'");
+        }
+        // Auto → classifier (first-use download); offline/no_model → body.
+        if (!noModel)
+            opts.category = MeshSegmenter::resolveCategoryBlocking(
+                verts.data(), vertexCount, opts);
+        else if (opts.category == MeshSegmenter::Category::Auto)
+            opts.category = MeshSegmenter::Category::Body;
+
+        QString modelPath;
+        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
@@ -4309,8 +4325,9 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         std::vector<int> fCount(P, 0);
         for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
 
-        QString summary = QString("Segmented '%1' (%2 verts) via %3:")
+        QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
             .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
+            .arg(MeshSegmenter::categoryName(r.category))
             .arg(r.usedModel ? "model" : "geometric fallback");
         for (int p = 0; p < P; ++p)
             if (vCount[p] > 0)
@@ -4326,6 +4343,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         content["vertex_count"]    = vertexCount;
         content["face_count"]      = static_cast<int>(r.faceLabels.size());
         content["used_model"]      = r.usedModel;
+        content["category"]        = MeshSegmenter::categoryName(r.category);
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             content["fallback_reason"] = r.fallbackReason;
         content["up_axis"]         = QString(QChar("xyz"[opts.upAxis]));
@@ -8154,17 +8172,20 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation."}};
         appendTool(
             "segment_mesh",
-            "AI mesh part segmentation (#410): predict a semantic part label "
-            "(head / torso / left+right arm / left+right leg) per vertex via a "
-            "PointNet++ ONNX model. Returns JSON with the full label map: per-part "
-            "vertex+face counts and the per-face label array (index into `parts`) "
-            "so callers can drive selection / per-part material assignment directly. "
-            "Falls back automatically to a deterministic geometric segmenter (connected "
+            "AI mesh part segmentation (#410/#818): predict a semantic part label "
+            "per vertex via a category-specialised PointNet++ ONNX model — body "
+            "(head/torso/arms/legs), vegetation, vehicle, or building label sets, "
+            "auto-dispatched by a point-cloud category classifier. Returns JSON with "
+            "the full label map: the resolved category, per-part vertex+face counts "
+            "and the per-face label array (index into `parts`) so callers can drive "
+            "selection / per-part material assignment directly. Falls back "
+            "automatically to a deterministic geometric segmenter (connected "
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
-            "which path ran. Works best on upright humanoid meshes.",
+            "which path ran.",
             props
         );
     }

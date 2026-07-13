@@ -911,7 +911,7 @@ void EditModeController::clearSeamOnSelection()
         uv->syncWorkingMeshFromEditable(*m_editableMesh);
 }
 
-QString EditModeController::selectByPart(const QString& upAxis)
+QString EditModeController::selectByPart(const QString& upAxis, const QString& category)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return tr("Enter Edit Mode on a mesh first.");
@@ -925,8 +925,13 @@ QString EditModeController::selectByPart(const QString& upAxis)
     else if (ua == QLatin1String("z")) upAxisIdx = 2;
     else upAxisIdx = 1;   // "y", empty, or anything unrecognised → +Y
 
+    // Parse category (parity with CLI --category / MCP category, #818);
+    // unrecognised values fall back to Auto.
+    const MeshSegmenter::Category cat = MeshSegmenter::categoryFromName(category);
+
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
-                                  QStringLiteral("Edit Mode: Select by part"));
+                                  QStringLiteral("Edit Mode: Select by part (category=%1)")
+                                      .arg(MeshSegmenter::categoryName(cat)));
 
     // MAIN thread: gather geometry (locks Ogre HW buffers — must stay here).
     std::vector<float> verts;
@@ -945,7 +950,11 @@ QString EditModeController::selectByPart(const QString& upAxis)
     // shared with the training-data miner (AutoRig::rigPriorPartLabels) so the
     // GUI selection and the mined ground truth are bit-identical.
     std::vector<int> rigLabels;
-    {
+    // An explicit NON-body category skips the rig-prior path entirely: rig
+    // labels are BODY parts, and the user has asked for a different label set.
+    const bool rigPriorAllowed = (cat == MeshSegmenter::Category::Auto
+                                  || cat == MeshSegmenter::Category::Body);
+    if (rigPriorAllowed) {
         int resolved = 0;
         rigLabels = AutoRig::rigPriorPartLabels(m_editEntity, vertexCount, &resolved);
         // Use the rig labels when they cover most of the mesh (a real rig
@@ -977,7 +986,7 @@ QString EditModeController::selectByPart(const QString& upAxis)
     auto cancel = m_segmentCancel;
     QPointer<EditModeController> self(this);
 
-    std::thread([self, verts, indices, rigLabels, vertexCount, cancel, upAxisIdx]() {
+    std::thread([self, verts, indices, rigLabels, vertexCount, cancel, upAxisIdx, cat]() {
         // Progress callback (inference): marshal to the UI thread, honour cancel.
         auto progress = [self, cancel](int done, int total) -> bool {
             if (cancel->load()) return false;
@@ -991,7 +1000,17 @@ QString EditModeController::selectByPart(const QString& upAxis)
             return true;
         };
 
-        const QString modelPath = MeshSegmenter::ensureModelBlocking();
+        // Resolve the mesh category first (#818 B2): Auto runs the tiny
+        // point-cloud classifier (first-use download; Body when unavailable)
+        // so a tree/car/house gets its specialised label set; an explicit
+        // category from the dropdown skips the classifier. Then fetch that
+        // category's segmentation model.
+        MeshSegmenter::Options opts;
+        opts.upAxis = upAxisIdx;
+        opts.category = cat;
+        opts.category = MeshSegmenter::resolveCategoryBlocking(
+            verts.data(), vertexCount, opts);
+        const QString modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
         if (cancel->load()) {
             QMetaObject::invokeMethod(qApp, [self]() {
                 if (!self) return;
@@ -1002,8 +1021,6 @@ QString EditModeController::selectByPart(const QString& upAxis)
             return;
         }
 
-        MeshSegmenter::Options opts;
-        opts.upAxis = upAxisIdx;
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
