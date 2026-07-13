@@ -958,6 +958,8 @@ jobs:
         host: 'linux'
         target: 'desktop'
         arch: 'linux_gcc_64'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: change folder permissions
       run: |
@@ -1074,7 +1076,8 @@ jobs:
             -DBUILD_QT_MESH_EDITOR=OFF \
             -DENABLE_SENTRY=OFF \
             -DENABLE_PS1_RIP=ON \
-            -DENABLE_ONNX=ON
+            -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON
 
     - name: Run build-wrapper
       env:

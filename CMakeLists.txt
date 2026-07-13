@@ -324,6 +324,29 @@ else()
     message(STATUS "Alembic vertex-animation import disabled (VAT_POSE playback still available)")
 endif()
 ##############################################################
+#  Performance capture — video/webcam mocap (epic #869)
+##############################################################
+# Slice B (#871): brings in Qt Multimedia (camera + video decode) and the
+# src/Mocap/ frame-source layer. Default OFF: Qt Multimedia is a new runtime
+# dependency (FFmpeg backend) that packaging has to carry per platform. The
+# ONNX predictors (Slices C/E) additionally require ENABLE_ONNX; requiring it
+# here keeps a single "mocap build" configuration instead of a half-working
+# one. Non-mocap builds print "rebuild with -DENABLE_MOCAP" on every surface.
+option(ENABLE_MOCAP "Enable performance capture (video/webcam mocap)" OFF)
+
+if(ENABLE_MOCAP)
+    if(NOT ENABLE_ONNX)
+        message(FATAL_ERROR "ENABLE_MOCAP requires ENABLE_ONNX (the face/pose "
+                "predictors run on ONNX Runtime). Configure with "
+                "-DENABLE_ONNX=ON -DENABLE_MOCAP=ON.")
+    endif()
+    find_package(Qt6 REQUIRED COMPONENTS Multimedia)
+    add_definitions(-DENABLE_MOCAP)
+    message(STATUS "Performance capture enabled (Qt Multimedia ${Qt6Multimedia_VERSION})")
+else()
+    message(STATUS "Performance capture disabled (rebuild with -DENABLE_MOCAP=ON -DENABLE_ONNX=ON)")
+endif()
+##############################################################
 #  PS1 runtime geometry extraction (experimental)
 ##############################################################
 option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)

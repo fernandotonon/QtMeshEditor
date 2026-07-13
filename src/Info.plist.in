@@ -43,6 +43,9 @@
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 
+	<key>NSCameraUsageDescription</key>
+	<string>QtMeshEditor uses the camera for live performance capture.</string>
+
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

@@ -161,6 +161,7 @@ NodeAnimationManager.cpp
 PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
+Mocap/VideoFrameSource.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
@@ -753,6 +754,11 @@ if(ENABLE_PS1_RIP AND TARGET Qt6::Gamepad)
     target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Gamepad)
 endif()
 
+# Performance capture (epic #869): Qt Multimedia for the frame sources
+if(ENABLE_MOCAP)
+    target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Multimedia)
+endif()
+
 if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh-relauncher)
     if(APPLE)
@@ -897,6 +903,11 @@ if(BUILD_TESTS)
     endif()
 
     ADD_DEPENDENCIES(UnitTests ui)
+
+    # Performance capture (epic #869): Qt Multimedia for the frame sources
+    if(ENABLE_MOCAP)
+        target_link_libraries(UnitTests Qt6::Multimedia)
+    endif()
 
     if(ENABLE_PS1_RIP)
         add_dependencies(UnitTests qtmesh_ps1core_stub)
