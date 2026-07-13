@@ -618,9 +618,14 @@ Rectangle {
             CollapsibleSection {
                 id: performanceCaptureSection
                 title: "Performance Capture"
+                // hasMeshInSelection (not hasEntitySelection): true also when a
+                // scene NODE with an attached entity is selected — the common
+                // case, since the Scene tree selects nodes. The controller
+                // resolves the same entity via getResolvedEntities(), so the
+                // gate and the capture target stay consistent.
                 sectionVisible: root.currentTab === root.modeToolsTab
                     && root.modeToolMatches(EditorModeController.AnimationMode)
-                    && PropertiesPanelController.hasEntitySelection
+                    && PropertiesPanelController.hasMeshInSelection
                 expanded: false
 
                 Component.onCompleted: content = performanceCaptureComponent
