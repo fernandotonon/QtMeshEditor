@@ -1187,7 +1187,35 @@ float twistDegAbout(const Ogre::Quaternion& q, const Ogre::Vector3& ax)
 
 TEST_F(AnimationMergerTest, TwistTransportCarriesBoneRoll)
 {
-    Ogre::Entity* ent = makeArmRigEntity("twist_roll");
+    // makeArmRigEntity resolves only 9/22 roles — below applyMotionClip's
+    // humanoid gate (>= 11) — so build a fuller rig (13 roles: + hands/feet).
+    auto skelRes = Ogre::SkeletonManager::getSingleton().create(
+        "twist_roll_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* par) {
+        auto* b = skelRes->createBone(n, h++);
+        b->setPosition(p);
+        if (par) par->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
+    bone("Head", {0, 0.4f, 0}, spine);
+    auto* lleg = bone("LeftUpLeg", {0.15f, -0.1f, 0}, hips);
+    bone("LeftFoot", {0, -0.8f, 0}, lleg);
+    auto* rleg = bone("RightUpLeg", {-0.15f, -0.1f, 0}, hips);
+    bone("RightFoot", {0, -0.8f, 0}, rleg);
+    auto* rsh = bone("RightArm", {-0.2f, 0.1f, 0}, spine);
+    auto* rfa = bone("RightForeArm", {-0.3f, 0, 0}, rsh);
+    bone("RightHand", {-0.25f, 0, 0}, rfa);
+    auto* lsh = bone("LeftArm", {0.2f, 0.1f, 0}, spine);
+    auto* lfa = bone("LeftForeArm", {0.3f, 0, 0}, lsh);
+    bone("LeftHand", {0.25f, 0, 0}, lfa);
+    skelRes->setBindingPose();
+    auto mesh = createInMemoryMesh("twist_roll_mesh", skelRes);
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sm->createEntity("twist_roll_ent", mesh);
     ASSERT_NE(ent, nullptr);
     Ogre::SkeletonInstance* skel = ent->getSkeleton();
 
@@ -1228,6 +1256,8 @@ TEST_F(AnimationMergerTest, TwistTransportCarriesBoneRoll)
     const Ogre::Quaternion leg =
         skel->getBone("LeftUpLeg")->_getDerivedOrientation();
     EXPECT_NEAR(std::abs(leg.w), 1.0f, 1e-3f);
+
+    sm->destroyEntity(ent);
 }
 
 TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
@@ -1262,8 +1292,8 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
 
     // Source: left collar (role 10, +X) rolls 0 → 240° — past the ±180° wrap.
     // The gain table damps collars to 0.5×, which is exactly where a missing
-    // unwrap explodes: wrapped −120° would scale to −60° instead of +120°'s
-    // half — a mid-clip snap.
+    // unwrap explodes: wrapped −120° would scale to −60° instead of the
+    // capped +150°'s half — a mid-clip snap.
     const int frames = 61;
     auto quats = identityClip(frames);
     for (int f = 0; f < frames; ++f) {
@@ -1301,7 +1331,9 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
         last = w;
     }
     EXPECT_LT(maxStepDeg, 15.0f) << "collar roll snapped mid-clip (unwrap)";
-    EXPECT_NEAR(twistDegAbout(last, Ogre::Vector3::UNIT_X), 120.0f, 8.0f);
+    // 240° source twist hits the 150° runaway-unwrap cap FIRST, then the
+    // 0.5× collar gain: 150 × 0.5 = 75°.
+    EXPECT_NEAR(twistDegAbout(last, Ogre::Vector3::UNIT_X), 75.0f, 8.0f);
 
     sm->destroyEntity(ent);
 }
