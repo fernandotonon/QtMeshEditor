@@ -24,8 +24,10 @@ namespace {
 
 constexpr const char* kDetectorFile = "pose_detector.onnx";
 constexpr const char* kLandmarksFile = "pose_landmarks.onnx";
+// base URL points at the mocap ROOT (shared with FaceCapPredictor); the
+// pose/ subdir is appended so ONE override serves both bundles.
 constexpr const char* kDefaultModelBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/mocap/pose/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/mocap/";
 constexpr const char* kBaseUrlSettingsKey = "ai/mocapModelBaseUrl";
 
 constexpr float kPresenceThreshold = 0.5f;
@@ -71,9 +73,6 @@ QString PoseCapPredictor::ensureModelsBlocking()
             const QByteArray env = qgetenv("QTMESH_MOCAP_MODEL_BASE_URL");
             base = env.isEmpty() ? QString::fromLatin1(kDefaultModelBaseUrl)
                                  : QString::fromUtf8(env);
-        } else if (base.contains(QLatin1String("/mocap/face"))) {
-            // one settings key covers both bundles; swap the subdir
-            base.replace(QLatin1String("/mocap/face"), QLatin1String("/mocap/pose"));
         }
     }
     if (base.isEmpty())
@@ -110,7 +109,7 @@ QString PoseCapPredictor::ensureModelsBlocking()
         QObject::connect(&timeout, &QTimer::timeout, &loop,
                          [&]() { timedOut = true; loop.quit(); });
         timeout.start(300000);  // 5 min — ~25 MB total
-        dl->startDownload(base + QLatin1String(fileName), dest, label);
+        dl->startDownload(base + QLatin1String("pose/") + QLatin1String(fileName), dest, label);
         loop.exec();
         QObject::disconnect(onDone);
         QObject::disconnect(onErr);

@@ -27,8 +27,10 @@ namespace {
 constexpr const char* kDetectorFile = "face_detector.onnx";
 constexpr const char* kLandmarksFile = "face_landmarks.onnx";
 constexpr const char* kBlendshapesFile = "face_blendshapes.onnx";
+// base URL points at the mocap ROOT; the face/pose subdir is appended so ONE
+// override serves both bundles.
 constexpr const char* kDefaultModelBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/mocap/face/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/mocap/";
 constexpr const char* kBaseUrlSettingsKey = "ai/mocapModelBaseUrl";
 
 constexpr float kPresenceThreshold = 0.5f;
@@ -108,7 +110,7 @@ QString FaceCapPredictor::ensureModelsBlocking()
         QObject::connect(&timeout, &QTimer::timeout, &loop,
                          [&]() { timedOut = true; loop.quit(); });
         timeout.start(300000);  // 5 min — the three graphs total ~6.4 MB
-        dl->startDownload(base + QLatin1String(fileName), dest, label);
+        dl->startDownload(base + QLatin1String("face/") + QLatin1String(fileName), dest, label);
         loop.exec();
         QObject::disconnect(onDone);
         QObject::disconnect(onErr);

@@ -733,6 +733,8 @@ jobs:
         host: 'linux'
         target: 'desktop'
         arch: 'linux_gcc_64'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: change folder permissions
       run: |
@@ -781,6 +783,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -1802,6 +1805,8 @@ jobs:
         target: 'desktop'
         arch: 'clang_64'
         tools: 'tools_cmake'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: Debug Qt Installation
       run: |
@@ -1888,6 +1893,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \

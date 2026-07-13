@@ -459,6 +459,9 @@ int run(int argc, char* argv[])
     }
 
     // --- record: face ------------------------------------------------------------
+    // In combined --face --body mode a failed stream (e.g. the face is too
+    // small to track in full-body footage) reports its error but doesn't
+    // abort the other stream; the exit code is 0 if at least one recorded.
     MocapRecorder::FaceRecordReport report;
     if (face) {
         MocapRecorder::FaceRecordOptions options;
@@ -468,7 +471,8 @@ int run(int argc, char* argv[])
         if (!report.ok()) {
             CLIPipeline::writeCliError(
                 QStringLiteral("Error: %1\n").arg(report.error));
-            return 1;
+            if (!body)
+                return 1;
         }
     }
 
@@ -502,7 +506,9 @@ int run(int argc, char* argv[])
             CLIPipeline::writeCliError(QStringLiteral(
                 "Error: no person tracked in the source (%1 of %2 frames had "
                 "no pose).\n").arg(noPose).arg(poseSamples.size()));
-            return 1;
+            if (!face || !report.ok())
+                return 1;
+            bodyReport.error = QStringLiteral("no person tracked");
         }
         MocapRecorder::BodyRecordOptions bodyOptions;
         bodyOptions.clipName = face ? clipName + QStringLiteral("_Body")
@@ -515,9 +521,12 @@ int run(int argc, char* argv[])
         if (!bodyReport.ok()) {
             CLIPipeline::writeCliError(
                 QStringLiteral("Error: %1\n").arg(bodyReport.error));
-            return 1;
+            if (!face || !report.ok())
+                return 1;
         }
     }
+    if (face && body && !report.ok() && !bodyReport.ok())
+        return 1;
 
     // --- export -------------------------------------------------------------------
     if (!outputPath.isEmpty()) {

@@ -1650,6 +1650,7 @@ int CLIPipeline::run(int argc, char* argv[])
             {QStringLiteral("generate3d"), QStringLiteral("image_to_3d")},
             {QStringLiteral("material"), QStringLiteral("material_editor")},
             {QStringLiteral("segment"), QStringLiteral("ai_assist")},
+            {QStringLiteral("mocap"), QStringLiteral("mocap")},
         };
         const QString feature = cmdFeatureMap.value(cmd);
         if (!feature.isEmpty())
