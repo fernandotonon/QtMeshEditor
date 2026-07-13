@@ -1587,13 +1587,17 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // Generated clips therefore reference the TARGET BIND — no pose from any
     // other animation is involved (the standing-pose harvest below is only
     // the fallback for restWorld-less clips, e.g. the CMU-built libraries).
+    // A reference orientation is PRESENT when it is a valid (unit-norm) quat;
+    // unresolved roles in dumps are zero-filled. Identity counts — the v5
+    // model's canonical triple (#858) is restWorld = identity ×22 by
+    // construction, and treating it as "absent" would silently demote model
+    // clips to the synthetic-standing-pose path.
     bool haveRestWorld = false;
     if (worldFrame
         && cmuRestWorld.size() == static_cast<size_t>(
                MotionInbetween::canonicalJointCount())) {
         for (const auto& q : cmuRestWorld)
-            if (std::abs(q[0]) > 1e-5f || std::abs(q[1]) > 1e-5f
-                || std::abs(q[2]) > 1e-5f || std::abs(1.f - std::abs(q[3])) > 1e-5f) {
+            if (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 0.25f) {
                 haveRestWorld = true;
                 break;
             }

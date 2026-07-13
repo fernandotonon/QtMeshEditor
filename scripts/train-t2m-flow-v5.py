@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+# ruff: noqa: E702, E741
+"""Train the v5 FLOW-MATCHING text-to-motion model (#840, epic #837).
+
+ONE-TIME OFFLINE dev tool — NOT shipped. Replaces the v4 CVAE: a conditional-
+mean decoder averages an action's phase-misaligned windows into gentle motion
+(the v4 training notes measured this); flow matching samples a transport path
+from noise to A SINGLE MODE of the data distribution instead — the one
+architectural change that separates MDM-era quality from the CVAE,
+independent of data scale (#837).
+
+Data: /tmp/t2m_v5.npz from prep-t2m-v5.py — CANONICALIZED quats (rig-
+independent aim+twist against the fixed canonical T-pose, #858), per-joint
+validity masks, one-hot action labels.
+
+Architecture: small DiT-style transformer v(x_t, t, action):
+  x[B,T,132] (22 joints × 6D rotation) + sinusoidal frame positions,
+  conditioned on (flow time t, action embedding) via AdaLN-Zero-lite
+  (per-layer scale/shift from the conditioning vector). Rectified-flow
+  objective: x_t=(1−t)x0+t·x1, target v*=x1−x0, masked joint-wise MSE.
+
+Export: ONNX graph with the EULER SAMPLER UNROLLED INSIDE (N fixed steps),
+matching the shipped MotionGenerator contract exactly:
+  inputs  tokens[1,V] one-hot, seed[1,Z]   (Z = T·132 flattened noise;
+          MotionGenerator draws N(0,0.5) — the graph rescales ×2 to unit)
+  output  motion[1,T,220]                  (per joint: tx,ty,tz=0,
+          quat x,y,z,w from Gram-Schmidt 6D→R, sx,sy,sz=1)
+plus t2m-vocab.json carrying the CANONICAL REFERENCE TRIPLE (restWorld =
+identity, restDir = the fixed canonical T-pose directions) so model clips
+ride the same bind-referenced direction retarget as v5 template clips —
+retiring the synthetic-standing-pose shim (#858).
+
+Usage:
+  python3 scripts/train-t2m-flow-v5.py --data /tmp/t2m_v5.npz \
+      --out /tmp/t2m_v5_flow --epochs 60 --device mps [--steps 16]
+"""
+import argparse
+import json
+import math
+import os
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+J, D6 = 22, 6
+C6 = J * D6      # 132
+
+
+# ---------- rotation reps ----------
+def quat_to_6d(q):
+    """q[...,4] (x,y,z,w) → first two rotation-matrix COLUMNS [...,6]."""
+    x, y, z, w = q.unbind(-1)
+    c0 = torch.stack([1 - 2 * (y * y + z * z),
+                      2 * (x * y + z * w),
+                      2 * (x * z - y * w)], -1)
+    c1 = torch.stack([2 * (x * y - z * w),
+                      1 - 2 * (x * x + z * z),
+                      2 * (y * z + x * w)], -1)
+    return torch.cat([c0, c1], -1)
+
+
+def d6_to_quat(d):
+    """[...,6] → unit quats [...,4] (x,y,z,w) via Gram-Schmidt (ONNX-safe)."""
+    a, b = d[..., :3], d[..., 3:]
+    c0 = F.normalize(a, dim=-1, eps=1e-6)
+    b = b - (c0 * b).sum(-1, keepdim=True) * c0
+    c1 = F.normalize(b, dim=-1, eps=1e-6)
+    c2 = torch.cross(c0, c1, dim=-1)
+    m00, m10, m20 = c0.unbind(-1)
+    m01, m11, m21 = c1.unbind(-1)
+    m02, m12, m22 = c2.unbind(-1)
+    # branchless Shepperd: build all four candidates, pick the max-norm one
+    t0 = 1 + m00 + m11 + m22
+    t1 = 1 + m00 - m11 - m22
+    t2 = 1 - m00 + m11 - m22
+    t3 = 1 - m00 - m11 + m22
+    eps = 1e-8
+    q0 = torch.stack([m21 - m12, m02 - m20, m10 - m01, t0], -1) \
+        / (2.0 * torch.sqrt(t0.clamp_min(eps)).unsqueeze(-1))
+    q1 = torch.stack([t1, m01 + m10, m02 + m20, m21 - m12], -1) \
+        / (2.0 * torch.sqrt(t1.clamp_min(eps)).unsqueeze(-1))
+    q2 = torch.stack([m01 + m10, t2, m12 + m21, m02 - m20], -1) \
+        / (2.0 * torch.sqrt(t2.clamp_min(eps)).unsqueeze(-1))
+    q3 = torch.stack([m02 + m20, m12 + m21, t3, m10 - m01], -1) \
+        / (2.0 * torch.sqrt(t3.clamp_min(eps)).unsqueeze(-1))
+    ts = torch.stack([t0, t1, t2, t3], -1)
+    idx = ts.argmax(-1, keepdim=True)
+    qs = torch.stack([q0, q1, q2, q3], -2)               # [...,4cand,4]
+    q = torch.gather(qs, -2,
+                     idx.unsqueeze(-1).expand(*idx.shape, 4)).squeeze(-2)
+    return F.normalize(q, dim=-1, eps=1e-6)
+
+
+# ---------- model ----------
+class Block(nn.Module):
+    def __init__(self, dim, heads):
+        super().__init__()
+        self.n1 = nn.LayerNorm(dim, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.n2 = nn.LayerNorm(dim, elementwise_affine=False)
+        self.mlp = nn.Sequential(nn.Linear(dim, dim * 4), nn.GELU(),
+                                 nn.Linear(dim * 4, dim))
+        self.ada = nn.Linear(dim, dim * 6)
+        nn.init.zeros_(self.ada.weight)
+        nn.init.zeros_(self.ada.bias)
+
+    def forward(self, x, c):
+        s1, b1, g1, s2, b2, g2 = self.ada(c).unsqueeze(1).chunk(6, -1)
+        h = self.n1(x) * (1 + s1) + b1
+        x = x + g1 * self.attn(h, h, h, need_weights=False)[0]
+        h = self.n2(x) * (1 + s2) + b2
+        return x + g2 * self.mlp(h)
+
+
+class FlowDiT(nn.Module):
+    def __init__(self, V, T, dim=256, layers=6, heads=8):
+        super().__init__()
+        self.T = T
+        self.inp = nn.Linear(C6, dim)
+        self.pos = nn.Parameter(torch.randn(1, T, dim) * 0.02)
+        self.act_emb = nn.Linear(V, dim)
+        self.t_mlp = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(),
+                                   nn.Linear(dim, dim))
+        self.blocks = nn.ModuleList([Block(dim, heads) for _ in range(layers)])
+        self.out_n = nn.LayerNorm(dim, elementwise_affine=False)
+        self.out = nn.Linear(dim, C6)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+        half = dim // 2
+        self.register_buffer(
+            "freqs", torch.exp(-math.log(1e4)
+                               * torch.arange(half).float() / half))
+
+    def forward(self, x, t, tok):
+        # x[B,T,C6], t[B] in [0,1], tok[B,V]
+        ang = t[:, None] * 1000.0 * self.freqs[None]
+        temb = torch.cat([torch.sin(ang), torch.cos(ang)], -1)
+        c = self.t_mlp(temb) + self.act_emb(tok)
+        h = self.inp(x) + self.pos
+        for blk in self.blocks:
+            h = blk(h, c)
+        return self.out(self.out_n(h))
+
+
+class Sampler(nn.Module):
+    """Euler flow sampler UNROLLED for ONNX export — MotionGenerator contract."""
+
+    def __init__(self, net, V, T, steps, guidance=2.0):
+        super().__init__()
+        self.net, self.V, self.T, self.steps = net, V, T, steps
+        self.guidance = guidance
+
+    def forward(self, tokens, seed):
+        B = 1
+        # MotionGenerator draws seed ~ N(0, 0.5) — rescale to unit noise.
+        x = seed.reshape(B, self.T, C6) * 2.0
+        uncond = torch.zeros_like(tokens)
+        for i in range(self.steps):
+            t = torch.full((B,), i / self.steps, dtype=x.dtype,
+                           device=x.device)
+            vc = self.net(x, t, tokens)
+            vu = self.net(x, t, uncond)
+            v = vu + self.guidance * (vc - vu)
+            x = x + v / self.steps
+        q = d6_to_quat(x.reshape(B, self.T, J, D6))       # [1,T,J,4]
+        zeros3 = torch.zeros(B, self.T, J, 3, dtype=x.dtype, device=x.device)
+        ones3 = torch.ones(B, self.T, J, 3, dtype=x.dtype, device=x.device)
+        motion = torch.cat([zeros3, q, ones3], -1)        # [1,T,J,10]
+        return motion.reshape(B, self.T, J * 10)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", default="/tmp/t2m_v5.npz")
+    ap.add_argument("--out", default="/tmp/t2m_v5_flow")
+    ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument("--batch", type=int, default=256)
+    ap.add_argument("--lr", type=float, default=2e-4)
+    ap.add_argument("--dim", type=int, default=256)
+    ap.add_argument("--layers", type=int, default=6)
+    ap.add_argument("--steps", type=int, default=16, help="Euler export steps")
+    ap.add_argument("--guidance", type=float, default=2.0,
+                    help="CFG scale baked into the exported sampler")
+    ap.add_argument("--device", default="mps")
+    a = ap.parse_args()
+
+    d = np.load(a.data, allow_pickle=True)
+    mo, msk, tk = d["mo"], d["msk"], d["tk"]
+    vocab = [str(w) for w in d["vocab"]]
+    fps = int(d["fps"])
+    canon_rd = d["canonRestDir"]
+    N, T = mo.shape[0], mo.shape[1]
+    V = len(vocab)
+    print(f"data: {N} windows T={T} V={V} vocab={vocab}")
+
+    dev = torch.device(a.device if (a.device != "mps"
+                                    or torch.backends.mps.is_available())
+                       else "cpu")
+    x1 = quat_to_6d(torch.from_numpy(mo)).reshape(N, T, C6)      # data
+    m6 = torch.from_numpy(msk).repeat_interleave(D6, -1)         # [N,C6]
+    tok = torch.from_numpy(tk)
+
+    # class-balanced sampling — walk is 64% of windows (v4 lesson)
+    freq = tk.sum(0)
+    w = (tk @ (1.0 / np.maximum(freq, 1.0))).astype(np.float64)
+    sampler = torch.utils.data.WeightedRandomSampler(
+        torch.from_numpy(w), num_samples=N, replacement=True)
+    ds = torch.utils.data.TensorDataset(x1, m6, tok)
+    dl = torch.utils.data.DataLoader(ds, batch_size=a.batch, sampler=sampler,
+                                     drop_last=True)
+
+    net = FlowDiT(V, T, dim=a.dim, layers=a.layers).to(dev)
+    print("params:", sum(p.numel() for p in net.parameters()) / 1e6, "M")
+    opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=a.epochs * max(1, len(dl)))
+
+    for ep in range(a.epochs):
+        tot, nb = 0.0, 0
+        for xb, mb, tb in dl:
+            xb, mb, tb = xb.to(dev), mb.to(dev), tb.to(dev)
+            x0 = torch.randn_like(xb)
+            # classifier-free guidance: drop the action condition 10% of the
+            # time so the sampler can extrapolate cond vs uncond at export.
+            drop = (torch.rand(tb.shape[0], device=dev) < 0.1).float()
+            tb = tb * (1.0 - drop)[:, None]
+            t = torch.rand(xb.shape[0], device=dev)
+            xt = (1 - t[:, None, None]) * x0 + t[:, None, None] * xb
+            v = net(xt, t, tb)
+            tgt = xb - x0
+            mask = mb[:, None, :]                       # [B,1,C6]
+            loss = ((v - tgt) ** 2 * mask).sum() / mask.sum() / T
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            opt.step()
+            sched.step()
+            tot += loss.item(); nb += 1
+        print(f"ep {ep + 1}/{a.epochs} loss {tot / max(1, nb):.4f}", flush=True)
+
+    os.makedirs(a.out, exist_ok=True)
+    torch.save(net.state_dict(), os.path.join(a.out, "flow.pt"))
+
+    # ---- export: sampler-unrolled ONNX + vocab json ----
+    net_cpu = FlowDiT(V, T, dim=a.dim, layers=a.layers)
+    net_cpu.load_state_dict({k: v.cpu() for k, v in net.state_dict().items()})
+    net_cpu.eval()
+    samp = Sampler(net_cpu, V, T, a.steps, a.guidance).eval()
+    Z = T * C6
+    tokens = torch.zeros(1, V); tokens[0, 0] = 1.0
+    seed = torch.randn(1, Z) * 0.5
+    onnx_path = os.path.join(a.out, "t2m.onnx")
+    torch.onnx.export(samp, (tokens, seed), onnx_path,
+                      input_names=["tokens", "seed"],
+                      output_names=["motion"], opset_version=17,
+                      dynamo=False)
+    vj = {
+        "vocab": vocab, "Z": Z, "T": T, "C": J * 10, "J": J,
+        "fps": fps, "frame": "world", "version": "v5-flow",
+        "flowSteps": a.steps,
+        # #858: the canonical reference triple — model clips ride the same
+        # bind-referenced direction retarget as v5 template clips.
+        "restWorld": [[0.0, 0.0, 0.0, 1.0]] * J,
+        "restDir": [[float(v) for v in row] for row in canon_rd],
+    }
+    with open(os.path.join(a.out, "t2m-vocab.json"), "w") as f:
+        json.dump(vj, f)
+    print(f"exported {onnx_path} "
+          f"({os.path.getsize(onnx_path) / 1e6:.1f} MB) + vocab")
+
+    # sanity: run one sample through onnxruntime
+    try:
+        import onnxruntime as ort
+        s = ort.InferenceSession(onnx_path,
+                                 providers=["CPUExecutionProvider"])
+        out = s.run(None, {"tokens": tokens.numpy(),
+                           "seed": seed.numpy()})[0]
+        q = out[0, :, 3:7]
+        nrm = np.linalg.norm(out[0].reshape(T, J, 10)[..., 3:7], axis=-1)
+        print("onnx ok:", out.shape, "quat norms",
+              nrm.min().round(4), nrm.max().round(4))
+    except Exception as e:  # noqa: BLE001
+        print("onnx check failed:", e)
+
+
+if __name__ == "__main__":
+    main()

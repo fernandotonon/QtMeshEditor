@@ -4073,10 +4073,18 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 if (mr.ok) {
                     action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
                     worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
-                    // Borrow a template clip's reference directions so the
-                    // retarget synthesizes a BIND-referenced base pose (no
-                    // harvest from the rig's other animations).
-                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                    if (!mr.clip.restWorld.empty() && !mr.clip.restDir.empty()) {
+                        // v5 models (#858) ship their canonical reference
+                        // triple — same bind-referenced retarget as templates.
+                        cmuRest = mr.clip.restWorld;
+                        clipDirs = mr.clip.restDir;
+                    } else {
+                        // Legacy v4: borrow a template clip's reference
+                        // directions so the retarget synthesizes a
+                        // BIND-referenced base pose (no harvest from the
+                        // rig's other animations).
+                        clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                    }
                 }
             }
         }

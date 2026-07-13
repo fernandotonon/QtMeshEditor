@@ -2056,12 +2056,21 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                 action = mr.matchedAction;
                 quats = mr.clip.quats;
                 fps = mr.clip.fps;
-                worldFrame = mr.worldFrame;  // v4 models: world-frame quats
-                // Model clips carry no reference triple — borrow a template
-                // clip's canonical bone directions so the retarget can
-                // synthesize a BIND-referenced base pose instead of
-                // harvesting the rig's other animations (contamination).
-                clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                worldFrame = mr.worldFrame;  // v4/v5 models: world-frame quats
+                if (!mr.clip.restWorld.empty() && !mr.clip.restDir.empty()) {
+                    // v5 models (#858) ship their canonical reference triple
+                    // in the vocab — the clip rides the same bind-referenced
+                    // direction retarget as v5 template clips.
+                    cmuRest = mr.clip.restWorld;
+                    clipDirs = mr.clip.restDir;
+                } else {
+                    // Legacy v4 models carry no reference triple — borrow a
+                    // template clip's canonical bone directions so the
+                    // retarget can synthesize a BIND-referenced base pose
+                    // instead of harvesting the rig's other animations
+                    // (contamination).
+                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                }
                 clipSource = QStringLiteral("model");
                 gotClip = true;
             } else {
