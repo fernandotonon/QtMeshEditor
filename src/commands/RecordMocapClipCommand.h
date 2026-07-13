@@ -51,5 +51,33 @@ private:
     bool m_snapshotTaken = false;
 };
 
+// Body-take variant (Slice E #874): one undo step around
+// MocapRecorder::recordBody. Snapshots the pre-existing skeletal clip.
+class RecordBodyClipCommand : public QUndoCommand
+{
+public:
+    RecordBodyClipCommand(std::string entityName,
+                          std::vector<std::vector<std::array<float, 4>>> clipQuats,
+                          int fps, MocapRecorder::BodyRecordOptions options,
+                          QUndoCommand* parent = nullptr);
+    ~RecordBodyClipCommand() override;
+
+    void undo() override;
+    void redo() override;
+
+    const MocapRecorder::BodyRecordReport& report() const { return m_report; }
+
+private:
+    struct Snapshot;
+
+    std::string m_entityName;
+    std::vector<std::vector<std::array<float, 4>>> m_clipQuats;
+    int m_fps;
+    MocapRecorder::BodyRecordOptions m_options;
+    MocapRecorder::BodyRecordReport m_report;
+    std::unique_ptr<Snapshot> m_before;
+    bool m_snapshotTaken = false;
+};
+
 #endif  // ENABLE_MOCAP
 #endif  // RECORD_MOCAP_CLIP_COMMAND_H

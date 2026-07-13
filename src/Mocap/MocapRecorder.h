@@ -70,6 +70,38 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                             const FaceCapMapper::Mapping& mapping,
                             const FaceRecordOptions& options = {});
 
+// ---- body capture (Slice E #874) -------------------------------------------
+
+struct BodyRecordOptions {
+    QString clipName = QStringLiteral("BodyCap");
+    bool replaceExisting = true;
+    QString algorithmUsed = QStringLiteral("pose-ik");  // for the report
+    QString fallbackReason;                             // why not sam3dbody
+};
+
+struct BodyRecordReport {
+    QString clipName;
+    QString algorithmUsed;
+    QString fallbackReason;
+    int framesProcessed = 0;
+    int rolesResolved = 0;     // distinct canonical roles that landed on bones
+    int tracksWritten = 0;     // skeleton bones keyed
+    double clipLength = 0.0;
+    QString error;
+
+    bool ok() const { return error.isEmpty(); }
+};
+
+// clipQuats: [frame][22 canonical roles] WORLD quats (x,y,z,w) — the
+// PoseIKSolver / SAM3DBody output stream, uniformly sampled at `fps`. Runs
+// AnimationMerger::applyMotionClip's world-frame retarget (delta vs frame 0 =
+// the calibration frame; rotation-only keys; root locked). Requires a skinned
+// entity resolving >= half the canonical roles (the humanoid gate).
+BodyRecordReport recordBody(
+    Ogre::Entity* entity,
+    const std::vector<std::vector<std::array<float, 4>>>& clipQuats, int fps,
+    const BodyRecordOptions& options = {});
+
 // Head-bone resolution (exposed for the GUI gate + tests): the first bone of
 // the entity's skeleton whose name resolves to the canonical Head role, or
 // empty when the entity is not skinned / has no such bone.

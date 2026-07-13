@@ -3,6 +3,7 @@
 #include "MocapRecorder.h"
 
 #include "FaceCapCanonicalData.h"
+#include "../AnimationMerger.h"
 #include "../Manager.h"
 #include "../MorphAnimationManager.h"
 #include "../MotionInbetween.h"
@@ -182,7 +183,9 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
 
         const QString headBone = resolveHeadBone(entity);
         if (!headBone.isEmpty()) {
-            Ogre::SkeletonInstance* skel = entity->getSkeleton();
+            // author on the MESH skeleton (shared, exported); the entity's
+            // SkeletonInstance only mirrors it for playback
+            Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
             Ogre::Bone* bone = skel->getBone(headBone.toStdString());
             const std::string clip = (options.clipName
                                       + QStringLiteral("_Head")).toStdString();
@@ -242,6 +245,73 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
             .arg(report.keyframesWritten)
             .arg(report.headKeyframesWritten)
             .arg(report.headTarget));
+    return report;
+}
+
+BodyRecordReport recordBody(
+    Ogre::Entity* entity,
+    const std::vector<std::vector<std::array<float, 4>>>& clipQuats, int fps,
+    const BodyRecordOptions& options)
+{
+    BodyRecordReport report;
+    report.clipName = options.clipName;
+    report.algorithmUsed = options.algorithmUsed;
+    report.fallbackReason = options.fallbackReason;
+    report.framesProcessed = static_cast<int>(clipQuats.size());
+
+    if (!entity) {
+        report.error = QStringLiteral("no entity");
+        return report;
+    }
+    if (!entity->hasSkeleton() || !entity->getMesh()
+        || !entity->getMesh()->getSkeleton()) {
+        report.error = QStringLiteral(
+            "the mesh is not skinned — body capture retargets onto a humanoid "
+            "skeleton (rig one first: qtmesh rig --skeleton humanoid --skin)");
+        return report;
+    }
+    if (clipQuats.size() < 2 || fps <= 0) {
+        report.error = QStringLiteral("need at least 2 pose frames");
+        return report;
+    }
+
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    const std::string clip = options.clipName.toStdString();
+    if (skel->hasAnimation(clip)) {
+        if (!options.replaceExisting) {
+            report.error = QStringLiteral(
+                "animation '%1' already exists (pass replace)").arg(options.clipName);
+            return report;
+        }
+        skel->removeAnimation(clip);
+    }
+
+    // The world-frame retarget: delta vs frame 0 (the calibration frame)
+    // transported into each bone's parent-world frame; rotation-only keys;
+    // root locked (the #411 machinery — not a new retargeter).
+    const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+    const auto res = AnimationMerger::applyMotionClip(
+        skel.get(), clip, clipQuats, fps,
+        /*worldFrame=*/true, /*cmuRestWorld=*/{},
+        /*refineWithModel=*/false, /*refineStride=*/8, yaw180);
+    if (!res.ok) {
+        report.error = res.error.isEmpty()
+                           ? QStringLiteral("retarget failed")
+                           : res.error;
+        return report;
+    }
+    report.rolesResolved = res.canonicalJoints;
+    report.tracksWritten = res.tracksWritten;
+    report.clipLength = res.length;
+    entity->refreshAvailableAnimationState();
+
+    SentryReporter::addBreadcrumb(
+        "ai.assist.mocap_body",
+        QStringLiteral("recorded '%1' via %2: %3 frames, %4 roles, %5 tracks")
+            .arg(options.clipName, options.algorithmUsed)
+            .arg(report.framesProcessed)
+            .arg(report.rolesResolved)
+            .arg(report.tracksWritten));
     return report;
 }
 
