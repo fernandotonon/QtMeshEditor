@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Performance capture (epic #869) reads the camera for live face/body
+         capture. With the hardened runtime (required for notarization), macOS
+         only presents the camera-permission prompt when the app is signed
+         with this device-camera entitlement. Paired with
+         NSCameraUsageDescription in Info.plist. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    <!-- Qt/QML + JIT-capable frameworks need these under the hardened runtime
+         so the notarized bundle still launches (V8/QML, plugin loading). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

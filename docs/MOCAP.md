@@ -85,13 +85,29 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 - Model base URL override: `QTMESH_MOCAP_MODEL_BASE_URL` /
   `QSettings ai/mocapModelBaseUrl`; offline guard `QTMESH_MOCAP_NO_DOWNLOAD`.
 
+## macOS camera permission
+
+On first **Preview**, macOS asks to allow camera access; click Allow and the
+app then appears under System Settings → Privacy & Security → Camera. For the
+prompt to appear the app must be **signed with an Apple Developer ID and
+notarized** — macOS silently denies camera access to ad-hoc-signed apps
+(no dialog, and the app never shows in the Camera list). The entitlements
+(`cfg/QtMeshEditor.entitlements`) and `NSCameraUsageDescription` are in place,
+so an official notarized release build prompts normally; a locally-built /
+ad-hoc dev build will NOT get the prompt. If you hit that on a dev build, use
+the file-based capture (`qtmesh mocap <video>`) instead — it needs no camera
+permission and exercises the identical pipeline.
+
 ## Known limitations (v1)
 
 - Single person per frame; the highest-scoring detection wins.
 - Head pose is camera-relative — walking around the camera reads as head
   rotation. Keep the camera static.
 - Body root is locked (no root motion); some foot slide is expected.
-- Live mode drives face + head; body capture is offline (CLI/MCP).
+- Live mode drives face, head, and (humanoid rig) body; the SAM 3D Body
+  quality backend is offline-only (CLI/MCP), body-live uses pose-ik.
+- Live camera needs a notarized build on macOS (see above); the CLI/MCP
+  video paths work regardless.
 - Video decode is playback-driven (a 60 s video takes 60 s to capture).
 - Reimporting an exported glTF loses morph-target NAMES (they come back as
   `Shape_N` — an Assimp exporter gap); re-capturing onto a reimported mesh

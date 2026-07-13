@@ -2144,10 +2144,24 @@ jobs:
                 ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
             fi
             
-            # Finally sign the entire app bundle
-            echo "Signing app bundle..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app || echo "Failed to sign app bundle (non-fatal)"
-            
+            # Finally sign the entire app bundle WITH the camera/microphone
+            # entitlements (epic #869). NOTE: this is still an ad-hoc signature
+            # (`--sign -`); macOS only PROMPTS for camera access when the app
+            # is signed with a real Apple Developer ID + notarized. Until this
+            # pipeline gains a Developer ID cert (secret) + notarization step,
+            # the live-camera capture will be blocked on end-user machines the
+            # same way it is on an ad-hoc dev build (the CLI `qtmesh mocap`
+            # video path and file-based capture are unaffected). The
+            # entitlements + Info.plist NSCameraUsageDescription are in place so
+            # that flipping to a Developer ID signature is the ONLY remaining
+            # step to enable the prompt. See docs/MOCAP.md.
+            echo "Signing app bundle (with camera entitlements)..."
+            ENT="${{github.workspace}}/cfg/QtMeshEditor.entitlements"
+            sudo codesign --force --sign - --entitlements "$ENT" \
+                ${{github.workspace}}/bin/QtMeshEditor.app \
+                || sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app \
+                || echo "Failed to sign app bundle (non-fatal)"
+
             echo "Code signing process completed"
             
             # Verify the signing
