@@ -162,6 +162,11 @@ PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
 Mocap/VideoFrameSource.cpp
+Mocap/OneEuroFilter.cpp
+Mocap/FaceCapMapper.cpp
+Mocap/FaceCapPose.cpp
+Mocap/FaceCapGeom.cpp
+Mocap/FaceCapPredictor.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
