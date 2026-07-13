@@ -653,10 +653,34 @@ def make_building(rng):
     return parts
 
 
-def sample_category_cloud(rng, make_fn, n_out=N_BASE):
+def detach_parts(P, L, rng, prob=0.25):
+    """Real-world exports often ship parts DETACHED from the main shape —
+    wheels as separate nodes dropped below the hull, foliage clusters at odd
+    offsets. Verified failure mode: a car with wheels floating under the body
+    stretched the normalised box and flipped the category classifier to
+    body/vegetation. With probability `prob`, offset each minority-label
+    cluster by a random (downward-biased) vector so the classifier and the
+    segmenters tolerate disconnected floating parts."""
+    if rng.random() >= prob:
+        return P
+    out = P.copy()
+    labs, counts = np.unique(L, return_counts=True)
+    main = labs[counts.argmax()]
+    ext = float(np.max(out.max(0) - out.min(0)))
+    for l in labs:
+        if l == main or rng.random() < 0.5:
+            continue
+        d = rng.normal(size=3); d /= np.linalg.norm(d) + 1e-9
+        d[1] = -abs(d[1])                      # bias downward (dropped wheels)
+        out[L == l] += (d * rng.uniform(0.15, 0.6) * ext).astype(np.float32)
+    return out
+
+
+def sample_category_cloud(rng, make_fn, n_out=N_BASE, detach_prob=0.25):
     """Like sample_body but for the non-body category plans: uniform density
-    randomisation (no body-specific head-density boost), same augment +
-    normalise. Mirror is applied by the caller (no L/R label swap needed)."""
+    randomisation (no body-specific head-density boost), detached-part
+    augmentation, same augment + normalise. Mirror is applied by the caller
+    (no L/R label swap needed)."""
     parts = make_fn(rng)
     ws = np.array([w * rng.uniform(0.5, 2.5) for _, _, w in parts])
     ws /= ws.sum()
@@ -665,6 +689,7 @@ def sample_category_cloud(rng, make_fn, n_out=N_BASE):
     for (fn, l, _), cnt in zip(parts, counts):
         pts.append(fn(int(cnt))); lab.append(np.full(int(cnt), l, np.int64))
     P = np.concatenate(pts).astype(np.float32); L = np.concatenate(lab)
+    P = detach_parts(P, L, rng, detach_prob)
     P = augment(P, rng)
     idx = rng.choice(len(P), n_out, replace=len(P) < n_out)
     return normalise(P[idx]), L[idx]
@@ -910,9 +935,19 @@ def train_classifier(a, torch, nn):
             if cls == "body":
                 P, _ = sample_body(rng)
             else:
-                P, _ = sample_category_cloud(rng, CATEGORY_MAKERS[cls])
+                # Stronger detachment than the segmenters: real exports drop
+                # wheels/parts at odd offsets and the CLASSIFIER must shrug.
+                P, _ = sample_category_cloud(rng, CATEGORY_MAKERS[cls],
+                                             detach_prob=0.5)
             if rng.random() < 0.5:
                 P = P.copy(); P[:, 0] = -P[:, 0]
+            # The category decision must be YAW-INVARIANT (segmenters learn
+            # facing; the classifier must not depend on it) — spin every
+            # cloud by a full random yaw, then re-normalise.
+            yaw = rng.uniform(0, 2 * np.pi)
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            R = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], np.float32)
+            P = normalise(P @ R.T)
             Ps.append(P); Ys.append(ci)
     if a.real_data:
         rP, _ = load_real_data(a.real_data, min(a.real_aug, 7), a.seed,

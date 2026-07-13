@@ -2865,13 +2865,38 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
-            // AI "Select by Part" (#410) — predicts head/torso/arm/leg labels
-            // and selects all faces matching the selected face's part (or the
-            // largest part if nothing is selected). Runs the (slow first-use
-            // model download + ONNX inference) on a WORKER thread so the UI stays
-            // responsive; progress + result surface via EditModeController.
+            // AI "Select by Part" (#410/#818) — predicts part labels for the
+            // mesh's CATEGORY (body / vegetation / vehicle / building; Auto =
+            // point-cloud classifier) and selects all faces matching the
+            // selected face's part (or the largest part if nothing is
+            // selected). Runs the (slow first-use model download + ONNX
+            // inference) on a WORKER thread so the UI stays responsive;
+            // progress + result surface via EditModeController.
             property string selectByPartStatus: ""
             property bool selectByPartError: false
+            // Manual category override (#818): the escape hatch for meshes
+            // the Auto classifier gets wrong (e.g. a car with detached
+            // wheels). Lowercase ids match the CLI --category values.
+            property var sbpCategoryIds: ["auto", "body", "vegetation", "vehicle", "building"]
+            property int sbpCategoryIndex: 0
+
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Category:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - 66
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Auto (AI)", "Body", "Vegetation", "Vehicle", "Building"]
+                    currentIndex: editToolsCol.sbpCategoryIndex
+                    onCurrentIndexChanged: editToolsCol.sbpCategoryIndex = currentIndex
+                    enabled: !EditModeController.segmentBusy
+                }
+            }
 
             Connections {
                 target: EditModeController
@@ -2903,7 +2928,8 @@ Rectangle {
                     if (EditModeController.segmentBusy)
                         return
                     editToolsCol.selectByPartStatus = ""
-                    EditModeController.selectByPart()
+                    EditModeController.selectByPart(
+                        "y", editToolsCol.sbpCategoryIds[editToolsCol.sbpCategoryIndex])
                 }
                 Keys.onPressed: function(event) {
                     if (event.key === Qt.Key_Space || event.key === Qt.Key_Return

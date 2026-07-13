@@ -669,7 +669,15 @@ public:
     /// `up_axis` parity — it drives the geometric/fallback head-vs-leg heuristic
     /// for meshes that are not +Y up. Case-insensitive; an empty/unknown value
     /// keeps the +Y default.
-    Q_INVOKABLE QString selectByPart(const QString& upAxis = QStringLiteral("y"));
+    ///
+    /// `category` matches the CLI `--category` / MCP `category` parity (#818):
+    /// "auto" (default) runs the point-cloud category classifier; an explicit
+    /// "body"/"vegetation"/"vehicle"/"building" forces that label set — the
+    /// manual override for meshes the classifier gets wrong (e.g. a car with
+    /// detached wheels). An explicit NON-body category also skips the
+    /// rig-prior fast path (rig labels are body parts).
+    Q_INVOKABLE QString selectByPart(const QString& upAxis = QStringLiteral("y"),
+                                     const QString& category = QStringLiteral("auto"));
 
     /// Cancel an in-flight selectByPart worker (no-op otherwise).
     Q_INVOKABLE void cancelSegment();
