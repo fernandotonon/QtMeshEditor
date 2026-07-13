@@ -59,6 +59,16 @@ class MocapController : public QObject
     Q_PROPERTY(QStringList unmatchedChannels READ unmatchedChannels
                NOTIFY mappingChanged)
     Q_PROPERTY(bool headAvailable READ headAvailable NOTIFY mappingChanged)
+    // body: only offerable when the selection is a humanoid rig
+    Q_PROPERTY(bool bodyAvailable READ bodyAvailable NOTIFY mappingChanged)
+    Q_PROPERTY(bool bodyDetected READ bodyDetected NOTIFY liveStatsChanged)
+    // channel enables (writable from the QML Face/Head/Body checkboxes)
+    Q_PROPERTY(bool faceEnabled READ faceEnabled WRITE setFaceEnabled
+               NOTIFY channelsChanged)
+    Q_PROPERTY(bool headEnabled READ headEnabled WRITE setHeadEnabled
+               NOTIFY channelsChanged)
+    Q_PROPERTY(bool bodyEnabled READ bodyEnabled WRITE setBodyEnabled
+               NOTIFY channelsChanged)
     Q_PROPERTY(QString clipName READ clipName WRITE setClipName
                NOTIFY clipNameChanged)
     Q_PROPERTY(double smoothingCutoff READ smoothingCutoff
@@ -85,6 +95,14 @@ public:
     int matchedChannelCount() const;
     QStringList unmatchedChannels() const;
     bool headAvailable() const;
+    bool bodyAvailable() const;
+    bool bodyDetected() const;
+    bool faceEnabled() const;
+    void setFaceEnabled(bool on);
+    bool headEnabled() const;
+    void setHeadEnabled(bool on);
+    bool bodyEnabled() const;
+    void setBodyEnabled(bool on);
     QString clipName() const;
     void setClipName(const QString& name);
     double smoothingCutoff() const;
@@ -106,8 +124,11 @@ public:
     // Ownership stays with the caller; feed samples through onSample().
     bool startPreviewWithSource(class VideoFrameSource* source);
     // Receives one predicted sample on the MAIN thread (queued from the
-    // inference worker in live mode; called directly by tests).
+    // inference worker in live mode; called directly by tests). The
+    // face-only overload forwards with no body frame.
     void onSample(const FaceSample& sample, const QImage& preview);
+    void onSample(const FaceSample& sample, const struct BodyLiveFrame& body,
+                  const QImage& preview);
 #endif
 
 signals:
@@ -117,6 +138,7 @@ signals:
     void previewChanged();
     void statusChanged();
     void mappingChanged();
+    void channelsChanged();
     void clipNameChanged();
     void smoothingChanged();
     void errorOccurred(const QString& message);
@@ -126,6 +148,9 @@ private:
     ~MocapController() override;
 
 #ifdef ENABLE_MOCAP
+    // startPreview() gates on camera permission (async on first run), then
+    // hands off here once granted.
+    bool beginPreview(const QString& deviceId);
     void restoreEntityState();
     void setStatusMessage(const QString& message);
 #endif

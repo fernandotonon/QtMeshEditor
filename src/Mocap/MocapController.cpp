@@ -3,7 +3,10 @@
 #ifdef ENABLE_MOCAP
 #include "MocapRecorder.h"
 #include "OneEuroFilter.h"
+#include "PoseCapPredictor.h"
+#include "PoseIKSolver.h"
 #include "VideoFrameSource.h"
+#include "../MotionInbetween.h"
 #include "../Manager.h"
 #include "../MorphAnimationManager.h"
 #include "../SelectionSet.h"
@@ -24,16 +27,11 @@
 #endif
 
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QPermissions>
 
 namespace {
 MocapController* s_instance = nullptr;
-#ifdef ENABLE_MOCAP
-// queued sampleReady(FaceSample, QImage) needs the metatype
-struct FaceSampleMetaTypeRegistrar {
-    FaceSampleMetaTypeRegistrar() { qRegisterMetaType<FaceSample>("FaceSample"); }
-};
-const FaceSampleMetaTypeRegistrar faceSampleRegistrar;
-#endif
 }
 
 MocapController* MocapController::instance()
@@ -84,6 +82,14 @@ QString MocapController::statusMessage() const { return {}; }
 int MocapController::matchedChannelCount() const { return 0; }
 QStringList MocapController::unmatchedChannels() const { return {}; }
 bool MocapController::headAvailable() const { return false; }
+bool MocapController::bodyAvailable() const { return false; }
+bool MocapController::bodyDetected() const { return false; }
+bool MocapController::faceEnabled() const { return false; }
+void MocapController::setFaceEnabled(bool) {}
+bool MocapController::headEnabled() const { return false; }
+void MocapController::setHeadEnabled(bool) {}
+bool MocapController::bodyEnabled() const { return false; }
+void MocapController::setBodyEnabled(bool) {}
 QString MocapController::clipName() const { return QStringLiteral("FaceCap"); }
 void MocapController::setClipName(const QString&) {}
 double MocapController::smoothingCutoff() const { return 1.0; }
@@ -101,6 +107,28 @@ void MocapController::calibrateNeutral() {}
 // Worker: drains the camera mailbox through the predictor off the main thread.
 // -----------------------------------------------------------------------------
 
+// One canonical-role world-quat frame from the pose solver, marshalled to the
+// main thread alongside the face sample (avoids a second queued signal type).
+struct BodyLiveFrame {
+    bool valid = false;
+    std::array<std::array<float, 4>, PoseIK::kCanonicalRoles> quats;
+    uint32_t resolvedMask = 0;
+};
+Q_DECLARE_METATYPE(BodyLiveFrame)
+
+// queued sampleReady(FaceSample, BodyLiveFrame, QImage) across the worker
+// thread boundary needs both payload types registered.
+namespace {
+struct MocapMetaTypeRegistrar {
+    MocapMetaTypeRegistrar()
+    {
+        qRegisterMetaType<FaceSample>("FaceSample");
+        qRegisterMetaType<BodyLiveFrame>("BodyLiveFrame");
+    }
+};
+const MocapMetaTypeRegistrar mocapMetaTypeRegistrar;
+}  // namespace
+
 class MocapInferenceWorker : public QObject
 {
     Q_OBJECT
@@ -110,6 +138,12 @@ public:
     std::array<OneEuroFilter, 52> weightFilters;
     OneEuroQuatFilter headFilter;
     bool smooth = true;
+
+    // body (optional; created only when the Body channel is enabled)
+    bool bodyEnabled = false;
+    std::shared_ptr<PoseCapPredictor> posePredictor;
+    PoseIK::Solver poseSolver;
+    std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
 
 public slots:
     void processPending()
@@ -125,16 +159,35 @@ public slots:
                         weightFilters[c].filter(s.weights[c], s.timeSec));
                 s.headRotation = headFilter.filter(s.headRotation, s.timeSec);
             }
+
+            BodyLiveFrame body;
+            if (bodyEnabled && posePredictor) {
+                const PoseSample ps =
+                    posePredictor->predict(frame.image, frame.timeSec);
+                if (ps.confidence > 0.f) {
+                    PoseIK::FrameResult fr = poseSolver.solveFrame(
+                        ps.world.data(), ps.visibility.data());
+                    if (smooth)
+                        for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
+                            fr.quats[r] =
+                                roleFilters[r].filter(fr.quats[r], frame.timeSec);
+                    body.valid = true;
+                    body.quats = fr.quats;
+                    body.resolvedMask = fr.resolvedMask;
+                }
+            }
+
             // downscale sparsely for the HUD preview (payload stays small)
             QImage preview;
             if (frame.frameIndex % 3 == 0)
                 preview = frame.image.scaledToWidth(240, Qt::FastTransformation);
-            emit sampleReady(s, preview);
+            emit sampleReady(s, body, preview);
         }
     }
 
 signals:
-    void sampleReady(const FaceSample& sample, const QImage& preview);
+    void sampleReady(const FaceSample& sample, const BodyLiveFrame& body,
+                     const QImage& preview);
 };
 
 struct MocapController::Impl {
@@ -160,9 +213,31 @@ struct MocapController::Impl {
     QHash<QString, float> savedWeights;          // mesh target -> weight
     QStringList savedEnabledAnimations;
 
+    // channel enables (persist across sessions; body gated on a humanoid rig)
+    bool faceEnabled = true;
+    bool headEnabled = true;
+    bool bodyEnabled = false;
+    bool bodyRigOk = false;   // selection resolved >= half the canonical roles
+
+    // body live-drive state: one canonical role -> the rig bone it drives, plus
+    // that bone's bind orientations (for the same world-delta math recordBody
+    // uses) and its pre-preview manual-control flag (restore contract).
+    struct BodyBone {
+        int role = -1;
+        std::string boneName;
+        Ogre::Quaternion bindLocal = Ogre::Quaternion::IDENTITY;
+        Ogre::Quaternion bindWorld = Ogre::Quaternion::IDENTITY;
+        bool wasManuallyControlled = false;
+    };
+    std::vector<BodyBone> bodyBones;
+    bool bodyCalibrated = false;
+    std::array<Ogre::Quaternion, PoseIK::kCanonicalRoles> bodyNeutral;
+    bool bodyDetected = false;
+
     // recording
     bool recordPending = false;
     std::vector<FaceSample> take;
+    std::vector<BodyLiveFrame> bodyTake;   // parallel to `take`, when body on
     double takeStart = 0.0;
     double lastSampleTime = 0.0;
 
@@ -229,6 +304,29 @@ QStringList MocapController::unmatchedChannels() const
     return d->mapping.unmatchedCanonical;
 }
 bool MocapController::headAvailable() const { return !d->headBone.isEmpty(); }
+bool MocapController::bodyAvailable() const { return d->bodyRigOk; }
+bool MocapController::bodyDetected() const { return d->bodyDetected; }
+bool MocapController::faceEnabled() const { return d->faceEnabled; }
+void MocapController::setFaceEnabled(bool on)
+{
+    if (on == d->faceEnabled) return;
+    d->faceEnabled = on;
+    emit channelsChanged();
+}
+bool MocapController::headEnabled() const { return d->headEnabled; }
+void MocapController::setHeadEnabled(bool on)
+{
+    if (on == d->headEnabled) return;
+    d->headEnabled = on;
+    emit channelsChanged();
+}
+bool MocapController::bodyEnabled() const { return d->bodyEnabled; }
+void MocapController::setBodyEnabled(bool on)
+{
+    if (on == d->bodyEnabled) return;
+    d->bodyEnabled = on;
+    emit channelsChanged();
+}
 QString MocapController::clipName() const { return d->clipName; }
 void MocapController::setClipName(const QString& name)
 {
@@ -255,6 +353,55 @@ void MocapController::setStatusMessage(const QString& message)
 }
 
 bool MocapController::startPreview(const QString& deviceId)
+{
+    if (d->state != Idle)
+        return false;
+
+    // A drive target must exist before we bother the user with a camera
+    // permission prompt.
+    auto* sel = SelectionSet::getSingleton();
+    bool haveEntity = false;
+    if (sel && !sel->getResolvedEntities().isEmpty())
+        haveEntity = sel->getResolvedEntities().first() != nullptr;
+    if (!haveEntity) {
+        setStatusMessage(tr("Select an entity to drive first."));
+        emit errorOccurred(d->status);
+        return false;
+    }
+
+    // Camera permission (Qt 6.6+). QCamera::start() delivers NO frames on
+    // macOS until the user has granted access — without this request the
+    // preview would sit at "Starting camera…" forever (there is no error, the
+    // sink is simply silent). requestPermission is async; we continue in
+    // beginPreview() once granted. checkPermission() short-circuits the prompt
+    // on repeat runs.
+    QCameraPermission camPerm;
+    switch (qApp->checkPermission(camPerm)) {
+    case Qt::PermissionStatus::Granted:
+        return beginPreview(deviceId);
+    case Qt::PermissionStatus::Denied:
+        setStatusMessage(tr("Camera access is denied — enable it for "
+                            "QtMeshEditor in System Settings → Privacy & "
+                            "Security → Camera, then try again."));
+        emit errorOccurred(d->status);
+        return false;
+    case Qt::PermissionStatus::Undetermined:
+        setStatusMessage(tr("Requesting camera access…"));
+        qApp->requestPermission(camPerm, this,
+            [this, deviceId](const QPermission& result) {
+                if (result.status() == Qt::PermissionStatus::Granted) {
+                    beginPreview(deviceId);
+                } else {
+                    setStatusMessage(tr("Camera access was not granted."));
+                    emit errorOccurred(d->status);
+                }
+            });
+        return true;  // async; the callback finishes the job
+    }
+    return false;
+}
+
+bool MocapController::beginPreview(const QString& deviceId)
 {
     if (d->state != Idle)
         return false;
@@ -289,11 +436,45 @@ bool MocapController::startPreview(const QString& deviceId)
     d->mapping = FaceCapMapper::build(
         MorphAnimationManager::instance()->morphTargetsFor(entity));
     d->headBone = MocapRecorder::resolveHeadBone(entity);
+
+    // body rig mapping: canonical role -> the rig bone that plays it (the same
+    // MotionInbetween::canonicalIndexForBone the retarget uses). Requires a
+    // skinned mesh resolving >= half of the 22 roles (the humanoid gate).
+    d->bodyBones.clear();
+    d->bodyRigOk = false;
+    if (entity->hasSkeleton()) {
+        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        std::array<bool, PoseIK::kCanonicalRoles> roleSeen{};
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+            Ogre::Bone* bone = skel->getBone(i);
+            const int role = MotionInbetween::canonicalIndexForBone(
+                QString::fromStdString(bone->getName()));
+            if (role < 0 || role >= PoseIK::kCanonicalRoles || roleSeen[role])
+                continue;
+            roleSeen[role] = true;
+            Impl::BodyBone bb;
+            bb.role = role;
+            bb.boneName = bone->getName();
+            d->bodyBones.push_back(bb);
+        }
+        int resolved = 0;
+        for (bool s : roleSeen) resolved += s ? 1 : 0;
+        d->bodyRigOk = resolved * 2 >= PoseIK::kCanonicalRoles;  // >= half
+        if (!d->bodyRigOk)
+            d->bodyBones.clear();
+    }
+    if (!d->bodyRigOk)
+        d->bodyEnabled = false;  // can't drive body on a non-humanoid rig
+
     emit mappingChanged();
-    if (d->mapping.channels.isEmpty() && d->headBone.isEmpty()) {
+    const bool faceDrivable = d->faceEnabled && !d->mapping.channels.isEmpty();
+    const bool headDrivable = d->headEnabled && !d->headBone.isEmpty();
+    const bool bodyDrivable = d->bodyEnabled && d->bodyRigOk;
+    if (!faceDrivable && !headDrivable && !bodyDrivable) {
         setStatusMessage(
-                  tr("The selection has no ARKit-style morph targets and no "
-                     "Head bone — nothing to drive."));
+                  tr("Nothing to drive: enable a channel the selection "
+                     "supports (morph targets for Face, a Head bone, or a "
+                     "humanoid rig for Body)."));
         emit errorOccurred(d->status);
         return false;
     }
@@ -313,15 +494,38 @@ bool MocapController::startPreview(const QString& deviceId)
             }
         }
     }
-    if (!d->headBone.isEmpty() && entity->hasSkeleton()) {
+    // Head-bone drive is used only when body is NOT driving (body owns the
+    // whole skeleton incl. the head when enabled, so they never fight).
+    const bool headBoneDrive =
+        d->headEnabled && !d->headBone.isEmpty() && !bodyDrivable;
+    if (headBoneDrive && entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
         Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
         d->headWasManuallyControlled = bone->isManuallyControlled();
         d->headBindLocal = bone->getOrientation();
         d->headBindWorld = bone->_getDerivedOrientation();
         bone->setManuallyControlled(true);
+    } else {
+        d->headBone.clear();  // signals onSample to skip the head-bone path
     }
+
+    // body-bone snapshot + manual control
+    if (bodyDrivable && entity->hasSkeleton()) {
+        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        for (auto& bb : d->bodyBones) {
+            Ogre::Bone* bone = skel->getBone(bb.boneName);
+            bb.wasManuallyControlled = bone->isManuallyControlled();
+            bb.bindLocal = bone->getOrientation();
+            bb.bindWorld = bone->_getDerivedOrientation();
+            bone->setManuallyControlled(true);
+        }
+    } else {
+        d->bodyBones.clear();  // not driving this session
+    }
+
     d->calibrated = false;
+    d->bodyCalibrated = false;
+    d->bodyDetected = false;
     d->faceDetected = false;
     d->liveFps = 0;
     d->lastArrival = -1;
@@ -345,6 +549,8 @@ bool MocapController::startPreview(const QString& deviceId)
     for (auto& f : d->worker->weightFilters)
         f = OneEuroFilter(params);
     d->worker->headFilter = OneEuroQuatFilter(params);
+    for (auto& f : d->worker->roleFilters)
+        f = OneEuroQuatFilter(params);
     if (!d->worker->predictor.load()) {
         const QString msg = d->worker->predictor.lastError();
         delete d->worker;
@@ -354,6 +560,29 @@ bool MocapController::startPreview(const QString& deviceId)
         setStatusMessage(msg);
         emit errorOccurred(msg);
         return false;
+    }
+    // body predictor (only when driving body this session — the mesh is skinned
+    // + humanoid and the Body channel is on)
+    if (!d->bodyBones.empty()) {
+        if (!PoseCapPredictor::modelsPresent()) {
+            setStatusMessage(tr("Downloading pose capture models…"));
+            QCoreApplication::processEvents();
+            PoseCapPredictor::ensureModelsBlocking();
+        }
+        auto pose = std::make_shared<PoseCapPredictor>();
+        if (pose->load()) {
+            d->worker->posePredictor = pose;
+            d->worker->bodyEnabled = true;
+        } else {
+            // body models unavailable: keep face/head live, drop body cleanly
+            setStatusMessage(tr("Body capture unavailable (%1) — driving "
+                                "face/head only.").arg(pose->lastError()));
+            for (auto& bb : d->bodyBones)
+                if (auto* skel = entity->getSkeleton())
+                    skel->getBone(bb.boneName)->setManuallyControlled(
+                        bb.wasManuallyControlled);
+            d->bodyBones.clear();
+        }
     }
     d->worker->moveToThread(&d->workerThread);
     connect(&d->workerThread, &QThread::finished, d->worker,
@@ -368,7 +597,9 @@ bool MocapController::startPreview(const QString& deviceId)
                 stopPreview();
             });
     connect(d->worker, &MocapInferenceWorker::sampleReady, this,
-            &MocapController::onSample, Qt::QueuedConnection);
+            [this](const FaceSample& s, const BodyLiveFrame& b,
+                   const QImage& p) { onSample(s, b, p); },
+            Qt::QueuedConnection);
     d->workerThread.start();
 
     d->state = CameraStarting;
@@ -437,6 +668,12 @@ bool MocapController::startPreviewWithSource(VideoFrameSource* source)
 // Test seam companion: feed a sample as if it came from the worker.
 void MocapController::onSample(const FaceSample& sample, const QImage& preview)
 {
+    onSample(sample, BodyLiveFrame{}, preview);
+}
+
+void MocapController::onSample(const FaceSample& sample,
+                               const BodyLiveFrame& body, const QImage& preview)
+{
     if (d->state == Idle)
         return;
     if (d->state == CameraStarting) {
@@ -447,6 +684,7 @@ void MocapController::onSample(const FaceSample& sample, const QImage& preview)
 
     // HUD
     d->faceDetected = sample.confidence > 0.f;
+    d->bodyDetected = body.valid;
     if (d->lastArrival >= 0.0) {
         const double dt = sample.timeSec - d->lastArrival;
         if (dt > 0)
@@ -475,7 +713,7 @@ void MocapController::onSample(const FaceSample& sample, const QImage& preview)
         morphMgr->setWeight(entity, ch.meshTargetName,
                             sample.weights[ch.canonicalIndex]);
 
-    // live drive — head
+    // live drive — head (skipped when body owns the skeleton)
     if (!d->headBone.isEmpty() && entity->hasSkeleton()) {
         if (!d->calibrated) {
             d->neutral = Ogre::Quaternion(
@@ -495,8 +733,36 @@ void MocapController::onSample(const FaceSample& sample, const QImage& preview)
         skel->_notifyManualBonesDirty();
     }
 
+    // live drive — body (per-bone world-delta vs the calibration frame, the
+    // same conjugation recordBody/applyMotionClip use: the first valid frame
+    // is neutral so "your pose at start" == the rig's standing pose).
+    if (body.valid && !d->bodyBones.empty() && entity->hasSkeleton()) {
+        auto toOgre = [](const std::array<float, 4>& q) {
+            return Ogre::Quaternion(q[3], q[0], q[1], q[2]);  // (x,y,z,w)->(w,x,y,z)
+        };
+        if (!d->bodyCalibrated) {
+            for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
+                d->bodyNeutral[r] = toOgre(body.quats[r]);
+            d->bodyCalibrated = true;
+        }
+        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        for (const auto& bb : d->bodyBones) {
+            if (!(body.resolvedMask & (1u << bb.role)))
+                continue;  // role not tracked this frame — hold last pose
+            const Ogre::Quaternion cur = toOgre(body.quats[bb.role]);
+            const Ogre::Quaternion dWorld =
+                cur * d->bodyNeutral[bb.role].Inverse();
+            const Ogre::Quaternion local =
+                bb.bindWorld.Inverse() * dWorld * bb.bindWorld;
+            skel->getBone(bb.boneName)->setOrientation(bb.bindLocal * local);
+        }
+        skel->_notifyManualBonesDirty();
+    }
+
     if (d->state == Recording) {
         d->take.push_back(sample);
+        if (!d->bodyBones.empty())
+            d->bodyTake.push_back(body);
         d->lastSampleTime = sample.timeSec;
     }
 }
@@ -512,6 +778,7 @@ bool MocapController::startRecording()
     if (d->state != Previewing)
         return false;
     d->take.clear();
+    d->bodyTake.clear();
     d->takeStart = d->lastArrival;
     d->lastSampleTime = d->takeStart;
     d->state = Recording;
@@ -532,29 +799,74 @@ void MocapController::stopRecording()
         setStatusMessage(tr("Nothing recorded (no confident frames)."));
         return;
     }
-    MocapRecorder::FaceRecordOptions options;
-    options.clipName = d->clipName;
-    options.head = !d->headBone.isEmpty();
-    auto* cmd = new RecordMocapClipCommand(d->entityName, d->take, d->mapping,
-                                           options);
-    UndoManager::getSingleton()->push(cmd);
-    const auto& report = cmd->report();
-    if (!report.ok()) {
-        setStatusMessage(report.error);
-        return;
+
+    QStringList summary;
+    int faceKeys = 0, bodyTracks = 0;
+    double clipLen = 0.0;
+
+    // face + head clip (only when a face/head channel actually drove)
+    if (!d->mapping.channels.isEmpty() || !d->headBone.isEmpty()) {
+        MocapRecorder::FaceRecordOptions options;
+        options.clipName = d->clipName;
+        options.head = !d->headBone.isEmpty();
+        auto* cmd = new RecordMocapClipCommand(d->entityName, d->take,
+                                               d->mapping, options);
+        UndoManager::getSingleton()->push(cmd);
+        const auto& report = cmd->report();
+        if (report.ok()) {
+            faceKeys = report.keyframesWritten + report.headKeyframesWritten;
+            clipLen = report.clipLength;
+            summary << tr("'%1' (%2 keys)").arg(report.clipName).arg(faceKeys);
+        } else {
+            setStatusMessage(report.error);
+        }
+        GamificationManager::noteOperation(
+            QStringLiteral("mocap_face"),
+            {{QStringLiteral("frames"),
+              static_cast<qint64>(report.framesProcessed)},
+             {QStringLiteral("keyframes"), static_cast<qint64>(faceKeys)}},
+            GamificationManager::Surface::Gui);
     }
-    setStatusMessage(
-              tr("Recorded %1s → clip '%2' (%3 keyframes) — Ctrl+Z to discard.")
-                  .arg(report.clipLength, 0, 'f', 1)
-                  .arg(report.clipName)
-                  .arg(report.keyframesWritten + report.headKeyframesWritten));
-    GamificationManager::noteOperation(
-        QStringLiteral("mocap_face"),
-        {{QStringLiteral("frames"), static_cast<qint64>(report.framesProcessed)},
-         {QStringLiteral("keyframes"),
-          static_cast<qint64>(report.keyframesWritten
-                              + report.headKeyframesWritten)}},
-        GamificationManager::Surface::Gui);
+
+    // body clip: convert the buffered live frames to the [frame][22] world-quat
+    // stream recordBody expects (identity for roles unresolved that frame), and
+    // push a SEPARATE undo command so face + body each undo cleanly.
+    if (!d->bodyBones.empty() && d->bodyTake.size() >= 2) {
+        std::vector<std::vector<std::array<float, 4>>> clipQuats;
+        clipQuats.reserve(d->bodyTake.size());
+        for (const auto& bf : d->bodyTake) {
+            if (!bf.valid)
+                continue;
+            clipQuats.emplace_back(bf.quats.begin(), bf.quats.end());
+        }
+        if (clipQuats.size() >= 2) {
+            MocapRecorder::BodyRecordOptions bopts;
+            bopts.clipName = d->clipName + QStringLiteral("_Body");
+            bopts.algorithmUsed = QStringLiteral("pose-ik");
+            const int fps = 30;
+            auto* bcmd = new RecordBodyClipCommand(d->entityName, clipQuats,
+                                                   fps, bopts);
+            UndoManager::getSingleton()->push(bcmd);
+            const auto& br = bcmd->report();
+            if (br.ok()) {
+                bodyTracks = br.tracksWritten;
+                clipLen = std::max(clipLen, br.clipLength);
+                summary << tr("'%1' (%2 tracks)")
+                               .arg(br.clipName).arg(bodyTracks);
+            }
+            GamificationManager::noteOperation(
+                QStringLiteral("mocap_body"),
+                {{QStringLiteral("frames"),
+                  static_cast<qint64>(br.framesProcessed)},
+                 {QStringLiteral("tracks"), static_cast<qint64>(bodyTracks)}},
+                GamificationManager::Surface::Gui);
+        }
+    }
+
+    if (!summary.isEmpty())
+        setStatusMessage(tr("Recorded %1s → %2 — Ctrl+Z to discard.")
+                             .arg(clipLen, 0, 'f', 1)
+                             .arg(summary.join(QStringLiteral(" + "))));
 }
 
 void MocapController::restoreEntityState()
@@ -565,11 +877,19 @@ void MocapController::restoreEntityState()
     auto* morphMgr = MorphAnimationManager::instance();
     for (auto it = d->savedWeights.begin(); it != d->savedWeights.end(); ++it)
         morphMgr->setWeight(entity, it.key(), it.value());
-    if (!d->headBone.isEmpty() && entity->hasSkeleton()) {
+    if (entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
-        Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
-        bone->setOrientation(d->headBindLocal);
-        bone->setManuallyControlled(d->headWasManuallyControlled);
+        if (!d->headBone.isEmpty()) {
+            Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
+            bone->setOrientation(d->headBindLocal);
+            bone->setManuallyControlled(d->headWasManuallyControlled);
+        }
+        // restore every body-driven bone to its pre-preview state exactly
+        for (const auto& bb : d->bodyBones) {
+            Ogre::Bone* bone = skel->getBone(bb.boneName);
+            bone->setOrientation(bb.bindLocal);
+            bone->setManuallyControlled(bb.wasManuallyControlled);
+        }
         skel->_notifyManualBonesDirty();
     }
     if (auto* states = entity->getAllAnimationStates()) {

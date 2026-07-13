@@ -611,9 +611,10 @@ Rectangle {
 
             // ---- Performance Capture (Animation mode, epic #869) ----
             // Live webcam capture: preview drives the selected entity's
-            // morph targets + Head bone in real time; Record writes an
-            // ordinary undoable clip. Gated on a selection that has either
-            // ARKit-style morph targets or a resolvable Head bone; disabled
+            // morph targets, Head bone, and (humanoid rig) full body in real
+            // time via the Face/Head/Body toggles; Record writes ordinary
+            // undoable clips. Gated on a selection with morph targets, a Head
+            // bone, or a humanoid rig; disabled
             // builds show the rebuild hint inside the section.
             CollapsibleSection {
                 id: performanceCaptureSection
@@ -2325,10 +2326,55 @@ Rectangle {
                 font.pixelSize: 10
                 text: mocapReady
                     ? "Webcam performance capture: Preview drives the selection's "
-                      + "ARKit-style morph targets and Head bone live; Record writes "
-                      + "an undoable clip onto the timeline. Body capture runs "
-                      + "offline via 'qtmesh mocap --body'."
+                      + "morph targets, Head bone, and (on a humanoid rig) full "
+                      + "body live; Record writes undoable clips onto the timeline."
                     : MocapController.unavailableReason
+            }
+
+            // Face / Head / Body channel toggles. Each is enabled only when the
+            // selection actually supports it; body needs a humanoid rig.
+            Row {
+                width: parent.width - 16
+                spacing: 12
+                visible: mocapReady
+                enabled: MocapController.state === 0  // lock during a session
+
+                CheckBox {
+                    text: "Face"
+                    checked: MocapController.faceEnabled
+                    enabled: MocapController.matchedChannelCount > 0
+                    onToggled: MocapController.faceEnabled = checked
+                    contentItem: Text {
+                        text: parent.text; leftPadding: parent.indicator.width + 4
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
+                        opacity: parent.enabled ? 1.0 : 0.4
+                    }
+                }
+                CheckBox {
+                    text: "Head"
+                    checked: MocapController.headEnabled
+                    enabled: MocapController.headAvailable
+                    onToggled: MocapController.headEnabled = checked
+                    contentItem: Text {
+                        text: parent.text; leftPadding: parent.indicator.width + 4
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
+                        opacity: parent.enabled ? 1.0 : 0.4
+                    }
+                }
+                CheckBox {
+                    text: "Body"
+                    checked: MocapController.bodyEnabled
+                    enabled: MocapController.bodyAvailable
+                    onToggled: MocapController.bodyEnabled = checked
+                    contentItem: Text {
+                        text: parent.text; leftPadding: parent.indicator.width + 4
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
+                        opacity: parent.enabled ? 1.0 : 0.4
+                    }
+                }
             }
 
             // device picker + preview toggle
@@ -2394,12 +2440,23 @@ Rectangle {
                     source: MocapController.previewDataUrl
                     cache: false
                 }
+                // face-detected (top) + body-detected (below, only when body on)
                 Rectangle {
+                    id: faceDot
                     width: 10; height: 10; radius: 5
                     anchors.top: parent.top
                     anchors.right: parent.right
                     anchors.margins: 6
                     color: MocapController.faceDetected ? "#4caf50" : "#f44336"
+                }
+                Rectangle {
+                    width: 10; height: 10; radius: 5
+                    anchors.top: faceDot.bottom
+                    anchors.right: parent.right
+                    anchors.topMargin: 4
+                    anchors.rightMargin: 6
+                    visible: MocapController.bodyEnabled
+                    color: MocapController.bodyDetected ? "#2196f3" : "#f44336"
                 }
                 Text {
                     anchors.bottom: parent.bottom
@@ -2424,12 +2481,20 @@ Rectangle {
                 opacity: 0.8
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
-                text: MocapController.matchedChannelCount + " morph channels matched"
-                    + (MocapController.headAvailable ? " + Head bone" : "")
-                    + (MocapController.unmatchedChannels.length > 0
-                       ? " (" + MocapController.unmatchedChannels.length
-                         + " capture channels unmatched)"
-                       : "")
+                text: {
+                    var parts = []
+                    if (MocapController.faceEnabled && MocapController.matchedChannelCount > 0)
+                        parts.push(MocapController.matchedChannelCount + " morph channels")
+                    if (MocapController.headEnabled && MocapController.headAvailable)
+                        parts.push("Head bone")
+                    if (MocapController.bodyEnabled && MocapController.bodyAvailable)
+                        parts.push("body rig")
+                    var s = "Driving: " + (parts.length ? parts.join(" + ") : "nothing")
+                    if (MocapController.unmatchedChannels.length > 0)
+                        s += " (" + MocapController.unmatchedChannels.length
+                             + " capture channels unmatched)"
+                    return s
+                }
             }
 
             // clip name + record controls
