@@ -14,7 +14,7 @@
 	<key>CFBundleSignature</key>
 	<string>QtMeshEditor</string>
 	<key>CFBundleIdentifier</key>
-	<string>QtMeshEditor</string>
+	<string>com.qtmesheditor.app</string>
 	<key>CFBundleExecutable</key>
 	<string>QtMeshEditor</string>
 

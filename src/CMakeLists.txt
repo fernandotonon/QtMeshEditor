@@ -1106,7 +1106,22 @@ endif()
 #  Configure Info.plist for Mac OS X
 ##############################################################
 if(APPLE)
-    configure_file (
+    # Configure the real Info.plist into the build tree AND set it as the
+    # bundle's plist on the target, so the .app that the plain build produces
+    # carries NSCameraUsageDescription + a stable CFBundleIdentifier + the file
+    # associations — not CMake's empty MACOSX_BUNDLE default. Without this the
+    # OS refuses the camera-permission prompt (empty bundle id + no usage
+    # string) and the app never appears under Privacy & Security → Camera.
+    # (Release/deploy.yml still copies the install-prefix copy too; harmless.)
+    set(_QTMESH_BUNDLE_PLIST "${CMAKE_CURRENT_BINARY_DIR}/QtMeshEditor-Info.plist")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        "${_QTMESH_BUNDLE_PLIST}"
+        @ONLY)
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${_QTMESH_BUNDLE_PLIST}")
+    # Keep the install-prefix copy for the release manual-copy step.
+    configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
         "${CMAKE_INSTALL_PREFIX}/Info.plist"
         @ONLY)

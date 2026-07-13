@@ -2339,41 +2339,23 @@ Rectangle {
                 visible: mocapReady
                 enabled: MocapController.state === 0  // lock during a session
 
-                CheckBox {
+                InspectorCheckBox {
                     text: "Face"
                     checked: MocapController.faceEnabled
                     enabled: MocapController.matchedChannelCount > 0
                     onToggled: MocapController.faceEnabled = checked
-                    contentItem: Text {
-                        text: parent.text; leftPadding: parent.indicator.width + 4
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
-                        opacity: parent.enabled ? 1.0 : 0.4
-                    }
                 }
-                CheckBox {
+                InspectorCheckBox {
                     text: "Head"
                     checked: MocapController.headEnabled
                     enabled: MocapController.headAvailable
                     onToggled: MocapController.headEnabled = checked
-                    contentItem: Text {
-                        text: parent.text; leftPadding: parent.indicator.width + 4
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
-                        opacity: parent.enabled ? 1.0 : 0.4
-                    }
                 }
-                CheckBox {
+                InspectorCheckBox {
                     text: "Body"
                     checked: MocapController.bodyEnabled
                     enabled: MocapController.bodyAvailable
                     onToggled: MocapController.bodyEnabled = checked
-                    contentItem: Text {
-                        text: parent.text; leftPadding: parent.indicator.width + 4
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11; verticalAlignment: Text.AlignVCenter
-                        opacity: parent.enabled ? 1.0 : 0.4
-                    }
                 }
             }
 
@@ -2383,9 +2365,11 @@ Rectangle {
                 spacing: 6
                 visible: mocapReady
 
-                ComboBox {
+                ThemedComboBox {
                     id: mocapDeviceCombo
                     width: parent.width - previewBtn.width - 6
+                    height: 26
+                    font.pixelSize: 11
                     model: MocapController.availableDevices
                     textRole: "description"
                     valueRole: "id"
