@@ -49,6 +49,12 @@ struct FaceRigGeometry {
     std::vector<float> userV;   // combined positions (Nu*3)
     std::vector<int> userF;     // combined triangle indices
     std::vector<GeometryOwner> owners;
+    // Per-combined-vertex head flag (size Nu). Empty = no head isolation (the
+    // whole mesh is treated as the face). When populated, only head vertices
+    // participate in the fit + receive blendshape deltas — so a full-body
+    // character rigs correctly instead of smearing the face over the body.
+    std::vector<char> headMask;
+    int headVertexCount = 0;
     bool valid() const { return userV.size() >= 9 && userF.size() >= 3; }
 };
 

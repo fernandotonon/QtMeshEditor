@@ -126,25 +126,51 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
 
     m_busy = true;
     emit busyChanged();
+    m_progress = 0;
+    m_progressTotal = 0;
+    emit progressChanged();
     setStatus(QStringLiteral("Fitting face template…"));
 
+    m_cancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_cancel;
     const std::string entName = entity->getName();
     QPointer<FaceRigController> self(this);
 
     // WORKER thread: the heavy Ogre-free fit + transfer over all 52 shapes.
-    std::thread([self, geo, tmpl, opts, entName]() {
+    std::thread([self, geo, tmpl, opts, entName, cancel]() {
+        // Progress callback: marshal the counters to the main thread for the
+        // progress bar; return false to stop the worker when cancel is set.
+        auto progress = [self, cancel](int done, int total,
+                                       const char* phase) -> bool {
+            if (cancel->load()) return false;
+            const QString ph = QString::fromUtf8(phase);
+            QMetaObject::invokeMethod(qApp, [self, done, total, ph]() {
+                if (!self) return;
+                self->m_progress = done;
+                self->m_progressTotal = total;
+                emit self->progressChanged();
+                self->setStatus(ph);
+            }, Qt::QueuedConnection);
+            return true;
+        };
         auto result = std::make_shared<FaceRig::FaceRigResult>(
-            FaceRig::buildFaceRig(geo->userV, geo->userF, *tmpl, opts));
+            FaceRig::buildFaceRig(geo->userV, geo->userF, *tmpl, opts,
+                                  geo->headMask, progress));
 
         // MAIN thread: attach (touches Ogre + the undo stack).
         QMetaObject::invokeMethod(qApp, [self, geo, result, entName]() {
             if (!self) return;
             self->m_busy = false;
             emit self->busyChanged();
+            self->m_progress = 0;
+            self->m_progressTotal = 0;
+            emit self->progressChanged();
             self->setStatus(QString());
 
             if (!result->ok) {
-                emit self->error(QString::fromStdString(result->error));
+                emit self->error(result->error == "cancelled"
+                    ? QStringLiteral("Face-rig cancelled.")
+                    : QString::fromStdString(result->error));
                 return;
             }
 
@@ -166,6 +192,22 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
             rep.userVertexCount = result->userVertexCount;
             rep.fitMeanResidualPct = result->fitMeanResidualPct;
             rep.fitMaxResidualPct = result->fitMaxResidualPct;
+
+            // The attach adds poses + a VAT_POSE clip to a LIVE entity and
+            // re-initialises it per shape. If the entity is mid-skeletal-
+            // animation, the render loop's _updateAnimation can run against the
+            // half-rebuilt pose buffers between our steps and crash. Disable
+            // every enabled animation state for the batch, then restore them —
+            // so the frame loop leaves the entity static while we mutate it.
+            std::vector<QString> reEnable;
+            if (auto* ass = entity->getAllAnimationStates()) {
+                for (const auto& kv : ass->getAnimationStates()) {
+                    if (kv.second && kv.second->getEnabled()) {
+                        reEnable.push_back(QString::fromStdString(kv.first));
+                        kv.second->setEnabled(false);
+                    }
+                }
+            }
 
             auto* undo = UndoManager::getSingleton();
             auto* stack = undo ? undo->stack() : nullptr;
@@ -190,6 +232,16 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
                 rep.shapesAttached++;
             }
             if (stack) stack->endMacro();
+
+            // Restore the animation states we disabled (refreshAvailable... in
+            // the attach may have recreated the state set, so re-resolve).
+            if (auto* ass = entity->getAllAnimationStates()) {
+                for (const QString& n : reEnable) {
+                    const std::string sn = n.toStdString();
+                    if (ass->hasAnimationState(sn))
+                        ass->getAnimationState(sn)->setEnabled(true);
+                }
+            }
             rep.ok = rep.shapesAttached > 0;
 
             if (!rep.ok) {
@@ -213,4 +265,9 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
     }).detach();
 
     return true;
+}
+
+void FaceRigController::cancel()
+{
+    if (m_cancel) m_cancel->store(true);
 }

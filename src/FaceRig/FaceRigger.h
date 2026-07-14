@@ -25,6 +25,7 @@
 
 #include <QString>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -61,13 +62,27 @@ struct FaceRigOptions {
     int maxShapes = 0;
 };
 
+// Progress callback: (done, total, phase). `phase` is a short static label
+// ("Fitting…", "Transferring shapes…"). Return false to request cancellation —
+// buildFaceRig then returns ok=false with error "cancelled". May be called from
+// a worker thread, so the callee must marshal any UI work itself.
+using FaceRigProgressFn =
+    std::function<bool(int done, int total, const char* phase)>;
+
 // userV/userF: the user neutral mesh (Nu*3 verts + Fu*3 tris). tmpl: a loaded
-// ArkitTemplate. Returns 52 per-user-vertex delta sets (or fewer if the
-// template has fewer), or ok=false + error on failure / a poor fit.
+// ArkitTemplate. Returns per-user-vertex delta sets (size Nu*3 each), or
+// ok=false + error on failure / a poor fit.
+// `headMask` (optional, size Nu): when non-empty, ONLY vertices flagged 1 are
+// fitted against the face template and receive blendshape deltas — the fix for
+// full-body characters (the face template must not smear over the body). Empty
+// = fit the whole mesh (a bare-face crop).
+// `progress` (optional) reports fit + per-shape steps and can cancel.
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
-                           const FaceRigOptions& opts = {});
+                           const FaceRigOptions& opts = {},
+                           const std::vector<char>& headMask = {},
+                           const FaceRigProgressFn& progress = {});
 
 }  // namespace FaceRig
 

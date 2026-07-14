@@ -2,6 +2,8 @@
 
 #include "ArkitTemplate.h"
 
+#include "../AutoRig.h"
+#include "../MeshSegmenter.h"
 #include "../commands/MorphCommands.h"
 
 #include <Ogre.h>
@@ -104,6 +106,47 @@ FaceRigGeometry extractGeometry(Ogre::Entity* entity)
         if (!sm || sm->useSharedVertices) continue;
         addOwner(static_cast<unsigned short>(si + 1), sm->vertexData, sm->indexData);
     }
+
+    // ── HEAD ISOLATION (the fix for full-body characters) ────────────────────
+    // The ARKit template is a FACE. Fitting it against a whole dancing body
+    // smears the face over the body (mouth shapes end up on an arm). So we
+    // isolate the head region and only fit / deform those vertices. Preference:
+    //   1) rig-prior — if the mesh is SKINNED, label each vertex by the body
+    //      region of the bone it's most weighted to (EXACT; handles the fox's
+    //      snout/ears and Mixamo's exaggerated proportions the coordinate model
+    //      can't). This is AutoRig::rigPriorPartLabels, ordered to match our
+    //      combined gather.
+    //   2) geometric fallback — MeshSegmenter's spatial head/torso/limb split.
+    // If neither finds a plausible head (e.g. the mesh really IS just a face),
+    // leave headMask empty and fit the whole thing (previous behaviour).
+    const int nv = int(geo.userV.size() / 3);
+    const int headPart = int(MeshSegmenter::Part::Head);
+    std::vector<int> labels;
+    if (mesh->hasSkeleton()) {
+        int resolved = 0;
+        labels = AutoRig::rigPriorPartLabels(entity, nv, &resolved);
+        // Require the rig prior to resolve a decent share; else fall through.
+        if (resolved < nv / 2) labels.clear();
+    }
+    if (labels.empty() && geo.userF.size() >= 3) {
+        std::vector<std::uint32_t> idx(geo.userF.begin(), geo.userF.end());
+        MeshSegmenter::Result seg = MeshSegmenter::segmentGeometric(
+            geo.userV.data(), nv, idx.data(), int(idx.size()));
+        if (seg.ok) labels = seg.vertexLabels;
+    }
+    if (int(labels.size()) == nv) {
+        int headCount = 0;
+        geo.headMask.assign(size_t(nv), 0);
+        for (int v = 0; v < nv; ++v)
+            if (labels[size_t(v)] == headPart) { geo.headMask[size_t(v)] = 1; ++headCount; }
+        // Only isolate when the head is a real, minority region of the mesh —
+        // i.e. this looks like a full body, not a bare face. A head that IS
+        // most of the mesh means it's already a face crop; fit it whole.
+        if (headCount >= 50 && headCount < nv * 3 / 4)
+            geo.headVertexCount = headCount;
+        else
+            geo.headMask.clear();   // treat as a face crop
+    }
     return geo;
 }
 
@@ -156,7 +199,8 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
         return rep;
     }
 
-    const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, opts);
+    const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, opts,
+                                           geo.headMask);
     rep.userVertexCount = res.userVertexCount;
     rep.fitMeanResidualPct = res.fitMeanResidualPct;
     rep.fitMaxResidualPct = res.fitMaxResidualPct;

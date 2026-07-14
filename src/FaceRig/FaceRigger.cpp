@@ -125,7 +125,9 @@ double bboxDiag(const std::vector<float>& v)
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
-                           const FaceRigOptions& opts)
+                           const FaceRigOptions& opts,
+                           const std::vector<char>& headMask,
+                           const FaceRigProgressFn& progress)
 {
     FaceRigResult r;
     if (userV.size() < 9 || userF.size() < 3) {
@@ -136,16 +138,76 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         r.error = "ARKit template not loaded";
         return r;
     }
-    r.userVertexCount = int(userV.size() / 3);
+    const int nuFull = int(userV.size() / 3);
+    r.userVertexCount = nuFull;
 
-    // 1) NRICP: template neutral → user neutral = correspondence X.
-    const NricpResult fit = FaceRig::fit(tmpl.neutral(), tmpl.faces(), userV, userF);
+    // Head isolation: if a mask is supplied, build a head-only sub-mesh and fit
+    // THAT (so the face template lands on the face, not the whole body). We
+    // keep a fit→full-mesh vertex index map so the resampled deltas scatter
+    // back to the right original vertices; non-head vertices get zero delta.
+    // Without a mask, fit the whole mesh (a bare-face crop).
+    std::vector<float> subV;
+    std::vector<int> subF;
+    std::vector<int> subToFull;         // fit vertex index → full-mesh index
+    const bool isolate = int(headMask.size()) == nuFull;
+    if (isolate) {
+        std::vector<int> fullToSub(size_t(nuFull), -1);
+        for (int v = 0; v < nuFull; ++v) {
+            if (!headMask[size_t(v)]) continue;
+            fullToSub[size_t(v)] = int(subToFull.size());
+            subToFull.push_back(v);
+            subV.insert(subV.end(),
+                        {userV[size_t(v)*3], userV[size_t(v)*3+1], userV[size_t(v)*3+2]});
+        }
+        // keep faces whose 3 verts are all head; remap to sub indices
+        for (size_t f = 0; f + 2 < userF.size(); f += 3) {
+            const int a = userF[f], b = userF[f+1], c = userF[f+2];
+            if (a < 0 || b < 0 || c < 0) continue;
+            const int sa = fullToSub[size_t(a)], sb = fullToSub[size_t(b)],
+                      sc = fullToSub[size_t(c)];
+            if (sa >= 0 && sb >= 0 && sc >= 0)
+                subF.insert(subF.end(), {sa, sb, sc});
+        }
+        if (subV.size() < 9 || subF.size() < 3) {
+            // head region had no usable surface — fall back to whole-mesh fit
+            subV.clear(); subF.clear(); subToFull.clear();
+        }
+    }
+    const bool useSub = !subToFull.empty();
+    const std::vector<float>& fitV = useSub ? subV : userV;
+    const std::vector<int>&   fitF = useSub ? subF : userF;
+    const int nu = int(fitV.size() / 3);
+
+    // Progress model: the NRICP fit anneals over N stiffness levels (each a
+    // step under "Fitting…"), then one step per transferred shape. Total =
+    // fitLevels + shapeCount so the bar advances through BOTH phases.
+    NricpOptions fitOpts;
+    const int fitLevels = int(fitOpts.stiffness.size());
+    const int shapeTotal = opts.maxShapes > 0
+        ? std::min<int>(opts.maxShapes, tmpl.shapeCount())
+        : tmpl.shapeCount();
+    const int total = fitLevels + shapeTotal;
+    bool cancelled = false;
+    auto tick = [&](int done, const char* phase) -> bool {
+        return progress ? progress(done, total, phase) : true;
+    };
+
+    // 1) NRICP: template neutral → user neutral = correspondence X. Report each
+    // annealing level so the (long) fit phase visibly advances.
+    const NricpResult fit = FaceRig::fit(
+        tmpl.neutral(), tmpl.faces(), fitV, fitF, fitOpts,
+        [&](int level, int /*levelCount*/) -> bool {
+            if (!tick(level, "Fitting face template…")) { cancelled = true; return false; }
+            return true;
+        });
+    if (cancelled) { r.error = "cancelled"; return r; }
     if (!fit.ok || fit.diag <= 0.0) {
         r.error = "non-rigid fit failed";
         return r;
     }
     r.fitMeanResidualPct = 100.0 * fit.meanResidual / fit.diag;
     r.fitMaxResidualPct = 100.0 * fit.maxResidual / fit.diag;
+    if (!tick(fitLevels, "Transferring shapes…")) { r.error = "cancelled"; return r; }
 
     // humanoid-only gate: a bad fit means this isn't a face — refuse. A NRICP
     // fit that couldn't converge onto the surface reports non-finite or huge
@@ -180,15 +242,16 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         return r;
     }
 
-    // 3) resample map: user vertex → nearest correspondence vertex (built once).
+    // 3) resample map: fit vertex → nearest correspondence vertex (built once).
     PointGrid grid;
     grid.build(fitted);
-    const int nu = r.userVertexCount;
     std::vector<int> userToTmpl(size_t(nu), -1);
     for (int i = 0; i < nu; ++i)
-        userToTmpl[size_t(i)] = grid.nearest(&userV[size_t(i)*3]);
+        userToTmpl[size_t(i)] = grid.nearest(&fitV[size_t(i)*3]);
 
-    const double diag = bboxDiag(userV);
+    // noise floor scaled by the FIT region diagonal (a head is smaller than a
+    // whole body, so scaling on the full-body diag would swallow real motion).
+    const double diag = bboxDiag(fitV);
     const double eps = opts.deltaEpsPct / 100.0 * diag;
 
     const auto& shapes = tmpl.shapes();
@@ -197,6 +260,7 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         : int(shapes.size());
 
     for (int s = 0; s < maxShapes; ++s) {
+        if (!tick(fitLevels + s, "Transferring shapes…")) { r.error = "cancelled"; return r; }
         // per-TEMPLATE-vertex delta on the user identity
         const std::vector<float> tmplDelta = dt.transfer(shapes[size_t(s)].deltas);
         if (int(tmplDelta.size() / 3) != tmpl.vertexCount()) {
@@ -206,7 +270,9 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
 
         FaceRigShape out;
         out.name = shapes[size_t(s)].name;
-        out.userDeltas.assign(size_t(nu) * 3, 0.0f);
+        // Deltas are always full-mesh sized; head isolation writes only the
+        // head vertices (via subToFull), leaving the body at zero.
+        out.userDeltas.assign(size_t(nuFull) * 3, 0.0f);
         for (int i = 0; i < nu; ++i) {
             const int t = userToTmpl[size_t(i)];
             if (t < 0) continue;
@@ -216,9 +282,10 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                                          double(dvec[1])*dvec[1] +
                                          double(dvec[2])*dvec[2]);
             if (mag < eps) continue;   // noise floor → keep sparse
-            out.userDeltas[size_t(i)*3]   = dvec[0];
-            out.userDeltas[size_t(i)*3+1] = dvec[1];
-            out.userDeltas[size_t(i)*3+2] = dvec[2];
+            const int dst = useSub ? subToFull[size_t(i)] : i;
+            out.userDeltas[size_t(dst)*3]   = dvec[0];
+            out.userDeltas[size_t(dst)*3+1] = dvec[1];
+            out.userDeltas[size_t(dst)*3+2] = dvec[2];
             out.nonZeroVerts++;
             out.maxDisp = std::max(out.maxDisp, float(mag));
         }
