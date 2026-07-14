@@ -1471,6 +1471,16 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     return true;
 }
 
+int AnimationMerger::smoothBakeAnimation(Ogre::Skeleton* skel,
+                                          const std::string& animName,
+                                          int sparseFps, int targetFps)
+{
+    if (!skel || sparseFps <= 0 || targetFps <= 0) return 0;
+    if (sparseFps >= targetFps) return 0;   // nothing to low-pass
+    if (bakeAnimationAtFps(skel, animName, sparseFps) == 0) return 0;
+    return bakeAnimationAtFps(skel, animName, targetFps);
+}
+
 namespace {
 std::string footPinKey(const std::string& animName)
 {
@@ -1600,7 +1610,17 @@ AnimationMerger::FootPinResult AnimationMerger::pinFeet(
              - Wpos[0][static_cast<size_t>(leg.thigh)]).length()
             + (Wpos[0][static_cast<size_t>(leg.foot)]
                - Wpos[0][static_cast<size_t>(leg.shin)]).length();
-        const auto spans = FootContact::detectContacts(footC, legLen);
+        auto spans = FootContact::detectContacts(footC, legLen);
+        // Coverage guard: a single "contact" spanning most of the clip is a
+        // misdetection (loose thresholds on a moving clip) — pinning it
+        // freezes the leg for the whole animation. Genuine stance phases in
+        // gait are well under this.
+        spans.erase(std::remove_if(spans.begin(), spans.end(),
+                        [&](const FootContact::Span& sp) {
+                            return (sp.end - sp.start + 1)
+                                   > (nk * 55) / 100;
+                        }),
+                    spans.end());
         if (spans.empty())
             continue;
         res.spans += static_cast<int>(spans.size());
@@ -1911,7 +1931,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 0.5f, 1.f, 1.f, 1.f,            // lcollar damped, left arm
                 1.f, 1.f, 1.f, 1.f,             // right leg + foot
                 1.f, 1.f, 1.f, 1.f };           // left leg + foot
-            constexpr float kTwistCap = 2.618f;  // 150° — runaway-unwrap guard
+            // Per-role twist caps (radians). The single generous 150° cap
+            // let noisy source roll through on spine/neck/head — takes whose
+            // roll was invisible pre-#857 (dropped) came back with flailing
+            // arms and a thrown-back head. Roll matters most on forearms;
+            // the axial chain needs very little. Hip keeps a wide cap: it
+            // carries genuine facing turns (salsa).
+            static const float kTwistCapRole[22] = {
+                2.62f, 0.79f, 0.79f, 0.52f, 0.52f, 0.52f,  // hip, spine 45°, neck/head 30°
+                0.52f, 1.57f, 1.57f, 1.57f,                // rcollar 30°, right arm 90°
+                0.52f, 1.57f, 1.57f, 1.57f,                // lcollar 30°, left arm 90°
+                1.05f, 1.05f, 1.05f, 0.79f,                // right leg 60°, foot 45°
+                1.05f, 1.05f, 1.05f, 0.79f };              // left leg 60°, foot 45°
             std::vector<std::vector<float>> twistTheta(
                 static_cast<size_t>(frames),
                 std::vector<float>(static_cast<size_t>(Jc), 0.0f));
@@ -1944,9 +1975,34 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         prev[static_cast<size_t>(c)] = th;
                         has[static_cast<size_t>(c)] = 1;
                         twistTheta[static_cast<size_t>(f)]
-                                  [static_cast<size_t>(c)] =
-                            std::clamp(th, -kTwistCap, kTwistCap);
+                                  [static_cast<size_t>(c)] = std::clamp(
+                            th, -kTwistCapRole[c], kTwistCapRole[c]);
                     }
+                // Low-pass the twist trajectories (5-tap binomial). θ comes
+                // from per-frame shortest-arc decompositions and jitters near
+                // degenerate aims — transporting it raw renders as trembling.
+                // Directions are untouched; only the roll is smoothed.
+                if (frames >= 5) {
+                    for (int c = 0; c < Jc; ++c) {
+                        std::vector<float> src(static_cast<size_t>(frames));
+                        for (int f = 0; f < frames; ++f)
+                            src[static_cast<size_t>(f)] =
+                                twistTheta[static_cast<size_t>(f)]
+                                          [static_cast<size_t>(c)];
+                        static const float k[5] = {1.f, 4.f, 6.f, 4.f, 1.f};
+                        for (int f = 0; f < frames; ++f) {
+                            float acc = 0.0f, wsum = 0.0f;
+                            for (int o = -2; o <= 2; ++o) {
+                                const int j = f + o;
+                                if (j < 0 || j >= frames) continue;
+                                acc += k[o + 2] * src[static_cast<size_t>(j)];
+                                wsum += k[o + 2];
+                            }
+                            twistTheta[static_cast<size_t>(f)]
+                                      [static_cast<size_t>(c)] = acc / wsum;
+                        }
+                    }
+                }
             }
             // Reference-aligned roll baseline per bone: aim the target bind
             // at the source's REFERENCE direction once, so every per-frame

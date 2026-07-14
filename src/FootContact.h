@@ -27,13 +27,16 @@ struct Span {
 
 struct DetectOptions {
     /// Height band above the detected ground level counting as "on the
-    /// ground", as a fraction of leg length.
-    float heightBandFrac = 0.18f;
+    /// ground", as a fraction of leg length. Deliberately TIGHT: a walking
+    /// foot lifts only ~5-15% of leg length, and a generous band swallows
+    /// most of the swing phase — the whole clip pins and the character
+    /// shuffles (legs frozen while the upper body keeps full rate).
+    float heightBandFrac = 0.06f;
     /// Max horizontal speed (units/frame) counting as "stationary", as a
     /// fraction of leg length.
-    float velThreshFrac = 0.03f;
+    float velThreshFrac = 0.012f;
     /// Spans shorter than this are noise, not contacts.
-    int minFrames = 3;
+    int minFrames = 4;
     /// Up axis: 0=X, 1=Y, 2=Z (canonical rigs are +Y-up).
     int upAxis = 1;
 };

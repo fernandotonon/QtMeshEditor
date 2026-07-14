@@ -260,6 +260,16 @@ public:
                                    const std::string& oldAnim,
                                    const std::string& newAnim);
 
+    /// #837 quality post-pass: re-grid the animation to a SPARSE keyframe
+    /// rate, then back to `targetFps` — a temporal low-pass that removes
+    /// retarget jitter ("trembling") while preserving the silhouette and the
+    /// clip length (both passes keep endpoints). Codifies the field-proven
+    /// trick of baking sparse and re-baking at 30 FPS. Returns the final
+    /// keyframe count (0 = animation missing / invalid fps).
+    static int smoothBakeAnimation(Ogre::Skeleton* skel,
+                                   const std::string& animName,
+                                   int sparseFps = 12, int targetFps = 30);
+
     /// Outcome of pinFeet.
     struct FootPinResult {
         bool ok = false;

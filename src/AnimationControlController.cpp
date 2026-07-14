@@ -1940,6 +1940,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 
+    // #837 quality post-pass: sparse-bake temporal low-pass (removes
+    // retarget trembling). Before arm-space/foot-pin so pins stay exact.
+    AnimationMerger::smoothBakeAnimation(skel.get(), animName, 12, fps);
+
     // #854: optional Mixamo-style arm-space post-process.
     if (std::abs(armSpaceDeg) > 1e-4)
         AnimationMerger::adjustArmSpace(skel.get(), animName,

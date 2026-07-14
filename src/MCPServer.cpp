@@ -4132,6 +4132,15 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipDirs);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
+        // #837 quality post-pass (ON by default): sparse-bake temporal
+        // low-pass — removes retarget trembling. Runs before arm-space and
+        // foot pinning so the pin targets stay exact.
+        const int smoothFps = args.value("smooth_bake").toBool(true)
+            ? args.value("smooth_fps").toInt(12) : 0;
+        if (smoothFps > 0)
+            AnimationMerger::smoothBakeAnimation(skel.get(), animName,
+                                                 smoothFps, fps);
+
         // #854: optional Mixamo-style arm-space post-process. Echo whether it
         // took effect so an MCP caller can tell the rig had no arm roles
         // (rather than silently getting an unadjusted clip).
@@ -8222,6 +8231,8 @@ QJsonArray MCPServer::buildToolsList()
         props["model"] = QJsonObject{{"type", "boolean"}, {"description", "EXPERIMENTAL: use the trained from-scratch text-to-motion ONNX model instead of the template clip. Falls back to the template library automatically if the model is unavailable or the action isn't in its vocabulary. Default false (template). Quality is action-dependent (locomotion better than gestures)."}};
         props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Optional Mixamo-style arm-space post-process in degrees (#854): positive widens the arms away from the body, negative tucks them in. Default 0. Rescues arm-into-torso clipping on rigs whose proportions differ from the clip."}};
         props["foot_pin"] = QJsonObject{{"type", "boolean"}, {"description", "Foot-contact cleanup (#856): detect ground-contact spans and IK-pin the feet so they plant instead of skating. Default true; set false to keep the raw retarget."}};
+        props["smooth_bake"] = QJsonObject{{"type", "boolean"}, {"description", "Temporal low-pass post-pass: bake the clip sparse then back to its native rate, removing retarget trembling. Default true."}};
+        props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "

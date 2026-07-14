@@ -2017,7 +2017,8 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
-                                 float armSpaceDeg, bool footPin)
+                                 float armSpaceDeg, bool footPin,
+                                 int smoothFps)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2144,6 +2145,17 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     }
     err() << "(source: " << clipSource << ")" << Qt::endl;
 
+    // #837 quality post-pass (ON by default, --no-smooth-bake disables,
+    // --smooth-fps N tunes): bake sparse -> re-bake at clip rate. A temporal
+    // low-pass that removes retarget trembling; runs BEFORE arm-space and
+    // foot pinning so the pin targets stay exact.
+    if (smoothFps > 0) {
+        if (AnimationMerger::smoothBakeAnimation(skel.get(), animName,
+                                                 smoothFps, fps) > 0)
+            err() << "(smooth-bake: " << smoothFps << " -> " << fps
+                  << " fps)" << Qt::endl;
+    }
+
     // #854: optional Mixamo-style arm-space post-process before export.
     if (std::abs(armSpaceDeg) > 1e-4f) {
         if (AnimationMerger::adjustArmSpace(skel.get(), animName, armSpaceDeg)) {
@@ -2224,6 +2236,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
     bool footPinSet = false;          // --foot-pin given (standalone post-process)
+    int  generateSmoothFps = 12;      // #837: sparse-bake low-pass (0 = off)
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -2322,6 +2335,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // EXISTING animation (standalone, needs --animation).
         if (arg == "--no-foot-pin") { generateFootPin = false; continue; }
         if (arg == "--foot-pin") { footPinSet = true; continue; }
+        // #837 smooth-bake post-pass on --generate: bake sparse then back to
+        // the clip rate (temporal low-pass, kills retarget trembling).
+        if (arg == "--no-smooth-bake") { generateSmoothFps = 0; continue; }
+        if (arg == "--smooth-fps" && i + 1 < argc) {
+            generateSmoothFps = QString(argv[++i]).toInt();
+            continue;
+        }
         if (arg == "--simplify") { simplifyMode = true; continue; }
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
@@ -2417,7 +2437,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
-                               generateUseModel, armSpaceDeg, generateFootPin);
+                               generateUseModel, armSpaceDeg, generateFootPin,
+                               generateSmoothFps);
     }
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
