@@ -30,6 +30,7 @@ struct AttachReport {
     double fitMeanResidualPct = 0.0;
     double fitMaxResidualPct = 0.0;
     QString templateFallback;   // set when the template had to be downloaded/etc.
+    std::vector<QString> shapeNames;   // attached shape names, in order
 };
 
 // One geometry owner (shared vertex pool, or a per-submesh vertex data) with
@@ -76,6 +77,12 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
 // obtained (offline + not present, or the build lacks the model).
 AttachReport attachFaceRigWithBundledTemplate(Ogre::Entity* entity,
                                                const FaceRigOptions& opts = {});
+
+// Write a `<meshPath>.arkit.json` sidecar with the ordered ARKit shape names,
+// so downstream tools recover the names even though Assimp 6.0's glTF exporter
+// drops mesh.extras.targetNames. Returns false on write failure.
+bool writeArkitSidecar(const QString& meshPath,
+                       const std::vector<QString>& shapeNames);
 
 }  // namespace FaceRig
 

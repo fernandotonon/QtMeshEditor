@@ -9,6 +9,11 @@
 #include <OgreMesh.h>
 #include <OgreSubMesh.h>
 
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include <cstdint>
 #include <map>
 
@@ -129,6 +134,7 @@ void attachShapes(Ogre::Entity* entity, const FaceRigGeometry& geo,
         AddMorphTargetCommand cmd(entity, shape.name, slices);
         cmd.redo();
         report.shapesAttached++;
+        report.shapeNames.push_back(shape.name);
     }
     report.ok = report.shapesAttached > 0;
     if (!report.ok)
@@ -182,6 +188,28 @@ AttachReport attachFaceRigWithBundledTemplate(Ogre::Entity* entity,
         return rep;
     }
     return attachFaceRig(entity, tmpl, opts);
+}
+
+bool writeArkitSidecar(const QString& meshPath,
+                       const std::vector<QString>& shapeNames)
+{
+    if (meshPath.isEmpty() || shapeNames.empty()) return false;
+    QJsonArray names;
+    for (const QString& n : shapeNames) names.append(n);
+    QJsonObject root;
+    root["schema"] = QStringLiteral("qtmesh-arkit-blendshapes-v1");
+    root["count"] = int(shapeNames.size());
+    root["names"] = names;   // ordered, matches the mesh's morph targets
+
+    // <mesh>.arkit.json alongside the exported mesh — recovers the ARKit names
+    // that Assimp 6.0's glTF exporter drops (it doesn't emit targetNames even
+    // though we set aiAnimMesh::mName). Face capture (#869) and re-import can
+    // read this to rebind the mocap-52 vocabulary by index.
+    QFile f(meshPath + QStringLiteral(".arkit.json"));
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    f.close();
+    return true;
 }
 
 }  // namespace FaceRig

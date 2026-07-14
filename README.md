@@ -186,6 +186,10 @@ qtmesh retopo model.fbx --max-angle 15 -o conservative.glb  # tighter coplanarit
 qtmesh skin model.fbx -o skinned.glb                        # default 4 influences, falloff 4
 qtmesh skin model.fbx --max-influences 8 --falloff 6 -o skinned.glb
 qtmesh skin model.fbx --skip-unweighted --merge -o filled.glb  # fill missing weights only
+
+# Auto-generate the 52 ARKit blendshapes on a humanoid FACE mesh (for face capture)
+qtmesh facerig head.glb -o rigged.glb                       # fit ARKit template + transfer 52 shapes
+qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / machine-readable report
 ```
 
 ---

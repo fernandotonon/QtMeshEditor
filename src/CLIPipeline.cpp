@@ -862,6 +862,13 @@ void CLIPipeline::printUsage()
         "                                    Per-vertex weight diff vs a reference-skinned copy of the same asset\n"
         "                                    (e.g. Mixamo) — vertices matched by position, bones by name. See\n"
         "                                    docs/SKINNING_QUALITY.md for the comparison protocol.\n"
+        "  facerig <file> -o <out> [--max-shapes N] [--max-residual PCT] [--json]\n"
+        "                                    Auto-generate the 52 ARKit blendshapes on a humanoid\n"
+        "                                    FACE mesh: fit the ARKit template (non-rigid ICP) and\n"
+        "                                    transfer each expression (Sumner-Popovic) onto the\n"
+        "                                    mesh, attaching them as named morph targets. A poor\n"
+        "                                    fit (non-face mesh) is rejected. The bundled template\n"
+        "                                    downloads on first use. Feeds `qtmesh mocap --face`.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -9548,6 +9555,10 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
         err() << "Error: export failed." << Qt::endl;
         return 1;
     }
+    // Sidecar with the ordered ARKit names (Assimp's glTF exporter drops
+    // targetNames), so `qtmesh mocap --face` / re-import can rebind by index.
+    FaceRig::writeArkitSidecar(QFileInfo(outputPath).absoluteFilePath(),
+                               rep.shapeNames);
 
     if (jsonOutput) {
         QJsonObject j;
