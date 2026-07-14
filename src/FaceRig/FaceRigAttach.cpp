@@ -58,54 +58,39 @@ void appendIndices(Ogre::IndexData* id, std::uint32_t offset,
     ibuf->unlock();
 }
 
-// One geometry owner (shared pool, or a per-submesh vertex data) with the
-// pose target handle it maps to and its base offset into the combined set.
-struct Owner {
-    unsigned short handle;   // 0 = shared, 1..N = submesh index+1
-    std::uint32_t base;      // first combined-vertex index
-    int count;               // vertices in this owner
-};
-
 }  // namespace
 
-AttachReport attachFaceRig(Ogre::Entity* entity,
-                           const ArkitTemplate& tmpl,
-                           const FaceRigOptions& opts)
+FaceRigGeometry extractGeometry(Ogre::Entity* entity)
 {
-    AttachReport rep;
-    if (!entity) { rep.error = QStringLiteral("no entity"); return rep; }
+    FaceRigGeometry geo;
+    if (!entity) return geo;
     Ogre::MeshPtr mesh = entity->getMesh();
-    if (!mesh) { rep.error = QStringLiteral("entity has no mesh"); return rep; }
-    if (!tmpl.valid()) { rep.error = QStringLiteral("ARKit template not loaded"); return rep; }
+    if (!mesh) return geo;
 
-    // ── collect every geometry owner into ONE combined vertex/index set so the
+    // Collect every geometry owner into ONE combined vertex/index set so the
     // fit sees the whole face (a single-submesh head is the common case, but a
     // face split across submeshes still fits as one surface). Track each owner
     // so we can split the per-vertex deltas back onto the right pose handle.
-    std::vector<float> userV;
-    std::vector<int> userF;
-    std::vector<Owner> owners;
-
     auto addOwner = [&](unsigned short handle, Ogre::VertexData* vd,
                         Ogre::IndexData* id) {
         std::vector<float> pos;
         if (!extractPositions(vd, pos)) return;
-        const std::uint32_t base = std::uint32_t(userV.size() / 3);
-        owners.push_back({handle, base, int(pos.size() / 3)});
-        userV.insert(userV.end(), pos.begin(), pos.end());
-        appendIndices(id, base, userF);
+        const std::uint32_t base = std::uint32_t(geo.userV.size() / 3);
+        geo.owners.push_back({handle, base, int(pos.size() / 3)});
+        geo.userV.insert(geo.userV.end(), pos.begin(), pos.end());
+        appendIndices(id, base, geo.userF);
     };
 
     if (mesh->sharedVertexData) {
         // shared pool → handle 0; its indices live per-submesh.
         std::vector<float> pos;
         if (extractPositions(mesh->sharedVertexData, pos)) {
-            owners.push_back({0, 0, int(pos.size() / 3)});
-            userV.insert(userV.end(), pos.begin(), pos.end());
+            geo.owners.push_back({0, 0, int(pos.size() / 3)});
+            geo.userV.insert(geo.userV.end(), pos.begin(), pos.end());
             for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
                 Ogre::SubMesh* sm = mesh->getSubMesh(si);
                 if (sm && sm->useSharedVertices)
-                    appendIndices(sm->indexData, 0, userF);
+                    appendIndices(sm->indexData, 0, geo.userF);
             }
         }
     }
@@ -114,34 +99,25 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
         if (!sm || sm->useSharedVertices) continue;
         addOwner(static_cast<unsigned short>(si + 1), sm->vertexData, sm->indexData);
     }
+    return geo;
+}
 
-    if (userV.size() < 9 || userF.size() < 3) {
-        rep.error = QStringLiteral("could not read mesh geometry");
-        return rep;
-    }
-
-    // ── run the Ogre-free pipeline
-    const FaceRigResult res = buildFaceRig(userV, userF, tmpl, opts);
-    rep.userVertexCount = res.userVertexCount;
-    rep.fitMeanResidualPct = res.fitMeanResidualPct;
-    rep.fitMaxResidualPct = res.fitMaxResidualPct;
-    if (!res.ok) {
-        rep.error = QString::fromStdString(res.error);
-        return rep;
-    }
-
-    // ── attach each shape as a pose + VAT_POSE clip, splitting the combined
+void attachShapes(Ogre::Entity* entity, const FaceRigGeometry& geo,
+                  const FaceRigResult& result, AttachReport& report)
+{
+    // Attach each shape as a pose + VAT_POSE clip, splitting the combined
     // deltas back onto each owner's handle. Reuse AddMorphTargetCommand's
     // redo() (the exact MorphCommands pose-build) so face capture drives these
     // with no new playback code; call redo() directly (headless-safe — no undo
     // stack required, GUI callers can wrap in UndoManager separately).
-    for (const FaceRigShape& shape : res.shapes) {
+    for (const FaceRigShape& shape : result.shapes) {
         std::vector<MorphPoseSlice> slices;
-        for (const Owner& o : owners) {
+        for (const GeometryOwner& o : geo.owners) {
             MorphPoseSlice slice;
             slice.submeshHandle = o.handle;
             for (int i = 0; i < o.count; ++i) {
                 const std::uint32_t gv = o.base + std::uint32_t(i);
+                if (size_t(gv) * 3 + 2 >= shape.userDeltas.size()) break;
                 const float* d = &shape.userDeltas[size_t(gv) * 3];
                 if (d[0] == 0.0f && d[1] == 0.0f && d[2] == 0.0f) continue;
                 slice.offsets[static_cast<unsigned int>(i)] =
@@ -152,12 +128,38 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
         if (slices.empty()) continue;   // shape moved nothing on this mesh
         AddMorphTargetCommand cmd(entity, shape.name, slices);
         cmd.redo();
-        rep.shapesAttached++;
+        report.shapesAttached++;
+    }
+    report.ok = report.shapesAttached > 0;
+    if (!report.ok)
+        report.error = QStringLiteral("no blendshapes produced any vertex movement");
+}
+
+AttachReport attachFaceRig(Ogre::Entity* entity,
+                           const ArkitTemplate& tmpl,
+                           const FaceRigOptions& opts)
+{
+    AttachReport rep;
+    if (!entity) { rep.error = QStringLiteral("no entity"); return rep; }
+    if (!entity->getMesh()) { rep.error = QStringLiteral("entity has no mesh"); return rep; }
+    if (!tmpl.valid()) { rep.error = QStringLiteral("ARKit template not loaded"); return rep; }
+
+    const FaceRigGeometry geo = extractGeometry(entity);
+    if (!geo.valid()) {
+        rep.error = QStringLiteral("could not read mesh geometry");
+        return rep;
     }
 
-    rep.ok = rep.shapesAttached > 0;
-    if (!rep.ok)
-        rep.error = QStringLiteral("no blendshapes produced any vertex movement");
+    const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, opts);
+    rep.userVertexCount = res.userVertexCount;
+    rep.fitMeanResidualPct = res.fitMeanResidualPct;
+    rep.fitMaxResidualPct = res.fitMaxResidualPct;
+    if (!res.ok) {
+        rep.error = QString::fromStdString(res.error);
+        return rep;
+    }
+
+    attachShapes(entity, geo, res, rep);
     return rep;
 }
 

@@ -9381,6 +9381,73 @@ Rectangle {
                     }
                 }
 
+                // ── Auto-generate ARKit blendshapes (#895) ──────────────────
+                // One-click: fit the ARKit template onto the selected FACE mesh
+                // (NRICP + deformation transfer) and attach the 52 ARKit-named
+                // morph targets, so the #869 face-capture panel drives them.
+                // Heavy — runs on a worker thread via FaceRigController; the
+                // button shows progress and disables while busy.
+                Rectangle {
+                    id: arkitBtn
+                    width: parent.width
+                    height: 24
+                    radius: 3
+                    property bool canRun: FaceRigController.hasMeshSelection
+                                          && !FaceRigController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    color: arkitMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                           : PropertiesPanelController.highlightColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: FaceRigController.busy
+                              ? (FaceRigController.status !== ""
+                                 ? FaceRigController.status : "Working…")
+                              : "✨ Add ARKit Blendshapes (AI)"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: arkitMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: arkitBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: FaceRigController.addArkitBlendshapesAsync(0, 8.0)
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: FaceRigController.hasMeshSelection
+                            ? "Auto-fit the ARKit blendshape template onto this face "
+                              + "mesh and attach the 52 ARKit shapes. Humanoid faces "
+                              + "only; a poor fit is rejected."
+                            : "Select a face mesh first."
+                    }
+                }
+                Connections {
+                    target: FaceRigController
+                    function onError(message) {
+                        arkitStatus.text = "⚠ " + message
+                        arkitStatus.color = "#d66"
+                    }
+                    function onCompleted(report) {
+                        arkitStatus.text = "✓ Attached " + report.shapesAttached
+                            + " ARKit shapes (fit "
+                            + report.fitMeanResidualPct.toFixed(2) + "% mean)."
+                        arkitStatus.color = PropertiesPanelController.textColor
+                        morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
+                    }
+                }
+                Text {
+                    id: arkitStatus
+                    width: parent.width
+                    visible: text !== ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 9
+                    color: PropertiesPanelController.textColor
+                    text: ""
+                }
+
                 // ── Section 2: ANIMATION CLIPS ──────────────────────────────
                 // Section header, shown only once shapes exist (clips animate
                 // shapes, so they're meaningless without any).

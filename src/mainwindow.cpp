@@ -118,6 +118,7 @@
 #include "UVEditorController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "FaceRigController.h"
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
@@ -573,6 +574,7 @@ MainWindow::~MainWindow()
         UVEditorController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        FaceRigController::kill();
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
@@ -765,6 +767,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SkinWeightsController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<FaceRigController>(
+            "PropertiesPanel", 1, 0, "FaceRigController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return FaceRigController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<LightsController>(
             "PropertiesPanel", 1, 0, "LightsController",

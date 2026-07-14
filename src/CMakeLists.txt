@@ -125,6 +125,7 @@ SkinTokensPredictor.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
+FaceRigController.cpp
 UniRigPredictor.cpp
 FaceRig/ArkitTemplate.cpp
 FaceRig/NonRigidICP.cpp
@@ -326,6 +327,7 @@ SkinTokensPredictor.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h
+FaceRigController.h
 UniRigPredictor.h
 MotionInbetween.h
 MotionLibrary.h
