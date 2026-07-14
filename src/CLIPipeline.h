@@ -225,6 +225,12 @@ public:
     /// skin weights (--skin), and export. Issue #407.
     static int cmdRig(int argc, char* argv[]);
 
+    /// Face auto-rig (#889): fit the ARKit blendshape template onto a user
+    /// face mesh (NRICP + deformation transfer) and attach the 52 ARKit
+    /// morph targets, then export. `facerig <file> [-o out] [--max-shapes N]
+    /// [--max-residual PCT] [--json]`.
+    static int cmdFaceRig(int argc, char* argv[]);
+
     /// AI mesh part segmentation (#410): predict per-vertex/face part labels
     /// (head/torso/arm/leg) and emit a label map. `segment <file> [--json]
     /// [--no-model] [--up-axis x|y|z]`. Text lists per-part vertex/face counts;

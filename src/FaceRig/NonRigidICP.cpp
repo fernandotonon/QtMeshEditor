@@ -311,23 +311,43 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
         }
     }
 
-    // final residuals to the user surface
+    // final residuals to the user surface. A vertex whose affine solve
+    // diverged (NaN/inf — e.g. degenerate fan triangles at a UV-sphere pole)
+    // must not poison the mean: count it, skip it from the average, but still
+    // surface it so callers can gate (a well-behaved face mesh produces none).
     res.fitted.resize(size_t(Nt)*3);
     res.residual.resize(Nt);
     double sum = 0, mx2 = 0;
+    int finiteCount = 0, divergedCount = 0;
     for (int i = 0; i < Nt; ++i) {
-        const int cf = tree.nearest(X[i]);
-        const Vec3 cp = closestPointTriangle(X[i], utri[cf][0], utri[cf][1], utri[cf][2]);
-        const double d = std::sqrt(vdot(vsub(X[i],cp), vsub(X[i],cp)));
-        res.residual[i] = float(d);
-        sum += d; mx2 = std::max(mx2, d);
+        const bool finite = std::isfinite(X[i][0]) && std::isfinite(X[i][1]) &&
+                            std::isfinite(X[i][2]);
+        double d = 0.0;
+        if (finite) {
+            const int cf = tree.nearest(X[i]);
+            const Vec3 cp = closestPointTriangle(X[i], utri[cf][0], utri[cf][1], utri[cf][2]);
+            d = std::sqrt(vdot(vsub(X[i],cp), vsub(X[i],cp)));
+        }
+        if (finite && std::isfinite(d)) {
+            res.residual[i] = float(d);
+            sum += d; mx2 = std::max(mx2, d);
+            finiteCount++;
+        } else {
+            res.residual[i] = std::numeric_limits<float>::infinity();
+            divergedCount++;
+        }
         res.fitted[size_t(i)*3+0] = float(X[i][0]);
         res.fitted[size_t(i)*3+1] = float(X[i][1]);
         res.fitted[size_t(i)*3+2] = float(X[i][2]);
     }
-    res.meanResidual = sum/Nt;
-    res.maxResidual = mx2;
-    res.ok = true;
+    res.meanResidual = finiteCount > 0 ? sum/finiteCount
+                                       : std::numeric_limits<double>::infinity();
+    // a large diverged fraction means the fit failed — reflect it in maxResidual
+    // (which callers already gate on) so a mostly-NaN fit can't read as "great".
+    res.maxResidual = (divergedCount > Nt / 20)   // > 5% diverged
+        ? std::numeric_limits<double>::infinity()
+        : mx2;
+    res.ok = finiteCount > Nt / 2;   // need at least half the verts to have fit
     return res;
 }
 

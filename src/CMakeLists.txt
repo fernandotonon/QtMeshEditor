@@ -130,6 +130,8 @@ FaceRig/ArkitTemplate.cpp
 FaceRig/NonRigidICP.cpp
 FaceRig/SparseSolve.cpp
 FaceRig/DeformationTransfer.cpp
+FaceRig/FaceRigger.cpp
+FaceRig/FaceRigAttach.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionGenerator.cpp

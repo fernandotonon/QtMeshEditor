@@ -42,6 +42,7 @@
 #include "SkinWeights.h"
 #include "SkinEvaluate.h"
 #include "AutoRig.h"
+#include "FaceRig/FaceRigAttach.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
@@ -1599,6 +1600,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
+    else if (cmd == "facerig") rc = cmdFaceRig(argc, argv);
     else if (cmd == "segment") rc = cmdSegment(argc, argv);
     else if (cmd == "generate3d") rc = cmdGenerate3d(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
@@ -1625,6 +1627,7 @@ int CLIPipeline::run(int argc, char* argv[])
             {QStringLiteral("uv"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("skin"), QStringLiteral("skin_weights")},
             {QStringLiteral("rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("facerig"), QStringLiteral("auto_rig")},
             {QStringLiteral("anim"), QStringLiteral("animation_blend")},
             {QStringLiteral("morph"), QStringLiteral("morph")},
             {QStringLiteral("vat"), QStringLiteral("vat_bake")},
@@ -9460,6 +9463,115 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         QStringLiteral("auto_rig"),
         {{QStringLiteral("bones_created"), report.boneCount},
          {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}},
+        GamificationManager::Surface::Cli);
+    return 0;
+}
+
+int CLIPipeline::cmdFaceRig(int argc, char* argv[])
+{
+    // Parse: facerig <file> [-o out] [--max-shapes N] [--max-residual PCT]
+    //        [--json]
+    QString inputPath, outputPath;
+    bool jsonOutput = false;
+    FaceRig::FaceRigOptions opts;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "facerig" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--max-shapes" && i + 1 < argc) {
+            opts.maxShapes = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--max-residual" && i + 1 < argc) {
+            opts.maxFitResidualPct = QString::fromLocal8Bit(argv[++i]).toDouble();
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh facerig <file> [-o out] [--max-shapes N] "
+                 "[--max-residual PCT] [--json]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> required." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        QString("facerig .%1 max_shapes=%2").arg(fi.suffix()).arg(opts.maxShapes));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    QList<Ogre::Entity*> meshEntities;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity")
+            meshEntities.push_back(e);
+    }
+    if (meshEntities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (meshEntities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh facerig` supports "
+                 "one entity per file." << Qt::endl;
+        return 1;
+    }
+    Ogre::Entity* entity = meshEntities.first();
+
+    const FaceRig::AttachReport rep =
+        FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
+    if (!rep.ok) {
+        err() << "Error: face-rig failed — " << rep.error << Qt::endl;
+        return 1;
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject j;
+        j["shapes_attached"] = rep.shapesAttached;
+        j["user_vertex_count"] = rep.userVertexCount;
+        j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+        j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
+        j["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(j).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(QString("Face-rig: attached %1 ARKit blendshape(s)\n"
+                         "  user vertices: %2\n"
+                         "  fit residual: mean %3%  max %4%\n"
+                         "Wrote: %5\n")
+                     .arg(rep.shapesAttached)
+                     .arg(rep.userVertexCount)
+                     .arg(rep.fitMeanResidualPct, 0, 'f', 3)
+                     .arg(rep.fitMaxResidualPct, 0, 'f', 3)
+                     .arg(QFileInfo(outputPath).fileName()));
+    }
+    GamificationManager::noteOperation(
+        QStringLiteral("auto_rig"),
+        {{QStringLiteral("blendshapes_attached"), rep.shapesAttached}},
         GamificationManager::Surface::Cli);
     return 0;
 }
