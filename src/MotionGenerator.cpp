@@ -191,6 +191,39 @@ MotionGenerator::Result MotionGenerator::generate(
         const bool worldFrame =
             vj.value("frame").toString() == QLatin1String("world");
         const int fps = vj.value("fps").toInt(30);
+        // v5 models (#858) train on CANONICALIZED quats and ship their
+        // reference triple in the vocab: restWorld (identity ×22) + restDir
+        // (the fixed canonical T-pose directions). With it, model clips ride
+        // the SAME bind-referenced direction retarget as v5 template clips —
+        // no synthetic-standing-pose shim.
+        std::vector<std::array<float, 4>> vocabRestWorld;
+        std::vector<std::array<float, 3>> vocabRestDir;
+        {
+            const QJsonArray rw = vj.value("restWorld").toArray();
+            const QJsonArray rd = vj.value("restDir").toArray();
+            if (rw.size() == J && rd.size() == J) {
+                for (const QJsonValue& v : rw) {
+                    const QJsonArray q = v.toArray();
+                    if (q.size() != 4) { vocabRestWorld.clear(); break; }
+                    vocabRestWorld.push_back({float(q[0].toDouble()),
+                                              float(q[1].toDouble()),
+                                              float(q[2].toDouble()),
+                                              float(q[3].toDouble())});
+                }
+                for (const QJsonValue& v : rd) {
+                    const QJsonArray d = v.toArray();
+                    if (d.size() != 3) { vocabRestDir.clear(); break; }
+                    vocabRestDir.push_back({float(d[0].toDouble()),
+                                            float(d[1].toDouble()),
+                                            float(d[2].toDouble())});
+                }
+                if (vocabRestWorld.size() != static_cast<size_t>(J)
+                    || vocabRestDir.size() != static_cast<size_t>(J)) {
+                    vocabRestWorld.clear();
+                    vocabRestDir.clear();
+                }
+            }
+        }
         const int V = vocab.size();
         if (V == 0 || T <= 0 || C != J * 10) {
             r.error = QStringLiteral("t2m vocab json malformed"); return r;
@@ -375,6 +408,8 @@ MotionGenerator::Result MotionGenerator::generate(
             clip.frames = want;
         }
 
+        clip.restWorld = vocabRestWorld;
+        clip.restDir = vocabRestDir;
         r.clip = std::move(clip);
         r.worldFrame = worldFrame;
         r.ok = true;

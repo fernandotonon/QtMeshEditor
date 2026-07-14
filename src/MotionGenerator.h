@@ -22,11 +22,17 @@
 // model is unavailable (no ENABLE_ONNX, model not downloaded, prompt action not
 // in the model's vocab, or inference fails).
 //
-// ONNX contract (must match scripts/train-t2m-onnx-v3.py export):
+// ONNX contract (v5: scripts/train-t2m-flow-v5.py; v4: train-t2m-onnx-v4.py):
 //   input  "tokens" float32 [1, V]    one-hot/bag over the fixed action vocab
-//   input  "seed"   float32 [1, Z]    latent (we pass zeros for the mean clip)
+//   input  "seed"   float32 [1, Z]    latent noise (sampled; best-of-N scored)
 //   output "motion" float32 [1, T, C] C = 22*10 per-joint [t.xyz, q.xyzw, s.xyz]
-// The accompanying t2m-vocab.json gives {vocab, Z, T, C, J, joints}.
+// The accompanying t2m-vocab.json gives {vocab, Z, T, C, J, fps, frame}.
+// v5 FLOW-MATCHING models (#840/#858) keep this exact interface: the Euler
+// sampler is unrolled INSIDE the exported graph (seed = the flattened noise
+// tensor, Z = T·132), and the vocab additionally carries the model's
+// canonical reference triple ("restWorld" identity ×22 + "restDir" canonical
+// T-pose directions) so generated clips ride the same bind-referenced
+// direction retarget as v5 template clips (no standing-pose shim).
 class MotionGenerator {
 public:
     MotionGenerator() = delete;
