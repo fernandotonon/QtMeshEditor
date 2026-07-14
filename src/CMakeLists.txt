@@ -126,6 +126,7 @@ SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
 UniRigPredictor.cpp
+FaceRig/ArkitTemplate.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionGenerator.cpp
