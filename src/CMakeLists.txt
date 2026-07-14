@@ -127,6 +127,7 @@ AutoRig.cpp
 AutoRigController.cpp
 UniRigPredictor.cpp
 FaceRig/ArkitTemplate.cpp
+FaceRig/NonRigidICP.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionGenerator.cpp
