@@ -271,6 +271,32 @@ the binary). Attribution + licenses for the models and their training data:
   checkbox; the template library remains the default and the automatic
   fallback. Same CMU licensing basis as above.
 
+## ICT-FaceKit — ARKit blendshape template for face auto-rig (epic #889)
+
+- **Asset (not a learned model):** the ICT-FaceKit generic neutral head
+  (`generic_neutral_mesh.obj`) + its per-expression meshes named after the
+  ARKit blendshapes (`jawOpen`, `mouthSmile_L`, `eyeBlink_L`, `browInnerUp_L`,
+  …), all sharing one topology (26,719 verts) so each shape = expr − neutral.
+- **Source / license:** [USC-ICT/ICT-FaceKit](https://github.com/USC-ICT/ICT-FaceKit)
+  — **MIT** (Copyright 2020 USC Institute for Creative Technologies). The
+  standard/released model is MIT; a separate "full model" tier under a
+  USC-specific license is **REJECTED** (we ship only the MIT tier). MIT clears
+  the permissive-redistribution bar, so the template + shapes are hostable on
+  the `fernandotonon/QtMeshEditor-models` HF repo (Slice B, #890).
+- **How it is used:** the template is the *source* for **deformation transfer**
+  (Sumner & Popović 2004) — QtMeshEditor fits it to the user's neutral head via
+  native non-rigid ICP (Amberg 2007), then transfers each of the 52 ARKit
+  expressions onto the user's topology, attaching them as `Ogre::Pose` morph
+  targets so face performance capture (#869) works on the mesh. **No ML model,
+  no ONNX** — it is a deterministic geometry algorithm (sparse linear solve),
+  implemented natively in `src/FaceRig/` (Slices C/D). The offline spike
+  (`scripts/spike-facerig.py`, not shipped) validated it: sub-1% NRICP fit onto
+  a different-topology head, anatomically-correct transferred shapes (jawOpen
+  drops the lower face, forehead still). See `docs/FACE_RIG_SPIKE.md`.
+- **Rejected alternatives:** Wrap3D (commercial, used by the reference impl for
+  NRICP — we implement NRICP natively instead), FLAME-based 3DMMs
+  (research-only), any generative expression model on non-commercial data.
+
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
