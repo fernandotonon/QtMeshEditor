@@ -15,6 +15,7 @@
 #include <OgreMesh.h>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QPointer>
 
 #include <cstdint>
@@ -218,6 +219,12 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
                     }
                 }
             }
+            // Hide the entity for the batch so the render loop doesn't touch its
+            // pose/skin buffers while we rebuild them — restored after the single
+            // _initialise. (Belt-and-braces with the animation-state disable.)
+            Ogre::SceneNode* enode = entity->getParentSceneNode();
+            const bool wasVisible = enode ? entity->getVisible() : true;
+            if (enode) entity->setVisible(false);
 
             // Build the per-shape commands first so we know which is LAST — only
             // the last re-initialises the entity (deferInit=false on it), the
@@ -251,6 +258,7 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
             if (stack) stack->beginMacro(QStringLiteral("Add ARKit Blendshapes"));
             for (auto* cmd : cmds) { undo->push(cmd); rep.shapesAttached++; }
             if (stack) stack->endMacro();
+            if (enode) entity->setVisible(wasVisible);
 
             // Restore the animation states we disabled (refreshAvailable... in
             // the attach may have recreated the state set, so re-resolve).

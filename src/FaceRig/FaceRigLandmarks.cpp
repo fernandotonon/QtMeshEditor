@@ -92,6 +92,21 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     const LandmarkResult lr = det.detect(rr.depth);
     if (!lr.ok || lr.points.empty()) return out;
     out.confidence = lr.confidence;
+#ifndef NDEBUG
+    if (const char* dp = std::getenv("QTMESH_FACERIG_DUMP_LANDMARKS")) {
+        QImage vis = rr.depth.convertToFormat(QImage::Format_RGB888);
+        for (const auto& p : lr.points) {
+            const int px = int(p[0]), py = int(p[1]);
+            for (int dy = -1; dy <= 1; ++dy)
+              for (int dx = -1; dx <= 1; ++dx) {
+                const int x = px+dx, y = py+dy;
+                if (x >= 0 && y >= 0 && x < vis.width() && y < vis.height())
+                    vis.setPixel(x, y, qRgb(0, 255, 0));
+              }
+        }
+        vis.save(QString::fromUtf8(dp));
+    }
+#endif
 
     // 3) build world-space head triangles (local verts × node world transform).
     //    The render framed the WORLD bounding box, so rays are in world space;
@@ -281,6 +296,150 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
         std::fprintf(stderr, "[facerig] landmark anchors: tmpl.ok=%d user.ok=%d "
                      "anchors=%zu\n", tlm.ok, ulm.ok, anchors.size());
 #endif
+    return anchors;
+}
+
+// Canonical MediaPipe FaceMesh indices for the few anatomical anchors the fit
+// needs. These indices are stable in the FaceMesh topology (documented in the
+// MediaPipe canonical face model).
+const std::vector<std::pair<QString, int>>& faceMarkerCatalog()
+{
+    static const std::vector<std::pair<QString, int>> kCatalog = {
+        {QStringLiteral("Nose tip"),          1},
+        {QStringLiteral("Chin"),              152},
+        {QStringLiteral("Left eye outer"),    33},
+        {QStringLiteral("Right eye outer"),   263},
+        {QStringLiteral("Left eye inner"),    133},
+        {QStringLiteral("Right eye inner"),   362},
+        {QStringLiteral("Left mouth corner"), 61},
+        {QStringLiteral("Right mouth corner"),291},
+        {QStringLiteral("Upper lip"),         13},
+        {QStringLiteral("Lower lip"),         14},
+        {QStringLiteral("Left brow"),         105},
+        {QStringLiteral("Right brow"),        334},
+        {QStringLiteral("Forehead"),          10},
+    };
+    return kCatalog;
+}
+
+namespace {
+int nearestTemplateVertex(const std::vector<float>& tn, int tvc,
+                          const std::array<float, 3>& p)
+{
+    int best = -1; float bestD = std::numeric_limits<float>::max();
+    for (int vtx = 0; vtx < tvc; ++vtx) {
+        const float dx = tn[size_t(vtx)*3] - p[0];
+        const float dy = tn[size_t(vtx)*3+1] - p[1];
+        const float dz = tn[size_t(vtx)*3+2] - p[2];
+        const float d = dx*dx + dy*dy + dz*dz;
+        if (d < bestD) { bestD = d; best = vtx; }
+    }
+    return best;
+}
+}  // namespace
+
+std::vector<FaceMarker> seedFaceMarkers(
+    Ogre::Entity* userEntity,
+    const std::vector<float>& userLocalV,
+    const std::vector<int>& userLocalF,
+    const ArkitTemplate& tmpl,
+    bool* outConfident)
+{
+    std::vector<FaceMarker> markers;
+    if (outConfident) *outConfident = false;
+    if (!userEntity || !tmpl.valid()) return markers;
+
+    const auto& cat = faceMarkerCatalog();
+    markers.reserve(cat.size());
+    for (const auto& [label, idx] : cat) {
+        FaceMarker m; m.label = label; m.mediapipeIndex = idx;
+        markers.push_back(std::move(m));
+    }
+
+    if (!FaceLandmarkDetector::backendAvailable()) return markers;
+    { FaceLandmarkDetector probe; if (!probe.load()) return markers; }
+
+    // Template detection resolves each marker's TEMPLATE vertex (reliable — the
+    // ICT template is a real human face).
+    Ogre::Entity* tent = templateEntity(tmpl.neutral(), tmpl.faces());
+    if (!tent) return markers;
+    if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(true);
+    const MeshLandmarks tlm = detectMeshLandmarks(tent, tmpl.neutral(),
+                                                  std::vector<int>(tmpl.faces()));
+    if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(false);
+
+    const int tvc = tmpl.vertexCount();
+    const auto& tn = tmpl.neutral();
+    if (tlm.ok) {
+        for (auto& m : markers) {
+            const int i = m.mediapipeIndex;
+            if (i >= 0 && i < int(tlm.points.size()) && tlm.valid[size_t(i)])
+                m.tmplVertex = nearestTemplateVertex(tn, tvc, tlm.points[size_t(i)]);
+        }
+    }
+
+    // User detection seeds the editable positions. If it's confident, use its
+    // points; otherwise leave markers unplaced at a sensible default (projected
+    // template landmark into the user head box) for the user to drag.
+    const MeshLandmarks ulm = detectMeshLandmarks(userEntity, userLocalV, userLocalF);
+
+    // Confidence heuristic: enough of the catalog markers hit the surface AND
+    // the landmark cloud isn't a degenerate blob. We approximate "trustworthy"
+    // by how many catalog markers are valid.
+    int seeded = 0;
+    if (ulm.ok) {
+        for (auto& m : markers) {
+            const int i = m.mediapipeIndex;
+            if (i >= 0 && i < int(ulm.points.size()) && ulm.valid[size_t(i)]) {
+                m.userPos = ulm.points[size_t(i)];
+                m.placed = true;
+                ++seeded;
+            }
+        }
+    }
+    // If auto-seed was weak, place the rest at the head-box-projected template
+    // landmark so every marker starts SOMEWHERE on the face for the user to
+    // nudge (rather than at the origin).
+    if (seeded < int(markers.size())) {
+        // user head AABB
+        std::array<float,3> lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
+        const int unv = int(userLocalV.size()/3);
+        for (int i = 0; i < unv; ++i)
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], userLocalV[size_t(i)*3+a]);
+                hi[a] = std::max(hi[a], userLocalV[size_t(i)*3+a]);
+            }
+        // template head AABB (its neutral)
+        std::array<float,3> tlo{1e30f,1e30f,1e30f}, thi{-1e30f,-1e30f,-1e30f};
+        for (int i = 0; i < tvc; ++i)
+            for (int a = 0; a < 3; ++a) {
+                tlo[a] = std::min(tlo[a], tn[size_t(i)*3+a]);
+                thi[a] = std::max(thi[a], tn[size_t(i)*3+a]);
+            }
+        for (auto& m : markers) {
+            if (m.placed || m.tmplVertex < 0) continue;
+            // map the template vertex position into the user head box.
+            for (int a = 0; a < 3; ++a) {
+                const float tv = tn[size_t(m.tmplVertex)*3+a];
+                const float f = (thi[a]-tlo[a]) > 1e-6f
+                    ? (tv - tlo[a]) / (thi[a]-tlo[a]) : 0.5f;
+                m.userPos[size_t(a)] = lo[a] + f * (hi[a]-lo[a]);
+            }
+            // left unplaced: it's a default guess the user should confirm/drag.
+        }
+    }
+
+    const bool confident = ulm.ok && seeded >= int(markers.size()) * 3 / 4;
+    if (outConfident) *outConfident = confident;
+    return markers;
+}
+
+std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers)
+{
+    std::vector<NricpLandmark> anchors;
+    for (const auto& m : markers)
+        if (m.placed && m.tmplVertex >= 0)
+            anchors.push_back({m.tmplVertex, m.userPos});
     return anchors;
 }
 

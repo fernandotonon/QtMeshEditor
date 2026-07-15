@@ -12,7 +12,10 @@
 
 #include "NonRigidICP.h"   // NricpLandmark
 
+#include <QString>
+
 #include <array>
+#include <utility>
 #include <vector>
 
 namespace Ogre { class Entity; }
@@ -20,6 +23,22 @@ namespace Ogre { class Entity; }
 namespace FaceRig {
 
 class ArkitTemplate;
+
+// A user-adjustable face marker: a canonical facial point (eye/nose/mouth/…)
+// with the TEMPLATE vertex it anchors and the current USER-mesh position (seeded
+// from auto-detection, then draggable). label is a short guidance string.
+struct FaceMarker {
+    QString label;
+    int mediapipeIndex = -1;         // canonical MediaPipe FaceMesh index
+    int tmplVertex = -1;             // template vertex it pins (from tmpl detect)
+    std::array<float, 3> userPos{0, 0, 0};  // user-mesh position (editable)
+    bool placed = false;             // seeded-or-user-set (vs unresolved)
+};
+
+// The canonical marker set (label + MediaPipe index), fixed order. These are
+// the anatomical anchors the fit needs to lock orientation/scale; the user only
+// has to get these few roughly right, not all 478.
+const std::vector<std::pair<QString, int>>& faceMarkerCatalog();
 
 struct MeshLandmarks {
     // 3D landmark positions in MESH-LOCAL space (same frame as the geometry the
@@ -51,6 +70,24 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
     const std::vector<float>& userLocalV,
     const std::vector<int>& userLocalF,
     const ArkitTemplate& tmpl);
+
+// Seed the editable face-marker set: detect on the template (reliable — a real
+// human face) to resolve each marker's template vertex, then AUTO-DETECT on the
+// user head to seed userPos when it works (marker.placed=true) or fall back to
+// the template landmark position mapped into the user's head box when it
+// doesn't (cartoon faces — the user then drags to correct). Always returns the
+// full catalog with template verts resolved; `outConfident` reports whether the
+// user auto-detect looked trustworthy.
+std::vector<FaceMarker> seedFaceMarkers(
+    Ogre::Entity* userEntity,
+    const std::vector<float>& userLocalV,
+    const std::vector<int>& userLocalF,
+    const ArkitTemplate& tmpl,
+    bool* outConfident = nullptr);
+
+// Build NRICP anchors from the (possibly user-edited) markers — one per placed
+// marker with a resolved template vertex.
+std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers);
 
 }  // namespace FaceRig
 
