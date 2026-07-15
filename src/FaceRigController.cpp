@@ -209,9 +209,12 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
                 }
             }
 
-            auto* undo = UndoManager::getSingleton();
-            auto* stack = undo ? undo->stack() : nullptr;
-            if (stack) stack->beginMacro(QStringLiteral("Add ARKit Blendshapes"));
+            // Build the per-shape commands first so we know which is LAST — only
+            // the last re-initialises the entity (deferInit=false on it), the
+            // rest defer. This makes redo (Ctrl+Shift+Z) rebuild the pose buffers
+            // exactly once at the end too, not just the initial attach; a
+            // per-shape re-init would freeze the UI on a multi-submesh mesh.
+            std::vector<AddMorphTargetCommand*> cmds;
             for (const FaceRig::FaceRigShape& shape : result->shapes) {
                 std::vector<MorphPoseSlice> slices;
                 for (const FaceRig::GeometryOwner& o : geo->owners) {
@@ -228,9 +231,15 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
                     if (!slice.offsets.empty()) slices.push_back(std::move(slice));
                 }
                 if (slices.empty()) continue;
-                undo->push(new AddMorphTargetCommand(entity, shape.name, slices));
-                rep.shapesAttached++;
+                cmds.push_back(new AddMorphTargetCommand(entity, shape.name, slices));
             }
+            for (size_t ci = 0; ci + 1 < cmds.size(); ++ci)
+                cmds[ci]->setDeferInit(true);   // all but the last defer re-init
+
+            auto* undo = UndoManager::getSingleton();
+            auto* stack = undo ? undo->stack() : nullptr;
+            if (stack) stack->beginMacro(QStringLiteral("Add ARKit Blendshapes"));
+            for (auto* cmd : cmds) { undo->push(cmd); rep.shapesAttached++; }
             if (stack) stack->endMacro();
 
             // Restore the animation states we disabled (refreshAvailable... in

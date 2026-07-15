@@ -51,10 +51,19 @@ public:
     void undo() override;
     void redo() override;
 
+    // Batch attach optimisation (face auto-rig #889 attaches 51 shapes at once):
+    // re-initialising the live entity after EVERY shape is O(shapes × mesh) and
+    // freezes the UI on big/multi-submesh meshes. When deferInit is set, redo()
+    // builds the poses but skips entity->_initialise; the caller must call it
+    // ONCE after the last command (Ogre rebuilds the pose buffers in one pass).
+    // undo() always re-inits (single removal — cheap).
+    void setDeferInit(bool defer) { mDeferInit = defer; }
+
 private:
     Ogre::Entity* mEntity = nullptr;
     QString mName;
     std::vector<MorphPoseSlice> mSlices;
+    bool mDeferInit = false;
 };
 
 // DeleteMorphTargetCommand: remove all same-named poses + the matching

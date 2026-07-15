@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <unordered_map>
 
