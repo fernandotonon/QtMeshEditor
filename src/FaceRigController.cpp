@@ -5,7 +5,9 @@
 #include "FaceRig/FaceRigLandmarks.h"
 #include "GamificationManager.h"
 #include "Manager.h"
+#include "OgreWidget.h"
 #include "SelectionSet.h"
+#include "SpaceCamera.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/MorphCommands.h"
@@ -117,23 +119,46 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
         return false;
     }
 
-    FaceRig::FaceRigOptions opts;
-    opts.maxShapes = maxShapes;
-    opts.maxFitResidualPct = maxResidualPct;
-
     // MAIN thread: facial-landmark anchors (renders template + user — Ogre) so
     // the worker's fit lands on the real face features. Empty when ONNX/model/
     // face-detection unavailable → the fit runs unanchored (previous behaviour).
     setStatus(QStringLiteral("Detecting face landmarks…"));
     std::vector<float> headV; std::vector<int> headF;
     FaceRig::headSubmesh(*geo, headV, headF);
-    auto anchors = std::make_shared<std::vector<FaceRig::NricpLandmark>>(
-        FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl));
+    const std::vector<FaceRig::NricpLandmark> anchors =
+        FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl);
+
+    m_geo = geo;
+    return runRigAsync(tmpl, maxShapes, maxResidualPct, anchors);
+}
+
+bool FaceRigController::runRigAsync(
+    const std::shared_ptr<FaceRig::ArkitTemplate>& tmpl,
+    int maxShapes, double maxResidualPct,
+    const std::vector<FaceRig::NricpLandmark>& anchorsIn)
+{
+    auto geo = m_geo;
+    if (!geo || !geo->valid()) {
+        emit error(QStringLiteral("Could not read the mesh geometry."));
+        return false;
+    }
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities()
+                              : QList<Ogre::Entity*>{};
+    Ogre::Entity* entity = entities.isEmpty() ? nullptr : entities.first();
+    if (!entity) { emit error(QStringLiteral("No mesh selected.")); return false; }
+
+    FaceRig::FaceRigOptions opts;
+    opts.maxShapes = maxShapes;
+    opts.maxFitResidualPct = maxResidualPct;
+    auto anchors =
+        std::make_shared<std::vector<FaceRig::NricpLandmark>>(anchorsIn);
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
-        QStringLiteral("face_rig entity=%1 verts=%2 template=%3v")
+        QStringLiteral("face_rig entity=%1 verts=%2 template=%3v anchors=%4")
             .arg(QString::fromStdString(entity->getName()))
-            .arg(geo->userV.size() / 3).arg(tmpl->vertexCount()));
+            .arg(geo->userV.size() / 3).arg(tmpl->vertexCount())
+            .arg(anchors->size()));
 
     m_busy = true;
     emit busyChanged();
@@ -297,4 +322,249 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
 void FaceRigController::cancel()
 {
     if (m_cancel) m_cancel->store(true);
+}
+
+// ─────────────────── Face-marker editing session ────────────────────
+
+QStringList FaceRigController::markerLabels() const
+{
+    QStringList out;
+    for (const auto& m : m_markers) out << m.label;
+    return out;
+}
+
+bool FaceRigController::markerPlaced(int index) const
+{
+    return index >= 0 && index < int(m_markers.size())
+           && m_markers[size_t(index)].placed;
+}
+
+bool FaceRigController::beginFaceMarkers()
+{
+    if (m_busy) { emit error(QStringLiteral("Busy.")); return false; }
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities()
+                              : QList<Ogre::Entity*>{};
+    Ogre::Entity* entity = entities.isEmpty() ? nullptr : entities.first();
+    if (!entity || !entity->getMesh()) {
+        emit error(QStringLiteral("No mesh selected."));
+        return false;
+    }
+
+    // Geometry + template (same prep as the direct rig).
+    m_geo = std::make_shared<FaceRig::FaceRigGeometry>(
+        FaceRig::extractGeometry(entity));
+    if (!m_geo->valid()) {
+        emit error(QStringLiteral("Could not read the mesh geometry."));
+        return false;
+    }
+    m_downloading = !FaceRig::ArkitTemplate::present();
+    setStatus(m_downloading ? QStringLiteral("Downloading face template…")
+                            : QStringLiteral("Preparing…"));
+    const QString path = FaceRig::ArkitTemplate::ensureModelBlocking();
+    m_downloading = false;
+    if (path.isEmpty()) {
+        setStatus(QString());
+        emit error(QStringLiteral("ARKit template unavailable."));
+        return false;
+    }
+    m_markerTmpl = std::make_shared<FaceRig::ArkitTemplate>();
+    QString loadErr;
+    if (!m_markerTmpl->load(path, &loadErr)) {
+        setStatus(QString());
+        emit error(QStringLiteral("Failed to load ARKit template: %1").arg(loadErr));
+        return false;
+    }
+
+    // Seed markers: template detection resolves template verts (reliable),
+    // user detection seeds positions when confident, else sensible defaults.
+    setStatus(QStringLiteral("Detecting face landmarks…"));
+    std::vector<float> headV; std::vector<int> headF;
+    FaceRig::headSubmesh(*m_geo, headV, headF);
+    m_markers = FaceRig::seedFaceMarkers(entity, headV, headF, *m_markerTmpl,
+                                         &m_seededConfident);
+    setStatus(QString());
+    if (m_markers.empty()) {
+        emit error(QStringLiteral("Could not prepare face markers."));
+        return false;
+    }
+
+    m_markerEntityName = entity->getName();
+    m_markerMode = true;
+    m_selMarker = 0;
+    refreshMarkerOverlays();
+    emit markerModeChanged();
+    emit markersChanged();
+    return true;
+}
+
+void FaceRigController::selectMarker(int index)
+{
+    if (!m_markerMode) return;
+    m_selMarker = (index >= 0 && index < int(m_markers.size())) ? index : -1;
+    refreshMarkerOverlays();
+    emit markersChanged();
+}
+
+void FaceRigController::cancelFaceMarkers()
+{
+    if (!m_markerMode) return;
+    m_markerMode = false;
+    m_markers.clear();
+    m_selMarker = -1;
+    clearMarkerOverlays();
+    setStatus(QString());
+    emit markerModeChanged();
+    emit markersChanged();
+}
+
+bool FaceRigController::handleMarkerClick(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (!m_markerMode || !widget) return false;
+
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities())
+        if (e && e->getMovableType() == "Entity"
+            && e->getName() == m_markerEntityName) { entity = e; break; }
+    if (!entity) { cancelFaceMarkers(); return false; }
+
+    auto* spaceCam = widget->getSpaceCamera();
+    auto* cam = spaceCam ? spaceCam->getCamera() : nullptr;
+    if (!cam) return true;
+    int vw = 0, vh = 0;
+    widget->pixelSizeForCameraPicking(vw, vh);
+    if (vw <= 0 || vh <= 0) return true;
+    const Ogre::Real nx = Ogre::Real(screenPos.x()) / vw;
+    const Ogre::Real ny = Ogre::Real(screenPos.y()) / vh;
+    const Ogre::Ray ray = cam->getCameraToViewportRay(nx, ny);
+
+    // Ray-cast to the mesh surface (world-space triangles from the geometry).
+    Ogre::Node* node = entity->getParentSceneNode();
+    const Ogre::Matrix4 world = node ? node->_getFullTransform()
+                                     : Ogre::Matrix4::IDENTITY;
+    const auto& V = m_geo->userV; const auto& F = m_geo->userF;
+    const int nv = int(V.size()/3);
+    float bestT = std::numeric_limits<float>::max();
+    Ogre::Vector3 hitLocal; bool found = false;
+    for (size_t f = 0; f + 2 < F.size(); f += 3) {
+        const int ia=F[f], ib=F[f+1], ic=F[f+2];
+        if (ia<0||ib<0||ic<0||ia>=nv||ib>=nv||ic>=nv) continue;
+        const Ogre::Vector3 a = world*Ogre::Vector3(V[size_t(ia)*3],V[size_t(ia)*3+1],V[size_t(ia)*3+2]);
+        const Ogre::Vector3 b = world*Ogre::Vector3(V[size_t(ib)*3],V[size_t(ib)*3+1],V[size_t(ib)*3+2]);
+        const Ogre::Vector3 c = world*Ogre::Vector3(V[size_t(ic)*3],V[size_t(ic)*3+1],V[size_t(ic)*3+2]);
+        auto res = Ogre::Math::intersects(ray, a, b, c, true, false);
+        if (res.first && res.second < bestT) {
+            bestT = res.second;
+            const Ogre::Vector3 w = ray.getPoint(res.second);
+            hitLocal = world.inverse() * w;
+            found = true;
+        }
+    }
+    if (!found) return true;   // missed the mesh — consume
+
+    if (m_selMarker < 0 || m_selMarker >= int(m_markers.size())) {
+        // no selection → pick the nearest marker to the hit, don't move it.
+        int best = -1; float bd = std::numeric_limits<float>::max();
+        for (int i = 0; i < int(m_markers.size()); ++i) {
+            const auto& p = m_markers[size_t(i)].userPos;
+            const float d = (Ogre::Vector3(p[0],p[1],p[2]) - hitLocal).squaredLength();
+            if (d < bd) { bd = d; best = i; }
+        }
+        m_selMarker = best;
+    } else {
+        // move the selected marker to the hit point.
+        auto& m = m_markers[size_t(m_selMarker)];
+        m.userPos = { hitLocal.x, hitLocal.y, hitLocal.z };
+        m.placed = true;
+        // auto-advance to the next unplaced marker for a smooth flow.
+        int next = -1;
+        for (int i = 1; i <= int(m_markers.size()); ++i) {
+            const int idx = (m_selMarker + i) % int(m_markers.size());
+            if (!m_markers[size_t(idx)].placed) { next = idx; break; }
+        }
+        m_selMarker = next >= 0 ? next : m_selMarker;
+    }
+    refreshMarkerOverlays();
+    emit markersChanged();
+    return true;
+}
+
+bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct)
+{
+    if (!m_markerMode) { emit error(QStringLiteral("Not in marker mode.")); return false; }
+    auto tmpl = m_markerTmpl;
+    const auto anchors = FaceRig::anchorsFromMarkers(m_markers);
+    // Leave marker mode (clears overlays) before the rig runs.
+    m_markerMode = false;
+    m_selMarker = -1;
+    clearMarkerOverlays();
+    emit markerModeChanged();
+    emit markersChanged();
+    if (!tmpl) { emit error(QStringLiteral("Template not loaded.")); return false; }
+    return runRigAsync(tmpl, maxShapes, maxResidualPct, anchors);
+}
+
+void FaceRigController::clearMarkerOverlays()
+{
+    auto* mgr = Manager::getSingletonPtr();
+    Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    for (Ogre::SceneNode* n : m_markerNodes) {
+        if (!n) continue;
+        if (scene) {
+            auto objs = n->getAttachedObjects();
+            for (auto* o : objs) scene->destroyMovableObject(o);
+            scene->destroySceneNode(n);
+        }
+    }
+    m_markerNodes.clear();
+}
+
+void FaceRigController::refreshMarkerOverlays()
+{
+    clearMarkerOverlays();
+    auto* mgr = Manager::getSingletonPtr();
+    Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!scene) return;
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : mgr->getEntities())
+        if (e && e->getMovableType() == "Entity"
+            && e->getName() == m_markerEntityName) { entity = e; break; }
+    if (!entity) return;
+    Ogre::Node* node = entity->getParentSceneNode();
+
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    auto ensureMat = [&](const std::string& n, const Ogre::ColourValue& c) {
+        if (!mm.resourceExists(n)) {
+            auto mat = mm.create(n, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto* pass = mat->getTechnique(0)->getPass(0);
+            pass->setLightingEnabled(false);
+            pass->setDiffuse(c); pass->setAmbient(c);
+            pass->setDepthCheckEnabled(false);
+        }
+    };
+    ensureMat("__FaceMarkerMat__",       Ogre::ColourValue(1.0f, 0.85f, 0.1f, 1.0f)); // placed
+    ensureMat("__FaceMarkerMatSel__",    Ogre::ColourValue(0.2f, 0.9f, 1.0f, 1.0f));  // selected
+    ensureMat("__FaceMarkerMatUnset__",  Ogre::ColourValue(0.6f, 0.6f, 0.6f, 1.0f));  // default/unplaced
+
+    const Ogre::Real r = entity->getBoundingRadius() * 0.02f;
+    for (int i = 0; i < int(m_markers.size()); ++i) {
+        const auto& m = m_markers[size_t(i)];
+        const Ogre::Vector3 localPos(m.userPos[0], m.userPos[1], m.userPos[2]);
+        const Ogre::Vector3 worldPos = node ? node->_getFullTransform()*localPos : localPos;
+        Ogre::SceneNode* sn = scene->getRootSceneNode()->createChildSceneNode();
+        Ogre::Entity* sphere = nullptr;
+        try { sphere = scene->createEntity(Ogre::SceneManager::PT_SPHERE); } catch (...) {}
+        if (sphere) {
+            sphere->setMaterialName(i == m_selMarker ? "__FaceMarkerMatSel__"
+                                    : m.placed ? "__FaceMarkerMat__"
+                                               : "__FaceMarkerMatUnset__");
+            sphere->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+            sn->attachObject(sphere);
+            const Ogre::Real s = (r > 1e-4f ? r : 0.02f) / 100.0f
+                                 * (i == m_selMarker ? 1.5f : 1.0f);
+            sn->setScale(s, s, s);
+        }
+        sn->setPosition(worldPos);
+        m_markerNodes.push_back(sn);
+    }
 }

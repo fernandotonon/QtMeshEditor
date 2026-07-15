@@ -9424,6 +9424,139 @@ Rectangle {
                             : "Select a face mesh first."
                     }
                 }
+
+                // ── Face markers (auto-seed, user adjusts) — the reliable path
+                // for cartoon/stylized faces MediaPipe can't detect. #889.
+                Rectangle {
+                    id: markerBtn
+                    width: parent.width
+                    height: 22
+                    visible: !FaceRigController.markerMode
+                    property bool canRun: FaceRigController.hasMeshSelection
+                                          && !FaceRigController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    radius: 3
+                    color: markerMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                           : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: "◎ Place / adjust face markers…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    MouseArea {
+                        id: markerMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: markerBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: FaceRigController.beginFaceMarkers()
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Auto-place face anchors (eyes, nose, mouth, "
+                            + "chin) and drag any that are off, then rig from them. "
+                            + "Use this for cartoon/stylized faces where auto-detect "
+                            + "struggles."
+                    }
+                }
+
+                // Marker-editing panel — shown only during a marker session.
+                Column {
+                    width: parent.width
+                    visible: FaceRigController.markerMode
+                    spacing: 4
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 9
+                        color: PropertiesPanelController.textColor
+                        text: (FaceRigController.markersSeededFromDetection
+                               ? "Auto-detected. " : "Auto-detect was weak — ")
+                              + "Click a marker below, then click on the face to move "
+                              + "it. Cyan = selected."
+                    }
+                    // Marker chips — click to select which one the next mesh
+                    // click will move.
+                    Flow {
+                        width: parent.width
+                        spacing: 3
+                        Repeater {
+                            model: FaceRigController.markerLabels
+                            Rectangle {
+                                height: 18
+                                width: chipText.implicitWidth + 12
+                                radius: 3
+                                property bool sel: index === FaceRigController.selectedMarker
+                                property bool placed: FaceRigController.markerPlaced(index)
+                                color: sel ? "#2ae6ff"
+                                       : placed ? PropertiesPanelController.highlightColor
+                                                : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor
+                                opacity: placed || sel ? 1.0 : 0.6
+                                Text {
+                                    id: chipText
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    font.pixelSize: 8
+                                    color: sel ? "#003" : PropertiesPanelController.textColor
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: FaceRigController.selectMarker(index)
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        width: parent.width
+                        spacing: 4
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 22
+                            radius: 3
+                            color: rigMkMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                                   : PropertiesPanelController.highlightColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✓ Rig from markers"
+                                font.pixelSize: 9; font.bold: true
+                                color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: rigMkMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: FaceRigController.rigFromMarkers(0, 8.0)
+                            }
+                        }
+                        Rectangle {
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 22
+                            radius: 3
+                            color: cancelMkMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Cancel"; font.pixelSize: 9
+                                color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: cancelMkMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: FaceRigController.cancelFaceMarkers()
+                            }
+                        }
+                    }
+                }
                 // Progress bar + Cancel, shown only while the worker runs.
                 RowLayout {
                     width: parent.width
