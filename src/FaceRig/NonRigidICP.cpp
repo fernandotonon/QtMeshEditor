@@ -182,7 +182,8 @@ void cgnr(const Sparse& A, const std::vector<double>& b,
 
 NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
                 const std::vector<float>& userV, const std::vector<int>& userF,
-                const NricpOptions& opts)
+                const NricpOptions& opts,
+                const NricpProgressFn& progress)
 {
     NricpResult res;
     const int Nt = int(tmplV.size()/3);
@@ -255,6 +256,8 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     // coord for every vertex), sharing the SAME sparse matrix.
     const int cols = 4*Nt;
 
+    const int levelCount = int(opts.stiffness.size());
+    int levelIdx = 0;
     for (double alpha : opts.stiffness) {
         for (int iter = 0; iter < opts.itersPerLevel; ++iter) {
             // find closest surface point per current X_i
@@ -267,9 +270,21 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
                 target[i] = closestPointTriangle(X[i], utri[cf][0], utri[cf][1], utri[cf][2]);
             }
 
-            // assemble A (rows = Nt data + E stiffness) once; rhs differs per axis
+            // Landmark anchors that reference a valid template vertex. Weight
+            // rides alpha so it dominates while the fit is still rigid (locking
+            // orientation/scale), then relaxes as alpha anneals down.
+            std::vector<const NricpLandmark*> lms;
+            lms.reserve(opts.landmarks.size());
+            for (const auto& lm : opts.landmarks)
+                if (lm.tmplVertex >= 0 && lm.tmplVertex < Nt)
+                    lms.push_back(&lm);
+            const int L = int(lms.size());
+            const double lw = opts.landmarkWeight * alpha;
+
+            // assemble A (rows = Nt data + E stiffness + L landmark) once;
+            // rhs differs per axis
             std::vector<std::array<double,3>> trip;
-            trip.reserve(size_t(Nt)*4 + size_t(E)*8);
+            trip.reserve(size_t(Nt)*4 + size_t(E)*8 + size_t(L)*4);
             // data rows: row i uses cols [4i..4i+3] with [vx,vy,vz,1]
             for (int i = 0; i < Nt; ++i) {
                 trip.push_back({double(i), double(4*i+0), vhat[i][0]});
@@ -287,14 +302,25 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
                     trip.push_back({double(row), double(4*j+k), -alpha});
                 }
             }
+            // landmark rows: lw*[vx,vy,vz,1]·A_L = lw*target[axis] (rhs per axis)
+            for (int l = 0; l < L; ++l) {
+                const int i = lms[l]->tmplVertex;
+                const int row = Nt + E*4 + l;
+                trip.push_back({double(row), double(4*i+0), lw*vhat[i][0]});
+                trip.push_back({double(row), double(4*i+1), lw*vhat[i][1]});
+                trip.push_back({double(row), double(4*i+2), lw*vhat[i][2]});
+                trip.push_back({double(row), double(4*i+3), lw});
+            }
             Sparse A;
-            A.fromTriplets(Nt + E*4, cols, trip);
+            A.fromTriplets(Nt + E*4 + L, cols, trip);
 
             std::vector<double> b(A.rows, 0.0);
             std::vector<double> x(cols, 0.0);
             for (int axis = 0; axis < 3; ++axis) {
                 for (int i = 0; i < Nt; ++i) b[i] = target[i][axis];
                 // stiffness rhs stays 0
+                for (int l = 0; l < L; ++l)
+                    b[Nt + E*4 + l] = lw * double(lms[l]->target[size_t(axis)]);
                 // warm start x from the current affine estimate for this axis
                 for (int i = 0; i < Nt; ++i) {
                     // recover current A_i row for this axis from X_i & vhat_i is
@@ -308,6 +334,12 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
                                + x[4*i+2]*vhat[i][2] + x[4*i+3];
                 }
             }
+        }
+        ++levelIdx;
+        if (progress && !progress(levelIdx, levelCount)) {
+            // caller aborted — bail with the best fit so far (ok stays false
+            // below because the residual pass computes finiteCount honestly).
+            break;
         }
     }
 

@@ -23,6 +23,8 @@
 // quality gate — a non-face mesh fits poorly and is rejected with a clear
 // reason, mirroring the AutoRig/Pinocchio precedent.
 
+#include "NonRigidICP.h"   // NricpLandmark
+
 #include <QString>
 
 #include <functional>
@@ -76,12 +78,17 @@ using FaceRigProgressFn =
 // fitted against the face template and receive blendshape deltas — the fix for
 // full-body characters (the face template must not smear over the body). Empty
 // = fit the whole mesh (a bare-face crop).
+// `landmarks` (optional): facial-landmark correspondences pinning template
+// vertices to USER positions (in the SAME frame as userV), computed externally
+// by the Ogre landmark layer. When present they anchor the NRICP fit so the
+// template lands on the real eyes/nose/mouth instead of a mis-oriented drape.
 // `progress` (optional) reports fit + per-shape steps and can cancel.
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
                            const FaceRigOptions& opts = {},
                            const std::vector<char>& headMask = {},
+                           const std::vector<NricpLandmark>& landmarks = {},
                            const FaceRigProgressFn& progress = {});
 
 }  // namespace FaceRig

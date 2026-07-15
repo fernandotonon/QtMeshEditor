@@ -5,6 +5,9 @@
 #include <QQmlEngine>
 #include <QVariantMap>
 
+#include <atomic>
+#include <memory>
+
 // QML-facing singleton for the face auto-rig (#889, Slice F #895). Wraps
 // FaceRig::attachFaceRig* plus selection state so the Inspector's "Add ARKit
 // Blendshapes" button can enable itself only on a mesh selection and run the
@@ -28,6 +31,9 @@ class FaceRigController : public QObject
     Q_PROPERTY(bool downloading READ downloading NOTIFY statusChanged)
     // Short human-readable status for the button label / tooltip.
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    // Worker progress for a progress bar: done / total steps (0 total = idle).
+    Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
+    Q_PROPERTY(int progressTotal READ progressTotal NOTIFY progressChanged)
 
 public:
     static FaceRigController* instance();
@@ -38,6 +44,8 @@ public:
     bool busy() const { return m_busy; }
     bool downloading() const { return m_downloading; }
     QString status() const { return m_status; }
+    int progress() const { return m_progress; }
+    int progressTotal() const { return m_progressTotal; }
 
     /// Run the face auto-rig on the first selected entity and attach the ARKit
     /// blendshapes. Prepares (extracts geometry + loads the bundled template)
@@ -48,10 +56,15 @@ public:
     Q_INVOKABLE bool addArkitBlendshapesAsync(int maxShapes = 0,
                                               double maxResidualPct = 8.0);
 
+    /// Request cancellation of an in-flight fit (no-op otherwise). The worker
+    /// stops at the next progress step; `error("cancelled")` follows.
+    Q_INVOKABLE void cancel();
+
 signals:
     void selectionChanged();
     void busyChanged();
     void statusChanged();
+    void progressChanged();
     void completed(const QVariantMap& report);
     void error(const QString& message);
 
@@ -65,6 +78,9 @@ private:
     bool m_busy = false;
     bool m_downloading = false;
     QString m_status;
+    int m_progress = 0;
+    int m_progressTotal = 0;
+    std::shared_ptr<std::atomic_bool> m_cancel;
 };
 
 #endif // FACE_RIG_CONTROLLER_H

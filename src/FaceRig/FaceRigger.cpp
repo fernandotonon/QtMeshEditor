@@ -129,6 +129,7 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const ArkitTemplate& tmpl,
                            const FaceRigOptions& opts,
                            const std::vector<char>& headMask,
+                           const std::vector<NricpLandmark>& landmarks,
                            const FaceRigProgressFn& progress)
 {
     FaceRigResult r;
@@ -184,6 +185,7 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     // step under "Fitting…"), then one step per transferred shape. Total =
     // fitLevels + shapeCount so the bar advances through BOTH phases.
     NricpOptions fitOpts;
+    fitOpts.landmarks = landmarks;   // anchor the fit to detected face features
     const int fitLevels = int(fitOpts.stiffness.size());
     const int shapeTotal = opts.maxShapes > 0
         ? std::min<int>(opts.maxShapes, tmpl.shapeCount())

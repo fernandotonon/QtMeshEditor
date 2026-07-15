@@ -62,6 +62,12 @@ struct FaceRigGeometry {
 // buffers — milliseconds). Empty/invalid result on failure.
 FaceRigGeometry extractGeometry(Ogre::Entity* entity);
 
+// Extract the HEAD sub-mesh (local V + remapped F) from a geometry + its
+// headMask — the region the landmark detector should frame/raycast. Returns the
+// full mesh when there's no head mask (a bare-face crop). Pure data.
+void headSubmesh(const FaceRigGeometry& geo,
+                 std::vector<float>& outV, std::vector<int>& outF);
+
 // MAIN-thread: attach a computed FaceRigResult's shapes to `entity` as
 // Ogre::Pose + VAT_POSE morph targets (via AddMorphTargetCommand), splitting
 // the combined per-vertex deltas back onto each owner's handle. Fills the

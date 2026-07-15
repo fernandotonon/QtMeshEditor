@@ -295,9 +295,20 @@ the binary). Attribution + licenses for the models and their training data:
   a decimated, different-topology face: mean 0.008% / max 0.61% NRICP fit and
   51 attached shapes. Surfaced via `qtmesh facerig`, MCP `add_arkit_blendshapes`,
   and the Inspector "Add ARKit Blendshapes" button. See `docs/FACE_RIG.md`.
+- **Facial-landmark anchoring (landmark pass):** the NRICP fit is anchored to
+  real face features by **MediaPipe Face Mesh V2** (`face_landmarks.onnx`,
+  **Apache-2.0** — the same model the mocap face-capture uses, #869). We render
+  the head front-on, detect the 478 landmarks, back-project them to the mesh
+  surface, and pin the matching template vertices — so the template lands on the
+  actual eyes/nose/mouth instead of a low-residual-but-mis-oriented drape. Hosted
+  under `facerig/face_landmarks.onnx` (a copy of the mocap graph); downloads on
+  first use; `ENABLE_ONNX`-guarded with a graceful unanchored-fit fallback.
 - **Rejected alternatives:** Wrap3D (commercial, used by the reference impl for
   NRICP — we implement NRICP natively instead), FLAME-based 3DMMs
   (research-only), any generative expression model on non-commercial data.
+  Landmark detectors trained on 300W / WFLW / InsightFace (dlib, PIPNet,
+  2d106det) were rejected — their weights carry research-only / non-commercial
+  terms; MediaPipe FaceMesh (Apache-2.0) is the clean choice.
 
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed

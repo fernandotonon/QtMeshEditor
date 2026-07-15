@@ -133,6 +133,8 @@ FaceRig/SparseSolve.cpp
 FaceRig/DeformationTransfer.cpp
 FaceRig/FaceRigger.cpp
 FaceRig/FaceRigAttach.cpp
+FaceRig/FaceLandmarkDetector.cpp
+FaceRig/FaceRigLandmarks.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionGenerator.cpp

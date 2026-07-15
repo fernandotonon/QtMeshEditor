@@ -39,7 +39,16 @@ operates on the selected entity; re-exports when `output_path` is given.
 ```
 ArkitTemplate  (ICT-FaceKit neutral + 52 expression deltas, one topology)
      │
-     ▼  NonRigidICP (Amberg 2007 optimal-step)   src/FaceRig/NonRigidICP
+     ▼  HEAD ISOLATION — rig-prior (skinned) or MeshSegmenter picks the head
+     │   region, so a full-body character fits the face template only on the
+     │   head (not smeared across the body).
+     │
+     ▼  FACE-LANDMARK ANCHORS — render the head front-on, detect 478 MediaPipe
+     │   landmarks (FaceLandmarkDetector), back-project to the surface on BOTH
+     │   template + user, pair by index → anchor constraints. This locks the
+     │   fit onto the real eyes/nose/mouth (the fix for wrong shape placement).
+     │
+     ▼  NonRigidICP (Amberg 2007 optimal-step, landmark-anchored)   src/FaceRig/NonRigidICP
   correspondence X  — template verts fitted onto the USER surface
      │
      ▼  DeformationTransfer (Sumner & Popović 2004)   src/FaceRig/DeformationTransfer
@@ -60,6 +69,12 @@ ArkitTemplate  (ICT-FaceKit neutral + 52 expression deltas, one topology)
   `THIRD_PARTY_AI_MODELS.md`) downloads on first use to
   `<AppData>/ai_models/facerig/`. Overrides: `QTMESH_FACERIG_MODEL_BASE_URL` /
   `QSettings ai/facerigModelBaseUrl`; offline guard `QTMESH_FACERIG_NO_DOWNLOAD`.
+- **Landmark anchoring** (`FaceLandmarkDetector` + `FaceRigLandmarks`,
+  `ENABLE_ONNX`): renders the head and runs MediaPipe FaceMesh V2
+  (`facerig/face_landmarks.onnx`, Apache-2.0) to anchor the fit to real face
+  features. When ONNX is off, the model is missing, or no face is detected, the
+  fit runs **unanchored** (the previous behaviour) — the feature degrades
+  gracefully, it never blocks a rig.
 
 ## Quality & limits
 

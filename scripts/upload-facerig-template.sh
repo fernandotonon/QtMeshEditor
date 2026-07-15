@@ -37,4 +37,12 @@ upload() {  # <local> <repo-path>
 upload "$OUT/arkit_template.bin" "facerig/arkit_template.bin"
 [ -n "$ICT_LICENSE" ] && upload "$ICT_LICENSE" "facerig/ICT-FaceKit-LICENSE.txt"
 
+# Facial-landmark model (MediaPipe FaceMesh V2, Apache-2.0) that anchors the
+# NRICP fit to real face features (#889 landmark pass). It is the SAME graph the
+# mocap face-capture uses (mocap/face/face_landmarks.onnx); we host a copy under
+# facerig/ so the face-rig feature is self-contained. Point FACE_LMK at the
+# converted onnx (e.g. .mocap_work/out/face/face_landmarks.onnx).
+FACE_LMK="${FACE_LMK:-}"
+[ -n "$FACE_LMK" ] && upload "$FACE_LMK" "facerig/face_landmarks.onnx"
+
 echo "done. Verify: curl -sI https://huggingface.co/$REPO/resolve/main/facerig/arkit_template.bin | head -1"

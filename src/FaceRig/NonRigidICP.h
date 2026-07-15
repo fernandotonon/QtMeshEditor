@@ -18,7 +18,9 @@
 // point-to-triangle projection against the user mesh (KD-tree over triangle
 // centroids for the broad phase). Contract proven in docs/FACE_RIG_SPIKE.md.
 
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace FaceRig {
@@ -35,21 +37,42 @@ struct NricpResult {
     bool ok = false;
 };
 
+// A landmark correspondence: template vertex `tmplVertex` should map onto the
+// user-space position `target`. Feeding a handful of these (from facial-landmark
+// detection) ANCHORS the fit so it can't converge to a low-residual but
+// mis-oriented/mis-scaled drape — the fix for the ARKit template landing on the
+// wrong face features. (#889)
+struct NricpLandmark {
+    int tmplVertex = -1;
+    std::array<float, 3> target{0, 0, 0};
+};
+
 struct NricpOptions {
     // annealed stiffness weights (high = rigid, low = free); ~3 inner iters each
     std::vector<double> stiffness = {50, 20, 8, 3, 1, 0.5};
     int itersPerLevel = 3;
     int cgIters = 400;           // CG cap per axis solve
     double cgTol = 1e-6;
+    // Optional landmark anchors (template vertex → user position). Added as
+    // high-weight data rows; the weight is strongest at the rigid (high-alpha)
+    // levels so orientation/scale lock first, then relaxes as the fit refines.
+    std::vector<NricpLandmark> landmarks;
+    double landmarkWeight = 10.0;   // base weight (× alpha at each level)
 };
+
+// Progress callback for the annealing loop: (level, levelCount). Return false
+// to abort the fit early (fit() then returns the best-so-far with ok=false).
+using NricpProgressFn = std::function<bool(int level, int levelCount)>;
 
 // tmplV/tmplF: template neutral verts (Nt*3) + tris (Ft*3).
 // userV/userF: user neutral verts (Nu*3) + tris (Fu*3).
 // Both assumed roughly aligned in orientation (+Y up); the fit does a
 // centroid+bbox-scale rigid pre-align, then the non-rigid warp.
+// `progress` (optional) fires once per completed stiffness level.
 NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
                 const std::vector<float>& userV, const std::vector<int>& userF,
-                const NricpOptions& opts = {});
+                const NricpOptions& opts = {},
+                const NricpProgressFn& progress = {});
 
 }  // namespace FaceRig
 

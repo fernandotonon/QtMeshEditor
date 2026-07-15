@@ -290,6 +290,117 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     return result;
 }
 
+MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
+    Ogre::Entity* entity, int size, const View& view, QString* errorOut,
+    const Ogre::AxisAlignedBox* focusAabb)
+{
+    RenderResult result;
+    if (!entity) {
+        if (errorOut) *errorOut = QStringLiteral("null entity");
+        return result;
+    }
+    size = std::clamp(size, 64, 2048);
+    if (!ensureRenderTarget(size, errorOut))
+        return result;
+
+    auto* sm = sceneMgr();
+    DepthState& st = state();
+
+    // Frame on the focus box (head) when given, else the whole entity.
+    const Ogre::AxisAlignedBox aabb =
+        (focusAabb && !focusAabb->isNull()) ? *focusAabb
+                                            : entity->getWorldBoundingBox(true);
+    const Ogre::Vector3 center = aabb.getCenter();
+    const Ogre::Real radius = aabb.getHalfSize().length();
+    if (radius <= 0.0f) {
+        if (errorOut) *errorOut = QStringLiteral("entity has zero-size bounding box");
+        return result;
+    }
+    const Ogre::Real fovY = st.camera->getFOVy().valueRadians();
+    const Ogre::Real dist = radius / std::sin(fovY * 0.5f) * 1.15f;
+    Ogre::Vector3 dir = view.dir;
+    if (dir.isZeroLength()) dir = Ogre::Vector3(0, 0, 1);
+    dir.normalise();
+    const Ogre::Vector3 camPos = center - dir * dist;
+    st.cameraNode->setPosition(camPos);
+    const Ogre::Vector3 up = view.up.isZeroLength() ? Ogre::Vector3::UNIT_Y : view.up;
+    st.cameraNode->setFixedYawAxis(true, up);
+    st.cameraNode->lookAt(center, Ogre::Node::TS_WORLD,
+                          Ogre::Vector3::NEGATIVE_UNIT_Z);
+
+    // Neutral flat lighting so MediaPipe sees an evenly-lit, photo-like face
+    // (no fog, materials intact). Bright ambient + a head-on light fills in
+    // feature shading without harsh shadows that would confuse the detector.
+    const Ogre::ColourValue savedAmbient = sm->getAmbientLight();
+    const Ogre::FogMode savedFogMode = sm->getFogMode();
+    const Ogre::ColourValue savedFogColour = sm->getFogColour();
+    const Ogre::Real savedFogStart = sm->getFogStart();
+    const Ogre::Real savedFogEnd = sm->getFogEnd();
+    sm->setFog(Ogre::FOG_NONE);
+    sm->setAmbientLight(Ogre::ColourValue(0.75f, 0.75f, 0.75f));
+
+    Ogre::Light* light = nullptr;
+    Ogre::SceneNode* lightNode = nullptr;
+    try {
+        light = sm->createLight("QtMeshFaceRigLight");
+        light->setType(Ogre::Light::LT_DIRECTIONAL);
+        light->setDiffuseColour(Ogre::ColourValue(0.5f, 0.5f, 0.5f));
+        light->setSpecularColour(Ogre::ColourValue::Black);
+        lightNode = sm->getRootSceneNode()->createChildSceneNode();
+        lightNode->attachObject(light);
+        lightNode->setDirection(dir, Ogre::Node::TS_WORLD);
+    } catch (...) { /* lighting is best-effort */ }
+
+    Ogre::SceneNode* gridNode = nullptr;
+    bool gridWasVisible = false;
+    if (Manager::getSingletonPtr()
+        && Manager::getSingleton()->hasSceneNode("GridLine_node")) {
+        gridNode = Manager::getSingleton()->getSceneNode("GridLine_node");
+        if (gridNode) {
+            gridWasVisible = gridNode->getAttachedObject(0)
+                ? gridNode->getAttachedObject(0)->getVisible() : true;
+            gridNode->setVisible(false);
+        }
+    }
+    Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    if (targetNode) targetNode->showBoundingBox(false);
+    std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
+    if (Manager::getSingletonPtr()) {
+        for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
+            if (!other || other == entity) continue;
+            if (other->getMovableType() != "Entity") continue;
+            Ogre::SceneNode* n = other->getParentSceneNode();
+            if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+                hiddenNodes.emplace_back(n, true);
+                n->setVisible(false);
+            }
+        }
+    }
+
+    auto restore = [&]() {
+        sm->setAmbientLight(savedAmbient);
+        sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
+        if (lightNode) { lightNode->detachAllObjects();
+                         sm->getRootSceneNode()->removeAndDestroyChild(lightNode); }
+        if (light) sm->destroyLight(light);
+        if (gridNode) gridNode->setVisible(gridWasVisible);
+        if (targetNode) targetNode->showBoundingBox(true);
+        for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
+    };
+    struct Restorer { std::function<void()> fn; ~Restorer() { fn(); } } restorer{restore};
+
+    st.renderTarget->update();
+    QImage rgba = readRenderTarget(size);
+    OgreRenderTargetUtil::restoreEditorRenderTarget();
+
+    result.viewMatrix = st.camera->getViewMatrix();
+    result.projMatrix = st.camera->getProjectionMatrix();
+    result.camPosition = camPos;
+    result.camDirection = dir;
+    result.depth = rgba.convertToFormat(QImage::Format_RGB888);   // RGB, not gray
+    return result;
+}
+
 void MeshDepthRenderer::shutdown()
 {
     DepthState& st = state();

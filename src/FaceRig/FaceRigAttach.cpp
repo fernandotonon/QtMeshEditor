@@ -1,6 +1,7 @@
 #include "FaceRigAttach.h"
 
 #include "ArkitTemplate.h"
+#include "FaceRigLandmarks.h"
 
 #include "../AutoRig.h"
 #include "../MeshSegmenter.h"
@@ -150,6 +151,37 @@ FaceRigGeometry extractGeometry(Ogre::Entity* entity)
     return geo;
 }
 
+void headSubmesh(const FaceRigGeometry& geo,
+                 std::vector<float>& outV, std::vector<int>& outF)
+{
+    outV.clear();
+    outF.clear();
+    const int nv = int(geo.userV.size() / 3);
+    if (int(geo.headMask.size()) != nv) {
+        // no head isolation — the whole mesh IS the face crop.
+        outV = geo.userV;
+        outF = geo.userF;
+        return;
+    }
+    std::vector<int> fullToSub(size_t(nv), -1);
+    for (int v = 0; v < nv; ++v) {
+        if (!geo.headMask[size_t(v)]) continue;
+        fullToSub[size_t(v)] = int(outV.size() / 3);
+        outV.insert(outV.end(), {geo.userV[size_t(v)*3],
+                                 geo.userV[size_t(v)*3+1],
+                                 geo.userV[size_t(v)*3+2]});
+    }
+    for (size_t f = 0; f + 2 < geo.userF.size(); f += 3) {
+        const int a = geo.userF[f], b = geo.userF[f+1], c = geo.userF[f+2];
+        if (a < 0 || b < 0 || c < 0) continue;
+        const int sa = fullToSub[size_t(a)], sb = fullToSub[size_t(b)],
+                  sc = fullToSub[size_t(c)];
+        if (sa >= 0 && sb >= 0 && sc >= 0)
+            outF.insert(outF.end(), {sa, sb, sc});
+    }
+    if (outV.size() < 9 || outF.size() < 3) { outV = geo.userV; outF = geo.userF; }
+}
+
 void attachShapes(Ogre::Entity* entity, const FaceRigGeometry& geo,
                   const FaceRigResult& result, AttachReport& report)
 {
@@ -199,8 +231,17 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
         return rep;
     }
 
+    // Facial-landmark anchors (render + detect on template AND user, pair by
+    // MediaPipe index). Frame/raycast the HEAD sub-mesh so the face fills the
+    // detector's frame. Empty when ONNX/model/face-detection unavailable — the
+    // fit then runs unanchored (previous behaviour).
+    std::vector<float> headV; std::vector<int> headF;
+    headSubmesh(geo, headV, headF);
+    const std::vector<NricpLandmark> anchors =
+        buildLandmarkAnchors(entity, headV, headF, tmpl);
+
     const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, opts,
-                                           geo.headMask);
+                                           geo.headMask, anchors);
     rep.userVertexCount = res.userVertexCount;
     rep.fitMeanResidualPct = res.fitMeanResidualPct;
     rep.fitMaxResidualPct = res.fitMaxResidualPct;

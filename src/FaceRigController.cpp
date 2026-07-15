@@ -2,6 +2,7 @@
 
 #include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
+#include "FaceRig/FaceRigLandmarks.h"
 #include "GamificationManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
@@ -119,6 +120,15 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
     opts.maxShapes = maxShapes;
     opts.maxFitResidualPct = maxResidualPct;
 
+    // MAIN thread: facial-landmark anchors (renders template + user — Ogre) so
+    // the worker's fit lands on the real face features. Empty when ONNX/model/
+    // face-detection unavailable → the fit runs unanchored (previous behaviour).
+    setStatus(QStringLiteral("Detecting face landmarks…"));
+    std::vector<float> headV; std::vector<int> headF;
+    FaceRig::headSubmesh(*geo, headV, headF);
+    auto anchors = std::make_shared<std::vector<FaceRig::NricpLandmark>>(
+        FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl));
+
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
         QStringLiteral("face_rig entity=%1 verts=%2 template=%3v")
             .arg(QString::fromStdString(entity->getName()))
@@ -137,7 +147,7 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
     QPointer<FaceRigController> self(this);
 
     // WORKER thread: the heavy Ogre-free fit + transfer over all 52 shapes.
-    std::thread([self, geo, tmpl, opts, entName, cancel]() {
+    std::thread([self, geo, tmpl, opts, entName, cancel, anchors]() {
         // Progress callback: marshal the counters to the main thread for the
         // progress bar; return false to stop the worker when cancel is set.
         auto progress = [self, cancel](int done, int total,
@@ -155,7 +165,7 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
         };
         auto result = std::make_shared<FaceRig::FaceRigResult>(
             FaceRig::buildFaceRig(geo->userV, geo->userF, *tmpl, opts,
-                                  geo->headMask, progress));
+                                  geo->headMask, *anchors, progress));
 
         // MAIN thread: attach (touches Ogre + the undo stack).
         QMetaObject::invokeMethod(qApp, [self, geo, result, entName]() {

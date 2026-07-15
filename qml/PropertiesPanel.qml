@@ -9424,6 +9424,57 @@ Rectangle {
                             : "Select a face mesh first."
                     }
                 }
+                // Progress bar + Cancel, shown only while the worker runs.
+                RowLayout {
+                    width: parent.width
+                    visible: FaceRigController.busy
+                    spacing: 6
+                    // Track + determinate fill (indeterminate look when total==0).
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 6
+                        radius: 3
+                        color: PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Rectangle {
+                            height: parent.height
+                            radius: 3
+                            color: PropertiesPanelController.highlightColor
+                            width: FaceRigController.progressTotal > 0
+                                   ? parent.width * FaceRigController.progress
+                                     / FaceRigController.progressTotal
+                                   : parent.width * 0.15
+                        }
+                    }
+                    Text {
+                        visible: FaceRigController.progressTotal > 0
+                        text: FaceRigController.progress + "/" + FaceRigController.progressTotal
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 48
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: cancelMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Cancel"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: cancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: FaceRigController.cancel()
+                        }
+                    }
+                }
                 Connections {
                     target: FaceRigController
                     function onError(message) {
