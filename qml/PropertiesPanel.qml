@@ -9474,7 +9474,8 @@ Rectangle {
                         text: (FaceRigController.markersSeededFromDetection
                                ? "Auto-detected. " : "Auto-detect was weak — ")
                               + "Click a marker below, then click on the face to move "
-                              + "it. Cyan = selected."
+                              + "it. Cyan = selected. Left/Right = the CHARACTER's "
+                              + "side (a mirrored placement is auto-corrected)."
                     }
                     // Marker chips — click to select which one the next mesh
                     // click will move.

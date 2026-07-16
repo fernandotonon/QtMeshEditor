@@ -86,8 +86,12 @@ std::vector<FaceMarker> seedFaceMarkers(
     bool* outConfident = nullptr);
 
 // Build NRICP anchors from the (possibly user-edited) markers — one per placed
-// marker with a resolved template vertex.
-std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers);
+// marker with a resolved template vertex. Auto-corrects a MIRRORED placement:
+// if swapping the left/right pair targets matches the template constellation
+// better (the user assumed the opposite left/right convention), the swapped
+// pairing is used — so either convention works.
+std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers,
+                                              const ArkitTemplate& tmpl);
 
 }  // namespace FaceRig
 

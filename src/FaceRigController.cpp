@@ -528,7 +528,8 @@ bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct)
 {
     if (!m_markerMode) { emit error(QStringLiteral("Not in marker mode.")); return false; }
     auto tmpl = m_markerTmpl;
-    const auto anchors = FaceRig::anchorsFromMarkers(m_markers);
+    if (!tmpl) { emit error(QStringLiteral("Template not loaded.")); return false; }
+    const auto anchors = FaceRig::anchorsFromMarkers(m_markers, *tmpl);
     int placedCount = 0;
     for (const auto& m : m_markers) placedCount += m.placed ? 1 : 0;
     qWarning("[facerig] rigFromMarkers: %d/%zu markers placed -> %zu anchors",

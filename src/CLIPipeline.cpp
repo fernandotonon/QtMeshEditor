@@ -9588,9 +9588,17 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
             }
         }
         for (auto& m : markers) m.placed = true;   // simulate the user placing all
-        const auto anchors = FaceRig::anchorsFromMarkers(markers);
+        const auto anchors = FaceRig::anchorsFromMarkers(markers, tmpl);
         err() << "[sim] markers=" << markers.size() << " anchors=" << anchors.size()
               << " seedConfident=" << confident << Qt::endl;
+        // side probe: character faces -Z, up +Y => character-LEFT = -X.
+        for (const auto& m : markers)
+            if (m.tmplVertex >= 0)
+                err() << "[sim] marker '" << m.label << "' tmplX="
+                      << tmpl.neutral()[size_t(m.tmplVertex)*3]
+                      << (tmpl.neutral()[size_t(m.tmplVertex)*3] < 0
+                          ? "  (character-LEFT side)" : "  (character-RIGHT side)")
+                      << Qt::endl;
         // warp diagnostics: how big is the warped template vs the user head?
         {
             std::vector<float> w = FaceRig::rbfWarpByAnchors(tmpl.neutral(), anchors);

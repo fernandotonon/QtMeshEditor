@@ -323,27 +323,54 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
 }
 
 // Canonical MediaPipe FaceMesh indices for the few anatomical anchors the fit
-// needs. These indices are stable in the FaceMesh topology (documented in the
-// MediaPipe canonical face model).
+// needs. IMPORTANT side semantics: MediaPipe names sides in IMAGE space, which
+// is MIRRORED for a camera-facing subject — MP "left" indices (33/133/61/105)
+// are the CHARACTER'S RIGHT (measured on the template: they sit at +X =
+// character-right). Labels here are in CHARACTER space (what a user placing
+// markers on a model naturally means by left/right).
 const std::vector<std::pair<QString, int>>& faceMarkerCatalog()
 {
     static const std::vector<std::pair<QString, int>> kCatalog = {
-        {QStringLiteral("Nose tip"),          1},
-        {QStringLiteral("Chin"),              152},
-        {QStringLiteral("Left eye outer"),    33},
-        {QStringLiteral("Right eye outer"),   263},
-        {QStringLiteral("Left eye inner"),    133},
-        {QStringLiteral("Right eye inner"),   362},
-        {QStringLiteral("Left mouth corner"), 61},
-        {QStringLiteral("Right mouth corner"),291},
-        {QStringLiteral("Upper lip"),         13},
-        {QStringLiteral("Lower lip"),         14},
-        {QStringLiteral("Left brow"),         105},
-        {QStringLiteral("Right brow"),        334},
-        {QStringLiteral("Forehead"),          10},
+        {QStringLiteral("Nose tip"),           1},
+        {QStringLiteral("Chin"),               152},
+        {QStringLiteral("Right eye outer"),    33},
+        {QStringLiteral("Left eye outer"),     263},
+        {QStringLiteral("Right eye inner"),    133},
+        {QStringLiteral("Left eye inner"),     362},
+        {QStringLiteral("Right mouth corner"), 61},
+        {QStringLiteral("Left mouth corner"),  291},
+        {QStringLiteral("Upper lip"),          13},
+        {QStringLiteral("Lower lip"),          14},
+        {QStringLiteral("Right brow"),         105},
+        {QStringLiteral("Left brow"),          334},
+        {QStringLiteral("Forehead"),           10},
     };
     return kCatalog;
 }
+
+namespace {
+// Side-pair / midline structure of the catalog (MediaPipe indices). Used to
+// SYMMETRIZE the template-side anchors (the template is x-symmetric with the
+// midline at x=0, but MediaPipe drifts on the untextured template render —
+// measured: "nose tip" detected 4 units off the midline) and to auto-correct
+// a user who placed markers with the opposite left/right convention.
+constexpr int kMidlineIdx[] = {1, 152, 13, 14, 10};
+constexpr int kPairIdx[][2] = {{33, 263}, {133, 362}, {61, 291}, {105, 334}};
+
+bool isMidline(int mpIdx)
+{
+    for (int m : kMidlineIdx) if (m == mpIdx) return true;
+    return false;
+}
+int pairOf(int mpIdx)
+{
+    for (const auto& p : kPairIdx) {
+        if (p[0] == mpIdx) return p[1];
+        if (p[1] == mpIdx) return p[0];
+    }
+    return -1;
+}
+}  // namespace
 
 namespace {
 int nearestTemplateVertex(const std::vector<float>& tn, int tvc,
@@ -438,10 +465,41 @@ std::vector<FaceMarker> seedFaceMarkers(
     const int tvc = tmpl.vertexCount();
     const auto& tn = tmpl.neutral();
     if (tlm.ok) {
+        // SYMMETRIZE the detected template landmarks before resolving vertices:
+        // the ICT template is x-symmetric (midline at x=0), but MediaPipe
+        // drifts on the untextured template render (measured: nose tip 4 units
+        // off-midline), which mis-anchors EVERYTHING downstream. Midline
+        // features snap to x=0; side pairs get mirrored positions with the
+        // pair-mean height/depth and mean |x|. Detection still supplies the
+        // vertical/depth placement it gets roughly right.
+        auto detected = [&](int mpIdx, std::array<float,3>& out) -> bool {
+            if (mpIdx < 0 || mpIdx >= int(tlm.points.size())
+                || !tlm.valid[size_t(mpIdx)]) return false;
+            out = tlm.points[size_t(mpIdx)];
+            return true;
+        };
         for (auto& m : markers) {
             const int i = m.mediapipeIndex;
-            if (i >= 0 && i < int(tlm.points.size()) && tlm.valid[size_t(i)])
-                m.tmplVertex = nearestTemplateVertex(tn, tvc, tlm.points[size_t(i)]);
+            std::array<float,3> p;
+            if (!detected(i, p)) continue;
+            if (isMidline(i)) {
+                p[0] = 0.0f;
+            } else if (const int j = pairOf(i); j >= 0) {
+                std::array<float,3> q;
+                if (detected(j, q)) {
+                    const float xm = 0.5f * (std::fabs(p[0]) + std::fabs(q[0]));
+                    const float ym = 0.5f * (p[1] + q[1]);
+                    const float zm = 0.5f * (p[2] + q[2]);
+                    // keep this marker on the side detection put it (ties →
+                    // MP-left-named index goes to +X = character-right,
+                    // the measured convention on this template).
+                    float sign = p[0] > q[0] ? 1.0f : (p[0] < q[0] ? -1.0f
+                        : ((i == 33 || i == 133 || i == 61 || i == 105) ? 1.0f
+                                                                        : -1.0f));
+                    p = { sign * xm, ym, zm };
+                } // single-sided detection: use as-is
+            }
+            m.tmplVertex = nearestTemplateVertex(tn, tvc, p);
         }
     }
 
@@ -525,13 +583,59 @@ std::vector<FaceMarker> seedFaceMarkers(
     return markers;
 }
 
-std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers)
+std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& markers,
+                                              const ArkitTemplate& tmpl)
 {
-    std::vector<NricpLandmark> anchors;
-    for (const auto& m : markers)
-        if (m.placed && m.tmplVertex >= 0)
-            anchors.push_back({m.tmplVertex, m.userPos});
-    return anchors;
+    // Two candidate pairings: as placed, and with the left/right PAIR targets
+    // swapped — a user may reasonably use either the character's or the
+    // screen's left/right. Score both against the template constellation and
+    // keep the one that agrees; a mirrored anchor set would ask the warp to
+    // fold the template through itself and crush every shape.
+    auto build = [&](bool swapped) {
+        std::vector<NricpLandmark> anchors;
+        for (const auto& m : markers) {
+            if (!m.placed || m.tmplVertex < 0) continue;
+            std::array<float,3> target = m.userPos;
+            if (swapped) {
+                const int j = pairOf(m.mediapipeIndex);
+                if (j >= 0) {
+                    // use the PAIRED marker's position instead
+                    for (const auto& o : markers)
+                        if (o.mediapipeIndex == j && o.placed) {
+                            target = o.userPos;
+                            break;
+                        }
+                }
+            }
+            anchors.push_back({m.tmplVertex, target});
+        }
+        return anchors;
+    };
+    auto residualOf = [&](const std::vector<NricpLandmark>& anchors) {
+        std::vector<std::array<float,3>> C, U;
+        const auto& tn = tmpl.neutral();
+        const int tvc = tmpl.vertexCount();
+        for (const auto& a : anchors) {
+            if (a.tmplVertex < 0 || a.tmplVertex >= tvc) continue;
+            C.push_back({tn[size_t(a.tmplVertex)*3],
+                         tn[size_t(a.tmplVertex)*3+1],
+                         tn[size_t(a.tmplVertex)*3+2]});
+            U.push_back(a.target);
+        }
+        return constellationResidual(C, U);
+    };
+
+    std::vector<NricpLandmark> normal = build(false);
+    if (!tmpl.valid()) return normal;
+    std::vector<NricpLandmark> swapped = build(true);
+    const double rn = residualOf(normal);
+    const double rs = residualOf(swapped);
+    if (rs < rn) {
+        std::fprintf(stderr, "[facerig] markers look MIRRORED (residual %.3f "
+                     "vs %.3f) — auto-swapping left/right pairs\n", rn, rs);
+        return swapped;
+    }
+    return normal;
 }
 
 }  // namespace FaceRig
