@@ -42,7 +42,9 @@
 #include "SkinWeights.h"
 #include "SkinEvaluate.h"
 #include "AutoRig.h"
+#include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
+#include "FaceRig/FaceRigLandmarks.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
@@ -9540,11 +9542,95 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
     }
     Ogre::Entity* entity = meshEntities.first();
 
-    const FaceRig::AttachReport rep =
-        FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
-    if (!rep.ok) {
-        err() << "Error: face-rig failed — " << rep.error << Qt::endl;
-        return 1;
+    FaceRig::AttachReport rep;
+    if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM")) {
+        // Diagnostic: exercise the GUI's MARKER path headlessly — seed the
+        // markers, force-place them at their seeded/default positions, and rig
+        // from those anchors (RBF warp + anchored fit), printing per-shape
+        // delta stats. Mirrors FaceRigController::rigFromMarkers.
+        const QString tpath = FaceRig::ArkitTemplate::ensureModelBlocking();
+        FaceRig::ArkitTemplate tmpl;
+        QString terr;
+        if (tpath.isEmpty() || !tmpl.load(tpath, &terr)) {
+            err() << "Error: template unavailable: " << terr << Qt::endl;
+            return 1;
+        }
+        FaceRig::FaceRigGeometry geo = FaceRig::extractGeometry(entity);
+        std::vector<float> headV; std::vector<int> headF;
+        FaceRig::headSubmesh(geo, headV, headF);
+        bool confident = false;
+        auto markers = FaceRig::seedFaceMarkers(entity, headV, headF, tmpl, &confident);
+        if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM") == 2) {
+            // sim mode 2: ignore the detection seeds and place every marker at
+            // its head-box-projected template position — approximates a user
+            // placing markers carefully on a proportional face.
+            float lo[3]={1e30f,1e30f,1e30f}, hi[3]={-1e30f,-1e30f,-1e30f};
+            const int unv = int(headV.size()/3);
+            for (int i = 0; i < unv; ++i)
+                for (int a = 0; a < 3; ++a) {
+                    lo[a]=std::min(lo[a],headV[size_t(i)*3+a]);
+                    hi[a]=std::max(hi[a],headV[size_t(i)*3+a]);
+                }
+            const auto& tn = tmpl.neutral();
+            float tlo[3]={1e30f,1e30f,1e30f}, thi[3]={-1e30f,-1e30f,-1e30f};
+            for (int i = 0; i < tmpl.vertexCount(); ++i)
+                for (int a = 0; a < 3; ++a) {
+                    tlo[a]=std::min(tlo[a],tn[size_t(i)*3+a]);
+                    thi[a]=std::max(thi[a],tn[size_t(i)*3+a]);
+                }
+            for (auto& m : markers) {
+                if (m.tmplVertex < 0) continue;
+                for (int a = 0; a < 3; ++a) {
+                    const float tv = tn[size_t(m.tmplVertex)*3+a];
+                    const float f = (thi[a]-tlo[a])>1e-6f ? (tv-tlo[a])/(thi[a]-tlo[a]) : 0.5f;
+                    m.userPos[size_t(a)] = lo[a] + f*(hi[a]-lo[a]);
+                }
+            }
+        }
+        for (auto& m : markers) m.placed = true;   // simulate the user placing all
+        const auto anchors = FaceRig::anchorsFromMarkers(markers);
+        err() << "[sim] markers=" << markers.size() << " anchors=" << anchors.size()
+              << " seedConfident=" << confident << Qt::endl;
+        // warp diagnostics: how big is the warped template vs the user head?
+        {
+            std::vector<float> w = FaceRig::rbfWarpByAnchors(tmpl.neutral(), anchors);
+            auto diagOf = [](const std::vector<float>& v){
+                float lo[3]={1e30f,1e30f,1e30f}, hi[3]={-1e30f,-1e30f,-1e30f};
+                for (size_t i=0;i+2<v.size();i+=3) for(int a=0;a<3;a++){lo[a]=std::min(lo[a],v[i+a]);hi[a]=std::max(hi[a],v[i+a]);}
+                double s=0; for(int a=0;a<3;a++) s+=double(hi[a]-lo[a])*(hi[a]-lo[a]);
+                return std::sqrt(s); };
+            err() << "[sim] diag: tmpl=" << diagOf(tmpl.neutral())
+                  << " warped=" << (w.empty()? -1.0 : diagOf(w))
+                  << " head=" << diagOf(headV) << Qt::endl;
+        }
+        const FaceRig::FaceRigResult res = FaceRig::buildFaceRig(
+            geo.userV, geo.userF, tmpl, opts, geo.headMask, anchors);
+        if (!res.ok) {
+            err() << "Error: marker-sim fit failed — "
+                  << QString::fromStdString(res.error) << Qt::endl;
+            return 1;
+        }
+        err() << "[sim] fit mean=" << res.fitMeanResidualPct
+              << "% max=" << res.fitMaxResidualPct << "%" << Qt::endl;
+        for (const auto& sh : res.shapes)
+            if (sh.name == "jawOpen" || sh.name == "mouthSmileLeft"
+                || sh.name == "eyeBlinkLeft" || sh.name == "browInnerUp")
+                err() << "[sim] " << sh.name << ": nonZero=" << sh.nonZeroVerts
+                      << " maxDisp=" << sh.maxDisp << Qt::endl;
+        rep.userVertexCount = res.userVertexCount;
+        rep.fitMeanResidualPct = res.fitMeanResidualPct;
+        rep.fitMaxResidualPct = res.fitMaxResidualPct;
+        FaceRig::attachShapes(entity, geo, res, rep);
+        if (!rep.ok) {
+            err() << "Error: marker-sim attach failed — " << rep.error << Qt::endl;
+            return 1;
+        }
+    } else {
+        rep = FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
+        if (!rep.ok) {
+            err() << "Error: face-rig failed — " << rep.error << Qt::endl;
+            return 1;
+        }
     }
 
     auto* node = entity->getParentSceneNode();

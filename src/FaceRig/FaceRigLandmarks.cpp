@@ -246,6 +246,11 @@ Ogre::Entity* templateEntity(const std::vector<float>& v,
 
 }  // namespace
 
+namespace {
+double constellationResidual(const std::vector<std::array<float,3>>& C,
+                             const std::vector<std::array<float,3>>& U);
+}  // namespace
+
 std::vector<NricpLandmark> buildLandmarkAnchors(
     Ogre::Entity* userEntity,
     const std::vector<float>& userLocalV,
@@ -291,11 +296,29 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
         if (best < 0) continue;
         anchors.push_back({best, ulm.points[size_t(i)]});
     }
+
+    // Gate on constellation consistency: MediaPipe returns a scattered garbage
+    // blob on cartoon/stylized faces, and anchoring the fit to garbage is worse
+    // than fitting unanchored. Compare the template-vs-user landmark layouts
+    // under a similarity — a real detection agrees, garbage doesn't.
+    {
+        std::vector<std::array<float,3>> C, U;
+        C.reserve(anchors.size()); U.reserve(anchors.size());
+        for (const auto& a : anchors) {
+            C.push_back({tn[size_t(a.tmplVertex)*3],
+                         tn[size_t(a.tmplVertex)*3+1],
+                         tn[size_t(a.tmplVertex)*3+2]});
+            U.push_back(a.target);
+        }
+        const double resid = constellationResidual(C, U);
 #ifndef NDEBUG
-    if (std::getenv("QTMESH_FACERIG_DEBUG"))
-        std::fprintf(stderr, "[facerig] landmark anchors: tmpl.ok=%d user.ok=%d "
-                     "anchors=%zu\n", tlm.ok, ulm.ok, anchors.size());
+        if (std::getenv("QTMESH_FACERIG_DEBUG"))
+            std::fprintf(stderr, "[facerig] landmark anchors: tmpl.ok=%d "
+                         "user.ok=%d anchors=%zu residual=%.3f\n",
+                         tlm.ok, ulm.ok, anchors.size(), resid);
 #endif
+        if (resid >= 0.25) anchors.clear();   // garbage → fit unanchored
+    }
     return anchors;
 }
 
@@ -335,6 +358,50 @@ int nearestTemplateVertex(const std::vector<float>& tn, int tvc,
         if (d < bestD) { bestD = d; best = vtx; }
     }
     return best;
+}
+
+// Does the user point constellation actually LOOK like the template's? Align
+// C onto U with a similarity (centroid + RMS scale, no rotation — both faces
+// upright/front by contract) and measure the mean residual normalised by U's
+// spread. A real face layout agrees (≲0.2); a garbage detection (MediaPipe on
+// a cartoon face returns a scattered blob) does not. This is the gate that
+// keeps garbage landmarks from silently poisoning the warp/fit.
+double constellationResidual(const std::vector<std::array<float,3>>& C,
+                             const std::vector<std::array<float,3>>& U)
+{
+    const int n = int(std::min(C.size(), U.size()));
+    if (n < 4) return 1e9;
+    std::array<double,3> cC{0,0,0}, cU{0,0,0};
+    for (int i = 0; i < n; ++i)
+        for (int d = 0; d < 3; ++d) {
+            cC[size_t(d)] += C[size_t(i)][size_t(d)] / n;
+            cU[size_t(d)] += U[size_t(i)][size_t(d)] / n;
+        }
+    double sC = 0, sU = 0;
+    for (int i = 0; i < n; ++i) {
+        double dc = 0, du = 0;
+        for (int d = 0; d < 3; ++d) {
+            const double a = C[size_t(i)][size_t(d)] - cC[size_t(d)];
+            const double b = U[size_t(i)][size_t(d)] - cU[size_t(d)];
+            dc += a*a; du += b*b;
+        }
+        sC += std::sqrt(dc); sU += std::sqrt(du);
+    }
+    if (sC < 1e-12 || sU < 1e-12) return 1e9;
+    const double scale = sU / sC;
+    double resid = 0;
+    for (int i = 0; i < n; ++i) {
+        double d2 = 0;
+        for (int d = 0; d < 3; ++d) {
+            const double m = (C[size_t(i)][size_t(d)] - cC[size_t(d)]) * scale
+                             + cU[size_t(d)];
+            const double e = U[size_t(i)][size_t(d)] - m;
+            d2 += e*e;
+        }
+        resid += std::sqrt(d2);
+    }
+    resid /= n;
+    return resid / (sU / n);   // normalise by mean spread of U
 }
 }  // namespace
 
@@ -378,30 +445,51 @@ std::vector<FaceMarker> seedFaceMarkers(
         }
     }
 
-    // User detection seeds the editable positions. If it's confident, use its
-    // points; otherwise leave markers unplaced at a sensible default (projected
-    // template landmark into the user head box) for the user to drag.
+    // User detection seeds the editable positions — but ONLY when the detected
+    // constellation actually looks like a face layout. MediaPipe returns a
+    // scattered garbage blob on cartoon/stylized faces, and garbage seeds
+    // silently poison the warp/fit (measured: jawOpen deltas 50x too small).
     const MeshLandmarks ulm = detectMeshLandmarks(userEntity, userLocalV, userLocalF);
 
-    // Confidence heuristic: enough of the catalog markers hit the surface AND
-    // the landmark cloud isn't a degenerate blob. We approximate "trustworthy"
-    // by how many catalog markers are valid.
     int seeded = 0;
+    std::vector<std::array<float,3>> detC, detU;   // template/user pairs
     if (ulm.ok) {
+        for (auto& m : markers) {
+            const int i = m.mediapipeIndex;
+            if (i >= 0 && i < int(ulm.points.size()) && ulm.valid[size_t(i)]
+                && m.tmplVertex >= 0) {
+                ++seeded;
+                detC.push_back({tn[size_t(m.tmplVertex)*3],
+                                tn[size_t(m.tmplVertex)*3+1],
+                                tn[size_t(m.tmplVertex)*3+2]});
+                detU.push_back(ulm.points[size_t(i)]);
+            }
+        }
+    }
+    const double resid = constellationResidual(detC, detU);
+    const bool confident = ulm.ok && seeded >= int(markers.size()) * 3 / 4
+                           && resid < 0.25;
+#ifndef NDEBUG
+    if (std::getenv("QTMESH_FACERIG_DEBUG"))
+        std::fprintf(stderr, "[facerig] seed: %d/%zu detected, constellation "
+                     "residual %.3f -> %s\n", seeded, markers.size(), resid,
+                     confident ? "trusted" : "using proportional defaults");
+#endif
+
+    if (confident) {
         for (auto& m : markers) {
             const int i = m.mediapipeIndex;
             if (i >= 0 && i < int(ulm.points.size()) && ulm.valid[size_t(i)]) {
                 m.userPos = ulm.points[size_t(i)];
                 m.placed = true;
-                ++seeded;
             }
         }
-    }
-    // If auto-seed was weak, place the rest at the head-box-projected template
-    // landmark so every marker starts SOMEWHERE on the face for the user to
-    // nudge (rather than at the origin).
-    if (seeded < int(markers.size())) {
-        // user head AABB
+    } else {
+        // Garbage / weak detection: seed EVERY marker at the head-box-projected
+        // template position instead. Those proportional defaults measurably
+        // produce a good rig on their own (the cartoon-face path), and the user
+        // refines from there. placed=true so they act as anchors even if the
+        // user rigs without touching them.
         std::array<float,3> lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         const int unv = int(userLocalV.size()/3);
         for (int i = 0; i < unv; ++i)
@@ -409,7 +497,6 @@ std::vector<FaceMarker> seedFaceMarkers(
                 lo[a] = std::min(lo[a], userLocalV[size_t(i)*3+a]);
                 hi[a] = std::max(hi[a], userLocalV[size_t(i)*3+a]);
             }
-        // template head AABB (its neutral)
         std::array<float,3> tlo{1e30f,1e30f,1e30f}, thi{-1e30f,-1e30f,-1e30f};
         for (int i = 0; i < tvc; ++i)
             for (int a = 0; a < 3; ++a) {
@@ -417,19 +504,17 @@ std::vector<FaceMarker> seedFaceMarkers(
                 thi[a] = std::max(thi[a], tn[size_t(i)*3+a]);
             }
         for (auto& m : markers) {
-            if (m.placed || m.tmplVertex < 0) continue;
-            // map the template vertex position into the user head box.
+            if (m.tmplVertex < 0) continue;
             for (int a = 0; a < 3; ++a) {
                 const float tv = tn[size_t(m.tmplVertex)*3+a];
                 const float f = (thi[a]-tlo[a]) > 1e-6f
                     ? (tv - tlo[a]) / (thi[a]-tlo[a]) : 0.5f;
                 m.userPos[size_t(a)] = lo[a] + f * (hi[a]-lo[a]);
             }
-            // left unplaced: it's a default guess the user should confirm/drag.
+            m.placed = true;
         }
     }
 
-    const bool confident = ulm.ok && seeded >= int(markers.size()) * 3 / 4;
     if (outConfident) *outConfident = confident;
     return markers;
 }
