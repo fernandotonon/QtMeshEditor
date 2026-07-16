@@ -122,7 +122,8 @@ TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsBoneNameForTaggedVisuals)
         {
             ++taggedCount;
             EXPECT_EQ(obj->getQueryFlags(), static_cast<Ogre::uint32>(BONE_QUERY_FLAGS));
-            EXPECT_FALSE(SkeletonDebug::entityNameForMovable(obj).empty());
+            EXPECT_EQ(SkeletonDebug::entityNameForMovable(obj),
+                      Ogre::String("SkeletonDebugTestEntity"));
         }
     }
     EXPECT_GT(taggedCount, 0) << "no SkeletonDebug visuals were tagged";

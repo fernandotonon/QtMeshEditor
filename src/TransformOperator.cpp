@@ -207,6 +207,11 @@ bool TransformOperator::shouldRouteToBoneGizmo(TransformState state,
     return false;
 }
 
+bool TransformOperator::shouldPreferGizmoOverBonePick(TransformState state)
+{
+    return state == TS_TRANSLATE || state == TS_ROTATE || state == TS_SCALE;
+}
+
 ////////////////////////////////////////
 // Snap settings
 
@@ -961,9 +966,12 @@ bool TransformOperator::tryPickBoneAt(const QPoint& pos, SelectionMode mode)
     if (!props->hasAnySkeletonDebugActive())
         return false;
 
-    // Gizmos always win over skeleton bones (including when a bone visual
-    // sits under a translate/rotate/scale handle).
-    if (performRaySelection(pos, /*findGizmo=*/true))
+    // Gizmos always win over skeleton bones when transform tools are active.
+    // In Select mode gizmos stay in the scene with GIZMO_QUERY_FLAGS but are
+    // only setVisible(false) — querying them would block bone picks under the
+    // (hidden) handle, so skip the gizmo gate there.
+    if (shouldPreferGizmoOverBonePick(mTransformState)
+        && performRaySelection(pos, /*findGizmo=*/true))
         return false;
 
     m_pRayQuery->setRay(rayFromScreenPoint(pos));

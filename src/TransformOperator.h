@@ -109,6 +109,11 @@ public:
                                        const Ogre::Bone* selectedBone,
                                        bool boneCanTranslate);
 
+    /// True when a gizmo ray hit should suppress bone picking. Select/None
+    /// leave gizmos in the scene (query flags set, only visibility cleared),
+    /// so bone picks must ignore them in those states.
+    static bool shouldPreferGizmoOverBonePick(TransformState state);
+
 private:
     TransformOperator ();
     ~TransformOperator () override;
