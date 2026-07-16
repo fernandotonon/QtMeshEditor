@@ -128,101 +128,150 @@ std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
                                     const std::vector<NricpLandmark>& anchors)
 {
     const int nv = int(tmplV.size() / 3);
-    // Collect valid, de-duplicated centers + displacements (two anchors on the
-    // same template vertex would make the system singular — first one wins).
-    std::vector<int> cs;                          // template vertex per center
-    std::vector<std::array<double,3>> C, D;       // center pos, displacement
+    // Collect valid, de-duplicated centers + targets (two anchors on the same
+    // template vertex would make the system singular - first one wins).
+    std::vector<int> cs;
+    std::vector<std::array<double,3>> C, T;      // template center, user target
     for (const auto& a : anchors) {
         if (a.tmplVertex < 0 || a.tmplVertex >= nv) continue;
         bool dup = false;
         for (int c : cs) if (c == a.tmplVertex) { dup = true; break; }
         if (dup) continue;
         cs.push_back(a.tmplVertex);
-        std::array<double,3> c{}, d{};
-        for (int k = 0; k < 3; ++k) {
-            c[size_t(k)] = tmplV[size_t(a.tmplVertex)*3 + k];
-            d[size_t(k)] = double(a.target[size_t(k)]) - c[size_t(k)];
-        }
-        C.push_back(c);
-        D.push_back(d);
+        C.push_back({tmplV[size_t(a.tmplVertex)*3],
+                     tmplV[size_t(a.tmplVertex)*3+1],
+                     tmplV[size_t(a.tmplVertex)*3+2]});
+        T.push_back({double(a.target[0]), double(a.target[1]),
+                     double(a.target[2])});
     }
     const int N = int(cs.size());
     if (N < 4) return {};
 
-    // System: [Φ P; Pᵀ 0] [w; a] = [D; 0], φ(r)=r, P = [1 x y z].
-    const int M = N + 4;
-    std::vector<double> A(size_t(M)*M, 0.0);
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N; ++j) {
-            const double dx = C[size_t(i)][0]-C[size_t(j)][0];
-            const double dy = C[size_t(i)][1]-C[size_t(j)][1];
-            const double dz = C[size_t(i)][2]-C[size_t(j)][2];
-            A[size_t(i)*M + j] = std::sqrt(dx*dx + dy*dy + dz*dz);
+    // 1) SIMILARITY prealign (centroid + RMS-spread scale, no rotation - both
+    // faces are upright/front-facing by contract). Face markers are nearly
+    // COPLANAR, so a full affine/thin-plate warp is ill-conditioned along the
+    // depth axis and can shear the back of the head into garbage - the
+    // similarity handles the global part robustly, the Gaussian RBF below only
+    // carries the local residuals and DECAYS away from the face.
+    std::array<double,3> cT{0,0,0}, cU{0,0,0};
+    for (int i = 0; i < N; ++i)
+        for (int d = 0; d < 3; ++d) {
+            cT[size_t(d)] += C[size_t(i)][size_t(d)] / N;
+            cU[size_t(d)] += T[size_t(i)][size_t(d)] / N;
         }
-        A[size_t(i)*M + N + 0] = 1.0;
-        A[size_t(i)*M + N + 1] = C[size_t(i)][0];
-        A[size_t(i)*M + N + 2] = C[size_t(i)][1];
-        A[size_t(i)*M + N + 3] = C[size_t(i)][2];
-        A[size_t(N+0)*M + i] = 1.0;
-        A[size_t(N+1)*M + i] = C[size_t(i)][0];
-        A[size_t(N+2)*M + i] = C[size_t(i)][1];
-        A[size_t(N+3)*M + i] = C[size_t(i)][2];
+    double sT = 0, sU = 0;
+    for (int i = 0; i < N; ++i) {
+        double dt = 0, du = 0;
+        for (int d = 0; d < 3; ++d) {
+            const double a = C[size_t(i)][size_t(d)] - cT[size_t(d)];
+            const double b = T[size_t(i)][size_t(d)] - cU[size_t(d)];
+            dt += a*a; du += b*b;
+        }
+        sT += std::sqrt(dt); sU += std::sqrt(du);
+    }
+    if (sT < 1e-9) return {};
+    const double scale = (sU > 1e-9) ? sU / sT : 1.0;
+    auto prealign = [&](const std::array<double,3>& p) {
+        std::array<double,3> q;
+        for (int d = 0; d < 3; ++d)
+            q[size_t(d)] = (p[size_t(d)] - cT[size_t(d)]) * scale + cU[size_t(d)];
+        return q;
+    };
+
+    // Prealigned centers + residual displacements the RBF must carry.
+    std::vector<std::array<double,3>> Cp(size_t(N), {0,0,0});
+    std::vector<std::array<double,3>> R(size_t(N), {0,0,0});
+    for (int i = 0; i < N; ++i) {
+        Cp[size_t(i)] = prealign(C[size_t(i)]);
+        for (int d = 0; d < 3; ++d)
+            R[size_t(i)][size_t(d)] =
+                T[size_t(i)][size_t(d)] - Cp[size_t(i)][size_t(d)];
     }
 
-    // Solve the 3 rhs (one per axis) with one LU-style elimination. Partial
-    // pivoting; bail on a near-singular pivot (degenerate anchor layout).
-    std::vector<std::array<double,3>> rhs(size_t(M), {0,0,0});
-    for (int i = 0; i < N; ++i) rhs[size_t(i)] = D[size_t(i)];
-    for (int col = 0; col < M; ++col) {
+    // 2) Gaussian RBF on the residuals, ridge-regularized. sigma = mean
+    // nearest-neighbour center spacing (x1.5) so influence blobs overlap
+    // smoothly; far from the face the displacement decays to the similarity.
+    double sigma = 0;
+    for (int i = 0; i < N; ++i) {
+        double best = 1e30;
+        for (int j = 0; j < N; ++j) {
+            if (i == j) continue;
+            double d2 = 0;
+            for (int d = 0; d < 3; ++d) {
+                const double dd = Cp[size_t(i)][size_t(d)] - Cp[size_t(j)][size_t(d)];
+                d2 += dd*dd;
+            }
+            best = std::min(best, d2);
+        }
+        sigma += std::sqrt(best) / N;
+    }
+    sigma *= 1.5;
+    if (sigma < 1e-9) return {};
+    const double inv2s2 = 1.0 / (2.0 * sigma * sigma);
+    const double ridge = 1e-3;
+
+    // Solve (A + ridge*I) w = R for the 3 axes with Gaussian elimination.
+    std::vector<double> A(size_t(N)*N, 0.0);
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j) {
+            double d2 = 0;
+            for (int d = 0; d < 3; ++d) {
+                const double dd = Cp[size_t(i)][size_t(d)] - Cp[size_t(j)][size_t(d)];
+                d2 += dd*dd;
+            }
+            A[size_t(i)*N + j] = std::exp(-d2 * inv2s2) + (i == j ? ridge : 0.0);
+        }
+    std::vector<std::array<double,3>> rhs = R;
+    for (int col = 0; col < N; ++col) {
         int piv = col;
-        for (int r = col+1; r < M; ++r)
-            if (std::abs(A[size_t(r)*M+col]) > std::abs(A[size_t(piv)*M+col]))
+        for (int r = col+1; r < N; ++r)
+            if (std::abs(A[size_t(r)*N+col]) > std::abs(A[size_t(piv)*N+col]))
                 piv = r;
-        if (std::abs(A[size_t(piv)*M+col]) < 1e-10) return {};
+        if (std::abs(A[size_t(piv)*N+col]) < 1e-12) return {};
         if (piv != col) {
-            for (int c = 0; c < M; ++c)
-                std::swap(A[size_t(piv)*M+c], A[size_t(col)*M+c]);
+            for (int c = 0; c < N; ++c)
+                std::swap(A[size_t(piv)*N+c], A[size_t(col)*N+c]);
             std::swap(rhs[size_t(piv)], rhs[size_t(col)]);
         }
-        const double p = A[size_t(col)*M+col];
-        for (int r = col+1; r < M; ++r) {
-            const double f = A[size_t(r)*M+col] / p;
+        const double p = A[size_t(col)*N+col];
+        for (int r = col+1; r < N; ++r) {
+            const double f = A[size_t(r)*N+col] / p;
             if (f == 0.0) continue;
-            for (int c = col; c < M; ++c)
-                A[size_t(r)*M+c] -= f * A[size_t(col)*M+c];
+            for (int c = col; c < N; ++c)
+                A[size_t(r)*N+c] -= f * A[size_t(col)*N+c];
             for (int d = 0; d < 3; ++d)
                 rhs[size_t(r)][size_t(d)] -= f * rhs[size_t(col)][size_t(d)];
         }
     }
-    std::vector<std::array<double,3>> sol(size_t(M), {0,0,0});
-    for (int r = M-1; r >= 0; --r) {
+    std::vector<std::array<double,3>> w(size_t(N), {0,0,0});
+    for (int r = N-1; r >= 0; --r) {
         std::array<double,3> acc = rhs[size_t(r)];
-        for (int c = r+1; c < M; ++c)
+        for (int c = r+1; c < N; ++c)
             for (int d = 0; d < 3; ++d)
-                acc[size_t(d)] -= A[size_t(r)*M+c] * sol[size_t(c)][size_t(d)];
-        const double p = A[size_t(r)*M+r];
-        for (int d = 0; d < 3; ++d) sol[size_t(r)][size_t(d)] = acc[size_t(d)] / p;
+                acc[size_t(d)] -= A[size_t(r)*N+c] * w[size_t(c)][size_t(d)];
+        for (int d = 0; d < 3; ++d)
+            w[size_t(r)][size_t(d)] = acc[size_t(d)] / A[size_t(r)*N+r];
     }
 
-    // Warp every template vertex: p' = p + Σ w_i φ(|p-c_i|) + a0 + a1x + a2y + a3z
+    // Warp every template vertex: similarity, then the decaying residual field.
     std::vector<float> out(tmplV.size());
     for (int v = 0; v < nv; ++v) {
-        const double px = tmplV[size_t(v)*3], py = tmplV[size_t(v)*3+1],
-                     pz = tmplV[size_t(v)*3+2];
-        std::array<double,3> disp = {
-            sol[size_t(N+0)][0] + sol[size_t(N+1)][0]*px + sol[size_t(N+2)][0]*py + sol[size_t(N+3)][0]*pz,
-            sol[size_t(N+0)][1] + sol[size_t(N+1)][1]*px + sol[size_t(N+2)][1]*py + sol[size_t(N+3)][1]*pz,
-            sol[size_t(N+0)][2] + sol[size_t(N+1)][2]*px + sol[size_t(N+2)][2]*py + sol[size_t(N+3)][2]*pz };
+        const std::array<double,3> p = prealign(
+            {tmplV[size_t(v)*3], tmplV[size_t(v)*3+1], tmplV[size_t(v)*3+2]});
+        std::array<double,3> disp{0,0,0};
         for (int i = 0; i < N; ++i) {
-            const double dx = px-C[size_t(i)][0], dy = py-C[size_t(i)][1],
-                         dz = pz-C[size_t(i)][2];
-            const double r = std::sqrt(dx*dx + dy*dy + dz*dz);
+            double d2 = 0;
+            for (int d = 0; d < 3; ++d) {
+                const double dd = p[size_t(d)] - Cp[size_t(i)][size_t(d)];
+                d2 += dd*dd;
+            }
+            const double phi = std::exp(-d2 * inv2s2);
             for (int d = 0; d < 3; ++d)
-                disp[size_t(d)] += sol[size_t(i)][size_t(d)] * r;
+                disp[size_t(d)] += w[size_t(i)][size_t(d)] * phi;
         }
-        out[size_t(v)*3]   = float(px + disp[0]);
-        out[size_t(v)*3+1] = float(py + disp[1]);
-        out[size_t(v)*3+2] = float(pz + disp[2]);
+        out[size_t(v)*3]   = float(p[0] + disp[0]);
+        out[size_t(v)*3+1] = float(p[1] + disp[1]);
+        out[size_t(v)*3+2] = float(p[2] + disp[2]);
     }
     return out;
 }

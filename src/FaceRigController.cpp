@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <thread>
 
 FaceRigController* FaceRigController::m_pSingleton = nullptr;
@@ -278,11 +279,31 @@ bool FaceRigController::runRigAsync(
             for (size_t ci = 0; ci + 1 < cmds.size(); ++ci)
                 cmds[ci]->setDeferInit(true);   // all but the last defer re-init
 
+            // Re-rig = REPLACE, not stack: VAT_POSE keyframes reference poses
+            // BY INDEX, so attaching a second same-named set on an already-
+            // rigged mesh both duplicates poses AND corrupts the existing
+            // keyframe references — the "sliders do nothing" failure. Delete
+            // the old same-named targets first, inside the same macro so
+            // undo/redo stays atomic.
+            std::set<std::string> existing;
+            if (auto mesh = entity->getMesh())
+                for (const Ogre::Pose* p : mesh->getPoseList())
+                    if (p) existing.insert(p->getName());
+            std::vector<DeleteMorphTargetCommand*> dels;
+            for (const FaceRig::FaceRigShape& shape : result->shapes)
+                if (existing.count(shape.name.toStdString()))
+                    dels.push_back(new DeleteMorphTargetCommand(entity, shape.name));
+
             auto* undo = UndoManager::getSingleton();
             auto* stack = undo ? undo->stack() : nullptr;
             if (stack) stack->beginMacro(QStringLiteral("Add ARKit Blendshapes"));
+            for (auto* del : dels) undo->push(del);
             for (auto* cmd : cmds) { undo->push(cmd); rep.shapesAttached++; }
             if (stack) stack->endMacro();
+            qWarning("[facerig] rig: replaced %zu existing, attached %d shapes "
+                     "(fit mean %.3f%% max %.3f%%)",
+                     dels.size(), rep.shapesAttached,
+                     rep.fitMeanResidualPct, rep.fitMaxResidualPct);
             if (enode) entity->setVisible(wasVisible);
 
             // Restore the animation states we disabled (refreshAvailable... in
@@ -494,6 +515,10 @@ bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct)
     if (!m_markerMode) { emit error(QStringLiteral("Not in marker mode.")); return false; }
     auto tmpl = m_markerTmpl;
     const auto anchors = FaceRig::anchorsFromMarkers(m_markers);
+    int placedCount = 0;
+    for (const auto& m : m_markers) placedCount += m.placed ? 1 : 0;
+    qWarning("[facerig] rigFromMarkers: %d/%zu markers placed -> %zu anchors",
+             placedCount, m_markers.size(), anchors.size());
     // Leave marker mode (clears overlays) before the rig runs.
     m_markerMode = false;
     m_selMarker = -1;
@@ -537,8 +562,14 @@ void FaceRigController::refreshMarkerOverlays()
         if (!mm.resourceExists(n)) {
             auto mat = mm.create(n, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
             auto* pass = mat->getTechnique(0)->getPass(0);
-            pass->setLightingEnabled(false);
-            pass->setDiffuse(c); pass->setAmbient(c);
+            // Lighting ON + self-illumination is what actually colours the
+            // sphere — with lighting disabled Ogre ignores diffuse/ambient and
+            // the markers render plain white (indistinguishable states).
+            pass->setLightingEnabled(true);
+            pass->setSelfIllumination(c);
+            pass->setDiffuse(Ogre::ColourValue::Black);
+            pass->setAmbient(Ogre::ColourValue::Black);
+            pass->setSpecular(Ogre::ColourValue::Black);
             pass->setDepthCheckEnabled(false);
         }
     };
