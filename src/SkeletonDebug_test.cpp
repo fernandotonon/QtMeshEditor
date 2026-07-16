@@ -122,9 +122,15 @@ TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsBoneNameForTaggedVisuals)
         {
             ++taggedCount;
             EXPECT_EQ(obj->getQueryFlags(), static_cast<Ogre::uint32>(BONE_QUERY_FLAGS));
+            EXPECT_FALSE(SkeletonDebug::entityNameForMovable(obj).empty());
         }
     }
     EXPECT_GT(taggedCount, 0) << "no SkeletonDebug visuals were tagged";
+}
+
+TEST_F(SkeletonDebugTests, EntityNameForMovableReturnsEmptyForNullptr)
+{
+    EXPECT_TRUE(SkeletonDebug::entityNameForMovable(nullptr).empty());
 }
 
 TEST_F(SkeletonDebugTests, SetAxesScaleZero)

@@ -36,6 +36,8 @@ public:
     // meshes) so a ray-pick in the viewport can map back to the bone.
     // Returns empty string when the movable isn't a SkeletonDebug visual.
     static Ogre::String boneNameForMovable(const Ogre::MovableObject* obj);
+    /// Owning skinned entity name (paired with boneNameForMovable).
+    static Ogre::String entityNameForMovable(const Ogre::MovableObject* obj);
 
 signals:
     void boneSelected(unsigned short boneIndex);
