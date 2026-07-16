@@ -183,6 +183,7 @@ MeshDecimator.cpp
 MeshDecimatorController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
+AIModelCatalog.cpp
 WelcomeScreenController.cpp
 WelcomeDialog.cpp
 ScanConfig.cpp
@@ -345,6 +346,7 @@ MeshDecimator.h
 MeshDecimatorController.h
 MeshValidator.h
 AIChatManager.h
+AIModelCatalog.h
 WelcomeScreenController.h
 WelcomeDialog.h
 ScanConfig.h

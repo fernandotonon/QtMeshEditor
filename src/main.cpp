@@ -20,6 +20,7 @@
 #include "MaterialEditorQML.h"
 #include "QMLMaterialHighlighter.h"
 #include "LLMManager.h"
+#include "AIModelCatalog.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -229,6 +230,11 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
             return ModelDownloader::qmlInstance(engine, scriptEngine);
+        });
+
+    qmlRegisterSingletonType<AIModelCatalog>("MaterialEditorQML", 1, 0, "AIModelCatalog",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            return AIModelCatalog::qmlInstance(engine, scriptEngine);
         });
 
 #ifdef ENABLE_STABLE_DIFFUSION
