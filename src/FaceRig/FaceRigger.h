@@ -62,6 +62,11 @@ struct FaceRigOptions {
     // Cap the shapes generated (0 = all in the template). Names are matched
     // against the template's own shape order.
     int maxShapes = 0;
+    // Amplitude multiplier applied to every transferred delta (an
+    // "exaggeration" control, like Mixamo's arm-space). 1 = as transferred;
+    // >1 amplifies subtle results on stylized faces whose transfer comes out
+    // conservative. Clamped by callers to a sane range.
+    double amplitude = 1.0;
 };
 
 // Progress callback: (done, total, phase). `phase` is a short static label

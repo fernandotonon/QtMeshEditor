@@ -9478,7 +9478,8 @@ Rectangle {
                               + "side (a mirrored placement is auto-corrected)."
                     }
                     // Marker chips — click to select which one the next mesh
-                    // click will move.
+                    // click will move. After placing, selection auto-advances
+                    // to the NEXT chip in this order.
                     Flow {
                         width: parent.width
                         spacing: 3
@@ -9489,17 +9490,27 @@ Rectangle {
                                 width: chipText.implicitWidth + 12
                                 radius: 3
                                 property bool sel: index === FaceRigController.selectedMarker
-                                property bool placed: FaceRigController.markerPlaced(index)
+                                // NB: markerPlaced() is an invokable, not a
+                                // property — reference selectedMarker in the
+                                // binding so it re-evaluates on markersChanged
+                                // (otherwise the chip state goes stale).
+                                property bool placed: {
+                                    var _dep = FaceRigController.selectedMarker
+                                    return FaceRigController.markerPlaced(index)
+                                }
                                 color: sel ? "#2ae6ff"
                                        : placed ? PropertiesPanelController.highlightColor
                                                 : PropertiesPanelController.controlBgColor
-                                border.color: PropertiesPanelController.borderColor
+                                border.color: sel ? "#ffffff"
+                                                  : PropertiesPanelController.borderColor
+                                border.width: sel ? 2 : 1
                                 opacity: placed || sel ? 1.0 : 0.6
                                 Text {
                                     id: chipText
                                     anchors.centerIn: parent
                                     text: modelData
                                     font.pixelSize: 8
+                                    font.bold: sel
                                     color: sel ? "#003" : PropertiesPanelController.textColor
                                 }
                                 MouseArea {
@@ -9508,6 +9519,28 @@ Rectangle {
                                     onClicked: FaceRigController.selectMarker(index)
                                 }
                             }
+                        }
+                    }
+                    // Strength (amplitude) — exaggeration multiplier for the
+                    // transferred shapes; stylized faces often want >1.
+                    RowLayout {
+                        width: parent.width
+                        spacing: 6
+                        Text {
+                            text: "Strength"
+                            font.pixelSize: 9
+                            color: PropertiesPanelController.textColor
+                        }
+                        Slider {
+                            id: ampSlider
+                            Layout.fillWidth: true
+                            from: 0.5; to: 3.0; value: 1.5
+                            stepSize: 0.1
+                        }
+                        Text {
+                            text: "×" + ampSlider.value.toFixed(1)
+                            font.pixelSize: 9
+                            color: PropertiesPanelController.textColor
                         }
                     }
                     RowLayout {
@@ -9532,7 +9565,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: FaceRigController.rigFromMarkers(0, 8.0)
+                                onClicked: FaceRigController.rigFromMarkers(0, 8.0, ampSlider.value)
                             }
                         }
                         Rectangle {

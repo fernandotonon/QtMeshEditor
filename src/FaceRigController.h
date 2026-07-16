@@ -68,7 +68,8 @@ public:
     /// (invalid selection / already busy — `error` is emitted); the real
     /// outcome arrives via completed(report) or error(msg).
     Q_INVOKABLE bool addArkitBlendshapesAsync(int maxShapes = 0,
-                                              double maxResidualPct = 8.0);
+                                              double maxResidualPct = 8.0,
+                                              double amplitude = 1.0);
 
     /// Request cancellation of an in-flight fit (no-op otherwise). The worker
     /// stops at the next progress step; `error("cancelled")` follows.
@@ -97,7 +98,8 @@ public:
     /// Commit: build NRICP anchors from the (edited) markers and run the rig
     /// (worker thread), same flow as addArkitBlendshapesAsync but anchored to
     /// the user-corrected markers. Returns false if it couldn't start.
-    Q_INVOKABLE bool rigFromMarkers(int maxShapes = 0, double maxResidualPct = 8.0);
+    Q_INVOKABLE bool rigFromMarkers(int maxShapes = 0, double maxResidualPct = 8.0,
+                                    double amplitude = 1.0);
 
     /// Called by TransformOperator on a viewport left-click while markerMode is
     /// active: ray-casts to the mesh surface and moves the SELECTED marker
@@ -125,7 +127,7 @@ private:
     // main thread; `anchors` are the landmark constraints (auto or marker-based,
     // possibly empty). Runs the fit on a worker, attaches on the main thread.
     bool runRigAsync(const std::shared_ptr<class FaceRig::ArkitTemplate>& tmpl,
-                     int maxShapes, double maxResidualPct,
+                     int maxShapes, double maxResidualPct, double amplitude,
                      const std::vector<FaceRig::NricpLandmark>& anchors);
 
     void clearMarkerOverlays();

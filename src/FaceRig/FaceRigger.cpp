@@ -443,11 +443,13 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         // Deltas are always full-mesh sized; head isolation writes only the
         // head vertices (via subToFull), leaving the body at zero.
         out.userDeltas.assign(size_t(nuFull) * 3, 0.0f);
+        const float amp = float(std::clamp(opts.amplitude, 0.1, 5.0));
         for (int i = 0; i < nu; ++i) {
             const int t = userToTmpl[size_t(i)];
             if (t < 0) continue;
-            float dvec[3] = {tmplDelta[size_t(t)*3], tmplDelta[size_t(t)*3+1],
-                             tmplDelta[size_t(t)*3+2]};
+            float dvec[3] = {amp * tmplDelta[size_t(t)*3],
+                             amp * tmplDelta[size_t(t)*3+1],
+                             amp * tmplDelta[size_t(t)*3+2]};
             const double mag = std::sqrt(double(dvec[0])*dvec[0] +
                                          double(dvec[1])*dvec[1] +
                                          double(dvec[2])*dvec[2]);

@@ -71,7 +71,8 @@ bool FaceRigController::hasMeshSelection() const
     return first && first->getMesh();
 }
 
-bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidualPct)
+bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidualPct,
+                                                 double amplitude)
 {
     if (m_busy) {
         emit error(QStringLiteral("A face-rig is already running."));
@@ -130,12 +131,12 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
         FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl);
 
     m_geo = geo;
-    return runRigAsync(tmpl, maxShapes, maxResidualPct, anchors);
+    return runRigAsync(tmpl, maxShapes, maxResidualPct, amplitude, anchors);
 }
 
 bool FaceRigController::runRigAsync(
     const std::shared_ptr<FaceRig::ArkitTemplate>& tmpl,
-    int maxShapes, double maxResidualPct,
+    int maxShapes, double maxResidualPct, double amplitude,
     const std::vector<FaceRig::NricpLandmark>& anchorsIn)
 {
     auto geo = m_geo;
@@ -152,6 +153,7 @@ bool FaceRigController::runRigAsync(
     FaceRig::FaceRigOptions opts;
     opts.maxShapes = maxShapes;
     opts.maxFitResidualPct = maxResidualPct;
+    opts.amplitude = amplitude;
     auto anchors =
         std::make_shared<std::vector<FaceRig::NricpLandmark>>(anchorsIn);
 
@@ -511,20 +513,18 @@ bool FaceRigController::handleMarkerClick(OgreWidget* widget, const QPoint& scre
         auto& m = m_markers[size_t(m_selMarker)];
         m.userPos = { hitLocal.x, hitLocal.y, hitLocal.z };
         m.placed = true;
-        // auto-advance to the next unplaced marker for a smooth flow.
-        int next = -1;
-        for (int i = 1; i <= int(m_markers.size()); ++i) {
-            const int idx = (m_selMarker + i) % int(m_markers.size());
-            if (!m_markers[size_t(idx)].placed) { next = idx; break; }
-        }
-        m_selMarker = next >= 0 ? next : m_selMarker;
+        // auto-advance in CATALOG ORDER so the user can walk the whole set
+        // click-by-click (defaults mark everything "placed", so advancing to
+        // the next *unplaced* one would just stick on the same marker).
+        m_selMarker = (m_selMarker + 1) % int(m_markers.size());
     }
     refreshMarkerOverlays();
     emit markersChanged();
     return true;
 }
 
-bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct)
+bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct,
+                                       double amplitude)
 {
     if (!m_markerMode) { emit error(QStringLiteral("Not in marker mode.")); return false; }
     auto tmpl = m_markerTmpl;
@@ -541,7 +541,7 @@ bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct)
     emit markerModeChanged();
     emit markersChanged();
     if (!tmpl) { emit error(QStringLiteral("Template not loaded.")); return false; }
-    return runRigAsync(tmpl, maxShapes, maxResidualPct, anchors);
+    return runRigAsync(tmpl, maxShapes, maxResidualPct, amplitude, anchors);
 }
 
 void FaceRigController::clearMarkerOverlays()

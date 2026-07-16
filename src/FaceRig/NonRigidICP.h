@@ -57,7 +57,11 @@ struct NricpOptions {
     // high-weight data rows; the weight is strongest at the rigid (high-alpha)
     // levels so orientation/scale lock first, then relaxes as the fit refines.
     std::vector<NricpLandmark> landmarks;
-    double landmarkWeight = 10.0;   // base weight (× alpha at each level)
+    // Base anchor weight (× alpha at each level). High enough that the marked
+    // features stay PINNED through the fine anneal levels — at 10 the anchors
+    // loosened once alpha dropped below 1 and the fitted lip line drifted a few
+    // mm below the marked lips (field-observed offset).
+    double landmarkWeight = 30.0;
 };
 
 // Progress callback for the annealing loop: (level, levelCount). Return false
