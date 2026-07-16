@@ -91,6 +91,18 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<NricpLandmark>& landmarks = {},
                            const FaceRigProgressFn& progress = {});
 
+// RBF (thin-plate, φ(r)=r) space warp of the template driven by the landmark
+// anchors: each anchor's template vertex lands EXACTLY on its user target and
+// the space between interpolates smoothly. Used to PRE-WARP the template into
+// the user's face proportions before NRICP — soft in-fit constraints alone let
+// the un-anchored regions slide on faces far from the template (cartoon
+// proportions), which smears the transferred shapes. Returns the warped
+// positions, or empty when there are too few / degenerate anchors (< 4, or a
+// singular system) — the caller then fits the unwarped template as before.
+// Pure data + unit-tested.
+std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
+                                    const std::vector<NricpLandmark>& anchors);
+
 }  // namespace FaceRig
 
 #endif  // FACERIGGER_H

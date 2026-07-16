@@ -159,6 +159,43 @@ TEST(FaceRigger, ProducesPerUserVertexShapes)
     EXPECT_LT(movedCentroidY(r.shapes[1]), movedCentroidY(r.shapes[0]));
 }
 
+// RBF pre-warp: anchors land exactly on their targets and the space between
+// interpolates smoothly (a pure translation of all anchors translates the
+// whole mesh).
+TEST(FaceRigger, RbfWarpInterpolatesAnchors)
+{
+    const Grid g = makeGrid(8, 2.0f, 0.1f);
+    const int n = int(g.V.size()/3);
+
+    // pure translation: 5 anchors all displaced by (0.3, -0.2, 0.1)
+    std::vector<FaceRig::NricpLandmark> anchors;
+    const int picks[5] = {0, 7, n/2, n-8, n-1};
+    for (int p : picks) {
+        FaceRig::NricpLandmark a;
+        a.tmplVertex = p;
+        a.target = {g.V[size_t(p)*3] + 0.3f, g.V[size_t(p)*3+1] - 0.2f,
+                    g.V[size_t(p)*3+2] + 0.1f};
+        anchors.push_back(a);
+    }
+    const auto warped = FaceRig::rbfWarpByAnchors(g.V, anchors);
+    ASSERT_EQ(warped.size(), g.V.size());
+    // anchors land exactly (affine part reproduces the translation)
+    for (int p : picks) {
+        EXPECT_NEAR(warped[size_t(p)*3],   g.V[size_t(p)*3] + 0.3f, 1e-3f);
+        EXPECT_NEAR(warped[size_t(p)*3+1], g.V[size_t(p)*3+1] - 0.2f, 1e-3f);
+        EXPECT_NEAR(warped[size_t(p)*3+2], g.V[size_t(p)*3+2] + 0.1f, 1e-3f);
+    }
+    // a pure-translation anchor set translates EVERY vertex (thin-plate exact
+    // for affine displacement fields)
+    for (int v = 0; v < n; ++v) {
+        EXPECT_NEAR(warped[size_t(v)*3],   g.V[size_t(v)*3] + 0.3f, 1e-2f);
+        EXPECT_NEAR(warped[size_t(v)*3+1], g.V[size_t(v)*3+1] - 0.2f, 1e-2f);
+    }
+    // too few anchors → empty (caller falls back to the unwarped template)
+    anchors.resize(3);
+    EXPECT_TRUE(FaceRig::rbfWarpByAnchors(g.V, anchors).empty());
+}
+
 TEST(FaceRigger, RejectsNonFaceMesh)
 {
     // template = bumpy plane with a shape

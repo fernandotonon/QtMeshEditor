@@ -124,6 +124,109 @@ double bboxDiag(const std::vector<float>& v)
 
 }  // namespace
 
+std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
+                                    const std::vector<NricpLandmark>& anchors)
+{
+    const int nv = int(tmplV.size() / 3);
+    // Collect valid, de-duplicated centers + displacements (two anchors on the
+    // same template vertex would make the system singular — first one wins).
+    std::vector<int> cs;                          // template vertex per center
+    std::vector<std::array<double,3>> C, D;       // center pos, displacement
+    for (const auto& a : anchors) {
+        if (a.tmplVertex < 0 || a.tmplVertex >= nv) continue;
+        bool dup = false;
+        for (int c : cs) if (c == a.tmplVertex) { dup = true; break; }
+        if (dup) continue;
+        cs.push_back(a.tmplVertex);
+        std::array<double,3> c{}, d{};
+        for (int k = 0; k < 3; ++k) {
+            c[size_t(k)] = tmplV[size_t(a.tmplVertex)*3 + k];
+            d[size_t(k)] = double(a.target[size_t(k)]) - c[size_t(k)];
+        }
+        C.push_back(c);
+        D.push_back(d);
+    }
+    const int N = int(cs.size());
+    if (N < 4) return {};
+
+    // System: [Φ P; Pᵀ 0] [w; a] = [D; 0], φ(r)=r, P = [1 x y z].
+    const int M = N + 4;
+    std::vector<double> A(size_t(M)*M, 0.0);
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            const double dx = C[size_t(i)][0]-C[size_t(j)][0];
+            const double dy = C[size_t(i)][1]-C[size_t(j)][1];
+            const double dz = C[size_t(i)][2]-C[size_t(j)][2];
+            A[size_t(i)*M + j] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        }
+        A[size_t(i)*M + N + 0] = 1.0;
+        A[size_t(i)*M + N + 1] = C[size_t(i)][0];
+        A[size_t(i)*M + N + 2] = C[size_t(i)][1];
+        A[size_t(i)*M + N + 3] = C[size_t(i)][2];
+        A[size_t(N+0)*M + i] = 1.0;
+        A[size_t(N+1)*M + i] = C[size_t(i)][0];
+        A[size_t(N+2)*M + i] = C[size_t(i)][1];
+        A[size_t(N+3)*M + i] = C[size_t(i)][2];
+    }
+
+    // Solve the 3 rhs (one per axis) with one LU-style elimination. Partial
+    // pivoting; bail on a near-singular pivot (degenerate anchor layout).
+    std::vector<std::array<double,3>> rhs(size_t(M), {0,0,0});
+    for (int i = 0; i < N; ++i) rhs[size_t(i)] = D[size_t(i)];
+    for (int col = 0; col < M; ++col) {
+        int piv = col;
+        for (int r = col+1; r < M; ++r)
+            if (std::abs(A[size_t(r)*M+col]) > std::abs(A[size_t(piv)*M+col]))
+                piv = r;
+        if (std::abs(A[size_t(piv)*M+col]) < 1e-10) return {};
+        if (piv != col) {
+            for (int c = 0; c < M; ++c)
+                std::swap(A[size_t(piv)*M+c], A[size_t(col)*M+c]);
+            std::swap(rhs[size_t(piv)], rhs[size_t(col)]);
+        }
+        const double p = A[size_t(col)*M+col];
+        for (int r = col+1; r < M; ++r) {
+            const double f = A[size_t(r)*M+col] / p;
+            if (f == 0.0) continue;
+            for (int c = col; c < M; ++c)
+                A[size_t(r)*M+c] -= f * A[size_t(col)*M+c];
+            for (int d = 0; d < 3; ++d)
+                rhs[size_t(r)][size_t(d)] -= f * rhs[size_t(col)][size_t(d)];
+        }
+    }
+    std::vector<std::array<double,3>> sol(size_t(M), {0,0,0});
+    for (int r = M-1; r >= 0; --r) {
+        std::array<double,3> acc = rhs[size_t(r)];
+        for (int c = r+1; c < M; ++c)
+            for (int d = 0; d < 3; ++d)
+                acc[size_t(d)] -= A[size_t(r)*M+c] * sol[size_t(c)][size_t(d)];
+        const double p = A[size_t(r)*M+r];
+        for (int d = 0; d < 3; ++d) sol[size_t(r)][size_t(d)] = acc[size_t(d)] / p;
+    }
+
+    // Warp every template vertex: p' = p + Σ w_i φ(|p-c_i|) + a0 + a1x + a2y + a3z
+    std::vector<float> out(tmplV.size());
+    for (int v = 0; v < nv; ++v) {
+        const double px = tmplV[size_t(v)*3], py = tmplV[size_t(v)*3+1],
+                     pz = tmplV[size_t(v)*3+2];
+        std::array<double,3> disp = {
+            sol[size_t(N+0)][0] + sol[size_t(N+1)][0]*px + sol[size_t(N+2)][0]*py + sol[size_t(N+3)][0]*pz,
+            sol[size_t(N+0)][1] + sol[size_t(N+1)][1]*px + sol[size_t(N+2)][1]*py + sol[size_t(N+3)][1]*pz,
+            sol[size_t(N+0)][2] + sol[size_t(N+1)][2]*px + sol[size_t(N+2)][2]*py + sol[size_t(N+3)][2]*pz };
+        for (int i = 0; i < N; ++i) {
+            const double dx = px-C[size_t(i)][0], dy = py-C[size_t(i)][1],
+                         dz = pz-C[size_t(i)][2];
+            const double r = std::sqrt(dx*dx + dy*dy + dz*dz);
+            for (int d = 0; d < 3; ++d)
+                disp[size_t(d)] += sol[size_t(i)][size_t(d)] * r;
+        }
+        out[size_t(v)*3]   = float(px + disp[0]);
+        out[size_t(v)*3+1] = float(py + disp[1]);
+        out[size_t(v)*3+2] = float(pz + disp[2]);
+    }
+    return out;
+}
+
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
@@ -196,10 +299,24 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         return progress ? progress(done, total, phase) : true;
     };
 
-    // 1) NRICP: template neutral → user neutral = correspondence X. Report each
-    // annealing level so the (long) fit phase visibly advances.
+    // Marker-driven RBF pre-warp: with a small, CURATED anchor set (the
+    // user-adjusted markers — ≤ ~16), warp the whole template into the user's
+    // face proportions before the fit, so the mouth/eyes/chin START on the
+    // marked positions and the space between interpolates smoothly. Soft
+    // in-fit constraints alone let un-anchored regions slide on faces far from
+    // the template (cartoon proportions), smearing the transferred shapes.
+    // Deliberately NOT applied to bulk auto-detected anchor sets (hundreds of
+    // points): a garbage detection would fold the template.
+    std::vector<float> fitTmplV = tmpl.neutral();
+    if (!landmarks.empty() && landmarks.size() <= 32) {
+        std::vector<float> warped = rbfWarpByAnchors(tmpl.neutral(), landmarks);
+        if (!warped.empty()) fitTmplV = std::move(warped);
+    }
+
+    // 1) NRICP: (pre-warped) template neutral → user neutral = correspondence X.
+    // Report each annealing level so the (long) fit phase visibly advances.
     const NricpResult fit = FaceRig::fit(
-        tmpl.neutral(), tmpl.faces(), fitV, fitF, fitOpts,
+        fitTmplV, tmpl.faces(), fitV, fitF, fitOpts,
         [&](int level, int /*levelCount*/) -> bool {
             if (!tick(level, "Fitting face template…")) { cancelled = true; return false; }
             return true;
