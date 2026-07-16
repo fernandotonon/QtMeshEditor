@@ -333,6 +333,20 @@ bool FaceRigController::runRigAsync(
             map["userVertexCount"] = rep.userVertexCount;
             map["fitMeanResidualPct"] = rep.fitMeanResidualPct;
             map["fitMaxResidualPct"] = rep.fitMaxResidualPct;
+            // Amplitude diagnostics: without these, "shapes attached but
+            // invisible" (deltas 50x too small) looks identical to success in
+            // the UI. jawDisp specifically because jawOpen is the shape users
+            // test first.
+            double maxDisp = 0, jawDisp = 0;
+            for (const auto& sh : result->shapes) {
+                maxDisp = std::max(maxDisp, double(sh.maxDisp));
+                if (sh.name == QLatin1String("jawOpen"))
+                    jawDisp = double(sh.maxDisp);
+            }
+            map["maxShapeDisp"] = maxDisp;
+            map["jawOpenDisp"] = jawDisp;
+            qWarning("[facerig] attached=%d jawOpenDisp=%.5f maxDisp=%.5f",
+                     rep.shapesAttached, jawDisp, maxDisp);
             emit self->completed(map);
         }, Qt::QueuedConnection);
     }).detach();

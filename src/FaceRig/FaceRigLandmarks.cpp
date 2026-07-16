@@ -317,7 +317,7 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
                          "user.ok=%d anchors=%zu residual=%.3f\n",
                          tlm.ok, ulm.ok, anchors.size(), resid);
 #endif
-        if (resid >= 0.25) anchors.clear();   // garbage → fit unanchored
+        if (resid >= 0.15) anchors.clear();   // garbage → fit unanchored
     }
     return anchors;
 }
@@ -466,9 +466,15 @@ std::vector<FaceMarker> seedFaceMarkers(
             }
         }
     }
+    // STRICT gate (0.12): the GUI render differs from headless (skybox,
+    // lighting), so MediaPipe's garbage varies run-to-run and looser gates let
+    // some of it through (field-reproduced: a "trusted" garbage constellation
+    // crushed every shape to 0.06% amplitude). Detection must look UNAMBIGUOUSLY
+    // like a face layout to be trusted; otherwise the proportional defaults are
+    // measurably good and the user refines from there.
     const double resid = constellationResidual(detC, detU);
     const bool confident = ulm.ok && seeded >= int(markers.size()) * 3 / 4
-                           && resid < 0.25;
+                           && resid < 0.12;
 #ifndef NDEBUG
     if (std::getenv("QTMESH_FACERIG_DEBUG"))
         std::fprintf(stderr, "[facerig] seed: %d/%zu detected, constellation "

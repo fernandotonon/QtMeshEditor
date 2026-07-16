@@ -462,6 +462,25 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         r.shapes.push_back(std::move(out));
     }
 
+    // Amplitude safety net: a poisoned anchor set (garbage landmarks that
+    // slipped every gate) crushes the fit so the transferred shapes come out
+    // technically-attached but INVISIBLE (~0.05% of the head, vs ~5% for a
+    // healthy jawOpen). If the anchored run produced nothing visible, retry
+    // once WITHOUT anchors — a plain head-isolated fit always beats an
+    // invisible one. (Field-reproduced failure mode; do not remove.)
+    if (!landmarks.empty()) {
+        double maxAmp = 0;
+        for (const auto& sh : r.shapes)
+            maxAmp = std::max(maxAmp, double(sh.maxDisp));
+        if (maxAmp < 0.005 * diag) {
+            std::fprintf(stderr, "[facerig] anchored fit produced invisible "
+                         "shapes (max %.5f on diag %.3f) — retrying "
+                         "unanchored\n", maxAmp, diag);
+            return buildFaceRig(userV, userF, tmpl, opts, headMask, {},
+                                progress);
+        }
+    }
+
     r.ok = true;
     return r;
 }

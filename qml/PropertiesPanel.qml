@@ -9617,7 +9617,9 @@ Rectangle {
                     function onCompleted(report) {
                         arkitStatus.text = "✓ Attached " + report.shapesAttached
                             + " ARKit shapes (fit "
-                            + report.fitMeanResidualPct.toFixed(2) + "% mean)."
+                            + report.fitMeanResidualPct.toFixed(2) + "% mean, jawOpen amp "
+                            + report.jawOpenDisp.toFixed(4) + ", max amp "
+                            + report.maxShapeDisp.toFixed(4) + ")."
                         arkitStatus.color = PropertiesPanelController.textColor
                         morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
                     }
