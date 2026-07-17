@@ -33,6 +33,9 @@ class TransformOperator : public QObject, public QtMouseListener
 public:
 
     static TransformOperator* getSingleton();
+    /// Non-creating accessor: null until getSingleton() first runs. Use from
+    /// paths that must not construct the gizmo machinery (headless CLI).
+    static TransformOperator* getSingletonPtr() { return m_pSingleton; }
     static void kill();
 
     enum TransformState

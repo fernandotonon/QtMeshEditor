@@ -6,6 +6,8 @@
 
 #include "../Manager.h"
 #include "../MeshDepthRenderer.h"
+#include "../TransformOperator.h"
+#include "../OgreWidget.h"
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -203,7 +205,30 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     {
         Ogre::Vector3 camDir = rr.depth.isNull() ? Ogre::Vector3::ZERO
                                                  : rr.camDirection;
-        if (bestLogit < 0.f) {
+        // The ACTIVE VIEWPORT camera is the strongest user-intent hint: the
+        // user orbits to LOOK AT the face before rigging, so the face points
+        // toward that camera. Trust it over every geometric fallback whenever
+        // detection itself isn't conclusive (logit below the strong-face bar).
+        bool vpResolved = false;
+        if (bestLogit < kStrongFaceLogit) {
+            if (auto* to = TransformOperator::getSingletonPtr()) {
+                if (auto* w = to->getActiveWidget()) {
+                    if (w->getViewport() && w->getViewport()->getCamera()) {
+                        const Ogre::Vector3 d =
+                            w->getViewport()->getCamera()->getDerivedDirection();
+                        if (!d.isZeroLength()) {
+                            camDir = d;   // camera looks toward the face
+                            vpResolved = true;
+                            if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                                std::fprintf(stderr,
+                                    "[facerig] facing from VIEWPORT camera "
+                                    "(bestLogit=%.1f)\n", bestLogit);
+                        }
+                    }
+                }
+            }
+        }
+        if (!vpResolved && bestLogit < 0.f) {
             // No positive face evidence anywhere (stylized / covered faces) —
             // the logit "winner" is noise. For a FULL-BODY character the feet
             // are the strongest facing cue: toes extend forward of the ankle.
