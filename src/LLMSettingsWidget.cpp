@@ -9,7 +9,11 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QDesktopServices>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QUrl>
+#include <QVariantMap>
+#include "SentryReporter.h"
 
 LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     : QDialog(parent)
@@ -22,6 +26,7 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     updateModelList();
     updateRecommendedModelsList();
     updateStatus();
+    updateAIModelCatalogList();
 #ifdef ENABLE_STABLE_DIFFUSION
     updateSDModelList();
     updateSDRecommendedModelsList();
@@ -36,13 +41,19 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateModelList);
 
 #ifdef ENABLE_STABLE_DIFFUSION
-    // Connect to SDManager signals
     SDManager *sdManager = SDManager::instance();
     connect(sdManager, &SDManager::modelLoadCompleted, this, &LLMSettingsWidget::onSDModelLoadCompleted);
     connect(sdManager, &SDManager::modelLoadError, this, &LLMSettingsWidget::onSDModelLoadError);
     connect(sdManager, &SDManager::modelUnloaded, this, &LLMSettingsWidget::onSDModelUnloaded);
     connect(sdManager, &SDManager::availableModelsChanged, this, &LLMSettingsWidget::updateSDModelList);
 #endif
+
+    AIModelCatalog *catalog = AIModelCatalog::instance();
+    connect(catalog, &AIModelCatalog::modelsChanged, this, &LLMSettingsWidget::updateAIModelCatalogList);
+    connect(catalog, &AIModelCatalog::busyChanged, this, &LLMSettingsWidget::updateAIModelCatalogButtons);
+    connect(catalog, &AIModelCatalog::statusMessageChanged, this, [this]() {
+        m_aiModelCatalogStatusLabel->setText(AIModelCatalog::instance()->statusMessage());
+    });
 
     // Connect to ModelDownloader signals
     ModelDownloader *downloader = ModelDownloader::instance();
@@ -60,14 +71,17 @@ void LLMSettingsWidget::setupUI()
     QWidget *modelsTab = new QWidget();
     QWidget *settingsTab = new QWidget();
     QWidget *downloadTab = new QWidget();
+    QWidget *aiModelsTab = new QWidget();
 
     setupModelsTab(modelsTab);
     setupSettingsTab(settingsTab);
     setupDownloadTab(downloadTab);
+    setupAIModelCatalogTab(aiModelsTab);
 
     m_tabWidget->addTab(modelsTab, "LLM Models");
     m_tabWidget->addTab(settingsTab, "LLM Settings");
     m_tabWidget->addTab(downloadTab, "LLM Download");
+    m_tabWidget->addTab(aiModelsTab, "QtMeshEditor Models");
 
 #ifdef ENABLE_STABLE_DIFFUSION
     QWidget *sdModelsTab = new QWidget();
@@ -303,6 +317,58 @@ void LLMSettingsWidget::setupDownloadTab(QWidget *parent)
     connect(m_cancelDownloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onCancelDownloadClicked);
 }
 
+void LLMSettingsWidget::setupAIModelCatalogTab(QWidget *parent)
+{
+    QVBoxLayout *layout = new QVBoxLayout(parent);
+
+    QGroupBox *modelsGroup = new QGroupBox("QtMeshEditor Models", parent);
+    QVBoxLayout *modelsLayout = new QVBoxLayout(modelsGroup);
+
+    m_aiModelCatalogList = new QListWidget(modelsGroup);
+    m_aiModelCatalogList->setSelectionMode(QAbstractItemView::SingleSelection);
+    modelsLayout->addWidget(m_aiModelCatalogList);
+
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    m_aiModelCatalogDownloadButton = new QPushButton("Download", modelsGroup);
+    m_aiModelCatalogDownloadAllButton = new QPushButton("Download All", modelsGroup);
+    m_aiModelCatalogDeleteButton = new QPushButton("Delete", modelsGroup);
+    m_aiModelCatalogDeleteAllButton = new QPushButton("Remove All", modelsGroup);
+    m_aiModelCatalogRefreshButton = new QPushButton("Refresh", modelsGroup);
+    m_aiModelCatalogOpenFolderButton = new QPushButton("Open Folder", modelsGroup);
+    buttonLayout->addWidget(m_aiModelCatalogDownloadButton);
+    buttonLayout->addWidget(m_aiModelCatalogDownloadAllButton);
+    buttonLayout->addWidget(m_aiModelCatalogDeleteButton);
+    buttonLayout->addWidget(m_aiModelCatalogDeleteAllButton);
+    buttonLayout->addWidget(m_aiModelCatalogRefreshButton);
+    buttonLayout->addStretch();
+    buttonLayout->addWidget(m_aiModelCatalogOpenFolderButton);
+    modelsLayout->addLayout(buttonLayout);
+
+    layout->addWidget(modelsGroup);
+
+    QGroupBox *statusGroup = new QGroupBox("Status", parent);
+    QVBoxLayout *statusLayout = new QVBoxLayout(statusGroup);
+    m_aiModelCatalogStatusLabel = new QLabel("Ready", statusGroup);
+    m_aiModelCatalogStatusLabel->setWordWrap(true);
+    statusLayout->addWidget(m_aiModelCatalogStatusLabel);
+    layout->addWidget(statusGroup);
+
+    connect(m_aiModelCatalogList, &QListWidget::currentItemChanged,
+            this, &LLMSettingsWidget::updateAIModelCatalogButtons);
+    connect(m_aiModelCatalogDownloadButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogDownloadClicked);
+    connect(m_aiModelCatalogDownloadAllButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogDownloadAllClicked);
+    connect(m_aiModelCatalogDeleteButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogDeleteClicked);
+    connect(m_aiModelCatalogDeleteAllButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogDeleteAllClicked);
+    connect(m_aiModelCatalogRefreshButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogRefreshClicked);
+    connect(m_aiModelCatalogOpenFolderButton, &QPushButton::clicked,
+            this, &LLMSettingsWidget::onAIModelCatalogOpenFolderClicked);
+}
+
 void LLMSettingsWidget::updateModelList()
 {
     m_modelCombo->clear();
@@ -525,6 +591,13 @@ void LLMSettingsWidget::onDownloadProgress(const QString &modelName, qint64 byte
 void LLMSettingsWidget::onDownloadCompleted(const QString &modelName, const QString &filePath)
 {
     Q_UNUSED(filePath);
+    const bool catalogDownload = AIModelCatalog::instance()->busy()
+        && !AIModelCatalog::instance()->activeModelId().isEmpty();
+    if (catalogDownload) {
+        updateAIModelCatalogList();
+        return;
+    }
+
     m_downloadButton->setEnabled(true);
     m_cancelDownloadButton->setEnabled(false);
     m_downloadStatusLabel->setText(QString("Download completed: %1").arg(modelName));
@@ -541,6 +614,7 @@ void LLMSettingsWidget::onDownloadCompleted(const QString &modelName, const QStr
     updateSDRecommendedModelsList();
     m_sdDownloadButton->setEnabled(true);
 #endif
+    updateAIModelCatalogList();
 
     QMessageBox::information(this, "Download Complete",
                              QString("Model %1 has been downloaded successfully.").arg(modelName));
@@ -594,6 +668,154 @@ void LLMSettingsWidget::onResetDefaults()
     m_repeatPenaltySpinBox->setValue(static_cast<double>(defaults.repeatPenalty));
 
     m_applyButton->setEnabled(true);
+}
+
+void LLMSettingsWidget::updateAIModelCatalogList()
+{
+    const QString selectedId = m_aiModelCatalogList->currentItem()
+        ? m_aiModelCatalogList->currentItem()->data(Qt::UserRole).toString()
+        : QString();
+
+    m_aiModelCatalogList->clear();
+    const QVariantList models = AIModelCatalog::instance()->models();
+    int selectedRow = -1;
+    for (int i = 0; i < models.size(); ++i) {
+        const QVariantMap model = models[i].toMap();
+        const bool downloaded = model.value("downloaded").toBool();
+        const bool partial = model.value("partial").toBool();
+        const bool available = model.value("available").toBool();
+        const qint64 installedBytes = model.value("installedBytes").toLongLong();
+
+        QString status = downloaded ? "Downloaded" : (partial ? "Partial" : "Not downloaded");
+        QString text = QString("%1 [%2]\n%3 - %4 - %5/%6 files%7\n%8")
+            .arg(model.value("name").toString())
+            .arg(status)
+            .arg(model.value("feature").toString())
+            .arg(model.value("size").toString())
+            .arg(model.value("presentFiles").toInt())
+            .arg(model.value("totalFiles").toInt())
+            .arg(installedBytes > 0
+                 ? QString(" - %1 installed").arg(formatFileSize(installedBytes))
+                 : QString())
+            .arg(model.value("description").toString());
+        if (!available)
+            text += QString("\n%1").arg(model.value("buildRequirement").toString());
+
+        QListWidgetItem *item = new QListWidgetItem(text, m_aiModelCatalogList);
+        item->setData(Qt::UserRole, model.value("id").toString());
+        item->setData(Qt::UserRole + 1, downloaded);
+        item->setData(Qt::UserRole + 2, partial);
+        item->setData(Qt::UserRole + 3, available);
+        item->setData(Qt::UserRole + 4, model.value("name").toString());
+
+        if (downloaded)
+            item->setForeground(QColor(0, 128, 0));
+        else if (partial)
+            item->setForeground(QColor(180, 100, 0));
+        else if (!available)
+            item->setForeground(QColor(160, 0, 0));
+
+        if (item->data(Qt::UserRole).toString() == selectedId)
+            selectedRow = i;
+    }
+
+    if (m_aiModelCatalogList->count() > 0)
+        m_aiModelCatalogList->setCurrentRow(selectedRow >= 0 ? selectedRow : 0);
+    updateAIModelCatalogButtons();
+}
+
+void LLMSettingsWidget::updateAIModelCatalogButtons()
+{
+    QListWidgetItem *item = m_aiModelCatalogList->currentItem();
+    const bool busy = AIModelCatalog::instance()->busy();
+    const bool hasItem = item != nullptr;
+    const bool downloaded = hasItem && item->data(Qt::UserRole + 1).toBool();
+    const bool partial = hasItem && item->data(Qt::UserRole + 2).toBool();
+    const bool available = hasItem && item->data(Qt::UserRole + 3).toBool();
+
+    m_aiModelCatalogDownloadButton->setEnabled(hasItem && available && !downloaded && !busy);
+    m_aiModelCatalogDeleteButton->setEnabled(hasItem && (downloaded || partial) && !busy);
+    m_aiModelCatalogDownloadAllButton->setEnabled(!busy);
+    m_aiModelCatalogDeleteAllButton->setEnabled(!busy);
+    m_aiModelCatalogRefreshButton->setEnabled(!busy);
+    m_aiModelCatalogOpenFolderButton->setEnabled(true);
+}
+
+void LLMSettingsWidget::onAIModelCatalogDownloadClicked()
+{
+    QListWidgetItem *item = m_aiModelCatalogList->currentItem();
+    if (!item)
+        return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Download QtMeshEditor model"));
+    AIModelCatalog::instance()->downloadModel(item->data(Qt::UserRole).toString());
+    updateAIModelCatalogButtons();
+}
+
+void LLMSettingsWidget::onAIModelCatalogDownloadAllClicked()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Download all QtMeshEditor models"));
+    AIModelCatalog::instance()->downloadAllModels();
+    updateAIModelCatalogButtons();
+}
+
+void LLMSettingsWidget::onAIModelCatalogDeleteClicked()
+{
+    QListWidgetItem *item = m_aiModelCatalogList->currentItem();
+    if (!item)
+        return;
+
+    const QString modelName = item->data(Qt::UserRole + 4).toString();
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "Delete Model Files",
+        QString("Delete downloaded files for %1?").arg(modelName),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::No)
+        return;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Delete QtMeshEditor model files"));
+    AIModelCatalog::instance()->deleteModel(item->data(Qt::UserRole).toString());
+}
+
+void LLMSettingsWidget::onAIModelCatalogDeleteAllClicked()
+{
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "Remove All Model Files",
+        "Remove all downloaded QtMeshEditor model files?",
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::No)
+        return;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Delete all QtMeshEditor model files"));
+    AIModelCatalog::instance()->deleteAllModels();
+}
+
+void LLMSettingsWidget::onAIModelCatalogRefreshClicked()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Refresh QtMeshEditor model catalog"));
+    AIModelCatalog::instance()->refresh();
+}
+
+void LLMSettingsWidget::onAIModelCatalogOpenFolderClicked()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Open QtMeshEditor models folder"));
+    const QString folderPath = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                                   .filePath(QStringLiteral("ai_models"));
+    QDir dir;
+    if (!dir.mkpath(folderPath)) {
+        QMessageBox::warning(this, "Open Folder Failed",
+                             QString("Could not create %1.").arg(folderPath));
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(folderPath))) {
+        QMessageBox::warning(this, "Open Folder Failed",
+                             QString("Could not open %1.").arg(folderPath));
+    }
 }
 
 // ============ SD Models Tab ============
@@ -883,6 +1105,6 @@ void LLMSettingsWidget::onSDApplySettings()
 
     QMessageBox::information(this, "Settings Applied", "SD settings have been saved.");
 }
-#endif // ENABLE_STABLE_DIFFUSION
+#endif
 
 // LCOV_EXCL_STOP

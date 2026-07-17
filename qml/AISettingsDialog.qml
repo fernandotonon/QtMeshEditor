@@ -21,6 +21,8 @@ Dialog {
     property color highlightColor: palette.highlight
     property color buttonColor: palette.button
     property color buttonTextColor: palette.buttonText
+    property string pendingDeleteModelId: ""
+    property string pendingDeleteModelName: ""
 
     SystemPalette {
         id: palette
@@ -68,6 +70,10 @@ Dialog {
             }
             TabButton {
                 text: "Download"
+                width: implicitWidth
+            }
+            TabButton {
+                text: "QtMeshEditor Models"
                 width: implicitWidth
             }
             TabButton {
@@ -331,61 +337,208 @@ Dialog {
                             }
                         }
 
-                        // ── AI-Assist models (image-to-3D, #764) ──────────────
-                        // Pre-download the TripoSR encoder/decoder + U²-Net bg
-                        // remover so first use is instant. Reuses ModelDownloader's
-                        // shared progress bar above. Only shown on an ONNX build.
-                        Text {
-                            visible: MeshGenController.available
-                            text: "AI-Assist Models"
-                            font.pointSize: 12
-                            font.bold: true
-                            color: textColor
-                        }
-                        Rectangle {
-                            visible: MeshGenController.available
+                        Item { Layout.preferredHeight: 10 }
+                    }
+                }
+            }
+
+            // ============ QtMeshEditor Models Tab ============
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+
+                Flickable {
+                    contentWidth: parent.width
+                    contentHeight: qtMeshModelsCol.implicitHeight
+
+                    ColumnLayout {
+                        id: qtMeshModelsCol
+                        width: parent.width - tabMargin * 2
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: 12
+
+                        Item { Layout.preferredHeight: 8 }
+
+                        RowLayout {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: gen3dCol.implicitHeight + 20
+                            spacing: 10
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: "QtMeshEditor Models"
+                                font.pointSize: 12
+                                font.bold: true
+                                color: textColor
+                            }
+                            Local.ThemedButton {
+                                text: "Refresh"
+                                enabled: !AIModelCatalog.busy
+                                onClicked: AIModelCatalog.refresh()
+                            }
+                            Local.ThemedButton {
+                                text: "Download All"
+                                enabled: !AIModelCatalog.busy
+                                onClicked: AIModelCatalog.downloadAllModels()
+                            }
+                            Local.ThemedButton {
+                                text: "Remove All"
+                                enabled: !AIModelCatalog.busy
+                                onClicked: removeAllQtMeshModelsDialog.open()
+                            }
+                            Local.ThemedButton {
+                                text: "Open Folder"
+                                onClicked: Qt.openUrlExternally(AIModelCatalog.modelsRootUrl())
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 74
                             color: panelColor
                             border.color: borderColor
                             border.width: 1
                             radius: 4
+                            visible: AIModelCatalog.busy || AIModelCatalog.statusMessage !== ""
+
                             ColumnLayout {
-                                id: gen3dCol
                                 anchors.fill: parent
                                 anchors.margins: 10
                                 spacing: 8
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    wrapMode: Text.WordWrap
-                                    text: "Image → 3D (TripoSR) + background removal. Pick a size tier and pre-download so first use is instant. Downloads on first use too."
-                                    font.pointSize: 9
-                                    color: Qt.darker(textColor, 1.3)
-                                }
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 8
-                                    ComboBox {
-                                        id: gen3dTier
-                                        Layout.preferredWidth: 200
-                                        model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
-                                        currentIndex: 0
-                                        enabled: !MeshGenController.busy
-                                    }
-                                    Item { Layout.fillWidth: true }
                                     Text {
-                                        text: MeshGenController.modelsPresent(gen3dTier.currentIndex)
-                                              ? "Downloaded" : "Not downloaded"
+                                        Layout.fillWidth: true
+                                        text: AIModelCatalog.busy
+                                              ? "Downloading " + AIModelCatalog.activeModelName
+                                              : AIModelCatalog.statusMessage
+                                        color: textColor
+                                        font.pointSize: 10
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        visible: ModelDownloader.isDownloading
+                                        text: formatSize(ModelDownloader.bytesReceived) + " / " +
+                                              formatSize(ModelDownloader.bytesTotal) + " (" +
+                                              formatSize(ModelDownloader.downloadSpeed) + "/s)"
                                         font.pointSize: 9
-                                        color: MeshGenController.modelsPresent(gen3dTier.currentIndex)
-                                               ? "#4caf50" : Qt.darker(textColor, 1.5)
+                                        color: Qt.darker(textColor, 1.4)
                                     }
                                     Local.ThemedButton {
-                                        text: "Download"
-                                        enabled: !MeshGenController.busy
-                                                 && !MeshGenController.modelsPresent(gen3dTier.currentIndex)
-                                        onClicked: MeshGenController.downloadModels(gen3dTier.currentIndex)
+                                        text: "Cancel"
+                                        visible: AIModelCatalog.busy
+                                        onClicked: ModelDownloader.cancelDownload()
+                                    }
+                                }
+
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    from: 0; to: 1
+                                    value: ModelDownloader.downloadProgress
+                                    visible: AIModelCatalog.busy
+                                }
+                            }
+                        }
+
+                        Repeater {
+                            model: AIModelCatalog.models
+
+                            delegate: Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: modelCardCol.implicitHeight + 20
+                                color: panelColor
+                                border.color: modelData.downloaded ? "#4caf50"
+                                             : modelData.partial ? "#ff9800" : borderColor
+                                border.width: 1
+                                radius: 4
+
+                                ColumnLayout {
+                                    id: modelCardCol
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 3
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Text {
+                                                    text: modelData.name
+                                                    color: textColor
+                                                    font.pointSize: 11
+                                                    font.bold: true
+                                                }
+                                                Rectangle {
+                                                    width: statusText.implicitWidth + 14
+                                                    height: 22
+                                                    radius: 3
+                                                    color: modelData.downloaded ? "#e8f5e9"
+                                                         : modelData.partial ? "#fff3e0" : Qt.rgba(0,0,0,0.04)
+                                                    border.color: modelData.downloaded ? "#4caf50"
+                                                                : modelData.partial ? "#ff9800" : borderColor
+                                                    Text {
+                                                        id: statusText
+                                                        anchors.centerIn: parent
+                                                        text: modelData.downloaded ? "Downloaded"
+                                                              : modelData.partial ? "Partial" : "Not downloaded"
+                                                        color: modelData.downloaded ? "#2e7d32"
+                                                             : modelData.partial ? "#e65100" : textColor
+                                                        font.pointSize: 8
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: modelData.feature + " · " + modelData.size + " · " +
+                                                      modelData.presentFiles + "/" + modelData.totalFiles + " files" +
+                                                      (modelData.installedBytes > 0 ? " · " + formatSize(modelData.installedBytes) + " installed" : "")
+                                                color: Qt.darker(textColor, 1.35)
+                                                font.pointSize: 9
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+
+                                        Local.ThemedButton {
+                                            text: "Download"
+                                            enabled: modelData.available && !modelData.downloaded && !AIModelCatalog.busy
+                                            onClicked: AIModelCatalog.downloadModel(modelData.id)
+                                        }
+                                        Local.ThemedButton {
+                                            text: "Delete"
+                                            enabled: (modelData.downloaded || modelData.partial) && !AIModelCatalog.busy
+                                            onClicked: {
+                                                aiSettingsDialog.pendingDeleteModelId = modelData.id
+                                                aiSettingsDialog.pendingDeleteModelName = modelData.name
+                                                removeQtMeshModelDialog.open()
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.description
+                                        color: Qt.darker(textColor, 1.25)
+                                        font.pointSize: 9
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        visible: !modelData.available
+                                        text: modelData.buildRequirement
+                                        color: "#b71c1c"
+                                        font.pointSize: 9
+                                        wrapMode: Text.WordWrap
                                     }
                                 }
                             }
@@ -801,6 +954,38 @@ Dialog {
                     }
                 }
             }
+        }
+    }
+
+    Dialog {
+        id: removeQtMeshModelDialog
+        title: "Delete Model Files"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: AIModelCatalog.deleteModel(aiSettingsDialog.pendingDeleteModelId)
+
+        Text {
+            width: 360
+            text: "Delete downloaded files for " + aiSettingsDialog.pendingDeleteModelName + "?"
+            color: textColor
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    Dialog {
+        id: removeAllQtMeshModelsDialog
+        title: "Remove All Model Files"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: AIModelCatalog.deleteAllModels()
+
+        Text {
+            width: 360
+            text: "Remove all downloaded QtMeshEditor model files?"
+            color: textColor
+            wrapMode: Text.WordWrap
         }
     }
 

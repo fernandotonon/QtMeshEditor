@@ -71,6 +71,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
@@ -210,6 +212,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIModelCatalog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.cpp
@@ -336,6 +339,8 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.h
@@ -369,6 +374,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIModelCatalog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.h

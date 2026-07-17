@@ -35,9 +35,9 @@ TEST_F(LLMSettingsWidgetTest, HasTabWidget)
     QTabWidget* tabWidget = widget.findChild<QTabWidget*>();
     ASSERT_NE(tabWidget, nullptr);
 #ifdef ENABLE_STABLE_DIFFUSION
-    EXPECT_EQ(tabWidget->count(), 5); // LLM Models, LLM Settings, LLM Download, SD Models, SD Settings
+    EXPECT_EQ(tabWidget->count(), 6);
 #else
-    EXPECT_EQ(tabWidget->count(), 3);
+    EXPECT_EQ(tabWidget->count(), 4);
 #endif
 }
 
@@ -49,9 +49,10 @@ TEST_F(LLMSettingsWidgetTest, TabNames)
     EXPECT_EQ(tabWidget->tabText(0), "LLM Models");
     EXPECT_EQ(tabWidget->tabText(1), "LLM Settings");
     EXPECT_EQ(tabWidget->tabText(2), "LLM Download");
+    EXPECT_EQ(tabWidget->tabText(3), "QtMeshEditor Models");
 #ifdef ENABLE_STABLE_DIFFUSION
-    EXPECT_EQ(tabWidget->tabText(3), "SD Models");
-    EXPECT_EQ(tabWidget->tabText(4), "SD Settings");
+    EXPECT_EQ(tabWidget->tabText(4), "SD Models");
+    EXPECT_EQ(tabWidget->tabText(5), "SD Settings");
 #endif
 }
 
