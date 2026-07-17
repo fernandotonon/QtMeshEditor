@@ -290,6 +290,38 @@ def main():
         d = np.abs((x * y).sum(-1)).clip(0, 1)
         return 2.0 * np.arccos(d)
 
+    LOCOMOTION = {"walk", "run", "march"}
+
+    def posture_ok(action, cq, valid):
+        """Posture gates (#837 quality follow-up): the v5 model learned a
+        head-down hunched walk because unfiltered windows include folded /
+        idle-contaminated / placeholder-armed source content. In the
+        CANONICAL rep the checks are trivial — d(f) = Q'(f)·D_c:
+        spine must stay up, neck/head must stay up, and locomotion arms
+        must HANG (signed Y, the library-curation lesson: abs() passes a
+        skyward arm)."""
+        def mean_y(r):
+            d = qrot(cq[:, r], np.broadcast_to(D_CANON[r], (len(cq), 3)))
+            return float(d[:, 1].mean())
+        floor = 0.7 if action in LOCOMOTION else 0.5
+        for r in (0, 1, 2):                    # spine chain
+            if valid[r]:
+                if mean_y(r) < floor:
+                    return False
+                break
+        for r in (3, 4, 5):                    # neck / head
+            if valid[r]:
+                if mean_y(r) < 0.5:
+                    return False
+                break
+        if action in LOCOMOTION:
+            for r in (7, 11):                  # upper arms hang
+                if valid[r] and mean_y(r) > -0.25:
+                    return False
+        return True
+
+    dropped = [0]
+
     def window(action, cq, valid, src):
         # The v4 neutral-start gate is deliberately GONE: model clips now ride
         # the bind-referenced direction retarget, which references the
@@ -306,7 +338,11 @@ def main():
             cq = np.concatenate(reps, 0)[:T]
             nF = T
         for s in range(0, nF - T + 1, max(1, T // 2)):
-            mo.append(cq[s:s + T])
+            w = cq[s:s + T]
+            if not posture_ok(action, w, valid):
+                dropped[0] += 1
+                continue
+            mo.append(w)
             msk.append(valid)
             acts.append(action)
             srcs.append(src)
@@ -325,6 +361,7 @@ def main():
             n0 += 1
         print(f"cmu: {n0} trials → {len(mo) - w0} windows")
 
+    print(f"posture gates dropped {dropped[0]} windows")
     if not mo:
         sys.exit("no windows extracted")
 
