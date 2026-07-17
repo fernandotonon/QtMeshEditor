@@ -106,6 +106,30 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                       entity, kRenderSize, view, &err,
                       focus.isNull() ? nullptr : &focus);
             if (vrr.depth.isNull()) continue;
+            // Flatness sanity: a blown-out / silhouette render (near-zero
+            // intensity variance inside the subject) carries no facial
+            // features — MediaPipe false-positives on such blobs with high
+            // presence, and the garbage landmarks CORRELATE between the
+            // template and user renders, slipping through the constellation
+            // gate. A genuinely shaded face has stddev well above this.
+            {
+                const QImage g = vrr.depth.convertToFormat(QImage::Format_Grayscale8);
+                double sum = 0, sum2 = 0; long n = 0;
+                for (int y = 0; y < g.height(); ++y) {
+                    const uchar* ln = g.constScanLine(y);
+                    for (int x = 0; x < g.width(); ++x) {
+                        if (ln[x] > 12) { sum += ln[x]; sum2 += double(ln[x]) * ln[x]; ++n; }
+                    }
+                }
+                const double var = n > 0 ? (sum2 / n - (sum / n) * (sum / n)) : 0.0;
+                if (n < 64 || var < 36.0) {   // stddev < 6 → featureless
+                    if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                        std::fprintf(stderr, "[facerig] detect view=%s mode=%s "
+                                     "SKIPPED (flat render, var=%.1f)\n",
+                                     view.name, depthMode ? "depth" : "shaded", var);
+                    continue;
+                }
+            }
             LandmarkResult vlr = det.detect(vrr.depth);
             if (std::getenv("QTMESH_FACERIG_DEBUG"))
                 std::fprintf(stderr,

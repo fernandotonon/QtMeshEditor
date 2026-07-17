@@ -272,14 +272,24 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
 
             // Landmark anchors that reference a valid template vertex. Weight
             // rides alpha so it dominates while the fit is still rigid (locking
-            // orientation/scale), then relaxes as alpha anneals down.
+            // orientation/scale), then relaxes as alpha anneals down — AND
+            // decays linearly to ZERO by the finest level, so anchors act as
+            // an INITIALIZATION, not a hard constraint. User-placed markers
+            // are never pixel-perfect; without the decay a slightly-off mark
+            // outweighs the surface term at the end of the anneal and drags
+            // its neighbourhood off the mesh (spiky eyelid/lip deltas). The
+            // final levels are pure surface snapping from the marker-steered
+            // coarse alignment.
             std::vector<const NricpLandmark*> lms;
             lms.reserve(opts.landmarks.size());
             for (const auto& lm : opts.landmarks)
                 if (lm.tmplVertex >= 0 && lm.tmplVertex < Nt)
                     lms.push_back(&lm);
             const int L = int(lms.size());
-            const double lw = opts.landmarkWeight * alpha;
+            const double anneal = levelCount > 1
+                ? double(levelCount - 1 - levelIdx) / double(levelCount - 1)
+                : 1.0;
+            const double lw = opts.landmarkWeight * alpha * anneal;
 
             // assemble A (rows = Nt data + E stiffness + L landmark) once;
             // rhs differs per axis

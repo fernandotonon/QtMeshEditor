@@ -45,8 +45,15 @@ inline void restoreEditorRenderTarget()
                 }
         }
     }
-    if (editorWindow)
+    if (editorWindow) {
         rs->_setRenderTarget(editorWindow);
+        // Clear the render system's cached active viewport. Without this the
+        // NEXT offscreen RTT update sees its viewport still marked active,
+        // skips the FBO re-bind, and renders into the editor window instead —
+        // the RTT then returns the same frozen frame for every later capture
+        // (multi-view landmark detection got 16 bit-identical images).
+        rs->_setViewport(nullptr);
+    }
 }
 
 } // namespace OgreRenderTargetUtil

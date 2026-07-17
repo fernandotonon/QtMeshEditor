@@ -350,23 +350,40 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
     st.cameraNode->lookAt(center, Ogre::Node::TS_WORLD,
                           Ogre::Vector3::NEGATIVE_UNIT_Z);
 
-    // Neutral flat lighting so MediaPipe sees an evenly-lit, photo-like face
-    // (no fog, materials intact). Bright ambient + a head-on light fills in
-    // feature shading without harsh shadows that would confuse the detector.
+    // Neutral, DETERMINISTIC lighting so MediaPipe sees an evenly-lit,
+    // photo-like face (no fog, materials intact): moderate ambient + one
+    // head-on directional. All EXISTING scene lights are disabled for the
+    // capture — in the live editor the user/default lights stack on top and
+    // saturate the render to a pure-white silhouette, which the detector
+    // false-positives on (and the resulting garbage landmarks correlate
+    // between template and user render, slipping through the constellation
+    // gate). Headless and GUI captures must produce the same image.
     const Ogre::ColourValue savedAmbient = sm->getAmbientLight();
     const Ogre::FogMode savedFogMode = sm->getFogMode();
     const Ogre::ColourValue savedFogColour = sm->getFogColour();
     const Ogre::Real savedFogStart = sm->getFogStart();
     const Ogre::Real savedFogEnd = sm->getFogEnd();
     sm->setFog(Ogre::FOG_NONE);
-    sm->setAmbientLight(Ogre::ColourValue(0.75f, 0.75f, 0.75f));
+    sm->setAmbientLight(Ogre::ColourValue(0.35f, 0.35f, 0.35f));
+
+    std::vector<Ogre::Light*> disabledLights;
+    {
+        auto it = sm->getMovableObjectIterator("Light");
+        while (it.hasMoreElements()) {
+            auto* l = static_cast<Ogre::Light*>(it.getNext());
+            if (l && l->getVisible()) {
+                disabledLights.push_back(l);
+                l->setVisible(false);
+            }
+        }
+    }
 
     Ogre::Light* light = nullptr;
     Ogre::SceneNode* lightNode = nullptr;
     try {
         light = sm->createLight("QtMeshFaceRigLight");
         light->setType(Ogre::Light::LT_DIRECTIONAL);
-        light->setDiffuseColour(Ogre::ColourValue(0.5f, 0.5f, 0.5f));
+        light->setDiffuseColour(Ogre::ColourValue(0.65f, 0.65f, 0.65f));
         light->setSpecularColour(Ogre::ColourValue::Black);
         lightNode = sm->getRootSceneNode()->createChildSceneNode();
         lightNode->attachObject(light);
@@ -412,6 +429,7 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
         if (lightNode) { lightNode->detachAllObjects();
                          sm->getRootSceneNode()->removeAndDestroyChild(lightNode); }
         if (light) sm->destroyLight(light);
+        for (auto* l : disabledLights) l->setVisible(true);
         if (gridNode) gridNode->setVisible(gridWasVisible);
         if (targetNode) targetNode->showBoundingBox(targetBoxWasShown);
         for (auto* n : hiddenBoxes) n->showBoundingBox(true);
