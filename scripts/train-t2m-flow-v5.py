@@ -181,7 +181,11 @@ def main():
     ap.add_argument("--dim", type=int, default=256)
     ap.add_argument("--layers", type=int, default=6)
     ap.add_argument("--steps", type=int, default=16, help="Euler export steps")
-    ap.add_argument("--guidance", type=float, default=2.0,
+    # Guidance default 1.0: with posture-FILTERED training data (already
+    # more upright than the uncond distribution), CFG > 1 extrapolates PAST
+    # upright into a backward arch — measured on the v5.1 retrain (g2.0
+    # arched, g1.0 clean). Raise only for conditioning-starved datasets.
+    ap.add_argument("--guidance", type=float, default=1.0,
                     help="CFG scale baked into the exported sampler")
     ap.add_argument("--device", default="mps")
     a = ap.parse_args()
