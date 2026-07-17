@@ -94,6 +94,14 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     MeshDepthRenderer::RenderResult rr;
     LandmarkResult lr;
     float bestLogit = -1e9f;
+    // FACING may only be claimed by SHADED-mode detections: the fog depth
+    // statue has no texture and MediaPipe false-positives on smooth domes
+    // (measured: Rumba's occiput depth render scored logit +8 while its true
+    // stylized face scored -3.5 — the facing flipped to the back of the
+    // head). Depth-mode detections still feed LANDMARKS (the constellation
+    // gate protects those), just never the facing decision.
+    float bestShadedLogit = -1e9f;
+    Ogre::Vector3 bestShadedCamDir = Ogre::Vector3::ZERO;
     // Geometric facing fallback: mean |Laplacian| of the fog depth render
     // over subject pixels. The face side of a head (nose, brows, lips, chin)
     // carries far more depth detail than the smooth occiput — used to decide
@@ -187,6 +195,10 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                                + (depthMode ? "depth." : "shaded.")
                                + view.name + ".png");
             if (!vlr.ok || vlr.points.empty()) continue;
+            if (!depthMode && vlr.presenceLogit > bestShadedLogit) {
+                bestShadedLogit = vlr.presenceLogit;
+                bestShadedCamDir = vrr.camDirection;
+            }
             if (vlr.presenceLogit > bestLogit) {
                 bestLogit = vlr.presenceLogit;
                 rr = std::move(vrr);
@@ -203,14 +215,24 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     // weak to use — the proportional-default marker placement needs only the
     // facing.
     {
-        Ogre::Vector3 camDir = rr.depth.isNull() ? Ogre::Vector3::ZERO
-                                                 : rr.camDirection;
+        // Facing ladder: (1) a strong SHADED-mode detection; (2) the active
+        // viewport camera; (3) feet direction; (4) depth-detail winner; (5)
+        // the overall logit winner as a last resort.
+        Ogre::Vector3 camDir = Ogre::Vector3::ZERO;
+        const bool strongShaded = bestShadedLogit >= kStrongFaceLogit
+                                  && !bestShadedCamDir.isZeroLength();
+        if (strongShaded) {
+            camDir = bestShadedCamDir;
+            if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                std::fprintf(stderr, "[facerig] facing from SHADED detection "
+                             "(logit=%.1f)\n", bestShadedLogit);
+        }
         // The ACTIVE VIEWPORT camera is the strongest user-intent hint: the
         // user orbits to LOOK AT the face before rigging, so the face points
         // toward that camera. Trust it over every geometric fallback whenever
-        // detection itself isn't conclusive (logit below the strong-face bar).
+        // detection itself isn't conclusive.
         bool vpResolved = false;
-        if (bestLogit < kStrongFaceLogit) {
+        if (!strongShaded) {
             if (auto* to = TransformOperator::getSingletonPtr()) {
                 if (auto* w = to->getActiveWidget()) {
                     if (w->getViewport() && w->getViewport()->getCamera()) {
@@ -228,7 +250,7 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                 }
             }
         }
-        if (!vpResolved && bestLogit < 0.f) {
+        if (!strongShaded && !vpResolved) {
             // No positive face evidence anywhere (stylized / covered faces) —
             // the logit "winner" is noise. For a FULL-BODY character the feet
             // are the strongest facing cue: toes extend forward of the ankle.
@@ -250,6 +272,10 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                     hHiY = std::max(hHiY, localV[size_t(i)*3+1]);
                 }
                 const float bodyH = bHiY - bLoY, headH = hHiY - hLoY;
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] feet gate: bodyH=%.2f "
+                                 "headH=%.2f ratio=%.2f\n",
+                                 bodyH, headH, headH > 0 ? bodyH/headH : 0.f);
                 if (bodyH > 2.5f * headH && bodyH > 1e-6f) {
                     const float feetTop  = bLoY + 0.08f * bodyH;
                     const float ankleTop = bLoY + 0.16f * bodyH;
@@ -263,10 +289,21 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                             ax += full.userV[size_t(i)*3]; az += full.userV[size_t(i)*3+2]; ++na;
                         }
                     }
+                    if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                        std::fprintf(stderr, "[facerig] feet slabs: nf=%ld "
+                                     "na=%ld\n", nf, na);
                     if (nf > 8 && na > 8) {
                         const double dx = fx/nf - ax/na, dz = fz/nf - az/na;
                         const double len = std::sqrt(dx*dx + dz*dz);
-                        if (len > 0.01 * bodyH) {
+                        if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                            std::fprintf(stderr, "[facerig] feet dir: "
+                                         "d=(%.3f,%.3f) len=%.3f min=%.3f\n",
+                                         dx, dz, len, 0.005 * bodyH);
+                        // 0.5% of body height: the toe-forward offset is small
+                        // on dance-pose rigs (Rumba: 1.9cm on a 2m body) but
+                        // its DIRECTION is reliable; only reject a truly
+                        // degenerate (near-zero) offset.
+                        if (len > 0.005 * bodyH) {
                             // LOCAL-space facing; convert to a WORLD camDir
                             // (the block below converts back) by mapping
                             // through the entity transform.
