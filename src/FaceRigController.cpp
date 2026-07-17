@@ -51,7 +51,23 @@ void FaceRigController::kill()
 FaceRigController::FaceRigController() : QObject(nullptr)
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
-            this, &FaceRigController::selectionChanged);
+            this, [this]() {
+        // Selecting a DIFFERENT model must reset the face-rig controls: an
+        // active marker session (chips, overlays, Rig-from-markers state)
+        // belongs to the entity it was started on, and a stale status line
+        // from the previous rig reads as if it applied to the new selection.
+        if (m_markerMode) {
+            auto* sel = SelectionSet::getSingleton();
+            const auto entities = sel ? sel->getResolvedEntities()
+                                      : QList<Ogre::Entity*>{};
+            Ogre::Entity* first = entities.isEmpty() ? nullptr : entities.first();
+            if (!first || first->getName() != m_markerEntityName)
+                cancelFaceMarkers();
+        } else if (!m_busy) {
+            setStatus(QString());
+        }
+        emit selectionChanged();
+    });
 }
 
 void FaceRigController::setStatus(const QString& s)
