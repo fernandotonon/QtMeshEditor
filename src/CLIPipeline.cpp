@@ -9556,6 +9556,16 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
             return 1;
         }
         FaceRig::FaceRigGeometry geo = FaceRig::extractGeometry(entity);
+        // per-submesh head-mask coverage (eye/teeth submeshes skinned to
+        // non-body-region bones can be silently excluded from the mask).
+        for (const auto& o : geo.owners) {
+            int inMask = 0;
+            for (int i = 0; i < o.count; ++i)
+                if (int(geo.headMask.size()) > int(o.base) + i
+                    && geo.headMask[size_t(o.base) + size_t(i)]) ++inMask;
+            err() << "[sim] submesh handle=" << o.handle << " verts=" << o.count
+                  << " inHeadMask=" << inMask << Qt::endl;
+        }
         std::vector<float> headV; std::vector<int> headF;
         FaceRig::headSubmesh(geo, headV, headF);
         bool confident = false;

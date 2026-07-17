@@ -140,6 +140,35 @@ FaceRigGeometry extractGeometry(Ogre::Entity* entity)
         geo.headMask.assign(size_t(nv), 0);
         for (int v = 0; v < nv; ++v)
             if (labels[size_t(v)] == headPart) { geo.headMask[size_t(v)] = 1; ++headCount; }
+
+        // GEOMETRIC expansion: eyes / teeth / tongue / lashes are often
+        // separate submeshes skinned to non-body-region bones (eye bones),
+        // which the rig-prior can't label — they'd be silently EXCLUDED from
+        // the face rig and never blink or look around (field-reported: 414-vert
+        // eye submesh with 0 masked verts). Anything inside the labeled head's
+        // slightly-expanded AABB belongs to the face.
+        if (headCount >= 50) {
+            float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+            for (int v = 0; v < nv; ++v) {
+                if (!geo.headMask[size_t(v)]) continue;
+                for (int a = 0; a < 3; ++a) {
+                    lo[a] = std::min(lo[a], geo.userV[size_t(v)*3 + a]);
+                    hi[a] = std::max(hi[a], geo.userV[size_t(v)*3 + a]);
+                }
+            }
+            float pad[3];
+            for (int a = 0; a < 3; ++a) pad[a] = 0.05f * (hi[a] - lo[a]);
+            for (int v = 0; v < nv; ++v) {
+                if (geo.headMask[size_t(v)]) continue;
+                bool inside = true;
+                for (int a = 0; a < 3; ++a) {
+                    const float p = geo.userV[size_t(v)*3 + a];
+                    if (p < lo[a] - pad[a] || p > hi[a] + pad[a]) { inside = false; break; }
+                }
+                if (inside) { geo.headMask[size_t(v)] = 1; ++headCount; }
+            }
+        }
+
         // Only isolate when the head is a real, minority region of the mesh —
         // i.e. this looks like a full body, not a bare face. A head that IS
         // most of the mesh means it's already a face crop; fit it whole.
