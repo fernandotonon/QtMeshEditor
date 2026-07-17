@@ -2,6 +2,7 @@
 
 #include "ArkitTemplate.h"
 #include "FaceLandmarkDetector.h"
+#include "FaceRigAttach.h"
 
 #include "../Manager.h"
 #include "../MeshDepthRenderer.h"
@@ -91,6 +92,28 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     MeshDepthRenderer::RenderResult rr;
     LandmarkResult lr;
     float bestLogit = -1e9f;
+    // Geometric facing fallback: mean |Laplacian| of the fog depth render
+    // over subject pixels. The face side of a head (nose, brows, lips, chin)
+    // carries far more depth detail than the smooth occiput — used to decide
+    // facing when NO view shows positive face evidence (stylized faces
+    // MediaPipe can't read return only noise logits).
+    double bestDetail = -1.0;
+    Ogre::Vector3 bestDetailCamDir = Ogre::Vector3::ZERO;
+    auto depthDetail = [](const QImage& img) -> double {
+        const QImage g = img.convertToFormat(QImage::Format_Grayscale8);
+        double acc = 0; long n = 0;
+        for (int y = 1; y + 1 < g.height(); ++y) {
+            const uchar* lm = g.constScanLine(y - 1);
+            const uchar* lc = g.constScanLine(y);
+            const uchar* lp = g.constScanLine(y + 1);
+            for (int x = 1; x + 1 < g.width(); ++x) {
+                if (lc[x] <= 12) continue;   // background
+                acc += std::fabs(4.0 * lc[x] - lc[x-1] - lc[x+1] - lm[x] - lp[x]);
+                ++n;
+            }
+        }
+        return n > 0 ? acc / double(n) : -1.0;
+    };
     // Two render styles per view: the shaded render (materials intact —
     // carries texture contrast MediaPipe likes) and the fog depth-map render
     // (pure geometry statue — immune to broken normals / inconsistent winding
@@ -115,6 +138,16 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                       entity, kRenderSize, view, &err,
                       focus.isNull() ? nullptr : &focus);
             if (vrr.depth.isNull()) continue;
+            if (depthMode) {
+                const double det = depthDetail(vrr.depth);
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] detail view=%s score=%.2f\n",
+                                 view.name, det);
+                if (det > bestDetail) {
+                    bestDetail = det;
+                    bestDetailCamDir = vrr.camDirection;
+                }
+            }
             // Flatness sanity: a blown-out / silhouette render (near-zero
             // intensity variance inside the subject) carries no facial
             // features — MediaPipe false-positives on such blobs with high
@@ -156,6 +189,95 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                 bestLogit = vlr.presenceLogit;
                 rr = std::move(vrr);
                 lr = std::move(vlr);
+            }
+        }
+    }
+    // Facing signal: the face points TOWARD the winning view's camera
+    // (= against its look direction). When NO view produced positive face
+    // evidence (all logits negative — MediaPipe can't read stylized faces),
+    // the logit "winner" is noise; fall back to the depth-DETAIL winner
+    // instead (the face side out-details the smooth back of the head).
+    // Exposed in MESH-LOCAL space even when the landmarks themselves are too
+    // weak to use — the proportional-default marker placement needs only the
+    // facing.
+    {
+        Ogre::Vector3 camDir = rr.depth.isNull() ? Ogre::Vector3::ZERO
+                                                 : rr.camDirection;
+        if (bestLogit < 0.f) {
+            // No positive face evidence anywhere (stylized / covered faces) —
+            // the logit "winner" is noise. For a FULL-BODY character the feet
+            // are the strongest facing cue: toes extend forward of the ankle.
+            // Compare the horizontal centroid of the feet slab (lowest 8% of
+            // the body) against the ankle slab above it.
+            bool feetResolved = false;
+            const FaceRigGeometry full = extractGeometry(entity);
+            if (full.valid()) {
+                const int n = int(full.userV.size() / 3);
+                float bLoY = 1e30f, bHiY = -1e30f;
+                for (int i = 0; i < n; ++i) {
+                    bLoY = std::min(bLoY, full.userV[size_t(i)*3+1]);
+                    bHiY = std::max(bHiY, full.userV[size_t(i)*3+1]);
+                }
+                // head height from the head verts we render (localV)
+                float hLoY = 1e30f, hHiY = -1e30f;
+                for (int i = 0; i < int(localV.size()/3); ++i) {
+                    hLoY = std::min(hLoY, localV[size_t(i)*3+1]);
+                    hHiY = std::max(hHiY, localV[size_t(i)*3+1]);
+                }
+                const float bodyH = bHiY - bLoY, headH = hHiY - hLoY;
+                if (bodyH > 2.5f * headH && bodyH > 1e-6f) {
+                    const float feetTop  = bLoY + 0.08f * bodyH;
+                    const float ankleTop = bLoY + 0.16f * bodyH;
+                    double fx = 0, fz = 0, ax = 0, az = 0;
+                    long nf = 0, na = 0;
+                    for (int i = 0; i < n; ++i) {
+                        const float y = full.userV[size_t(i)*3+1];
+                        if (y < feetTop) {
+                            fx += full.userV[size_t(i)*3]; fz += full.userV[size_t(i)*3+2]; ++nf;
+                        } else if (y < ankleTop) {
+                            ax += full.userV[size_t(i)*3]; az += full.userV[size_t(i)*3+2]; ++na;
+                        }
+                    }
+                    if (nf > 8 && na > 8) {
+                        const double dx = fx/nf - ax/na, dz = fz/nf - az/na;
+                        const double len = std::sqrt(dx*dx + dz*dz);
+                        if (len > 0.01 * bodyH) {
+                            // LOCAL-space facing; convert to a WORLD camDir
+                            // (the block below converts back) by mapping
+                            // through the entity transform.
+                            const Ogre::Vector3 o = world * Ogre::Vector3::ZERO;
+                            Ogre::Vector3 faceW =
+                                (world * Ogre::Vector3(float(dx), 0, float(dz))) - o;
+                            if (!faceW.isZeroLength()) {
+                                camDir = -faceW;   // camera looks against facing
+                                feetResolved = true;
+                                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                                    std::fprintf(stderr,
+                                        "[facerig] facing from FEET dir "
+                                        "local=(%.2f,0,%.2f)\n", dx/len, dz/len);
+                            }
+                        }
+                    }
+                }
+            }
+            if (!feetResolved && bestDetail >= 0.0
+                && !bestDetailCamDir.isZeroLength()) {
+                camDir = bestDetailCamDir;
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] facing from depth detail "
+                                 "(bestLogit=%.1f, detail=%.2f)\n",
+                                 bestLogit, bestDetail);
+            }
+        }
+        if (!camDir.isZeroLength()) {
+            const Ogre::Matrix4 wInv = world.inverse();
+            const Ogre::Vector3 faceW = -camDir;
+            const Ogre::Vector3 o = wInv * Ogre::Vector3::ZERO;
+            Ogre::Vector3 faceL = (wInv * faceW) - o;
+            if (!faceL.isZeroLength()) {
+                faceL.normalise();
+                out.faceDirLocal = {faceL.x, faceL.y, faceL.z};
+                out.faceDirValid = true;
             }
         }
     }
@@ -659,6 +781,32 @@ std::vector<FaceMarker> seedFaceMarkers(
         // produce a good rig on their own (the cartoon-face path), and the user
         // refines from there. placed=true so they act as anchors even if the
         // user rigs without touching them.
+        //
+        // FACING-AWARE: the straight box mapping assumes the user's face
+        // points the template's way (+Z); a backwards-facing import (glb
+        // round-trips flip facing) landed every default on the BACK of the
+        // head. Even a too-weak-to-trust detection still tells us which
+        // render view scored best — yaw the template coordinates to that
+        // cardinal facing before the box mapping.
+        int yaw = 0;   // 0:+Z (template) 1:-Z 2:+X 3:-X
+        if (ulm.faceDirValid) {
+            const float fx = ulm.faceDirLocal[0], fz = ulm.faceDirLocal[2];
+            yaw = (std::fabs(fz) >= std::fabs(fx)) ? (fz >= 0.f ? 0 : 1)
+                                                   : (fx >= 0.f ? 2 : 3);
+        }
+        auto yawRot = [yaw](std::array<float,3> p) -> std::array<float,3> {
+            switch (yaw) {
+                case 1: return {-p[0], p[1], -p[2]};   // 180°
+                case 2: return { p[2], p[1], -p[0]};   // +Z → +X
+                case 3: return {-p[2], p[1],  p[0]};   // +Z → -X
+                default: return p;
+            }
+        };
+        if (std::getenv("QTMESH_FACERIG_DEBUG"))
+            std::fprintf(stderr, "[facerig] defaults: faceDirValid=%d "
+                         "dir=(%.2f,%.2f,%.2f) yaw=%d\n",
+                         ulm.faceDirValid ? 1 : 0, ulm.faceDirLocal[0],
+                         ulm.faceDirLocal[1], ulm.faceDirLocal[2], yaw);
         std::array<float,3> lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         const int unv = int(userLocalV.size()/3);
         for (int i = 0; i < unv; ++i)
@@ -667,17 +815,23 @@ std::vector<FaceMarker> seedFaceMarkers(
                 hi[a] = std::max(hi[a], userLocalV[size_t(i)*3+a]);
             }
         std::array<float,3> tlo{1e30f,1e30f,1e30f}, thi{-1e30f,-1e30f,-1e30f};
-        for (int i = 0; i < tvc; ++i)
+        for (int i = 0; i < tvc; ++i) {
+            const std::array<float,3> tv = yawRot({tn[size_t(i)*3],
+                                                   tn[size_t(i)*3+1],
+                                                   tn[size_t(i)*3+2]});
             for (int a = 0; a < 3; ++a) {
-                tlo[a] = std::min(tlo[a], tn[size_t(i)*3+a]);
-                thi[a] = std::max(thi[a], tn[size_t(i)*3+a]);
+                tlo[a] = std::min(tlo[a], tv[size_t(a)]);
+                thi[a] = std::max(thi[a], tv[size_t(a)]);
             }
+        }
         for (auto& m : markers) {
             if (m.tmplVertex < 0) continue;
+            const std::array<float,3> tv = yawRot({tn[size_t(m.tmplVertex)*3],
+                                                   tn[size_t(m.tmplVertex)*3+1],
+                                                   tn[size_t(m.tmplVertex)*3+2]});
             for (int a = 0; a < 3; ++a) {
-                const float tv = tn[size_t(m.tmplVertex)*3+a];
                 const float f = (thi[a]-tlo[a]) > 1e-6f
-                    ? (tv - tlo[a]) / (thi[a]-tlo[a]) : 0.5f;
+                    ? (tv[size_t(a)] - tlo[a]) / (thi[a]-tlo[a]) : 0.5f;
                 m.userPos[size_t(a)] = lo[a] + f * (hi[a]-lo[a]);
             }
             m.placed = true;

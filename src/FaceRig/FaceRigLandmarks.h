@@ -47,6 +47,14 @@ struct MeshLandmarks {
     std::vector<std::array<float, 3>> points;
     std::vector<char> valid;
     float confidence = 0.0f;
+    // Direction the FACE points, in MESH-LOCAL space — derived from the view
+    // whose render won the presence-logit ranking (the face points toward that
+    // camera). Valid even when `ok` is false: a weak detection is still a
+    // usable FACING signal, and the proportional-default marker placement
+    // needs it so defaults land on the face instead of the back of the head
+    // for meshes that don't face the template's +Z.
+    std::array<float, 3> faceDirLocal{0, 0, 1};
+    bool faceDirValid = false;
     bool ok = false;
 };
 
