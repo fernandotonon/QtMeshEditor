@@ -10230,6 +10230,64 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
         }
     }
 
+    // Diagnostic (env-gated): verify a target actually PLAYS after import —
+    // enable it at weight 1 and measure the software-animated displacement.
+    // Distinguishes "targets listed but dead" (importer clip/pose bug) from a
+    // GUI-side playback issue.
+    if (!targets.isEmpty()
+        && qEnvironmentVariableIsSet("QTMESH_MORPH_PLAYTEST")) {
+        const QByteArray want = qgetenv("QTMESH_MORPH_PLAYTEST");
+        QString name = QString::fromUtf8(want);
+        if (name == "1" || name.isEmpty()) name = targets.first();
+        for (Ogre::Entity* entity : entities) {
+            auto* states = entity->getAllAnimationStates();
+            const bool hasState = states
+                && states->hasAnimationState(name.toStdString());
+            err() << "[playtest] entity=" << QString::fromStdString(entity->getName())
+                  << " target=" << name
+                  << " hasAnimState=" << hasState
+                  << " meshHasVertexAnim=" << entity->getMesh()->hasVertexAnimation()
+                  << Qt::endl;
+            if (!hasState) continue;
+            auto* st = states->getAnimationState(name.toStdString());
+            st->setEnabled(true);
+            st->setWeight(1.0f);
+            st->setTimePosition(0.0f);
+            entity->addSoftwareAnimationRequest(false);
+            entity->_updateAnimation();
+            // measure displacement on each subentity's software-animated data
+            double maxDisp = 0;
+            for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+                Ogre::SubEntity* se = entity->getSubEntity(si);
+                Ogre::VertexData* animVd = se->_getSoftwareVertexAnimVertexData();
+                Ogre::VertexData* baseVd = se->getSubMesh()->vertexData;
+                if (!animVd || !baseVd) continue;
+                auto readPos = [](Ogre::VertexData* vd, std::vector<float>& out) {
+                    const auto* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+                    if (!pe) return;
+                    auto vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
+                    const size_t stride = vb->getVertexSize();
+                    auto* base = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    out.resize(vd->vertexCount * 3);
+                    for (size_t i = 0; i < vd->vertexCount; ++i) {
+                        float* fp = nullptr;
+                        pe->baseVertexPointerToElement(base + i*stride, &fp);
+                        out[i*3] = fp[0]; out[i*3+1] = fp[1]; out[i*3+2] = fp[2];
+                    }
+                    vb->unlock();
+                };
+                std::vector<float> a, b;
+                readPos(animVd, a); readPos(baseVd, b);
+                for (size_t i = 0; i + 2 < std::min(a.size(), b.size()); i += 3) {
+                    const double dx = a[i]-b[i], dy = a[i+1]-b[i+1], dz = a[i+2]-b[i+2];
+                    maxDisp = std::max(maxDisp, std::sqrt(dx*dx+dy*dy+dz*dz));
+                }
+            }
+            err() << "[playtest] maxDisp after weight=1: " << maxDisp << Qt::endl;
+            entity->removeSoftwareAnimationRequest(false);
+        }
+    }
+
     if (jsonOutput) {
         QJsonArray arr;
         for (const QString& n : targets) arr.append(n);
