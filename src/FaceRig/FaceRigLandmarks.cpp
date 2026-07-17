@@ -886,6 +886,19 @@ std::vector<FaceMarker> seedFaceMarkers(
                 thi[a] = std::max(thi[a], tv[size_t(a)]);
             }
         }
+        // Depth axis + ray setup for surface snapping: the box mapping puts
+        // markers at the box's proportional DEPTH, but protrusions (a cigar,
+        // a long nose, hair) inflate the head box along the facing axis and
+        // every default then floats off the face. Ray-cast each marker from
+        // outside the box along the facing direction and take the first
+        // surface hit as its depth instead.
+        const int depthAxis = (yaw <= 1) ? 2 : 0;
+        const float depthSign = (yaw == 0 || yaw == 2) ? 1.0f : -1.0f;
+        const float margin = 0.25f * (hi[size_t(depthAxis)] - lo[size_t(depthAxis)]);
+        Ogre::Vector3 rayDir = Ogre::Vector3::ZERO;
+        rayDir[depthAxis] = -depthSign;   // from the face side into the head
+        const int unvTot = int(userLocalV.size() / 3);
+
         for (auto& m : markers) {
             if (m.tmplVertex < 0) continue;
             const std::array<float,3> tv = yawRot({tn[size_t(m.tmplVertex)*3],
@@ -896,6 +909,31 @@ std::vector<FaceMarker> seedFaceMarkers(
                     ? (tv[size_t(a)] - tlo[a]) / (thi[a]-tlo[a]) : 0.5f;
                 m.userPos[size_t(a)] = lo[a] + f * (hi[a]-lo[a]);
             }
+            // Snap to the head surface along the facing axis.
+            Ogre::Vector3 o(m.userPos[0], m.userPos[1], m.userPos[2]);
+            o[depthAxis] = depthSign > 0
+                ? hi[size_t(depthAxis)] + margin
+                : lo[size_t(depthAxis)] - margin;
+            float bestT = std::numeric_limits<float>::max();
+            bool hitAny = false;
+            Ogre::Vector3 hit;
+            for (size_t fI = 0; fI + 2 < userLocalF.size(); fI += 3) {
+                const int ia = userLocalF[fI], ib = userLocalF[fI+1],
+                          ic = userLocalF[fI+2];
+                if (ia < 0 || ib < 0 || ic < 0
+                    || ia >= unvTot || ib >= unvTot || ic >= unvTot) continue;
+                auto vAt = [&](int k) {
+                    return Ogre::Vector3(userLocalV[size_t(k)*3],
+                                         userLocalV[size_t(k)*3+1],
+                                         userLocalV[size_t(k)*3+2]);
+                };
+                float t;
+                if (rayTri(o, rayDir, vAt(ia), vAt(ib), vAt(ic), t) && t < bestT) {
+                    bestT = t; hit = o + rayDir * t; hitAny = true;
+                }
+            }
+            if (hitAny)
+                m.userPos = {hit.x, hit.y, hit.z};
             m.placed = true;
         }
     }

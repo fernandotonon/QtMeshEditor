@@ -9601,6 +9601,21 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
         const auto anchors = FaceRig::anchorsFromMarkers(markers, tmpl);
         err() << "[sim] markers=" << markers.size() << " anchors=" << anchors.size()
               << " seedConfident=" << confident << Qt::endl;
+        // surface-distance probe: how far does each seeded marker float off
+        // the head mesh? (box-mapped defaults used to hover off the face when
+        // protrusions inflate the head box)
+        for (const auto& m : markers) {
+            if (!m.placed) continue;
+            float best = 1e30f;
+            for (size_t i = 0; i + 2 < headV.size(); i += 3) {
+                const float dx = headV[i]   - m.userPos[0];
+                const float dy = headV[i+1] - m.userPos[1];
+                const float dz = headV[i+2] - m.userPos[2];
+                best = std::min(best, dx*dx + dy*dy + dz*dz);
+            }
+            err() << "[sim] surfdist '" << m.label << "' = "
+                  << std::sqrt(best) << Qt::endl;
+        }
         // side probe: character faces -Z, up +Y => character-LEFT = -X.
         for (const auto& m : markers)
             if (m.tmplVertex >= 0)
