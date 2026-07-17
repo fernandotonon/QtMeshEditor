@@ -362,10 +362,89 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         if (!warped.empty()) fitTmplV = std::move(warped);
     }
 
-    // 1) NRICP: (pre-warped) template neutral → user neutral = correspondence X.
+    // ── TEMPLATE COMPONENT SPLIT (the eyes/teeth fix) ───────────────────────
+    // The ICT template is ~191 connected components: the outer face surface
+    // (14k verts) plus eyeballs, corneas, teeth, mouth interior, lashes… The
+    // surface fit drags INTERIOR component verts onto the OUTER skin (closest-
+    // point has no better answer), destroying their correspondence — measured:
+    // eyeLook/eyeBlink deltas landed nowhere and the eyes never moved, on the
+    // TEMPLATE ITSELF. Fit ONLY the main component; place each satellite by the
+    // local AFFINE its surrounding main-surface region underwent, preserving
+    // the eyeball/teeth structure inside the fitted head.
+    const int tvc = tmpl.vertexCount();
+    std::vector<int> comp(size_t(tvc), 0);
+    int compCount = 1;
+    {
+        std::vector<int> par(size_t(tvc), 0);
+        for (int i = 0; i < tvc; ++i) par[size_t(i)] = i;
+        std::function<int(int)> findRoot = [&](int x) {
+            while (par[size_t(x)] != x) {
+                par[size_t(x)] = par[size_t(par[size_t(x)])];
+                x = par[size_t(x)];
+            }
+            return x;
+        };
+        const auto& tf = tmpl.faces();
+        for (size_t f = 0; f + 2 < tf.size(); f += 3) {
+            int a = findRoot(tf[f]), b = findRoot(tf[f+1]);
+            if (a != b) par[size_t(a)] = b;
+            a = findRoot(tf[f+1]); b = findRoot(tf[f+2]);
+            if (a != b) par[size_t(a)] = b;
+        }
+        std::unordered_map<int,int> remap;
+        compCount = 0;
+        for (int i = 0; i < tvc; ++i) {
+            const int root = findRoot(i);
+            auto it = remap.find(root);
+            if (it == remap.end()) { remap.emplace(root, compCount); comp[size_t(i)] = compCount++; }
+            else comp[size_t(i)] = it->second;
+        }
+    }
+    int mainComp = 0;
+    {
+        std::vector<int> cnt(size_t(compCount), 0);
+        for (int i = 0; i < tvc; ++i) cnt[size_t(comp[size_t(i)])]++;
+        for (int c = 1; c < compCount; ++c)
+            if (cnt[size_t(c)] > cnt[size_t(mainComp)]) mainComp = c;
+    }
+
+    // Extract the main-component sub-template (from the possibly-warped verts)
+    // and remap anchors onto it (markers sit on the outer surface; any anchor
+    // that resolved onto a satellite is dropped).
+    std::vector<float> mainV; std::vector<int> mainF; std::vector<int> mainToFull;
+    std::vector<int> fullToMainIdx(size_t(tvc), -1);
+    if (compCount > 1) {
+        for (int i = 0; i < tvc; ++i) {
+            if (comp[size_t(i)] != mainComp) continue;
+            fullToMainIdx[size_t(i)] = int(mainToFull.size());
+            mainToFull.push_back(i);
+            mainV.insert(mainV.end(), {fitTmplV[size_t(i)*3],
+                                       fitTmplV[size_t(i)*3+1],
+                                       fitTmplV[size_t(i)*3+2]});
+        }
+        const auto& tf = tmpl.faces();
+        for (size_t f = 0; f + 2 < tf.size(); f += 3) {
+            const int a = fullToMainIdx[size_t(tf[f])],
+                      b = fullToMainIdx[size_t(tf[f+1])],
+                      c = fullToMainIdx[size_t(tf[f+2])];
+            if (a >= 0 && b >= 0 && c >= 0) mainF.insert(mainF.end(), {a, b, c});
+        }
+        std::vector<NricpLandmark> mainAnchors;
+        for (auto lm : fitOpts.landmarks) {
+            if (lm.tmplVertex < 0 || lm.tmplVertex >= tvc) continue;
+            const int mi = fullToMainIdx[size_t(lm.tmplVertex)];
+            if (mi >= 0) { lm.tmplVertex = mi; mainAnchors.push_back(lm); }
+        }
+        fitOpts.landmarks = std::move(mainAnchors);
+    }
+    const bool splitTmpl = compCount > 1 && mainV.size() >= 9 && mainF.size() >= 3;
+    const std::vector<float>& fitTV = splitTmpl ? mainV : fitTmplV;
+    const std::vector<int>&   fitTF = splitTmpl ? mainF : tmpl.faces();
+
+    // 1) NRICP: (pre-warped) template MAIN SURFACE → user neutral.
     // Report each annealing level so the (long) fit phase visibly advances.
     const NricpResult fit = FaceRig::fit(
-        fitTmplV, tmpl.faces(), fitV, fitF, fitOpts,
+        fitTV, fitTF, fitV, fitF, fitOpts,
         [&](int level, int /*levelCount*/) -> bool {
             if (!tick(level, "Fitting face template…")) { cancelled = true; return false; }
             return true;
@@ -395,12 +474,120 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         return r;
     }
 
+    // Assemble the FULL fitted correspondence: main verts from the fit;
+    // satellites by the local affine their neighbouring main region underwent
+    // (least-squares over the K nearest FINITE main verts).
+    const std::vector<float>& tn = tmpl.neutral();
+    std::vector<float> fitted;
+    if (!splitTmpl) {
+        fitted = fit.fitted;
+    } else {
+        fitted.assign(size_t(tvc) * 3, 0.0f);
+        for (size_t m = 0; m < mainToFull.size(); ++m)
+            for (int d = 0; d < 3; ++d)
+                fitted[size_t(mainToFull[m])*3 + d] = fit.fitted[m*3 + d];
+
+        // group satellite verts per component
+        std::unordered_map<int, std::vector<int>> sats;
+        for (int i = 0; i < tvc; ++i)
+            if (comp[size_t(i)] != mainComp) sats[comp[size_t(i)]].push_back(i);
+
+        for (auto& [cid, verts] : sats) {
+            // centroid in the (warped) template space
+            std::array<double,3> ctr{0,0,0};
+            for (int v : verts)
+                for (int d = 0; d < 3; ++d)
+                    ctr[size_t(d)] += fitTmplV[size_t(v)*3+d] / double(verts.size());
+            // K nearest FINITE main verts to the centroid
+            constexpr int K = 60;
+            std::vector<std::pair<float,int>> near;   // (dist², main idx)
+            near.reserve(mainToFull.size());
+            for (size_t m = 0; m < mainToFull.size(); ++m) {
+                bool finite = true;
+                for (int d = 0; d < 3; ++d)
+                    if (!std::isfinite(fit.fitted[m*3+d])) { finite = false; break; }
+                if (!finite) continue;
+                const int fv = mainToFull[m];
+                float d2 = 0;
+                for (int d = 0; d < 3; ++d) {
+                    const float dd = fitTmplV[size_t(fv)*3+d] - float(ctr[size_t(d)]);
+                    d2 += dd*dd;
+                }
+                near.push_back({d2, int(m)});
+            }
+            const int k = std::min<int>(K, int(near.size()));
+            if (k < 4) {
+                // no usable neighbours — leave the satellite at the template
+                // rest (it just won't deform meaningfully).
+                for (int v : verts)
+                    for (int d = 0; d < 3; ++d)
+                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
+                continue;
+            }
+            std::partial_sort(near.begin(), near.begin()+k, near.end());
+            // least-squares affine: (warped rest) → (fitted), normal equations
+            // per output dim: (SᵀS) w = Sᵀ t, S rows = [x y z 1].
+            double StS[4][4] = {{0}}, Stt[3][4] = {{0}};
+            for (int n = 0; n < k; ++n) {
+                const int m = near[size_t(n)].second;
+                const int fv = mainToFull[size_t(m)];
+                const double s[4] = {fitTmplV[size_t(fv)*3], fitTmplV[size_t(fv)*3+1],
+                                     fitTmplV[size_t(fv)*3+2], 1.0};
+                for (int a = 0; a < 4; ++a)
+                    for (int b = 0; b < 4; ++b)
+                        StS[a][b] += s[a]*s[b];
+                for (int d = 0; d < 3; ++d)
+                    for (int a = 0; a < 4; ++a)
+                        Stt[d][a] += double(fit.fitted[size_t(m)*3+d]) * s[a];
+            }
+            // solve 4x4 (Gaussian, shared factorisation for the 3 rhs)
+            double A[4][7];
+            for (int a = 0; a < 4; ++a) {
+                for (int b = 0; b < 4; ++b) A[a][b] = StS[a][b];
+                for (int d = 0; d < 3; ++d) A[a][4+d] = Stt[d][a];
+            }
+            bool singular = false;
+            for (int col = 0; col < 4 && !singular; ++col) {
+                int piv = col;
+                for (int rr = col+1; rr < 4; ++rr)
+                    if (std::abs(A[rr][col]) > std::abs(A[piv][col])) piv = rr;
+                if (std::abs(A[piv][col]) < 1e-12) { singular = true; break; }
+                if (piv != col) for (int cc = 0; cc < 7; ++cc) std::swap(A[piv][cc], A[col][cc]);
+                for (int rr = col+1; rr < 4; ++rr) {
+                    const double f2 = A[rr][col] / A[col][col];
+                    for (int cc = col; cc < 7; ++cc) A[rr][cc] -= f2 * A[col][cc];
+                }
+            }
+            double W[3][4];   // affine rows per output dim
+            if (!singular) {
+                for (int d = 0; d < 3; ++d)
+                    for (int rr = 3; rr >= 0; --rr) {
+                        double acc = A[rr][4+d];
+                        for (int cc = rr+1; cc < 4; ++cc) acc -= A[rr][cc] * W[d][cc];
+                        W[d][rr] = acc / A[rr][rr];
+                    }
+            }
+            for (int v : verts) {
+                if (singular) {
+                    for (int d = 0; d < 3; ++d)
+                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
+                    continue;
+                }
+                const double p[4] = {fitTmplV[size_t(v)*3], fitTmplV[size_t(v)*3+1],
+                                     fitTmplV[size_t(v)*3+2], 1.0};
+                for (int d = 0; d < 3; ++d) {
+                    double o = 0;
+                    for (int a = 0; a < 4; ++a) o += W[d][a] * p[a];
+                    fitted[size_t(v)*3+d] = float(o);
+                }
+            }
+        }
+    }
+
     // sanitize the correspondence: a handful of template verts may have
     // diverged (NaN/inf) even in an accepted fit (< 5% by the NRICP gate).
     // Fall those back to the template neutral so they don't poison the
     // deformation-transfer solve — they simply won't deform meaningfully.
-    std::vector<float> fitted = fit.fitted;
-    const std::vector<float>& tn = tmpl.neutral();
     for (size_t i = 0; i < fitted.size() && i < tn.size(); ++i)
         if (!std::isfinite(fitted[i]))
             fitted[i] = tn[i];
