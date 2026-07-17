@@ -90,12 +90,21 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     };
     MeshDepthRenderer::RenderResult rr;
     LandmarkResult lr;
-    float bestConf = -1.0f;
+    float bestLogit = -1e9f;
     // Two render styles per view: the shaded render (materials intact —
     // carries texture contrast MediaPipe likes) and the fog depth-map render
     // (pure geometry statue — immune to broken normals / inconsistent winding
     // / missing textures, which turn the shaded render into unusable noise).
-    for (int depthMode = 0; depthMode <= 1 && bestConf < 0.85f; ++depthMode) {
+    //
+    // EVERY view in a mode is evaluated — no first-hit early-out. The winner
+    // is the highest RAW presence logit: a true face scores ~+20 while a
+    // false positive (the smooth back of a head) scores far lower, but both
+    // saturate the sigmoid, so an early-out on `confidence` locked onto the
+    // back of backwards-facing imports (glb round-trips flip facing). Ranking
+    // all four views by logit IS the orientation detection.
+    constexpr float kStrongFaceLogit = 6.0f;   // sigmoid ≈ 0.998
+    for (int depthMode = 0;
+         depthMode <= 1 && bestLogit < kStrongFaceLogit; ++depthMode) {
         for (const auto& view : views) {
             QString err;
             MeshDepthRenderer::RenderResult vrr = depthMode
@@ -133,21 +142,21 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
             LandmarkResult vlr = det.detect(vrr.depth);
             if (std::getenv("QTMESH_FACERIG_DEBUG"))
                 std::fprintf(stderr,
-                             "[facerig] detect view=%s mode=%s ok=%d conf=%.2f\n",
+                             "[facerig] detect view=%s mode=%s ok=%d conf=%.2f "
+                             "logit=%.1f\n",
                              view.name, depthMode ? "depth" : "shaded",
-                             vlr.ok, vlr.confidence);
+                             vlr.ok, vlr.confidence, vlr.presenceLogit);
             if (const char* dp = std::getenv("QTMESH_FACERIG_DUMP_RENDER"))
                 vrr.depth.save(QString::fromUtf8(dp) + "."
                                + QString::fromStdString(entity->getName()) + "."
                                + (depthMode ? "depth." : "shaded.")
                                + view.name + ".png");
             if (!vlr.ok || vlr.points.empty()) continue;
-            if (vlr.confidence > bestConf) {
-                bestConf = vlr.confidence;
+            if (vlr.presenceLogit > bestLogit) {
+                bestLogit = vlr.presenceLogit;
                 rr = std::move(vrr);
                 lr = std::move(vlr);
             }
-            if (bestConf >= 0.85f) break;   // confident face — stop rendering
         }
     }
     if (rr.depth.isNull() || !lr.ok || lr.points.empty()) return out;

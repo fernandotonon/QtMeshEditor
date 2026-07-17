@@ -29,6 +29,11 @@ struct LandmarkResult {
     // z a relative depth (unused for back-projection). Empty when no face.
     std::vector<std::array<float, 3>> points;
     float confidence = 0.0f;   // presence sigmoid, 0 = no face
+    // RAW presence logit. The sigmoid saturates (~1.0) for both a true face
+    // (logit ~+20) and a convincing false positive like the smooth back of a
+    // head (low positive logit) — rank candidate views/crops by THIS, never
+    // by `confidence`.
+    float presenceLogit = -1e9f;
     bool ok = false;
 };
 

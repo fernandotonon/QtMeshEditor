@@ -243,9 +243,9 @@ LandmarkResult FaceLandmarkDetector::detect(const QImage& image)
     LandmarkResult best;
     for (const Cand& c : cands) {
         LandmarkResult pr = runPass(image, c.ox, c.oy, c.side);
-        if (pr.ok && !pr.points.empty() && pr.confidence > best.confidence) {
+        if (pr.ok && !pr.points.empty()
+            && pr.presenceLogit > best.presenceLogit) {
             best = std::move(pr);
-            if (best.confidence >= 0.98f) break;
         }
     }
     if (!best.ok || best.points.empty()) return best;
@@ -266,7 +266,7 @@ LandmarkResult FaceLandmarkDetector::detect(const QImage& image)
         const int oy1 = std::clamp(int(cy - side1 * 0.5f), 0, H - side1);
         LandmarkResult pass2 = runPass(image, ox1, oy1, side1);
         if (pass2.ok && !pass2.points.empty()
-            && pass2.confidence >= best.confidence)
+            && pass2.presenceLogit >= best.presenceLogit)
             return pass2;
     }
     return best;
@@ -327,6 +327,7 @@ LandmarkResult FaceLandmarkDetector::runPass(const QImage& image,
         r.confidence = presenceFound
             ? 1.f / (1.f + std::exp(-std::clamp(presenceLogit, -50.f, 50.f)))
             : 1.f;
+        r.presenceLogit = presenceFound ? presenceLogit : 0.f;
 
         const int n = int(landmarkFloats / 3);
         r.points.reserve(size_t(n));
