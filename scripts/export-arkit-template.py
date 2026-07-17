@@ -84,7 +84,13 @@ def load_obj(path):
             if ln.startswith("v "):
                 V.append([float(x) for x in ln.split()[1:4]])
             elif ln.startswith("f "):
-                F.append([int(t.split("/")[0]) - 1 for t in ln.split()[1:4]])
+                # Fan-triangulate: ICT-FaceKit meshes are QUADS. Taking only
+                # the first 3 indices dropped every quad's second triangle,
+                # shipping a template with half its faces missing (holed
+                # renders, fragmented connectivity).
+                idx = [int(t.split("/")[0]) - 1 for t in ln.split()[1:]]
+                for k in range(1, len(idx) - 1):
+                    F.append([idx[0], idx[k], idx[k + 1]])
     return np.asarray(V, np.float64), np.asarray(F, np.int32)
 
 

@@ -64,6 +64,12 @@ Ogre::MaterialPtr ensureDepthMaterial()
     pass->setAmbient(0, 0, 0);
     // Fog must affect this pass.
     pass->setFog(false);  // false => inherit scene fog
+    // Double-sided: assets with inconsistent triangle winding (LH round-trips,
+    // raw scans) would otherwise render half their faces as culled holes and
+    // the depth map degrades to speckle noise. The depth buffer still keeps
+    // the nearest surface, so a correctly-wound mesh is unaffected.
+    pass->setCullingMode(Ogre::CULL_NONE);
+    pass->setManualCullingMode(Ogre::MANUAL_CULL_NONE);
     return mat;
 }
 
@@ -138,7 +144,8 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
 }
 
 MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
-    Ogre::Entity* entity, int size, const View& view, QString* errorOut)
+    Ogre::Entity* entity, int size, const View& view, QString* errorOut,
+    const Ogre::AxisAlignedBox* focusAabb)
 {
     RenderResult result;
     if (!entity) {
@@ -154,8 +161,11 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
 
     // Frame the camera on the entity's bounding sphere so the whole
     // mesh fills the view (matches how the generated texture is
-    // projection-baked back).
-    const Ogre::AxisAlignedBox aabb = entity->getWorldBoundingBox(true);
+    // projection-baked back). A focus box (e.g. the head of a full-body
+    // character) overrides the framing when given.
+    const Ogre::AxisAlignedBox aabb =
+        (focusAabb && !focusAabb->isNull()) ? *focusAabb
+                                            : entity->getWorldBoundingBox(true);
     const Ogre::Vector3 center = aabb.getCenter();
     const Ogre::Real radius = aabb.getHalfSize().length();
     if (radius <= 0.0f) {
@@ -221,20 +231,31 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     }
 
     // Turn off the target entity's bounding box for the capture
-    // (it's on by default when selected). Remember to restore.
+    // (it's on when selected). Save the PRIOR state — restoring an
+    // unconditional `true` used to leave stray debug boxes on (and they
+    // draw into later captures: the box render ignores visibility).
     Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    const bool targetBoxWasShown = targetNode && targetNode->getShowBoundingBox();
     if (targetNode) targetNode->showBoundingBox(false);
 
     // Hide other entities entirely, remembering each node's prior
     // visibility so we restore exactly what we changed (a node that
-    // was already hidden must stay hidden on restore).
+    // was already hidden must stay hidden on restore). Their bounding
+    // boxes must be turned off too — showBoundingBox draws via the
+    // scene manager's debug pass even when the node's objects are hidden.
     std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
+    std::vector<Ogre::SceneNode*> hiddenBoxes;
     if (Manager::getSingletonPtr()) {
         for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
             if (!other || other == entity) continue;
             if (other->getMovableType() != "Entity") continue;
             Ogre::SceneNode* n = other->getParentSceneNode();
-            if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+            if (!n) continue;
+            if (n->getShowBoundingBox()) {
+                hiddenBoxes.push_back(n);
+                n->showBoundingBox(false);
+            }
+            if (n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
                 hiddenNodes.emplace_back(n, true);
                 n->setVisible(false);
             }
@@ -261,7 +282,8 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
         sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
         sm->setAmbientLight(savedAmbient);
         if (gridNode) gridNode->setVisible(gridWasVisible);
-        if (targetNode) targetNode->showBoundingBox(true);
+        if (targetNode) targetNode->showBoundingBox(targetBoxWasShown);
+        for (auto* n : hiddenBoxes) n->showBoundingBox(true);
         for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
     };
     struct Restorer {
@@ -363,14 +385,21 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
         }
     }
     Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    const bool targetBoxWasShown = targetNode && targetNode->getShowBoundingBox();
     if (targetNode) targetNode->showBoundingBox(false);
     std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
+    std::vector<Ogre::SceneNode*> hiddenBoxes;
     if (Manager::getSingletonPtr()) {
         for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
             if (!other || other == entity) continue;
             if (other->getMovableType() != "Entity") continue;
             Ogre::SceneNode* n = other->getParentSceneNode();
-            if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+            if (!n) continue;
+            if (n->getShowBoundingBox()) {
+                hiddenBoxes.push_back(n);
+                n->showBoundingBox(false);
+            }
+            if (n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
                 hiddenNodes.emplace_back(n, true);
                 n->setVisible(false);
             }
@@ -384,7 +413,8 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
                          sm->getRootSceneNode()->removeAndDestroyChild(lightNode); }
         if (light) sm->destroyLight(light);
         if (gridNode) gridNode->setVisible(gridWasVisible);
-        if (targetNode) targetNode->showBoundingBox(true);
+        if (targetNode) targetNode->showBoundingBox(targetBoxWasShown);
+        for (auto* n : hiddenBoxes) n->showBoundingBox(true);
         for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
     };
     struct Restorer { std::function<void()> fn; ~Restorer() { fn(); } } restorer{restore};

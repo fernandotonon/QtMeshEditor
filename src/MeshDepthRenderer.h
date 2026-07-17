@@ -72,11 +72,13 @@ public:
     // Render `entity`'s depth map at `size` x `size` from `view`. Returns a
     // RenderResult whose `.depth` is null on failure (errorOut populated).
     // Must be called on the main/render thread — it touches the Ogre scene
-    // manager.
+    // manager. `focusAabb` (optional, WORLD space) frames the camera on that
+    // box instead of the whole entity (same semantics as renderShadedView).
     static RenderResult renderDepthMapView(Ogre::Entity* entity,
                                            int size,
                                            const View& view,
-                                           QString* errorOut = nullptr);
+                                           QString* errorOut = nullptr,
+                                           const Ogre::AxisAlignedBox* focusAabb = nullptr);
 
     // Back-compat convenience: front-view depth image only (issue #403).
     static QImage renderDepthMap(Ogre::Entity* entity,

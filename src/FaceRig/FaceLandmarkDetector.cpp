@@ -181,12 +181,102 @@ LandmarkResult FaceLandmarkDetector::detect(const QImage& image)
     LandmarkResult r;
     if (!isAvailable() || image.isNull()) return r;
 
-    // Centre-square crop of the render, then resize to 256 — the head fills the
-    // frame (we rendered it), so the upstream face detector is unnecessary. We
-    // track the crop rect to map landmark px back into the ORIGINAL image space.
     const int W = image.width(), H = image.height();
-    const int side = std::min(W, H);
-    const int ox = (W - side) / 2, oy = (H - side) / 2;
+    const int side0 = std::min(W, H);
+
+    // The landmark graph is trained on tight, detector-cropped FACES. Measured
+    // on our own renders: presence logit -27 full-frame, -8.6 with the head
+    // filling the frame, +19.8 on a chin-to-forehead crop — so candidate crops
+    // must reach face-tightness before the model reports a face at all.
+    //
+    // Our renders put the subject on a black background, so a silhouette scan
+    // finds the head deterministically: bbox of non-black pixels, head width
+    // measured over the TOP part of the blob (shoulders are wider), then a few
+    // face-square candidates around it. A non-black background degrades to the
+    // centre-square fallback candidate.
+    struct Cand { int ox, oy, side; };
+    std::vector<Cand> cands;
+    {
+        const QImage gray = image.convertToFormat(QImage::Format_Grayscale8);
+        int top = H, bot = -1;
+        std::vector<int> rowMin(size_t(H), W), rowMax(size_t(H), -1);
+        for (int y = 0; y < H; ++y) {
+            const uchar* ln = gray.constScanLine(y);
+            for (int x = 0; x < W; ++x) {
+                if (ln[x] > 12) {
+                    top = std::min(top, y); bot = std::max(bot, y);
+                    rowMin[size_t(y)] = std::min(rowMin[size_t(y)], x);
+                    rowMax[size_t(y)] = std::max(rowMax[size_t(y)], x);
+                }
+            }
+        }
+        if (bot > top + 16) {
+            // head width = median row span over the top 35% of the blob
+            const int headRows = std::max(8, (bot - top) * 35 / 100);
+            int wMin = W, wMax = -1;
+            long cxSum = 0; int cxN = 0;
+            for (int y = top + headRows / 4; y < top + headRows; ++y) {
+                if (rowMax[size_t(y)] < 0) continue;
+                wMin = std::min(wMin, rowMin[size_t(y)]);
+                wMax = std::max(wMax, rowMax[size_t(y)]);
+                cxSum += (rowMin[size_t(y)] + rowMax[size_t(y)]) / 2; ++cxN;
+            }
+            if (wMax > wMin + 16 && cxN > 0) {
+                const int headW = wMax - wMin;
+                const int cx = int(cxSum / cxN);
+                // face square candidates: the face sits in the lower-middle of
+                // the head — try a few sizes/centres around it.
+                for (float s : {0.9f, 1.15f, 1.45f}) {
+                    int side = std::min(int(headW * s), std::min(W, H));
+                    if (side < 32) continue;
+                    const int cyFace = top + int(side * 0.62f);
+                    cands.push_back({
+                        std::clamp(cx - side / 2, 0, W - side),
+                        std::clamp(cyFace - side / 2, 0, H - side),
+                        side });
+                }
+            }
+        }
+    }
+    cands.push_back({ (W - side0) / 2, (H - side0) / 2, side0 });  // fallback
+
+    LandmarkResult best;
+    for (const Cand& c : cands) {
+        LandmarkResult pr = runPass(image, c.ox, c.oy, c.side);
+        if (pr.ok && !pr.points.empty() && pr.confidence > best.confidence) {
+            best = std::move(pr);
+            if (best.confidence >= 0.98f) break;
+        }
+    }
+    if (!best.ok || best.points.empty()) return best;
+
+    // Refine: tight re-crop around the winning landmark bbox (×1.6, the
+    // expansion MediaPipe's own face detector applies).
+    float mnx = best.points[0][0], mxx = mnx;
+    float mny = best.points[0][1], mxy = mny;
+    for (const auto& p : best.points) {
+        mnx = std::min(mnx, p[0]); mxx = std::max(mxx, p[0]);
+        mny = std::min(mny, p[1]); mxy = std::max(mxy, p[1]);
+    }
+    const float cx = (mnx + mxx) * 0.5f, cy = (mny + mxy) * 0.5f;
+    int side1 = int(std::max(mxx - mnx, mxy - mny) * 1.6f);
+    if (side1 >= 32) {
+        side1 = std::min(side1, std::min(W, H));
+        const int ox1 = std::clamp(int(cx - side1 * 0.5f), 0, W - side1);
+        const int oy1 = std::clamp(int(cy - side1 * 0.5f), 0, H - side1);
+        LandmarkResult pass2 = runPass(image, ox1, oy1, side1);
+        if (pass2.ok && !pass2.points.empty()
+            && pass2.confidence >= best.confidence)
+            return pass2;
+    }
+    return best;
+}
+
+LandmarkResult FaceLandmarkDetector::runPass(const QImage& image,
+                                             int ox, int oy, int side)
+{
+    LandmarkResult r;
+    if (!isAvailable() || image.isNull() || side <= 0) return r;
     QImage crop = image.copy(ox, oy, side, side)
                       .convertToFormat(QImage::Format_RGB888)
                       .scaled(kInputSize, kInputSize, Qt::IgnoreAspectRatio,

@@ -56,9 +56,17 @@ public:
 
     // Detect landmarks on `image` (any format; the head should fill the frame,
     // centred and front-facing). Points come back in `image`'s pixel space.
+    // Runs TWO passes: a loose full-frame pass to locate the face, then a
+    // tight re-crop around the pass-1 landmark bbox — FaceMesh is trained on
+    // detector-cropped faces, so a loose frame depresses both the presence
+    // score and landmark accuracy.
     LandmarkResult detect(const QImage& image);
 
 private:
+    // One inference on the square crop (ox, oy, side) of `image`; landmark
+    // x/y mapped back to `image` pixel space.
+    LandmarkResult runPass(const QImage& image, int ox, int oy, int side);
+
     struct Impl;
     std::unique_ptr<Impl> d;
     QString m_error;

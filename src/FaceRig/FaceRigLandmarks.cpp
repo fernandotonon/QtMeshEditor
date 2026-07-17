@@ -76,21 +76,57 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
                                             localV[size_t(i)*3+1],
                                             localV[size_t(i)*3+2])); }
 
-    // 1) render the head front-on (materials intact, lit) for the detector.
-    QString err;
-    const MeshDepthRenderer::RenderResult rr =
-        MeshDepthRenderer::renderShadedView(
-            entity, kRenderSize, MeshDepthRenderer::front(), &err,
-            focus.isNull() ? nullptr : &focus);
-    if (rr.depth.isNull()) return out;
-#ifndef NDEBUG
-    if (const char* dp = std::getenv("QTMESH_FACERIG_DUMP_RENDER"))
-        rr.depth.save(QString::fromUtf8(dp));
-#endif
-
-    // 2) detect landmarks (image-pixel space).
-    const LandmarkResult lr = det.detect(rr.depth);
-    if (!lr.ok || lr.points.empty()) return out;
+    // 1+2) render the head + detect landmarks — MULTI-VIEW. Nothing guarantees
+    // the mesh faces the renderer's "front" (glTF assets commonly face +Z
+    // while MeshDepthRenderer::front() places the camera on -Z; the LH-flip
+    // asymmetry between import and glTF export also flips facing on
+    // round-trips). Render the four horizontal views and keep the one
+    // MediaPipe is most confident about; a true face scores high (~0.9+), the
+    // back of a head scores low or fails outright. Early-out on a confident
+    // hit so the common facing stays one render.
+    const MeshDepthRenderer::View views[] = {
+        MeshDepthRenderer::front(), MeshDepthRenderer::back(),
+        MeshDepthRenderer::left(),  MeshDepthRenderer::right(),
+    };
+    MeshDepthRenderer::RenderResult rr;
+    LandmarkResult lr;
+    float bestConf = -1.0f;
+    // Two render styles per view: the shaded render (materials intact —
+    // carries texture contrast MediaPipe likes) and the fog depth-map render
+    // (pure geometry statue — immune to broken normals / inconsistent winding
+    // / missing textures, which turn the shaded render into unusable noise).
+    for (int depthMode = 0; depthMode <= 1 && bestConf < 0.85f; ++depthMode) {
+        for (const auto& view : views) {
+            QString err;
+            MeshDepthRenderer::RenderResult vrr = depthMode
+                ? MeshDepthRenderer::renderDepthMapView(
+                      entity, kRenderSize, view, &err,
+                      focus.isNull() ? nullptr : &focus)
+                : MeshDepthRenderer::renderShadedView(
+                      entity, kRenderSize, view, &err,
+                      focus.isNull() ? nullptr : &focus);
+            if (vrr.depth.isNull()) continue;
+            LandmarkResult vlr = det.detect(vrr.depth);
+            if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                std::fprintf(stderr,
+                             "[facerig] detect view=%s mode=%s ok=%d conf=%.2f\n",
+                             view.name, depthMode ? "depth" : "shaded",
+                             vlr.ok, vlr.confidence);
+            if (const char* dp = std::getenv("QTMESH_FACERIG_DUMP_RENDER"))
+                vrr.depth.save(QString::fromUtf8(dp) + "."
+                               + QString::fromStdString(entity->getName()) + "."
+                               + (depthMode ? "depth." : "shaded.")
+                               + view.name + ".png");
+            if (!vlr.ok || vlr.points.empty()) continue;
+            if (vlr.confidence > bestConf) {
+                bestConf = vlr.confidence;
+                rr = std::move(vrr);
+                lr = std::move(vlr);
+            }
+            if (bestConf >= 0.85f) break;   // confident face — stop rendering
+        }
+    }
+    if (rr.depth.isNull() || !lr.ok || lr.points.empty()) return out;
     out.confidence = lr.confidence;
 #ifndef NDEBUG
     if (const char* dp = std::getenv("QTMESH_FACERIG_DUMP_LANDMARKS")) {
@@ -201,9 +237,48 @@ Ogre::Entity* templateEntity(const std::vector<float>& v,
     sub->vertexData->vertexCount = size_t(vc);
     auto* decl = sub->vertexData->vertexDeclaration;
     decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    decl->addElement(0, sizeof(float) * 3, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+
+    // Smooth vertex normals (area-weighted face-normal accumulation). Without
+    // a NORMAL attribute the render pipeline samples undefined per-vertex data
+    // and the shaded render degrades to per-triangle noise MediaPipe can't
+    // detect a face in.
+    std::vector<float> normals(v.size(), 0.0f);
+    for (size_t i = 0; i + 2 < f.size(); i += 3) {
+        const int a = f[i], b = f[i+1], c = f[i+2];
+        if (a < 0 || b < 0 || c < 0 || a >= vc || b >= vc || c >= vc) continue;
+        const Ogre::Vector3 pa(v[size_t(a)*3], v[size_t(a)*3+1], v[size_t(a)*3+2]);
+        const Ogre::Vector3 pb(v[size_t(b)*3], v[size_t(b)*3+1], v[size_t(b)*3+2]);
+        const Ogre::Vector3 pc(v[size_t(c)*3], v[size_t(c)*3+1], v[size_t(c)*3+2]);
+        const Ogre::Vector3 n = (pb - pa).crossProduct(pc - pa);  // area-weighted
+        for (int k : {a, b, c}) {
+            normals[size_t(k)*3+0] += n.x;
+            normals[size_t(k)*3+1] += n.y;
+            normals[size_t(k)*3+2] += n.z;
+        }
+    }
+    for (int i = 0; i < vc; ++i) {
+        Ogre::Vector3 n(normals[size_t(i)*3], normals[size_t(i)*3+1],
+                        normals[size_t(i)*3+2]);
+        if (n.isZeroLength()) n = Ogre::Vector3::UNIT_Z;
+        n.normalise();
+        normals[size_t(i)*3+0] = n.x;
+        normals[size_t(i)*3+1] = n.y;
+        normals[size_t(i)*3+2] = n.z;
+    }
+
+    std::vector<float> interleaved(size_t(vc) * 6);
+    for (int i = 0; i < vc; ++i) {
+        interleaved[size_t(i)*6+0] = v[size_t(i)*3+0];
+        interleaved[size_t(i)*6+1] = v[size_t(i)*3+1];
+        interleaved[size_t(i)*6+2] = v[size_t(i)*3+2];
+        interleaved[size_t(i)*6+3] = normals[size_t(i)*3+0];
+        interleaved[size_t(i)*6+4] = normals[size_t(i)*3+1];
+        interleaved[size_t(i)*6+5] = normals[size_t(i)*3+2];
+    }
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
         decl->getVertexSize(0), vc, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    vbuf->writeData(0, v.size() * sizeof(float), v.data());
+    vbuf->writeData(0, interleaved.size() * sizeof(float), interleaved.data());
     sub->vertexData->vertexBufferBinding->setBinding(0, vbuf);
 
     const bool use32 = vc > 65535;
@@ -311,12 +386,10 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
             U.push_back(a.target);
         }
         const double resid = constellationResidual(C, U);
-#ifndef NDEBUG
         if (std::getenv("QTMESH_FACERIG_DEBUG"))
             std::fprintf(stderr, "[facerig] landmark anchors: tmpl.ok=%d "
                          "user.ok=%d anchors=%zu residual=%.3f\n",
                          tlm.ok, ulm.ok, anchors.size(), resid);
-#endif
         if (resid >= 0.15) anchors.clear();   // garbage → fit unanchored
     }
     return anchors;
@@ -533,12 +606,11 @@ std::vector<FaceMarker> seedFaceMarkers(
     const double resid = constellationResidual(detC, detU);
     const bool confident = ulm.ok && seeded >= int(markers.size()) * 3 / 4
                            && resid < 0.12;
-#ifndef NDEBUG
     if (std::getenv("QTMESH_FACERIG_DEBUG"))
-        std::fprintf(stderr, "[facerig] seed: %d/%zu detected, constellation "
-                     "residual %.3f -> %s\n", seeded, markers.size(), resid,
+        std::fprintf(stderr, "[facerig] seed: ulm.ok=%d conf=%.2f %d/%zu "
+                     "detected, constellation residual %.3f -> %s\n",
+                     ulm.ok, ulm.confidence, seeded, markers.size(), resid,
                      confident ? "trusted" : "using proportional defaults");
-#endif
 
     if (confident) {
         for (auto& m : markers) {
