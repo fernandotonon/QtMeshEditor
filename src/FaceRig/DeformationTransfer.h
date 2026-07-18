@@ -63,6 +63,7 @@ private:
     std::vector<std::array<double, 9>> m_tgtRestInv;
     std::vector<std::array<double, 3>> m_tgtNormalV4;   // fitted 4th vertex/tri
     std::vector<int> m_anchors;         // one gauge-anchor vertex per island
+    double m_fitScale = 1.0;            // template->fitted global size ratio
 };
 
 }  // namespace FaceRig

@@ -34,8 +34,12 @@ upload() {  # <local> <repo-path>
     fi
 }
 
+# Required artifacts — refuse to publish an incomplete release. Only the
+# landmark model below is optional (hosted separately by the mocap epic).
+[ -f "$OUT/arkit_template.bin" ] || { echo "ABORT: missing $OUT/arkit_template.bin"; exit 1; }
+[ -n "$ICT_LICENSE" ] && [ -f "$ICT_LICENSE" ] || { echo "ABORT: ICT_LICENSE not set or missing (the MIT license must ship next to the template)"; exit 1; }
 upload "$OUT/arkit_template.bin" "facerig/arkit_template.bin"
-[ -n "$ICT_LICENSE" ] && upload "$ICT_LICENSE" "facerig/ICT-FaceKit-LICENSE.txt"
+upload "$ICT_LICENSE" "facerig/ICT-FaceKit-LICENSE.txt"
 
 # Facial-landmark model (MediaPipe FaceMesh V2, Apache-2.0) that anchors the
 # NRICP fit to real face features (#889 landmark pass). It is the SAME graph the

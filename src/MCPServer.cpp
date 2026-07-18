@@ -2348,8 +2348,10 @@ QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
                 return makeErrorResult(
                     QStringLiteral("Error: blendshapes attached but export to '%1' "
                                    "failed (code %2)").arg(outputPath).arg(rc));
-            // Sidecar with the ordered ARKit names (Assimp drops targetNames).
-            FaceRig::writeArkitSidecar(outputPath, rep.shapeNames);
+            // NOTE: no sidecar write here — MeshImporterExporter::exporter
+            // already writes the FULL deduplicated pose-name sidecar;
+            // overwriting it with only the newly-attached names would drop
+            // pre-existing morph targets and misalign indices.
         }
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")

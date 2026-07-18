@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QtEndian>
 
+#include <cmath>
 #include <cstring>
 
 namespace FaceRig {
@@ -93,11 +94,19 @@ bool ArkitTemplate::load(const QString& path, QString* error)
     m_vertexCount = V;
     m_faceCount = F;
     m_neutral.resize(size_t(V) * 3);
-    for (auto& v : m_neutral)
+    for (auto& v : m_neutral) {
         v = rdF32(p);
+        if (!std::isfinite(v))
+            return fail(QStringLiteral("non-finite neutral position"));
+    }
     m_faces.resize(size_t(F) * 3);
-    for (auto& i : m_faces)
+    for (auto& i : m_faces) {
         i = rdI32(p);
+        // out-of-range indices would be dereferenced by the fit / renders
+        if (i < 0 || i >= V)
+            return fail(QStringLiteral("face index %1 out of range (V=%2)")
+                            .arg(i).arg(V));
+    }
 
     m_shapes.clear();
     m_shapes.reserve(S);
@@ -108,8 +117,12 @@ bool ArkitTemplate::load(const QString& path, QString* error)
         shape.name = QString::fromLatin1(p, qstrnlen(p, kNameLen));
         p += kNameLen;
         shape.deltas.resize(size_t(V) * 3);
-        for (auto& d : shape.deltas)
+        for (auto& d : shape.deltas) {
             d = rdF32(p);
+            if (!std::isfinite(d))
+                return fail(QStringLiteral("non-finite delta in shape %1")
+                                .arg(shape.name));
+        }
         m_shapes.push_back(std::move(shape));
     }
     return true;

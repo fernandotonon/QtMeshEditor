@@ -231,6 +231,14 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     const int Fu = int(userF.size()/3);
     if (Nt < 3 || Fu < 1 || userV.size() < 9)
         return res;
+    bool aborted = false;
+    // Reject malformed face buffers at the public boundary — indices are
+    // dereferenced when building triangles/edges below.
+    const int Nu = int(userV.size()/3);
+    for (int idx : userF)
+        if (idx < 0 || idx >= Nu) return res;
+    for (int idx : tmplF)
+        if (idx < 0 || idx >= Nt) return res;
 
     // user bbox diagonal
     Vec3 mn = at(userV,0), mx = mn;
@@ -247,7 +255,6 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
         for (int a=0;a<3;++a){ tmn[a]=std::min(tmn[a],p[a]); tmx[a]=std::max(tmx[a],p[a]); }
     }
     tc = vscale(tc, 1.0/Nt);
-    const int Nu = int(userV.size()/3);
     for (int i = 0; i < Nu; ++i) uc = vadd(uc, at(userV,i));
     uc = vscale(uc, 1.0/Nu);
     const double tdiag = std::sqrt(vdot(vsub(tmx,tmn), vsub(tmx,tmn)));
@@ -400,8 +407,10 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
         }
         ++levelIdx;
         if (progress && !progress(levelIdx, levelCount)) {
-            // caller aborted — bail with the best fit so far (ok stays false
-            // below because the residual pass computes finiteCount honestly).
+            // caller aborted — bail with the best fit so far, and force
+            // ok=false regardless of how the residuals turn out (the
+            // finite-count check alone can read a half-finished fit as ok).
+            aborted = true;
             break;
         }
     }
@@ -442,7 +451,7 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     res.maxResidual = (divergedCount > Nt / 20)   // > 5% diverged
         ? std::numeric_limits<double>::infinity()
         : mx2;
-    res.ok = finiteCount > Nt / 2;   // need at least half the verts to have fit
+    res.ok = !aborted && finiteCount > Nt / 2;   // half the verts + not cancelled
     return res;
 }
 

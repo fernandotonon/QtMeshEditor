@@ -2,6 +2,7 @@
 
 #include "ArkitTemplate.h"        // reuse its model dir + base-url convention
 #include "../ModelDownloader.h"
+#include "../SentryReporter.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -93,15 +94,18 @@ QString FaceLandmarkDetector::ensureModelBlocking()
     const QString url = base + QString::fromLatin1(kModelFile);
     const QString label = QStringLiteral("face landmark model");
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        QStringLiteral("face landmark model download start"));
+
     QEventLoop loop;
-    bool ok = false, timedOut = false;
+    bool ok = false, timedOut = false, done = false;
     auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
         [&](const QString& name, const QString&) {
-            if (name == label) { ok = true; loop.quit(); }
+            if (name == label) { ok = true; done = true; loop.quit(); }
         });
     auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
         [&](const QString& name, const QString&) {
-            if (name == label) { ok = false; loop.quit(); }
+            if (name == label) { ok = false; done = true; loop.quit(); }
         });
     QTimer timeout;
     timeout.setSingleShot(true);
@@ -110,14 +114,22 @@ QString FaceLandmarkDetector::ensureModelBlocking()
     timeout.start(120000);  // 2 min — the model is small (~3 MB)
 
     dl->startDownload(url, dest, label);
-    loop.exec();
+    // done-guard: a synchronous downloadError would otherwise block the
+    // loop for the full timeout (same pattern as ArkitTemplate).
+    if (!done)
+        loop.exec();
 
     QObject::disconnect(onDone);
     QObject::disconnect(onErr);
     if (timedOut && dl)
         dl->cancelDownload();
 
-    return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
+    const bool success = ok && !timedOut && QFileInfo::exists(dest);
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        success ? QStringLiteral("face landmark model download ok")
+                : QStringLiteral("face landmark model download failed%1")
+                      .arg(timedOut ? QStringLiteral(" (timeout)") : QString()));
+    return success ? dest : QString();
 }
 
 bool FaceLandmarkDetector::isAvailable() const { return d && d->loaded; }

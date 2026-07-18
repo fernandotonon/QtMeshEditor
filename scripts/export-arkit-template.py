@@ -117,13 +117,18 @@ def main():
             if not os.path.exists(p):
                 missing.append(stem)
                 continue
-            ev, _ = load_obj(p)
+            ev, ef = load_obj(p)
             if len(ev) != V:
                 sys.exit(f"topology mismatch: {stem} has {len(ev)} verts, "
                          f"neutral {V}")
+            if not np.array_equal(ef, faces):
+                sys.exit(f"topology mismatch: {stem} face list differs from "
+                         f"the neutral mesh (same vert count is not enough)")
             delta += ev - neutral
         if missing:
-            print(f"  !! {arkit_name}: missing ICT {missing} — zero shape")
+            # A missing expression would silently ship as a dead zero-delta
+            # shape — fail so a corrupt bundle can't be packaged/uploaded.
+            sys.exit(f"ABORT: {arkit_name}: missing ICT {missing}")
         # count verts moved by a MEANINGFUL amount (0.1% of the head
         # diagonal), not floating-point dust, so the log reflects real motion.
         _diag = float(np.linalg.norm(neutral.max(0) - neutral.min(0)))

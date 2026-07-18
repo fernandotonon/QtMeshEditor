@@ -96,6 +96,24 @@ bool DeformationTransfer::init(const std::vector<float>& tmplNeutral,
     m_tmplNeutral = tmplNeutral;
     m_faces = faces;
     m_fitted = fitted;
+    // global template->fitted size ratio, used to scale island gauge-anchor
+    // deltas into fitted space (see the anchor rhs in transfer()).
+    {
+        auto diagOf = [](const std::vector<float>& v) {
+            float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+            for (size_t i = 0; i + 2 < v.size(); i += 3)
+                for (int a = 0; a < 3; ++a) {
+                    lo[a] = std::min(lo[a], v[i + size_t(a)]);
+                    hi[a] = std::max(hi[a], v[i + size_t(a)]);
+                }
+            double s2 = 0;
+            for (int a = 0; a < 3; ++a)
+                s2 += double(hi[a] - lo[a]) * (hi[a] - lo[a]);
+            return std::sqrt(s2);
+        };
+        const double td = diagOf(tmplNeutral);
+        m_fitScale = td > 1e-12 ? diagOf(fitted) / td : 1.0;
+    }
     m_srcRestInv.assign(size_t(F), {});
     m_tgtRestInv.assign(size_t(F), {});
     m_tgtNormalV4.assign(size_t(F), {});
@@ -240,16 +258,20 @@ std::vector<float> DeformationTransfer::transfer(
                 rhs[size_t(axis)][size_t(3*f+g)] = S[size_t(axis*3+g)];
     }
     // anchor rhs: pin one vertex PER ISLAND to (fitted rest + the template's
-    // displacement of that vertex) — fixes each island's translation gauge
-    // while letting the shape move it the same way the source moved it. For
-    // the identity fit this is exactly expr[anchor].
+    // displacement of that vertex, SCALED into fitted space) — fixes each
+    // island's translation gauge while letting the shape move it the way the
+    // source moved it. The gradient system cannot represent rigid
+    // translation, and the raw template-space delta has the wrong amplitude
+    // when the fit changed scale; the global size ratio corrects that (a
+    // rotationless fit is the pipeline contract — the similarity prealign
+    // has no rotation term).
     const double anchorW = 1.0;
     for (size_t ai = 0; ai < m_anchors.size(); ++ai) {
         const size_t v = size_t(m_anchors[ai]);
         for (int axis = 0; axis < 3; ++axis)
             rhs[size_t(axis)][size_t(3*F) + ai] =
                 anchorW * (m_fitted[v*3 + size_t(axis)]
-                           + tmplExprDelta[v*3 + size_t(axis)]);
+                           + m_fitScale * tmplExprDelta[v*3 + size_t(axis)]);
     }
 
     // solve per axis (warm-start real verts at the fitted rest, 4th verts at

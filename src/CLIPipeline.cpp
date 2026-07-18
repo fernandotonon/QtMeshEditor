@@ -9402,8 +9402,10 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
         QString("rig .%1 template=%2 algo=%3 skin=%4")
             .arg(fi.suffix(), templateName, algoName).arg(alsoSkin));
+    // Extension only — absolute paths leak usernames/directory structure
+    // into telemetry.
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-        QString("Importing %1").arg(fi.absoluteFilePath()));
+        QString("Importing .%1 for facerig").arg(fi.suffix()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     QList<Ogre::Entity*> meshEntities;
@@ -9522,8 +9524,10 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
         QString("facerig .%1 max_shapes=%2").arg(fi.suffix()).arg(opts.maxShapes));
+    // Extension only — absolute paths leak usernames/directory structure
+    // into telemetry.
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-        QString("Importing %1").arg(fi.absoluteFilePath()));
+        QString("Importing .%1 for facerig").arg(fi.suffix()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     QList<Ogre::Entity*> meshEntities;

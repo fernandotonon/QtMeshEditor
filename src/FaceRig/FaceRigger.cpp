@@ -664,6 +664,9 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         double maxAmp = 0;
         for (const auto& sh : r.shapes)
             maxAmp = std::max(maxAmp, double(sh.maxDisp));
+        // maxDisp includes the user amplitude — normalise it out so a healthy
+        // rig at amplitude 0.1 doesn't read as "invisible" and rerun.
+        maxAmp /= std::clamp(opts.amplitude, 0.1, 5.0);
         if (maxAmp < 0.005 * diag) {
             std::fprintf(stderr, "[facerig] anchored fit produced invisible "
                          "shapes (max %.5f on diag %.3f) — retrying "

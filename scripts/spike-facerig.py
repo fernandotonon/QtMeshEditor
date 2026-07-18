@@ -81,7 +81,12 @@ def load_obj(path):
             if ln.startswith("v "):
                 V.append([float(x) for x in ln.split()[1:4]])
             elif ln.startswith("f "):
-                F.append([int(t.split("/")[0]) - 1 for t in ln.split()[1:4]])
+                # Fan-triangulate: ICT-FaceKit meshes are QUADS (same fix as
+                # export-arkit-template.py — first-3-indices dropped half the
+                # triangles).
+                idx = [int(t.split("/")[0]) - 1 for t in ln.split()[1:]]
+                for k in range(1, len(idx) - 1):
+                    F.append([idx[0], idx[k], idx[k + 1]])
     return np.asarray(V, dtype=np.float64), np.asarray(F, dtype=np.int64)
 
 

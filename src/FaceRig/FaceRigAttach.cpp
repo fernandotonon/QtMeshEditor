@@ -211,7 +211,8 @@ void headSubmesh(const FaceRigGeometry& geo,
     }
     for (size_t f = 0; f + 2 < geo.userF.size(); f += 3) {
         const int a = geo.userF[f], b = geo.userF[f+1], c = geo.userF[f+2];
-        if (a < 0 || b < 0 || c < 0) continue;
+        const int nv = int(fullToSub.size());
+        if (a < 0 || b < 0 || c < 0 || a >= nv || b >= nv || c >= nv) continue;
         const int sa = fullToSub[size_t(a)], sb = fullToSub[size_t(b)],
                   sc = fullToSub[size_t(c)];
         if (sa >= 0 && sb >= 0 && sc >= 0)
