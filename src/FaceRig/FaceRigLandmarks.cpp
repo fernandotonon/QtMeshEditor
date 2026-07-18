@@ -618,6 +618,30 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
 // are the CHARACTER'S RIGHT (measured on the template: they sit at +X =
 // character-right). Labels here are in CHARACTER space (what a user placing
 // markers on a model naturally means by left/right).
+int canonicalTemplateVertex(int mpIndex)
+{
+    // ICT-FaceKit topology (26,719 verts). Derived offline from the packed
+    // template's own blendshape deltas + midline geometry; side assignment
+    // matches the catalog's measured detector convention (anchorsFromMarkers'
+    // mirror check absorbs a global L/R flip regardless).
+    switch (mpIndex) {
+        case 1:   return 4841;   // nose tip (front-most midline)
+        case 152: return 961;    // chin / gnathion (lowest front midline)
+        case 13:  return 5829;   // upper lip (mouthUpperUp peak, midline)
+        case 14:  return 5945;   // lower lip (mouthLowerDown peak, midline)
+        case 10:  return 2138;   // forehead (midline above brows)
+        case 33:  return 2798;   // eye outer corner (+X lid extreme)
+        case 133: return 3585;   // eye inner corner (+X)
+        case 61:  return 6156;   // mouth corner (+X, mouthSmile peak)
+        case 105: return 2590;   // brow (+X, browOuterUp peak)
+        case 263: return 557;    // eye outer corner (-X)
+        case 362: return 1370;   // eye inner corner (-X)
+        case 291: return 5651;   // mouth corner (-X)
+        case 334: return 349;    // brow (-X)
+        default:  return -1;
+    }
+}
+
 const std::vector<std::pair<QString, int>>& faceMarkerCatalog()
 {
     static const std::vector<std::pair<QString, int>> kCatalog = {
@@ -743,17 +767,40 @@ std::vector<FaceMarker> seedFaceMarkers(
     if (!FaceLandmarkDetector::backendAvailable()) return markers;
     { FaceLandmarkDetector probe; if (!probe.load()) return markers; }
 
-    // Template detection resolves each marker's TEMPLATE vertex (reliable — the
-    // ICT template is a real human face).
-    Ogre::Entity* tent = templateEntity(tmpl.neutral(), tmpl.faces());
-    if (!tent) return markers;
-    if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(true);
-    const MeshLandmarks tlm = detectMeshLandmarks(tent, tmpl.neutral(),
-                                                  std::vector<int>(tmpl.faces()));
-    if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(false);
-
     const int tvc = tmpl.vertexCount();
     const auto& tn = tmpl.neutral();
+
+    // Template-side marker vertices: CANONICAL constants for the ICT topology,
+    // derived offline from the template's own blendshape deltas (the
+    // mouthSmile peak IS the mouth corner, the eyeBlink-moved lid's lateral
+    // extremes ARE the eye corners, gnathion = lowest front midline vertex).
+    // Detection on the template's untextured render carries a systematic
+    // detector bias (lower-face landmarks drift UP one anatomical step), and
+    // that bias used to define the "ground truth" every user marker was
+    // matched against. Falls back to template detection for a non-ICT
+    // template (vertex count mismatch).
+    const bool canonicalOk = (tvc == 26719);
+    if (canonicalOk) {
+        for (auto& m : markers)
+            m.tmplVertex = canonicalTemplateVertex(m.mediapipeIndex);
+    }
+    // Template detection still runs even with canonical vertices: the
+    // template is rendered + detected EXACTLY like the user mesh, so the
+    // difference between where the detector puts a marker on the template and
+    // its canonical vertex measures the detector's systematic bias on this
+    // render style (lower-face landmarks drift up one anatomical step on
+    // untextured statues) — which we then subtract from the user detections.
+    MeshLandmarks tlm;
+    {
+        Ogre::Entity* tent = templateEntity(tmpl.neutral(), tmpl.faces());
+        if (!tent) return markers;
+        if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(true);
+        tlm = detectMeshLandmarks(tent, tmpl.neutral(),
+                                  std::vector<int>(tmpl.faces()));
+        if (auto* tnode = tent->getParentSceneNode()) tnode->setVisible(false);
+    }
+    std::vector<std::array<float,3>> tlmSym(markers.size(), {0,0,0});
+    std::vector<char> tlmSymOk(markers.size(), 0);
     if (tlm.ok) {
         // SYMMETRIZE the detected template landmarks before resolving vertices:
         // the ICT template is x-symmetric (midline at x=0), but MediaPipe
@@ -768,7 +815,8 @@ std::vector<FaceMarker> seedFaceMarkers(
             out = tlm.points[size_t(mpIdx)];
             return true;
         };
-        for (auto& m : markers) {
+        for (size_t k = 0; k < markers.size(); ++k) {
+            auto& m = markers[k];
             const int i = m.mediapipeIndex;
             std::array<float,3> p;
             if (!detected(i, p)) continue;
@@ -789,7 +837,10 @@ std::vector<FaceMarker> seedFaceMarkers(
                     p = { sign * xm, ym, zm };
                 } // single-sided detection: use as-is
             }
-            m.tmplVertex = nearestTemplateVertex(tn, tvc, p);
+            tlmSym[k] = p;
+            tlmSymOk[k] = 1;
+            if (!canonicalOk)
+                m.tmplVertex = nearestTemplateVertex(tn, tvc, p);
         }
     }
 
@@ -799,20 +850,75 @@ std::vector<FaceMarker> seedFaceMarkers(
     // silently poison the warp/fit (measured: jawOpen deltas 50x too small).
     const MeshLandmarks ulm = detectMeshLandmarks(userEntity, userLocalV, userLocalF);
 
-    int seeded = 0;
-    std::vector<std::array<float,3>> detC, detU;   // template/user pairs
+    // Detector-bias correction: transfer each marker's measured template-side
+    // bias (symmetrized detection − canonical vertex) into the user's frame
+    // (scaled by the template→user constellation size ratio) and subtract it
+    // from the user detection. Template and user go through the same render +
+    // detector, so the systematic statue bias cancels; what remains is the
+    // user's actual anatomy.
+    std::vector<std::array<float,3>> uCorr(markers.size(), {0,0,0});
+    std::vector<char> uOk(markers.size(), 0);
     if (ulm.ok) {
-        for (auto& m : markers) {
-            const int i = m.mediapipeIndex;
-            if (i >= 0 && i < int(ulm.points.size()) && ulm.valid[size_t(i)]
-                && m.tmplVertex >= 0) {
-                ++seeded;
-                detC.push_back({tn[size_t(m.tmplVertex)*3],
-                                tn[size_t(m.tmplVertex)*3+1],
-                                tn[size_t(m.tmplVertex)*3+2]});
-                detU.push_back(ulm.points[size_t(i)]);
+        // constellation size ratio from raw detected pairs (bias-consistent
+        // on both sides, so the ratio is unaffected by the bias itself)
+        double sT = 0, sUsr = 0;
+        {
+            std::array<double,3> cT{0,0,0}, cUsr{0,0,0};
+            int n = 0;
+            for (size_t k = 0; k < markers.size(); ++k) {
+                const int i = markers[k].mediapipeIndex;
+                if (!tlmSymOk[k] || i < 0 || i >= int(ulm.points.size())
+                    || !ulm.valid[size_t(i)]) continue;
+                for (int d = 0; d < 3; ++d) {
+                    cT[size_t(d)] += tlmSym[k][size_t(d)];
+                    cUsr[size_t(d)] += ulm.points[size_t(i)][size_t(d)];
+                }
+                ++n;
+            }
+            if (n >= 4) {
+                for (int d = 0; d < 3; ++d) { cT[size_t(d)] /= n; cUsr[size_t(d)] /= n; }
+                for (size_t k = 0; k < markers.size(); ++k) {
+                    const int i = markers[k].mediapipeIndex;
+                    if (!tlmSymOk[k] || i < 0 || i >= int(ulm.points.size())
+                        || !ulm.valid[size_t(i)]) continue;
+                    double dt = 0, du = 0;
+                    for (int d = 0; d < 3; ++d) {
+                        const double a = tlmSym[k][size_t(d)] - cT[size_t(d)];
+                        const double b = ulm.points[size_t(i)][size_t(d)] - cUsr[size_t(d)];
+                        dt += a*a; du += b*b;
+                    }
+                    sT += std::sqrt(dt); sUsr += std::sqrt(du);
+                }
             }
         }
+        const double ratio = (canonicalOk && tlm.ok && sT > 1e-9)
+                             ? sUsr / sT : 0.0;
+        for (size_t k = 0; k < markers.size(); ++k) {
+            const int i = markers[k].mediapipeIndex;
+            if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)])
+                continue;
+            uCorr[k] = ulm.points[size_t(i)];
+            uOk[k] = 1;
+            const int cv = markers[k].tmplVertex;
+            if (ratio > 0.0 && tlmSymOk[k] && cv >= 0) {
+                for (int d = 0; d < 3; ++d) {
+                    const float bias = tlmSym[k][size_t(d)]
+                                       - tn[size_t(cv)*3 + size_t(d)];
+                    uCorr[k][size_t(d)] -= float(ratio * bias);
+                }
+            }
+        }
+    }
+
+    int seeded = 0;
+    std::vector<std::array<float,3>> detC, detU;   // template/user pairs
+    for (size_t k = 0; k < markers.size(); ++k) {
+        if (!uOk[k] || markers[k].tmplVertex < 0) continue;
+        ++seeded;
+        const int cv = markers[k].tmplVertex;
+        detC.push_back({tn[size_t(cv)*3], tn[size_t(cv)*3+1],
+                        tn[size_t(cv)*3+2]});
+        detU.push_back(uCorr[k]);
     }
     // STRICT gate (0.12): the GUI render differs from headless (skybox,
     // lighting), so MediaPipe's garbage varies run-to-run and looser gates let
@@ -865,12 +971,11 @@ std::vector<FaceMarker> seedFaceMarkers(
             return p;
         };
         std::vector<double> devs;
-        for (auto& m : markers) {
-            const int i = m.mediapipeIndex;
-            if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)]
-                || m.tmplVertex < 0) continue;
+        for (size_t k = 0; k < markers.size(); ++k) {
+            const auto& m = markers[k];
+            if (!uOk[k] || m.tmplVertex < 0) continue;
             const auto pred = predictOf(m.tmplVertex);
-            const auto& det = ulm.points[size_t(i)];
+            const auto& det = uCorr[k];
             const double dx = det[0]-pred[0], dy = det[1]-pred[1],
                          dz = det[2]-pred[2];
             devs.push_back(std::sqrt(dx*dx + dy*dy + dz*dz));
@@ -882,10 +987,9 @@ std::vector<FaceMarker> seedFaceMarkers(
         const double outlierAt = std::max(2.0 * median, 1e-9);
 
         size_t di = 0;
-        for (auto& m : markers) {
-            const int i = m.mediapipeIndex;
-            if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)])
-                continue;
+        for (size_t k = 0; k < markers.size(); ++k) {
+            auto& m = markers[k];
+            if (!uOk[k]) continue;
             if (m.tmplVertex >= 0 && di < devs.size()
                 && devs[di] > outlierAt) {
                 // consensus prediction, snapped onto the head surface
@@ -908,7 +1012,7 @@ std::vector<FaceMarker> seedFaceMarkers(
                                  "dev=%.3f (median %.3f) -> consensus\n",
                                  m.label.toUtf8().constData(), devs[di], median);
             } else {
-                m.userPos = ulm.points[size_t(i)];
+                m.userPos = uCorr[k];
             }
             if (m.tmplVertex >= 0) ++di;
             m.placed = true;
