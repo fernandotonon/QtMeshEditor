@@ -48,7 +48,15 @@ public:
     int nearest(const float* q) const
     {
         if (!m_pts || m_cells.empty()) return -1;
-        const std::array<int,3> c = cellOf(q);
+        // Clamp the SEARCH ORIGIN into the populated bounds: for a query far
+        // outside the grid, the shell cap below (grid span) could otherwise
+        // terminate before any populated cell is reached and silently return
+        // -1 (dropping that vertex's transferred delta). Distances are still
+        // measured to the real q, so the nearest result is unchanged.
+        float qc[3];
+        for (int a = 0; a < 3; ++a)
+            qc[a] = std::min(std::max(q[a], m_lo[a]), m_hi[a]);
+        const std::array<int,3> c = cellOf(qc);
         // absolute cap on the shell radius = span of the grid in cells + 1,
         // guarantees termination even if q is far outside the populated region.
         int spanCells = 1;
@@ -317,7 +325,9 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         // keep faces whose 3 verts are all head; remap to sub indices
         for (size_t f = 0; f + 2 < userF.size(); f += 3) {
             const int a = userF[f], b = userF[f+1], c = userF[f+2];
-            if (a < 0 || b < 0 || c < 0) continue;
+            const int nFull = int(fullToSub.size());
+            if (a < 0 || b < 0 || c < 0 || a >= nFull || b >= nFull || c >= nFull)
+                continue;
             const int sa = fullToSub[size_t(a)], sb = fullToSub[size_t(b)],
                       sc = fullToSub[size_t(c)];
             if (sa >= 0 && sb >= 0 && sc >= 0)

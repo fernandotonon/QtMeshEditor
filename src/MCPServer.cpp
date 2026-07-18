@@ -2324,9 +2324,8 @@ QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
         return makeErrorResult("No selected entity.");
     Ogre::Entity* entity = resolved.first();
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
-        QStringLiteral("add_arkit_blendshapes entity=%1 max_shapes=%2")
-            .arg(QString::fromStdString(entity->getName())).arg(opts.maxShapes));
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("add_arkit_blendshapes max_shapes=%1").arg(opts.maxShapes));
 
     FaceRig::AttachReport rep;
     try {

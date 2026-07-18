@@ -91,16 +91,16 @@ bool ArkitTemplate::load(const QString& path, QString* error)
         return fail(QStringLiteral("template truncated (need %1 bytes, have %2)")
                         .arg(need).arg(blob.size()));
 
-    m_vertexCount = V;
-    m_faceCount = F;
-    m_neutral.resize(size_t(V) * 3);
-    for (auto& v : m_neutral) {
+    // Parse into TEMPORARIES and commit only after every check passes — a
+    // validation failure mid-file must not leave the object half-populated.
+    std::vector<float> neutral(size_t(V) * 3, 0.0f);
+    for (auto& v : neutral) {
         v = rdF32(p);
         if (!std::isfinite(v))
             return fail(QStringLiteral("non-finite neutral position"));
     }
-    m_faces.resize(size_t(F) * 3);
-    for (auto& i : m_faces) {
+    std::vector<int> faces(size_t(F) * 3, 0);
+    for (auto& i : faces) {
         i = rdI32(p);
         // out-of-range indices would be dereferenced by the fit / renders
         if (i < 0 || i >= V)
@@ -108,8 +108,8 @@ bool ArkitTemplate::load(const QString& path, QString* error)
                             .arg(i).arg(V));
     }
 
-    m_shapes.clear();
-    m_shapes.reserve(S);
+    std::vector<ArkitShape> shapes;
+    shapes.reserve(S);
     for (int s = 0; s < S; ++s) {
         if (p + kNameLen > end)
             return fail(QStringLiteral("shape %1 name overruns").arg(s));
@@ -123,8 +123,14 @@ bool ArkitTemplate::load(const QString& path, QString* error)
                 return fail(QStringLiteral("non-finite delta in shape %1")
                                 .arg(shape.name));
         }
-        m_shapes.push_back(std::move(shape));
+        shapes.push_back(std::move(shape));
     }
+
+    m_vertexCount = V;
+    m_faceCount = F;
+    m_neutral = std::move(neutral);
+    m_faces = std::move(faces);
+    m_shapes = std::move(shapes);
     return true;
 }
 
