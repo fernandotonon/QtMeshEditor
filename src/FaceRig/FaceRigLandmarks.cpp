@@ -830,12 +830,88 @@ std::vector<FaceMarker> seedFaceMarkers(
                      confident ? "trusted" : "using proportional defaults");
 
     if (confident) {
+        // Consensus outlier correction: fit the similarity model the
+        // constellation gate already uses (centroid + scale, no rotation)
+        // and predict each marker from the TEMPLATE layout. Individual
+        // detections on low-contrast renders drift most at the eye/mouth
+        // corners (measured up to 0.59 units on the reference vs ~0.07
+        // for the nose); a detection that deviates from the consensus
+        // prediction by more than 2x the median is detector noise — replace
+        // it with the prediction, snapped to the head surface.
+        std::array<double,3> cC{0,0,0}, cU{0,0,0};
+        const int np = int(detC.size());
+        for (int i = 0; i < np; ++i)
+            for (int d = 0; d < 3; ++d) {
+                cC[size_t(d)] += detC[size_t(i)][size_t(d)] / np;
+                cU[size_t(d)] += detU[size_t(i)][size_t(d)] / np;
+            }
+        double sC = 0, sU = 0;
+        for (int i = 0; i < np; ++i) {
+            double dc = 0, du = 0;
+            for (int d = 0; d < 3; ++d) {
+                const double a = detC[size_t(i)][size_t(d)] - cC[size_t(d)];
+                const double b = detU[size_t(i)][size_t(d)] - cU[size_t(d)];
+                dc += a*a; du += b*b;
+            }
+            sC += std::sqrt(dc); sU += std::sqrt(du);
+        }
+        const double scale = (sC > 1e-12) ? sU / sC : 1.0;
+
+        auto predictOf = [&](int tmplVertex) -> std::array<float,3> {
+            std::array<float,3> p;
+            for (int d = 0; d < 3; ++d)
+                p[size_t(d)] = float((double(tn[size_t(tmplVertex)*3 + d])
+                                      - cC[size_t(d)]) * scale + cU[size_t(d)]);
+            return p;
+        };
+        std::vector<double> devs;
         for (auto& m : markers) {
             const int i = m.mediapipeIndex;
-            if (i >= 0 && i < int(ulm.points.size()) && ulm.valid[size_t(i)]) {
+            if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)]
+                || m.tmplVertex < 0) continue;
+            const auto pred = predictOf(m.tmplVertex);
+            const auto& det = ulm.points[size_t(i)];
+            const double dx = det[0]-pred[0], dy = det[1]-pred[1],
+                         dz = det[2]-pred[2];
+            devs.push_back(std::sqrt(dx*dx + dy*dy + dz*dz));
+        }
+        std::vector<double> sorted = devs;
+        std::sort(sorted.begin(), sorted.end());
+        const double median = sorted.empty() ? 0.0
+                              : sorted[sorted.size() / 2];
+        const double outlierAt = std::max(2.0 * median, 1e-9);
+
+        size_t di = 0;
+        for (auto& m : markers) {
+            const int i = m.mediapipeIndex;
+            if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)])
+                continue;
+            if (m.tmplVertex >= 0 && di < devs.size()
+                && devs[di] > outlierAt) {
+                // consensus prediction, snapped onto the head surface
+                std::array<float,3> p = predictOf(m.tmplVertex);
+                float best = 1e30f;
+                std::array<float,3> snap = p;
+                for (size_t v = 0; v + 2 < userLocalV.size(); v += 3) {
+                    const float dx = userLocalV[v]   - p[0];
+                    const float dy = userLocalV[v+1] - p[1];
+                    const float dz = userLocalV[v+2] - p[2];
+                    const float d2 = dx*dx + dy*dy + dz*dz;
+                    if (d2 < best) {
+                        best = d2;
+                        snap = {userLocalV[v], userLocalV[v+1], userLocalV[v+2]};
+                    }
+                }
+                m.userPos = snap;
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] seed outlier '%s' "
+                                 "dev=%.3f (median %.3f) -> consensus\n",
+                                 m.label.toUtf8().constData(), devs[di], median);
+            } else {
                 m.userPos = ulm.points[size_t(i)];
-                m.placed = true;
             }
+            if (m.tmplVertex >= 0) ++di;
+            m.placed = true;
         }
     } else {
         // Garbage / weak detection: seed EVERY marker at the head-box-projected

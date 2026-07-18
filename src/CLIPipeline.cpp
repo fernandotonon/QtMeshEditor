@@ -9601,6 +9601,20 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
         const auto anchors = FaceRig::anchorsFromMarkers(markers, tmpl);
         err() << "[sim] markers=" << markers.size() << " anchors=" << anchors.size()
               << " seedConfident=" << confident << Qt::endl;
+        // seed-accuracy probe: when the rig target IS the template geometry
+        // (the ARKit reference), each marker's true position is its template
+        // vertex — print the seeding error per marker.
+        if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM") == 1) {
+            for (const auto& m : markers) {
+                if (!m.placed || m.tmplVertex < 0) continue;
+                const auto& tv = tmpl.neutral();
+                const float dx = tv[size_t(m.tmplVertex)*3]   - m.userPos[0];
+                const float dy = tv[size_t(m.tmplVertex)*3+1] - m.userPos[1];
+                const float dz = tv[size_t(m.tmplVertex)*3+2] - m.userPos[2];
+                err() << "[sim] seederr '" << m.label << "' = "
+                      << std::sqrt(dx*dx + dy*dy + dz*dz) << Qt::endl;
+            }
+        }
         // surface-distance probe: how far does each seeded marker float off
         // the head mesh? (box-mapped defaults used to hover off the face when
         // protrusions inflate the head box)
