@@ -88,7 +88,7 @@ Template 26,719v → user 12,763v (60%-decimated, different topology):
 | ARKit shape | max displacement | verts moved | semantics check |
 |---|---|---|---|
 | NRICP surface fit | mean **0.003%** / max **0.59%** of diag | — | template lands on user surface |
-| jawOpen | 9.0% | 6,771 | lower face ΔY −0.32 (drops), forehead |Δ| 0.002 (still) ✅ |
+| jawOpen | 9.0% | 6,771 | lower face ΔY −0.32 (drops), forehead \|Δ\| 0.002 (still) ✅ |
 | mouthSmileLeft | 3.3% | 3,552 | localized to mouth ✅ |
 | eyeBlinkLeft | 3.8% | 1,328 | localized to eye ✅ |
 | browInnerUp | 1.3% | 2,181 | localized to brow ✅ |

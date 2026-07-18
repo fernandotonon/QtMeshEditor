@@ -89,7 +89,16 @@ FaceRigGeometry extractGeometry(Ogre::Entity* entity)
         appendIndices(id, base, geo.userF);
     };
 
-    if (mesh->sharedVertexData) {
+    // Only extract the shared pool when a submesh actually references it —
+    // some importers allocate sharedVertexData that no submesh uses, and the
+    // orphan vertices would join the fit (and the head mask / bounding
+    // computations) without any triangles.
+    bool anyShared = false;
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(si);
+        if (sm && sm->useSharedVertices) { anyShared = true; break; }
+    }
+    if (mesh->sharedVertexData && anyShared) {
         // shared pool → handle 0; its indices live per-submesh.
         std::vector<float> pos;
         if (extractPositions(mesh->sharedVertexData, pos)) {

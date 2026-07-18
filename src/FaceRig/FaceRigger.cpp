@@ -461,12 +461,15 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     // humanoid-only gate: a bad fit means this isn't a face — refuse. A NRICP
     // fit that couldn't converge onto the surface reports non-finite or huge
     // residuals (e.g. a plane template forced onto a sphere), which we treat
-    // as a hard reject alongside the mean-residual threshold. The max residual
-    // catches shapes that fit on average but blow up in a region.
+    // as a hard reject. `maxFitResidualPct` gates the MAX residual directly —
+    // the knob is advertised as `--max-residual`, so it must mean what it says
+    // (it previously allowed up to 6x the supplied value). The mean gate at a
+    // quarter of it catches fits that never blow up locally but drape the
+    // whole surface badly (healthy fits measure mean <= 0.1%, max <= ~4%).
     const bool nonFinite = !std::isfinite(r.fitMeanResidualPct) ||
                            !std::isfinite(r.fitMaxResidualPct);
-    if (nonFinite || r.fitMeanResidualPct > opts.maxFitResidualPct ||
-        r.fitMaxResidualPct > opts.maxFitResidualPct * 6.0) {
+    if (nonFinite || r.fitMaxResidualPct > opts.maxFitResidualPct ||
+        r.fitMeanResidualPct > opts.maxFitResidualPct * 0.25) {
         r.error = "mesh does not fit the human face template (mean residual " +
                   std::to_string(r.fitMeanResidualPct) + "%, max " +
                   std::to_string(r.fitMaxResidualPct) +

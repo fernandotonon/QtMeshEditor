@@ -62,6 +62,7 @@ private:
     std::vector<std::array<double, 9>> m_srcRestInv;   // 3x3 per tri
     std::vector<std::array<double, 9>> m_tgtRestInv;
     std::vector<std::array<double, 3>> m_tgtNormalV4;   // fitted 4th vertex/tri
+    std::vector<int> m_anchors;         // one gauge-anchor vertex per island
 };
 
 }  // namespace FaceRig

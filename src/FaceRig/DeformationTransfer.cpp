@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <set>
 
 namespace FaceRig {
 
@@ -81,6 +82,15 @@ bool DeformationTransfer::init(const std::vector<float>& tmplNeutral,
     const int F = int(faces.size() / 3);
     if (N < 3 || F < 1 || int(fitted.size() / 3) != N)
         return false;
+    // Reject malformed buffers outright: trailing floats/indices that don't
+    // form whole vertices/triangles, and face indices outside [0, N) — those
+    // would be dereferenced by vert() below.
+    if (tmplNeutral.size() % 3 != 0 || faces.size() % 3 != 0
+        || fitted.size() % 3 != 0)
+        return false;
+    for (int idx : faces)
+        if (idx < 0 || idx >= N)
+            return false;
 
     m_n = N;
     m_tmplNeutral = tmplNeutral;
@@ -138,20 +148,43 @@ bool DeformationTransfer::init(const std::vector<float>& tmplNeutral,
         }
     };
 
-    // rows: 3 per triangle (gradient columns) + ONE anchor row.
-    // columns: N real verts + F free 4th-vertices.
+    // rows: 3 per triangle (gradient columns) + ONE anchor row PER CONNECTED
+    // COMPONENT. columns: N real verts + F free 4th-vertices.
     //
     // Deformation gradients are translation-invariant, so the system is only
-    // determined up to a global translation. We pin exactly ONE real vertex
-    // (index 0) to fix that gauge — anchoring EVERY vertex would fight the
-    // shape (the gradients want expr, the anchor wants neutral) and pull the
-    // solution back toward the neutral, corrupting the transfer.
+    // determined up to a translation PER TRIANGLE ISLAND — the ICT template
+    // has dozens of them (eyeballs, corneas, teeth, mouth interior). One
+    // anchor per island fixes each gauge; anchoring EVERY vertex would fight
+    // the shape (the gradients want expr, the anchor wants neutral) and pull
+    // the solution back toward the neutral, corrupting the transfer.
     for (int f = 0; f < F; ++f)
         pushGrad(3 * f, f);
     const double anchorW = 1.0;
-    trip.push_back({double(3 * F), 0.0, anchorW});
+    std::vector<int> comp(size_t(N), 0);
+    for (int i = 0; i < N; ++i) comp[size_t(i)] = i;
+    auto findRoot = [&comp](int a) {
+        while (comp[size_t(a)] != a) {
+            comp[size_t(a)] = comp[size_t(comp[size_t(a)])];
+            a = comp[size_t(a)];
+        }
+        return a;
+    };
+    for (int f = 0; f < F; ++f) {
+        const int a = findRoot(m_faces[size_t(f)*3]);
+        comp[size_t(findRoot(m_faces[size_t(f)*3+1]))] = a;
+        comp[size_t(findRoot(m_faces[size_t(f)*3+2]))] = a;
+    }
+    m_anchors.clear();
+    std::set<int> anchoredRoots;
+    for (int i = 0; i < N; ++i) {
+        if (anchoredRoots.insert(findRoot(i)).second) {
+            trip.push_back({double(3 * F + int(m_anchors.size())),
+                            double(i), anchorW});
+            m_anchors.push_back(i);
+        }
+    }
 
-    m_A.fromTriplets(3 * F + 1, N + F, trip);
+    m_A.fromTriplets(3 * F + int(m_anchors.size()), N + F, trip);
 
     // source (template) rest inverse frames — for building S_f per shape
     for (int f = 0; f < F; ++f) {
@@ -187,7 +220,8 @@ std::vector<float> DeformationTransfer::transfer(
     // column g; the free 4th vertex is an unknown (its normal equation exists
     // in the matrix), so the rhs is just S — no rest-approximation term.
     const int nCols = m_n + F;
-    std::vector<std::vector<double>> rhs(3, std::vector<double>(size_t(3 * F + 1), 0.0));
+    std::vector<std::vector<double>> rhs(
+        3, std::vector<double>(size_t(3 * F) + m_anchors.size(), 0.0));
 
     for (int f = 0; f < F; ++f) {
         const int i0 = m_faces[size_t(f)*3];
@@ -205,14 +239,18 @@ std::vector<float> DeformationTransfer::transfer(
             for (int g = 0; g < 3; ++g)
                 rhs[size_t(axis)][size_t(3*f+g)] = S[size_t(axis*3+g)];
     }
-    // anchor rhs: pin vertex 0 to (fitted rest + the template's vertex-0
-    // displacement) — fixes the translation gauge while letting the shape
-    // move vertex 0 the same way the source moved its vertex 0. For the
-    // identity fit this is exactly expr[0].
+    // anchor rhs: pin one vertex PER ISLAND to (fitted rest + the template's
+    // displacement of that vertex) — fixes each island's translation gauge
+    // while letting the shape move it the same way the source moved it. For
+    // the identity fit this is exactly expr[anchor].
     const double anchorW = 1.0;
-    for (int axis = 0; axis < 3; ++axis)
-        rhs[size_t(axis)][size_t(3*F)] =
-            anchorW * (m_fitted[axis] + tmplExprDelta[size_t(axis)]);
+    for (size_t ai = 0; ai < m_anchors.size(); ++ai) {
+        const size_t v = size_t(m_anchors[ai]);
+        for (int axis = 0; axis < 3; ++axis)
+            rhs[size_t(axis)][size_t(3*F) + ai] =
+                anchorW * (m_fitted[v*3 + size_t(axis)]
+                           + tmplExprDelta[v*3 + size_t(axis)]);
+    }
 
     // solve per axis (warm-start real verts at the fitted rest, 4th verts at
     // their rest normal offset). Read back only the N real vertices as a delta.

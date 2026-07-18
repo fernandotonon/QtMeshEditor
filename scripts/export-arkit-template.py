@@ -16,7 +16,7 @@ OUTPUT  arkit_template.bin  — little-endian:
   magic   "QMFRT1\0\0"                (8 bytes)
   int32   vertexCount V
   int32   faceCount   F
-  int32   shapeCount  S               (== 52)
+  int32   shapeCount  S               (== 51 — ICT has no tongueOut)
   float32 neutral[V*3]                (template neutral positions)
   int32   faces[F*3]                  (triangle vertex indices)
   then S shape records:
@@ -72,6 +72,10 @@ ARKIT = [
     ("mouthStretchLeft", ["mouthStretch_L"]), ("mouthStretchRight", ["mouthStretch_R"]),
     ("mouthUpperUpLeft", ["mouthUpperUp_L"]), ("mouthUpperUpRight", ["mouthUpperUp_R"]),
     ("noseSneerLeft", ["noseSneer_L"]), ("noseSneerRight", ["noseSneer_R"]),
+    # NOTE: tongueOut (ARKit channel 52) is deliberately ABSENT — ICT-FaceKit
+    # ships no tongue expression (the tongue isn't part of its face topology),
+    # so the packed template carries 51 real shapes. Emitting a zero-delta
+    # tongueOut would only inflate the bundle and show a dead slider.
 ]
 
 MAGIC = b"QMFRT1\0\0"

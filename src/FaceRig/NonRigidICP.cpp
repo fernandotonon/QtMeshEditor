@@ -105,6 +105,47 @@ struct KDTree {
         nearestRec(near, q, best, bestD2);
         if (diff*diff < bestD2) nearestRec(far, q, best, bestD2);
     }
+    // K nearest centroid indices (broad phase). The caller runs the exact
+    // point-triangle test over these — a large sliver triangle's true surface
+    // can be closer than the triangle whose CENTROID is closest, so a single
+    // centroid winner picks the wrong correspondence on non-uniform meshes.
+    void nearestK(const Vec3& q, int K, std::vector<int>& out) const
+    {
+        out.clear();
+        std::vector<std::pair<double,int>> heap;   // max-heap by distance
+        nearestKRec(0, q, K, heap);
+        out.reserve(heap.size());
+        for (const auto& [d2, pi] : heap) out.push_back(pi);
+    }
+    void nearestKRec(int n, const Vec3& q, int K,
+                     std::vector<std::pair<double,int>>& heap) const
+    {
+        const Node& nd = nodes[n];
+        if (nd.axis < 0) {
+            for (int k = 0; k < nd.count; ++k) {
+                const int pi = idx[nd.start+k];
+                const Vec3 d = vsub(pts[pi], q);
+                const double d2 = vdot(d, d);
+                if (int(heap.size()) < K) {
+                    heap.emplace_back(d2, pi);
+                    std::push_heap(heap.begin(), heap.end());
+                } else if (d2 < heap.front().first) {
+                    std::pop_heap(heap.begin(), heap.end());
+                    heap.back() = {d2, pi};
+                    std::push_heap(heap.begin(), heap.end());
+                }
+            }
+            return;
+        }
+        const double diff = q[nd.axis] - nd.split;
+        const int near = diff < 0 ? nd.lo : nd.hi;
+        const int far = diff < 0 ? nd.hi : nd.lo;
+        nearestKRec(near, q, K, heap);
+        const double worstNow = int(heap.size()) < K
+            ? std::numeric_limits<double>::max() : heap.front().first;
+        if (diff*diff < worstNow)
+            nearestKRec(far, q, K, heap);
+    }
 };
 
 // ---- CSR sparse matrix + CG on the normal equations (AᵀA x = Aᵀb) ----------
@@ -260,14 +301,26 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     int levelIdx = 0;
     for (double alpha : opts.stiffness) {
         for (int iter = 0; iter < opts.itersPerLevel; ++iter) {
-            // find closest surface point per current X_i
+            // find closest surface point per current X_i: broad-phase K
+            // nearest centroids, then the EXACT point-triangle distance picks
+            // among them — the centroid-nearest triangle alone mis-corresponds
+            // next to large/sliver triangles on non-uniform meshes.
             std::vector<Vec3> target(Nt);
+            std::vector<int> cand;
             for (int i = 0; i < Nt; ++i) {
-                const int cf = tree.nearest(X[i]);
-                // refine: check that triangle + a few neighbors would need the
-                // full tree; centroid-nearest triangle is a good approximation
-                // for a fitted template already close to the surface.
-                target[i] = closestPointTriangle(X[i], utri[cf][0], utri[cf][1], utri[cf][2]);
+                tree.nearestK(X[i], 4, cand);
+                double bestD2 = std::numeric_limits<double>::max();
+                Vec3 bestP{0,0,0};
+                for (int cf : cand) {
+                    const Vec3 p = closestPointTriangle(
+                        X[i], utri[cf][0], utri[cf][1], utri[cf][2]);
+                    const Vec3 d = vsub(p, X[i]);
+                    const double d2 = vdot(d, d);
+                    if (d2 < bestD2) { bestD2 = d2; bestP = p; }
+                }
+                target[i] = cand.empty()
+                    ? X[i]
+                    : bestP;
             }
 
             // Landmark anchors that reference a valid template vertex. Weight

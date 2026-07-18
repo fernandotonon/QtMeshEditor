@@ -1,6 +1,7 @@
 #include "ArkitTemplate.h"
 
 #include "../ModelDownloader.h"
+#include "../SentryReporter.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -155,15 +156,18 @@ QString ArkitTemplate::ensureModelBlocking()
     const QString url = base + QString::fromLatin1(kModelFile);
     const QString label = QStringLiteral("ARKit face template");
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        QStringLiteral("ARKit template download start"));
+
     QEventLoop loop;
-    bool ok = false, timedOut = false;
+    bool ok = false, timedOut = false, done = false;
     auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
         [&](const QString& name, const QString&) {
-            if (name == label) { ok = true; loop.quit(); }
+            if (name == label) { ok = true; done = true; loop.quit(); }
         });
     auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
         [&](const QString& name, const QString&) {
-            if (name == label) { ok = false; loop.quit(); }
+            if (name == label) { ok = false; done = true; loop.quit(); }
         });
     QTimer timeout;
     timeout.setSingleShot(true);
@@ -172,14 +176,23 @@ QString ArkitTemplate::ensureModelBlocking()
     timeout.start(300000);  // 5 min — the template is ~17 MB
 
     dl->startDownload(url, dest, label);
-    loop.exec();
+    // `done` guards the synchronous-failure case: startDownload can emit
+    // downloadError DURING the call (another download active, .part file
+    // unopenable) — entering the loop then would block for the full timeout.
+    if (!done)
+        loop.exec();
 
     QObject::disconnect(onDone);
     QObject::disconnect(onErr);
     if (timedOut && dl)
         dl->cancelDownload();
 
-    return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
+    const bool success = ok && !timedOut && QFileInfo::exists(dest);
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        success ? QStringLiteral("ARKit template download ok")
+                : QStringLiteral("ARKit template download failed%1")
+                      .arg(timedOut ? QStringLiteral(" (timeout)") : QString()));
+    return success ? dest : QString();
 }
 
 }  // namespace FaceRig
