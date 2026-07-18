@@ -97,6 +97,7 @@ docs/*
 !docs/TRIPOSG_EXPORT_NOTES.md
 !docs/MESH_SEGMENTATION_STRATEGY.md
 !docs/FACE_RIG.md
+!docs/FACE_RIG_SPIKE.md
 
 # minisign — never commit secret keys
 minisign.key

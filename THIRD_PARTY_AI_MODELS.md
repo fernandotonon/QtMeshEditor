@@ -282,7 +282,7 @@ the binary). Attribution + licenses for the models and their training data:
   standard/released model is MIT; a separate "full model" tier under a
   USC-specific license is **REJECTED** (we ship only the MIT tier). MIT clears
   the permissive-redistribution bar, so the template + shapes are hostable on
-  the `fernandotonon/QtMeshEditor-models` HF repo (Slice B) — packed by
+  the `fernandotonon/QtMeshEditor-models` HF repo (Slice B, #890) — packed by
   `scripts/export-arkit-template.py` into `facerig/arkit_template.bin` and
   uploaded by `scripts/upload-facerig-template.sh`; it downloads on first use.
 - **How it is used:** the template is the *source* for **deformation transfer**
@@ -291,7 +291,9 @@ the binary). Attribution + licenses for the models and their training data:
   expressions onto the user's topology, attaching them as `Ogre::Pose` morph
   targets so face performance capture (#869) works on the mesh. **No ML model,
   no ONNX** — it is a deterministic geometry algorithm (sparse linear solve),
-  implemented natively in `src/FaceRig/` (Slices C/D/E). Verified end-to-end on
+  implemented natively in `src/FaceRig/` (Slices C/D/E). The offline spike
+  (`scripts/spike-facerig.py`, not shipped) validated the approach first
+  (see `docs/FACE_RIG_SPIKE.md`). Verified end-to-end on
   a decimated, different-topology face: mean 0.008% / max 0.61% NRICP fit and
   51 attached shapes. Surfaced via `qtmesh facerig`, MCP `add_arkit_blendshapes`,
   and the Inspector "Add ARKit Blendshapes" button. See `docs/FACE_RIG.md`.
