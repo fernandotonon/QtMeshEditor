@@ -75,6 +75,17 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
+        # Face auto-rig (#889): MCPServer/CLIPipeline/mainwindow reference
+        # these — without them the per-suite test executables fail to link.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRigController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/ArkitTemplate.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/NonRigidICP.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/SparseSolve.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/DeformationTransfer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigAttach.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceLandmarkDetector.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigLandmarks.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.cpp
