@@ -188,6 +188,9 @@ def main():
     ap.add_argument("--guidance", type=float, default=1.0,
                     help="CFG scale baked into the exported sampler")
     ap.add_argument("--device", default="mps")
+    ap.add_argument("--resume", action="store_true",
+                    help="resume from <out>/ckpt.pt (long runs survive "
+                         "sleep/restarts)")
     a = ap.parse_args()
 
     d = np.load(a.data, allow_pickle=True)
@@ -221,7 +224,18 @@ def main():
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(
         opt, T_max=a.epochs * max(1, len(dl)))
 
-    for ep in range(a.epochs):
+    os.makedirs(a.out, exist_ok=True)
+    ckpt_path = os.path.join(a.out, "ckpt.pt")
+    start_ep = 0
+    if a.resume and os.path.exists(ckpt_path):
+        ck = torch.load(ckpt_path, map_location=dev)
+        net.load_state_dict(ck["net"])
+        opt.load_state_dict(ck["opt"])
+        sched.load_state_dict(ck["sched"])
+        start_ep = ck["epoch"] + 1
+        print(f"resumed from epoch {start_ep}", flush=True)
+
+    for ep in range(start_ep, a.epochs):
         tot, nb = 0.0, 0
         for xb, mb, tb in dl:
             xb, mb, tb = xb.to(dev), mb.to(dev), tb.to(dev)
@@ -243,8 +257,9 @@ def main():
             sched.step()
             tot += loss.item(); nb += 1
         print(f"ep {ep + 1}/{a.epochs} loss {tot / max(1, nb):.4f}", flush=True)
+        torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
+                    "sched": sched.state_dict(), "epoch": ep}, ckpt_path)
 
-    os.makedirs(a.out, exist_ok=True)
     torch.save(net.state_dict(), os.path.join(a.out, "flow.pt"))
 
     # ---- export: sampler-unrolled ONNX + vocab json ----

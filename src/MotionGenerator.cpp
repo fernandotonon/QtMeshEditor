@@ -309,9 +309,33 @@ MotionGenerator::Result MotionGenerator::generate(
         // NOSONAR — non-crypto: seeds latent-noise sampling for motion variety.
         std::mt19937 rng(QRandomGenerator::global()->generate());  // NOSONAR
         std::normal_distribution<float> gauss(0.0f, 0.5f);
-        constexpr int kCandidates = 8;
+        constexpr int kCandidates = 16;
         constexpr float kTargetStep = 0.048f;   // rad/frame — real-clip locals
         constexpr float kMaxArtic  = 1.5f;      // rad from the starting pose
+
+        // Posture-aware ranking (#837 quality follow-up): v5+ models are
+        // CANONICAL (restWorld = identity), so a bone's world direction is
+        // simply q·restDir — the same measurements that curate the template
+        // library rank the candidates here: spine and head must stay up,
+        // and locomotion upper arms must HANG (signed Y — an abs() check
+        // would pass a skyward arm).
+        const bool haveCanonDirs = !vocabRestDir.empty();
+        const bool locomotion = matched == QLatin1String("walk")
+                                || matched == QLatin1String("run")
+                                || matched == QLatin1String("march");
+        auto qRotDir = [&](const Q4& q, int role) -> std::array<float, 3> {
+            const auto& d = vocabRestDir[static_cast<size_t>(role)];
+            const float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+            const float ux = qy * d[2] - qz * d[1];
+            const float uy = qz * d[0] - qx * d[2];
+            const float uz = qx * d[1] - qy * d[0];
+            const float vx = qy * uz - qz * uy;
+            const float vy = qz * ux - qx * uz;
+            const float vz = qx * uy - qy * ux;
+            return { d[0] + 2.0f * (qw * ux + vx),
+                     d[1] + 2.0f * (qw * uy + vy),
+                     d[2] + 2.0f * (qw * uz + vz) };
+        };
 
         std::vector<std::vector<Q4>> best;      // [T][J]
         float bestScore = -1e30f;
@@ -371,9 +395,44 @@ MotionGenerator::Result MotionGenerator::generate(
                 }
             const float step = static_cast<float>(stepSum / ((T - 1) * (J - 1)));
             const float coh  = cohN ? static_cast<float>(cohSum / cohN) : 0.0f;
-            const float score = -std::abs(step - kTargetStep) * 40.0f
-                                + coh * 2.0f
-                                - std::max(0.0f, maxArtic - kMaxArtic) * 4.0f;
+            float score = -std::abs(step - kTargetStep) * 40.0f
+                          + coh * 2.0f
+                          - std::max(0.0f, maxArtic - kMaxArtic) * 4.0f;
+            if (haveCanonDirs && worldFrame) {
+                // Posture penalties DOMINATE the energy/coherence terms: a
+                // bad sample (head thrown back, an arm reaching out) is worse
+                // than a slightly-off-tempo good one, so the weights here are
+                // ~10x the motion terms. This is the "best-of-N must never
+                // pick a broken pose" guarantee — the model produces good
+                // walks most of the time, and the scorer's job is to reject
+                // the occasional flailing draw.
+                auto meanDir = [&](int role) -> std::array<float, 3> {
+                    float ax = 0.f, ay = 0.f, az = 0.f;
+                    for (int f = 0; f < T; ++f) {
+                        const auto d = qRotDir(w[f][role], role);
+                        ax += d[0]; ay += d[1]; az += d[2];
+                    }
+                    const float inv = 1.0f / static_cast<float>(T);
+                    return { ax * inv, ay * inv, az * inv };
+                };
+                const float spineY = meanDir(1)[1];      // abdomen up-ness
+                const auto head = meanDir(5);            // head direction
+                // head must point UP; penalize both drooping AND tipping back
+                // (|Z| forward/back lean of the head axis).
+                score -= std::max(0.0f, 0.85f - head[1]) * 60.0f;
+                score -= std::abs(head[2]) * 25.0f;
+                score -= std::max(0.0f, 0.85f - spineY) * 60.0f;
+                if (locomotion) {
+                    // Each arm's upper-arm must HANG (signed Y strongly
+                    // negative). An arm reaching out/forward sits near Y≈0
+                    // and is heavily penalized; the worst arm dominates so a
+                    // single flung arm can't hide behind the other.
+                    const float ry = meanDir(7)[1];
+                    const float ly = meanDir(11)[1];
+                    score -= std::max(0.0f, ry + 0.35f) * 40.0f;
+                    score -= std::max(0.0f, ly + 0.35f) * 40.0f;
+                }
+            }
             if (score > bestScore) { bestScore = score; best = std::move(w); }
         }
         if (best.empty()) {
@@ -410,6 +469,24 @@ MotionGenerator::Result MotionGenerator::generate(
 
         clip.restWorld = vocabRestWorld;
         clip.restDir = vocabRestDir;
+        if (!clip.restDir.empty()) {
+            // Ballerina-feet guard: feet are low-variance joints the model
+            // under-fits — near-static predicted feet aim the target's foot
+            // at the canonical FORWARD axis and point the toes. When a foot
+            // role barely articulates, drop its reference direction so the
+            // retarget leaves those bones at the rig's own bind pitch.
+            for (const int foot : {17, 21}) {
+                float maxDev = 0.0f;
+                const Q4& q0 = best[0][static_cast<size_t>(foot)];
+                for (int f = 1; f < T; ++f) {
+                    const Q4 d = qMul(qConj(q0),
+                                      best[f][static_cast<size_t>(foot)]);
+                    maxDev = std::max(maxDev, qAngle(d));
+                }
+                if (maxDev < 0.21f)   // < ~12 degrees over the whole clip
+                    clip.restDir[static_cast<size_t>(foot)] = {0.f, 0.f, 0.f};
+            }
+        }
         r.clip = std::move(clip);
         r.worldFrame = worldFrame;
         r.ok = true;
