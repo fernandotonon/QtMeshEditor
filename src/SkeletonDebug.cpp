@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <functional>
+#include <unordered_map>
 
 namespace {
 constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
@@ -115,6 +117,9 @@ void SkeletonDebug::onTimerTick()
         if (currentSelected >= 0)
             emit boneSelected(static_cast<unsigned short>(currentSelected));
     }
+
+    if (mShowRestGhost)
+        updateGhostVisuals();
 }
 
 void SkeletonDebug::rebuildVisuals()
@@ -125,8 +130,10 @@ void SkeletonDebug::rebuildVisuals()
     const bool wasAxes = mShowAxes;
     const bool wasBones = mShowBones;
     const bool wasNames = mShowNames;
+    const bool wasGhost = mShowRestGhost;
 
     mTimer.stop();
+    destroyGhostVisuals();
     mEntity->detachAllObjectsFromBone();
 
     for (auto* ent : mBoneEntities)
@@ -145,9 +152,11 @@ void SkeletonDebug::rebuildVisuals()
     mShowAxes = false;
     mShowBones = false;
     mShowNames = false;
+    mShowRestGhost = false;
     showAxes(wasAxes);
     showBones(wasBones);
     showNames(wasNames);
+    showRestGhost(wasGhost);
     mTimer.start(0);
 }
 
@@ -155,6 +164,8 @@ SkeletonDebug::~SkeletonDebug()
 {
     mTimer.stop();
     mTimer.disconnect();
+
+    destroyGhostVisuals();
 
     // Detach all bone-attached objects at once — this clears mChildObjectList
     // and frees TagPoints without leaving stale parent references.
@@ -309,6 +320,103 @@ void SkeletonDebug::showNames(bool show)
     mShowNames = show;
 }
 
+void SkeletonDebug::showRestGhost(bool show)
+{
+    if (mShowRestGhost == show)
+        return;
+    mShowRestGhost = show;
+    if (show) {
+        ensureGhostVisuals();
+        updateGhostVisuals();
+    } else {
+        destroyGhostVisuals();
+    }
+}
+
+void SkeletonDebug::destroyGhostVisuals()
+{
+    for (auto* ent : mGhostEntities) {
+        if (ent && ent->getParentSceneNode())
+            ent->detachFromParent();
+        if (ent)
+            mSceneMan->destroyEntity(ent);
+    }
+    mGhostEntities.clear();
+    mGhostNodes.clear();
+    mGhostBoneNames.clear();
+    if (mGhostRoot) {
+        mGhostRoot->removeAndDestroyAllChildren();
+        mSceneMan->destroySceneNode(mGhostRoot);
+        mGhostRoot = nullptr;
+    }
+}
+
+void SkeletonDebug::ensureGhostVisuals()
+{
+    if (!mEntity || !mEntity->hasSkeleton() || !mSceneMan)
+        return;
+    if (mGhostRoot)
+        return;
+
+    createBoneMaterial();
+    if (!mJointMeshPtr)
+        createJointMesh();
+
+    Ogre::SceneNode* entNode = mEntity->getParentSceneNode();
+    if (!entNode)
+        return;
+
+    mGhostRoot = entNode->createChildSceneNode(
+        mEntity->getName() + "_restGhostRoot");
+
+    Ogre::SkeletonInstance* skel = mEntity->getSkeleton();
+    for (auto* bone : skel->getBones()) {
+        const Ogre::String entName = mEntity->getName() + "_restGhostEnt_" + bone->getName();
+        Ogre::Entity* ghost = mSceneMan->createEntity(entName, "SkeletonDebug/JointMesh");
+        ghost->setMaterial(mBoneMatGhostPtr);
+        ghost->setQueryFlags(0);
+        ghost->setVisible(true);
+        Ogre::SceneNode* node = mGhostRoot->createChildSceneNode();
+        node->attachObject(ghost);
+        const float jointScale = std::max(mBoneSize * 0.9f, 0.02f);
+        node->setScale(jointScale, jointScale, jointScale);
+        mGhostEntities.push_back(ghost);
+        mGhostNodes.push_back(node);
+        mGhostBoneNames.push_back(bone->getName());
+    }
+}
+
+void SkeletonDebug::updateGhostVisuals()
+{
+    if (!mShowRestGhost || !mEntity || !mEntity->hasSkeleton() || !mGhostRoot)
+        return;
+
+    Ogre::SkeletonInstance* skel = mEntity->getSkeleton();
+
+    // Rest-pose transforms in skeleton/entity-local space from initial TRS.
+    std::unordered_map<std::string, std::pair<Ogre::Vector3, Ogre::Quaternion>> restLocal;
+    std::function<void(Ogre::Bone*, const Ogre::Vector3&, const Ogre::Quaternion&)> walk;
+    walk = [&](Ogre::Bone* bone, const Ogre::Vector3& parentPos, const Ogre::Quaternion& parentOri) {
+        const Ogre::Vector3 pos = parentPos + parentOri * bone->getInitialPosition();
+        const Ogre::Quaternion ori = parentOri * bone->getInitialOrientation();
+        restLocal[bone->getName()] = {pos, ori};
+        for (auto* child : bone->getChildren())
+            walk(static_cast<Ogre::Bone*>(child), pos, ori);
+    };
+    for (Ogre::Bone* root : skel->getRootBones())
+        walk(root, Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY);
+
+    const size_t n = std::min(mGhostNodes.size(), mGhostBoneNames.size());
+    for (size_t i = 0; i < n; ++i) {
+        Ogre::SceneNode* node = mGhostNodes[i];
+        if (!node) continue;
+        auto it = restLocal.find(mGhostBoneNames[i]);
+        if (it == restLocal.end()) continue;
+        node->setPosition(it->second.first);
+        node->setOrientation(it->second.second);
+    }
+}
+
 void SkeletonDebug::createAxesMaterial()
 {
     Ogre::String matName = "SkeletonDebug/AxesMat";
@@ -413,6 +521,25 @@ void SkeletonDebug::createBoneMaterial()
         p->setCullingMode(Ogre::CULL_NONE);
         p->setDepthWriteEnabled(false);
         p->setDepthCheckEnabled(false);
+    }
+
+    // Translucent cyan ghost for rest-pose overlay (slice C #557).
+    Ogre::String ghostMatName = "SkeletonDebug/BoneMatGhost";
+    mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(ghostMatName));
+    if (!mBoneMatGhostPtr) {
+        mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                ghostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mBoneMatGhostPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
+        p->setDiffuse(0.2f, 0.85f, 0.95f, 0.35f);
+        p->setAmbient(0.1f, 0.4f, 0.5f);
+        p->setEmissive(0.05f, 0.25f, 0.3f);
     }
 }
 

@@ -171,6 +171,14 @@ void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
     updateSkeletonTable();
 }
 
+void AnimationWidget::setRestPoseGhostVisible(bool show)
+{
+    for (SkeletonDebug* sd : mShowSkeleton.values()) {
+        if (sd)
+            sd->showRestGhost(show);
+    }
+}
+
 SkeletonDebug* AnimationWidget::getSkeletonDebug(Ogre::Entity* entity) const
 {
     if (mShowSkeleton.contains(entity))

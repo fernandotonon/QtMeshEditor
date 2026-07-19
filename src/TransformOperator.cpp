@@ -26,6 +26,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "commands/BoneTransformCommand.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
 #include "AutoRigController.h"
@@ -2071,10 +2072,13 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
             }
             mBoneDragSavedMaskWeights.clear();
 
+            const bool editRestMode = SkeletonEditor::getSingletonPtr()
+                && SkeletonEditor::getSingletonPtr()->editRestPoseMode();
             const auto outcome = BoneDragRelease::apply(
                 bone, mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                 hasActiveAnim, autoKeyOn,
-                AnimationControlController::instance()->selectedEntity());
+                AnimationControlController::instance()->selectedEntity(),
+                editRestMode);
             if (outcome == BoneDragRelease::Result::Commit) {
                 // autoKeyOnTransform → addKeyframe → AddKeyframeCommand
                 // captures the durable artifact (the keyframe). The
@@ -2084,16 +2088,13 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 // undoing the keyframe is enough.
                 AnimationControlController::instance()->autoKeyOnTransform();
             } else if (outcome == BoneDragRelease::Result::CommitBind) {
-                // bindMode=true so undo also reverts the bone's initial
-                // (bind) state — otherwise Skeleton::reset would snap
-                // back to the new bind on the next animation update.
+                // Rest-pose commit with animation re-bake (slice C #557).
                 const std::string entityName =
                     AnimationControlController::instance()->selectedEntityName().toStdString();
                 UndoManager::getSingleton()->push(
-                    new BoneTransformCommand(entityName, bone->getName(),
-                        mBoneStartPos, mBoneStartOrient, mBoneStartScale,
-                        afterPos,      afterOrient,      afterScale,
-                        /*bindMode=*/true));
+                    new SetRestPoseCommand(entityName,
+                                           SetRestPoseCommand::Op::SnapSelected,
+                                           QStringList{QString::fromStdString(bone->getName())}));
             } else if (outcome == BoneDragRelease::Result::Revert) {
                 // Restore the gizmo to the press-time anchor so the
                 // viewport visually returns to the start of the drag.

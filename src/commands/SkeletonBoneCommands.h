@@ -202,3 +202,29 @@ private:
     bool m_applied = false;
     bool m_firstRedo = true;
 };
+
+/// Undoable rest-pose capture / snap / reset (epic #554 slice C #557).
+class SetRestPoseCommand : public QUndoCommand
+{
+public:
+    enum class Op { CaptureAll, SnapSelected, Reset };
+
+    SetRestPoseCommand(std::string entityName,
+                       Op op,
+                       QStringList boneNames = {},
+                       QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+
+private:
+    std::string m_entityName;
+    Op m_op = Op::CaptureAll;
+    QStringList m_boneNames;
+    SkeletonEditor::Snapshot m_before;
+    SkeletonEditor::Snapshot m_after;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};

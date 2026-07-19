@@ -3119,6 +3119,76 @@ Rectangle {
                     SkelToolButton { label: "Remove"; action: "remove" }
                     SkelToolButton { label: "Rename"; action: "rename" }
                 }
+
+                Text {
+                    text: "Rest Pose"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 10
+                    color: PropertiesPanelController.borderColor
+                    text: "Capture the current pose as bind, or edit rest with the bone gizmo."
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    SkelToolButton { label: "Capture Rest"; action: "captureRest"; needsBone: false }
+                    SkelToolButton { label: "Reset Rest"; action: "resetRest"; needsBone: false }
+                    SkelToolButton { label: "Snap Bone"; action: "snapRest" }
+                }
+
+                Row {
+                    spacing: 12
+                    CheckBox {
+                        id: editRestCheck
+                        text: "Edit rest pose"
+                        checked: SkeletonEditor.editRestPoseMode
+                        onCheckedChanged: {
+                            if (checked !== SkeletonEditor.editRestPoseMode)
+                                SkeletonEditor.editRestPoseMode = checked
+                        }
+                        contentItem: Text {
+                            text: editRestCheck.text
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            leftPadding: editRestCheck.indicator.width + 4
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    CheckBox {
+                        id: ghostRestCheck
+                        text: "Rest ghost"
+                        checked: SkeletonEditor.showRestPoseGhost
+                        onCheckedChanged: {
+                            if (checked !== SkeletonEditor.showRestPoseGhost)
+                                SkeletonEditor.showRestPoseGhost = checked
+                        }
+                        contentItem: Text {
+                            text: ghostRestCheck.text
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            leftPadding: ghostRestCheck.indicator.width + 4
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+
+                Connections {
+                    target: SkeletonEditor
+                    function onEditRestPoseModeChanged() {
+                        if (editRestCheck.checked !== SkeletonEditor.editRestPoseMode)
+                            editRestCheck.checked = SkeletonEditor.editRestPoseMode
+                    }
+                    function onShowRestPoseGhostChanged() {
+                        if (ghostRestCheck.checked !== SkeletonEditor.showRestPoseGhost)
+                            ghostRestCheck.checked = SkeletonEditor.showRestPoseGhost
+                    }
+                }
             }
 
             Text {
@@ -7925,6 +7995,27 @@ Rectangle {
             }
         } else if (action === "attach") {
             root.openAttachBoneDialog()
+        } else if (action === "captureRest") {
+            if (SkeletonEditor.captureRestPoseForSelected()) {
+                root.boneEditStatus = "Rest pose captured."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Capture rest pose failed."
+            }
+        } else if (action === "resetRest") {
+            if (SkeletonEditor.resetRestPoseForSelected()) {
+                root.boneEditStatus = "Rest pose reset to import."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Reset rest pose failed."
+            }
+        } else if (action === "snapRest") {
+            if (SkeletonEditor.snapSelectedBonesToCurrentPose()) {
+                root.boneEditStatus = "Selected bone snapped to rest."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Snap rest pose failed (select a bone)."
+            }
         } else if (action === "remove") {
             root.openRemoveBoneDialog()
         } else if (action === "rename") {

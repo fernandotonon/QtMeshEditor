@@ -213,24 +213,39 @@ TEST_F(BoneDragReleaseTest, SetDerivedPositionDragRevertsCleanly) {
 }
 
 TEST_F(BoneDragReleaseTest, NoAnimSetsInitial) {
-    // No active animation: drag commits to bind pose via setInitialState.
-    // Subsequent reset would land at the new bind pose — confirm by
-    // calling resetToInitialState afterwards.
+    // No active animation: drag returns CommitBind; caller (TransformOperator)
+    // commits via SetRestPoseCommand. apply() itself does not call
+    // setInitialState — that belongs to the rest-pose rebake path.
     Ogre::Entity* entity = createAnimatedTestEntity("BDR_BindPose");
     ASSERT_NE(entity, nullptr);
     Ogre::Bone* bone = entity->getSkeleton()->getBone("Child");
 
     const Ogre::Vector3 before = bone->getPosition();
     const Ogre::Vector3 after  = before + Ogre::Vector3(0.5f, 0, 0);
+    const Ogre::Vector3 initialBefore = bone->getInitialPosition();
     simulateBoneDrag(bone, after);
     auto outcome = BoneDragRelease::apply(bone, before, bone->getInitialOrientation(),
                                           bone->getInitialScale(),
                                           /*hasAnim=*/false, /*autoKey=*/false);
     EXPECT_EQ(outcome, BoneDragRelease::Result::CommitBind);
     EXPECT_EQ(bone->getPosition(), after);
-    // Reset to initial — should land back at `after` since we just rebound.
-    bone->setPosition(Ogre::Vector3::ZERO);
-    bone->resetToInitialState();
+    EXPECT_EQ(bone->getInitialPosition(), initialBefore)
+        << "apply() must leave initial unchanged for the rebake caller";
+}
+
+TEST_F(BoneDragReleaseTest, EditRestModeCommitsBindEvenWithAnim) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_EditRest");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* bone = entity->getSkeleton()->getBone("Child");
+
+    const Ogre::Vector3 before = bone->getPosition();
+    const Ogre::Vector3 after  = before + Ogre::Vector3(0.25f, 0, 0);
+    simulateBoneDrag(bone, after);
+    auto outcome = BoneDragRelease::apply(bone, before, bone->getOrientation(),
+                                          bone->getScale(),
+                                          /*hasAnim=*/true, /*autoKey=*/true,
+                                          entity, /*editRestMode=*/true);
+    EXPECT_EQ(outcome, BoneDragRelease::Result::CommitBind);
     EXPECT_EQ(bone->getPosition(), after);
 }
 

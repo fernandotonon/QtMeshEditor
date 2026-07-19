@@ -421,3 +421,134 @@ TEST_F(SkeletonEditorTest, ReparentAndSplitUndoViaCommand) {
     UndoManager::getSingleton()->undo();
     EXPECT_EQ(entity->getMesh()->getSkeleton()->getNumBones(), 2u);
 }
+
+namespace {
+
+Ogre::Entity* createThreeBoneAnimatedEntity(const std::string& name)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity(name);
+    if (!entity) return nullptr;
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    Ogre::Bone* child = skel->getBone("Child");
+    Ogre::Bone* tip = skel->createBone("Tip", 2);
+    tip->setPosition(Ogre::Vector3(0, 1, 0));
+    child->addChild(tip);
+    tip->setInitialState();
+    skel->setBindingPose();
+    entity->_initialise(true);
+    return entity;
+}
+
+Ogre::Vector3 sampleBoneDerived(Ogre::Entity* entity, const char* boneName, float time)
+{
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    Ogre::SkeletonPtr meshSkel = entity->getMesh()->getSkeleton();
+    if (!skel || !meshSkel || !meshSkel->hasAnimation("TestAnim"))
+        return Ogre::Vector3::ZERO;
+
+    // Apply the mesh skeleton's animation directly onto the instance.
+    // Entity::_updateAnimation can leave bones at bind after a prior t=0
+    // sample on this fixture; Animation::apply is deterministic.
+    skel->reset(true);
+    Ogre::Animation* anim = meshSkel->getAnimation("TestAnim");
+    anim->apply(skel, time, 1.0f, Ogre::Real(1.0f));
+    for (Ogre::Bone* root : skel->getRootBones())
+        root->_update(true, false);
+    return skel->getBone(boneName)->_getDerivedPosition();
+}
+
+} // namespace
+
+TEST_F(SkeletonEditorTest, CaptureRestPoseRebasesAnimation) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestCapture");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumBones(), 3u);
+
+    // Pose samples for world-motion preservation checks.
+    const Ogre::Vector3 beforeT0 = sampleBoneDerived(entity, "Child", 0.0f);
+    const Ogre::Vector3 beforeT05 = sampleBoneDerived(entity, "Child", 0.5f);
+    const Ogre::Vector3 beforeT1 = sampleBoneDerived(entity, "Child", 1.0f);
+    // Mid-frame must actually move — otherwise the fixture/anim is broken.
+    ASSERT_GT(beforeT05.distance(beforeT0), 0.1f);
+
+    sampleBoneDerived(entity, "Child", 0.5f);
+    const auto result = SkeletonEditor::captureRestPose(entity);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    Ogre::Bone* meshChild = entity->getMesh()->getSkeleton()->getBone("Child");
+    EXPECT_NEAR(meshChild->getInitialPosition().x, 0.5f, 1e-4f);
+
+    Ogre::Animation* anim = entity->getMesh()->getSkeleton()->getAnimation("TestAnim");
+    Ogre::NodeAnimationTrack* track = nullptr;
+    for (const auto& [handle, t] : anim->_getNodeTrackList()) {
+        if (t->getAssociatedNode() && t->getAssociatedNode()->getName() == "Child") {
+            track = t;
+            break;
+        }
+    }
+    ASSERT_NE(track, nullptr);
+    const auto* kfMid = track->getNodeKeyFrame(1);
+    EXPECT_NEAR(kfMid->getTranslate().length(), 0.0f, 1e-3f);
+
+    EXPECT_NEAR(sampleBoneDerived(entity, "Child", 0.0f).distance(beforeT0), 0.0f, 1e-3f);
+    EXPECT_NEAR(sampleBoneDerived(entity, "Child", 0.5f).distance(beforeT05), 0.0f, 1e-3f);
+    EXPECT_NEAR(sampleBoneDerived(entity, "Child", 1.0f).distance(beforeT1), 0.0f, 1e-3f);
+}
+
+TEST_F(SkeletonEditorTest, ResetRestPoseRestoresImportedBind) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestReset");
+    ASSERT_NE(entity, nullptr);
+
+    SkeletonEditor::ensureImportedRestCache(entity);
+    const Ogre::Vector3 imported =
+        entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition();
+
+    sampleBoneDerived(entity, "Child", 0.5f);
+    ASSERT_TRUE(SkeletonEditor::captureRestPose(entity).ok);
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.5f, 1e-4f);
+
+    const auto reset = SkeletonEditor::resetRestPose(entity);
+    ASSERT_TRUE(reset.ok) << reset.error.toStdString();
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition(),
+              imported);
+}
+
+TEST_F(SkeletonEditorTest, SnapSelectedBoneLeavesOthersUnchanged) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestSnap");
+    ASSERT_NE(entity, nullptr);
+
+    const Ogre::Vector3 tipInitial =
+        entity->getMesh()->getSkeleton()->getBone("Tip")->getInitialPosition();
+
+    sampleBoneDerived(entity, "Child", 0.5f);
+    const auto result = SkeletonEditor::captureRestPose(
+        entity, QStringList{QStringLiteral("Child")});
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.5f, 1e-4f);
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getBone("Tip")->getInitialPosition(),
+              tipInitial);
+}
+
+TEST_F(SkeletonEditorTest, SetRestPoseCommandUndoRedo) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestUndo");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+
+    sampleBoneDerived(entity, "Child", 0.5f);
+    auto* cmd = new SetRestPoseCommand(entity->getName(), SetRestPoseCommand::Op::CaptureAll);
+    UndoManager::getSingleton()->push(cmd);
+    ASSERT_TRUE(cmd->applied());
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.5f, 1e-4f);
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.0f, 1e-4f);
+
+    UndoManager::getSingleton()->redo();
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.5f, 1e-4f);
+}

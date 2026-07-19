@@ -23,13 +23,17 @@ class Mesh;
 class Skeleton;
 }
 
-/// Bone-level CRUD + hierarchy editing for skeletal rigs
-/// (epic #554: slice A #555 CRUD, slice B #556 hierarchy).
+/// Bone-level CRUD + hierarchy + rest-pose editing for skeletal rigs
+/// (epic #554: slice A #555 CRUD, slice B #556 hierarchy, slice C #557 rest pose).
 class SkeletonEditor : public QObject
 {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
+    Q_PROPERTY(bool editRestPoseMode READ editRestPoseMode WRITE setEditRestPoseMode
+               NOTIFY editRestPoseModeChanged)
+    Q_PROPERTY(bool showRestPoseGhost READ showRestPoseGhost WRITE setShowRestPoseGhost
+               NOTIFY showRestPoseGhostChanged)
 
 public:
     struct CreateOptions {
@@ -138,6 +142,25 @@ public:
     static Result setBoneConnected(Ogre::Entity* entity, const QString& boneName, bool connected);
     static bool isBoneConnected(Ogre::Entity* entity, const QString& boneName);
 
+    /// Cache the mesh skeleton's current bind pose as the "imported" rest
+    /// (first call wins per mesh). Used by resetRestPose.
+    static void ensureImportedRestCache(Ogre::Entity* entity);
+    /// Clear cached imported rest for a mesh (tests / mesh destroy).
+    static void clearImportedRestCache(Ogre::Entity* entity = nullptr);
+
+    /// Set rest pose of the listed bones (empty list = all) to their current
+    /// evaluated local TRS, rebake animation tracks so world motion is
+    /// unchanged, and refresh inverse binds. Mutates the mesh skeleton.
+    static Result captureRestPose(Ogre::Entity* entity, const QStringList& boneNames = {});
+    /// Restore bind pose (+ rebaked tracks) to the cached imported rest.
+    static Result resetRestPose(Ogre::Entity* entity);
+    /// Commit an explicit new rest TRS for one bone (edit-rest gizmo path).
+    static Result commitBoneRestPose(Ogre::Entity* entity,
+                                     const QString& boneName,
+                                     const Ogre::Vector3& pos,
+                                     const Ogre::Quaternion& orient,
+                                     const Ogre::Vector3& scale);
+
     static void refreshAfterEdit(const std::string& entityName, const QString& selectBone = {});
 
     /// Push undo commands — used by QML and tests.
@@ -152,6 +175,10 @@ public:
     Q_INVOKABLE bool isSelectedBoneConnected() const;
     Q_INVOKABLE bool attachSelectedBoneToEntity(const QString& dstEntityName);
 
+    Q_INVOKABLE bool captureRestPoseForSelected();
+    Q_INVOKABLE bool resetRestPoseForSelected();
+    Q_INVOKABLE bool snapSelectedBonesToCurrentPose();
+
     Q_INVOKABLE bool hasSkeletonSelection() const;
     Q_INVOKABLE QString selectedBoneName() const;
     /// Current parent of the selected bone; empty string if root / none.
@@ -161,7 +188,12 @@ public:
     /// Other scene entities that can receive an attached bone.
     Q_INVOKABLE QVariantList attachTargetEntities() const;
 
-/// Request the floating bone context menu at a global screen position
+    bool editRestPoseMode() const { return m_editRestPoseMode; }
+    void setEditRestPoseMode(bool on);
+    bool showRestPoseGhost() const { return m_showRestPoseGhost; }
+    void setShowRestPoseGhost(bool on);
+
+    /// Request the floating bone context menu at a global screen position
     /// (viewport right-click or Inspector bone picker).
     void requestBoneContextMenu(int globalX, int globalY);
 
@@ -172,6 +204,9 @@ signals:
     void boneDuplicated(const QString& entityName, const QString& boneName);
     void skeletonStructureChanged();
     void boneContextMenuRequested(int globalX, int globalY);
+    void editRestPoseModeChanged();
+    void showRestPoseGhostChanged();
+    void restPoseChanged();
 
 private:
     explicit SkeletonEditor(QObject* parent = nullptr);
@@ -185,5 +220,12 @@ private:
                                             QString* error);
     static bool ensureEntitySkeleton(Ogre::Entity* entity, QString* error);
 
+    void applyEditRestAnimMute(bool mute);
+    void syncRestPoseGhostOverlay();
+
     static SkeletonEditor* s_singleton;
+    bool m_editRestPoseMode = false;
+    bool m_showRestPoseGhost = false;
+    QString m_editRestMutedEntity;
+    QStringList m_editRestMutedAnims;
 };
