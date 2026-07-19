@@ -336,6 +336,61 @@ the binary). Attribution + licenses for the models and their training data:
   2d106det) were rejected — their weights carry research-only / non-commercial
   terms; MediaPipe FaceMesh (Apache-2.0) is the clean choice.
 
+## Performance capture (epic #869)
+
+### MediaPipe Face Landmarker + Pose Landmarker — face/pose capture (#870/#872/#874)
+
+- **Models:** Google MediaPipe `face_landmarker.task` (BlazeFace short-range
+  detector + Face Mesh V2 478-landmark model + 52-blendshape MLP-Mixer) and
+  `pose_landmarker_full.task` (BlazePose detector + 39-landmark model with
+  world coordinates), converted TFLite → ONNX.
+- **License:** **Apache-2.0, code AND models** (Google's MediaPipe release —
+  the stack the entire VTuber ecosystem builds on). Ship the Apache-2.0
+  notice next to the hosted weights.
+- The ONNX export is produced by `scripts/export-facecap-onnx.py` (one-time,
+  offline dev tool — not shipped), which also **asserts numerical parity**
+  against the Python `mediapipe` reference (landmarks ≤ 0.59 px, blendshapes
+  ≤ 0.0148 abs, pose world landmarks ≤ 1.02 cm on the test set). Conversion
+  recipe, pre/post-processing contracts and measured latencies:
+  `docs/MOCAP_SPIKE.md`. The app runs the five graphs via ONNX Runtime,
+  downloading them on first use to `AppData/ai_models/mocap/{face,pose}/`.
+- **Rejected face alternatives:** DECA / EMOCA / SPECTRE (all regress the
+  FLAME 3DMM — research-only license), ARKit (iOS-only), OpenSeeFace (MIT
+  code but weaker blendshape story).
+
+### SAM 3D Body + MHR — body capture quality path (#870/#874) — decision record
+
+- **MHR (Momentum Human Rig)** — the 127-joint parametric rig SAM 3D Body
+  poses — is **Apache-2.0** (https://github.com/facebookresearch/MHR, assets
+  v1.0.1). Skeleton definition (names, hierarchy, pre-rotations, derived rest
+  world pose) extracted to `mhr_skeleton.json` by
+  `scripts/export-bodycap-onnx.py --mhr-assets`. No restrictions.
+- **SAM 3D Body checkpoints** (`facebook/sam-3d-body-dinov3`, 2.1 GB) are
+  under the **SAM License** (2025-11-19 text reviewed in full, 2026-07-12).
+  **Verdict: PASS with conditions** — usable as an OPTIONAL,
+  downloaded-on-first-use backend, never bundled:
+  - §1.a grants use/reproduction/distribution/modification (ONNX conversion
+    is a permitted modification, not the prohibited "reverse engineering" of
+    §1.b.iv). §1.b.i permits redistributing derivatives **only under the SAM
+    License with a copy attached** — rehosting converted ONNX on our HF repo
+    is compliant with the license file shipped next to the weights.
+  - **No non-commercial clause; model outputs are unrestricted** (§3 only
+    disclaims warranty over outputs). No EU exclusion (unlike Hunyuan3D).
+  - Conditions/risks recorded: the SAM backend is NOT permissive-equivalent —
+    users of that one optional feature are bound by the SAM License
+    (AUP-style trade-controls/military restrictions pass through); Meta may
+    unilaterally amend the terms (§8); upstream access is gated (HF
+    click-through sharing contact info with Meta).
+  - **Status:** checkpoint download blocked pending the gated-access
+    acceptance on the HF model page (our token is not yet on the authorized
+    list). Export recipe proven by the community port
+    (AmmarkoV/SAM3DBody-cpp: DINOv3-H+ backbone ~4.8 GB fp32 + 93 MB decoder
+    → 519 MHR params). Until unblocked the body path ships **MediaPipe Pose +
+    analytic IK only** (Apache-2.0, zero conditions).
+- **Rejected body alternatives:** WHAM / GVHMR / TRAM / 4D-Humans (all regress
+  **SMPL** — weights non-commercial, Meshcapade sells the commercial
+  license), OpenPose (CMU non-commercial), FreeMoCap (AGPL).
+
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
