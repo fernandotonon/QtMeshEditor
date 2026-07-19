@@ -119,10 +119,28 @@ public:
     virtual bool isLive() const = 0;
     virtual double nativeFps() const = 0;  // 0 if unknown
 
+    // Latest-wins mailbox for the (slower) inference consumer running on a
+    // worker thread. Live camera AND file playback both feed it — the live
+    // GUI preview drops intermediate frames either way (real-time). Sources
+    // that emit frames write via emitFrame() below, which both signals
+    // frameReady() and posts to this mailbox.
+    FrameMailbox& mailbox() { return m_mailbox; }
+
 signals:
     void frameReady(const MocapFrame& frame);
     void finished();                      // file/sequence sources: end of media
     void errorOccurred(const QString& message);
+
+protected:
+    // Emit a frame to BOTH the frameReady() signal (synchronous consumers /
+    // tests) and the mailbox (worker-thread live preview).
+    void emitFrame(const MocapFrame& frame)
+    {
+        m_mailbox.put(frame);
+        emit frameReady(frame);
+    }
+
+    FrameMailbox m_mailbox;
 };
 
 // (c) Image sequence — synchronous test double. Emits every image on start()
@@ -197,8 +215,6 @@ public:
     bool isLive() const override { return true; }
     double nativeFps() const override { return m_nativeFps; }
 
-    FrameMailbox& mailbox() { return m_mailbox; }
-
 private:
     void handleVideoFrame();
 
@@ -207,7 +223,6 @@ private:
     std::unique_ptr<QMediaCaptureSession> m_session;
     std::unique_ptr<QVideoSink> m_sink;
     std::unique_ptr<QElapsedTimer> m_clock;
-    FrameMailbox m_mailbox;
     double m_nativeFps = 0.0;
     qint64 m_frameIndex = 0;
 };

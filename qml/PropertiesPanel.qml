@@ -2409,6 +2409,41 @@ Rectangle {
                 }
             }
 
+            // Video-file source — the path for macOS where the camera is
+            // blocked/unavailable. Picks a file and drives the selection from
+            // it (same live preview + recording as the webcam).
+            Rectangle {
+                id: loadVideoBtn
+                visible: mocapReady
+                width: parent.width - 16
+                height: 26
+                radius: 3
+                enabled: MocapController.state === 0
+                opacity: enabled ? 1.0 : 0.5
+                color: loadVideoMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    text: "Load Video…  (use instead of camera)"
+                }
+                MouseArea {
+                    id: loadVideoMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: MocapController.state === 0
+                    onClicked: {
+                        var path = MocapController.openVideoDialog()
+                        if (path && path.length > 0)
+                            MocapController.startPreviewFromVideo(path)
+                    }
+                }
+            }
+
             // camera preview + HUD
             Rectangle {
                 width: parent.width - 16
@@ -2474,7 +2509,16 @@ Rectangle {
                     if (MocapController.bodyEnabled && MocapController.bodyAvailable)
                         parts.push("body rig")
                     var s = "Driving: " + (parts.length ? parts.join(" + ") : "nothing")
-                    if (MocapController.unmatchedChannels.length > 0)
+                    // The common confusion: Face is on but the mesh has no
+                    // matching ARKit morph targets, so 51/52 channels can't
+                    // bind. Say what to do instead of just a count.
+                    if (MocapController.faceEnabled
+                        && MocapController.matchedChannelCount === 0)
+                        s += "\n⚠ This mesh has no matching ARKit blendshapes — "
+                           + "the face won't animate. Run “✨ Add ARKit "
+                           + "Blendshapes (AI)” in the Vertex Morph Animation "
+                           + "section first, or uncheck Face."
+                    else if (MocapController.unmatchedChannels.length > 0)
                         s += " (" + MocapController.unmatchedChannels.length
                              + " capture channels unmatched)"
                     return s

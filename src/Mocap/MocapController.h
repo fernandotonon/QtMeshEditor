@@ -112,6 +112,16 @@ public:
     // Start the camera + live drive of the SELECTED entity. Empty deviceId =
     // default camera.
     Q_INVOKABLE bool startPreview(const QString& deviceId = {});
+    // Start live drive from a VIDEO FILE instead of the camera — the path for
+    // macOS where camera access is blocked/unavailable. No permission prompt;
+    // playback-driven at real time (frames dropped latest-wins, same as the
+    // webcam preview — recording re-runs the full clip). filePath is a local
+    // file path (not a URL).
+    Q_INVOKABLE bool startPreviewFromVideo(const QString& filePath);
+    // Native open-file dialog filtered to video files; returns the chosen
+    // local path or "" if cancelled. Convenience for the GUI "Load Video…"
+    // button (the codebase's C++-side dialog convention).
+    Q_INVOKABLE QString openVideoDialog();
     Q_INVOKABLE void stopPreview();
     Q_INVOKABLE bool startRecording();
     Q_INVOKABLE void stopRecording();
@@ -151,6 +161,19 @@ private:
     // startPreview() gates on camera permission (async on first run), then
     // hands off here once granted.
     bool beginPreview(const QString& deviceId);
+    // Shared live-preview runner: drivability check, model download, worker
+    // thread + connections, all driven by `source` (a webcam or a video file).
+    // Takes ownership of `source`. `startingMessage` is the status shown while
+    // the source spins up. Returns false (and restores state) on any failure.
+    bool beginPreviewWithLiveSource(std::unique_ptr<class VideoFrameSource> source,
+                                    const QString& startingMessage);
+    // Inspect the currently-selected entity and (re)build the face mapping,
+    // head bone, and body-rig role set — so matchedChannelCount / headAvailable
+    // / bodyAvailable reflect the selection BEFORE a preview runs (the channel
+    // checkboxes gate on them). Called on selectionChanged and at construction;
+    // beginPreviewWithLiveSource also calls it. No-op / clears when nothing
+    // suitable is selected. Never touches live-session state.
+    void refreshMappingForSelection();
     void restoreEntityState();
     void setStatusMessage(const QString& message);
 #endif

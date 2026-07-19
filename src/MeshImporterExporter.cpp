@@ -3060,6 +3060,13 @@ std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
                 }
             }
         }
+        if (std::getenv("QTMESH_MOCAP_DEBUG")) {
+            float mn = 1e9f, mx = -1e9f;
+            for (float w : clip.weights) { mn = std::min(mn, w); mx = std::max(mx, w); }
+            std::fprintf(stderr, "[export] clip '%s' rows=%zu targets=%d "
+                         "influenceRange=[%.3f,%.3f]\n", nm.c_str(),
+                         clip.times.size(), numTargets, mn, mx);
+        }
         out.push_back(std::move(clip));
     }
     return out;

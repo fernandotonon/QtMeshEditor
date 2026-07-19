@@ -72,6 +72,9 @@ private:
     std::array<std::array<float, 3>, kCanonicalRoles> m_prevSecondary{};
     std::array<std::array<float, 3>, kCanonicalRoles> m_prevPrimary{};
     std::array<std::array<float, 4>, kCanonicalRoles> m_prevQuats{};
+    // previous hip horizontal line (world frame) — keeps the torso frame
+    // from flipping 180° on a noisy/occluded seated subject.
+    std::array<float, 3> m_prevHipLine{0.f, 0.f, 0.f};
 };
 
 }  // namespace PoseIK

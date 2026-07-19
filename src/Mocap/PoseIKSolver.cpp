@@ -107,11 +107,15 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
     if (m_hasPrev)
         result.quats = m_prevQuats;  // unresolved roles hold their last pose
 
-    // canonicalize MediaPipe's frame (x subject-left, y down, z to camera)
-    // into y-up right-handed: (x, -y, -z)
+    // Canonicalize MediaPipe's frame (x = subject-left, y = down, z = toward
+    // camera) into the canonical rig frame: y-UP, subject FACING +Z, right-
+    // handed. The subject faces the camera (MediaPipe -z), but canonical rigs
+    // face +Z, so we must flip the facing: map (x,y,z) -> (-x, -y, +z). This
+    // is a 180° yaw that cancels the constant (0,-1,0,0) hip offset the old
+    // (x,-y,-z) mapping produced (which left the whole body driven backwards).
     Vec3 p[kLandmarkCount];
     for (int i = 0; i < kLandmarkCount; ++i)
-        p[i] = {world[i * 3 + 0], -world[i * 3 + 1], -world[i * 3 + 2]};
+        p[i] = {-world[i * 3 + 0], -world[i * 3 + 1], world[i * 3 + 2]};
 
     auto visible = [&](int lm) {
         return !visibility || visibility[lm] >= minVisibility;
@@ -130,8 +134,23 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
         const Vec3 hipMid = mid(LHipLm, RHipLm);
         const Vec3 shoulderMid = mid(LShoulderLm, RShoulderLm);
         Vec3 up = sub(shoulderMid, hipMid);
-        const Vec3 hipLine = sub(p[RHipLm], p[LHipLm]);
+        Vec3 hipLine = sub(p[RHipLm], p[LHipLm]);
         const Vec3 shoulderLine = sub(p[RShoulderLm], p[LShoulderLm]);
+        // Stabilize the hip's horizontal reference. On a seated / partially-
+        // occluded subject the hip landmarks are noisy and hipLine can FLIP
+        // sign between frames, whipping the whole torso 180° about Y (observed:
+        // Hip quat identity → (0,-1,0,0) mid-clip). The SHOULDER line is far
+        // more reliable, so:
+        //  (a) if the hip line is short/degenerate or points opposite the
+        //      shoulder line, fall back to the shoulder line for the hip frame;
+        //  (b) keep the hip line temporally continuous (no sudden sign flip).
+        if (length(hipLine) < 0.05f * length(shoulderLine)
+            || dot(hipLine, shoulderLine) < 0.f)
+            hipLine = shoulderLine;
+        const Vec3 prevHip{m_prevHipLine[0], m_prevHipLine[1], m_prevHipLine[2]};
+        if (m_hasPrev && dot(hipLine, prevHip) < 0.f)
+            hipLine = mul(hipLine, -1.f);   // preserve orientation continuity
+        m_prevHipLine = {hipLine[0], hipLine[1], hipLine[2]};
         Quat q1, q2;
         const bool ok1 = basisFromPrimary(up, hipLine, q1, nullptr);
         const bool ok2 = basisFromPrimary(up, shoulderLine, q2, nullptr);

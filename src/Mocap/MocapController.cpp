@@ -26,9 +26,13 @@
 #include <QThread>
 #endif
 
+#include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
+#include <QFileDialog>
 #include <QGuiApplication>
 #include <QPermissions>
+#include <QWidget>
 
 namespace {
 MocapController* s_instance = nullptr;
@@ -96,6 +100,8 @@ double MocapController::smoothingCutoff() const { return 1.0; }
 void MocapController::setSmoothingCutoff(double) {}
 void MocapController::refreshDevices() {}
 bool MocapController::startPreview(const QString&) { return false; }
+bool MocapController::startPreviewFromVideo(const QString&) { return false; }
+QString MocapController::openVideoDialog() { return {}; }
 void MocapController::stopPreview() {}
 bool MocapController::startRecording() { return false; }
 void MocapController::stopRecording() {}
@@ -196,7 +202,10 @@ struct MocapController::Impl {
     QString clipName = QStringLiteral("FaceCap");
     double smoothingCutoff = 1.0;
 
-    std::unique_ptr<CameraFrameSource> camera;
+    // The live source feeding the worker: a CameraFrameSource (webcam) OR a
+    // FileFrameSource (video-file preview, the macOS-camera-blocked path).
+    // Both feed the same mailbox() via the base class.
+    std::unique_ptr<VideoFrameSource> camera;
     VideoFrameSource* injectedSource = nullptr;  // test seam, not owned
     QThread workerThread;
     MocapInferenceWorker* worker = nullptr;  // owned by workerThread
@@ -227,6 +236,13 @@ struct MocapController::Impl {
         std::string boneName;
         Ogre::Quaternion bindLocal = Ogre::Quaternion::IDENTITY;
         Ogre::Quaternion bindWorld = Ogre::Quaternion::IDENTITY;
+        // The PARENT bone's bind-pose world orientation. A world-space rotation
+        // delta must be transported through the PARENT's frame (not the bone's
+        // own) to become a valid parent-relative local, matching the offline
+        // applyMotionClip retarget. Using the bone's own bindWorld is only
+        // correct when the local bind is identity (~head); it mis-rotates
+        // bones with a non-trivial local bind (arms/shoulders).
+        Ogre::Quaternion parentBindWorld = Ogre::Quaternion::IDENTITY;
         bool wasManuallyControlled = false;
     };
     std::vector<BodyBone> bodyBones;
@@ -263,6 +279,14 @@ struct MocapController::Impl {
 MocapController::MocapController(QObject* parent)
     : QObject(parent), d(new Impl)
 {
+    // Keep the channel availability (Face/Head/Body checkboxes) in sync with
+    // whatever is selected, WITHOUT running a preview — otherwise the boxes
+    // stay disabled until the first Preview builds the mapping, and never
+    // update when the user picks a different mesh.
+    if (auto* sel = SelectionSet::getSingleton())
+        connect(sel, &SelectionSet::selectionChanged, this,
+                [this]() { refreshMappingForSelection(); });
+    refreshMappingForSelection();
 }
 
 MocapController::~MocapController()
@@ -401,10 +425,11 @@ bool MocapController::startPreview(const QString& deviceId)
     return true;  // async; the callback finishes the job
 }
 
-bool MocapController::beginPreview(const QString& deviceId)
+void MocapController::refreshMappingForSelection()
 {
+    // Never disturb a running session — the mapping is fixed once preview starts.
     if (d->state != Idle)
-        return false;
+        return;
 
     auto* sel = SelectionSet::getSingleton();
     Ogre::Entity* entity = nullptr;
@@ -414,15 +439,16 @@ bool MocapController::beginPreview(const QString& deviceId)
             entity = ents.first();
     }
     if (!entity) {
-        setStatusMessage(tr("Select an entity to drive first."));
-        emit errorOccurred(d->status);
-        return false;
+        // Nothing selected: clear so the channel checkboxes disable.
+        d->entityName.clear();
+        d->mapping = FaceCapMapper::Mapping{};
+        d->headBone.clear();
+        d->bodyBones.clear();
+        d->bodyRigOk = false;
+        emit mappingChanged();
+        return;
     }
 
-    // Determine what the selection can be driven with BEFORE downloading any
-    // models — a ~30 MB face-model fetch is wasted if the mesh has no ARKit
-    // morph targets and no head bone (field-reported: clicking Preview on a
-    // plain mesh triggered the download, then failed the drivability check).
     d->entityName = entity->getName();
     d->mapping = FaceCapMapper::build(
         MorphAnimationManager::instance()->morphTargetsFor(entity));
@@ -458,6 +484,79 @@ bool MocapController::beginPreview(const QString& deviceId)
         d->bodyEnabled = false;  // can't drive body on a non-humanoid rig
 
     emit mappingChanged();
+}
+
+bool MocapController::beginPreview(const QString& deviceId)
+{
+    // Webcam path: build the camera source and run the shared preview.
+    return beginPreviewWithLiveSource(
+        std::make_unique<CameraFrameSource>(deviceId),
+        tr("Starting camera…"));
+}
+
+bool MocapController::startPreviewFromVideo(const QString& filePath)
+{
+    if (d->state != Idle)
+        return false;
+    if (filePath.isEmpty()) {
+        setStatusMessage(tr("No video file selected."));
+        emit errorOccurred(d->status);
+        return false;
+    }
+    // Video-file path: no camera permission needed (the macOS-blocked-camera
+    // fallback). FileFrameSource plays at real time and drops frames
+    // latest-wins into the mailbox, same as the webcam preview.
+    return beginPreviewWithLiveSource(
+        std::make_unique<FileFrameSource>(filePath),
+        tr("Playing video…"));
+}
+
+QString MocapController::openVideoDialog()
+{
+    // Non-native dialog (matches the codebase convention — avoids the macOS
+    // native panel stealing focus from the Ogre window).
+    if (QWidget* activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    const QString file = QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        tr("Select a video file"),
+        QDir::currentPath(),
+        tr("Video files (*.mp4 *.mov *.m4v *.avi *.mkv *.webm);;All files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog);
+    return file;
+}
+
+bool MocapController::beginPreviewWithLiveSource(
+    std::unique_ptr<VideoFrameSource> source, const QString& startingMessage)
+{
+    if (d->state != Idle)
+        return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    Ogre::Entity* entity = nullptr;
+    if (sel) {
+        const auto ents = sel->getResolvedEntities();
+        if (!ents.isEmpty())
+            entity = ents.first();
+    }
+    if (!entity) {
+        setStatusMessage(tr("Select an entity to drive first."));
+        emit errorOccurred(d->status);
+        return false;
+    }
+    d->camera = std::move(source);
+
+    // Determine what the selection can be driven with BEFORE downloading any
+    // models — a ~30 MB face-model fetch is wasted if the mesh has no ARKit
+    // morph targets and no head bone (field-reported: clicking Preview on a
+    // plain mesh triggered the download, then failed the drivability check).
+    // (Also keeps the channel checkboxes honest — see refreshMappingForSelection.)
+    refreshMappingForSelection();
+
     const bool faceDrivable = d->faceEnabled && !d->mapping.channels.isEmpty();
     const bool headDrivable = d->headEnabled && !d->headBone.isEmpty();
     const bool bodyDrivable = d->bodyEnabled && d->bodyRigOk;
@@ -524,6 +623,9 @@ bool MocapController::beginPreview(const QString& deviceId)
             bb.wasManuallyControlled = bone->isManuallyControlled();
             bb.bindLocal = bone->getOrientation();
             bb.bindWorld = bone->_getDerivedOrientation();
+            Ogre::Node* parent = bone->getParent();
+            bb.parentBindWorld = parent ? parent->_getDerivedOrientation()
+                                        : Ogre::Quaternion::IDENTITY;
             bone->setManuallyControlled(true);
         }
     } else {
@@ -540,7 +642,6 @@ bool MocapController::beginPreview(const QString& deviceId)
     d->clock.start();
 
     // camera + worker
-    d->camera = std::make_unique<CameraFrameSource>(deviceId);
     QString error;
     if (!d->camera->open(&error)) {
         d->camera.reset();
@@ -611,7 +712,7 @@ bool MocapController::beginPreview(const QString& deviceId)
 
     d->state = CameraStarting;
     emit stateChanged();
-    setStatusMessage(tr("Starting camera…"));
+    setStatusMessage(startingMessage);
     d->camera->start();
 
     SentryReporter::addBreadcrumb("ai.assist.mocap_live", "preview start");
@@ -748,22 +849,52 @@ void MocapController::onSample(const FaceSample& sample,
             return Ogre::Quaternion(q[3], q[0], q[1], q[2]);  // (x,y,z,w)->(w,x,y,z)
         };
         if (!d->bodyCalibrated) {
-            for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                d->bodyNeutral[r] = toOgre(body.quats[r]);
-            d->bodyCalibrated = true;
+            // Calibrate the neutral ONLY from a frame where the TORSO is
+            // tracked (Hip + Chest, which the solver resolves as a unit from
+            // the shoulder+hip landmark quad). This rejects the first barely-
+            // tracked frame that otherwise seeds a garbage neutral and folds
+            // the rig — while still calibrating for a SEATED subject (whose
+            // leg/hip LIMB roles never resolve, so gating on those would mean
+            // the body never animates at all). Per-limb roles that aren't in
+            // the neutral simply hold bind pose via the resolvedMask check
+            // in the drive loop.
+            constexpr uint32_t kTorsoRoles =
+                (1u << PoseIK::Role::Hip) | (1u << PoseIK::Role::Chest);
+            if ((body.resolvedMask & kTorsoRoles) == kTorsoRoles) {
+                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
+                    d->bodyNeutral[r] = toOgre(body.quats[r]);
+                d->bodyCalibrated = true;
+                if (std::getenv("QTMESH_MOCAP_DEBUG"))
+                    std::fprintf(stderr, "[mocap] body calibrated "
+                                 "(resolvedMask=0x%x, %zu driven bones)\n",
+                                 body.resolvedMask, d->bodyBones.size());
+            } else if (std::getenv("QTMESH_MOCAP_DEBUG")) {
+                std::fprintf(stderr, "[mocap] awaiting torso frame "
+                             "(resolvedMask=0x%x)\n", body.resolvedMask);
+            }
         }
-        Ogre::SkeletonInstance* skel = entity->getSkeleton();
-        for (const auto& bb : d->bodyBones) {
-            if (!(body.resolvedMask & (1u << bb.role)))
-                continue;  // role not tracked this frame — hold last pose
-            const Ogre::Quaternion cur = toOgre(body.quats[bb.role]);
-            const Ogre::Quaternion dWorld =
-                cur * d->bodyNeutral[bb.role].Inverse();
-            const Ogre::Quaternion local =
-                bb.bindWorld.Inverse() * dWorld * bb.bindWorld;
-            skel->getBone(bb.boneName)->setOrientation(bb.bindLocal * local);
+        // Only drive once we have a clean neutral — otherwise hold bind pose.
+        if (d->bodyCalibrated) {
+            Ogre::SkeletonInstance* skel = entity->getSkeleton();
+            for (const auto& bb : d->bodyBones) {
+                if (!(body.resolvedMask & (1u << bb.role)))
+                    continue;  // role not tracked this frame — hold last pose
+                const Ogre::Quaternion cur = toOgre(body.quats[bb.role]);
+                const Ogre::Quaternion dWorld =
+                    cur * d->bodyNeutral[bb.role].Inverse();
+                // Apply the world-space delta to the bone's bind WORLD
+                // orientation, then express that target world orientation as a
+                // PARENT-relative local (Wp⁻¹ · Wt) — the frame setOrientation
+                // expects. Transporting through the parent (not the bone's own
+                // bindWorld) is what makes arm/shoulder bones — which have a
+                // non-identity local bind — rotate correctly.
+                const Ogre::Quaternion targetWorld = dWorld * bb.bindWorld;
+                const Ogre::Quaternion local =
+                    bb.parentBindWorld.Inverse() * targetWorld;
+                skel->getBone(bb.boneName)->setOrientation(local);
+            }
+            skel->_notifyManualBonesDirty();
         }
-        skel->_notifyManualBonesDirty();
     }
 
     if (d->state == Recording) {

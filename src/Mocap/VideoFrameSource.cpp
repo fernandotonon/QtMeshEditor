@@ -180,7 +180,7 @@ void FileFrameSource::handleVideoFrame()
     frame.timeSec = t;
     frame.frameIndex = index;
     if (!frame.image.isNull())
-        emit frameReady(frame);
+        emitFrame(frame);   // -> frameReady() + mailbox (worker-thread preview)
 }
 
 // ---------------------------------------------------------------------------
@@ -294,8 +294,7 @@ void CameraFrameSource::handleVideoFrame()
     frame.frameIndex = m_frameIndex++;
     // Latest-wins for the inference consumer; the signal serves lightweight
     // observers (preview HUD) that keep up with the camera.
-    m_mailbox.put(frame);
-    emit frameReady(frame);
+    emitFrame(frame);
 }
 
 #endif  // ENABLE_MOCAP
