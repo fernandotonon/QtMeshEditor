@@ -860,20 +860,19 @@ SkeletonEditor::Result SkeletonEditor::splitBone(Ogre::Entity* entity,
     splitBd.name = childName.toStdString();
     splitBd.handle = newHandle;
     splitBd.parentName = boneStd;
-    splitBd.position = axis * (1.f - t);
+    // Insert the new joint at fraction t along bone→tip (axis).
+    splitBd.position = axis * t;
     splitBd.orientation = Ogre::Quaternion::IDENTITY;
     splitBd.scale = Ogre::Vector3::UNIT_SCALE;
     splitBd.initialPosition = splitBd.position;
     splitBd.initialOrientation = Ogre::Quaternion::IDENTITY;
     splitBd.initialScale = Ogre::Vector3::UNIT_SCALE;
 
-    // Original bone keeps its parent; shrink its contribution to the tip by
-    // moving former children under the new split bone and scaling their locals.
+    // Original bone keeps its parent; former children move under the split
+    // joint and are re-expressed relative to that joint (world tip unchanged).
     for (auto& bd : snap.bones) {
         if (bd.parentName == boneStd) {
             bd.parentName = splitBd.name;
-            // Children were expressed in original bone space at full length;
-            // after the split joint they sit in the new bone's space past t.
             bd.position = bd.position - axis * t;
             bd.initialPosition = bd.initialPosition - axis * t;
         }

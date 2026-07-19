@@ -328,19 +328,34 @@ TEST_F(SkeletonEditorTest, SplitBoneInsertsChildAndRemapsWeights) {
     Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Split");
     ASSERT_NE(entity, nullptr);
     Ogre::Mesh* mesh = entity->getMesh().get();
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    Ogre::Bone* tip = skel->createBone("Tip", 2);
+    skel->getBone("Child")->addChild(tip);
+    tip->setPosition(Ogre::Vector3(0, 1, 0));
+    tip->setInitialState();
+    entity->_initialise(true);
 
     float weightSumBefore = 0.f;
     for (const auto& kv : mesh->getBoneAssignments())
         weightSumBefore += kv.second.weight;
 
-    const auto result = SkeletonEditor::splitBone(entity, QStringLiteral("Child"), 0.5f);
+    const float t = 0.25f;
+    const auto result = SkeletonEditor::splitBone(entity, QStringLiteral("Child"), t);
     ASSERT_TRUE(result.ok) << result.error.toStdString();
 
-    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
-    EXPECT_TRUE(skel->hasBone(result.boneName.toStdString()));
+    skel = entity->getMesh()->getSkeleton();
+    ASSERT_TRUE(skel->hasBone(result.boneName.toStdString()));
     Ogre::Bone* split = skel->getBone(result.boneName.toStdString());
     ASSERT_NE(split->getParent(), nullptr);
     EXPECT_EQ(split->getParent()->getName(), "Child");
+    // Split joint sits at fraction t along Child → Tip.
+    EXPECT_NEAR(split->getInitialPosition().y, t, 1e-4f);
+    ASSERT_TRUE(skel->hasBone("Tip"));
+    Ogre::Bone* tipAfter = skel->getBone("Tip");
+    ASSERT_NE(tipAfter->getParent(), nullptr);
+    EXPECT_EQ(tipAfter->getParent()->getName(), result.boneName.toStdString());
+    EXPECT_NEAR(tipAfter->getInitialPosition().y, 1.f - t, 1e-4f);
 
     float weightSumAfter = 0.f;
     for (const auto& kv : mesh->getBoneAssignments())
