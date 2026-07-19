@@ -34,6 +34,7 @@
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
 #include "SkeletonDebug.h"
+#include "SkeletonEditor.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -1102,6 +1103,21 @@ void TransformOperator::performBoxSelection(const QPoint& first, const QPoint& s
 
 void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
+    // Right-click on a visible skeleton bone → pick it and open the floating
+    // hierarchy context menu (Inspector-styled).
+    if (e->button() == Qt::RightButton)
+    {
+        if (tryPickBoneAt(e->pos()))
+        {
+            if (m_pActiveWidget) {
+                const QPoint global = m_pActiveWidget->mapToGlobal(e->pos());
+                if (auto* skelEd = SkeletonEditor::getSingletonPtr())
+                    skelEd->requestBoneContextMenu(global.x(), global.y());
+            }
+            return;
+        }
+    }
+
     if (e->button()==Qt::LeftButton)
     {
         // Auto-rig marker placement (Mixamo-style) is active: left-click drops

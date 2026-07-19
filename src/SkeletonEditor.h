@@ -8,6 +8,8 @@
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
+#include <QStringList>
+#include <QVariantList>
 
 #include <map>
 #include <optional>
@@ -21,9 +23,8 @@ class Mesh;
 class Skeleton;
 }
 
-/// Bone-level CRUD for skeletal rigs (epic #554, slice A #555).
-/// Owns create / remove / rename / duplicate on the selected entity's
-/// skeleton resource, with undo via SkeletonBoneCommands.
+/// Bone-level CRUD + hierarchy editing for skeletal rigs
+/// (epic #554: slice A #555 CRUD, slice B #556 hierarchy).
 class SkeletonEditor : public QObject
 {
     Q_OBJECT
@@ -42,10 +43,19 @@ public:
         bool transferWeightsToParent = true;
     };
 
+    struct ReparentOptions {
+        bool keepWorld = true; ///< false → keep local TRS unchanged
+    };
+
+    struct AttachOptions {
+        /// Reserved for a future geometry-transfer mode. Slice B is rig-only.
+        bool transferGeometry = false;
+    };
+
     struct Result {
         bool ok = false;
         QString error;
-        QString boneName; ///< created / duplicated bone name
+        QString boneName; ///< created / duplicated / split bone name
     };
 
     /// Captured skeleton + mesh skin state for undo of destructive edits.
@@ -107,6 +117,27 @@ public:
     static Result renameBone(Ogre::Entity* entity, const QString& oldName, const QString& newName);
     static Result duplicateBone(Ogre::Entity* entity, const QString& sourceBoneName);
 
+    /// Reparent `boneName` under `newParentName` (empty = detach to root).
+    static Result reparentBone(Ogre::Entity* entity,
+                               const QString& boneName,
+                               const QString& newParentName,
+                               const ReparentOptions& opts);
+    /// Detach chain to root (keep-world).
+    static Result detachBone(Ogre::Entity* entity, const QString& boneName);
+
+    /// Copy bone subtree(s) from src onto dst's skeleton (rig-only; no VBA copy).
+    static Result attachBonesToEntity(Ogre::Entity* srcEntity,
+                                      const QStringList& boneNames,
+                                      Ogre::Entity* dstEntity,
+                                      const AttachOptions& opts);
+
+    /// Insert a bone at fraction `t` along the selected bone's axis (0 < t < 1).
+    static Result splitBone(Ogre::Entity* entity, const QString& boneName, float t = 0.5f);
+
+    /// Snap / unsnap bone head to parent tip (Blender-style connect).
+    static Result setBoneConnected(Ogre::Entity* entity, const QString& boneName, bool connected);
+    static bool isBoneConnected(Ogre::Entity* entity, const QString& boneName);
+
     static void refreshAfterEdit(const std::string& entityName, const QString& selectBone = {});
 
     /// Push undo commands — used by QML and tests.
@@ -114,9 +145,25 @@ public:
     Q_INVOKABLE bool removeSelectedBone(bool removeChildren, bool transferWeightsToParent);
     Q_INVOKABLE bool renameSelectedBone(const QString& newName);
     Q_INVOKABLE bool duplicateSelectedBone();
+    Q_INVOKABLE bool reparentSelectedBone(const QString& newParentName, bool keepWorld = true);
+    Q_INVOKABLE bool detachSelectedBone();
+    Q_INVOKABLE bool splitSelectedBone(float t = 0.5f);
+    Q_INVOKABLE bool setSelectedBoneConnected(bool connected);
+    Q_INVOKABLE bool isSelectedBoneConnected() const;
+    Q_INVOKABLE bool attachSelectedBoneToEntity(const QString& dstEntityName);
 
     Q_INVOKABLE bool hasSkeletonSelection() const;
     Q_INVOKABLE QString selectedBoneName() const;
+    /// Current parent of the selected bone; empty string if root / none.
+    Q_INVOKABLE QString selectedBoneParentName() const;
+    /// Candidate parents for the selected bone (excludes self + descendants).
+    Q_INVOKABLE QStringList reparentCandidateParents() const;
+    /// Other scene entities that can receive an attached bone.
+    Q_INVOKABLE QVariantList attachTargetEntities() const;
+
+/// Request the floating bone context menu at a global screen position
+    /// (viewport right-click or Inspector bone picker).
+    void requestBoneContextMenu(int globalX, int globalY);
 
 signals:
     void boneCreated(const QString& entityName, const QString& boneName);
@@ -124,6 +171,7 @@ signals:
     void boneRenamed(const QString& entityName, const QString& oldName, const QString& newName);
     void boneDuplicated(const QString& entityName, const QString& boneName);
     void skeletonStructureChanged();
+    void boneContextMenuRequested(int globalX, int globalY);
 
 private:
     explicit SkeletonEditor(QObject* parent = nullptr);
@@ -135,6 +183,7 @@ private:
                                             bool removeChildren,
                                             bool transferWeightsToParent,
                                             QString* error);
+    static bool ensureEntitySkeleton(Ogre::Entity* entity, QString* error);
 
     static SkeletonEditor* s_singleton;
 };

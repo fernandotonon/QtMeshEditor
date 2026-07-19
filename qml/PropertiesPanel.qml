@@ -78,6 +78,10 @@ Rectangle {
     property bool   rigStatusError: false
     property string boneEditStatus: ""
     property bool   boneEditError: false
+    property bool   selectedBoneConnected: false
+    function refreshSelectedBoneConnected() {
+        root.selectedBoneConnected = SkeletonEditor.isSelectedBoneConnected()
+    }
 
     function runAutoRig() {
         if (AutoRigController.busy || !AutoRigController.hasRiggableSelection) return
@@ -2746,6 +2750,7 @@ Rectangle {
                 function onSelectionChanged() {
                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
                     skeletonToolsCol.ensureBoneListBound()
+                    root.refreshSelectedBoneConnected()
                 }
             }
             Connections {
@@ -2753,7 +2758,12 @@ Rectangle {
                 function onSkeletonStructureChanged() {
                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
                     skeletonToolsCol.ensureBoneListBound()
+                    root.refreshSelectedBoneConnected()
                 }
+            }
+            Connections {
+                target: AnimationControlController
+                function onBoneListChanged() { root.refreshSelectedBoneConnected() }
             }
 
             function ensureBoneListBound() {
@@ -2766,7 +2776,10 @@ Rectangle {
                     AnimationControlController.bindSkeletonForEntity(ent)
             }
 
-            Component.onCompleted: skeletonToolsCol.ensureBoneListBound()
+            Component.onCompleted: {
+                skeletonToolsCol.ensureBoneListBound()
+                root.refreshSelectedBoneConnected()
+            }
 
             Text {
                 width: parent.width - 16
@@ -2901,8 +2914,14 @@ Rectangle {
                         id: skelBoneSelectorMouse
                         anchors.fill: parent
                         hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         enabled: SkeletonEditor.hasSkeletonSelection
-                        onClicked: {
+                        onClicked: function(mouse) {
+                            if (mouse.button === Qt.RightButton) {
+                                const g = skelBoneSelector.mapToGlobal(mouse.x, mouse.y)
+                                root.openBoneContextMenu(g.x, g.y)
+                                return
+                            }
                             skelBoneSelector.dropdownOpen = !skelBoneSelector.dropdownOpen
                             if (skelBoneSelector.dropdownOpen) {
                                 skelBoneFilter.text = ""
@@ -3025,70 +3044,80 @@ Rectangle {
                 }
             }
 
-            Row {
+            // Bone action buttons — two rows so labels stay readable in the
+            // narrow Inspector dock.
+            Column {
                 spacing: 4
                 width: skeletonToolsCol.width - 16
 
-                Repeater {
-                    model: [
-                        { label: "+ Bone", action: "create", needsBone: false },
-                        { label: "Duplicate", action: "duplicate", needsBone: true },
-                        { label: "Remove", action: "remove", needsBone: true },
-                        { label: "Rename", action: "rename", needsBone: true }
-                    ]
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: Math.max(52, labelText.implicitWidth + 12)
-                        height: 22
-                        radius: 3
-                        color: btnMa.containsMouse
-                            ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
-                            : PropertiesPanelController.headerColor
-                        border.color: PropertiesPanelController.borderColor
-                        border.width: 1
-                        opacity: (SkeletonEditor.hasSkeletonSelection
-                                  && (!modelData.needsBone || AnimationControlController.selectedBone.length > 0))
-                                 ? 1.0 : 0.45
+                component SkelToolButton: Rectangle {
+                    id: skelBtn
+                    property string label: ""
+                    property string action: ""
+                    property bool needsBone: true
+                    width: Math.max(56, skelBtnLabel.implicitWidth + 14)
+                    height: 22
+                    radius: 3
+                    color: skelBtnMa.containsMouse || skelBtn.activeFocus
+                        ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                        : PropertiesPanelController.headerColor
+                    border.color: skelBtn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: skelBtn.activeFocus ? 2 : 1
+                    opacity: (SkeletonEditor.hasSkeletonSelection
+                              && (!skelBtn.needsBone || AnimationControlController.selectedBone.length > 0))
+                             ? 1.0 : 0.45
+                    activeFocusOnTab: enabled
+                    Accessible.role: Accessible.Button
+                    Accessible.name: skelBtnLabel.text
+                    enabled: SkeletonEditor.hasSkeletonSelection
+                            && (!skelBtn.needsBone || AnimationControlController.selectedBone.length > 0)
 
-                        Text {
-                            id: labelText
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 10
+                    Text {
+                        id: skelBtnLabel
+                        anchors.centerIn: parent
+                        text: {
+                            if (skelBtn.action === "connect")
+                                return root.selectedBoneConnected ? "Disconnect" : "Connect"
+                            return skelBtn.label
                         }
-                        MouseArea {
-                            id: btnMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            enabled: SkeletonEditor.hasSkeletonSelection
-                                    && (!modelData.needsBone || AnimationControlController.selectedBone.length > 0)
-                            onClicked: {
-                                root.boneEditError = false
-                                root.boneEditStatus = ""
-                                if (modelData.action === "create") {
-                                    if (SkeletonEditor.createBoneForSelected("")) {
-                                        root.boneEditStatus = "Bone created."
-                                    } else {
-                                        root.boneEditError = true
-                                        root.boneEditStatus = "Could not create bone."
-                                    }
-                                } else if (modelData.action === "duplicate") {
-                                    if (SkeletonEditor.duplicateSelectedBone()) {
-                                        root.boneEditStatus = "Bone duplicated."
-                                    } else {
-                                        root.boneEditError = true
-                                        root.boneEditStatus = "Select a bone first."
-                                    }
-                                } else if (modelData.action === "remove") {
-                                    root.openRemoveBoneDialog()
-                                } else if (modelData.action === "rename") {
-                                    root.openRenameBoneDialog()
-                                }
-                            }
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: skelBtnMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: skelBtn.enabled
+                        onClicked: {
+                            skelBtn.forceActiveFocus()
+                            root.runSkeletonToolAction(skelBtn.action)
                         }
                     }
+                    Keys.onPressed: function(event) {
+                        if (!skelBtn.enabled) return
+                        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                                || event.key === Qt.Key_Space) {
+                            root.runSkeletonToolAction(skelBtn.action)
+                            event.accepted = true
+                        }
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    SkelToolButton { label: "+ Bone"; action: "create"; needsBone: false }
+                    SkelToolButton { label: "Duplicate"; action: "duplicate" }
+                    SkelToolButton { label: "Reparent"; action: "reparent" }
+                    SkelToolButton { label: "Detach"; action: "detach" }
+                    SkelToolButton { label: "Split"; action: "split" }
+                    SkelToolButton { label: "Connect"; action: "connect" }
+                    SkelToolButton { label: "Attach"; action: "attach" }
+                    SkelToolButton { label: "Remove"; action: "remove" }
+                    SkelToolButton { label: "Rename"; action: "rename" }
                 }
             }
 
@@ -7740,6 +7769,211 @@ Rectangle {
             renameBoneLoader.active = true
         } else if (renameBoneLoader.item) {
             renameBoneLoader.item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+
+    Loader {
+        id: reparentBoneLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/ReparentBoneDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!reparentBoneLoader.wired) {
+                reparentBoneLoader.wired = true
+                item.reparentRequested.connect(function(newParent, keepWorld) {
+                    if (SkeletonEditor.reparentSelectedBone(newParent, keepWorld)) {
+                        root.boneEditStatus = "Bone reparented."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Reparent failed."
+                    }
+                })
+            }
+            item.openForBone(AnimationControlController.selectedBone,
+                             SkeletonEditor.reparentCandidateParents(),
+                             SkeletonEditor.selectedBoneParentName())
+        }
+    }
+    function openReparentBoneDialog() {
+        if (AnimationControlController.selectedBone.length === 0) {
+            root.boneEditError = true
+            root.boneEditStatus = "Select a bone first."
+            return
+        }
+        if (!reparentBoneLoader.active) {
+            reparentBoneLoader.active = true
+        } else if (reparentBoneLoader.item) {
+            reparentBoneLoader.item.openForBone(AnimationControlController.selectedBone,
+                                                SkeletonEditor.reparentCandidateParents(),
+                                                SkeletonEditor.selectedBoneParentName())
+        }
+    }
+
+    Loader {
+        id: splitBoneLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/SplitBoneDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!splitBoneLoader.wired) {
+                splitBoneLoader.wired = true
+                item.splitRequested.connect(function(t) {
+                    if (SkeletonEditor.splitSelectedBone(t)) {
+                        root.boneEditStatus = "Bone split."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Split failed."
+                    }
+                })
+            }
+            item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+    function openSplitBoneDialog() {
+        if (AnimationControlController.selectedBone.length === 0) {
+            root.boneEditError = true
+            root.boneEditStatus = "Select a bone first."
+            return
+        }
+        if (!splitBoneLoader.active) {
+            splitBoneLoader.active = true
+        } else if (splitBoneLoader.item) {
+            splitBoneLoader.item.openForBone(AnimationControlController.selectedBone)
+        }
+    }
+
+    Loader {
+        id: attachBoneLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/AttachBoneDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!attachBoneLoader.wired) {
+                attachBoneLoader.wired = true
+                item.attachRequested.connect(function(dstName) {
+                    if (SkeletonEditor.attachSelectedBoneToEntity(dstName)) {
+                        root.boneEditStatus = "Bone attached to " + dstName + "."
+                        root.boneEditError = false
+                    } else {
+                        root.boneEditError = true
+                        root.boneEditStatus = "Attach failed."
+                    }
+                })
+            }
+            item.openForBone(AnimationControlController.selectedBone,
+                             SkeletonEditor.attachTargetEntities())
+        }
+    }
+    function openAttachBoneDialog() {
+        if (AnimationControlController.selectedBone.length === 0) {
+            root.boneEditError = true
+            root.boneEditStatus = "Select a bone first."
+            return
+        }
+        if (!attachBoneLoader.active) {
+            attachBoneLoader.active = true
+        } else if (attachBoneLoader.item) {
+            attachBoneLoader.item.openForBone(AnimationControlController.selectedBone,
+                                              SkeletonEditor.attachTargetEntities())
+        }
+    }
+
+    function runSkeletonToolAction(action) {
+        root.boneEditError = false
+        root.boneEditStatus = ""
+        if (action === "create") {
+            if (SkeletonEditor.createBoneForSelected("")) {
+                root.boneEditStatus = "Bone created."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Could not create bone."
+            }
+        } else if (action === "duplicate") {
+            if (SkeletonEditor.duplicateSelectedBone()) {
+                root.boneEditStatus = "Bone duplicated."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Select a bone first."
+            }
+        } else if (action === "reparent") {
+            root.openReparentBoneDialog()
+        } else if (action === "detach") {
+            if (SkeletonEditor.detachSelectedBone()) {
+                root.boneEditStatus = "Bone detached."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Detach failed."
+            }
+        } else if (action === "split") {
+            root.openSplitBoneDialog()
+        } else if (action === "connect") {
+            const want = !SkeletonEditor.isSelectedBoneConnected()
+            if (SkeletonEditor.setSelectedBoneConnected(want)) {
+                root.boneEditStatus = want ? "Bone connected." : "Bone disconnected."
+                root.refreshSelectedBoneConnected()
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Connect/disconnect failed."
+            }
+        } else if (action === "attach") {
+            root.openAttachBoneDialog()
+        } else if (action === "remove") {
+            root.openRemoveBoneDialog()
+        } else if (action === "rename") {
+            root.openRenameBoneDialog()
+        }
+    }
+
+    Loader {
+        id: boneContextMenuLoader
+        active: false
+        property bool wired: false
+        source: "qrc:/MaterialEditorQML/BoneContextMenu.qml"
+        onLoaded: {
+            if (!item) return
+            if (!boneContextMenuLoader.wired) {
+                boneContextMenuLoader.wired = true
+                item.setParentRequested.connect(function() { root.openReparentBoneDialog() })
+                item.detachRequested.connect(function() { root.runSkeletonToolAction("detach") })
+                item.splitRequested.connect(function() { root.openSplitBoneDialog() })
+                item.connectToggleRequested.connect(function() { root.runSkeletonToolAction("connect") })
+                item.attachRequested.connect(function() { root.openAttachBoneDialog() })
+                item.duplicateRequested.connect(function() { root.runSkeletonToolAction("duplicate") })
+                item.renameRequested.connect(function() { root.openRenameBoneDialog() })
+                item.removeRequested.connect(function() { root.openRemoveBoneDialog() })
+            }
+            if (boneContextMenuLoader.pendingX !== undefined) {
+                item.openAt(boneContextMenuLoader.pendingX, boneContextMenuLoader.pendingY)
+                boneContextMenuLoader.pendingX = undefined
+                boneContextMenuLoader.pendingY = undefined
+            }
+        }
+        property var pendingX
+        property var pendingY
+    }
+
+    function openBoneContextMenu(globalX, globalY) {
+        if (!boneContextMenuLoader.active) {
+            boneContextMenuLoader.pendingX = globalX
+            boneContextMenuLoader.pendingY = globalY
+            boneContextMenuLoader.active = true
+        } else if (boneContextMenuLoader.item) {
+            boneContextMenuLoader.item.openAt(globalX, globalY)
+        }
+    }
+
+    Connections {
+        target: SkeletonEditor
+        function onBoneContextMenuRequested(globalX, globalY) {
+            root.openBoneContextMenu(globalX, globalY)
         }
     }
 
