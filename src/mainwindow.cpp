@@ -4423,6 +4423,8 @@ void MainWindow::importMeshs(const QStringList &_uriList)
 
     QElapsedTimer importTimer;
     importTimer.start();
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("Importing meshes"));
     const QString firstImportPath = _uriList.isEmpty() ? QString() : _uriList.first();
     SentryReporter::captureFileWorkflowEvent(
         {QStringLiteral("import"), QStringLiteral("started"), QStringLiteral("gui"), firstImportPath});
