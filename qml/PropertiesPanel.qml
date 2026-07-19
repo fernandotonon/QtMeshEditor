@@ -3130,7 +3130,8 @@ Rectangle {
                     width: parent.width
                     wrapMode: Text.Wrap
                     font.pixelSize: 10
-                    color: PropertiesPanelController.borderColor
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.75
                     text: "Capture the current pose as bind, or edit rest with the bone gizmo."
                 }
 
@@ -3144,7 +3145,7 @@ Rectangle {
 
                 Row {
                     spacing: 12
-                    CheckBox {
+                    InspectorCheckBox {
                         id: editRestCheck
                         text: "Edit rest pose"
                         checked: SkeletonEditor.editRestPoseMode
@@ -3152,28 +3153,14 @@ Rectangle {
                             if (checked !== SkeletonEditor.editRestPoseMode)
                                 SkeletonEditor.editRestPoseMode = checked
                         }
-                        contentItem: Text {
-                            text: editRestCheck.text
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 11
-                            leftPadding: editRestCheck.indicator.width + 4
-                            verticalAlignment: Text.AlignVCenter
-                        }
                     }
-                    CheckBox {
+                    InspectorCheckBox {
                         id: ghostRestCheck
                         text: "Rest ghost"
                         checked: SkeletonEditor.showRestPoseGhost
                         onCheckedChanged: {
                             if (checked !== SkeletonEditor.showRestPoseGhost)
                                 SkeletonEditor.showRestPoseGhost = checked
-                        }
-                        contentItem: Text {
-                            text: ghostRestCheck.text
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 11
-                            leftPadding: ghostRestCheck.indicator.width + 4
-                            verticalAlignment: Text.AlignVCenter
                         }
                     }
                 }

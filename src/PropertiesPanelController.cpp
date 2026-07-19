@@ -1208,20 +1208,8 @@ void PropertiesPanelController::refreshSkeletonOverlays(const QString& entityNam
 void PropertiesPanelController::setRestPoseGhostVisible(bool show)
 {
     if (!mAnimationWidget) return;
-    if (show) {
-        // Ghost lives on SkeletonDebug instances — ensure skinned entities
-        // have an overlay so the rest pose is visible even if the user
-        // hasn't toggled "Skeleton" yet.
-        auto* mgr = Manager::getSingletonPtr();
-        if (mgr) {
-            for (Ogre::Entity* ent : mgr->getEntities()) {
-                if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
-                    continue;
-                if (!mAnimationWidget->isSkeletonDebugActive(ent))
-                    mAnimationWidget->toggleSkeletonDebug(ent, true);
-            }
-        }
-    }
+    // Ghost is independent of the Skeleton debug checkbox — AnimationWidget
+    // creates bone-hidden hosts when needed and tears them down on hide.
     mAnimationWidget->setRestPoseGhostVisible(show);
 }
 

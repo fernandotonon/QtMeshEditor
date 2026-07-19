@@ -72,7 +72,9 @@ bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
 
 bool AnimationWidget::isSkeletonDebugActive(Ogre::Entity* entity) const
 {
-    return mShowSkeleton.contains(entity);
+    // "Active" means the user-visible skeleton overlay (bones), not a
+    // rest-pose ghost host that happens to share SkeletonDebug.
+    return isSkeletonShown(entity);
 }
 
 bool AnimationWidget::isBoneWeightsShown(Ogre::Entity* entity) const
@@ -100,14 +102,17 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
     {
         sd->showAxes(false);
         sd->showNames(false);
-        mShowSkeleton.remove(entity);
-        // QMap of raw pointers doesn't own — delete explicitly. Without
-        // this, the SkeletonDebug + its QTimer (which fires every tick
-        // touching mBoneEntities) leaks. On the next enable, a *new*
-        // SkeletonDebug attaches new visuals, the leaked one's timer
-        // races with the new attachments via attachObjectToBone, and
-        // touches dangling Ogre::Entity pointers → SIGSEGV at 0xf8.
-        delete sd; // NOSONAR — manual delete needed since QMap doesn't own
+        // Keep the host alive when rest-pose ghost still needs it.
+        if (!sd->restGhostShown()) {
+            mShowSkeleton.remove(entity);
+            // QMap of raw pointers doesn't own — delete explicitly. Without
+            // this, the SkeletonDebug + its QTimer (which fires every tick
+            // touching mBoneEntities) leaks. On the next enable, a *new*
+            // SkeletonDebug attaches new visuals, the leaked one's timer
+            // races with the new attachments via attachObjectToBone, and
+            // touches dangling Ogre::Entity pointers → SIGSEGV at 0xf8.
+            delete sd; // NOSONAR — manual delete needed since QMap doesn't own
+        }
     }
     else if (show && mWeightOverlays.contains(entity))
     {
@@ -173,9 +178,40 @@ void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
 
 void AnimationWidget::setRestPoseGhostVisible(bool show)
 {
-    for (SkeletonDebug* sd : mShowSkeleton.values()) {
-        if (sd)
-            sd->showRestGhost(show);
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return;
+
+    if (show) {
+        // Create a SkeletonDebug host when needed, but do NOT enable bone
+        // visuals — rest ghost is independent of the Skeleton checkbox.
+        for (Ogre::Entity* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
+                continue;
+            SkeletonDebug* sd = nullptr;
+            if (mShowSkeleton.contains(ent)) {
+                sd = mShowSkeleton.value(ent);
+            } else {
+                sd = new SkeletonDebug(ent, mgr->getSceneMgr(), 0.1f, 0.01f);
+                mShowSkeleton.insert(ent, sd);
+            }
+            sd->showRestGhost(true);
+        }
+        return;
+    }
+
+    // Hide ghost only. Destroy hosts that exist solely for the ghost
+    // (bones never shown) so we don't leave invisible SkeletonDebug timers.
+    QList<Ogre::Entity*> toRemove;
+    for (auto it = mShowSkeleton.begin(); it != mShowSkeleton.end(); ++it) {
+        SkeletonDebug* sd = it.value();
+        if (!sd) continue;
+        sd->showRestGhost(false);
+        if (!sd->bonesShown())
+            toRemove.append(it.key());
+    }
+    for (Ogre::Entity* ent : toRemove) {
+        SkeletonDebug* sd = mShowSkeleton.take(ent);
+        delete sd; // NOSONAR — QMap doesn't own
     }
 }
 

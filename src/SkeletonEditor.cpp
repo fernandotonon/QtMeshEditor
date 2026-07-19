@@ -242,11 +242,16 @@ bool applyRestPoseMap(Ogre::Entity* entity,
         return false;
     }
 
+    // Validate every target bone exists before mutating any tracks/bind.
     for (const auto& [name, newRest] : newRests) {
+        Q_UNUSED(newRest);
         if (!skel->hasBone(name)) {
             if (error) *error = QStringLiteral("Bone not found: %1").arg(QString::fromStdString(name));
             return false;
         }
+    }
+
+    for (const auto& [name, newRest] : newRests) {
         Ogre::Bone* bone = skel->getBone(name);
         RestPoseTRS oldRest{bone->getInitialPosition(), bone->getInitialOrientation(),
                             bone->getInitialScale()};
@@ -295,6 +300,20 @@ void SkeletonEditor::kill()
 }
 
 SkeletonEditor::SkeletonEditor(QObject* parent) : QObject(parent) {}
+
+void SkeletonEditor::ensureEditRestSelectionHook()
+{
+    if (m_editRestSelectionHooked) return;
+    auto* sel = SelectionSet::getSingletonPtr();
+    if (!sel) return;
+    connect(sel, &SelectionSet::selectionChanged, this, [this]() {
+        if (!m_editRestPoseMode) return;
+        // Remute for the newly selected entity; unmute the previous one.
+        applyEditRestAnimMute(false);
+        applyEditRestAnimMute(true);
+    });
+    m_editRestSelectionHooked = true;
+}
 
 Ogre::Entity* SkeletonEditor::selectedSkinnedEntity()
 {
@@ -1388,9 +1407,22 @@ SkeletonEditor::Result SkeletonEditor::resetRestPose(Ogre::Entity* entity)
         return result;
     }
 
+    Ogre::SkeletonPtr skel = skeletonResource(entity);
+    if (!skel) {
+        result.error = QStringLiteral("Entity has no skeleton");
+        return result;
+    }
+
     std::unordered_map<std::string, RestPoseTRS> newRests;
-    for (const auto& [name, trs] : it->second.bones)
+    for (const auto& [name, trs] : it->second.bones) {
+        if (!skel->hasBone(name))
+            continue; // renamed/removed since import — skip stale cache entries
         newRests[name] = trs;
+    }
+    if (newRests.empty()) {
+        result.error = QStringLiteral("Cached rest pose has no matching bones");
+        return result;
+    }
 
     QString err;
     if (!applyRestPoseMap(entity, newRests, &err)) {
@@ -1428,8 +1460,12 @@ SkeletonEditor::Result SkeletonEditor::commitBoneRestPose(Ogre::Entity* entity,
 void SkeletonEditor::setEditRestPoseMode(bool on)
 {
     if (m_editRestPoseMode == on) return;
+    if (on)
+        ensureEditRestSelectionHook();
     m_editRestPoseMode = on;
     applyEditRestAnimMute(on);
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.rest_pose.edit_mode"),
+                                  on ? QStringLiteral("on") : QStringLiteral("off"));
     emit editRestPoseModeChanged();
 }
 
@@ -1438,14 +1474,15 @@ void SkeletonEditor::setShowRestPoseGhost(bool on)
     if (m_showRestPoseGhost == on) return;
     m_showRestPoseGhost = on;
     syncRestPoseGhostOverlay();
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.rest_pose.ghost"),
+                                  on ? QStringLiteral("on") : QStringLiteral("off"));
     emit showRestPoseGhostChanged();
 }
 
 void SkeletonEditor::applyEditRestAnimMute(bool mute)
 {
-    auto* animCtrl = AnimationControlController::instance();
     if (!mute) {
-        if (!m_editRestMutedEntity.isEmpty() && animCtrl) {
+        if (!m_editRestMutedEntity.isEmpty()) {
             Ogre::Entity* ent = resolveEntityByName(m_editRestMutedEntity.toStdString());
             if (ent) {
                 for (const QString& name : m_editRestMutedAnims) {

@@ -222,10 +222,12 @@ private:
 
     void applyEditRestAnimMute(bool mute);
     void syncRestPoseGhostOverlay();
+    void ensureEditRestSelectionHook();
 
     static SkeletonEditor* s_singleton;
     bool m_editRestPoseMode = false;
     bool m_showRestPoseGhost = false;
+    bool m_editRestSelectionHooked = false;
     QString m_editRestMutedEntity;
     QStringList m_editRestMutedAnims;
 };
