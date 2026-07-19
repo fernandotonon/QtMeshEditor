@@ -127,6 +127,16 @@ def sphere_surf(c, r, n, rng, squash=None):
     return c + p
 
 
+def ball_vol(c, r, n, rng, squash=None):
+    """Points filling an ellipsoid VOLUME (not just the surface). A stylized
+    tree's canopy is a dense cloud of leaf cards filling a volume, not a hollow
+    shell — training only on shells taught the model that a solid low mass must
+    be trunk (the oak-canopy-labelled-trunk bug)."""
+    d = _unit_dirs(n, rng) * (rng.random((n, 1)) ** (1.0 / 3.0)) * r
+    if squash is not None: d = d * squash
+    return c + d
+
+
 def capsule_surf(p0, p1, r, n, rng, cap0=True, cap1=True):
     """Points on a capsule surface (cylinder side + spherical caps).
 
@@ -420,45 +430,70 @@ def make_tree(rng):
     """Surface-sampled tree/plant. Same (sampler, label, weight) contract as the
     body plans; labels are the vegetation LOCAL channels."""
     parts = []
-    kind = rng.choice(['broadleaf', 'pine', 'palm', 'dead', 'bush'],
-                      p=[0.40, 0.25, 0.15, 0.10, 0.10])
+    kind = rng.choice(['broadleaf', 'oak', 'pine', 'palm', 'dead', 'bush'],
+                      p=[0.30, 0.22, 0.20, 0.12, 0.08, 0.08])
     trunkH = rng.uniform(0.5, 1.5)
     trunkR = trunkH * rng.uniform(0.04, 0.12)
     if kind == 'bush':
         trunkH *= rng.uniform(0.15, 0.4)
+    # 'oak': big-canopy / short-trunk broadleaf — a huge canopy on a stubby
+    # trunk, with foliage DROOPING down around/below the trunk top (real oaks,
+    # willows, stylized game trees). This is the regime the oak-canopy bug lives
+    # in: the canopy dwarfs the trunk and its lower edge dips into trunk height.
+    canopyScale = 1.0        # canopy radius multiplier vs trunkH
+    droop = 0.0              # how far the canopy center sits BELOW the trunk top
+    if kind == 'oak':
+        trunkH *= rng.uniform(0.45, 0.9)       # stubby
+        trunkR = trunkH * rng.uniform(0.10, 0.22)
+        canopyScale = rng.uniform(1.1, 2.2)    # canopy much bigger than trunk
+        droop = rng.uniform(0.15, 0.55)        # canopy descends around the trunk
     lean = rng.uniform(-0.12, 0.12, size=2)
     top = np.array([lean[0] * trunkH, trunkH, lean[1] * trunkH])
     parts.append((lambda n, b=top, r=trunkR: capsule_surf([0, 0, 0], b, r, n, rng),
                   TRUNK, trunkH * trunkR * 3))
 
-    def blob(c, r, label, w, squash=None):
-        parts.append((lambda n, c=c, r=r, s=squash: sphere_surf(c, r, n, rng, s),
-                      label, w))
+    def blob(c, r, label, w, squash=None, solid=False):
+        fn = ball_vol if solid else sphere_surf
+        parts.append((lambda n, c=c, r=r, s=squash: fn(c, r, n, rng, s), label, w))
 
-    if kind in ('broadleaf', 'dead', 'bush'):
-        nbr = rng.integers(2, 7)
+    if kind in ('broadleaf', 'oak', 'dead', 'bush'):
+        nbr = rng.integers(2, 8 if kind == 'oak' else 7)
         tips = []
         for _ in range(nbr):
             az = rng.uniform(0, 2 * np.pi)
-            elev = rng.uniform(0.3, 1.1)
-            bl = trunkH * rng.uniform(0.25, 0.6)
-            base = top * rng.uniform(0.55, 0.95)
+            # oak branches spread more horizontally (lower elevation) so the
+            # canopy sits wide and low rather than piled on top
+            elev = rng.uniform(-0.1, 0.6) if kind == 'oak' else rng.uniform(0.3, 1.1)
+            bl = trunkH * rng.uniform(0.25, 0.7)
+            base = top * rng.uniform(0.5, 0.95)
             tip = base + bl * np.array([np.cos(az) * np.cos(elev), np.sin(elev),
                                         np.sin(az) * np.cos(elev)])
             parts.append((lambda n, a=base, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
                           capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR))
             tips.append(tip)
         if kind != 'dead':
-            if rng.random() < 0.5 or kind == 'bush':     # one big low-poly canopy
-                cr = trunkH * rng.uniform(0.35, 0.7)
-                cc = top + np.array([0, cr * rng.uniform(0.3, 0.8), 0])
+            # A meaningful share of canopies are SOLID-volume (dense leaf-card
+            # clouds), not thin shells — the training-vs-real domain gap.
+            solid = rng.random() < 0.5
+            if kind == 'oak' or rng.random() < 0.5 or kind == 'bush':  # one big canopy
+                cr = trunkH * canopyScale * rng.uniform(0.45, 0.85)
+                # center can sit BELOW the trunk top (droop) so the canopy's
+                # lower half overlaps trunk height — the oak silhouette
+                cc = top + np.array([0, cr * rng.uniform(0.2, 0.7) - droop * trunkH, 0])
                 blob(cc, cr, FOLIAGE, cr * cr * 10,
-                     np.array([rng.uniform(0.8, 1.2), rng.uniform(0.6, 1.1),
-                               rng.uniform(0.8, 1.2)]))
+                     np.array([rng.uniform(0.85, 1.3), rng.uniform(0.6, 1.15),
+                               rng.uniform(0.85, 1.3)]), solid=solid)
+                # oak: a second, lower skirt of foliage that wraps the trunk
+                if kind == 'oak' and rng.random() < 0.7:
+                    sr = cr * rng.uniform(0.6, 0.95)
+                    sc = np.array([top[0], trunkH * rng.uniform(0.35, 0.75), top[2]])
+                    blob(sc, sr, FOLIAGE, sr * sr * 8,
+                         np.array([rng.uniform(1.0, 1.5), rng.uniform(0.45, 0.8),
+                                   rng.uniform(1.0, 1.5)]), solid=solid)
             else:                                        # per-tip blobs
                 for tip in tips:
                     br = trunkH * rng.uniform(0.15, 0.35)
-                    blob(tip, br, FOLIAGE, br * br * 8)
+                    blob(tip, br, FOLIAGE, br * br * 8, solid=solid)
             if rng.random() < 0.25:                      # flowers / fruit
                 for _ in range(rng.integers(2, 8)):
                     d = _unit_dirs(1, rng)[0]
