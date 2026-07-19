@@ -712,6 +712,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_capture_devices"), &MCPServer::toolListCaptureDevices},
         {QStringLiteral("start_live_capture"), &MCPServer::toolStartLiveCapture},
         {QStringLiteral("stop_live_capture"), &MCPServer::toolStopLiveCapture},
+        {QStringLiteral("set_capture_channels"), &MCPServer::toolSetCaptureChannels},
         {QStringLiteral("play_vertex_animation"), &MCPServer::toolPlayVertexAnimation},
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
@@ -6791,13 +6792,54 @@ QJsonObject MCPServer::toolStartLiveCapture(const QJsonObject &args)
     auto* c = MocapController::instance();
     if (c->state() != MocapController::Idle)
         return makeErrorResult("Error: a live capture session is already running");
-    if (!c->startPreview(args.value("device_id").toString()))
+
+    // Optional channel toggles — set BEFORE starting so drivability is
+    // evaluated with the requested channels (default: leave as-is).
+    if (args.contains("face")) c->setFaceEnabled(args.value("face").toBool());
+    if (args.contains("head")) c->setHeadEnabled(args.value("head").toBool());
+    if (args.contains("body")) c->setBodyEnabled(args.value("body").toBool());
+
+    // video_path drives from a file (the macOS-camera-blocked path); else the
+    // webcam device_id (empty = default camera).
+    const QString videoPath = args.value("video_path").toString();
+    const bool started = videoPath.isEmpty()
+        ? c->startPreview(args.value("device_id").toString())
+        : c->startPreviewFromVideo(videoPath);
+    if (!started)
         return makeErrorResult(QString("Error: %1").arg(c->statusMessage()));
     QJsonObject content;
     content["ok"] = true;
     content["state"] = "previewing";
+    content["source"] = videoPath.isEmpty() ? "camera" : "video";
     content["matchedChannels"] = c->matchedChannelCount();
     content["headAvailable"] = c->headAvailable();
+    content["bodyAvailable"] = c->bodyAvailable();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolSetCaptureChannels(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_capture_channels");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    auto* c = MocapController::instance();
+    if (args.contains("face")) c->setFaceEnabled(args.value("face").toBool());
+    if (args.contains("head")) c->setHeadEnabled(args.value("head").toBool());
+    if (args.contains("body")) c->setBodyEnabled(args.value("body").toBool());
+    QJsonObject content;
+    content["ok"] = true;
+    content["face"] = c->faceEnabled();
+    content["head"] = c->headEnabled();
+    content["body"] = c->bodyEnabled();
+    content["matchedChannels"] = c->matchedChannelCount();
+    content["headAvailable"] = c->headAvailable();
+    content["bodyAvailable"] = c->bodyAvailable();
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 #endif
@@ -9852,13 +9894,32 @@ QJsonArray MCPServer::buildToolsList()
     {
         QJsonObject props;
         props["device_id"] = QJsonObject{{"type", "string"}, {"description", "Camera id from list_capture_devices (default camera when omitted)."}};
+        props["video_path"] = QJsonObject{{"type", "string"}, {"description", "Drive from a VIDEO FILE instead of the camera (the macOS-camera-blocked path). Local path, not a URL."}};
+        props["face"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Face (morph-target) drive. Default: leave current toggle."}};
+        props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Head-bone drive."}};
+        props["body"] = QJsonObject{{"type", "boolean"}, {"description", "Enable full-body drive (humanoid rig)."}};
         QJsonArray required;
         appendTool(
             "start_live_capture",
-            "Start a live webcam performance-capture preview driving the SELECTED entity's "
-            "morph targets + Head bone (the GUI Performance Capture panel's session). Only "
-            "works in --with-mcp (GUI) mode. Follow with stop_live_capture.",
+            "Start a live performance-capture preview driving the SELECTED entity's morph "
+            "targets + Head bone + (humanoid) body — the GUI Performance Capture panel's "
+            "session. Source is the webcam (device_id) or a video file (video_path). The "
+            "face/head/body flags toggle channels before starting. Only works in --with-mcp "
+            "(GUI) mode. Follow with stop_live_capture.",
             props, required);
+    }
+    {
+        QJsonObject props;
+        props["face"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the Face (morph-target) channel."}};
+        props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the Head-bone channel."}};
+        props["body"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the full-body channel."}};
+        appendTool(
+            "set_capture_channels",
+            "Set the Face/Head/Body capture channel toggles for the SELECTED entity (the "
+            "Performance Capture checkboxes). Returns each flag plus what the selection can "
+            "actually drive (matchedChannels, headAvailable, bodyAvailable). Set BEFORE "
+            "start_live_capture, or between sessions.",
+            props, QJsonArray());
     }
     {
         QJsonObject props;
