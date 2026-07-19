@@ -48,6 +48,7 @@
 #include "SkinWeights.h"
 #include "SkinningDisplay.h"
 #include "AutoRig.h"
+#include "FaceRig/FaceRigAttach.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -625,6 +626,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
+        {QStringLiteral("add_arkit_blendshapes"), &MCPServer::toolAddArkitBlendshapes},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
@@ -740,6 +742,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
@@ -798,6 +801,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
             {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("add_arkit_blendshapes"), QStringLiteral("auto_rig")},
             {QStringLiteral("motion_in_between"), QStringLiteral("motion_inbetween")},
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
@@ -2288,6 +2292,86 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     QJsonObject j = AutoRig::reportToJson(report);
     j["skinned"] = skinned;
     result["rig"] = j;
+    return result;
+}
+
+QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
+{
+    // #889: fit the ARKit blendshape template onto the selected face mesh and
+    // attach the 52 ARKit morph targets, optionally re-exporting.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    FaceRig::FaceRigOptions opts;
+    if (args.contains("max_shapes")) {
+        if (!args["max_shapes"].isDouble())
+            return makeErrorResult("Error: 'max_shapes' must be a number.");
+        opts.maxShapes = args["max_shapes"].toInt();
+    }
+    if (args.contains("max_residual_pct")) {
+        if (!args["max_residual_pct"].isDouble())
+            return makeErrorResult("Error: 'max_residual_pct' must be a number.");
+        opts.maxFitResidualPct = args["max_residual_pct"].toDouble();
+    }
+    if (args.contains("output_path") && !args["output_path"].isString())
+        return makeErrorResult("Error: 'output_path' must be a string.");
+    const QString outputPath = args.value("output_path").toString();
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty() || !resolved.first())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("add_arkit_blendshapes max_shapes=%1").arg(opts.maxShapes));
+
+    FaceRig::AttachReport rep;
+    try {
+        rep = FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
+        if (!rep.ok)
+            return makeErrorResult(
+                QStringLiteral("Face-rig failed: %1").arg(rep.error));
+
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            if (!node)
+                return makeErrorResult(QStringLiteral(
+                    "Error: rigged, but the entity has no scene node to export from"));
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("add_arkit_blendshapes export requested"));
+            const int rc = MeshImporterExporter::exporter(
+                node, outputPath, CLIPipeline::formatForExtension(outputPath));
+            if (rc != 0)
+                return makeErrorResult(
+                    QStringLiteral("Error: blendshapes attached but export to '%1' "
+                                   "failed (code %2)").arg(outputPath).arg(rc));
+            // NOTE: no sidecar write here — MeshImporterExporter::exporter
+            // already writes the FULL deduplicated pose-name sidecar;
+            // overwriting it with only the newly-attached names would drop
+            // pre-existing morph targets and misalign indices.
+        }
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Face-rig error: %1")
+            .arg(QString::fromUtf8(e.what())));
+    }
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Attached %1 ARKit blendshape(s) (fit residual mean %2%, "
+                       "max %3%).")
+            .arg(rep.shapesAttached)
+            .arg(rep.fitMeanResidualPct, 0, 'f', 3)
+            .arg(rep.fitMaxResidualPct, 0, 'f', 3));
+    QJsonObject j;
+    j["shapes_attached"] = rep.shapesAttached;
+    j["user_vertex_count"] = rep.userVertexCount;
+    j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+    j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
+    result["facerig"] = j;
     return result;
 }
 
@@ -8559,6 +8643,35 @@ QJsonArray MCPServer::buildToolsList()
             "joints toward the mesh's medial mass. Best on roughly upright, manifold, "
             "T/A-pose meshes with +Y up. Already-skinned meshes are rejected. Pair "
             "skin:true for a one-click rig+skin.",
+            props
+        );
+    }
+
+    // add_arkit_blendshapes (#889)
+    {
+        QJsonObject props;
+        props["max_shapes"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Cap the number of ARKit shapes generated (0 = all 52 in the "
+             "template, default)."}};
+        props["max_residual_pct"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Reject the rig when the non-rigid fit is worse than this percent of "
+             "the mesh diagonal (default 8). A human template only fits a roughly "
+             "human face; a non-face mesh blows past this and is refused."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Optional path to re-export the mesh with the attached blendshapes. "
+             "When omitted, the shapes are added to the in-session scene only."}};
+        appendTool(
+            "add_arkit_blendshapes",
+            "Fit the ARKit blendshape template onto the currently selected FACE "
+            "mesh and attach the 52 ARKit morph targets (#889). Native pipeline (no "
+            "external deps): non-rigid ICP fits the template to the user face, then "
+            "Sumner-Popovic deformation transfer realizes each expression on the "
+            "user's identity; the shapes are named per the mocap-52 vocabulary so "
+            "face capture drives them. Humanoid faces only — a poor fit is rejected. "
+            "The bundled template downloads on first use.",
             props
         );
     }

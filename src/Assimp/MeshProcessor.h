@@ -33,6 +33,14 @@ public:
     void processNode(aiNode* node, const aiScene* scene);
     Ogre::MeshPtr createMesh(const Ogre::String& name, const Ogre::String& group, MaterialProcessor &materialProcessor);
 
+    // Morph-target name hints from a `<file>.arkit.json` sidecar (ordered
+    // names). Assimp's glTF2 EXPORTER drops `targetNames`, so a re-imported
+    // rigged glb otherwise degrades to generated "Shape_N" names — losing the
+    // ARKit vocabulary face capture matches on. Applied only when the aiMesh
+    // itself carries no names and the scene has a single morphed mesh (the
+    // unambiguous case — e.g. the ARKit reference head).
+    void setMorphNameHints(std::vector<std::string> names) { m_nameHints = std::move(names); }
+
 protected:
     // Protected for testing purposes
     SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
@@ -42,4 +50,5 @@ private:
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     Ogre::SkeletonPtr skeleton;
     bool m_isZup;
+    std::vector<std::string> m_nameHints;
 };

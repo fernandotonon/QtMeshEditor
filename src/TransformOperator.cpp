@@ -29,6 +29,7 @@
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
 #include "AutoRigController.h"
+#include "FaceRigController.h"
 #include "TexturePaintController.h"
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
@@ -1110,6 +1111,13 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         if (AutoRigController::instance()->markerMode())
         {
             AutoRigController::instance()->handleMarkerClick(m_pActiveWidget, e->pos());
+            return;
+        }
+        // Face-rig marker editing (auto-seeded, user-adjusted) — same priority:
+        // a left-click repositions the selected face marker on the mesh surface.
+        if (FaceRigController::instance()->markerMode())
+        {
+            FaceRigController::instance()->handleMarkerClick(m_pActiveWidget, e->pos());
             return;
         }
 

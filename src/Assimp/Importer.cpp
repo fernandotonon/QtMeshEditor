@@ -37,6 +37,10 @@ THE SOFTWARE.
 #include <string_view>
 
 #include <QFileInfo>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 namespace {
 
@@ -235,6 +239,26 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
 
     // Process the root node recursively (meshes)
     MeshProcessor meshProcessor(skeleton, isZup);
+
+    // ARKit blendshape name sidecar (`<file>.arkit.json`, schema
+    // qtmesh-arkit-blendshapes-v1): Assimp's glTF2 exporter drops
+    // `targetNames`, so shapes in a re-imported glb arrive nameless and would
+    // degrade to "Shape_N". Restore the authored ARKit names from the sidecar
+    // the face-rig exporters write next to the mesh.
+    {
+        QFile sidecar(QString::fromStdString(path) + ".arkit.json");
+        if (sidecar.exists() && sidecar.open(QIODevice::ReadOnly)) {
+            const QJsonObject root = QJsonDocument::fromJson(sidecar.readAll()).object();
+            if (root.value("schema").toString().startsWith("qtmesh-arkit-blendshapes")) {
+                std::vector<std::string> names;
+                for (const auto& v : root.value("names").toArray())
+                    names.push_back(v.toString().toStdString());
+                if (!names.empty())
+                    meshProcessor.setMorphNameHints(std::move(names));
+            }
+        }
+    }
+
     meshProcessor.processNode(scene->mRootNode, scene);
     Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(modelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, materialProcessor);
 

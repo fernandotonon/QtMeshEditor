@@ -177,6 +177,10 @@ private:
     /// #407: native auto-rig of the selected static mesh (template embedding),
     /// optional skin chain + re-export.
     QJsonObject toolAutoRig(const QJsonObject &args);
+    /// #889: fit the ARKit blendshape template onto the selected face mesh
+    /// (NRICP + deformation transfer), attach the 52 ARKit morph targets, and
+    /// optionally re-export.
+    QJsonObject toolAddArkitBlendshapes(const QJsonObject &args);
     /// Issue #403: mesh-aware (depth-conditioned) texture
     /// generation. Renders the selected entity's depth map and
     /// conditions sd.cpp on it via a ControlNet depth model, then

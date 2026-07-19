@@ -72,6 +72,7 @@ THE SOFTWARE.
 #include "SceneLightsIO.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "FaceRig/FaceRigAttach.h"
 #include "ExportOptimizer.h"
 #include "RTShaderHelper.h"
 
@@ -3964,6 +3965,27 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 if (formatId == "gltf2" || formatId == "glb2")
                     injectMorphWeightAnimations(file.filePath(), e,
                                                 /*isBinary=*/formatId == "glb2");
+
+                // Morph-target NAME sidecar: Assimp's glTF2 exporter also
+                // drops `targetNames`, so a rigged mesh re-imported from this
+                // export would degrade to "Shape_N" names. Persist the
+                // ordered pose names next to the file (the same
+                // `<file>.arkit.json` the CLI/MCP face-rig paths write); the
+                // importer restores them on load.
+                if (e->getMesh() && e->getMesh()->getPoseCount() > 0)
+                {
+                    std::vector<QString> poseNames;
+                    QSet<QString> seen;
+                    for (const auto* pose : e->getMesh()->getPoseList())
+                    {
+                        const QString n = QString::fromStdString(pose->getName());
+                        if (n.isEmpty() || seen.contains(n)) continue;
+                        seen.insert(n);
+                        poseNames.push_back(n);
+                    }
+                    if (!poseNames.empty())
+                        FaceRig::writeArkitSidecar(file.filePath(), poseNames);
+                }
             }
 
             delete scene;

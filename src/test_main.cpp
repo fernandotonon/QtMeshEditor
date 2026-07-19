@@ -139,12 +139,21 @@ int main(int argc, char **argv)
     // Prove headless GL works on this runner, then tear down: many suites
     // (Assimp processors, etc.) construct their own Ogre::Root and cannot
     // coexist with a live Manager singleton from a prior init.
-    if (!tryInitOgre()) {
+    // QTMESH_TESTS_SKIP_OGRE_PREFLIGHT=1 skips the GL proof so PURE-DATA suites
+    // can run (with --gtest_filter) on machines with no GL/WindowServer at all
+    // (remote shells, containers without Xvfb). Ogre-dependent fixtures still
+    // fail under it — this only moves the failure from "no test ran" to
+    // per-fixture. CI never sets it.
+    if (qEnvironmentVariableIsSet("QTMESH_TESTS_SKIP_OGRE_PREFLIGHT")) {
+        fprintf(stderr, "UnitTests: skipping Ogre GL preflight "
+                        "(QTMESH_TESTS_SKIP_OGRE_PREFLIGHT set)\n");
+    } else if (!tryInitOgre()) {
         fprintf(stderr,
                 "UnitTests FATAL: tryInitOgre() failed — need working DISPLAY / Xvfb for GL.\n");
         return 1;
+    } else {
+        Manager::kill();
     }
-    Manager::kill();
     if (QCoreApplication::instance())
         QCoreApplication::processEvents();
     QThread::msleep(50);

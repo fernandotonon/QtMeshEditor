@@ -72,16 +72,35 @@ public:
     // Render `entity`'s depth map at `size` x `size` from `view`. Returns a
     // RenderResult whose `.depth` is null on failure (errorOut populated).
     // Must be called on the main/render thread — it touches the Ogre scene
-    // manager.
+    // manager. `focusAabb` (optional, WORLD space) frames the camera on that
+    // box instead of the whole entity (same semantics as renderShadedView).
     static RenderResult renderDepthMapView(Ogre::Entity* entity,
                                            int size,
                                            const View& view,
-                                           QString* errorOut = nullptr);
+                                           QString* errorOut = nullptr,
+                                           const Ogre::AxisAlignedBox* focusAabb = nullptr);
 
     // Back-compat convenience: front-view depth image only (issue #403).
     static QImage renderDepthMap(Ogre::Entity* entity,
                                  int size,
                                  QString* errorOut = nullptr);
+
+    // Render the entity with its REAL materials (not the flat depth material),
+    // lit by a temporary head-on light so faces show feature shading — for the
+    // face auto-rig's landmark detection (#889), which feeds a photo-like image
+    // to MediaPipe FaceMesh. Same framing / hide-others / RTT reuse as the depth
+    // path; RenderResult.depth holds the RGB888 image (name kept for reuse) and
+    // the view/proj/cam fields let the caller back-project 2D landmarks to the
+    // mesh surface. Main/render thread only.
+    // `focusAabb` (optional, WORLD space): when non-null, frame the camera on
+    // THIS box instead of the entity's full bounds — so a full-body character
+    // can be rendered tightly around the HEAD (the face fills the frame for the
+    // landmark detector). Pass nullptr to frame the whole entity.
+    static RenderResult renderShadedView(Ogre::Entity* entity,
+                                          int size,
+                                          const View& view,
+                                          QString* errorOut = nullptr,
+                                          const Ogre::AxisAlignedBox* focusAabb = nullptr);
 
     // Release the cached RTT / camera / scene nodes. Safe to call
     // when Ogre is shutting down.
