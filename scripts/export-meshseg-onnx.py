@@ -466,7 +466,12 @@ def make_tree(rng):
         parts.append((lambda n, c=c, r=r, s=squash: fn(c, r, n, rng, s), label, w))
 
     if kind in ('broadleaf', 'oak', 'dead', 'bush'):
-        nbr = rng.integers(2, 8 if kind == 'oak' else 7)
+        # More primary branches, and each spawns a couple of thinner SUB-branches
+        # that thread UP INTO the canopy — real trees (esp. the user's oak) show
+        # a visible branch skeleton inside the leaves. Under-representing branches
+        # let trunk/foliage over-claim them (branch recall regression); branches
+        # get a heavier weight + a density boost in sampling so they hold ground.
+        nbr = rng.integers(4, 11 if kind == 'oak' else 9)
         tips = []
         for _ in range(nbr):
             az = rng.uniform(0, 2 * np.pi)
@@ -477,9 +482,17 @@ def make_tree(rng):
             base = top * rng.uniform(0.5, 0.95)
             tip = base + bl * np.array([np.cos(az) * np.cos(elev), np.sin(elev),
                                         np.sin(az) * np.cos(elev)])
-            parts.append((lambda n, a=base, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
-                          capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR))
+            br = trunkR * rng.uniform(0.35, 0.65)
+            parts.append((lambda n, a=base, b=tip, r=br:
+                          capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR * 3))
             tips.append(tip)
+            # sub-branches continuing from the tip deeper into the canopy
+            for _ in range(rng.integers(0, 3)):
+                d = _unit_dirs(1, rng)[0]; d[1] = abs(d[1]) * rng.uniform(0.3, 1.0)
+                sl = bl * rng.uniform(0.3, 0.7)
+                stip = tip + d * sl
+                parts.append((lambda n, a=tip, b=stip, r=br * rng.uniform(0.5, 0.8):
+                              capsule_surf(a, b, r, n, rng), BRANCH, sl * trunkR * 3))
         if kind != 'dead':
             # A meaningful share of canopies are SOLID-volume (dense leaf-card
             # clouds), not thin shells — the training-vs-real domain gap.
