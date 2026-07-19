@@ -73,6 +73,34 @@ def mean_dir_y(w, r):
     return float(d[:, 1].mean())
 
 
+# canonical parent chain (AnimationMerger kParentCanon) for FK
+PAR = [-1, 0, 1, 2, 3, 4, 2, 6, 7, 8, 2, 10, 11, 12, 0, 14, 15, 16, 0, 18, 19, 20]
+
+
+def foot_travel_ratio(w):
+    """fwd/side travel ratio of the feet over the window (unit bone lengths).
+    A clean walk/run steps front-to-back (Z >> X); a splayed/side-step stride
+    (the v6 model's failure mode) has X ~ Z. Positions come from the same
+    canonical-direction FK the retarget uses, so this measures exactly what
+    renders. Returns fwd/side (higher = cleaner)."""
+    T = len(w)
+
+    def pos(role):
+        p = np.zeros((T, 3), np.float32)
+        r = role
+        while PAR[r] >= 0:
+            p = p + qrot(w[:, PAR[r]], np.broadcast_to(D_CANON[r], (T, 3)))
+            r = PAR[r]
+        return p
+    side = fwd = 0.0
+    for foot in (17, 21):
+        c = pos(foot)
+        c = c - c.mean(0, keepdims=True)
+        side += float(np.abs(c[:, 0]).mean())
+        fwd += float(np.abs(c[:, 2]).mean())
+    return fwd / (side + 1e-6)
+
+
 def window_quality(action, w, valid):
     """True when the window meets the library curation bar."""
     # energy band — mean joint rotation speed (rad/frame)
@@ -97,6 +125,12 @@ def window_quality(action, w, valid):
         for r in (7, 11):
             if valid[r] and mean_dir_y(w, r) > -0.25:
                 return False
+        # Stride-directionality gate (v6.1): the feet must step FORWARD, not
+        # sideways. 59% of raw CMU walk windows are splayed/side-stepping
+        # (measured fwd/side < 1.5) — the model faithfully learned that
+        # majority and walked sideways. Require a clean front-to-back stride.
+        if valid[17] and valid[21] and foot_travel_ratio(w) < 2.0:
+            return False
     return True
 
 
