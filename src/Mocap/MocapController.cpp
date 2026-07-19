@@ -6,6 +6,7 @@
 #include "PoseCapPredictor.h"
 #include "PoseIKSolver.h"
 #include "VideoFrameSource.h"
+#include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
 #include "../Manager.h"
 #include "../MorphAnimationManager.h"
@@ -248,6 +249,9 @@ struct MocapController::Impl {
     std::vector<BodyBone> bodyBones;
     bool bodyCalibrated = false;
     std::array<Ogre::Quaternion, PoseIK::kCanonicalRoles> bodyNeutral;
+    // Shared per-frame retargeter (same math as the recorded clip); built once
+    // at preview start for the driven entity.
+    std::shared_ptr<BodyRetargeter> bodyRetargeter;
     bool bodyDetected = false;
 
     // recording
@@ -615,19 +619,24 @@ bool MocapController::beginPreviewWithLiveSource(
         d->headBone.clear();  // signals onSample to skip the head-bone path
     }
 
-    // body-bone snapshot + manual control
+    // body drive setup: build the SHARED retargeter (same math as the recorded
+    // clip) from the rig's bind pose, and put the driven bones under manual
+    // control so we can write their orientations each frame.
+    d->bodyRetargeter.reset();
     if (bodyDrivable && entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        // The retargeter reads the bind frame off the skeleton, so capture it
+        // BEFORE any bone goes manual (reset() gives the bind pose).
+        d->bodyRetargeter =
+            std::make_shared<BodyRetargeter>(entity->getMesh()->getSkeleton().get());
         for (auto& bb : d->bodyBones) {
             Ogre::Bone* bone = skel->getBone(bb.boneName);
             bb.wasManuallyControlled = bone->isManuallyControlled();
-            bb.bindLocal = bone->getOrientation();
-            bb.bindWorld = bone->_getDerivedOrientation();
-            Ogre::Node* parent = bone->getParent();
-            bb.parentBindWorld = parent ? parent->_getDerivedOrientation()
-                                        : Ogre::Quaternion::IDENTITY;
+            bb.bindLocal = bone->getOrientation();  // for restore-on-stop
             bone->setManuallyControlled(true);
         }
+        if (!d->bodyRetargeter->valid())
+            d->bodyRetargeter.reset();  // non-humanoid — skip body drive
     } else {
         d->bodyBones.clear();  // not driving this session
     }
@@ -841,60 +850,19 @@ void MocapController::onSample(const FaceSample& sample,
         skel->_notifyManualBonesDirty();
     }
 
-    // live drive — body (per-bone world-delta vs the calibration frame, the
-    // same conjugation recordBody/applyMotionClip use: the first valid frame
-    // is neutral so "your pose at start" == the rig's standing pose).
-    if (body.valid && !d->bodyBones.empty() && entity->hasSkeleton()) {
-        auto toOgre = [](const std::array<float, 4>& q) {
-            return Ogre::Quaternion(q[3], q[0], q[1], q[2]);  // (x,y,z,w)->(w,x,y,z)
-        };
-        if (!d->bodyCalibrated) {
-            // Calibrate the neutral ONLY from a frame where the TORSO is
-            // tracked (Hip + Chest, which the solver resolves as a unit from
-            // the shoulder+hip landmark quad). This rejects the first barely-
-            // tracked frame that otherwise seeds a garbage neutral and folds
-            // the rig — while still calibrating for a SEATED subject (whose
-            // leg/hip LIMB roles never resolve, so gating on those would mean
-            // the body never animates at all). Per-limb roles that aren't in
-            // the neutral simply hold bind pose via the resolvedMask check
-            // in the drive loop.
-            constexpr uint32_t kTorsoRoles =
-                (1u << PoseIK::Role::Hip) | (1u << PoseIK::Role::Chest);
-            if ((body.resolvedMask & kTorsoRoles) == kTorsoRoles) {
-                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                    d->bodyNeutral[r] = toOgre(body.quats[r]);
-                d->bodyCalibrated = true;
-                if (std::getenv("QTMESH_MOCAP_DEBUG"))
-                    std::fprintf(stderr, "[mocap] body calibrated "
-                                 "(resolvedMask=0x%x, %zu driven bones)\n",
-                                 body.resolvedMask, d->bodyBones.size());
-            } else if (std::getenv("QTMESH_MOCAP_DEBUG")) {
-                std::fprintf(stderr, "[mocap] awaiting torso frame "
-                             "(resolvedMask=0x%x)\n", body.resolvedMask);
-            }
-        }
-        // Only drive once we have a clean neutral — otherwise hold bind pose.
-        if (d->bodyCalibrated) {
-            Ogre::SkeletonInstance* skel = entity->getSkeleton();
-            for (const auto& bb : d->bodyBones) {
-                if (!(body.resolvedMask & (1u << bb.role)))
-                    continue;  // role not tracked this frame — hold last pose
-                const Ogre::Quaternion cur = toOgre(body.quats[bb.role]);
-                const Ogre::Quaternion dWorld =
-                    cur * d->bodyNeutral[bb.role].Inverse();
-                // Apply the world-space delta to the bone's bind WORLD
-                // orientation, then express that target world orientation as a
-                // PARENT-relative local (Wp⁻¹ · Wt) — the frame setOrientation
-                // expects. Transporting through the parent (not the bone's own
-                // bindWorld) is what makes arm/shoulder bones — which have a
-                // non-identity local bind — rotate correctly.
-                const Ogre::Quaternion targetWorld = dWorld * bb.bindWorld;
-                const Ogre::Quaternion local =
-                    bb.parentBindWorld.Inverse() * targetWorld;
-                skel->getBone(bb.boneName)->setOrientation(local);
-            }
-            skel->_notifyManualBonesDirty();
-        }
+    // live drive — body. Uses the SHARED BodyRetargeter, i.e. the EXACT same
+    // direction-match math applyMotionClip bakes into the recorded clip, so
+    // live Preview and Record can't diverge. Bind-referenced (no per-take
+    // neutral): each bone's bind direction is aimed at the pose-IK world
+    // direction, twist dropped.
+    if (body.valid && d->bodyRetargeter && d->bodyRetargeter->valid()
+        && entity->hasSkeleton()) {
+        const auto locals =
+            d->bodyRetargeter->evaluateFrame(body.quats, body.resolvedMask);
+        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        for (const auto& [handle, local] : locals)
+            skel->getBone(handle)->setOrientation(local);
+        skel->_notifyManualBonesDirty();
     }
 
     if (d->state == Recording) {
@@ -1067,6 +1035,7 @@ void MocapController::stopPreview()
     d->worker = nullptr;  // deleted via QThread::finished
     d->camera.reset();
     d->injectedSource = nullptr;
+    d->bodyRetargeter.reset();
 
     restoreEntityState();
 

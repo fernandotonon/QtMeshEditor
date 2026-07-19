@@ -7,6 +7,32 @@
 #include <array>
 #include <vector>
 
+// Stateful per-frame body retargeter — the SAME direction-match math
+// applyMotionClip bakes into a clip, exposed for LIVE drive (mocap preview)
+// so the live path and the recorded clip can never diverge. Construct once
+// from the target skeleton (captures the bind frame, torso frame Ct, and
+// per-role bind directions), then call evaluateFrame() per incoming pose.
+//
+// Input: 22 canonical-role WORLD quaternions (x,y,z,w) from PoseIK — the
+// same array recordBody feeds applyMotionClip. Bone local +Y is the bone's
+// down-the-length axis (PoseIK's convention). Output: per-bone LOCAL
+// (parent-relative) orientation to hand to Bone::setOrientation(); twist is
+// dropped (least-visible DoF), matching the offline path.
+class BodyRetargeter {
+public:
+    explicit BodyRetargeter(Ogre::Skeleton* skel);
+    bool valid() const { return m_valid; }
+    // resolvedMask bit i set => canonical role i is tracked this frame; roles
+    // not set keep their bind local. Returns {boneHandle -> local quat}.
+    std::vector<std::pair<unsigned short, Ogre::Quaternion>>
+    evaluateFrame(const std::array<std::array<float, 4>, 22>& canonicalQuats,
+                  uint32_t resolvedMask) const;
+private:
+    struct Impl;
+    std::shared_ptr<Impl> d;   // shared_ptr so the class stays copyable/movable
+    bool m_valid = false;
+};
+
 class AnimationMerger {
 public:
     AnimationMerger() = delete;

@@ -1345,6 +1345,82 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
 }
 } // namespace
 
+// ── BodyRetargeter — the applyMotionClip direction-match, per single frame ──
+struct BodyRetargeter::Impl {
+    TargetBindFrame tb;
+    std::vector<int> boneToCanon;   // per bone
+    Ogre::Quaternion CtInv = Ogre::Quaternion::IDENTITY;
+    int nBones = 0;
+    int Jc = 0;
+};
+
+BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
+{
+    if (!skel) return;
+    d = std::make_shared<Impl>();
+    d->nBones = static_cast<int>(skel->getNumBones());
+    d->Jc = MotionInbetween::canonicalJointCount();
+    d->boneToCanon.assign(static_cast<size_t>(d->nBones), -1);
+    for (int i = 0; i < d->nBones; ++i)
+        d->boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    d->tb = readTargetBindFrame(skel, d->boneToCanon);
+    d->CtInv = d->tb.Ct.Inverse();
+    // valid only if at least half the canonical roles map (the humanoid gate)
+    int mapped = 0;
+    for (int c = 0; c < d->Jc; ++c)
+        if (d->tb.roleBoneIdx[static_cast<size_t>(c)] >= 0) ++mapped;
+    m_valid = mapped * 2 >= d->Jc;
+}
+
+std::vector<std::pair<unsigned short, Ogre::Quaternion>>
+BodyRetargeter::evaluateFrame(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask) const
+{
+    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
+    if (!m_valid || !d) return out;
+    const TargetBindFrame& tb = d->tb;
+    const int Jc = d->Jc;
+    auto clipQ = [&](int joint) -> Ogre::Quaternion {
+        const auto& q = canonicalQuats[static_cast<size_t>(joint)];
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+    };
+    // World orientations, hierarchy-ordered — identical to applyMotionClip's
+    // direction path, but with srcLocalAxis = +Y (PoseIK bone down-axis) and
+    // a per-role resolvedMask deciding drive-vs-hold-bind.
+    std::vector<Ogre::Quaternion> W(static_cast<size_t>(d->nBones));
+    for (int i : tb.order) {
+        const int pi = tb.parentIdx[static_cast<size_t>(i)];
+        const Ogre::Quaternion Wp = (pi >= 0)
+            ? W[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
+        const int c = d->boneToCanon[static_cast<size_t>(i)];
+        Ogre::Quaternion local;
+        const bool drive = c >= 0 && c < Jc
+            && (resolvedMask & (1u << static_cast<unsigned>(c)))
+            && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength() > 1e-8f;
+        if (drive) {
+            // ds = CtInv · (clipQ · +Y): the world direction the pose-IK bone
+            // points, mapped into the rig's canonical frame. Aim the rig
+            // bone's bind direction there; twist dropped.
+            const Ogre::Vector3 ds =
+                d->CtInv * (clipQ(c) * Ogre::Vector3::UNIT_Y);
+            const Ogre::Quaternion R =
+                tb.tgtBindDir[static_cast<size_t>(c)].getRotationTo(ds);
+            const Ogre::Quaternion Wt =
+                R * tb.bindWorld[static_cast<size_t>(i)];
+            local = Wp.Inverse() * Wt;
+            W[static_cast<size_t>(i)] = Wt;
+            out.emplace_back(static_cast<unsigned short>(i), local);
+        } else {
+            local = tb.bindLocal[static_cast<size_t>(i)];
+            W[static_cast<size_t>(i)] = Wp * local;
+        }
+    }
+    return out;
+}
+
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
                                        const std::string& animName)
 {
