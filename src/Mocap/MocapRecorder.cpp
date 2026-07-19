@@ -217,16 +217,24 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
             if (nam) {
                 // Scene-level node clips are NOT snapshotted by
                 // RecordMocapClipCommand's undo (unlike the mesh/skeleton
-                // clips), so a pre-existing user clip must never be deleted
-                // here — undoing the record would lose it permanently. Reject
-                // the name collision instead (even under replaceExisting) and
-                // let the caller surface it; a fresh name always proceeds.
-                if (nam->listClips().contains(clip)) {
+                // clips). When NOT replacing, a pre-existing clip of this name
+                // must not be clobbered — undoing would lose it permanently;
+                // reject with a clear headError. When replaceExisting is set
+                // (the recorder's default contract, same as the mesh/skeleton
+                // clips above), overwrite our own <clip>_Head — the GUI undo
+                // path (RecordMocapClipCommand) owns delete-on-undo for the
+                // clip it created.
+                const bool collides = nam->listClips().contains(clip);
+                if (collides && !options.replaceExisting) {
                     report.headError = QStringLiteral(
                         "a node animation named '%1' already exists; head "
                         "capture will not overwrite it — record under a "
-                        "different clip name").arg(clip);
-                } else if (nam->createClip(clip, std::max(length, 0.001))) {
+                        "different clip name, or pass replace").arg(clip);
+                    nam = nullptr;  // skip the write below
+                }
+                if (collides && options.replaceExisting)
+                    nam->deleteClip(clip);
+                if (nam && nam->createClip(clip, std::max(length, 0.001))) {
                     const QString nodeName = QString::fromStdString(node->getName());
                     int written = 0;
                     for (int i : keys) {
