@@ -243,7 +243,6 @@ struct MocapController::Impl {
         // correct when the local bind is identity (~head); it mis-rotates
         // bones with a non-trivial local bind (arms/shoulders).
         Ogre::Quaternion parentBindWorld = Ogre::Quaternion::IDENTITY;
-        Ogre::Vector3 bindDirWorld = Ogre::Vector3::UNIT_Y;
         bool wasManuallyControlled = false;
     };
     std::vector<BodyBone> bodyBones;
@@ -627,21 +626,6 @@ bool MocapController::beginPreviewWithLiveSource(
             Ogre::Node* parent = bone->getParent();
             bb.parentBindWorld = parent ? parent->_getDerivedOrientation()
                                         : Ogre::Quaternion::IDENTITY;
-            // Bind-pose WORLD direction the bone points (toward its first child;
-            // fall back to the bone's local +Y down-axis). The direction-match
-            // drive aims THIS at the pose-IK per-frame world direction — the
-            // same twist-dropping approach the offline applyMotionClip uses,
-            // which is frame-alignment-independent (unlike a world-delta that
-            // assumes the pose-IK and rig frames coincide, splaying the arms).
-            Ogre::Vector3 dir = bb.bindWorld * Ogre::Vector3::UNIT_Y;
-            const Ogre::Vector3 bonePos = bone->_getDerivedPosition();
-            for (unsigned short ci = 0; ci < bone->numChildren(); ++ci) {
-                if (auto* child = dynamic_cast<Ogre::Bone*>(bone->getChild(ci))) {
-                    const Ogre::Vector3 v = child->_getDerivedPosition() - bonePos;
-                    if (v.squaredLength() > 1e-8f) { dir = v.normalisedCopy(); break; }
-                }
-            }
-            bb.bindDirWorld = dir;
             bone->setManuallyControlled(true);
         }
     } else {
@@ -896,28 +880,15 @@ void MocapController::onSample(const FaceSample& sample,
                 if (!(body.resolvedMask & (1u << bb.role)))
                     continue;  // role not tracked this frame — hold last pose
                 const Ogre::Quaternion cur = toOgre(body.quats[bb.role]);
-                const Ogre::Quaternion neu = d->bodyNeutral[bb.role];
-                // DIRECTION-MATCH drive (matches the offline applyMotionClip,
-                // which renders correctly). The pose-IK bone points along its
-                // local +Y; its direction moved from neutralDir -> curDir since
-                // calibration. Apply THAT rotation (well-defined in pose-IK's
-                // own frame, so no cross-frame assumption) to the rig bone's
-                // bind world direction, then aim the bone there and drop twist.
-                // A world-DELTA applied to the rig bind (the old approach)
-                // assumed the pose-IK and rig frames coincide — which splayed
-                // the arms, since arm bones carry a large local bind.
-                const Ogre::Vector3 neutralDir =
-                    (neu * Ogre::Vector3::UNIT_Y).normalisedCopy();
-                const Ogre::Vector3 curDir =
-                    (cur * Ogre::Vector3::UNIT_Y).normalisedCopy();
-                const Ogre::Quaternion move = neutralDir.getRotationTo(curDir);
-                const Ogre::Vector3 targetDir =
-                    (move * bb.bindDirWorld).normalisedCopy();
-                // world orientation = aim(bindDir -> targetDir) * bindWorld,
-                // then to parent-relative local for setOrientation.
-                const Ogre::Quaternion aim =
-                    bb.bindDirWorld.getRotationTo(targetDir);
-                const Ogre::Quaternion targetWorld = aim * bb.bindWorld;
+                const Ogre::Quaternion dWorld =
+                    cur * d->bodyNeutral[bb.role].Inverse();
+                // Apply the world-space delta to the bone's bind WORLD
+                // orientation, then express that target world orientation as a
+                // PARENT-relative local (Wp⁻¹ · Wt) — the frame setOrientation
+                // expects. Transporting through the parent (not the bone's own
+                // bindWorld) is what makes arm/shoulder bones — which have a
+                // non-identity local bind — rotate correctly.
+                const Ogre::Quaternion targetWorld = dWorld * bb.bindWorld;
                 const Ogre::Quaternion local =
                     bb.parentBindWorld.Inverse() * targetWorld;
                 skel->getBone(bb.boneName)->setOrientation(local);

@@ -2325,10 +2325,9 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: mocapReady
-                    ? "Performance capture (webcam or Load Video): Preview is a "
-                      + "live guide driving the selection's morph targets, Head "
-                      + "bone, and (humanoid rig) body. Record bakes the accurate "
-                      + "clip onto the timeline (undoable)."
+                    ? "Webcam performance capture: Preview drives the selection's "
+                      + "morph targets, Head bone, and (on a humanoid rig) full "
+                      + "body live; Record writes undoable clips onto the timeline."
                     : MocapController.unavailableReason
             }
 
