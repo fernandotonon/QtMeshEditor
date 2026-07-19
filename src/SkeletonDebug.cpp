@@ -6,10 +6,15 @@
 
 namespace {
 constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
+constexpr const char* kEntityNameTag = "skeletonDebugEntityName";
 
-void tagBoneVisual(Ogre::MovableObject* obj, const Ogre::String& boneName) {
+void tagBoneVisual(Ogre::MovableObject* obj,
+                   const Ogre::String& boneName,
+                   const Ogre::String& entityName)
+{
     if (!obj) return;
     obj->getUserObjectBindings().setUserAny(kBoneNameTag, Ogre::Any(boneName));
+    obj->getUserObjectBindings().setUserAny(kEntityNameTag, Ogre::Any(entityName));
     obj->setQueryFlags(BONE_QUERY_FLAGS);
 }
 }
@@ -18,6 +23,18 @@ Ogre::String SkeletonDebug::boneNameForMovable(const Ogre::MovableObject* obj)
 {
     if (!obj) return {};
     const auto& any = obj->getUserObjectBindings().getUserAny(kBoneNameTag);
+    if (!any.has_value()) return {};
+    try {
+        return Ogre::any_cast<Ogre::String>(any);
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+Ogre::String SkeletonDebug::entityNameForMovable(const Ogre::MovableObject* obj)
+{
+    if (!obj) return {};
+    const auto& any = obj->getUserObjectBindings().getUserAny(kEntityNameTag);
     if (!any.has_value()) return {};
     try {
         return Ogre::any_cast<Ogre::String>(any);
@@ -154,7 +171,7 @@ void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre
         // Tag every child bone visual with the parent bone's name —
         // dragging this segment in the viewport edits the parent bone's
         // pose (the segment visually represents that bone, not the child).
-        tagBoneVisual(lastEnt, pBone->getName());
+        tagBoneVisual(lastEnt, pBone->getName(), mEntity->getName());
     }
 }
 
@@ -184,7 +201,7 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             if(length >= 0.00001f)
                 tp->setScale(length, length, length);
 
-            tagBoneVisual(ent, pBone->getName());
+            tagBoneVisual(ent, pBone->getName(), mEntity->getName());
         }
         else
         {
@@ -199,7 +216,7 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
         mAxisEntities.push_back(ent);
         // Tag the axes overlay too — clicking the axis cross is the most
         // visible target for users when scaling/rotating.
-        tagBoneVisual(ent, pBone->getName());
+        tagBoneVisual(ent, pBone->getName(), mEntity->getName());
     }
 
     return mapEntities;

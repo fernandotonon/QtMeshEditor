@@ -29,6 +29,7 @@
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
 #include "AutoRigController.h"
+#include "FaceRigController.h"
 #include "TexturePaintController.h"
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
@@ -205,6 +206,11 @@ bool TransformOperator::shouldRouteToBoneGizmo(TransformState state,
     if (state == TS_ROTATE || state == TS_SCALE) return true;
     if (state == TS_TRANSLATE) return boneCanTranslate;
     return false;
+}
+
+bool TransformOperator::shouldPreferGizmoOverBonePick(TransformState state)
+{
+    return state == TS_TRANSLATE || state == TS_ROTATE || state == TS_SCALE;
 }
 
 ////////////////////////////////////////
@@ -952,6 +958,81 @@ Ogre::MovableObject* TransformOperator::performRaySelection(const QPoint& pos, b
     return nullptr;
 }
 
+bool TransformOperator::tryPickBoneAt(const QPoint& pos, SelectionMode mode)
+{
+    if (!m_pRayQuery || !m_pActiveWidget || mode == DEL_SELECT)
+        return false;
+
+    auto* props = PropertiesPanelController::instance();
+    if (!props->hasAnySkeletonDebugActive())
+        return false;
+
+    // Gizmos always win over skeleton bones when transform tools are active.
+    // In Select mode gizmos stay in the scene with GIZMO_QUERY_FLAGS but are
+    // only setVisible(false) — querying them would block bone picks under the
+    // (hidden) handle, so skip the gizmo gate there.
+    if (shouldPreferGizmoOverBonePick(mTransformState)
+        && performRaySelection(pos, /*findGizmo=*/true))
+        return false;
+
+    m_pRayQuery->setRay(rayFromScreenPoint(pos));
+    m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
+    m_pRayQuery->setSortByDistance(true);
+    Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
+
+    for (const auto& hit : res) {
+        if (!hit.movable)
+            continue;
+
+        const Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
+        const Ogre::String entityName = SkeletonDebug::entityNameForMovable(hit.movable);
+        if (boneName.empty() || entityName.empty())
+            continue;
+
+        const QString entQ = QString::fromStdString(entityName);
+        if (!props->isSkeletonDebugActive(entQ))
+            continue;
+
+        Ogre::Entity* ent = nullptr;
+        for (Ogre::Entity* candidate : Manager::getSingleton()->getEntities()) {
+            if (!candidate || candidate->getMovableType() != "Entity")
+                continue;
+            if (candidate->getName() == entityName) {
+                ent = candidate;
+                break;
+            }
+        }
+        if (!ent || !ent->getParentSceneNode())
+            continue;
+
+        // Keep the mesh selection stable when the hit entity is already
+        // selected. clear()+append of the same node briefly empties
+        // SelectionSet, which makes EditModeController exit Edit → Object.
+        bool alreadySelected = false;
+        for (Ogre::Entity* selected : SelectionSet::getSingleton()->getResolvedEntities()) {
+            if (selected == ent) {
+                alreadySelected = true;
+                break;
+            }
+        }
+        if (!alreadySelected) {
+            if (mode == NEW_SELECT)
+                SelectionSet::getSingleton()->clear();
+            SelectionSet::getSingleton()->append(ent->getParentSceneNode());
+        }
+
+        auto* anim = AnimationControlController::instance();
+        anim->bindSkeletonForEntity(entQ);
+        anim->selectBone(QString::fromStdString(boneName));
+
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Bone picked: %1 (%2)")
+                .arg(entQ, QString::fromStdString(boneName)));
+        return true;
+    }
+    return false;
+}
+
 
 // from 0 to 1
 void TransformOperator::performBoxSelection(const QPoint& first, const QPoint& second, SelectionMode mode)
@@ -971,6 +1052,10 @@ void TransformOperator::performBoxSelection(const QPoint& first, const QPoint& s
 
     if ((right - left) * (bottom - top) < 0.0001)
     {
+        // Small click: skeleton bones (when overlay is visible) before meshes.
+        if (tryPickBoneAt(first, mode))
+            return;
+
         // go to ray scene query as the rectangle is too small
         Ogre::MovableObject* obj = performRaySelection(first);
         if(obj)
@@ -1026,6 +1111,13 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         if (AutoRigController::instance()->markerMode())
         {
             AutoRigController::instance()->handleMarkerClick(m_pActiveWidget, e->pos());
+            return;
+        }
+        // Face-rig marker editing (auto-seeded, user-adjusted) — same priority:
+        // a left-click repositions the selected face marker on the mesh surface.
+        if (FaceRigController::instance()->markerMode())
+        {
+            FaceRigController::instance()->handleMarkerClick(m_pActiveWidget, e->pos());
             return;
         }
 
@@ -1113,6 +1205,12 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 // Paint mode on: do not start box / component selection on miss.
                 return;
             }
+            // Skeleton bone pick (when overlay is visible) before
+            // vertex/edge/face picks — tryPickBoneAt keeps SelectionSet
+            // stable when the edited mesh is already selected so Edit
+            // Mode is not exited.
+            if (tryPickBoneAt(e->pos()))
+                return;
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
             m_pSelectionBox->setVisible(true);
@@ -1159,30 +1257,10 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         if(mTransformState == TS_SELECT)
         {
-            // Bone viewport picks before box-select (lights are scene-tree only
-            // in select mode — gizmo hits would block mesh/entity selection).
-            if (m_pRayQuery)
-            {
-                m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
-                m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
-                m_pRayQuery->setSortByDistance(true);
-                Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
-                for (const auto& hit : res)
-                {
-                    if (!hit.movable)
-                        continue;
-
-                    Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
-                    if (!boneName.empty())
-                    {
-                        AnimationControlController::instance()->selectBone(
-                            QString::fromStdString(boneName));
-                        SentryReporter::addBreadcrumb("ui.action",
-                            QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
-                        return;
-                    }
-                }
-            }
+            // Bone picks take priority over mesh/box selection while the
+            // skeleton overlay is visible (gizmos are hidden in select mode).
+            if (tryPickBoneAt(e->pos()))
+                return;
 
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
@@ -1190,6 +1268,7 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         }
         else if (e->button() == Qt::LeftButton
+                 && performRaySelection(e->pos(), true)
                  && shouldRouteToBoneGizmo(
                         mTransformState,
                         AnimationControlController::instance()->selectedBonePtr(),
@@ -1279,7 +1358,8 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             if (mTransformState == TS_SCALE)
                 mScaleDragStartPixel = e->pos();
         }
-        else if((!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
+        else if (!tryPickBoneAt(e->pos())
+                 && (!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
         {
             // Log a single breadcrumb per transform gesture (not per mouse-move frame)
             if(mTransformState == TS_TRANSLATE)

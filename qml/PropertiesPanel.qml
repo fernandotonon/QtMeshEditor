@@ -3467,13 +3467,38 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
-            // AI "Select by Part" (#410) — predicts head/torso/arm/leg labels
-            // and selects all faces matching the selected face's part (or the
-            // largest part if nothing is selected). Runs the (slow first-use
-            // model download + ONNX inference) on a WORKER thread so the UI stays
-            // responsive; progress + result surface via EditModeController.
+            // AI "Select by Part" (#410/#818) — predicts part labels for the
+            // mesh's CATEGORY (body / vegetation / vehicle / building; Auto =
+            // point-cloud classifier) and selects all faces matching the
+            // selected face's part (or the largest part if nothing is
+            // selected). Runs the (slow first-use model download + ONNX
+            // inference) on a WORKER thread so the UI stays responsive;
+            // progress + result surface via EditModeController.
             property string selectByPartStatus: ""
             property bool selectByPartError: false
+            // Manual category override (#818): the escape hatch for meshes
+            // the Auto classifier gets wrong (e.g. a car with detached
+            // wheels). Lowercase ids match the CLI --category values.
+            property var sbpCategoryIds: ["auto", "body", "vegetation", "vehicle", "building"]
+            property int sbpCategoryIndex: 0
+
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Category:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - 66
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Auto (AI)", "Body", "Vegetation", "Vehicle", "Building"]
+                    currentIndex: editToolsCol.sbpCategoryIndex
+                    onCurrentIndexChanged: editToolsCol.sbpCategoryIndex = currentIndex
+                    enabled: !EditModeController.segmentBusy
+                }
+            }
 
             Connections {
                 target: EditModeController
@@ -3505,7 +3530,8 @@ Rectangle {
                     if (EditModeController.segmentBusy)
                         return
                     editToolsCol.selectByPartStatus = ""
-                    EditModeController.selectByPart()
+                    EditModeController.selectByPart(
+                        "y", editToolsCol.sbpCategoryIds[editToolsCol.sbpCategoryIndex])
                 }
                 Keys.onPressed: function(event) {
                     if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
@@ -9663,6 +9689,293 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // ── Auto-generate ARKit blendshapes (#895) ──────────────────
+                // One-click: fit the ARKit template onto the selected FACE mesh
+                // (NRICP + deformation transfer) and attach the 52 ARKit-named
+                // morph targets, so the #869 face-capture panel drives them.
+                // Heavy — runs on a worker thread via FaceRigController; the
+                // button shows progress and disables while busy.
+                Rectangle {
+                    id: arkitBtn
+                    width: parent.width
+                    height: 24
+                    radius: 3
+                    property bool canRun: FaceRigController.hasMeshSelection
+                                          && !FaceRigController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    color: arkitMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                           : PropertiesPanelController.highlightColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: FaceRigController.busy
+                              ? (FaceRigController.status !== ""
+                                 ? FaceRigController.status : "Working…")
+                              : "✨ Add ARKit Blendshapes (AI)"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: arkitMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: arkitBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: FaceRigController.addArkitBlendshapesAsync(0, 8.0)
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: FaceRigController.hasMeshSelection
+                            ? "Auto-fit the ARKit blendshape template onto this face "
+                              + "mesh and attach the 52 ARKit shapes. Humanoid faces "
+                              + "only; a poor fit is rejected."
+                            : "Select a face mesh first."
+                    }
+                }
+
+                // ── Face markers (auto-seed, user adjusts) — the reliable path
+                // for cartoon/stylized faces MediaPipe can't detect. #889.
+                Rectangle {
+                    id: markerBtn
+                    width: parent.width
+                    height: 22
+                    visible: !FaceRigController.markerMode
+                    property bool canRun: FaceRigController.hasMeshSelection
+                                          && !FaceRigController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    radius: 3
+                    color: markerMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                           : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: "◎ Place / adjust face markers…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    MouseArea {
+                        id: markerMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: markerBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: FaceRigController.beginFaceMarkers()
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Auto-place face anchors (eyes, nose, mouth, "
+                            + "chin) and drag any that are off, then rig from them. "
+                            + "Use this for cartoon/stylized faces where auto-detect "
+                            + "struggles."
+                    }
+                }
+
+                // Marker-editing panel — shown only during a marker session.
+                Column {
+                    width: parent.width
+                    visible: FaceRigController.markerMode
+                    spacing: 4
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 9
+                        color: PropertiesPanelController.textColor
+                        text: (FaceRigController.markersSeededFromDetection
+                               ? "Auto-detected. " : "Auto-detect was weak — ")
+                              + "Click a marker below, then click on the face to move "
+                              + "it. Cyan = selected. Left/Right = the CHARACTER's "
+                              + "side (a mirrored placement is auto-corrected)."
+                    }
+                    // Marker chips — click to select which one the next mesh
+                    // click will move. After placing, selection auto-advances
+                    // to the NEXT chip in this order.
+                    Flow {
+                        width: parent.width
+                        spacing: 3
+                        Repeater {
+                            model: FaceRigController.markerLabels
+                            Rectangle {
+                                height: 18
+                                width: chipText.implicitWidth + 12
+                                radius: 3
+                                property bool sel: index === FaceRigController.selectedMarker
+                                // NB: markerPlaced() is an invokable, not a
+                                // property — reference selectedMarker in the
+                                // binding so it re-evaluates on markersChanged
+                                // (otherwise the chip state goes stale).
+                                property bool placed: {
+                                    var _dep = FaceRigController.selectedMarker
+                                    return FaceRigController.markerPlaced(index)
+                                }
+                                color: sel ? "#2ae6ff"
+                                       : placed ? PropertiesPanelController.highlightColor
+                                                : PropertiesPanelController.controlBgColor
+                                border.color: sel ? "#ffffff"
+                                                  : PropertiesPanelController.borderColor
+                                border.width: sel ? 2 : 1
+                                opacity: placed || sel ? 1.0 : 0.6
+                                Text {
+                                    id: chipText
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    font.pixelSize: 8
+                                    font.bold: sel
+                                    color: sel ? "#003" : PropertiesPanelController.textColor
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: FaceRigController.selectMarker(index)
+                                }
+                            }
+                        }
+                    }
+                    // Strength (amplitude) — exaggeration multiplier for the
+                    // transferred shapes; stylized faces often want >1.
+                    RowLayout {
+                        width: parent.width
+                        spacing: 6
+                        Text {
+                            text: "Strength"
+                            font.pixelSize: 9
+                            color: PropertiesPanelController.textColor
+                        }
+                        Slider {
+                            id: ampSlider
+                            Layout.fillWidth: true
+                            from: 0.5; to: 3.0; value: 1.5
+                            stepSize: 0.1
+                        }
+                        Text {
+                            text: "×" + ampSlider.value.toFixed(1)
+                            font.pixelSize: 9
+                            color: PropertiesPanelController.textColor
+                        }
+                    }
+                    RowLayout {
+                        width: parent.width
+                        spacing: 4
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 22
+                            radius: 3
+                            color: rigMkMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                                   : PropertiesPanelController.highlightColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✓ Rig from markers"
+                                font.pixelSize: 9; font.bold: true
+                                color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: rigMkMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: FaceRigController.rigFromMarkers(0, 8.0, ampSlider.value)
+                            }
+                        }
+                        Rectangle {
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 22
+                            radius: 3
+                            color: cancelMkMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Cancel"; font.pixelSize: 9
+                                color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: cancelMkMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: FaceRigController.cancelFaceMarkers()
+                            }
+                        }
+                    }
+                }
+                // Progress bar + Cancel, shown only while the worker runs.
+                RowLayout {
+                    width: parent.width
+                    visible: FaceRigController.busy
+                    spacing: 6
+                    // Track + determinate fill (indeterminate look when total==0).
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 6
+                        radius: 3
+                        color: PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Rectangle {
+                            height: parent.height
+                            radius: 3
+                            color: PropertiesPanelController.highlightColor
+                            width: FaceRigController.progressTotal > 0
+                                   ? parent.width * FaceRigController.progress
+                                     / FaceRigController.progressTotal
+                                   : parent.width * 0.15
+                        }
+                    }
+                    Text {
+                        visible: FaceRigController.progressTotal > 0
+                        text: FaceRigController.progress + "/" + FaceRigController.progressTotal
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 48
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: cancelMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Cancel"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: cancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: FaceRigController.cancel()
+                        }
+                    }
+                }
+                Connections {
+                    target: FaceRigController
+                    function onError(message) {
+                        arkitStatus.text = "⚠ " + message
+                        arkitStatus.color = "#d66"
+                    }
+                    function onCompleted(report) {
+                        arkitStatus.text = "✓ Attached " + report.shapesAttached
+                            + " ARKit shapes (fit "
+                            + report.fitMeanResidualPct.toFixed(2) + "% mean, jawOpen amp "
+                            + report.jawOpenDisp.toFixed(4) + ", max amp "
+                            + report.maxShapeDisp.toFixed(4) + ")."
+                        arkitStatus.color = PropertiesPanelController.textColor
+                        morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
+                    }
+                }
+                Text {
+                    id: arkitStatus
+                    width: parent.width
+                    visible: text !== ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 9
+                    color: PropertiesPanelController.textColor
+                    text: ""
                 }
 
                 // ── Section 2: ANIMATION CLIPS ──────────────────────────────

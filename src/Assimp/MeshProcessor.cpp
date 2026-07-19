@@ -135,12 +135,27 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     // time, where we already have the base positions in hand for the
     // Ogre::Pose constructor. Apply the same Z-up axis bake the base
     // vertex pass uses so the shape and base agree on coordinate frame.
+    // Sidecar name hints only apply when the scene has exactly ONE morphed
+    // mesh — the unambiguous case (a flat ordered name list can't be split
+    // across submeshes safely).
+    bool useNameHints = false;
+    if (!m_nameHints.empty()) {
+        unsigned morphedMeshes = 0;
+        for (auto mi = 0u; mi < scene->mNumMeshes; mi++)
+            if (scene->mMeshes[mi] && scene->mMeshes[mi]->mNumAnimMeshes > 0)
+                morphedMeshes++;
+        useNameHints = (morphedMeshes == 1);
+    }
     for(auto am = 0u; am < mesh->mNumAnimMeshes; am++) {
         const aiAnimMesh* anim = mesh->mAnimMeshes[am];
         if (!anim || !anim->mVertices || anim->mNumVertices != mesh->mNumVertices) continue;
         MorphTargetData target;
-        target.name = anim->mName.length > 0 ? anim->mName.C_Str()
-                                              : (std::string("Shape_") + std::to_string(am));
+        if (anim->mName.length > 0)
+            target.name = anim->mName.C_Str();
+        else if (useNameHints && am < m_nameHints.size() && !m_nameHints[am].empty())
+            target.name = m_nameHints[am];
+        else
+            target.name = std::string("Shape_") + std::to_string(am);
         target.positions.reserve(anim->mNumVertices);
         for (auto i = 0u; i < anim->mNumVertices; i++) {
             Ogre::Vector3 v(anim->mVertices[i].x, anim->mVertices[i].y, anim->mVertices[i].z);

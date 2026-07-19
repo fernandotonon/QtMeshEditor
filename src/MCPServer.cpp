@@ -59,6 +59,7 @@
 #include "SkinWeights.h"
 #include "SkinningDisplay.h"
 #include "AutoRig.h"
+#include "FaceRig/FaceRigAttach.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -636,6 +637,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
+        {QStringLiteral("add_arkit_blendshapes"), &MCPServer::toolAddArkitBlendshapes},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
@@ -756,6 +758,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
@@ -816,6 +819,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
             {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("add_arkit_blendshapes"), QStringLiteral("auto_rig")},
             {QStringLiteral("motion_in_between"), QStringLiteral("motion_inbetween")},
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
@@ -2308,6 +2312,86 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     QJsonObject j = AutoRig::reportToJson(report);
     j["skinned"] = skinned;
     result["rig"] = j;
+    return result;
+}
+
+QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
+{
+    // #889: fit the ARKit blendshape template onto the selected face mesh and
+    // attach the 52 ARKit morph targets, optionally re-exporting.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    FaceRig::FaceRigOptions opts;
+    if (args.contains("max_shapes")) {
+        if (!args["max_shapes"].isDouble())
+            return makeErrorResult("Error: 'max_shapes' must be a number.");
+        opts.maxShapes = args["max_shapes"].toInt();
+    }
+    if (args.contains("max_residual_pct")) {
+        if (!args["max_residual_pct"].isDouble())
+            return makeErrorResult("Error: 'max_residual_pct' must be a number.");
+        opts.maxFitResidualPct = args["max_residual_pct"].toDouble();
+    }
+    if (args.contains("output_path") && !args["output_path"].isString())
+        return makeErrorResult("Error: 'output_path' must be a string.");
+    const QString outputPath = args.value("output_path").toString();
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty() || !resolved.first())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("add_arkit_blendshapes max_shapes=%1").arg(opts.maxShapes));
+
+    FaceRig::AttachReport rep;
+    try {
+        rep = FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
+        if (!rep.ok)
+            return makeErrorResult(
+                QStringLiteral("Face-rig failed: %1").arg(rep.error));
+
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            if (!node)
+                return makeErrorResult(QStringLiteral(
+                    "Error: rigged, but the entity has no scene node to export from"));
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("add_arkit_blendshapes export requested"));
+            const int rc = MeshImporterExporter::exporter(
+                node, outputPath, CLIPipeline::formatForExtension(outputPath));
+            if (rc != 0)
+                return makeErrorResult(
+                    QStringLiteral("Error: blendshapes attached but export to '%1' "
+                                   "failed (code %2)").arg(outputPath).arg(rc));
+            // NOTE: no sidecar write here — MeshImporterExporter::exporter
+            // already writes the FULL deduplicated pose-name sidecar;
+            // overwriting it with only the newly-attached names would drop
+            // pre-existing morph targets and misalign indices.
+        }
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Face-rig error: %1")
+            .arg(QString::fromUtf8(e.what())));
+    }
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Attached %1 ARKit blendshape(s) (fit residual mean %2%, "
+                       "max %3%).")
+            .arg(rep.shapesAttached)
+            .arg(rep.fitMeanResidualPct, 0, 'f', 3)
+            .arg(rep.fitMaxResidualPct, 0, 'f', 3));
+    QJsonObject j;
+    j["shapes_attached"] = rep.shapesAttached;
+    j["user_vertex_count"] = rep.userVertexCount;
+    j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+    j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
+    result["facerig"] = j;
     return result;
 }
 
@@ -4303,8 +4387,6 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             AutoRig::rigPriorPartLabels(entity, vertexCount);
 
         const bool noModel = args.value("no_model").toBool(false);
-        QString modelPath;
-        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();
 
         MeshSegmenter::Options opts;
         opts.forceFallback = noModel;
@@ -4315,6 +4397,24 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             else if (upAxisStr == "z") opts.upAxis = 2;
             else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
         }
+        const QString categoryStr = args.value("category").toString();
+        if (!categoryStr.isEmpty()) {
+            bool okCat = false;
+            opts.category = MeshSegmenter::categoryFromName(categoryStr, &okCat);
+            if (!okCat)
+                return makeErrorResult("Error: category must be 'auto', 'body', "
+                                       "'vegetation', 'vehicle', or 'building'");
+        }
+        // Auto → classifier (first-use download); offline/no_model → body.
+        if (!noModel)
+            opts.category = MeshSegmenter::resolveCategoryBlocking(
+                verts.data(), vertexCount, opts);
+        else if (opts.category == MeshSegmenter::Category::Auto)
+            opts.category = MeshSegmenter::Category::Body;
+
+        QString modelPath;
+        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
@@ -4329,8 +4429,9 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         std::vector<int> fCount(P, 0);
         for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
 
-        QString summary = QString("Segmented '%1' (%2 verts) via %3:")
+        QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
             .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
+            .arg(MeshSegmenter::categoryName(r.category))
             .arg(r.usedModel ? "model" : "geometric fallback");
         for (int p = 0; p < P; ++p)
             if (vCount[p] > 0)
@@ -4346,6 +4447,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         content["vertex_count"]    = vertexCount;
         content["face_count"]      = static_cast<int>(r.faceLabels.size());
         content["used_model"]      = r.usedModel;
+        content["category"]        = MeshSegmenter::categoryName(r.category);
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             content["fallback_reason"] = r.fallbackReason;
         content["up_axis"]         = QString(QChar("xyz"[opts.upAxis]));
@@ -8548,17 +8650,20 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation."}};
         appendTool(
             "segment_mesh",
-            "AI mesh part segmentation (#410): predict a semantic part label "
-            "(head / torso / left+right arm / left+right leg) per vertex via a "
-            "PointNet++ ONNX model. Returns JSON with the full label map: per-part "
-            "vertex+face counts and the per-face label array (index into `parts`) "
-            "so callers can drive selection / per-part material assignment directly. "
-            "Falls back automatically to a deterministic geometric segmenter (connected "
+            "AI mesh part segmentation (#410/#818): predict a semantic part label "
+            "per vertex via a category-specialised PointNet++ ONNX model — body "
+            "(head/torso/arms/legs), vegetation, vehicle, or building label sets, "
+            "auto-dispatched by a point-cloud category classifier. Returns JSON with "
+            "the full label map: the resolved category, per-part vertex+face counts "
+            "and the per-face label array (index into `parts`) so callers can drive "
+            "selection / per-part material assignment directly. Falls back "
+            "automatically to a deterministic geometric segmenter (connected "
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
-            "which path ran. Works best on upright humanoid meshes.",
+            "which path ran.",
             props
         );
     }
@@ -8932,6 +9037,35 @@ QJsonArray MCPServer::buildToolsList()
             "joints toward the mesh's medial mass. Best on roughly upright, manifold, "
             "T/A-pose meshes with +Y up. Already-skinned meshes are rejected. Pair "
             "skin:true for a one-click rig+skin.",
+            props
+        );
+    }
+
+    // add_arkit_blendshapes (#889)
+    {
+        QJsonObject props;
+        props["max_shapes"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Cap the number of ARKit shapes generated (0 = all 52 in the "
+             "template, default)."}};
+        props["max_residual_pct"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Reject the rig when the non-rigid fit is worse than this percent of "
+             "the mesh diagonal (default 8). A human template only fits a roughly "
+             "human face; a non-face mesh blows past this and is refused."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Optional path to re-export the mesh with the attached blendshapes. "
+             "When omitted, the shapes are added to the in-session scene only."}};
+        appendTool(
+            "add_arkit_blendshapes",
+            "Fit the ARKit blendshape template onto the currently selected FACE "
+            "mesh and attach the 52 ARKit morph targets (#889). Native pipeline (no "
+            "external deps): non-rigid ICP fits the template to the user face, then "
+            "Sumner-Popovic deformation transfer realizes each expression on the "
+            "user's identity; the shapes are named per the mocap-52 vocabulary so "
+            "face capture drives them. Humanoid faces only — a poor fit is rejected. "
+            "The bundled template downloads on first use.",
             props
         );
     }

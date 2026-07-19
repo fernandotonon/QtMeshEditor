@@ -25,6 +25,10 @@
 #   u2net      → QtMeshEditor-u2net-onnx       (Apache, U²-Net / rembg)
 #   smolvlm    → QtMeshEditor-smolvlm-gguf     (Apache, HuggingFaceTB SmolVLM Q8_0)
 #   motion     → QtMeshEditor-t2m              (CC0,    in-house; template clip library)
+#   segveg     → QtMeshEditor-mesh-segmentation-vegetation (CC-BY-4.0, in-house #818 B2)
+#   segveh     → QtMeshEditor-mesh-segmentation-vehicle    (CC-BY-4.0, in-house #818 B2)
+#   segbld     → QtMeshEditor-mesh-segmentation-building   (CC-BY-4.0, in-house #818 B2)
+#   segcls     → QtMeshEditor-mesh-segmentation-category   (CC-BY-4.0, in-house #818 B2 Auto dispatcher)
 #   mocap-* (5, #869; Apache, converted Google MediaPipe graphs):
 #     blazeface       → QtMeshEditor-blazeface-onnx       (face detector)
 #     facemesh        → QtMeshEditor-facemesh-onnx        (478 face landmarks)
@@ -48,6 +52,10 @@ declare -A REPOS=(
   [u2net]=QtMeshEditor-u2net-onnx
   [smolvlm]=QtMeshEditor-smolvlm-gguf
   [motion]=QtMeshEditor-t2m
+  [segveg]=QtMeshEditor-mesh-segmentation-vegetation
+  [segveh]=QtMeshEditor-mesh-segmentation-vehicle
+  [segbld]=QtMeshEditor-mesh-segmentation-building
+  [segcls]=QtMeshEditor-mesh-segmentation-category
   [blazeface]=QtMeshEditor-blazeface-onnx
   [facemesh]=QtMeshEditor-facemesh-onnx
   [faceblendshapes]=QtMeshEditor-faceblendshapes-onnx
@@ -64,6 +72,10 @@ declare -A FILES=(
   [u2net]="rembg/u2net.onnx"
   [smolvlm]="caption/SmolVLM-500M-Instruct-Q8_0.gguf caption/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"
   [motion]="motion/motion-library.json"
+  [segveg]="segment/meshseg_vegetation.onnx"
+  [segveh]="segment/meshseg_vehicle.onnx"
+  [segbld]="segment/meshseg_building.onnx"
+  [segcls]="segment/meshseg_category.onnx"
   [blazeface]="mocap/face/face_detector.onnx"
   [facemesh]="mocap/face/face_landmarks.onnx"
   [faceblendshapes]="mocap/face/face_blendshapes.onnx"

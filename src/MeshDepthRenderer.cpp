@@ -64,6 +64,12 @@ Ogre::MaterialPtr ensureDepthMaterial()
     pass->setAmbient(0, 0, 0);
     // Fog must affect this pass.
     pass->setFog(false);  // false => inherit scene fog
+    // Double-sided: assets with inconsistent triangle winding (LH round-trips,
+    // raw scans) would otherwise render half their faces as culled holes and
+    // the depth map degrades to speckle noise. The depth buffer still keeps
+    // the nearest surface, so a correctly-wound mesh is unaffected.
+    pass->setCullingMode(Ogre::CULL_NONE);
+    pass->setManualCullingMode(Ogre::MANUAL_CULL_NONE);
     return mat;
 }
 
@@ -138,7 +144,8 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
 }
 
 MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
-    Ogre::Entity* entity, int size, const View& view, QString* errorOut)
+    Ogre::Entity* entity, int size, const View& view, QString* errorOut,
+    const Ogre::AxisAlignedBox* focusAabb)
 {
     RenderResult result;
     if (!entity) {
@@ -154,8 +161,11 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
 
     // Frame the camera on the entity's bounding sphere so the whole
     // mesh fills the view (matches how the generated texture is
-    // projection-baked back).
-    const Ogre::AxisAlignedBox aabb = entity->getWorldBoundingBox(true);
+    // projection-baked back). A focus box (e.g. the head of a full-body
+    // character) overrides the framing when given.
+    const Ogre::AxisAlignedBox aabb =
+        (focusAabb && !focusAabb->isNull()) ? *focusAabb
+                                            : entity->getWorldBoundingBox(true);
     const Ogre::Vector3 center = aabb.getCenter();
     const Ogre::Real radius = aabb.getHalfSize().length();
     if (radius <= 0.0f) {
@@ -221,20 +231,31 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     }
 
     // Turn off the target entity's bounding box for the capture
-    // (it's on by default when selected). Remember to restore.
+    // (it's on when selected). Save the PRIOR state — restoring an
+    // unconditional `true` used to leave stray debug boxes on (and they
+    // draw into later captures: the box render ignores visibility).
     Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    const bool targetBoxWasShown = targetNode && targetNode->getShowBoundingBox();
     if (targetNode) targetNode->showBoundingBox(false);
 
     // Hide other entities entirely, remembering each node's prior
     // visibility so we restore exactly what we changed (a node that
-    // was already hidden must stay hidden on restore).
+    // was already hidden must stay hidden on restore). Their bounding
+    // boxes must be turned off too — showBoundingBox draws via the
+    // scene manager's debug pass even when the node's objects are hidden.
     std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
+    std::vector<Ogre::SceneNode*> hiddenBoxes;
     if (Manager::getSingletonPtr()) {
         for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
             if (!other || other == entity) continue;
             if (other->getMovableType() != "Entity") continue;
             Ogre::SceneNode* n = other->getParentSceneNode();
-            if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+            if (!n) continue;
+            if (n->getShowBoundingBox()) {
+                hiddenBoxes.push_back(n);
+                n->showBoundingBox(false);
+            }
+            if (n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
                 hiddenNodes.emplace_back(n, true);
                 n->setVisible(false);
             }
@@ -261,7 +282,8 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
         sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
         sm->setAmbientLight(savedAmbient);
         if (gridNode) gridNode->setVisible(gridWasVisible);
-        if (targetNode) targetNode->showBoundingBox(true);
+        if (targetNode) targetNode->showBoundingBox(targetBoxWasShown);
+        for (auto* n : hiddenBoxes) n->showBoundingBox(true);
         for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
     };
     struct Restorer {
@@ -287,6 +309,143 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     // Restorer goes out of scope.
     result.depth = rgba.convertToFormat(QImage::Format_Grayscale8)
         .convertToFormat(QImage::Format_RGB888);
+    return result;
+}
+
+MeshDepthRenderer::RenderResult MeshDepthRenderer::renderShadedView(
+    Ogre::Entity* entity, int size, const View& view, QString* errorOut,
+    const Ogre::AxisAlignedBox* focusAabb)
+{
+    RenderResult result;
+    if (!entity) {
+        if (errorOut) *errorOut = QStringLiteral("null entity");
+        return result;
+    }
+    size = std::clamp(size, 64, 2048);
+    if (!ensureRenderTarget(size, errorOut))
+        return result;
+
+    auto* sm = sceneMgr();
+    DepthState& st = state();
+
+    // Frame on the focus box (head) when given, else the whole entity.
+    const Ogre::AxisAlignedBox aabb =
+        (focusAabb && !focusAabb->isNull()) ? *focusAabb
+                                            : entity->getWorldBoundingBox(true);
+    const Ogre::Vector3 center = aabb.getCenter();
+    const Ogre::Real radius = aabb.getHalfSize().length();
+    if (radius <= 0.0f) {
+        if (errorOut) *errorOut = QStringLiteral("entity has zero-size bounding box");
+        return result;
+    }
+    const Ogre::Real fovY = st.camera->getFOVy().valueRadians();
+    const Ogre::Real dist = radius / std::sin(fovY * 0.5f) * 1.15f;
+    Ogre::Vector3 dir = view.dir;
+    if (dir.isZeroLength()) dir = Ogre::Vector3(0, 0, 1);
+    dir.normalise();
+    const Ogre::Vector3 camPos = center - dir * dist;
+    st.cameraNode->setPosition(camPos);
+    const Ogre::Vector3 up = view.up.isZeroLength() ? Ogre::Vector3::UNIT_Y : view.up;
+    st.cameraNode->setFixedYawAxis(true, up);
+    st.cameraNode->lookAt(center, Ogre::Node::TS_WORLD,
+                          Ogre::Vector3::NEGATIVE_UNIT_Z);
+
+    // Neutral, DETERMINISTIC lighting so MediaPipe sees an evenly-lit,
+    // photo-like face (no fog, materials intact): moderate ambient + one
+    // head-on directional. All EXISTING scene lights are disabled for the
+    // capture — in the live editor the user/default lights stack on top and
+    // saturate the render to a pure-white silhouette, which the detector
+    // false-positives on (and the resulting garbage landmarks correlate
+    // between template and user render, slipping through the constellation
+    // gate). Headless and GUI captures must produce the same image.
+    const Ogre::ColourValue savedAmbient = sm->getAmbientLight();
+    const Ogre::FogMode savedFogMode = sm->getFogMode();
+    const Ogre::ColourValue savedFogColour = sm->getFogColour();
+    const Ogre::Real savedFogStart = sm->getFogStart();
+    const Ogre::Real savedFogEnd = sm->getFogEnd();
+    sm->setFog(Ogre::FOG_NONE);
+    sm->setAmbientLight(Ogre::ColourValue(0.35f, 0.35f, 0.35f));
+
+    std::vector<Ogre::Light*> disabledLights;
+    {
+        auto it = sm->getMovableObjectIterator("Light");
+        while (it.hasMoreElements()) {
+            auto* l = static_cast<Ogre::Light*>(it.getNext());
+            if (l && l->getVisible()) {
+                disabledLights.push_back(l);
+                l->setVisible(false);
+            }
+        }
+    }
+
+    Ogre::Light* light = nullptr;
+    Ogre::SceneNode* lightNode = nullptr;
+    try {
+        light = sm->createLight("QtMeshFaceRigLight");
+        light->setType(Ogre::Light::LT_DIRECTIONAL);
+        light->setDiffuseColour(Ogre::ColourValue(0.65f, 0.65f, 0.65f));
+        light->setSpecularColour(Ogre::ColourValue::Black);
+        lightNode = sm->getRootSceneNode()->createChildSceneNode();
+        lightNode->attachObject(light);
+        lightNode->setDirection(dir, Ogre::Node::TS_WORLD);
+    } catch (...) { /* lighting is best-effort */ }
+
+    Ogre::SceneNode* gridNode = nullptr;
+    bool gridWasVisible = false;
+    if (Manager::getSingletonPtr()
+        && Manager::getSingleton()->hasSceneNode("GridLine_node")) {
+        gridNode = Manager::getSingleton()->getSceneNode("GridLine_node");
+        if (gridNode) {
+            gridWasVisible = gridNode->getAttachedObject(0)
+                ? gridNode->getAttachedObject(0)->getVisible() : true;
+            gridNode->setVisible(false);
+        }
+    }
+    Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    const bool targetBoxWasShown = targetNode && targetNode->getShowBoundingBox();
+    if (targetNode) targetNode->showBoundingBox(false);
+    std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
+    std::vector<Ogre::SceneNode*> hiddenBoxes;
+    if (Manager::getSingletonPtr()) {
+        for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
+            if (!other || other == entity) continue;
+            if (other->getMovableType() != "Entity") continue;
+            Ogre::SceneNode* n = other->getParentSceneNode();
+            if (!n) continue;
+            if (n->getShowBoundingBox()) {
+                hiddenBoxes.push_back(n);
+                n->showBoundingBox(false);
+            }
+            if (n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+                hiddenNodes.emplace_back(n, true);
+                n->setVisible(false);
+            }
+        }
+    }
+
+    auto restore = [&]() {
+        sm->setAmbientLight(savedAmbient);
+        sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
+        if (lightNode) { lightNode->detachAllObjects();
+                         sm->getRootSceneNode()->removeAndDestroyChild(lightNode); }
+        if (light) sm->destroyLight(light);
+        for (auto* l : disabledLights) l->setVisible(true);
+        if (gridNode) gridNode->setVisible(gridWasVisible);
+        if (targetNode) targetNode->showBoundingBox(targetBoxWasShown);
+        for (auto* n : hiddenBoxes) n->showBoundingBox(true);
+        for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
+    };
+    struct Restorer { std::function<void()> fn; ~Restorer() { fn(); } } restorer{restore};
+
+    st.renderTarget->update();
+    QImage rgba = readRenderTarget(size);
+    OgreRenderTargetUtil::restoreEditorRenderTarget();
+
+    result.viewMatrix = st.camera->getViewMatrix();
+    result.projMatrix = st.camera->getProjectionMatrix();
+    result.camPosition = camPos;
+    result.camDirection = dir;
+    result.depth = rgba.convertToFormat(QImage::Format_RGB888);   // RGB, not gray
     return result;
 }
 

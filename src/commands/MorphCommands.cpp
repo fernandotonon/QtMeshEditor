@@ -105,7 +105,8 @@ void removePosesByName(Ogre::Mesh* mesh, const QString& name, Ogre::Entity* enti
 void buildPosesFromSlices(Ogre::Mesh* mesh,
                           const QString& name,
                           const std::vector<MorphPoseSlice>& slices,
-                          Ogre::Entity* entity)
+                          Ogre::Entity* entity,
+                          bool deferInit = false)
 {
     if (!mesh || slices.empty()) return;
     const std::string sn = name.toStdString();
@@ -141,7 +142,7 @@ void buildPosesFromSlices(Ogre::Mesh* mesh,
         kf->addPoseReference(poseIndices[i], 1.0f);
     }
 
-    if (entity) {
+    if (entity && !deferInit) {
         // Adding poses / a VAT_POSE animation to an already-loaded mesh means
         // the entity's pose (software + hardware) vertex-animation buffers were
         // never allocated — the importer sets poses up BEFORE the entity is
@@ -150,6 +151,8 @@ void buildPosesFromSlices(Ogre::Mesh* mesh,
         // animation against null buffers and crashes (skinned meshes especially,
         // where skeletal + pose animation combine). Mirrors the AutoRig path,
         // which likewise re-initialises after mutating a live entity's mesh.
+        // deferInit lets a batch attach (face auto-rig) skip this per-shape and
+        // re-initialise ONCE after the last shape — O(shapes×mesh) → O(mesh).
         entity->_initialise(true);
         entity->refreshAvailableAnimationState();
     }
@@ -261,7 +264,7 @@ void AddMorphTargetCommand::redo()
     if (!mEntity) return;
     Ogre::MeshPtr mesh = mEntity->getMesh();
     if (!mesh) return;
-    buildPosesFromSlices(mesh.get(), mName, mSlices, mEntity);
+    buildPosesFromSlices(mesh.get(), mName, mSlices, mEntity, mDeferInit);
     SentryReporter::addBreadcrumb("scene.anim.morph",
         QStringLiteral("add target '%1'").arg(mName));
 }

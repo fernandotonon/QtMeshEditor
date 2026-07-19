@@ -39,22 +39,70 @@
 // `MeshSegmenterController` / CLI / MCP adapt it to an Ogre::Entity.
 class MeshSegmenter {
 public:
-    // Canonical part labels. Index order is the model's output-channel order and
-    // MUST match scripts/export-meshseg-onnx.py. Kept small + body-centric for
-    // the first model; `Unknown` is the catch-all / unlabeled.
+    // Canonical part labels — ONE shared vocabulary across every category
+    // (#818 B2). The first 7 entries are the BODY model's output-channel order
+    // and MUST keep matching scripts/export-meshseg-onnx.py (the meshseg.onnx
+    // wire contract). Non-body categories ship their own small ONNX whose
+    // LOCAL channels map into this enum via categoryChannelMap(). `Window` is
+    // shared by the vehicle and building maps.
     enum class Part : uint8_t {
         Unknown = 0,
+        // body (meshseg.onnx channels 1..6)
         Head,
         Torso,
         LeftArm,
         RightArm,
         LeftLeg,
         RightLeg,
+        // vegetation (meshseg_vegetation.onnx channels 1..5)
+        Trunk,
+        Branch,
+        Foliage,
+        Root,
+        Flower,
+        // vehicle (meshseg_vehicle.onnx channels 1..5)
+        VehicleBody,
+        Wheel,
+        Window,
+        Wing,
+        Rotor,
+        // building (meshseg_building.onnx channels 1..6; window shared above)
+        Wall,
+        Roof,
+        Door,
+        Chimney,
+        Foundation,
         Count
     };
     static int partCount();                  // == (int)Part::Count
     static QString partName(Part p);         // stable lowercase id ("head", …)
     static QString partName(int p);
+
+    // Mesh categories (#818 B2): several specialised ~1 MB models, one per
+    // category, instead of one big multi-category softmax (label imbalance,
+    // coupled failures, and every category addition would force a full retrain
+    // + re-download — see docs/MESH_SEGMENTATION_STRATEGY.md). `Auto` runs the
+    // tiny point-cloud category classifier (meshseg_category.onnx) and falls
+    // back to Body when it is unavailable.
+    enum class Category : uint8_t {
+        Auto = 0,
+        Body,
+        Vegetation,
+        Vehicle,
+        Building,
+        CategoryCount
+    };
+    static QString categoryName(Category c);             // "auto", "body", …
+    // Parse a category id ("vegetation", "auto", …). Unrecognised → Auto with
+    // *ok=false (when provided).
+    static Category categoryFromName(const QString& name, bool* ok = nullptr);
+    // The category model's output channel count (incl. channel 0 = unknown).
+    static int categoryChannelCount(Category c);
+    // LOCAL model channel → global Part value; size == categoryChannelCount().
+    static std::vector<int> categoryChannelMap(Category c);
+    // Canonical model file name for a category ("meshseg.onnx",
+    // "meshseg_vegetation.onnx", …). Auto maps to the body file.
+    static QString modelFileName(Category c);
 
     // Map a SKELETON bone name → a segmentation part (or Unknown if it doesn't
     // correspond to a body region). This is the RIG-PRIOR path: when a mesh is
@@ -76,6 +124,10 @@ public:
         // Cap on points sampled for the model (PointNet++ is fixed-N; the
         // sampled labels are scattered back to all vertices by nearest point).
         int samplePoints = 4096;
+        // Which category's label set / model to use. Auto = run the category
+        // classifier (callers resolve via resolveCategoryBlocking(); predict()
+        // itself treats a still-Auto value as Body).
+        Category category = Category::Auto;
     };
 
     struct Result {
@@ -88,6 +140,8 @@ public:
         std::vector<int> faceLabels;
         bool usedModel = false;          // true = ONNX model; false = fallback
         QString fallbackReason;          // why the fallback ran (if it did)
+        // The category the labels belong to (opts.category, Auto resolved).
+        Category category = Category::Body;
     };
 
     using ProgressFn = std::function<bool(int stepsDone, int maxSteps)>;
@@ -109,14 +163,32 @@ public:
                                    const int* boneProximity = nullptr);
 
     // ---- ONNX path (model when available, else geometric fallback) ----------
-    static QString modelPath();          // AppData/ai_models/segment/meshseg.onnx
-    static bool modelPresent();
-    // Download the model on first use (blocks via a local ModelDownloader event
-    // loop). Returns the model path, or empty when offline/disabled/failed — the
-    // caller then uses the geometric fallback. Honours QTMESH_SEGMENT_NO_DOWNLOAD
-    // + base-URL override QTMESH_SEGMENT_MODEL_BASE_URL / QSettings
-    // ai/segmentModelBaseUrl. Call on a thread with an event loop.
-    static QString ensureModelBlocking();
+    // AppData/ai_models/segment/<modelFileName(c)> (Auto → the body model).
+    static QString modelPath(Category c = Category::Body);
+    static bool modelPresent(Category c = Category::Body);
+    // Download a category's model on first use (blocks via a local
+    // ModelDownloader event loop). Returns the model path, or empty when
+    // offline/disabled/failed — the caller then uses the geometric fallback.
+    // Honours QTMESH_SEGMENT_NO_DOWNLOAD + base-URL override
+    // QTMESH_SEGMENT_MODEL_BASE_URL / QSettings ai/segmentModelBaseUrl.
+    // Call on a thread with an event loop.
+    static QString ensureModelBlocking(Category c = Category::Body);
+
+    // ---- Auto-dispatch category classifier (meshseg_category.onnx) ----------
+    static QString classifierModelPath();
+    static bool classifierModelPresent();
+    static QString ensureClassifierModelBlocking();
+    // Run the category classifier on the mesh's point cloud. Returns Body on
+    // ANY failure (missing model, non-ONNX build, inference error) so Auto
+    // degrades to the pre-#818 behaviour.
+    static Category classifyCategory(const float* positions, int vertexCount,
+                                     const QString& classifierPath,
+                                     const Options& opts = {});
+    // One-call Auto resolution for callers: an explicit opts.category is
+    // returned as-is; Auto ensures the classifier model (first-use download)
+    // and classifies, falling back to Body when unavailable/offline.
+    static Category resolveCategoryBlocking(const float* positions, int vertexCount,
+                                            const Options& opts = {});
 
     // Run the model if present; else fall back to segmentGeometric (recording
     // `fallbackReason`). Never throws.

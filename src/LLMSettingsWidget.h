@@ -14,10 +14,11 @@
 #include <QGroupBox>
 #include <QTabWidget>
 #include "LLMManager.h"
+#include "AIModelCatalog.h"
+#include "ModelDownloader.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
-#include "ModelDownloader.h"
 
 class LLMSettingsWidget : public QDialog
 {
@@ -49,7 +50,6 @@ private slots:
     void onResetDefaults();
 
 #ifdef ENABLE_STABLE_DIFFUSION
-    // SD slots
     void onSDLoadModelClicked();
     void onSDUnloadModelClicked();
     void onSDRefreshModelsClicked();
@@ -61,11 +61,22 @@ private slots:
     void onSDApplySettings();
 #endif
 
+    // QtMeshEditor model catalog slots
+    void updateAIModelCatalogList();
+    void updateAIModelCatalogButtons();
+    void onAIModelCatalogDownloadClicked();
+    void onAIModelCatalogDownloadAllClicked();
+    void onAIModelCatalogDeleteClicked();
+    void onAIModelCatalogDeleteAllClicked();
+    void onAIModelCatalogRefreshClicked();
+    void onAIModelCatalogOpenFolderClicked();
+
 private:
     void setupUI();
     void setupModelsTab(QWidget *parent);
     void setupSettingsTab(QWidget *parent);
     void setupDownloadTab(QWidget *parent);
+    void setupAIModelCatalogTab(QWidget *parent);
 #ifdef ENABLE_STABLE_DIFFUSION
     void setupSDModelsTab(QWidget *parent);
     void setupSDSettingsTab(QWidget *parent);
@@ -117,8 +128,17 @@ private:
     QLabel *m_downloadStatusLabel;
     QLabel *m_downloadSpeedLabel;
 
+    // QtMeshEditor models tab
+    QListWidget *m_aiModelCatalogList;
+    QPushButton *m_aiModelCatalogDownloadButton;
+    QPushButton *m_aiModelCatalogDownloadAllButton;
+    QPushButton *m_aiModelCatalogDeleteButton;
+    QPushButton *m_aiModelCatalogDeleteAllButton;
+    QPushButton *m_aiModelCatalogRefreshButton;
+    QPushButton *m_aiModelCatalogOpenFolderButton;
+    QLabel *m_aiModelCatalogStatusLabel;
+
 #ifdef ENABLE_STABLE_DIFFUSION
-    // SD Models tab
     QComboBox *m_sdModelCombo;
     QPushButton *m_sdLoadButton;
     QPushButton *m_sdUnloadButton;

@@ -187,11 +187,23 @@ the binary). Attribution + licenses for the models and their training data:
   no model, and visibly smoother than naive linear interpolation. The trained
   model measurably beats slerp on held-out CMU motion (rotation error < half).
 
-## Mesh part segmentation (issue #410)
+## Mesh part segmentation (issue #410, categories #818 B2)
 
-- **Model:** a PointNet++-style point-cloud part-segmentation network (per-point
-  → head / torso / left+right arm / left+right leg), exported to ONNX. Run by
-  `src/MeshSegmenter.cpp`; the fourth ONNX consumer.
+- **Models:** a family of PointNet++-style point-cloud part-segmentation
+  networks, one small ONNX per mesh CATEGORY, plus a tiny category classifier
+  for Auto dispatch — all exported to ONNX and run by `src/MeshSegmenter.cpp`
+  (the fourth ONNX consumer):
+  - `meshseg.onnx` — body (head / torso / left+right arm / left+right leg);
+  - `meshseg_vegetation.onnx` — trunk / branch / foliage / root / flower;
+  - `meshseg_vehicle.onnx` — vehicle_body / wheel / window / wing / rotor;
+  - `meshseg_building.onnx` — wall / roof / window / door / chimney / foundation;
+  - `meshseg_category.onnx` — point-cloud → {body, vegetation, vehicle,
+    building} (PointNet max-pool classifier, ~0.1 MB).
+  The non-body models are trained on **procedurally generated synthetic
+  shapes we own** (parametric trees / vehicles / buildings with exact
+  by-construction labels — CC0, ours); the classifier trains on the same
+  generators + the mined body corpus. No third-party data at all in those
+  four files.
 - **Training data — synthetic / permissively derived.** The standard
   part-segmentation datasets (**ShapeNet-Part**, **PartNet**) are
   **non-commercial research-only** and so were rejected (same bar as #408
@@ -227,11 +239,17 @@ the binary). Attribution + licenses for the models and their training data:
   of training; accuracy figures live in `docs/MESH_SEGMENTATION_STRATEGY.md`.
 - **Export tool:** `scripts/export-meshseg-onnx.py` (one-time, offline, NOT
   shipped — the app never runs Python; it synthesises the data + trains + exports).
-- **Hosting:** `meshseg.onnx` is hosted in the
+- **Hosting:** every `meshseg*.onnx` (body + the category models + the
+  classifier) is hosted in the
   [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
-  HF repo under `segment/` and downloads on first use to
-  `AppData/ai_models/segment/` (override `QTMESH_SEGMENT_MODEL_BASE_URL` /
-  `QSettings ai/segmentModelBaseUrl`; offline guard `QTMESH_SEGMENT_NO_DOWNLOAD`).
+  HF repo under `segment/` (the app's download source) and downloads on first
+  use to `AppData/ai_models/segment/` (one shared override
+  `QTMESH_SEGMENT_MODEL_BASE_URL` / `QSettings ai/segmentModelBaseUrl`;
+  offline guard `QTMESH_SEGMENT_NO_DOWNLOAD` covers the whole family).
+  Each model also has a dedicated standalone HF repo with its own model card
+  (`QtMeshEditor-mesh-segmentation` for body, plus
+  `…-mesh-segmentation-{vegetation,vehicle,building,category}`), refreshed
+  from the aggregate via `scripts/sync-hf-model-repos.sh`.
 - **Fallback:** when ONNX is disabled, the model can't be fetched, or inference
   fails, the feature uses a deterministic **geometric** segmenter (connected-
   component islands + an up-axis/lateral spatial heuristic, refined by rig
@@ -276,6 +294,47 @@ the binary). Attribution + licenses for the models and their training data:
   library. Selected via `--model` (CLI) / `model:true` (MCP) / the GUI
   checkbox; the template library remains the default and the automatic
   fallback. Same CMU licensing basis as above.
+
+## ICT-FaceKit — ARKit blendshape template for face auto-rig (epic #889)
+
+- **Asset (not a learned model):** the ICT-FaceKit generic neutral head
+  (`generic_neutral_mesh.obj`) + its per-expression meshes named after the
+  ARKit blendshapes (`jawOpen`, `mouthSmile_L`, `eyeBlink_L`, `browInnerUp_L`,
+  …), all sharing one topology (26,719 verts) so each shape = expr − neutral.
+- **Source / license:** [USC-ICT/ICT-FaceKit](https://github.com/USC-ICT/ICT-FaceKit)
+  — **MIT** (Copyright 2020 USC Institute for Creative Technologies). The
+  standard/released model is MIT; a separate "full model" tier under a
+  USC-specific license is **REJECTED** (we ship only the MIT tier). MIT clears
+  the permissive-redistribution bar, so the template + shapes are hostable on
+  the `fernandotonon/QtMeshEditor-models` HF repo (Slice B, #890) — packed by
+  `scripts/export-arkit-template.py` into `facerig/arkit_template.bin` and
+  uploaded by `scripts/upload-facerig-template.sh`; it downloads on first use.
+- **How it is used:** the template is the *source* for **deformation transfer**
+  (Sumner & Popović 2004) — QtMeshEditor fits it to the user's neutral head via
+  native non-rigid ICP (Amberg 2007), then transfers each of the 52 ARKit
+  expressions onto the user's topology, attaching them as `Ogre::Pose` morph
+  targets so face performance capture (#869) works on the mesh. **No ML model,
+  no ONNX** — it is a deterministic geometry algorithm (sparse linear solve),
+  implemented natively in `src/FaceRig/` (Slices C/D/E). The offline spike
+  (`scripts/spike-facerig.py`, not shipped) validated the approach first
+  (see `docs/FACE_RIG_SPIKE.md`). Verified end-to-end on
+  a decimated, different-topology face: mean 0.008% / max 0.61% NRICP fit and
+  51 attached shapes. Surfaced via `qtmesh facerig`, MCP `add_arkit_blendshapes`,
+  and the Inspector "Add ARKit Blendshapes" button. See `docs/FACE_RIG.md`.
+- **Facial-landmark anchoring (landmark pass):** the NRICP fit is anchored to
+  real face features by **MediaPipe Face Mesh V2** (`face_landmarks.onnx`,
+  **Apache-2.0** — the same model the mocap face-capture uses, #869). We render
+  the head front-on, detect the 478 landmarks, back-project them to the mesh
+  surface, and pin the matching template vertices — so the template lands on the
+  actual eyes/nose/mouth instead of a low-residual-but-mis-oriented drape. Hosted
+  under `facerig/face_landmarks.onnx` (a copy of the mocap graph); downloads on
+  first use; `ENABLE_ONNX`-guarded with a graceful unanchored-fit fallback.
+- **Rejected alternatives:** Wrap3D (commercial, used by the reference impl for
+  NRICP — we implement NRICP natively instead), FLAME-based 3DMMs
+  (research-only), any generative expression model on non-commercial data.
+  Landmark detectors trained on 300W / WFLW / InsightFace (dlib, PIPNet,
+  2d106det) were rejected — their weights carry research-only / non-commercial
+  terms; MediaPipe FaceMesh (Apache-2.0) is the clean choice.
 
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed

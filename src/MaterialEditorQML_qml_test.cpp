@@ -15,6 +15,7 @@
 #include "MaterialEditorQML.h"
 #include "LLMManager.h"
 #include "ModelDownloader.h"
+#include "AIModelCatalog.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "QMLMaterialHighlighter.h"
 #include "ThemeManager.h"
@@ -193,6 +194,11 @@ protected:
         qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
             [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
                 return ModelDownloader::qmlInstance(eng, js);
+            }
+        );
+        qmlRegisterSingletonType<AIModelCatalog>("MaterialEditorQML", 1, 0, "AIModelCatalog",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return AIModelCatalog::qmlInstance(eng, js);
             }
         );
         // AISettingsDialog.qml references MeshGenController (image-to-3D #764) under
@@ -669,4 +675,4 @@ TEST_F(QMLComponentLoadingTest, DynamicComponentCreation) {
 } 
 */
 
-// End of commented-out QML tests due to MaterialEditorQML singleton lifecycle issues 
+// End of commented-out QML tests due to MaterialEditorQML singleton lifecycle issues

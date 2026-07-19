@@ -81,46 +81,98 @@ head 2690 / torso 583 / L-arm 809 / R-arm 768 / L-leg 492 / R-leg 486
 against rig-truth 2767 / 933 / 652 / 661 / 443 / 430 (boundary bleed at the
 shoulders/hips, correct lateralisation everywhere).
 
-## Category strategy (proposed roadmap)
+## #788 retrain verdict (July 2026): published v2 weights STAY
 
-The current C++ contract is one 7-class body-centric label set
-(`MeshSegmenter::Part`). That already covers **humanoids** and stretches to
+#788 asked for a retrain with the #787 exterior-capsule-cap data fix,
+gated on ≥ v2's 94.7% rig-truth accuracy. Six full-recipe retrains were
+run (three seeds with the plain fix, three with an additional
+junction-cap suppression fix) and NONE cleared the bar:
+
+| model | rig-truth (3 OOD chars) | held-out CC0 rigs (6 files) |
+|---|---|---|
+| v2 published (pre-fix) | **94.7%** | 97.0% |
+| exterior-cap fix, seeds 0/1/2 | 92.6 / 89.0 / 87.0 | 97.4 / 97.5 / 97.9 |
+| + junction-cap suppression, seeds 0/1/2 | 92.7 / 88.1 / 87.5 | 95.9 / 97.5 / 97.2 |
+
+Diagnosis: the exterior-cap fix concentrates a limb capsule's
+attachment-end cap points on the junction-facing hemisphere — limb-labelled
+points exactly on the torso boundary — so limbs over-claim shoulders/hips
+(torso recall 0.80 → 0.50-0.68). Suppressing attachment-end caps entirely
+(a limb has no real surface at its torso junction; now in
+`capsule_surf(cap0/cap1)`) recovers torso recall at seed 0 but does not
+reach v2's number; v2 also sits ~2σ above the retrain distribution
+(mean ≈ 89.5%), i.e. its 94.7% is partly a fortunate draw on a 3-file
+(2-distinct-character) eval. Every post-fix model BEATS v2 on the
+6-file held-out real set — the fixed script generalises at least as well —
+but the issue's explicit bar is the rig-truth set, so the published
+weights are unchanged and script↔weights correspondence is deliberately
+NOT restored. Before any republish: widen the OOD eval set (more
+non-Quaternius rigged characters) so the bar measures generalisation
+rather than a 2-character draw, and grow the mined corpus.
+
+## Category strategy (ADOPTED — #818 Track B2, implemented 2026-07)
+
+The pre-B2 C++ contract was one 7-class body-centric label set
+(`MeshSegmenter::Part`). That covers **humanoids** and stretches to
 **quadrupeds/birds/dinos** ("front-left leg" → left_leg, tail/wing handled by
 the rig-prior name map). It cannot express vegetation/vehicle/building parts.
 
-Recommended architecture, in order of preference:
+Adopted architecture (option 1 below; option 2 stays rejected):
 
-1. **One label vocabulary, several category models** (recommended).
-   Keep a single flat label enum but partition it by category, and ship one
-   small ONNX per category (`meshseg.onnx` = body, `meshseg_vegetation.onnx`,
+1. **One label vocabulary, several category models** (SHIPPED).
+   A single flat label enum partitioned by category, one small ONNX per
+   category (`meshseg.onnx` = body, `meshseg_vegetation.onnx`,
    `meshseg_vehicle.onnx`, `meshseg_building.onnx`). A tiny shared
-   point-cloud *category classifier* (or an explicit `--category` CLI/MCP
-   argument, Inspector dropdown) dispatches. Small per-category models train
-   independently, fail independently, and download lazily — same
-   `ensureModelBlocking` pattern, one file each. C++ change: extend `Part`
-   past `Count` with category-scoped labels and add
-   `Options::category {Auto, Body, Vegetation, Vehicle, Building}`.
+   point-cloud *category classifier* (`meshseg_category.onnx`, PointNet
+   max-pool → 4-way softmax, trained on generator-provenance labels) — or an
+   explicit `--category` CLI/MCP argument — dispatches. Small per-category
+   models train independently, fail independently, and download lazily — same
+   `ensureModelBlocking` pattern, one file each. C++: `Part` extended past the
+   body labels (`trunk…flower`, `vehicle_body…rotor`, `wall…foundation`;
+   `window` is ONE global label shared by vehicle + building),
+   `Options::category {Auto, Body, Vegetation, Vehicle, Building}`,
+   per-category channel→Part maps (`categoryChannelMap`), and
+   `resolveCategoryBlocking()` for the Auto path (classifier unavailable →
+   Body, the pre-B2 behaviour). The geometric fallback is category-aware
+   (vegetation: foliage/trunk up-band; vehicle: wheel/body; building:
+   roof/wall).
 
 2. *Rejected: one big multi-category model with a unified softmax.* Label
    imbalance across categories, one bad category degrades all, and every
    category addition forces a full retrain + re-download for everyone.
 
-Proposed label sets (all mineable or synthesisable permissively):
+**Why the classifier and not SmolVLM as the Auto dispatcher:** the shipped
+`ImageCaptioner` (SmolVLM-500M) was considered for "identify what this mesh
+is". As the *dispatcher* it loses on every axis: it needs an offscreen GL
+render + a ~500 MB model + `ENABLE_LOCAL_LLM`, and free-text output needs
+fragile keyword mapping — while the point-cloud classifier is ~100 KB,
+headless-CLI-safe, deterministic, and its training labels are free
+(generator provenance: synthetic bodies/trees/vehicles/buildings + mined
+rigs as `body`). SmolVLM remains the right tool for the OPTIONAL GUI
+"identify/name this mesh (or part)" assist — a follow-up slice that renders
+the viewport/part crops and suggests names; it composes with, not replaces,
+the category dispatch.
 
-- **Body (shipped)**: head, torso, L/R arm, L/R leg. Future minor additions:
-  `tail`, `wing` (currently folded into torso/arm by the rig-prior map — keep
-  folding until a consumer needs them separated).
-- **Vegetation**: trunk, branches, foliage, roots, flower/fruit. Data:
-  synthetic L-system trees (trivially exact labels, fully ours) + CC0 packs
-  (Quaternius/Kenney nature packs are UNRIGGED, so labels come from
-  connected-component + material/name heuristics, manually spot-checked).
-- **Vehicle**: body/hull, wheels/tracks, windows/canopy, wings, rotor/prop,
-  lights, interior. Data: synthetic parametric cars/planes + CC0 vehicle
-  packs with per-material/submesh name mining ("wheel", "glass", …
-  submesh/material names are strong exact labels in CC0 packs).
-- **Building**: walls, roof, windows, doors, chimney, base/foundation,
-  fence/railing. Data: synthetic parametric houses + CC0 building kits
-  (Kenney castle kit etc.), again submesh/material-name mining.
+Shipped label sets (channel order in scripts/export-meshseg-onnx.py; global
+Part mapping in src/MeshSegmenter.cpp kCategoryChannelMaps):
+
+- **Body (v2 + #788 retrain)**: head, torso, L/R arm, L/R leg. Future minor
+  additions: `tail`, `wing` (currently folded into torso/arm by the rig-prior
+  map — keep folding until a consumer needs them separated).
+- **Vegetation (v1, synthetic-only)**: trunk, branch, foliage, root,
+  flower(/fruit). Data: procedural trees (broadleaf/pine/palm/dead/bush
+  regimes with canopy-vs-per-tip blobs, surface roots, coconuts) — exact
+  labels, fully ours. Follow-up: mine CC0 nature packs (UNRIGGED, so labels
+  come from connected-component + material/name heuristics, spot-checked).
+- **Vehicle (v1, synthetic-only)**: vehicle_body, wheel, window, wing,
+  rotor(/prop). Data: parametric cars/trucks (cabin+panes+wheels), planes
+  (fuselage/wings/tail/prop/gear), helicopters (body/boom/rotors/skids).
+  Follow-up: name-mined CC0 vehicle packs ("Wheel_FL", "glass" submesh names
+  are strong exact labels).
+- **Building (v1, synthetic-only)**: wall, roof, window, door, chimney,
+  foundation. Data: parametric houses/towers/huts (gable/pyramid/flat roofs,
+  window rows, door, chimney, foundation slab). Follow-up: name-mined CC0
+  kits (Kenney castle kit etc.).
 
 Key insight for non-rigged categories: **submesh + material + node names play
 the role bone weights play for bodies** — CC0 packs are consistently named
@@ -130,15 +182,37 @@ annotation. The `--dump-training-data` schema stays the same
 (`qtmesh-meshseg-training-v1`: points + labels), so the training script needs
 no changes per category — only a new miner path and a label-set table.
 
-### Suggested implementation order
+### v1 category-model results (July 2026, held-out synthetic val)
+
+| model | val acc | notes |
+|---|---|---|
+| meshseg_vegetation.onnx | 93.8% | broadleaf/pine/palm/dead/bush regimes |
+| meshseg_vehicle.onnx | 93.5% | car/truck/plane/helicopter |
+| meshseg_building.onnx | 86.9% | hardest — many small parts (windows, chimneys) |
+| meshseg_category.onnx | 99.1% | 4-way Auto dispatcher (incl. mined real bodies) |
+
+End-to-end through `qtmesh segment` (ONNX build): the Auto path correctly
+classified procedural tree/car/house/human test meshes and produced sane
+part splits on each (some boundary bleed on low-detail primitives — the
+models train on dense 4096-point surface clouds, so very low-poly meshes
+lean on the duplicate-padding path and degrade; real assets are fine).
+All four + the body model are hosted on the aggregate HF repo (`segment/`)
+and on dedicated standalone repos
+(`QtMeshEditor-mesh-segmentation-{vegetation,vehicle,building,category}`).
+
+### Implementation status
 
 1. (done, v2) Fix humanoids + basic quadrupeds with the existing 7-class model.
-2. Category classifier + `Options::category` plumbing (CLI `--category`,
-   MCP arg, Inspector dropdown; `Auto` = classifier).
-3. Vegetation model (synthetic L-systems are nearly free and exact).
-4. Vehicle model (name-mined CC0 packs + parametric synthetics).
-5. Building model (name-mined CC0 kits + parametric synthetics).
-6. Body label additions (tail/wing) only when a feature consumes them.
+2. (done, #818 B2) Category classifier + `Options::category` plumbing (CLI
+   `--category`, MCP `category` arg; `Auto` = classifier; GUI Select-by-Part
+   resolves Auto transparently).
+3. (done, v1 synthetic) Vegetation model.
+4. (done, v1 synthetic) Vehicle model.
+5. (done, v1 synthetic) Building model.
+6. (follow-ups) Name-mined CC0 packs for 3–5; body label additions
+   (tail/wing) only when a feature consumes them; SmolVLM "identify/name"
+   GUI assist; SAM-2 multiview zero-shot path (`sam2seg`) for arbitrary
+   kitbashed meshes where a fixed label set can't win (#818 B2 item 2).
 
 ## Continual improvement loop (unchanged)
 

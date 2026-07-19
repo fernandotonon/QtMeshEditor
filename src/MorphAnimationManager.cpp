@@ -21,6 +21,7 @@ The MIT License
 #include "commands/MorphCommands.h"
 
 #include <QCoreApplication>
+#include <QSet>
 #include <QThread>
 
 #include <OgreAnimation.h>
@@ -101,11 +102,22 @@ QStringList MorphAnimationManager::morphTargetsFor(Ogre::Entity* entity) const
     if (!entity) return out;
     Ogre::MeshPtr mesh = entity->getMesh();
     if (!mesh) return out;
+    // A morph target that spans multiple submeshes has ONE pose per submesh
+    // handle, all sharing the same name (common on multi-submesh characters —
+    // e.g. a face split across 11 submeshes yields 11 "jawOpen" poses). The
+    // UI + every by-name op (weight/key/delete) treat a target as its NAME, so
+    // list each distinct name once — otherwise the Inspector shows a duplicate
+    // row per submesh.
+    QSet<QString> seen;
     const auto& poseList = mesh->getPoseList();
     for (const Ogre::Pose* p : poseList) {
         if (!p) continue;
         const Ogre::String n = p->getName();
-        if (!n.empty()) out << QString::fromStdString(n);
+        if (n.empty()) continue;
+        const QString qn = QString::fromStdString(n);
+        if (seen.contains(qn)) continue;   // coalesce same-named poses
+        seen.insert(qn);
+        out << qn;
     }
     return out;
 }

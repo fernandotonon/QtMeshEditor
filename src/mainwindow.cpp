@@ -107,6 +107,7 @@
 #endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
+#include "AIModelCatalog.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "PropertiesPanelController.h"
@@ -118,6 +119,7 @@
 #include "UVEditorController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "FaceRigController.h"
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
@@ -574,6 +576,7 @@ MainWindow::~MainWindow()
         UVEditorController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        FaceRigController::kill();
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
@@ -772,6 +775,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "MocapController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MocapController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<FaceRigController>(
+            "PropertiesPanel", 1, 0, "FaceRigController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return FaceRigController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<LightsController>(
             "PropertiesPanel", 1, 0, "LightsController",
@@ -4681,6 +4689,13 @@ void MainWindow::on_actionMaterial_Editor_triggered()
                 Q_UNUSED(engine)
                 Q_UNUSED(scriptEngine)
                 return ModelDownloader::qmlInstance(engine, scriptEngine);
+            });
+
+        qmlRegisterSingletonType<AIModelCatalog>("MaterialEditorQML", 1, 0, "AIModelCatalog",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return AIModelCatalog::qmlInstance(engine, scriptEngine);
             });
 
         // Register QMLMaterialHighlighter for QML use
