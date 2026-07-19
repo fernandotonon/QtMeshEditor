@@ -364,7 +364,11 @@ the binary). Attribution + licenses for the models and their training data:
   poses — is **Apache-2.0** (https://github.com/facebookresearch/MHR, assets
   v1.0.1). Skeleton definition (names, hierarchy, pre-rotations, derived rest
   world pose) extracted to `mhr_skeleton.json` by
-  `scripts/export-bodycap-onnx.py --mhr-assets`. No restrictions.
+  `scripts/export-bodycap-onnx.py --mhr-assets`. Apache-2.0 permits use,
+  modification, and redistribution (including our derived `mhr_skeleton.json`)
+  for any purpose incl. commercial, provided the LICENSE + NOTICE are retained
+  and modifications are marked — we ship the Apache-2.0 notice next to the
+  derived skeleton on the HF repo. No copyleft, no field-of-use restriction.
 - **SAM 3D Body checkpoints** (`facebook/sam-3d-body-dinov3`, 2.1 GB) are
   under the **SAM License** (2025-11-19 text reviewed in full, 2026-07-12).
   **Verdict: PASS with conditions** — usable as an OPTIONAL,

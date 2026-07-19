@@ -99,6 +99,16 @@ FileFrameSource::FileFrameSource(const QString& filePath, double targetFps,
 FileFrameSource::~FileFrameSource()
 {
     stop();
+    // Tear down in dependency order: the player holds the sink pointer via
+    // setVideoSink(), so it must die (or be unbound) BEFORE the sink. Member
+    // destruction runs in reverse declaration order (m_sink before m_player),
+    // which would leave the player briefly pointing at a freed sink — reset
+    // the player first here.
+    if (m_player) {
+        m_player->setVideoSink(nullptr);
+        m_player.reset();
+    }
+    m_sink.reset();
 }
 
 bool FileFrameSource::open(QString* error)
@@ -194,6 +204,15 @@ CameraFrameSource::CameraFrameSource(const QString& deviceId, QObject* parent)
 CameraFrameSource::~CameraFrameSource()
 {
     stop();
+    // The capture session references the sink via setVideoSink(); detach and
+    // destroy the session (and camera) BEFORE the sink. Member destruction
+    // runs in reverse declaration order (m_sink before m_session), so do it
+    // explicitly here.
+    if (m_session)
+        m_session->setVideoSink(nullptr);
+    m_camera.reset();
+    m_session.reset();
+    m_sink.reset();
 }
 
 bool CameraFrameSource::open(QString* error)

@@ -215,9 +215,18 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
             auto* nam = NodeAnimationManager::instance();
             const QString clip = options.clipName + QStringLiteral("_Head");
             if (nam) {
-                if (options.replaceExisting)
-                    nam->deleteClip(clip);  // no-op when absent
-                if (nam->createClip(clip, std::max(length, 0.001))) {
+                // Scene-level node clips are NOT snapshotted by
+                // RecordMocapClipCommand's undo (unlike the mesh/skeleton
+                // clips), so a pre-existing user clip must never be deleted
+                // here — undoing the record would lose it permanently. Reject
+                // the name collision instead (even under replaceExisting) and
+                // let the caller surface it; a fresh name always proceeds.
+                if (nam->listClips().contains(clip)) {
+                    report.headError = QStringLiteral(
+                        "a node animation named '%1' already exists; head "
+                        "capture will not overwrite it — record under a "
+                        "different clip name").arg(clip);
+                } else if (nam->createClip(clip, std::max(length, 0.001))) {
                     const QString nodeName = QString::fromStdString(node->getName());
                     int written = 0;
                     for (int i : keys) {
@@ -277,14 +286,16 @@ BodyRecordReport recordBody(
 
     Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
     const std::string clip = options.clipName.toStdString();
-    if (skel->hasAnimation(clip)) {
-        if (!options.replaceExisting) {
-            report.error = QStringLiteral(
-                "animation '%1' already exists (pass replace)").arg(options.clipName);
-            return report;
-        }
-        skel->removeAnimation(clip);
+    if (skel->hasAnimation(clip) && !options.replaceExisting) {
+        report.error = QStringLiteral(
+            "animation '%1' already exists (pass replace)").arg(options.clipName);
+        return report;
     }
+    // NOTE: do NOT removeAnimation(clip) here. applyMotionClip below replaces
+    // the clip on SUCCESS but returns early (clip untouched) when the skeleton
+    // can't be retargeted — removing it up front would destroy the user's
+    // existing clip on a retarget failure. The replace is deferred to the
+    // moment the take is known good.
 
     // The world-frame retarget: delta vs frame 0 (the calibration frame)
     // transported into each bone's parent-world frame; rotation-only keys;

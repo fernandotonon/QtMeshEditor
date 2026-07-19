@@ -173,10 +173,11 @@ void RecordMocapClipCommand::undo()
         }
     }
     // node-TRS head clip (static meshes): scene-level, owned by
-    // NodeAnimationManager — a recorded node clip is simply deleted (there is
-    // no pre-existing "<clip>_Head" node clip to restore: recordFace only
-    // creates it fresh, and name collisions with user clips are rejected by
-    // createClip returning false).
+    // NodeAnimationManager — a recorded node clip is simply deleted. This is
+    // safe because recordFace REJECTS a name collision with a pre-existing
+    // node clip (report.headError set, headTarget != "node") rather than
+    // overwriting it, so a "node" headTarget always means we created it fresh
+    // this record — there is nothing of the user's to restore.
     if (m_report.headTarget == QLatin1String("node")) {
         if (auto* nam = NodeAnimationManager::instance())
             nam->deleteClip(m_options.clipName + QStringLiteral("_Head"));

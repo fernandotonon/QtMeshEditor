@@ -26,14 +26,17 @@ OUT_DIR="${OUT_DIR:?set OUT_DIR to the export output dir (face/*.onnx + pose/*.o
 
 upload() {  # <local> <repo-path>
     local src="$1" dst="$2"
-    if [ -f "$src" ]; then
-        echo ">> uploading $src -> $REPO:$dst"
-        # `hf upload <repo> <local> <path-in-repo>` (huggingface_hub >= 1.0;
-        # the old `huggingface-cli upload` was removed).
-        hf upload "$REPO" "$src" "$dst"
-    else
-        echo "!! skip (missing): $src"
+    # Every mocap graph is REQUIRED — a partial upload produces a broken
+    # model release (the app downloads all five). Fail hard rather than
+    # skipping, so `set -e` aborts before a half-published set goes live.
+    if [ ! -f "$src" ]; then
+        echo "!! ABORT: required model missing: $src" >&2
+        exit 1
     fi
+    echo ">> uploading $src -> $REPO:$dst"
+    # `hf upload <repo> <local> <path-in-repo>` (huggingface_hub >= 1.0;
+    # the old `huggingface-cli upload` was removed).
+    hf upload "$REPO" "$src" "$dst"
 }
 
 # Face bundle (FaceCapPredictor): detector + landmarks + blendshapes.

@@ -6615,10 +6615,20 @@ QJsonObject MCPServer::toolCaptureFaceFromVideo(const QJsonObject &args)
 
     const QString entityName = args.value("entity_name").toString();
     Ogre::Entity* entity = nullptr;
-    for (auto* ent : mgr->getEntities()) {
-        if (!ent || ent->getMovableType() != "Entity") continue;
-        if (entityName.isEmpty()
-            || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+    if (entityName.isEmpty()) {
+        // Schema says the target defaults to the selected entity — honour
+        // SelectionSet, then fall back to the first entity in the scene.
+        if (auto* sel = SelectionSet::getSingleton()) {
+            const auto resolved = sel->getResolvedEntities();
+            if (!resolved.isEmpty()) entity = resolved.first();
+        }
+    }
+    if (!entity) {
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
     }
     if (!entity) {
         return makeErrorResult(entityName.isEmpty()
@@ -6837,10 +6847,20 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
 
     const QString entityName = args.value("entity_name").toString();
     Ogre::Entity* entity = nullptr;
-    for (auto* ent : mgr->getEntities()) {
-        if (!ent || ent->getMovableType() != "Entity") continue;
-        if (entityName.isEmpty()
-            || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+    if (entityName.isEmpty()) {
+        // Schema says the target defaults to the selected entity — honour
+        // SelectionSet, then fall back to the first entity in the scene.
+        if (auto* sel = SelectionSet::getSingleton()) {
+            const auto resolved = sel->getResolvedEntities();
+            if (!resolved.isEmpty()) entity = resolved.first();
+        }
+    }
+    if (!entity) {
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
     }
     if (!entity) {
         return makeErrorResult(entityName.isEmpty()

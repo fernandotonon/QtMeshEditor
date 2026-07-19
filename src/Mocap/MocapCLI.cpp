@@ -84,6 +84,8 @@ QJsonObject reportToJson(const MocapRecorder::FaceRecordReport& r)
              QJsonArray::fromStringList(r.unmatchedMesh));
     if (!r.error.isEmpty())
         o.insert(QLatin1String("error"), r.error);
+    if (!r.headError.isEmpty())
+        o.insert(QLatin1String("headError"), r.headError);
     return o;
 }
 
@@ -506,23 +508,28 @@ int run(int argc, char* argv[])
             CLIPipeline::writeCliError(QStringLiteral(
                 "Error: no person tracked in the source (%1 of %2 frames had "
                 "no pose).\n").arg(noPose).arg(poseSamples.size()));
+            // Face succeeded → keep its take, but SKIP body recording entirely
+            // (recordBody would reject <2 frames anyway; falling through fed it
+            // the empty clip and overwrote this error). Fail only if face
+            // wasn't recorded either.
             if (!face || !report.ok())
                 return 1;
             bodyReport.error = QStringLiteral("no person tracked");
-        }
-        MocapRecorder::BodyRecordOptions bodyOptions;
-        bodyOptions.clipName = face ? clipName + QStringLiteral("_Body")
-                                    : clipName;
-        bodyOptions.algorithmUsed = bodyAlgoUsed;
-        bodyOptions.fallbackReason = bodyFallbackReason;
-        bodyReport = MocapRecorder::recordBody(
-            entity, clipQuats, static_cast<int>(fps), bodyOptions);
-        bodyReport.framesProcessed = static_cast<int>(poseSamples.size());
-        if (!bodyReport.ok()) {
-            CLIPipeline::writeCliError(
-                QStringLiteral("Error: %1\n").arg(bodyReport.error));
-            if (!face || !report.ok())
-                return 1;
+        } else {
+            MocapRecorder::BodyRecordOptions bodyOptions;
+            bodyOptions.clipName = face ? clipName + QStringLiteral("_Body")
+                                        : clipName;
+            bodyOptions.algorithmUsed = bodyAlgoUsed;
+            bodyOptions.fallbackReason = bodyFallbackReason;
+            bodyReport = MocapRecorder::recordBody(
+                entity, clipQuats, static_cast<int>(fps), bodyOptions);
+            bodyReport.framesProcessed = static_cast<int>(poseSamples.size());
+            if (!bodyReport.ok()) {
+                CLIPipeline::writeCliError(
+                    QStringLiteral("Error: %1\n").arg(bodyReport.error));
+                if (!face || !report.ok())
+                    return 1;
+            }
         }
     }
     if (face && body && !report.ok() && !bodyReport.ok())
@@ -542,16 +549,29 @@ int run(int argc, char* argv[])
     }
 
     if (jsonOutput) {
+        // Face-only output keeps its ORIGINAL top-level shape (clipName,
+        // framesProcessed, error, … at the root) so pre-body-capture scripts
+        // don't break. Only nest under "face"/"body" when body capture is
+        // actually part of the run (the two-report case that needs
+        // disambiguation).
         QJsonObject root;
-        if (face)
-            root.insert(QLatin1String("face"), reportToJson(report));
-        if (body)
-            root.insert(QLatin1String("body"), bodyReportToJson(bodyReport));
+        if (face && !body) {
+            root = reportToJson(report);
+        } else {
+            if (face)
+                root.insert(QLatin1String("face"), reportToJson(report));
+            if (body)
+                root.insert(QLatin1String("body"), bodyReportToJson(bodyReport));
+        }
         CLIPipeline::writeOutput(QString::fromUtf8(
             QJsonDocument(root).toJson(QJsonDocument::Indented)));
     } else {
         QString text;
-        if (face)
+        // Only print the face SUCCESS line when face recording actually
+        // succeeded — in a --face --body run where face failed but body
+        // succeeded, the error was already written to stderr above; don't
+        // also claim a face take was recorded.
+        if (face && report.ok())
             text += QStringLiteral(
                         "Recorded '%1': %2 frames (%3 without a face), "
                         "%4 weight keys on %5 channels, %6 head keys (%7), "
@@ -564,6 +584,8 @@ int run(int argc, char* argv[])
                         .arg(report.headKeyframesWritten)
                         .arg(report.headTarget)
                         .arg(report.clipLength, 0, 'f', 2);
+        if (face && report.ok() && !report.headError.isEmpty())
+            text += QStringLiteral("  warning: %1\n").arg(report.headError);
         if (body) {
             text += QStringLiteral(
                         "Recorded '%1' via %2: %3 frames, %4 canonical roles, "

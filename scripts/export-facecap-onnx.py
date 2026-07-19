@@ -612,21 +612,31 @@ def run_face_parity(face_task, out_dir, images, canonical_obj, procrustes_pbtxt)
     print("\n== FACE PARITY (ONNX pipeline vs python mediapipe) ==")
     worst_bs, worst_px, worst_deg = 0.0, 0.0, 0.0
     n_ok = 0
+    n_mismatch = 0
     for path in images:
         img = Image.open(path)
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
                           data=np.asarray(img.convert("RGB")))
         res = ref.detect(mp_img)
         mine = ours(img)
+        # Detection DISAGREEMENTS are parity failures, not skips: if we only
+        # require n_ok > 0, one matching image can hide mismatches on every
+        # other asset. Count them and assert none remain at the end.
         if not res.face_landmarks:
-            print(f"  {os.path.basename(path)}: no face (reference); "
-                  f"ours={'none' if mine is None else 'found'}")
+            if mine is not None:
+                print(f"  {os.path.basename(path)}: MISMATCH — reference found "
+                      f"no face, we did")
+                n_mismatch += 1
+            else:
+                print(f"  {os.path.basename(path)}: no face (both agree)")
             continue
         if mine is None:
-            print(f"  {os.path.basename(path)}: REFERENCE found a face, we did NOT")
+            print(f"  {os.path.basename(path)}: MISMATCH — reference found a "
+                  f"face, we did NOT")
+            n_mismatch += 1
             continue
         W, H = img.size
-        ref_pts = np.array([[l.x * W, l.y * H] for l in res.face_landmarks[0]])
+        ref_pts = np.array([[pt.x * W, pt.y * H] for pt in res.face_landmarks[0]])
         d_px = np.linalg.norm(ref_pts - mine["landmarks"][:, :2], axis=1)
         ref_bs = np.array([b.score for b in res.face_blendshapes[0]])
         d_bs = np.abs(ref_bs - mine["blendshapes"])
@@ -647,6 +657,8 @@ def run_face_parity(face_task, out_dir, images, canonical_obj, procrustes_pbtxt)
         n_ok += 1
     ref.close()
     assert n_ok > 0, "no face image produced a reference result"
+    assert n_mismatch == 0, (
+        f"{n_mismatch} image(s) disagreed on face detection — parity FAILED")
     print(f"  WORST: blendshapes {worst_bs:.4f} (target <= 0.02), "
           f"landmarks {worst_px:.2f}px (target <= 2px on the tracked face), "
           f"head-pose {worst_deg:.2f} deg (informational)")
@@ -681,8 +693,8 @@ def run_pose_parity(pose_task, out_dir, images):
         if mine is None:
             print(f"  {os.path.basename(path)}: REFERENCE found a pose, we did NOT")
             continue
-        ref_world = np.array([[l.x, l.y, l.z]
-                              for l in res.pose_world_landmarks[0]])
+        ref_world = np.array([[pt.x, pt.y, pt.z]
+                              for pt in res.pose_world_landmarks[0]])
         d = np.linalg.norm(ref_world - mine["world"], axis=1)
         print(f"  {os.path.basename(path)}: world landmarks mean "
               f"{d.mean() * 100:.2f}cm max {d.max() * 100:.2f}cm "
@@ -742,6 +754,11 @@ def main():
         report["face"] = run_face_parity(args.face_task, args.out_dir, face_imgs,
                                          args.canonical_obj, args.procrustes)
         assert report["face"]["worst_blendshape_abs"] <= 0.02, "blendshape parity FAILED"
+        # The documented contract advertises a 2px landmark target; enforce it
+        # so parity can't silently regress while the script prints success.
+        assert report["face"]["worst_landmark_px"] <= 2.0, (
+            f"landmark parity FAILED "
+            f"({report['face']['worst_landmark_px']:.2f}px > 2px)")
 
     if args.pose_task:
         pose_out = os.path.join(args.out_dir, "pose")

@@ -419,19 +419,10 @@ bool MocapController::beginPreview(const QString& deviceId)
         return false;
     }
 
-    // models first (blocking download with a visible status)
-    if (!FaceCapPredictor::modelsPresent()) {
-        setStatusMessage(tr("Downloading face capture models…"));
-        QCoreApplication::processEvents();
-        if (FaceCapPredictor::ensureModelsBlocking().isEmpty()) {
-            setStatusMessage(
-                      tr("Face capture models are not available (offline, or "
-                         "not hosted yet)."));
-            emit errorOccurred(d->status);
-            return false;
-        }
-    }
-
+    // Determine what the selection can be driven with BEFORE downloading any
+    // models — a ~30 MB face-model fetch is wasted if the mesh has no ARKit
+    // morph targets and no head bone (field-reported: clicking Preview on a
+    // plain mesh triggered the download, then failed the drivability check).
     d->entityName = entity->getName();
     d->mapping = FaceCapMapper::build(
         MorphAnimationManager::instance()->morphTargetsFor(entity));
@@ -477,6 +468,22 @@ bool MocapController::beginPreview(const QString& deviceId)
                      "humanoid rig for Body)."));
         emit errorOccurred(d->status);
         return false;
+    }
+
+    // NOW that we know there is something to drive, fetch the models (blocking
+    // download with a visible status). Face models feed both face + head drive
+    // (the head rotation comes from the face graph); the pose models are
+    // fetched lazily in the worker only when body drive is active.
+    if (!FaceCapPredictor::modelsPresent()) {
+        setStatusMessage(tr("Downloading face capture models…"));
+        QCoreApplication::processEvents();
+        if (FaceCapPredictor::ensureModelsBlocking().isEmpty()) {
+            setStatusMessage(
+                      tr("Face capture models are not available (offline, or "
+                         "not hosted yet)."));
+            emit errorOccurred(d->status);
+            return false;
+        }
     }
 
     // snapshot live state (the restore contract)
@@ -912,7 +919,19 @@ void MocapController::stopPreview()
         d->camera->stop();
     if (d->workerThread.isRunning()) {
         d->workerThread.quit();
-        d->workerThread.wait(2000);
+        // Block until the worker thread has actually exited before we free
+        // anything it touches — the worker drains d->camera->mailbox() inside
+        // processPending(), so releasing the camera (and its mailbox) while
+        // the thread is still running is a use-after-free. A single wait(2000)
+        // could time out mid-inference and fall through; keep waiting (a long
+        // ONNX step is finite) and log if it's pathologically slow.
+        int waited = 0;
+        while (!d->workerThread.wait(2000)) {
+            waited += 2000;
+            SentryReporter::addBreadcrumb("ai.assist.mocap_live",
+                QStringLiteral("preview stop: worker still running after %1ms")
+                    .arg(waited));
+        }
     }
     d->worker = nullptr;  // deleted via QThread::finished
     d->camera.reset();

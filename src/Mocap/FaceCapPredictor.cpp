@@ -206,6 +206,10 @@ bool FaceCapPredictor::load(const QString& dirIn)
     const QString bs = dir.filePath(QLatin1String(kBlendshapesFile));
     if (!QFileInfo::exists(det) || !QFileInfo::exists(lmk)
         || !QFileInfo::exists(bs)) {
+        // Clear availability from any prior successful load() — a later load()
+        // pointed at a missing/invalid dir must report unavailable, not leave
+        // isAvailable() lying about the previous session's models.
+        d->available = false;
         d->error = QStringLiteral(
             "face capture models not found in %1 — they download on first "
             "use, or set QTMESH_MOCAP_MODEL_BASE_URL").arg(dir.absolutePath());

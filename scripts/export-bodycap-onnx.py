@@ -47,6 +47,7 @@ USAGE
 
 import argparse
 import json
+import os
 import sys
 
 
@@ -72,7 +73,20 @@ def quat_rotate(q, v):
 def extract_mhr_skeleton(assets_dir, out_path):
     import torch  # local import: only needed for this mode
 
-    model = torch.jit.load(f"{assets_dir}/mhr_model.pt", map_location="cpu")
+    # Create the output directory up front — the documented default
+    # (.mocap_work/out/…) does not exist on a fresh checkout, and the json
+    # dump below would otherwise FileNotFoundError after the (slow) load.
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+
+    # SECURITY: torch.jit.load deserializes the archive. This is an offline
+    # dev tool and the operator supplies their OWN MHR assets from the
+    # official facebookresearch/MHR release (Apache-2.0), so we load directly;
+    # do NOT point --mhr-assets at an untrusted download.
+    mhr_model = f"{assets_dir}/mhr_model.pt"
+    if not os.path.isfile(mhr_model):
+        sys.exit(f"MHR model not found: {mhr_model} "
+                 f"(pass --mhr-assets pointing at the official MHR v1.0.1 assets)")
+    model = torch.jit.load(mhr_model, map_location="cpu")
     sk = model.character_torch.skeleton
     names = list(sk.joint_names)
     parents = sk.joint_parents.tolist()

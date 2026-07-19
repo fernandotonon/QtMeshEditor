@@ -59,6 +59,9 @@ struct FaceRecordReport {
     QString clipName;
     double clipLength = 0.0;         // seconds
     QString error;                   // non-empty = nothing was written
+    QString headError;               // non-empty = head clip skipped (e.g. a
+                                     // pre-existing node clip we won't clobber);
+                                     // weight keys still written — not fatal
 
     bool ok() const { return error.isEmpty(); }
 };
