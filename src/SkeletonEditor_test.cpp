@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QStringList>
 #include <QThread>
 
 #include "SkeletonEditor.h"
@@ -237,4 +238,169 @@ TEST_F(SkeletonEditorTest, DuplicateBoneRebindsAnimationControllerSkeleton) {
     EXPECT_NE(anim->selectedBonePtr(), nullptr);
     EXPECT_TRUE(anim->boneNames().contains(result.boneName));
     EXPECT_EQ(anim->selectedEntity()->getSkeleton(), entity->getSkeleton());
+}
+
+TEST_F(SkeletonEditorTest, ReparentKeepWorldPreservesDerivedPosition) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_ReparentWorld");
+    ASSERT_NE(entity, nullptr);
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    Ogre::Bone* tip = skel->createBone("Tip", 2);
+    skel->getBone("Child")->addChild(tip);
+    tip->setPosition(Ogre::Vector3(0, 1, 0));
+    tip->setInitialState();
+    entity->_initialise(true);
+
+    const Ogre::Vector3 worldBefore = tip->_getDerivedPosition();
+
+    SkeletonEditor::ReparentOptions opts;
+    opts.keepWorld = true;
+    // Reparent Tip under Root (skip Child)
+    const auto result = SkeletonEditor::reparentBone(
+        entity, QStringLiteral("Tip"), QStringLiteral("Root"), opts);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    skel = entity->getMesh()->getSkeleton();
+    Ogre::Bone* tipAfter = skel->getBone("Tip");
+    ASSERT_NE(tipAfter->getParent(), nullptr);
+    EXPECT_EQ(tipAfter->getParent()->getName(), "Root");
+    EXPECT_NEAR(tipAfter->_getDerivedPosition().y, worldBefore.y, 1e-3f);
+}
+
+TEST_F(SkeletonEditorTest, ReparentKeepLocalPreservesLocalTRS) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_ReparentLocal");
+    ASSERT_NE(entity, nullptr);
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    Ogre::Bone* tip = skel->createBone("Tip", 2);
+    skel->getBone("Child")->addChild(tip);
+    tip->setPosition(Ogre::Vector3(0.25f, 0.75f, 0));
+    tip->setInitialState();
+    entity->_initialise(true);
+
+    const Ogre::Vector3 localBefore = tip->getPosition();
+
+    SkeletonEditor::ReparentOptions opts;
+    opts.keepWorld = false;
+    const auto result = SkeletonEditor::reparentBone(
+        entity, QStringLiteral("Tip"), QStringLiteral("Root"), opts);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    skel = entity->getMesh()->getSkeleton();
+    Ogre::Bone* tipAfter = skel->getBone("Tip");
+    EXPECT_NEAR(tipAfter->getPosition().x, localBefore.x, 1e-5f);
+    EXPECT_NEAR(tipAfter->getPosition().y, localBefore.y, 1e-5f);
+    EXPECT_NEAR(tipAfter->getPosition().z, localBefore.z, 1e-5f);
+}
+
+TEST_F(SkeletonEditorTest, DetachMovesChainToRoot) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Detach");
+    ASSERT_NE(entity, nullptr);
+
+    const auto result = SkeletonEditor::detachBone(entity, QStringLiteral("Child"));
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    Ogre::Bone* child = skel->getBone("Child");
+    EXPECT_EQ(child->getParent(), nullptr);
+
+    // Weights still resolve to Child handle.
+    bool childWeighted = false;
+    for (const auto& kv : entity->getMesh()->getBoneAssignments()) {
+        if (kv.second.boneIndex == child->getHandle() && kv.second.weight > 0.f) {
+            childWeighted = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(childWeighted);
+}
+
+TEST_F(SkeletonEditorTest, ReparentRejectsCycle) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Cycle");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ReparentOptions opts;
+    const auto result = SkeletonEditor::reparentBone(
+        entity, QStringLiteral("Root"), QStringLiteral("Child"), opts);
+    EXPECT_FALSE(result.ok);
+}
+
+TEST_F(SkeletonEditorTest, SplitBoneInsertsChildAndRemapsWeights) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Split");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Mesh* mesh = entity->getMesh().get();
+
+    float weightSumBefore = 0.f;
+    for (const auto& kv : mesh->getBoneAssignments())
+        weightSumBefore += kv.second.weight;
+
+    const auto result = SkeletonEditor::splitBone(entity, QStringLiteral("Child"), 0.5f);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    EXPECT_TRUE(skel->hasBone(result.boneName.toStdString()));
+    Ogre::Bone* split = skel->getBone(result.boneName.toStdString());
+    ASSERT_NE(split->getParent(), nullptr);
+    EXPECT_EQ(split->getParent()->getName(), "Child");
+
+    float weightSumAfter = 0.f;
+    for (const auto& kv : mesh->getBoneAssignments())
+        weightSumAfter += kv.second.weight;
+    EXPECT_NEAR(weightSumAfter, weightSumBefore, 1e-3f);
+}
+
+TEST_F(SkeletonEditorTest, ConnectDisconnectTogglesHeadGap) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_Connect");
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_TRUE(SkeletonEditor::isBoneConnected(entity, QStringLiteral("Child")));
+
+    auto disc = SkeletonEditor::setBoneConnected(entity, QStringLiteral("Child"), false);
+    ASSERT_TRUE(disc.ok) << disc.error.toStdString();
+    EXPECT_FALSE(SkeletonEditor::isBoneConnected(entity, QStringLiteral("Child")));
+
+    auto conn = SkeletonEditor::setBoneConnected(entity, QStringLiteral("Child"), true);
+    ASSERT_TRUE(conn.ok) << conn.error.toStdString();
+    EXPECT_TRUE(SkeletonEditor::isBoneConnected(entity, QStringLiteral("Child")));
+}
+
+TEST_F(SkeletonEditorTest, AttachBoneToEntityCopiesRigOnly) {
+    Ogre::Entity* src = createAnimatedTestEntity("SkelEd_AttachSrc");
+    Ogre::Entity* dst = createAnimatedTestEntity("SkelEd_AttachDst");
+    ASSERT_NE(src, nullptr);
+    ASSERT_NE(dst, nullptr);
+
+    // Force a name collision on destination.
+    ASSERT_TRUE(dst->getMesh()->getSkeleton()->hasBone("Child"));
+
+    const auto result = SkeletonEditor::attachBonesToEntity(
+        src, QStringList{QStringLiteral("Child")}, dst, {});
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    EXPECT_TRUE(result.boneName.startsWith(QStringLiteral("Child")));
+
+    Ogre::SkeletonPtr dstSkel = dst->getMesh()->getSkeleton();
+    EXPECT_TRUE(dstSkel->hasBone(result.boneName.toStdString()));
+    // Source unchanged.
+    EXPECT_TRUE(src->getMesh()->getSkeleton()->hasBone("Child"));
+    EXPECT_EQ(src->getMesh()->getSkeleton()->getNumBones(), 2u);
+}
+
+TEST_F(SkeletonEditorTest, ReparentAndSplitUndoViaCommand) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_HierUndo");
+    ASSERT_NE(entity, nullptr);
+
+    SkeletonEditor::ReparentOptions opts;
+    opts.keepWorld = true;
+    UndoManager::getSingleton()->push(
+        new ReparentBoneCommand(entity->getName(), QStringLiteral("Child"), {}, opts));
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getBone("Child")->getParent(), nullptr);
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_NE(entity->getMesh()->getSkeleton()->getBone("Child")->getParent(), nullptr);
+
+    UndoManager::getSingleton()->push(
+        new SplitBoneCommand(entity->getName(), QStringLiteral("Child"), 0.5f));
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getNumBones(), 3u);
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getNumBones(), 2u);
 }
