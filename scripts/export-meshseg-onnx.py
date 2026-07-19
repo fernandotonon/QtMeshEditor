@@ -451,6 +451,15 @@ def make_tree(rng):
     top = np.array([lean[0] * trunkH, trunkH, lean[1] * trunkH])
     parts.append((lambda n, b=top, r=trunkR: capsule_surf([0, 0, 0], b, r, n, rng),
                   TRUNK, trunkH * trunkR * 3))
+    # Trunk base FLARE / buttress — most real trunks widen at the bottom. This is
+    # TRUNK, not root: without it the model learned "wide low mass = root" and
+    # grabbed the trunk flare (user report). A short, wide, low cone at the base.
+    if rng.random() < 0.7:
+        flareR = trunkR * rng.uniform(1.6, 3.5)
+        flareH = trunkH * rng.uniform(0.05, 0.18)
+        parts.append((lambda n, top=np.array([0.0, flareH, 0.0]), r=flareR:
+                      capsule_surf([0, 0, 0], top, r, n, rng),
+                      TRUNK, flareR * flareH * 4))
 
     def blob(c, r, label, w, squash=None, solid=False):
         fn = ball_vol if solid else sphere_surf
@@ -522,14 +531,26 @@ def make_tree(rng):
             for _ in range(rng.integers(2, 5)):
                 d = _unit_dirs(1, rng)[0] * trunkR * 2
                 blob(top + d, trunkR * rng.uniform(0.5, 1.0), FLOWER, trunkR)
-    if rng.random() < 0.45 and kind != 'bush':           # surface roots
-        for _ in range(rng.integers(2, 6)):
+    # Surface roots — only ~25% of trees (most real tree meshes model NO roots;
+    # they're usually underground). When present they are a SMALL, GROUND-HUGGING
+    # flare: thick where they meet the trunk (buttress-like, NOT twig-thin) and
+    # spreading LOW and outward, never rising into trunk/branch height. Root
+    # points stay in the bottom ~8% of the tree so the model learns "root = the
+    # little bit right at the base", not "any thin low structure".
+    if rng.random() < 0.25 and kind != 'bush':
+        rootTopH = trunkH * rng.uniform(0.02, 0.08)      # ceiling: very low
+        for _ in range(rng.integers(2, 5)):
             az = rng.uniform(0, 2 * np.pi)
-            rl = trunkH * rng.uniform(0.08, 0.25)
-            tip = np.array([np.cos(az) * rl, -rl * rng.uniform(0.1, 0.4),
+            rl = trunkH * rng.uniform(0.06, 0.16)
+            # spread outward and DOWN, ending at/below ground
+            tip = np.array([np.cos(az) * rl, -trunkH * rng.uniform(0.0, 0.05),
                             np.sin(az) * rl])
-            parts.append((lambda n, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
-                          capsule_surf([0, 0, 0], b, r, n, rng), ROOT, rl * trunkR))
+            base = np.array([np.cos(az) * trunkR * 0.6, rootTopH,
+                             np.sin(az) * trunkR * 0.6])
+            parts.append((lambda n, a=base, b=tip,
+                          r=trunkR * rng.uniform(0.5, 1.0):     # THICK, buttress-like
+                          capsule_surf(a, b, r, n, rng, cap0=False),
+                          ROOT, rl * trunkR * 2))
     return parts
 
 
