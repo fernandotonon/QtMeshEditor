@@ -567,6 +567,11 @@ bool EditModeController::enterEditMode()
             .arg(m_editableMesh->totalVertexCount())
             .arg(m_editableMesh->totalTriangleCount())
             .arg(m_editableMesh->subMeshCount()));
+    SentryReporter::captureTelemetryEvent(QStringLiteral("edit.mode.entered"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                    {QStringLiteral("target_kind"), QStringLiteral("mesh")},
+                    {QStringLiteral("vertex_count"), static_cast<int>(m_editableMesh->totalVertexCount())},
+                    {QStringLiteral("submesh_count"), static_cast<int>(m_editableMesh->subMeshCount())}});
 
     // Run initial validation
     validateMesh();

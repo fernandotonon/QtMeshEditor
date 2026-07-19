@@ -3,9 +3,11 @@
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonObject>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSet>
@@ -22,6 +24,23 @@ QString joinUrl(QString base, const QString& fileName)
     if (!base.endsWith('/'))
         base += '/';
     return base + fileName;
+}
+
+QString capabilityForFeature(const QString& feature)
+{
+    const QString f = feature.toLower();
+    if (f.contains(QStringLiteral("mesh tools"))) return QStringLiteral("segmentation");
+    if (f.contains(QStringLiteral("image to 3d"))) return QStringLiteral("generation");
+    if (f.contains(QStringLiteral("animation"))) return QStringLiteral("mocap");
+    if (f.contains(QStringLiteral("texture"))) return QStringLiteral("material");
+    return QStringLiteral("other");
+}
+
+QString sourceForModelId(const QString& id)
+{
+    if (id.startsWith(QStringLiteral("tripos")) || id.contains(QStringLiteral("caption")))
+        return QStringLiteral("huggingface");
+    return QStringLiteral("bundled");
 }
 }
 
@@ -50,8 +69,8 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
                 if (m_pendingFiles.first().label != name)
                     return;
                 m_pendingFiles.removeFirst();
-                SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                              tr("Downloaded %1").arg(name));
+                SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                              QStringLiteral("downloaded catalog file"));
                 emit modelsChanged();
                 QTimer::singleShot(0, this, &AIModelCatalog::startNextQueuedFile);
             });
@@ -61,8 +80,14 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
                     return;
                 if (m_pendingFiles.first().label != name)
                     return;
-                SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                              tr("Download failed for %1: %2").arg(name, error),
+                QList<ModelSpec> owner;
+                const ModelSpec* spec = findSpec(m_activeModelId, &owner);
+                captureModelTelemetry(QStringLiteral("ai.model_download.failed"), spec,
+                                      m_activeDownloadStartedMs > 0
+                                          ? QDateTime::currentMSecsSinceEpoch() - m_activeDownloadStartedMs : -1,
+                                      SentryReporter::sanitizedErrorCategory(error));
+                SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                              QStringLiteral("download failed"),
                                               QStringLiteral("error"));
                 m_pendingFiles.clear();
                 setStatusMessage(tr("Download failed: %1").arg(error));
@@ -76,8 +101,8 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
                     return;
                 if (m_pendingFiles.first().label != name)
                     return;
-                SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                              tr("Download canceled for %1").arg(name),
+                SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                              QStringLiteral("download canceled"),
                                               QStringLiteral("warning"));
                 m_pendingFiles.clear();
                 setStatusMessage(tr("Download canceled."));
@@ -371,7 +396,29 @@ qint64 AIModelCatalog::installedBytes(const ModelSpec& spec) const
 
 void AIModelCatalog::refresh()
 {
+    SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_catalog.opened"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")}});
     emit modelsChanged();
+}
+
+
+void AIModelCatalog::captureModelTelemetry(const QString& eventName, const ModelSpec* spec,
+                                           qint64 durationMs, const QString& failureCategory) const
+{
+    QJsonObject props;
+    props["source_surface"] = QStringLiteral("gui");
+    props["model_id"] = spec ? spec->id : m_activeModelId;
+    props["capability"] = spec ? capabilityForFeature(spec->feature) : QStringLiteral("other");
+    props["source"] = spec ? sourceForModelId(spec->id) : QStringLiteral("custom");
+    props["build_available"] = spec ? spec->available : false;
+    if (durationMs >= 0)
+        props["duration_ms"] = durationMs;
+    const qint64 bytes = spec ? installedBytes(*spec) : 0;
+    props["byte_size_bucket"] = SentryReporter::sizeBucket(bytes);
+    if (!failureCategory.isEmpty())
+        props["failure_category"] = SentryReporter::sanitizedErrorCategory(failureCategory);
+    SentryReporter::captureTelemetryEvent(eventName, props,
+        eventName.endsWith(QStringLiteral(".failed")) ? QStringLiteral("error") : QStringLiteral("info"));
 }
 
 void AIModelCatalog::downloadModel(const QString& id)
@@ -386,6 +433,7 @@ void AIModelCatalog::downloadModel(const QString& id)
     if (!spec)
         return;
     if (!spec->available) {
+        captureModelTelemetry(QStringLiteral("ai.feature_model_missing"), spec, -1, QStringLiteral("build_unavailable"));
         setStatusMessage(spec->buildRequirement);
         return;
     }
@@ -404,9 +452,11 @@ void AIModelCatalog::downloadModel(const QString& id)
 
     m_activeModelId = spec->id;
     m_activeModelName = spec->name;
+    m_activeDownloadStartedMs = QDateTime::currentMSecsSinceEpoch();
     emit activeModelChanged();
-    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                  tr("Started download for %1").arg(spec->name));
+    captureModelTelemetry(QStringLiteral("ai.model_download.started"), spec);
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                  QStringLiteral("started"));
     setBusy(true);
     setStatusMessage(tr("Downloading %1...").arg(spec->name));
     emit modelsChanged();
@@ -446,12 +496,19 @@ void AIModelCatalog::downloadAllModels()
     }
 
     m_activeModelId = QStringLiteral("__all__");
+    m_activeDownloadStartedMs = QDateTime::currentMSecsSinceEpoch();
     m_activeModelName = unavailable > 0
         ? tr("all available QtMeshEditor models")
         : tr("all QtMeshEditor models");
     emit activeModelChanged();
-    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                  tr("Started download for %1").arg(m_activeModelName));
+    SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_download.started"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                    {QStringLiteral("model_id"), QStringLiteral("__all__")},
+                    {QStringLiteral("capability"), QStringLiteral("other")},
+                    {QStringLiteral("source"), QStringLiteral("bundled")},
+                    {QStringLiteral("build_available"), true}});
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                  QStringLiteral("started all"));
     setBusy(true);
     setStatusMessage(tr("Downloading %1...").arg(m_activeModelName));
     emit modelsChanged();
@@ -470,8 +527,9 @@ void AIModelCatalog::deleteModel(const QString& id)
     if (!spec)
         return;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                  tr("Deleting files for %1").arg(spec->name));
+    const qint64 deleteStartedMs = QDateTime::currentMSecsSinceEpoch();
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.model_delete"),
+                                  QStringLiteral("started"));
 
     QSet<QString> sharedPaths;
     for (const ModelSpec& other : std::as_const(owner)) {
@@ -509,17 +567,20 @@ void AIModelCatalog::deleteModel(const QString& id)
         setStatusMessage(tr("Could not delete %1 file(s) for %2.")
                              .arg(failedPaths.size())
                              .arg(spec->name));
-        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                      tr("Failed to delete %1 file(s) for %2")
-                                          .arg(failedPaths.size())
-                                          .arg(spec->name),
+        captureModelTelemetry(QStringLiteral("ai.model_delete.failed"), spec,
+                              QDateTime::currentMSecsSinceEpoch() - deleteStartedMs,
+                              QStringLiteral("delete_failed"));
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.model_delete"),
+                                      QStringLiteral("failed"),
                                       QStringLiteral("error"));
     } else if (removedAny) {
         setStatusMessage(keptSharedPaths.isEmpty()
             ? tr("Deleted %1.").arg(spec->name)
             : tr("Deleted %1. Shared files used by other models were kept.").arg(spec->name));
-        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                      tr("Deleted files for %1").arg(spec->name));
+        captureModelTelemetry(QStringLiteral("ai.model_delete.completed"), spec,
+                              QDateTime::currentMSecsSinceEpoch() - deleteStartedMs);
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.model_delete"),
+                                      QStringLiteral("completed"));
     } else if (!keptSharedPaths.isEmpty()) {
         setStatusMessage(tr("No exclusive downloaded files found for %1; shared files were kept.")
                              .arg(spec->name));
@@ -586,8 +647,21 @@ void AIModelCatalog::deleteAllModels()
 void AIModelCatalog::startNextQueuedFile()
 {
     if (m_pendingFiles.isEmpty()) {
-        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                      tr("Completed download for %1").arg(m_activeModelName));
+        const qint64 durationMs = m_activeDownloadStartedMs > 0
+            ? QDateTime::currentMSecsSinceEpoch() - m_activeDownloadStartedMs : -1;
+        if (m_activeModelId == QStringLiteral("__all__")) {
+            SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_download_all.completed"),
+                QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                            {QStringLiteral("model_id"), QStringLiteral("__all__")},
+                            {QStringLiteral("capability"), QStringLiteral("other")},
+                            {QStringLiteral("duration_ms"), durationMs}});
+        } else {
+            QList<ModelSpec> owner;
+            captureModelTelemetry(QStringLiteral("ai.model_download.completed"),
+                                  findSpec(m_activeModelId, &owner), durationMs);
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                      QStringLiteral("completed"));
         setStatusMessage(tr("%1 downloaded.").arg(m_activeModelName));
         clearActive();
         setBusy(false);
@@ -598,8 +672,14 @@ void AIModelCatalog::startNextQueuedFile()
     const FileSpec f = m_pendingFiles.first();
     if (f.url.isEmpty()) {
         m_pendingFiles.clear();
-        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                      tr("No download URL configured for %1").arg(m_activeModelName),
+        QList<ModelSpec> owner;
+        captureModelTelemetry(QStringLiteral("ai.model_download.failed"),
+                              findSpec(m_activeModelId, &owner),
+                              m_activeDownloadStartedMs > 0
+                                  ? QDateTime::currentMSecsSinceEpoch() - m_activeDownloadStartedMs : -1,
+                              QStringLiteral("missing_url"));
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
+                                      QStringLiteral("missing url"),
                                       QStringLiteral("error"));
         setStatusMessage(tr("No download URL configured for %1.").arg(m_activeModelName));
         clearActive();

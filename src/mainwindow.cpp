@@ -4421,14 +4421,24 @@ void MainWindow::importMeshs(const QStringList &_uriList)
             entityNamesBefore.insert(QString::fromStdString(obj->getName()));
     }
 
+    QElapsedTimer importTimer;
+    importTimer.start();
+    const QString firstImportPath = _uriList.isEmpty() ? QString() : _uriList.first();
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("started"),
+        QStringLiteral("gui"), firstImportPath);
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
     try {
         MeshImporterExporter::importer(_uriList, 0, &animOnlySkeletons);
     } catch (...) {
+        SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("failed"),
+            QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), false, QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("completed"),
+        QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), true, QString(),
+        Manager::getSingleton()->getEntities().size(), animOnlySkeletons.size(), QFileInfo(firstImportPath).size());
     SentryReporter::finishTransaction(txn);
 
     // Material rebinding (texture hydration + per-material RTSS sync + a
@@ -4519,6 +4529,10 @@ void MainWindow::on_actionOpen_Scene_triggered()
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty()) return;
 
+    QElapsedTimer sceneImportTimer;
+    sceneImportTimer.start();
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("started"),
+        QStringLiteral("gui"), fileName);
     auto txn = SentryReporter::startTransaction("ui.import", "scene.import");
     try {
         if (!MeshImporterExporter::sceneImporter(fileName)) {
@@ -4526,13 +4540,20 @@ void MainWindow::on_actionOpen_Scene_triggered()
                 this, tr("Open Scene"), tr("Could not import scene file."),
                 FeedbackReportHelper::importFailurePrefill(
                     QFileInfo(fileName).suffix(), tr("Could not import scene file.")));
+            SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("failed"),
+                QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("import_failed"));
             SentryReporter::finishTransaction(txn);
             return;
         }
     } catch (...) {
+        SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("failed"),
+            QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("completed"),
+        QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), true, QString(),
+        Manager::getSingleton()->getEntities().size(), -1, QFileInfo(fileName).size());
     SentryReporter::finishTransaction(txn);
     addToRecentFiles(fileName);
 }
@@ -4555,6 +4576,10 @@ void MainWindow::on_actionSave_Scene_triggered()
     progressDialog.setMinimumDuration(0);
     progressDialog.setValue(0);
 
+    QElapsedTimer sceneExportTimer;
+    sceneExportTimer.start();
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("started"),
+        QStringLiteral("gui"), QString(), fileName);
     auto txn = SentryReporter::startTransaction("ui.export", "scene.export");
     try {
         int result = MeshImporterExporter::sceneExporter(fileName,
@@ -4564,16 +4589,25 @@ void MainWindow::on_actionSave_Scene_triggered()
                 QApplication::processEvents();
             });
         if (result != 0) {
+            SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("failed"),
+                QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("export_failed"));
             FeedbackReportHelper::showFailureWithReportOption(
                 this, tr("Save Scene"), tr("Failed to save scene."),
                 FeedbackReportHelper::exportFailurePrefill(
                     QFileInfo(fileName).suffix(), tr("Failed to save scene."),
                     QString::number(result)));
+            SentryReporter::finishTransaction(txn);
+            return;
         }
     } catch (...) {
+        SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("failed"),
+            QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("completed"),
+        QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), true, QString(),
+        Manager::getSingleton()->getEntities().size(), -1, QFileInfo(fileName).size());
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
@@ -4582,6 +4616,10 @@ void MainWindow::on_actionSave_Scene_triggered()
 void MainWindow::on_actionExport_Selected_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
+    QElapsedTimer exportTimer;
+    exportTimer.start();
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("started"),
+        QStringLiteral("gui"));
     auto txn = SentryReporter::startTransaction("ui.export", "file.export");
 
     // Stop EVERY timer that could mutate the mesh / skeleton state
@@ -4630,11 +4668,16 @@ void MainWindow::on_actionExport_Selected_triggered()
     } catch (...) {
         AnimationControlController::instance()->resumePollTimer();
         if (wasRendering) m_pTimer->start();
+        SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("failed"),
+            QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), false, QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     AnimationControlController::instance()->resumePollTimer();
     if (wasRendering) m_pTimer->start();
+    SentryReporter::captureFileWorkflowEvent(QStringLiteral("export"), QStringLiteral("completed"),
+        QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), true, QString(),
+        Manager::getSingleton()->getEntities().size());
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
