@@ -207,8 +207,12 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
     Ogre::Vector3 entityScale = Ogre::Vector3::UNIT_SCALE;
     if (mEntity->getParentSceneNode())
         entityScale = mEntity->getParentSceneNode()->getScale();
+    const Ogre::Vector3 scaleMagnitude(
+        std::max(std::abs(entityScale.x), 1e-4f),
+        std::max(std::abs(entityScale.y), 1e-4f),
+        std::max(std::abs(entityScale.z), 1e-4f));
     const float invEntScale = 1.f
-        / std::max({entityScale.x, entityScale.y, entityScale.z, 1e-4f});
+        / std::max({scaleMagnitude.x, scaleMagnitude.y, scaleMagnitude.z});
 
     for (unsigned short int iBone = 0; iBone < numBones; ++iBone)
     {
@@ -253,9 +257,9 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
 
         Ogre::Entity* axes = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
         auto* axesTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)axes);
-        axesTp->setScale((mScaleAxes / entityScale.x),
-                         (mScaleAxes / entityScale.y),
-                         (mScaleAxes / entityScale.z));
+        axesTp->setScale(mScaleAxes / scaleMagnitude.x,
+                         mScaleAxes / scaleMagnitude.y,
+                         mScaleAxes / scaleMagnitude.z);
         mAxisEntities.push_back(axes);
         tagBoneVisual(axes, pBone->getName(), mEntity->getName());
     }

@@ -14,6 +14,7 @@ Window {
     height: menuFrame.implicitHeight
 
     property bool closeOnDeactivate: false
+    property bool boneConnectedSnapshot: false
 
     signal setParentRequested()
     signal detachRequested()
@@ -32,6 +33,7 @@ Window {
 
     function openAt(globalX, globalY) {
         menu.closeOnDeactivate = false
+        menu.boneConnectedSnapshot = SkeletonEditor.isSelectedBoneConnected()
         menu.x = globalX
         menu.y = globalY
         menu.show()
@@ -119,7 +121,7 @@ Window {
                 onActivated: menu.splitRequested()
             }
             MenuRow {
-                label: SkeletonEditor.isSelectedBoneConnected() ? "Disconnect" : "Connect"
+                label: menu.boneConnectedSnapshot ? "Disconnect" : "Connect"
                 enabled: menu.hasBone
                 onActivated: menu.connectToggleRequested()
             }

@@ -1011,6 +1011,22 @@ SkeletonEditor::Result SkeletonEditor::attachBonesToEntity(Ogre::Entity* srcEnti
         return result;
     }
     QString err;
+    // Validate sources before mutating destination (ensureEntitySkeleton
+    // may create a skeleton — don't leave that behind on a bad request).
+    std::unordered_set<std::string> toCopy;
+    for (const QString& name : boneNames) {
+        if (!srcSkel->hasBone(name.toStdString())) {
+            result.error = QStringLiteral("Source bone not found: %1").arg(name);
+            return result;
+        }
+        auto desc = collectDescendants(srcSkel.get(), name.toStdString());
+        toCopy.insert(desc.begin(), desc.end());
+    }
+    if (toCopy.empty()) {
+        result.error = QStringLiteral("No bones to attach");
+        return result;
+    }
+
     if (!ensureEntitySkeleton(dstEntity, &err)) {
         result.error = err;
         return result;
@@ -1023,28 +1039,42 @@ SkeletonEditor::Result SkeletonEditor::attachBonesToEntity(Ogre::Entity* srcEnti
         return result;
     }
 
-    // Collect unique bones to copy (requested + descendants), parent-before-child.
-    std::unordered_set<std::string> toCopy;
-    for (const QString& name : boneNames) {
-        if (!srcSkel->hasBone(name.toStdString())) {
-            result.error = QStringLiteral("Source bone not found: %1").arg(name);
-            return result;
-        }
-        auto desc = collectDescendants(srcSkel.get(), name.toStdString());
-        toCopy.insert(desc.begin(), desc.end());
-    }
-
     std::unordered_map<std::string, std::string> renameMap;
     QString firstNewName;
     unsigned short nextHandle = 0;
     for (const auto& bd : dstSnap.bones)
         nextHandle = std::max<unsigned short>(nextHandle, static_cast<unsigned short>(bd.handle + 1));
 
-    // Walk source bones in handle order so parents are processed first.
+    // Parent-before-child order (handle order is not guaranteed hierarchical).
+    std::vector<Ogre::Bone*> remaining;
+    remaining.reserve(toCopy.size());
+    for (const std::string& name : toCopy) {
+        if (srcSkel->hasBone(name))
+            remaining.push_back(srcSkel->getBone(name));
+    }
     std::vector<Ogre::Bone*> ordered;
-    for (unsigned short i = 0; i < srcSkel->getNumBones(); ++i) {
-        Ogre::Bone* b = srcSkel->getBone(i);
-        if (toCopy.count(b->getName()))
+    ordered.reserve(remaining.size());
+    std::unordered_set<std::string> placed;
+    while (ordered.size() < remaining.size()) {
+        bool progress = false;
+        for (Ogre::Bone* b : remaining) {
+            if (!b || placed.count(b->getName()))
+                continue;
+            Ogre::Node* parent = b->getParent();
+            const bool parentOk = !parent
+                || !toCopy.count(parent->getName())
+                || placed.count(parent->getName());
+            if (!parentOk)
+                continue;
+            ordered.push_back(b);
+            placed.insert(b->getName());
+            progress = true;
+        }
+        if (!progress)
+            break; // Shouldn't happen for a tree; fall through with partial order.
+    }
+    for (Ogre::Bone* b : remaining) {
+        if (b && !placed.count(b->getName()))
             ordered.push_back(b);
     }
 
@@ -1086,7 +1116,8 @@ SkeletonEditor::Result SkeletonEditor::attachBonesToEntity(Ogre::Entity* srcEnti
         bd.name = unique.toStdString();
         bd.handle = nextHandle++;
         if (srcBone->getParent() && toCopy.count(srcBone->getParent()->getName())) {
-            bd.parentName = renameMap[srcBone->getParent()->getName()];
+            auto pit = renameMap.find(srcBone->getParent()->getName());
+            bd.parentName = (pit != renameMap.end()) ? pit->second : dstRootParent;
         } else {
             bd.parentName = dstRootParent;
         }
@@ -1097,10 +1128,6 @@ SkeletonEditor::Result SkeletonEditor::attachBonesToEntity(Ogre::Entity* srcEnti
         bd.initialOrientation = srcBone->getInitialOrientation();
         bd.initialScale = srcBone->getInitialScale();
         dstSnap.bones.push_back(bd);
-
-        // Keep dstSkel name set in sync for uniqueBoneName checks mid-loop.
-        // uniqueBoneName reads the live skeleton; names only exist after restore.
-        // The renameMap + dstSnap.bones checks above cover in-batch collisions.
     }
 
     if (!restoreSnapshot(dstEntity, dstSnap, &err)) {

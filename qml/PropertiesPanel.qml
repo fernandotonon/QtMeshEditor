@@ -78,6 +78,10 @@ Rectangle {
     property bool   rigStatusError: false
     property string boneEditStatus: ""
     property bool   boneEditError: false
+    property bool   selectedBoneConnected: false
+    function refreshSelectedBoneConnected() {
+        root.selectedBoneConnected = SkeletonEditor.isSelectedBoneConnected()
+    }
 
     function runAutoRig() {
         if (AutoRigController.busy || !AutoRigController.hasRiggableSelection) return
@@ -2746,6 +2750,7 @@ Rectangle {
                 function onSelectionChanged() {
                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
                     skeletonToolsCol.ensureBoneListBound()
+                    root.refreshSelectedBoneConnected()
                 }
             }
             Connections {
@@ -2753,7 +2758,12 @@ Rectangle {
                 function onSkeletonStructureChanged() {
                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
                     skeletonToolsCol.ensureBoneListBound()
+                    root.refreshSelectedBoneConnected()
                 }
+            }
+            Connections {
+                target: AnimationControlController
+                function onBoneListChanged() { root.refreshSelectedBoneConnected() }
             }
 
             function ensureBoneListBound() {
@@ -2766,7 +2776,10 @@ Rectangle {
                     AnimationControlController.bindSkeletonForEntity(ent)
             }
 
-            Component.onCompleted: skeletonToolsCol.ensureBoneListBound()
+            Component.onCompleted: {
+                skeletonToolsCol.ensureBoneListBound()
+                root.refreshSelectedBoneConnected()
+            }
 
             Text {
                 width: parent.width - 16
@@ -3045,21 +3058,28 @@ Rectangle {
                     width: Math.max(56, skelBtnLabel.implicitWidth + 14)
                     height: 22
                     radius: 3
-                    color: skelBtnMa.containsMouse
+                    color: skelBtnMa.containsMouse || skelBtn.activeFocus
                         ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
                         : PropertiesPanelController.headerColor
-                    border.color: PropertiesPanelController.borderColor
-                    border.width: 1
+                    border.color: skelBtn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: skelBtn.activeFocus ? 2 : 1
                     opacity: (SkeletonEditor.hasSkeletonSelection
                               && (!skelBtn.needsBone || AnimationControlController.selectedBone.length > 0))
                              ? 1.0 : 0.45
+                    activeFocusOnTab: enabled
+                    Accessible.role: Accessible.Button
+                    Accessible.name: skelBtnLabel.text
+                    enabled: SkeletonEditor.hasSkeletonSelection
+                            && (!skelBtn.needsBone || AnimationControlController.selectedBone.length > 0)
 
                     Text {
                         id: skelBtnLabel
                         anchors.centerIn: parent
                         text: {
                             if (skelBtn.action === "connect")
-                                return SkeletonEditor.isSelectedBoneConnected() ? "Disconnect" : "Connect"
+                                return root.selectedBoneConnected ? "Disconnect" : "Connect"
                             return skelBtn.label
                         }
                         color: PropertiesPanelController.textColor
@@ -3070,22 +3090,30 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        enabled: SkeletonEditor.hasSkeletonSelection
-                                && (!skelBtn.needsBone || AnimationControlController.selectedBone.length > 0)
-                        onClicked: root.runSkeletonToolAction(skelBtn.action)
+                        enabled: skelBtn.enabled
+                        onClicked: {
+                            skelBtn.forceActiveFocus()
+                            root.runSkeletonToolAction(skelBtn.action)
+                        }
+                    }
+                    Keys.onPressed: function(event) {
+                        if (!skelBtn.enabled) return
+                        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                                || event.key === Qt.Key_Space) {
+                            root.runSkeletonToolAction(skelBtn.action)
+                            event.accepted = true
+                        }
                     }
                 }
 
-                Row {
+                Flow {
+                    width: parent.width
                     spacing: 4
                     SkelToolButton { label: "+ Bone"; action: "create"; needsBone: false }
                     SkelToolButton { label: "Duplicate"; action: "duplicate" }
                     SkelToolButton { label: "Reparent"; action: "reparent" }
                     SkelToolButton { label: "Detach"; action: "detach" }
                     SkelToolButton { label: "Split"; action: "split" }
-                }
-                Row {
-                    spacing: 4
                     SkelToolButton { label: "Connect"; action: "connect" }
                     SkelToolButton { label: "Attach"; action: "attach" }
                     SkelToolButton { label: "Remove"; action: "remove" }
@@ -7890,6 +7918,7 @@ Rectangle {
             const want = !SkeletonEditor.isSelectedBoneConnected()
             if (SkeletonEditor.setSelectedBoneConnected(want)) {
                 root.boneEditStatus = want ? "Bone connected." : "Bone disconnected."
+                root.refreshSelectedBoneConnected()
             } else {
                 root.boneEditError = true
                 root.boneEditStatus = "Connect/disconnect failed."

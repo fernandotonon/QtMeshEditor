@@ -391,9 +391,11 @@ TEST_F(SkeletonEditorTest, AttachBoneToEntityCopiesRigOnly) {
         src, QStringList{QStringLiteral("Child")}, dst, {});
     ASSERT_TRUE(result.ok) << result.error.toStdString();
     EXPECT_TRUE(result.boneName.startsWith(QStringLiteral("Child")));
+    EXPECT_NE(result.boneName, QStringLiteral("Child"));
 
     Ogre::SkeletonPtr dstSkel = dst->getMesh()->getSkeleton();
     EXPECT_TRUE(dstSkel->hasBone(result.boneName.toStdString()));
+    EXPECT_EQ(dstSkel->getNumBones(), 3u);
     // Source unchanged.
     EXPECT_TRUE(src->getMesh()->getSkeleton()->hasBone("Child"));
     EXPECT_EQ(src->getMesh()->getSkeleton()->getNumBones(), 2u);
