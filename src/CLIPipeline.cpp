@@ -1572,7 +1572,6 @@ int CLIPipeline::run(int argc, char* argv[])
     if (SentryReporter::isEnabled()) {
         SentryReporter::configureSession(QStringLiteral("cli"));
         SentryReporter::initialize();
-        SentryReporter::configureSession(QStringLiteral("cli"));
     }
 
     SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
@@ -10097,16 +10096,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         QString("segment .%1 noModel=%2 category=%3")
             .arg(fi.suffix()).arg(noModel)
             .arg(MeshSegmenter::categoryName(category)));
-    QElapsedTimer segmentTimer;
-    segmentTimer.start();
-    const QString requestedCategory = MeshSegmenter::categoryName(category);
-    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
-        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
-                    {QStringLiteral("requested_category"), requestedCategory},
-                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
-                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
-                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
-
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     Ogre::Entity* entity = nullptr;
     for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
@@ -10188,6 +10177,16 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                      .arg(100.0 * rigResolved / std::max(1, vertexCount), 0, 'f', 1));
         return 0;
     }
+
+    QElapsedTimer segmentTimer;
+    segmentTimer.start();
+    const QString requestedCategory = MeshSegmenter::categoryName(category);
+    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                    {QStringLiteral("requested_category"), requestedCategory},
+                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
     MeshSegmenter::Options opts;
     opts.upAxis = upAxis;

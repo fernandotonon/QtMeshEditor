@@ -23,7 +23,9 @@ bool SentryReporter::s_initialized = false;
 QString SentryReporter::s_sessionId;
 QString SentryReporter::s_launchMode = QStringLiteral("unknown");
 qint64 SentryReporter::s_sessionStartedMs = 0;
+#ifdef QTMESH_UNIT_TESTS
 QVector<SentryReporter::CapturedTelemetryEvent> SentryReporter::s_capturedTelemetryEvents;
+#endif
 
 namespace {
 QString normalizedRole(QString role)
@@ -222,6 +224,15 @@ void SentryReporter::resetAnonymousInstallationId()
 {
     QSettings settings;
     settings.remove(AppSettingsKeys::anonymousInstallationId());
+    s_sessionId.clear();
+    s_sessionStartedMs = 0;
+#ifdef ENABLE_SENTRY
+    if (s_initialized) {
+        sentry_set_user(sentry_value_new_object());
+        sentry_close();
+        s_initialized = false;
+    }
+#endif
 }
 
 QString SentryReporter::sessionId()
@@ -243,7 +254,7 @@ QString SentryReporter::telemetryRole()
 void SentryReporter::setTag(const QString &key, const QString &value)
 {
 #ifdef ENABLE_SENTRY
-    if (!s_initialized) return;
+    if (!isEnabled() || !s_initialized) return;
     sentry_set_tag(key.toUtf8().constData(), sanitizedValue(value).toUtf8().constData());
 #else
     Q_UNUSED(key);
@@ -276,7 +287,7 @@ void SentryReporter::addBreadcrumb(const QString &category, const QString &messa
 void SentryReporter::captureMessage(const QString &message, const QString &level)
 {
 #ifdef ENABLE_SENTRY
-    if (!s_initialized) return;
+    if (!isEnabled() || !s_initialized) return;
 
     sentry_value_t event = sentry_value_new_message_event(sentryLevelFromString(level),
         "qtmesheditor", sanitizedValue(message).toUtf8().constData());
@@ -312,7 +323,9 @@ void SentryReporter::captureTelemetryEvent(const QString &eventName,
 
     QJsonObject context = sanitizedObject(properties);
     context["event_name"] = eventName;
+#ifdef QTMESH_UNIT_TESTS
     s_capturedTelemetryEvents.push_back({eventName, level, tags, context});
+#endif
 
 #ifdef ENABLE_SENTRY
     if (!s_initialized)
@@ -334,8 +347,10 @@ void SentryReporter::captureInvocationEvent(const QString &surface, const QStrin
 {
     QJsonObject props;
     props["source_surface"] = surface;
-    props["command"] = sanitizedValue(name);
-    props["tool"] = sanitizedValue(name);
+    if (surface == QStringLiteral("mcp"))
+        props["tool"] = sanitizedValue(name);
+    else
+        props["command"] = sanitizedValue(name);
     props["phase"] = phase;
     props["invocation.id"] = invocationId.isEmpty()
         ? QUuid::createUuid().toString(QUuid::WithoutBraces) : invocationId;
@@ -349,36 +364,27 @@ void SentryReporter::captureInvocationEvent(const QString &surface, const QStrin
                           props, phase == QStringLiteral("failed") ? QStringLiteral("error") : QStringLiteral("info"));
 }
 
-void SentryReporter::captureFileWorkflowEvent(const QString &operation, const QString &phase,
-                                              const QString &sourceSurface,
-                                              const QString &inputPath,
-                                              const QString &outputPath,
-                                              qint64 durationMs,
-                                              bool success,
-                                              const QString &failureCategory,
-                                              int modelCount,
-                                              int animationCount,
-                                              qint64 approximateBytes)
+void SentryReporter::captureFileWorkflowEvent(const FileWorkflowTelemetry &telemetry)
 {
     QJsonObject props;
-    props["source_surface"] = sourceSurface;
-    props["input_format"] = extensionOnly(inputPath);
-    props["output_format"] = extensionOnly(outputPath);
+    props["source_surface"] = telemetry.sourceSurface;
+    props["input_format"] = extensionOnly(telemetry.inputPath);
+    props["output_format"] = extensionOnly(telemetry.outputPath);
     props["asset_kind"] = QStringLiteral("unknown");
-    props["success"] = success;
-    props["phase"] = phase;
-    if (durationMs >= 0)
-        props["duration_ms"] = durationMs;
-    if (!failureCategory.isEmpty())
-        props["failure_category"] = sanitizedErrorCategory(failureCategory);
-    if (modelCount >= 0)
-        props["model_count"] = modelCount;
-    if (animationCount >= 0)
-        props["animation_count"] = animationCount;
-    if (approximateBytes >= 0)
-        props["size_bucket"] = sizeBucket(approximateBytes);
-    captureTelemetryEvent(QStringLiteral("file.%1.%2").arg(operation, phase), props,
-                          success ? QStringLiteral("info") : QStringLiteral("error"));
+    props["success"] = telemetry.success;
+    props["phase"] = telemetry.phase;
+    if (telemetry.durationMs >= 0)
+        props["duration_ms"] = telemetry.durationMs;
+    if (!telemetry.failureCategory.isEmpty())
+        props["failure_category"] = sanitizedErrorCategory(telemetry.failureCategory);
+    if (telemetry.modelCount >= 0)
+        props["model_count"] = telemetry.modelCount;
+    if (telemetry.animationCount >= 0)
+        props["animation_count"] = telemetry.animationCount;
+    if (telemetry.approximateBytes >= 0)
+        props["size_bucket"] = sizeBucket(telemetry.approximateBytes);
+    captureTelemetryEvent(QStringLiteral("file.%1.%2").arg(telemetry.operation, telemetry.phase), props,
+                          telemetry.success ? QStringLiteral("info") : QStringLiteral("error"));
 }
 
 QString SentryReporter::sanitizedValue(const QString &value)
@@ -437,8 +443,10 @@ bool SentryReporter::isKnownTelemetryEvent(const QString &eventName)
         QStringLiteral("mcp.tool.completed"), QStringLiteral("mcp.tool.failed"),
         QStringLiteral("ai.model_catalog.opened"), QStringLiteral("ai.model_download.started"),
         QStringLiteral("ai.model_download.completed"), QStringLiteral("ai.model_download.failed"),
+        QStringLiteral("ai.model_download.canceled"), QStringLiteral("ai.model_delete.started"),
         QStringLiteral("ai.model_delete.completed"), QStringLiteral("ai.model_delete.failed"),
-        QStringLiteral("ai.model_download_all.completed"), QStringLiteral("ai.feature_model_missing"),
+        QStringLiteral("ai.model_download_all.started"), QStringLiteral("ai.model_download_all.completed"),
+        QStringLiteral("ai.feature_model_missing"),
         QStringLiteral("edit.mode.entered"), QStringLiteral("selection.mesh"),
         QStringLiteral("selection.bone"), QStringLiteral("transform.completed"),
         QStringLiteral("segmentation.started"), QStringLiteral("segmentation.completed"),
@@ -450,14 +458,20 @@ bool SentryReporter::isKnownTelemetryEvent(const QString &eventName)
 
 void SentryReporter::clearCapturedTelemetryEventsForTest()
 {
+#ifdef QTMESH_UNIT_TESTS
     s_capturedTelemetryEvents.clear();
+#endif
     s_sessionId.clear();
     s_sessionStartedMs = 0;
 }
 
 QVector<SentryReporter::CapturedTelemetryEvent> SentryReporter::capturedTelemetryEventsForTest()
 {
+#ifdef QTMESH_UNIT_TESTS
     return s_capturedTelemetryEvents;
+#else
+    return {};
+#endif
 }
 
 uintptr_t SentryReporter::startTransaction(const QString &name, const QString &op)

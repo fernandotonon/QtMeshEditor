@@ -45,6 +45,22 @@
 TransformOperator* TransformOperator:: m_pSingleton = nullptr;
 const QPoint  TransformOperator::invalidPosition(-1,-1);
 
+namespace {
+QString telemetryTransformType(TransformOperator::TransformState state)
+{
+    switch (state) {
+    case TransformOperator::TS_TRANSLATE:
+        return QStringLiteral("translate");
+    case TransformOperator::TS_ROTATE:
+        return QStringLiteral("rotate");
+    case TransformOperator::TS_SCALE:
+        return QStringLiteral("scale");
+    default:
+        return QStringLiteral("other");
+    }
+}
+}
+
 ////////////////////////////////////////
 /// Static Member to build & destroy
 
@@ -2101,12 +2117,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
             }
             if (changed && outcome != BoneDragRelease::Result::Revert) {
-                const QString transformType = mTransformState == TS_TRANSLATE ? QStringLiteral("translate")
-                    : mTransformState == TS_ROTATE ? QStringLiteral("rotate")
-                    : mTransformState == TS_SCALE ? QStringLiteral("scale") : QStringLiteral("other");
                 SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
                     QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
-                                {QStringLiteral("transform_type"), transformType},
+                                {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
                                 {QStringLiteral("target_kind"), QStringLiteral("bone")}});
             }
         }
@@ -2150,12 +2163,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 UndoManager::getSingleton()->push(
                     new EditVertexTransformCommand(mEditModeUndoSnapshot, newPositions, desc));
 
-                const QString transformType = mTransformState == TS_TRANSLATE ? QStringLiteral("translate")
-                    : mTransformState == TS_ROTATE ? QStringLiteral("rotate")
-                    : mTransformState == TS_SCALE ? QStringLiteral("scale") : QStringLiteral("other");
                 SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
                     QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
-                                {QStringLiteral("transform_type"), transformType},
+                                {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
                                 {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
 
                 // Validate mesh after edit
@@ -2201,12 +2211,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
             }
         }
         if (subMeshTransformCommitted) {
-            const QString transformType = mTransformState == TS_TRANSLATE ? QStringLiteral("translate")
-                : mTransformState == TS_ROTATE ? QStringLiteral("rotate")
-                : mTransformState == TS_SCALE ? QStringLiteral("scale") : QStringLiteral("other");
             SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
                 QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
-                            {QStringLiteral("transform_type"), transformType},
+                            {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
                             {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
         }
         mUndoSubEntities.clear();
@@ -2300,12 +2307,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         // Auto-key only when an actual transform was committed — plain clicks
         // and zero-delta releases must not pollute tracks with duplicate keys.
         if (nodeTransformCommitted) {
-            const QString transformType = mTransformState == TS_TRANSLATE ? QStringLiteral("translate")
-                : mTransformState == TS_ROTATE ? QStringLiteral("rotate")
-                : mTransformState == TS_SCALE ? QStringLiteral("scale") : QStringLiteral("other");
             SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
                 QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
-                            {QStringLiteral("transform_type"), transformType},
+                            {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
                             {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
             AnimationControlController::instance()->autoKeyOnTransform();
         }

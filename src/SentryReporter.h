@@ -24,6 +24,20 @@ public:
         QJsonObject context;
     };
 
+    struct FileWorkflowTelemetry {
+        QString operation;
+        QString phase;
+        QString sourceSurface;
+        QString inputPath;
+        QString outputPath;
+        qint64 durationMs = -1;
+        bool success = true;
+        QString failureCategory;
+        int modelCount = -1;
+        int animationCount = -1;
+        qint64 approximateBytes = -1;
+    };
+
     // Lifecycle
     static void initialize();
     static void shutdown();
@@ -56,16 +70,7 @@ public:
                                        bool changedScene = false,
                                        const QString &failureCategory = {},
                                        const QString &invocationId = {});
-    static void captureFileWorkflowEvent(const QString &operation, const QString &phase,
-                                         const QString &sourceSurface,
-                                         const QString &inputPath = {},
-                                         const QString &outputPath = {},
-                                         qint64 durationMs = -1,
-                                         bool success = true,
-                                         const QString &failureCategory = {},
-                                         int modelCount = -1,
-                                         int animationCount = -1,
-                                         qint64 approximateBytes = -1);
+    static void captureFileWorkflowEvent(const FileWorkflowTelemetry &telemetry);
 
     static QString sanitizedValue(const QString &value);
     static QString sanitizedErrorCategory(const QString &error);
@@ -87,7 +92,9 @@ private:
     static QString s_sessionId;
     static QString s_launchMode;
     static qint64 s_sessionStartedMs;
+#ifdef QTMESH_UNIT_TESTS
     static QVector<CapturedTelemetryEvent> s_capturedTelemetryEvents;
+#endif
 };
 
 #endif // SENTRYREPORTER_H

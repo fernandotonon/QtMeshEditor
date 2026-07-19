@@ -85,7 +85,7 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
                 captureModelTelemetry(QStringLiteral("ai.model_download.failed"), spec,
                                       m_activeDownloadStartedMs > 0
                                           ? QDateTime::currentMSecsSinceEpoch() - m_activeDownloadStartedMs : -1,
-                                      SentryReporter::sanitizedErrorCategory(error));
+                                      error);
                 SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
                                               QStringLiteral("download failed"),
                                               QStringLiteral("error"));
@@ -101,6 +101,11 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
                     return;
                 if (m_pendingFiles.first().label != name)
                     return;
+                QList<ModelSpec> owner;
+                captureModelTelemetry(QStringLiteral("ai.model_download.canceled"),
+                                      findSpec(m_activeModelId, &owner),
+                                      m_activeDownloadStartedMs > 0
+                                          ? QDateTime::currentMSecsSinceEpoch() - m_activeDownloadStartedMs : -1);
                 SentryReporter::addBreadcrumb(QStringLiteral("ai.model_download"),
                                               QStringLiteral("download canceled"),
                                               QStringLiteral("warning"));
@@ -501,7 +506,7 @@ void AIModelCatalog::downloadAllModels()
         ? tr("all available QtMeshEditor models")
         : tr("all QtMeshEditor models");
     emit activeModelChanged();
-    SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_download.started"),
+    SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_download_all.started"),
         QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
                     {QStringLiteral("model_id"), QStringLiteral("__all__")},
                     {QStringLiteral("capability"), QStringLiteral("other")},
@@ -528,6 +533,7 @@ void AIModelCatalog::deleteModel(const QString& id)
         return;
 
     const qint64 deleteStartedMs = QDateTime::currentMSecsSinceEpoch();
+    captureModelTelemetry(QStringLiteral("ai.model_delete.started"), spec);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.model_delete"),
                                   QStringLiteral("started"));
 

@@ -107,6 +107,10 @@ TEST_F(SentryReporterTest, AnonymousInstallationIdCreatedReusedAndReset)
 
 TEST_F(SentryReporterTest, OptOutDoesNotGenerateInstallationIdOrEvents)
 {
+    SentryReporter::setEnabled(true);
+    SentryReporter::configureSession(QStringLiteral("gui"));
+    EXPECT_FALSE(SentryReporter::sessionId().isEmpty());
+
     SentryReporter::setEnabled(false);
     EXPECT_TRUE(SentryReporter::anonymousInstallationId().isEmpty());
     EXPECT_TRUE(SentryReporter::sessionId().isEmpty());
@@ -179,6 +183,29 @@ TEST_F(SentryReporterTest, EventNamesAreAllowListedAndRequiredTagsArePresent)
     EXPECT_FALSE(tags.value(QStringLiteral("session.id")).toString().isEmpty());
     EXPECT_TRUE(tags.contains(QStringLiteral("os")));
     EXPECT_TRUE(tags.contains(QStringLiteral("arch")));
+
+    EXPECT_TRUE(SentryReporter::isKnownTelemetryEvent(QStringLiteral("ai.model_download.canceled")));
+    EXPECT_TRUE(SentryReporter::isKnownTelemetryEvent(QStringLiteral("ai.model_delete.started")));
+    EXPECT_TRUE(SentryReporter::isKnownTelemetryEvent(QStringLiteral("ai.model_download_all.started")));
+}
+
+TEST_F(SentryReporterTest, InvocationEventsUseSurfaceSpecificIdentifier)
+{
+    SentryReporter::setEnabled(true);
+    SentryReporter::configureSession(QStringLiteral("cli"));
+    SentryReporter::captureInvocationEvent(QStringLiteral("cli"), QStringLiteral("segment"),
+                                           QStringLiteral("started"), -1, false, QString(),
+                                           QStringLiteral("invocation-1"));
+    SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), QStringLiteral("load_mesh"),
+                                           QStringLiteral("started"), -1, false, QString(),
+                                           QStringLiteral("invocation-2"));
+
+    const auto events = SentryReporter::capturedTelemetryEventsForTest();
+    ASSERT_EQ(events.size(), 2);
+    EXPECT_EQ(events[0].context.value(QStringLiteral("command")).toString(), QStringLiteral("segment"));
+    EXPECT_FALSE(events[0].context.contains(QStringLiteral("tool")));
+    EXPECT_EQ(events[1].context.value(QStringLiteral("tool")).toString(), QStringLiteral("load_mesh"));
+    EXPECT_FALSE(events[1].context.contains(QStringLiteral("command")));
 }
 
 TEST_F(SentryReporterTest, TelemetryRoleDefaultsAndHonorsAllowedValues)
@@ -198,8 +225,8 @@ TEST_F(SentryReporterTest, FileWorkflowUsesExtensionsOnly)
 {
     SentryReporter::setEnabled(true);
     SentryReporter::configureSession(QStringLiteral("gui"));
-    SentryReporter::captureFileWorkflowEvent(QStringLiteral("import"), QStringLiteral("completed"),
-        QStringLiteral("gui"), QStringLiteral("/Users/me/Secret Character.fbx"), QString(), 5, true);
+    SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("completed"),
+        QStringLiteral("gui"), QStringLiteral("/Users/me/Secret Character.fbx"), QString(), 5, true});
     const auto events = SentryReporter::capturedTelemetryEventsForTest();
     ASSERT_EQ(events.size(), 1);
     EXPECT_EQ(events[0].context.value(QStringLiteral("input_format")).toString(), QStringLiteral("fbx"));

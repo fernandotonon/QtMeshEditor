@@ -50,9 +50,9 @@ Properties: `command` or `tool`, `phase`, `invocation.id`, `duration_ms`, `chang
 AI model management:
 
 - `ai.model_catalog.opened`
-- `ai.model_download.started`, `ai.model_download.completed`, `ai.model_download.failed`
-- `ai.model_delete.completed`, `ai.model_delete.failed`
-- `ai.model_download_all.completed`
+- `ai.model_download.started`, `ai.model_download.completed`, `ai.model_download.failed`, `ai.model_download.canceled`
+- `ai.model_delete.started`, `ai.model_delete.completed`, `ai.model_delete.failed`
+- `ai.model_download_all.started`, `ai.model_download_all.completed`
 - `ai.feature_model_missing`
 
 Properties: `model_id`, `capability`, `source`, `duration_ms`, `byte_size_bucket`, `failure_category`, `build_available`. Model IDs are stable catalog IDs, not paths.
@@ -134,10 +134,10 @@ Group by `launch_mode` and `source_surface`.
 Model-download success rate:
 
 ```text
-message:["ai.model_download.completed", "ai.model_download.failed"] !telemetry.role:developer !telemetry.role:ci
+message:["ai.model_download.completed", "ai.model_download.failed", "ai.model_download.canceled"] !telemetry.role:developer !telemetry.role:ci
 ```
 
-Group by `model_id` and `capability`; compute completed / (completed + failed).
+Group by `model_id` and `capability`; compute completed / (completed + failed + canceled).
 
 Crashes per release and affected installations:
 
