@@ -1936,7 +1936,8 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
-                                                      clipDirs);
+                                                      clipDirs,
+                                                      clipSource == QStringLiteral("model"));
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

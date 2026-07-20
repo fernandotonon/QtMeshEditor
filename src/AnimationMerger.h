@@ -181,7 +181,14 @@ public:
         bool refineWithModel = false,
         int refineStride = 8,
         bool yaw180 = false,
-        const std::vector<std::array<float, 3>>& clipRestDir = {});
+        const std::vector<std::array<float, 3>>& clipRestDir = {},
+        // #837: tight per-role twist caps damp the from-scratch MODEL's noisy
+        // roll (flailing arms / thrown-back head). Authored template + self-
+        // parity clips carry legitimate large roll (arms up to 180°); capping
+        // them collapses real motion (measured: mouse elbow 180°→124°, total
+        // parity 5.1°→3.1° with caps off). So default = relaxed; the model
+        // path passes modelClip=true to re-enable the tight caps.
+        bool modelClip = false);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,

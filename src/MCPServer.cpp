@@ -4129,7 +4129,8 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         worldFrame, cmuRest,
                                                         /*refineWithModel=*/false,
                                                         /*refineStride=*/8, yaw180,
-                                                        clipDirs);
+                                                        clipDirs,
+                                                        clipSource == QStringLiteral("model"));
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal

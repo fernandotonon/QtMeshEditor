@@ -1730,7 +1730,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool refineWithModel,
     int refineStride,
     bool yaw180,
-    const std::vector<std::array<float, 3>>& clipRestDir)
+    const std::vector<std::array<float, 3>>& clipRestDir,
+    bool modelClip)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -1937,12 +1938,24 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             // arms and a thrown-back head. Roll matters most on forearms;
             // the axial chain needs very little. Hip keeps a wide cap: it
             // carries genuine facing turns (salsa).
-            static const float kTwistCapRole[22] = {
+            // MODEL clips get tight per-role caps (the from-scratch model's
+            // roll is noisy — uncapped it flails). AUTHORED/self-parity clips
+            // carry legitimate large roll and must NOT be capped (measured:
+            // caps collapse mouse elbow 180°→124°, parity 5.1°→3.1° off).
+            static const float kTwistCapModel[22] = {
                 2.62f, 0.79f, 0.79f, 0.52f, 0.52f, 0.52f,  // hip, spine 45°, neck/head 30°
                 0.52f, 1.57f, 1.57f, 1.57f,                // rcollar 30°, right arm 90°
                 0.52f, 1.57f, 1.57f, 1.57f,                // lcollar 30°, left arm 90°
                 1.05f, 1.05f, 1.05f, 0.79f,                // right leg 60°, foot 45°
                 1.05f, 1.05f, 1.05f, 0.79f };              // left leg 60°, foot 45°
+            static const float kTwistCapOpen[22] = {
+                3.15f, 3.15f, 3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f };
+            const float* kTwistCapRole = modelClip ? kTwistCapModel
+                                                   : kTwistCapOpen;
             std::vector<std::vector<float>> twistTheta(
                 static_cast<size_t>(frames),
                 std::vector<float>(static_cast<size_t>(Jc), 0.0f));
