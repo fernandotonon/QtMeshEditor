@@ -2098,10 +2098,13 @@ void TexturePaintController::pickBrushColorInteractive()
 {
     auto* em = EditModeController::instance();
     if (!em) return;
-    QApplication::processEvents();
+    // DontUseNativeDialog: native pickers deadlock / freeze against Ogre's
+    // GL surface on Linux (and occasionally macOS). Same fix as the
+    // background-color picker in MainWindow.
     QWidget* parent = QApplication::activeWindow();
     const QColor picked = QColorDialog::getColor(
-        em->vertexPaintColor(), parent, QStringLiteral("Brush color"));
+        em->vertexPaintColor(), parent, QStringLiteral("Brush color"),
+        QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
     if (picked.isValid())
         em->setVertexPaintColor(picked);
 }

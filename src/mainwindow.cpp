@@ -2307,9 +2307,10 @@ void MainWindow::initToolBar()
         connect(fg, &QPushButton::clicked, this, [this, syncSwatches]() {
             SentryReporter::addBreadcrumb("ui.action", "Toolbar: FG color picker opened");
             auto* em = EditModeController::instance();
+            // DontUseNativeDialog — native pickers freeze against Ogre GL.
             QColor c = QColorDialog::getColor(em->vertexPaintColor(), this,
                 tr("Foreground color"),
-                QColorDialog::ShowAlphaChannel);
+                QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
             if (c.isValid())
                 em->setVertexPaintColor(c);
             syncSwatches();
@@ -2319,7 +2320,7 @@ void MainWindow::initToolBar()
             auto* em = EditModeController::instance();
             QColor c = QColorDialog::getColor(em->vertexPaintBackgroundColor(), this,
                 tr("Background color"),
-                QColorDialog::ShowAlphaChannel);
+                QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
             if (c.isValid())
                 em->setVertexPaintBackgroundColor(c);
             syncSwatches();
