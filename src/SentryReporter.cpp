@@ -42,8 +42,8 @@ QJsonObject sanitizedObject(const QJsonObject& in)
     QJsonObject out;
     for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
         const QString key = it.key();
-        const QString lower = key.toLower();
-        if (lower.contains(QStringLiteral("prompt"))
+        if (const QString lower = key.toLower();
+            lower.contains(QStringLiteral("prompt"))
             || lower.contains(QStringLiteral("path"))
             || lower.contains(QStringLiteral("filename"))
             || lower.contains(QStringLiteral("file_name"))
@@ -433,7 +433,7 @@ QString SentryReporter::sizeBucket(qint64 bytes)
 
 bool SentryReporter::isKnownTelemetryEvent(const QString &eventName)
 {
-    static const QSet<QString> events = {
+    static const auto events = QSet{
         QStringLiteral("app.startup"), QStringLiteral("app.shutdown"),
         QStringLiteral("file.import.started"), QStringLiteral("file.import.completed"),
         QStringLiteral("file.import.failed"), QStringLiteral("file.export.started"),

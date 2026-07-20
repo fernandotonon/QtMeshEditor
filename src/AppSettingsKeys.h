@@ -52,7 +52,7 @@ inline const QString& telemetryEnabled()
 /** @brief Opaque random telemetry installation UUID. Never machine-derived. */
 inline const QString& anonymousInstallationId()
 {
-    static const QString k(QStringLiteral("telemetry/anonymousInstallationId"));
+    static const auto k(QStringLiteral("telemetry/anonymousInstallationId"));
     return k;
 }
 

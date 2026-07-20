@@ -839,7 +839,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     }
 
     const bool failed = toolResult.contains("isError") && toolResult["isError"].toBool();
-    static const QSet<QString> sceneChangingTools = {
+    static const auto sceneChangingTools = QSet{
         QStringLiteral("load_mesh"), QStringLiteral("transform_mesh"), QStringLiteral("transform_submesh"),
         QStringLiteral("apply_material"), QStringLiteral("create_material"), QStringLiteral("modify_material"),
         QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
