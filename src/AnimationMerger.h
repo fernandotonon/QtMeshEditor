@@ -7,23 +7,30 @@
 #include <array>
 #include <vector>
 
-// Stateful per-frame body retargeter — the SAME direction-match math
+// Stateful per-frame body retargeter — the SAME legacy-transport math
 // applyMotionClip bakes into a clip, exposed for LIVE drive (mocap preview)
 // so the live path and the recorded clip can never diverge. Construct once
-// from the target skeleton (captures the bind frame, torso frame Ct, and
-// per-role bind directions), then call evaluateFrame() per incoming pose.
+// from the target skeleton (captures the bind frame, torso frame Ct, per-role
+// bind directions, and the rig's harvested STANDING pose from the calmest
+// frame of its first authored animation), then call evaluateFrame() per pose.
 //
-// Input: 22 canonical-role WORLD quaternions (x,y,z,w) from PoseIK — the
-// same array recordBody feeds applyMotionClip. Bone local +Y is the bone's
-// down-the-length axis (PoseIK's convention). Output: per-bone LOCAL
-// (parent-relative) orientation to hand to Bone::setOrientation(); twist is
-// dropped (least-visible DoF), matching the offline path.
+// Input: 22 canonical-role WORLD quaternions (x,y,z,w) from PoseIK — the same
+// array recordBody feeds applyMotionClip. Each joint's parent-relative LOCAL
+// articulation delta (vs the FIRST frame, cached as the neutral reference on
+// the first call) is composed onto the standing pose, with the Mixamo roll
+// correction Mc: local = standLocal · (Mc⁻¹ · delta · Mc). The root/hip is
+// locked to standing (facing is baked into the hip); unresolved roles hold
+// standing. Output: per-bone ABSOLUTE LOCAL orientation for
+// Bone::setOrientation() (Ogre node keyframes are absolute, not deltas).
 class BodyRetargeter {
 public:
     explicit BodyRetargeter(Ogre::Skeleton* skel);
     bool valid() const { return m_valid; }
     // resolvedMask bit i set => canonical role i is tracked this frame; roles
-    // not set keep their bind local. Returns {boneHandle -> local quat}.
+    // not set hold the standing pose. Returns {boneHandle -> local quat}.
+    // NOTE: the FIRST call lazily caches the neutral reference + precomputes Mc
+    // (hence the const method mutates *d through the shared_ptr). Single-thread
+    // use only (the mocap live/bake paths); call frames in order.
     std::vector<std::pair<unsigned short, Ogre::Quaternion>>
     evaluateFrame(const std::array<std::array<float, 4>, 22>& canonicalQuats,
                   uint32_t resolvedMask) const;

@@ -855,10 +855,11 @@ void MocapController::onSample(const FaceSample& sample,
     }
 
     // live drive — body. Uses the SHARED BodyRetargeter, i.e. the EXACT same
-    // direction-match math applyMotionClip bakes into the recorded clip, so
-    // live Preview and Record can't diverge. Bind-referenced (no per-take
-    // neutral): each bone's bind direction is aimed at the pose-IK world
-    // direction, twist dropped.
+    // legacy-transport math applyMotionClip bakes into the recorded clip, so
+    // live Preview and Record can't diverge: each joint's parent-relative
+    // articulation delta (vs the first frame) composed onto the rig's harvested
+    // standing pose. setOrientation takes the absolute local the retargeter
+    // returns (Ogre node keys are absolute, not deltas).
     if (body.valid && d->bodyRetargeter && d->bodyRetargeter->valid()
         && entity->hasSkeleton()) {
         const auto locals =
