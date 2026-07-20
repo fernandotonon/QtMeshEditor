@@ -2135,11 +2135,6 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     // Auto-rigged (no prior animation) meshes that face −Z would walk
     // backward — detect facing from the mesh's foot region.
     const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
-    // #837: the model faces −Z by construction, so model clips need a rigid
-    // 180° yaw to walk toward +Z; a backward-facing rig (yaw180) cancels it.
-    // Rigid yaw preserves the pose (knee/spine/arms) — verified via parity.
-    if (clipSource == QStringLiteral("model") && !yaw180)
-        AnimationMerger::yawFlipCanonicalClip(quats);
     auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                 worldFrame, cmuRest,
                                                 /*refineWithModel=*/false,

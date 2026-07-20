@@ -277,18 +277,6 @@ public:
                                    const std::string& animName,
                                    int sparseFps = 12, int targetFps = 30);
 
-    /// #837: rigidly yaw a canonical clip 180° about up (+Y). The from-scratch
-    /// model faces −Z; the retarget targets +Z-forward, so model walks play
-    /// backward. This rotates ONLY the world quats (x,y,z,w)→(z,w,-x,-y) and
-    /// deliberately leaves restDir untouched — a pure rigid body turn: facing
-    /// (hip forward Z) negates while every relative pose quantity (knee bend,
-    /// spine uprightness, arm hang) is bit-preserved. VERIFIED via the parity
-    /// harness (facing flips, kneebend/spineY unchanged to 3 decimals).
-    /// NB: earlier attempts ALSO negated restDir, which conjugates the aim and
-    /// reverses knee/elbow hinge chirality — do NOT do that. Model path only.
-    static void yawFlipCanonicalClip(
-        std::vector<std::vector<std::array<float, 4>>>& quats);
-
     /// Outcome of pinFeet.
     struct FootPinResult {
         bool ok = false;
