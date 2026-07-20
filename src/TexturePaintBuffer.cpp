@@ -106,8 +106,21 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                                    float falloff,
                                    BrushShape shape)
 {
+    return paintBrush(uv, radiusUV,
+                      [&color](float, float) { return color; },
+                      strength, falloff, shape);
+}
+
+int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
+                                   float radiusUV,
+                                   const ColorAtFn& colorAt,
+                                   float strength,
+                                   float falloff,
+                                   BrushShape shape)
+{
     if (m_width <= 0 || m_height <= 0) return 0;
     if (radiusUV <= 0.0f) return 0;
+    if (!colorAt) return 0;
     strength = std::clamp(strength, 0.0f, 1.0f);
     falloff = std::clamp(falloff, 0.0f, 1.0f);
     if (strength <= 0.0f) return 0;
@@ -154,6 +167,7 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                 blend = strength * w;
             }
             if (blend <= 0.0f) continue;
+            const Ogre::ColourValue color = colorAt(dx, dy);
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
             const float prevR = byteToFloat(m_pixels[off + 0]);
             const float prevG = byteToFloat(m_pixels[off + 1]);

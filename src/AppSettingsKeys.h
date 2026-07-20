@@ -281,6 +281,27 @@ inline const QString& shadowSpotResolution()
     return k;
 }
 
+/** @brief Last-selected paint gradient ramp name (Paint v2 Slice A / #544). */
+inline const QString& paintGradientRampName()
+{
+    static const QString k(QStringLiteral("Paint/gradientRampName"));
+    return k;
+}
+
+/** @brief Paint brush colour source: 0=solid, 1=gradient. */
+inline const QString& paintColorSource()
+{
+    static const QString k(QStringLiteral("Paint/colorSource"));
+    return k;
+}
+
+/** @brief Paint gradient mode: 0=linear, 1=radial, 2=angular. */
+inline const QString& paintGradientMode()
+{
+    static const QString k(QStringLiteral("Paint/gradientMode"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

@@ -3,6 +3,8 @@
 
 #include "PaintSelectionMask.h"
 #include "TexturePaintBuffer.h"
+#include "BrushEngine.h"
+#include "GradientRamp.h"
 
 #include <QColor>
 #include <QObject>
@@ -78,6 +80,17 @@ class TexturePaintController : public QObject
     // Brush tool — paint / erase / fill / picker.
     Q_PROPERTY(int brushTool READ brushTool WRITE setBrushTool NOTIFY brushToolChanged)
 
+    // Paint v2 Slice A (#544) — gradient ramp brushes.
+    Q_PROPERTY(int colorSource READ colorSource WRITE setColorSource NOTIFY gradientChanged)
+    Q_PROPERTY(int gradientMode READ gradientMode WRITE setGradientMode NOTIFY gradientChanged)
+    Q_PROPERTY(QString activeRampName READ activeRampName WRITE setActiveRampName NOTIFY gradientChanged)
+    Q_PROPERTY(bool useFgBgRamp READ useFgBgRamp WRITE setUseFgBgRamp NOTIFY gradientChanged)
+    Q_PROPERTY(bool gradientStepped READ gradientStepped WRITE setGradientStepped NOTIFY gradientChanged)
+    Q_PROPERTY(double rampJitter READ rampJitter WRITE setRampJitter NOTIFY gradientChanged)
+    Q_PROPERTY(QStringList rampNames READ rampNames NOTIFY gradientChanged)
+    Q_PROPERTY(QString rampPreviewDataUri READ rampPreviewDataUri NOTIFY gradientChanged)
+    Q_PROPERTY(QVariantList activeRampStops READ activeRampStops NOTIFY gradientChanged)
+
     // Paint target — texture or vertex.
     Q_PROPERTY(int paintTarget READ paintTarget WRITE setPaintTarget NOTIFY paintTargetChanged)
 
@@ -120,6 +133,21 @@ public:
     };
     Q_ENUM(PaintTarget)
 
+    /// Paint v2 Slice A — brush colour source (mirrors BrushEngine::ColorSource).
+    enum ColorSource {
+        ColorSolid = 0,
+        ColorGradient = 1,
+    };
+    Q_ENUM(ColorSource)
+
+    /// Paint v2 Slice A — gradient mapping mode (mirrors BrushEngine::GradientMode).
+    enum GradientMode {
+        GradientLinear = 0,
+        GradientRadial = 1,
+        GradientAngular = 2,
+    };
+    Q_ENUM(GradientMode)
+
     static TexturePaintController* instance();
     static TexturePaintController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
@@ -160,6 +188,42 @@ public:
     /// @{
     int brushTool() const { return static_cast<int>(m_tool); }
     void setBrushTool(int tool);
+    /// @}
+
+    /// @name Paint v2 Slice A — gradient ramp brushes
+    /// @{
+    int colorSource() const { return static_cast<int>(m_colorSource); }
+    void setColorSource(int source);
+    int gradientMode() const { return static_cast<int>(m_gradientMode); }
+    void setGradientMode(int mode);
+    QString activeRampName() const { return m_activeRampName; }
+    void setActiveRampName(const QString& name);
+    bool useFgBgRamp() const { return m_useFgBgRamp; }
+    void setUseFgBgRamp(bool on);
+    bool gradientStepped() const { return m_gradientStepped; }
+    void setGradientStepped(bool on);
+    double rampJitter() const { return m_rampJitter; }
+    void setRampJitter(double j);
+    QStringList rampNames() const;
+    QString rampPreviewDataUri() const { return m_rampPreviewUri; }
+    QVariantList activeRampStops() const;
+
+    /// Persist the currently-edited stops as a named custom ramp.
+    Q_INVOKABLE bool saveCustomRamp(const QString& name, const QVariantList& stops,
+                                    bool stepped = false);
+    /// Delete a custom ramp by name (bundled presets are not removable).
+    Q_INVOKABLE bool deleteCustomRamp(const QString& name);
+    /// Replace the active ramp's stops in-memory (editor live preview).
+    Q_INVOKABLE void setActiveRampStops(const QVariantList& stops, bool stepped = false);
+    /// Seed a new ramp by sampling N colours along a UV line on the buffer.
+    Q_INVOKABLE bool sampleRampFromTexture(double u0, double v0,
+                                           double u1, double v1,
+                                           int numStops = 5);
+    /// Open the gradient ramp editor window.
+    Q_INVOKABLE void openRampEditor();
+    Q_INVOKABLE void closeRampEditor();
+    Q_PROPERTY(bool rampEditorOpen READ rampEditorOpen NOTIFY rampEditorChanged)
+    bool rampEditorOpen() const { return m_rampEditorWindow != nullptr; }
     /// @}
 
     /// @name Paint target (texture or vertex colors)
@@ -380,6 +444,8 @@ signals:
     void uvOverlayChanged();
     void smartSelectChanged();
     void editorWindowChanged();
+    void gradientChanged();
+    void rampEditorChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -453,6 +519,14 @@ private:
     /// Returns true if any pixel changed.
     bool applyBrushAtUV(const Ogre::Vector2& uv);
 
+    /// Resolve the active GradientRamp (FG/BG quick mode, custom, or bundled).
+    const GradientRamp::Ramp* resolveActiveRamp() const;
+    /// Rebuild `m_activeRamp` / preview URI after name or stop edits.
+    void reloadActiveRamp();
+    void refreshRampPreviewUri();
+    /// Update stroke path-length tracking used by linear gradients.
+    void noteStrokeSample(const Ogre::Vector2& uv, bool isStart);
+
     /// Draw the hover ring on the mesh at a given local position +
     /// normal. Shared between viewport-driven and panel-driven hover.
     void drawHoverRingAt(const Ogre::Vector3& localPos,
@@ -490,6 +564,26 @@ private:
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
     PaintTarget m_target = TargetVertex;
+
+    // Paint v2 Slice A — gradient ramp state.
+    ColorSource m_colorSource = ColorSolid;
+    GradientMode m_gradientMode = GradientLinear;
+    QString m_activeRampName = QStringLiteral("Sunset");
+    bool m_useFgBgRamp = false;
+    bool m_gradientStepped = false;
+    double m_rampJitter = 0.0; ///< 0..1 max random phase offset per stroke.
+    GradientRamp::Ramp m_activeRamp;
+    QString m_rampPreviewUri;
+    QObject* m_rampEditorWindow = nullptr;
+
+    // Per-stroke path tracking for linear gradients (smoothed length).
+    Ogre::Vector2 m_strokePrevUV = Ogre::Vector2::ZERO;
+    bool m_strokeHavePrevUV = false;
+    float m_strokePathLength = 0.0f;
+    float m_strokePhaseJitter = 0.0f;
+    /// EMA of the stroke direction unit vector — keeps linear sampling
+    /// stable when the cursor turns sharply mid-stroke.
+    Ogre::Vector2 m_strokeDirSmoothed = Ogre::Vector2::ZERO;
 
     /// Track every TUS we rebound to the paint texture so closeSession()
     /// can restore the originals. We keep the *material name* (not a

@@ -1,5 +1,6 @@
 #include "TexturePaintController.h"
 
+#include "AppSettingsKeys.h"
 #include "EditModeController.h"
 #include "GamificationManager.h"
 #include "EditableMesh.h"
@@ -15,6 +16,7 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QCoreApplication>
 #include <QPainter>
 #include <QPen>
 #include <QLibraryInfo>
@@ -22,6 +24,7 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
+#include <QSettings>
 #include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
@@ -29,6 +32,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
+#include <QRandomGenerator>
 #include <QUndoCommand>
 #include <QUrl>
 #include <QVariantMap>
@@ -290,6 +294,28 @@ TexturePaintController::TexturePaintController(QObject* parent)
     if (auto* em = EditModeController::instance()) {
         connect(em, &EditModeController::vertexPaintChanged,
                 this, &TexturePaintController::texturePaintChanged);
+        // FG/BG changes should refresh the FG/BG quick-ramp preview.
+        connect(em, &EditModeController::vertexPaintChanged,
+                this, [this]() {
+                    if (m_useFgBgRamp || m_colorSource == ColorGradient)
+                        reloadActiveRamp();
+                });
+    }
+
+    // Restore Paint v2 Slice A preferences.
+    {
+        QSettings s;
+        m_colorSource = static_cast<ColorSource>(
+            s.value(AppSettingsKeys::paintColorSource(), static_cast<int>(ColorSolid)).toInt());
+        m_gradientMode = static_cast<GradientMode>(
+            s.value(AppSettingsKeys::paintGradientMode(), static_cast<int>(GradientLinear)).toInt());
+        m_activeRampName = s.value(AppSettingsKeys::paintGradientRampName(),
+                                   QStringLiteral("Sunset")).toString();
+        if (m_colorSource != ColorSolid && m_colorSource != ColorGradient)
+            m_colorSource = ColorSolid;
+        if (m_gradientMode < GradientLinear || m_gradientMode > GradientAngular)
+            m_gradientMode = GradientLinear;
+        reloadActiveRamp();
     }
 
     // Refresh the texture slot list whenever the selection changes —
@@ -406,6 +432,396 @@ void TexturePaintController::setBrushTool(int tool)
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Texture paint: tool = %1").arg(tool));
     emit brushToolChanged();
+}
+
+void TexturePaintController::setColorSource(int source)
+{
+    const ColorSource s = (source == static_cast<int>(ColorGradient))
+                              ? ColorGradient
+                              : ColorSolid;
+    if (s == m_colorSource) return;
+    m_colorSource = s;
+    QSettings().setValue(AppSettingsKeys::paintColorSource(), static_cast<int>(m_colorSource));
+    if (m_colorSource == ColorGradient) {
+        SentryReporter::addBreadcrumb(
+            "paint.brush.gradient",
+            QStringLiteral("mode=%1 ramp=%2")
+                .arg(static_cast<int>(m_gradientMode))
+                .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
+    }
+    reloadActiveRamp();
+    emit gradientChanged();
+}
+
+void TexturePaintController::setGradientMode(int mode)
+{
+    GradientMode m = GradientLinear;
+    if (mode == static_cast<int>(GradientRadial))
+        m = GradientRadial;
+    else if (mode == static_cast<int>(GradientAngular))
+        m = GradientAngular;
+    if (m == m_gradientMode) return;
+    m_gradientMode = m;
+    QSettings().setValue(AppSettingsKeys::paintGradientMode(), static_cast<int>(m_gradientMode));
+    SentryReporter::addBreadcrumb(
+        "paint.brush.gradient",
+        QStringLiteral("mode=%1 ramp=%2")
+            .arg(static_cast<int>(m_gradientMode))
+            .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
+    emit gradientChanged();
+}
+
+void TexturePaintController::setActiveRampName(const QString& name)
+{
+    if (name.isEmpty() || name == m_activeRampName) return;
+    m_activeRampName = name;
+    m_useFgBgRamp = false;
+    QSettings().setValue(AppSettingsKeys::paintGradientRampName(), m_activeRampName);
+    reloadActiveRamp();
+    SentryReporter::addBreadcrumb(
+        "paint.brush.gradient",
+        QStringLiteral("mode=%1 ramp=%2")
+            .arg(static_cast<int>(m_gradientMode))
+            .arg(m_activeRampName));
+    emit gradientChanged();
+}
+
+void TexturePaintController::setUseFgBgRamp(bool on)
+{
+    if (on == m_useFgBgRamp) return;
+    m_useFgBgRamp = on;
+    reloadActiveRamp();
+    emit gradientChanged();
+}
+
+void TexturePaintController::setGradientStepped(bool on)
+{
+    if (on == m_gradientStepped) return;
+    m_gradientStepped = on;
+    m_activeRamp.interpolate = on ? GradientRamp::Interpolate::Stepped
+                                  : GradientRamp::Interpolate::Linear;
+    refreshRampPreviewUri();
+    emit gradientChanged();
+}
+
+void TexturePaintController::setRampJitter(double j)
+{
+    j = std::clamp(j, 0.0, 1.0);
+    if (std::abs(j - m_rampJitter) < 1e-6) return;
+    m_rampJitter = j;
+    emit gradientChanged();
+}
+
+QStringList TexturePaintController::rampNames() const
+{
+    QStringList names;
+    for (const auto& r : GradientRamp::bundledPresets())
+        names << QString::fromStdString(r.name);
+    for (const auto& r : GradientRamp::loadCustomRamps()) {
+        const QString n = QString::fromStdString(r.name);
+        if (!names.contains(n))
+            names << n;
+    }
+    return names;
+}
+
+QVariantList TexturePaintController::activeRampStops() const
+{
+    QVariantList out;
+    for (const auto& s : m_activeRamp.stops) {
+        QVariantMap m;
+        m.insert(QStringLiteral("t"), static_cast<double>(s.position));
+        m.insert(QStringLiteral("r"), static_cast<double>(s.colour.r));
+        m.insert(QStringLiteral("g"), static_cast<double>(s.colour.g));
+        m.insert(QStringLiteral("b"), static_cast<double>(s.colour.b));
+        m.insert(QStringLiteral("a"), static_cast<double>(s.colour.a));
+        out.push_back(m);
+    }
+    return out;
+}
+
+const GradientRamp::Ramp* TexturePaintController::resolveActiveRamp() const
+{
+    if (m_useFgBgRamp)
+        return &m_activeRamp;
+    if (m_activeRamp.isValid() && m_activeRamp.name == m_activeRampName.toStdString())
+        return &m_activeRamp;
+    if (const auto* bundled = GradientRamp::findBundled(m_activeRampName.toStdString()))
+        return bundled;
+    return m_activeRamp.isValid() ? &m_activeRamp : nullptr;
+}
+
+void TexturePaintController::reloadActiveRamp()
+{
+    if (m_useFgBgRamp) {
+        const QColor fg = texturePaintColor();
+        const QColor bg = bgPaintColor();
+        m_activeRamp = GradientRamp::fromFgBg(
+            {static_cast<float>(fg.redF()), static_cast<float>(fg.greenF()),
+             static_cast<float>(fg.blueF()), static_cast<float>(fg.alphaF())},
+            {static_cast<float>(bg.redF()), static_cast<float>(bg.greenF()),
+             static_cast<float>(bg.blueF()), static_cast<float>(bg.alphaF())});
+        m_activeRamp.interpolate = m_gradientStepped
+                                       ? GradientRamp::Interpolate::Stepped
+                                       : GradientRamp::Interpolate::Linear;
+        refreshRampPreviewUri();
+        return;
+    }
+
+    if (const auto* bundled = GradientRamp::findBundled(m_activeRampName.toStdString())) {
+        m_activeRamp = *bundled;
+    } else {
+        bool found = false;
+        for (const auto& r : GradientRamp::loadCustomRamps()) {
+            if (r.name == m_activeRampName.toStdString()) {
+                m_activeRamp = r;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // Fall back to Sunset so the brush always has a usable ramp.
+            if (const auto* sunset = GradientRamp::findBundled("Sunset")) {
+                m_activeRamp = *sunset;
+                m_activeRampName = QStringLiteral("Sunset");
+            }
+        }
+    }
+    m_activeRamp.interpolate = m_gradientStepped
+                                   ? GradientRamp::Interpolate::Stepped
+                                   : GradientRamp::Interpolate::Linear;
+    refreshRampPreviewUri();
+}
+
+void TexturePaintController::refreshRampPreviewUri()
+{
+    constexpr int W = 256;
+    constexpr int H = 24;
+    QImage img(W, H, QImage::Format_RGBA8888);
+    if (!m_activeRamp.isValid()) {
+        img.fill(Qt::black);
+    } else {
+        for (int x = 0; x < W; ++x) {
+            const float t = (W == 1) ? 0.0f : static_cast<float>(x) / static_cast<float>(W - 1);
+            const auto c = m_activeRamp.sample(t);
+            const QRgb px = qRgba(
+                static_cast<int>(std::clamp(c.r, 0.0f, 1.0f) * 255.0f + 0.5f),
+                static_cast<int>(std::clamp(c.g, 0.0f, 1.0f) * 255.0f + 0.5f),
+                static_cast<int>(std::clamp(c.b, 0.0f, 1.0f) * 255.0f + 0.5f),
+                static_cast<int>(std::clamp(c.a, 0.0f, 1.0f) * 255.0f + 0.5f));
+            for (int y = 0; y < H; ++y)
+                img.setPixel(x, y, px);
+        }
+    }
+    QByteArray ba;
+    QBuffer buf(&ba);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "PNG");
+    m_rampPreviewUri = QStringLiteral("data:image/png;base64,") + ba.toBase64();
+}
+
+void TexturePaintController::noteStrokeSample(const Ogre::Vector2& uv, bool isStart)
+{
+    if (isStart || !m_strokeHavePrevUV) {
+        m_strokePrevUV = uv;
+        m_strokeHavePrevUV = true;
+        m_strokePathLength = 0.0f;
+        m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+        return;
+    }
+    const Ogre::Vector2 delta = uv - m_strokePrevUV;
+    const float dist = delta.length();
+    if (dist > 1e-8f) {
+        // EMA-smoothed direction keeps linear sampling stable when the
+        // stroke turns — the path length still advances by the true
+        // step distance so the ramp doesn't stutter.
+        const Ogre::Vector2 dir = delta / dist;
+        if (m_strokeDirSmoothed.squaredLength() < 1e-12f)
+            m_strokeDirSmoothed = dir;
+        else
+            m_strokeDirSmoothed = (m_strokeDirSmoothed * 0.75f + dir * 0.25f).normalisedCopy();
+        m_strokePathLength += dist;
+    }
+    m_strokePrevUV = uv;
+}
+
+bool TexturePaintController::saveCustomRamp(const QString& name, const QVariantList& stops,
+                                            bool stepped)
+{
+    if (name.trimmed().isEmpty() || stops.size() < 2)
+        return false;
+    GradientRamp::Ramp ramp;
+    ramp.name = name.trimmed().toStdString();
+    ramp.interpolate = stepped ? GradientRamp::Interpolate::Stepped
+                               : GradientRamp::Interpolate::Linear;
+    for (const QVariant& v : stops) {
+        const QVariantMap m = v.toMap();
+        GradientRamp::Stop s;
+        s.position = static_cast<float>(m.value(QStringLiteral("t")).toDouble());
+        s.colour.r = static_cast<float>(m.value(QStringLiteral("r")).toDouble());
+        s.colour.g = static_cast<float>(m.value(QStringLiteral("g")).toDouble());
+        s.colour.b = static_cast<float>(m.value(QStringLiteral("b")).toDouble());
+        s.colour.a = static_cast<float>(m.value(QStringLiteral("a"), 1.0).toDouble());
+        s.position = std::clamp(s.position, 0.0f, 1.0f);
+        ramp.stops.push_back(s);
+    }
+    std::sort(ramp.stops.begin(), ramp.stops.end(),
+              [](const GradientRamp::Stop& a, const GradientRamp::Stop& b) {
+                  return a.position < b.position;
+              });
+    if (!ramp.isValid())
+        return false;
+    const std::string path = GradientRamp::saveCustom(ramp);
+    if (path.empty())
+        return false;
+    m_activeRampName = QString::fromStdString(ramp.name);
+    m_useFgBgRamp = false;
+    m_gradientStepped = stepped;
+    m_activeRamp = std::move(ramp);
+    QSettings().setValue(AppSettingsKeys::paintGradientRampName(), m_activeRampName);
+    refreshRampPreviewUri();
+    SentryReporter::addBreadcrumb("paint.brush.gradient",
+        QStringLiteral("saved custom ramp=%1").arg(m_activeRampName));
+    emit gradientChanged();
+    return true;
+}
+
+bool TexturePaintController::deleteCustomRamp(const QString& name)
+{
+    if (GradientRamp::findBundled(name.toStdString()))
+        return false;
+    if (!GradientRamp::deleteCustom(name.toStdString()))
+        return false;
+    if (m_activeRampName == name)
+        setActiveRampName(QStringLiteral("Sunset"));
+    else
+        emit gradientChanged();
+    return true;
+}
+
+void TexturePaintController::setActiveRampStops(const QVariantList& stops, bool stepped)
+{
+    if (stops.size() < 2)
+        return;
+    GradientRamp::Ramp ramp;
+    ramp.name = m_useFgBgRamp ? "FG/BG" : m_activeRampName.toStdString();
+    ramp.interpolate = stepped ? GradientRamp::Interpolate::Stepped
+                               : GradientRamp::Interpolate::Linear;
+    for (const QVariant& v : stops) {
+        const QVariantMap m = v.toMap();
+        GradientRamp::Stop s;
+        s.position = std::clamp(static_cast<float>(m.value(QStringLiteral("t")).toDouble()), 0.0f, 1.0f);
+        s.colour.r = std::clamp(static_cast<float>(m.value(QStringLiteral("r")).toDouble()), 0.0f, 1.0f);
+        s.colour.g = std::clamp(static_cast<float>(m.value(QStringLiteral("g")).toDouble()), 0.0f, 1.0f);
+        s.colour.b = std::clamp(static_cast<float>(m.value(QStringLiteral("b")).toDouble()), 0.0f, 1.0f);
+        s.colour.a = std::clamp(static_cast<float>(m.value(QStringLiteral("a"), 1.0).toDouble()), 0.0f, 1.0f);
+        ramp.stops.push_back(s);
+    }
+    std::sort(ramp.stops.begin(), ramp.stops.end(),
+              [](const GradientRamp::Stop& a, const GradientRamp::Stop& b) {
+                  return a.position < b.position;
+              });
+    if (!ramp.isValid())
+        return;
+    m_activeRamp = std::move(ramp);
+    m_gradientStepped = stepped;
+    refreshRampPreviewUri();
+    emit gradientChanged();
+}
+
+bool TexturePaintController::sampleRampFromTexture(double u0, double v0,
+                                                   double u1, double v1,
+                                                   int numStops)
+{
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0)
+        return false;
+    numStops = std::clamp(numStops, 2, 16);
+    GradientRamp::Ramp ramp;
+    ramp.name = "Eyedropper";
+    ramp.interpolate = GradientRamp::Interpolate::Linear;
+    for (int i = 0; i < numStops; ++i) {
+        const float t = (numStops == 1)
+                            ? 0.0f
+                            : static_cast<float>(i) / static_cast<float>(numStops - 1);
+        const float u = static_cast<float>(u0 + (u1 - u0) * static_cast<double>(t));
+        const float v = static_cast<float>(v0 + (v1 - v0) * static_cast<double>(t));
+        int x = 0, y = 0;
+        m_buffer.uvToPixel(Ogre::Vector2(u, v), x, y);
+        const auto c = m_buffer.pixel(x, y);
+        ramp.stops.push_back({t, {c.r, c.g, c.b, c.a}});
+    }
+    if (!ramp.isValid())
+        return false;
+    m_activeRamp = std::move(ramp);
+    m_activeRampName = QStringLiteral("Eyedropper");
+    m_useFgBgRamp = false;
+    m_colorSource = ColorGradient;
+    refreshRampPreviewUri();
+    SentryReporter::addBreadcrumb("paint.brush.gradient",
+        QStringLiteral("mode=%1 ramp=Eyedropper (sampled %2 stops)")
+            .arg(static_cast<int>(m_gradientMode))
+            .arg(numStops));
+    emit gradientChanged();
+    return true;
+}
+
+void TexturePaintController::openRampEditor()
+{
+    if (m_rampEditorWindow) {
+        if (auto* w = qobject_cast<QQuickWindow*>(m_rampEditorWindow)) {
+            w->raise();
+            w->requestActivate();
+        }
+        return;
+    }
+    auto* engine = new QQmlApplicationEngine(this);
+    const QString appDir = QCoreApplication::applicationDirPath();
+    engine->addImportPath(appDir + "/qml");
+    engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+    qmlRegisterSingletonType<TexturePaintController>(
+        "PropertiesPanel", 1, 0, "TexturePaintController",
+        [](QQmlEngine* e, QJSEngine*) -> QObject* {
+            return TexturePaintController::qmlInstance(e, nullptr);
+        });
+    bool handled = false;
+    connect(engine, &QQmlApplicationEngine::objectCreated, this,
+        [this, engine, &handled](QObject* obj, const QUrl&) {
+            handled = true;
+            if (!obj) {
+                engine->deleteLater();
+                return;
+            }
+            m_rampEditorWindow = obj;
+            if (auto* w = qobject_cast<QQuickWindow*>(obj)) {
+                connect(w, &QQuickWindow::visibleChanged, this,
+                    [this, w, engine](bool vis) {
+                        if (vis || m_rampEditorWindow != w) return;
+                        m_rampEditorWindow = nullptr;
+                        emit rampEditorChanged();
+                        engine->deleteLater();
+                    });
+                w->show();
+                w->raise();
+                w->requestActivate();
+            }
+            emit rampEditorChanged();
+        }, Qt::DirectConnection);
+    engine->load(QUrl(QStringLiteral("qrc:/PropertiesPanel/GradientRampEditor.qml")));
+    if (!handled)
+        engine->deleteLater();
+    SentryReporter::addBreadcrumb("paint.brush.gradient", "ramp editor opened");
+}
+
+void TexturePaintController::closeRampEditor()
+{
+    if (!m_rampEditorWindow) return;
+    if (auto* w = qobject_cast<QQuickWindow*>(m_rampEditorWindow)) {
+        w->close();
+    } else {
+        m_rampEditorWindow->deleteLater();
+        m_rampEditorWindow = nullptr;
+        emit rampEditorChanged();
+    }
 }
 
 void TexturePaintController::setPaintTarget(int target)
@@ -1248,6 +1664,19 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
     m_strokePreSnapshot = snapshotPixels();
     m_wandStrokeActive = false;
     m_wandStartScreenPos = screenPos;
+    m_strokeHavePrevUV = false;
+    m_strokePathLength = 0.0f;
+    m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+    m_strokePhaseJitter = (m_rampJitter > 0.0)
+        ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
+        : 0.0f;
+    if (m_colorSource == ColorGradient) {
+        SentryReporter::addBreadcrumb(
+            "paint.brush.gradient",
+            QStringLiteral("mode=%1 ramp=%2")
+                .arg(static_cast<int>(m_gradientMode))
+                .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
+    }
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Paint stroke begin (target=%1 tool=%2 radius=%3 strength=%4 color=%5)")
             .arg(m_target == TargetVertex ? "vertex" : "texture")
@@ -1362,8 +1791,48 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
     switch (m_tool) {
     case ToolPaint: {
         const QColor c = texturePaintColor();
-        const Ogre::ColourValue paint(c.redF(), c.greenF(), c.blueF(), c.alphaF());
-        return m_buffer.paintBrush(uv, radius, paint, strength, falloff, shape) > 0;
+        const Ogre::ColourValue solid(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        if (m_colorSource != ColorGradient) {
+            return m_buffer.paintBrush(uv, radius, solid, strength, falloff, shape) > 0;
+        }
+
+        // Paint v2 Slice A — gradient colour source via BrushEngine.
+        noteStrokeSample(uv, m_strokeJustBegan);
+        m_strokeJustBegan = false;
+        const GradientRamp::Ramp* ramp = resolveActiveRamp();
+        if (!ramp || !ramp->isValid()) {
+            return m_buffer.paintBrush(uv, radius, solid, strength, falloff, shape) > 0;
+        }
+        // Wavelength ≈ 4× brush radius so one full ramp covers a short stroke.
+        const float wavelength = std::max(radius * 4.0f, 0.05f);
+        const float strokeT = BrushEngine::linearStrokeT(
+            m_strokePathLength, wavelength, m_strokePhaseJitter);
+        BrushEngine::SampleParams params;
+        params.source = BrushEngine::ColorSource::Gradient;
+        params.solid = {solid.r, solid.g, solid.b, solid.a};
+        params.ramp = ramp;
+        params.mode = static_cast<BrushEngine::GradientMode>(m_gradientMode);
+        params.strokeT = strokeT;
+        params.phaseJitter = m_strokePhaseJitter;
+        // Linear: whole stamp shares strokeT (phase already in strokeT).
+        // Radial/Angular: per-pixel + per-stroke phase jitter.
+        if (m_gradientMode == GradientLinear) {
+            params.phaseJitter = 0.0f; // already folded into strokeT
+            const auto sampled = BrushEngine::sampleColor(params);
+            const Ogre::ColourValue paint(sampled.r, sampled.g, sampled.b, sampled.a);
+            return m_buffer.paintBrush(uv, radius, paint, strength, falloff, shape) > 0;
+        }
+        return m_buffer.paintBrush(
+                   uv, radius,
+                   [&params](float dx, float dy) {
+                       BrushEngine::SampleParams local = params;
+                       local.dx = dx;
+                       local.dy = dy;
+                       const auto s = BrushEngine::sampleColor(local);
+                       return Ogre::ColourValue(s.r, s.g, s.b, s.a);
+                   },
+                   strength, falloff, shape)
+            > 0;
     }
     case ToolErase: {
         // Erase = paint with the user-chosen background color. The BG
@@ -1884,6 +2353,19 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
     // Re-use the screen-pos field to stash press UV (u in pixel-ish
     // units). updateStrokeUV reads the delta from the current u.
     m_wandStartScreenPos = QPoint(static_cast<int>(u * 10000.0), 0);
+    m_strokeHavePrevUV = false;
+    m_strokePathLength = 0.0f;
+    m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+    m_strokePhaseJitter = (m_rampJitter > 0.0)
+        ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
+        : 0.0f;
+    if (m_colorSource == ColorGradient) {
+        SentryReporter::addBreadcrumb(
+            "paint.brush.gradient",
+            QStringLiteral("mode=%1 ramp=%2")
+                .arg(static_cast<int>(m_gradientMode))
+                .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
+    }
     emit hoveredUVChanged(u, v);
     updateStrokeUV(u, v);
     return true;
