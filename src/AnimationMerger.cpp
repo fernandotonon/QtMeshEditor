@@ -1471,6 +1471,18 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     return true;
 }
 
+void AnimationMerger::yawFlipCanonicalClip(
+    std::vector<std::vector<std::array<float, 4>>>& quats)
+{
+    const int Jc = MotionInbetween::canonicalJointCount();
+    // 180° about +Y as (x,y,z,w)=(0,1,0,0): yaw·q = (z, w, -x, -y).
+    for (auto& frame : quats)
+        for (int c = 0; c < Jc && c < static_cast<int>(frame.size()); ++c) {
+            const auto& q = frame[static_cast<size_t>(c)];
+            frame[static_cast<size_t>(c)] = { q[2], q[3], -q[0], -q[1] };
+        }
+}
+
 int AnimationMerger::smoothBakeAnimation(Ogre::Skeleton* skel,
                                           const std::string& animName,
                                           int sparseFps, int targetFps)
