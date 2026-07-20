@@ -347,19 +347,27 @@ def main():
             acts.append(action)
             srcs.append(src)
 
+    # Per-item guard: a single malformed clip/BVH must not abort a multi-
+    # thousand-item batch (offline dev tool — resilience over strictness).
     if a.corpus:
-        n0 = 0
+        n0, bad = 0, 0
         for action, cq, valid, src in corpus_clips(
                 os.path.expanduser(a.corpus), a.min_roles):
-            window(action, cq, valid, src)
-            n0 += 1
-        print(f"corpus: {n0} clips → {len(mo)} windows")
+            try:
+                window(action, cq, valid, src); n0 += 1
+            except Exception as e:                          # noqa: BLE001
+                bad += 1
+                print(f"  skip corpus clip ({src}): {e}")
+        print(f"corpus: {n0} clips → {len(mo)} windows ({bad} skipped)")
     if a.bvh and a.index:
-        n0, w0 = 0, len(mo)
+        n0, w0, bad = 0, len(mo), 0
         for action, cq, valid, src in cmu_clips(a.bvh, a.index):
-            window(action, cq, valid, src)
-            n0 += 1
-        print(f"cmu: {n0} trials → {len(mo) - w0} windows")
+            try:
+                window(action, cq, valid, src); n0 += 1
+            except Exception as e:                          # noqa: BLE001
+                bad += 1
+                print(f"  skip cmu trial ({src}): {e}")
+        print(f"cmu: {n0} trials → {len(mo) - w0} windows ({bad} skipped)")
 
     print(f"posture gates dropped {dropped[0]} windows")
     if not mo:
@@ -370,6 +378,9 @@ def main():
     cnt = Counter(acts)
     vocab = sorted(w for w, n in cnt.items() if n >= a.min_action_windows)
     keep = [i for i, w in enumerate(acts) if w in vocab]
+    if not vocab or not keep:
+        sys.exit(f"no action reached --min-action-windows "
+                 f"({a.min_action_windows}); per-action counts: {dict(cnt)}")
     mo = np.stack([mo[i] for i in keep]).astype(np.float32)
     msk = np.stack([msk[i] for i in keep]).astype(np.float32)
     tk = np.zeros((len(keep), len(vocab)), np.float32)

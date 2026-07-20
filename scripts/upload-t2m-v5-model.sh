@@ -28,15 +28,21 @@ for f in t2m.onnx t2m-vocab.json; do
     [[ -f "$OUT_DIR/$f" ]] || { echo "missing $OUT_DIR/$f" >&2; exit 1; }
 done
 
-# keep the previous (v4 CVAE) files for rollback under versioned names
+# keep the previous (v4 CVAE) files for rollback under versioned names.
+# IDEMPOTENT: only back up if the v4 rollback does NOT already exist —
+# otherwise a re-run would overwrite the real v4 with the current (v5) file
+# and destroy the rollback point.
 TMP=$(mktemp -d)
 for f in t2m.onnx t2m-vocab.json; do
+    case "$f" in
+        t2m.onnx)       dst="motion/t2m-v4.onnx" ;;
+        t2m-vocab.json) dst="motion/t2m-vocab-v4.json" ;;
+    esac
+    if huggingface-cli download "$REPO" "$dst" --local-dir "$TMP" >/dev/null 2>&1; then
+        echo "rollback $dst already exists — skipping backup (idempotent)"
+        continue
+    fi
     if huggingface-cli download "$REPO" "motion/$f" --local-dir "$TMP" >/dev/null 2>&1; then
-        v4name="${f%.onnx}"; v4name="${v4name%.json}"
-        case "$f" in
-            t2m.onnx)       dst="motion/t2m-v4.onnx" ;;
-            t2m-vocab.json) dst="motion/t2m-vocab-v4.json" ;;
-        esac
         huggingface-cli upload "$REPO" "$TMP/motion/$f" "$dst" \
             --commit-message "t2m: preserve v4 CVAE as $dst before the v5 flow model (#858)"
     fi

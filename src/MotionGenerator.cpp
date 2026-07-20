@@ -398,7 +398,10 @@ MotionGenerator::Result MotionGenerator::generate(
             float score = -std::abs(step - kTargetStep) * 40.0f
                           + coh * 2.0f
                           - std::max(0.0f, maxArtic - kMaxArtic) * 4.0f;
-            if (haveCanonDirs && worldFrame) {
+            // Requires the full 22-joint canonical layout — the posture roles
+            // (17/21 feet, 11 larm) index up to 21. Guard J so a smaller vocab
+            // can't read out of bounds.
+            if (haveCanonDirs && worldFrame && J >= 22) {
                 // Posture penalties DOMINATE the energy/coherence terms: a
                 // bad sample (head thrown back, an arm reaching out) is worse
                 // than a slightly-off-tempo good one, so the weights here are

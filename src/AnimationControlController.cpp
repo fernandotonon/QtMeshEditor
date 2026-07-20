@@ -1961,6 +1961,8 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
         if (fp.ok && fp.spans > 0)
             out["footPinSpans"] = fp.spans;
+        else if (!fp.ok && !fp.error.isEmpty())
+            out["footPinError"] = fp.error;   // surface why (no leg tracks, etc.)
     }
 
     entity->refreshAvailableAnimationState();

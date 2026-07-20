@@ -1600,6 +1600,25 @@ AnimationMerger::FootPinResult AnimationMerger::pinFeet(
             || static_cast<int>(shinTrk->getNumKeyFrames()) != nk
             || (footTrk && static_cast<int>(footTrk->getNumKeyFrames()) != nk))
             continue;   // mixed keyframe grids — not a generated clip
+        // The rewrite below indexes shin/foot keyframes by k and assumes they
+        // share timeSrc's times. Count alone isn't enough — an authored clip
+        // can have equal counts at DIFFERENT times, which would write a
+        // correction computed at time t onto a keyframe at t'. Verify the
+        // grids actually align (generated clips do by construction).
+        {
+            bool aligned = true;
+            for (int k = 0; k < nk && aligned; ++k) {
+                const float t = times[static_cast<size_t>(k)];
+                if (std::abs(thighTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f
+                    || std::abs(shinTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f
+                    || (footTrk && std::abs(footTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f))
+                    aligned = false;
+            }
+            if (!aligned) continue;   // keyframe times don't match — skip leg
+        }
 
         std::vector<FootContact::V3> footC(static_cast<size_t>(nk));
         for (int k = 0; k < nk; ++k)

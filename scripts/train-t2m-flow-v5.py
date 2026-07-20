@@ -228,7 +228,9 @@ def main():
     ckpt_path = os.path.join(a.out, "ckpt.pt")
     start_ep = 0
     if a.resume and os.path.exists(ckpt_path):
-        ck = torch.load(ckpt_path, map_location=dev)
+        # weights_only=True: the checkpoint is only state_dicts + an int
+        # epoch — no pickled objects — so load safely (no code execution).
+        ck = torch.load(ckpt_path, map_location=dev, weights_only=True)
         net.load_state_dict(ck["net"])
         opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"])

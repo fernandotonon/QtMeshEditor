@@ -1288,7 +1288,9 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
     auto mesh = createInMemoryMesh("twist_collar_mesh", skelRes);
     auto* sm = Manager::getSingleton()->getSceneMgr();
     Ogre::Entity* ent = sm->createEntity("twist_collar_ent", mesh);
+    ASSERT_NE(ent, nullptr);
     Ogre::SkeletonInstance* skel = ent->getSkeleton();
+    ASSERT_NE(skel, nullptr);
 
     // Source: left collar (role 10, +X) rolls 0 → 240° — past the ±180° wrap.
     // The gain table damps collars to 0.5×, which is exactly where a missing
