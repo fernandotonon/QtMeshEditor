@@ -50,13 +50,17 @@ TEST(FootContactTest, SlidingFootIsNotAContact)
 
 TEST(FootContactTest, ShortBlipsAreIgnored)
 {
+    // Foot is airborne (0.6) most of the clip, dipping to the ground for
+    // three SEPARATE single frames. The low-percentile ground level lands
+    // near 0, so each dip is an isolated on-ground frame — none forms a
+    // run of minFrames consecutive, so no contact span registers.
     std::vector<V3> foot;
     for (int f = 0; f < 20; ++f)
-        foot.push_back({0.0f, (f == 10 || f == 11) ? 0.0f : 0.6f, 0.0f});
+        foot.push_back({0.0f, (f == 3 || f == 10 || f == 17) ? 0.0f : 0.6f, 0.0f});
     FootContact::DetectOptions opt;
     opt.minFrames = 3;
     const auto spans = FootContact::detectContacts(foot, 1.0f, opt);
-    EXPECT_TRUE(spans.empty());      // 2-frame touch < minFrames
+    EXPECT_TRUE(spans.empty());      // isolated 1-frame touches < minFrames
 }
 
 TEST(FootContactTest, SolveKneePreservesLengthsAndReachesTarget)

@@ -1305,9 +1305,12 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
             * kSrcRest;
         quats[f][10] = {w.x, w.y, w.z, w.w};
     }
+    // modelClip=true: the per-role twist caps only apply on the model path
+    // (authored/self clips run uncapped since #837 review). This test asserts
+    // the capped collar behavior, so it exercises the model path explicitly.
     const auto res = AnimationMerger::applyMotionClip(
         skel, "collarclip", quats, 30, true, srcRestWorld(),
-        false, 8, false, canonRestDirs());
+        false, 8, false, canonRestDirs(), /*modelClip=*/true);
     ASSERT_TRUE(res.ok) << res.error.toStdString();
 
     // Sample densely: the collar's world orientation must move CONTINUOUSLY
