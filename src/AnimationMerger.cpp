@@ -1498,13 +1498,12 @@ void AnimationMerger::conditionModelClip(
             for (int c = 0; c < Jc && c < static_cast<int>(frame.size()); ++c)
                 frame[static_cast<size_t>(c)] =
                     yawMul(frame[static_cast<size_t>(c)]);
-        // restDir is expressed in the canonical frame → negate X/Z there too.
-        for (int c = 0; c < Jc && c < static_cast<int>(restDir.size()); ++c) {
-            restDir[static_cast<size_t>(c)][0] =
-                -restDir[static_cast<size_t>(c)][0];
-            restDir[static_cast<size_t>(c)][2] =
-                -restDir[static_cast<size_t>(c)][2];
-        }
+        // NB: restDir is deliberately NOT touched. The aim consumes
+        // ds = W_c · restDir; rotating the quats alone gives ds = yaw·(old ds)
+        // — the whole body's directions rotate 180° as a RIGID unit, so every
+        // limb keeps its relative bend and only the heading turns. ALSO
+        // negating restDir would conjugate (yaw·W·yaw⁻¹·restDir), flipping
+        // the knee/elbow hinge chirality — the "knees bend backward" bug.
     }
 
     // (2) Widen the arms: the model hangs them too narrow. Rotate each upper
