@@ -236,7 +236,15 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                 }
                 if (collides && options.replaceExisting)
                     nam->deleteClip(clip);
-                if (nam && nam->createClip(clip, std::max(length, 0.001))) {
+                // Clip length must strictly exceed the last key time:
+                // NodeAnimationManager::addKeyframe rejects `time > getLength()`,
+                // and the last key sits at exactly `length` — the double→float
+                // round-trip on the stored length can dip just below it and
+                // silently drop the final key (0 keyframes written). A tiny pad
+                // keeps every key inside the clip. Harmless (clip is fractionally
+                // longer than the captured span).
+                const double clipLen = std::max(length, 0.001) + 1e-3;
+                if (nam && nam->createClip(clip, clipLen)) {
                     const QString nodeName = QString::fromStdString(node->getName());
                     int written = 0;
                     for (int i : keys) {
@@ -246,7 +254,10 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                             ++written;
                     }
                     report.headKeyframesWritten = written;
-                    report.headTarget = QStringLiteral("node");
+                    // Only claim the node target if keys actually landed, so the
+                    // report never says "node" with an empty clip.
+                    if (written > 0)
+                        report.headTarget = QStringLiteral("node");
                 }
             }
         }
