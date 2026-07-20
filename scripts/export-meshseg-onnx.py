@@ -127,6 +127,16 @@ def sphere_surf(c, r, n, rng, squash=None):
     return c + p
 
 
+def ball_vol(c, r, n, rng, squash=None):
+    """Points filling an ellipsoid VOLUME (not just the surface). A stylized
+    tree's canopy is a dense cloud of leaf cards filling a volume, not a hollow
+    shell — training only on shells taught the model that a solid low mass must
+    be trunk (the oak-canopy-labelled-trunk bug)."""
+    d = _unit_dirs(n, rng) * (rng.random((n, 1)) ** (1.0 / 3.0)) * r
+    if squash is not None: d = d * squash
+    return c + d
+
+
 def capsule_surf(p0, p1, r, n, rng, cap0=True, cap1=True):
     """Points on a capsule surface (cylinder side + spherical caps).
 
@@ -420,45 +430,92 @@ def make_tree(rng):
     """Surface-sampled tree/plant. Same (sampler, label, weight) contract as the
     body plans; labels are the vegetation LOCAL channels."""
     parts = []
-    kind = rng.choice(['broadleaf', 'pine', 'palm', 'dead', 'bush'],
-                      p=[0.40, 0.25, 0.15, 0.10, 0.10])
+    kind = rng.choice(['broadleaf', 'oak', 'pine', 'palm', 'dead', 'bush'],
+                      p=[0.30, 0.22, 0.20, 0.12, 0.08, 0.08])
     trunkH = rng.uniform(0.5, 1.5)
     trunkR = trunkH * rng.uniform(0.04, 0.12)
     if kind == 'bush':
         trunkH *= rng.uniform(0.15, 0.4)
+    # 'oak': big-canopy / short-trunk broadleaf — a huge canopy on a stubby
+    # trunk, with foliage DROOPING down around/below the trunk top (real oaks,
+    # willows, stylized game trees). This is the regime the oak-canopy bug lives
+    # in: the canopy dwarfs the trunk and its lower edge dips into trunk height.
+    canopyScale = 1.0        # canopy radius multiplier vs trunkH
+    droop = 0.0              # how far the canopy center sits BELOW the trunk top
+    if kind == 'oak':
+        trunkH *= rng.uniform(0.45, 0.9)       # stubby
+        trunkR = trunkH * rng.uniform(0.10, 0.22)
+        canopyScale = rng.uniform(1.1, 2.2)    # canopy much bigger than trunk
+        droop = rng.uniform(0.15, 0.55)        # canopy descends around the trunk
     lean = rng.uniform(-0.12, 0.12, size=2)
     top = np.array([lean[0] * trunkH, trunkH, lean[1] * trunkH])
     parts.append((lambda n, b=top, r=trunkR: capsule_surf([0, 0, 0], b, r, n, rng),
                   TRUNK, trunkH * trunkR * 3))
+    # Trunk base FLARE / buttress — most real trunks widen at the bottom. This is
+    # TRUNK, not root: without it the model learned "wide low mass = root" and
+    # grabbed the trunk flare (user report). A short, wide, low cone at the base.
+    if rng.random() < 0.7:
+        flareR = trunkR * rng.uniform(1.6, 3.5)
+        flareH = trunkH * rng.uniform(0.05, 0.18)
+        parts.append((lambda n, top=np.array([0.0, flareH, 0.0]), r=flareR:
+                      capsule_surf([0, 0, 0], top, r, n, rng),
+                      TRUNK, flareR * flareH * 4))
 
-    def blob(c, r, label, w, squash=None):
-        parts.append((lambda n, c=c, r=r, s=squash: sphere_surf(c, r, n, rng, s),
-                      label, w))
+    def blob(c, r, label, w, squash=None, solid=False):
+        fn = ball_vol if solid else sphere_surf
+        parts.append((lambda n, c=c, r=r, s=squash: fn(c, r, n, rng, s), label, w))
 
-    if kind in ('broadleaf', 'dead', 'bush'):
-        nbr = rng.integers(2, 7)
+    if kind in ('broadleaf', 'oak', 'dead', 'bush'):
+        # More primary branches, and each spawns a couple of thinner SUB-branches
+        # that thread UP INTO the canopy — real trees (esp. the user's oak) show
+        # a visible branch skeleton inside the leaves. Under-representing branches
+        # let trunk/foliage over-claim them (branch recall regression); branches
+        # get a heavier weight + a density boost in sampling so they hold ground.
+        nbr = rng.integers(4, 11 if kind == 'oak' else 9)
         tips = []
         for _ in range(nbr):
             az = rng.uniform(0, 2 * np.pi)
-            elev = rng.uniform(0.3, 1.1)
-            bl = trunkH * rng.uniform(0.25, 0.6)
-            base = top * rng.uniform(0.55, 0.95)
+            # oak branches spread more horizontally (lower elevation) so the
+            # canopy sits wide and low rather than piled on top
+            elev = rng.uniform(-0.1, 0.6) if kind == 'oak' else rng.uniform(0.3, 1.1)
+            bl = trunkH * rng.uniform(0.25, 0.7)
+            base = top * rng.uniform(0.5, 0.95)
             tip = base + bl * np.array([np.cos(az) * np.cos(elev), np.sin(elev),
                                         np.sin(az) * np.cos(elev)])
-            parts.append((lambda n, a=base, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
-                          capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR))
+            br = trunkR * rng.uniform(0.35, 0.65)
+            parts.append((lambda n, a=base, b=tip, r=br:
+                          capsule_surf(a, b, r, n, rng), BRANCH, bl * trunkR * 3))
             tips.append(tip)
+            # sub-branches continuing from the tip deeper into the canopy
+            for _ in range(rng.integers(0, 3)):
+                d = _unit_dirs(1, rng)[0]; d[1] = abs(d[1]) * rng.uniform(0.3, 1.0)
+                sl = bl * rng.uniform(0.3, 0.7)
+                stip = tip + d * sl
+                parts.append((lambda n, a=tip, b=stip, r=br * rng.uniform(0.5, 0.8):
+                              capsule_surf(a, b, r, n, rng), BRANCH, sl * trunkR * 3))
         if kind != 'dead':
-            if rng.random() < 0.5 or kind == 'bush':     # one big low-poly canopy
-                cr = trunkH * rng.uniform(0.35, 0.7)
-                cc = top + np.array([0, cr * rng.uniform(0.3, 0.8), 0])
+            # A meaningful share of canopies are SOLID-volume (dense leaf-card
+            # clouds), not thin shells — the training-vs-real domain gap.
+            solid = rng.random() < 0.5
+            if kind == 'oak' or rng.random() < 0.5 or kind == 'bush':  # one big canopy
+                cr = trunkH * canopyScale * rng.uniform(0.45, 0.85)
+                # center can sit BELOW the trunk top (droop) so the canopy's
+                # lower half overlaps trunk height — the oak silhouette
+                cc = top + np.array([0, cr * rng.uniform(0.2, 0.7) - droop * trunkH, 0])
                 blob(cc, cr, FOLIAGE, cr * cr * 10,
-                     np.array([rng.uniform(0.8, 1.2), rng.uniform(0.6, 1.1),
-                               rng.uniform(0.8, 1.2)]))
+                     np.array([rng.uniform(0.85, 1.3), rng.uniform(0.6, 1.15),
+                               rng.uniform(0.85, 1.3)]), solid=solid)
+                # oak: a second, lower skirt of foliage that wraps the trunk
+                if kind == 'oak' and rng.random() < 0.7:
+                    sr = cr * rng.uniform(0.6, 0.95)
+                    sc = np.array([top[0], trunkH * rng.uniform(0.35, 0.75), top[2]])
+                    blob(sc, sr, FOLIAGE, sr * sr * 8,
+                         np.array([rng.uniform(1.0, 1.5), rng.uniform(0.45, 0.8),
+                                   rng.uniform(1.0, 1.5)]), solid=solid)
             else:                                        # per-tip blobs
                 for tip in tips:
                     br = trunkH * rng.uniform(0.15, 0.35)
-                    blob(tip, br, FOLIAGE, br * br * 8)
+                    blob(tip, br, FOLIAGE, br * br * 8, solid=solid)
             if rng.random() < 0.25:                      # flowers / fruit
                 for _ in range(rng.integers(2, 8)):
                     d = _unit_dirs(1, rng)[0]
@@ -487,14 +544,26 @@ def make_tree(rng):
             for _ in range(rng.integers(2, 5)):
                 d = _unit_dirs(1, rng)[0] * trunkR * 2
                 blob(top + d, trunkR * rng.uniform(0.5, 1.0), FLOWER, trunkR)
-    if rng.random() < 0.45 and kind != 'bush':           # surface roots
-        for _ in range(rng.integers(2, 6)):
+    # Surface roots — only ~25% of trees (most real tree meshes model NO roots;
+    # they're usually underground). When present they are a SMALL, GROUND-HUGGING
+    # flare: thick where they meet the trunk (buttress-like, NOT twig-thin) and
+    # spreading LOW and outward, never rising into trunk/branch height. Root
+    # points stay in the bottom ~8% of the tree so the model learns "root = the
+    # little bit right at the base", not "any thin low structure".
+    if rng.random() < 0.25 and kind != 'bush':
+        rootTopH = trunkH * rng.uniform(0.02, 0.08)      # ceiling: very low
+        for _ in range(rng.integers(2, 5)):
             az = rng.uniform(0, 2 * np.pi)
-            rl = trunkH * rng.uniform(0.08, 0.25)
-            tip = np.array([np.cos(az) * rl, -rl * rng.uniform(0.1, 0.4),
+            rl = trunkH * rng.uniform(0.06, 0.16)
+            # spread outward and DOWN, ending at/below ground
+            tip = np.array([np.cos(az) * rl, -trunkH * rng.uniform(0.0, 0.05),
                             np.sin(az) * rl])
-            parts.append((lambda n, b=tip, r=trunkR * rng.uniform(0.3, 0.6):
-                          capsule_surf([0, 0, 0], b, r, n, rng), ROOT, rl * trunkR))
+            base = np.array([np.cos(az) * trunkR * 0.6, rootTopH,
+                             np.sin(az) * trunkR * 0.6])
+            parts.append((lambda n, a=base, b=tip,
+                          r=trunkR * rng.uniform(0.5, 1.0):     # THICK, buttress-like
+                          capsule_surf(a, b, r, n, rng, cap0=False),
+                          ROOT, rl * trunkR * 2))
     return parts
 
 

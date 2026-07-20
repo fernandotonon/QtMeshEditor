@@ -49,6 +49,13 @@ inline const QString& telemetryEnabled()
     return k;
 }
 
+/** @brief Opaque random telemetry installation UUID. Never machine-derived. */
+inline const QString& anonymousInstallationId()
+{
+    static const auto k(QStringLiteral("telemetry/anonymousInstallationId"));
+    return k;
+}
+
 /** @brief Light/dark/system from Preferences. */
 inline const QString& appearanceTheme()
 {

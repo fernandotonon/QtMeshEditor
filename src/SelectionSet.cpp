@@ -2,10 +2,12 @@
 
 #include <Ogre.h>
 #include <QSet>
+#include <QJsonObject>
 
 #include "Euler.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 
 namespace {
 
@@ -141,12 +143,19 @@ void SelectionSet::append(Ogre::SceneNode* const& obj)
 
 void SelectionSet::append(Ogre::Entity* const& obj)
 {
+    bool added = false;
     if(!mEntitiesSelected.contains(obj))
     {
         obj->getParentSceneNode()->showBoundingBox(true);
         mEntitiesSelected.append(obj);
+        added = true;
     }
 
+    if (added) {
+        SentryReporter::captureTelemetryEvent(QStringLiteral("selection.mesh"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                        {QStringLiteral("selection_count"), mEntitiesSelected.size()}});
+    }
     emit entitySelectionChanged();
     emit selectionChanged();
 }
@@ -223,6 +232,9 @@ void SelectionSet::selectOne(Ogre::Entity* const& obj)
     obj->getParentSceneNode()->showBoundingBox(true);
     mEntitiesSelected.append(obj);
 
+    SentryReporter::captureTelemetryEvent(QStringLiteral("selection.mesh"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                    {QStringLiteral("selection_count"), 1}});
     emit entitySelectionChanged();
     emit selectionChanged();
 }

@@ -3,6 +3,7 @@
 #include <QInputDialog>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QJsonObject>
 #include <QPointer>
 
 #include <OgreAnimationState.h>
@@ -322,6 +323,10 @@ void AnimationWidget::updateSkeletonTable()
 void AnimationWidget::on_PlayPauseButton_toggled(bool checked)
 {
     SentryReporter::addBreadcrumb("ui.animation", "Toggle animation playback");
+    if (checked) {
+        SentryReporter::captureTelemetryEvent(QStringLiteral("animation.played"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")}});
+    }
     setAnimationState(checked);
 }
 

@@ -74,6 +74,8 @@ private:
     void startNextQueuedFile();
     void clearActive();
     const ModelSpec* findSpec(const QString& id, QList<ModelSpec>* owner = nullptr) const;
+    void captureModelTelemetry(const QString& eventName, const ModelSpec* spec,
+                               qint64 durationMs = -1, const QString& failureCategory = {}) const;
 
     static AIModelCatalog* s_instance;
 
@@ -82,6 +84,7 @@ private:
     QString m_activeModelName;
     QString m_statusMessage;
     QList<FileSpec> m_pendingFiles;
+    qint64 m_activeDownloadStartedMs = 0;
 };
 
 #endif // AIMODELCATALOG_H
