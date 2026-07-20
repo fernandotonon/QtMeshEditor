@@ -268,8 +268,12 @@ TEST_F(MocapRecorderTest, HeadTargetIsNoneForStaticMeshWithoutNode)
         MocapRecorder::recordFace(m_entity, samples, m_mapping, {});
     ASSERT_TRUE(report.ok());
     // skeleton-less mesh + a parent node exists -> node-TRS head clip
-    EXPECT_EQ(report.headTarget, QStringLiteral("node"));
-    EXPECT_GT(report.headKeyframesWritten, 0);
+    EXPECT_EQ(report.headTarget, QStringLiteral("node"))
+        << "headError=" << report.headError.toStdString()
+        << " parentNode=" << (m_entity->getParentSceneNode()
+               ? m_entity->getParentSceneNode()->getName() : std::string("<null>"));
+    EXPECT_GT(report.headKeyframesWritten, 0)
+        << "headError=" << report.headError.toStdString();
     EXPECT_TRUE(MocapRecorder::resolveHeadBone(m_entity).isEmpty());
 }
 

@@ -236,15 +236,14 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                 }
                 if (collides && options.replaceExisting)
                     nam->deleteClip(clip);
-                // Clip length must strictly exceed the last key time:
-                // NodeAnimationManager::addKeyframe rejects `time > getLength()`,
-                // and the last key sits at exactly `length` — the double→float
-                // round-trip on the stored length can dip just below it and
-                // silently drop the final key (0 keyframes written). A tiny pad
-                // keeps every key inside the clip. Harmless (clip is fractionally
-                // longer than the captured span).
+                // Clip length padded strictly beyond the last key time:
+                // NodeAnimationManager::addKeyframe rejects `time > getLength()`
+                // (MorphAnimationManager auto-extends instead), so a key sitting
+                // at exactly `length` can be dropped by the double→float
+                // round-trip. Harmless (clip is fractionally longer).
                 const double clipLen = std::max(length, 0.001) + 1e-3;
-                if (nam && nam->createClip(clip, clipLen)) {
+                const bool created = nam && nam->createClip(clip, clipLen);
+                if (created) {
                     const QString nodeName = QString::fromStdString(node->getName());
                     int written = 0;
                     for (int i : keys) {
@@ -258,6 +257,16 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                     // report never says "node" with an empty clip.
                     if (written > 0)
                         report.headTarget = QStringLiteral("node");
+                    else if (report.headError.isEmpty())
+                        report.headError = QStringLiteral(
+                            "node head clip '%1' created but 0/%2 keyframes "
+                            "written (node '%3' addKeyframe rejected)")
+                            .arg(clip).arg(static_cast<int>(keys.size()))
+                            .arg(QString::fromStdString(node->getName()));
+                } else if (nam && report.headError.isEmpty()) {
+                    report.headError = QStringLiteral(
+                        "node head clip '%1' createClip failed (scene animation "
+                        "of that name already exists?)").arg(clip);
                 }
             }
         }
