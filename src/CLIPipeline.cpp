@@ -2228,6 +2228,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
     bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
     QString dumpCanonicalPath;        // --dump-canonical <out.json>
+    bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
+    QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
@@ -2310,6 +2312,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--dump-canonical" && i + 1 < argc) {
             dumpCanonicalMode = true;
             dumpCanonicalPath = QString(argv[++i]);
+            continue;
+        }
+        // #837 retarget parity harness (dev/test): apply an arbitrary
+        // canonical clip JSON (as written by --dump-canonical) through the
+        // SAME bind-referenced retarget the model path uses — no model, no
+        // conditioning. Lets a self-retarget round-trip (dump a rig's own
+        // clip → apply-canonical back onto it → re-dump → compare) measure
+        // per-bone retarget parity in isolation.
+        if (arg == "--apply-canonical" && i + 1 < argc) {
+            applyCanonicalMode = true;
+            applyCanonicalPath = QString(argv[++i]);
             continue;
         }
         if (arg == "--generate" && i + 1 < argc) {
@@ -2439,6 +2452,68 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
                                generateUseModel, armSpaceDeg, generateFootPin,
                                generateSmoothFps);
+    }
+
+    // #837 parity harness: apply a canonical clip JSON through the pure
+    // bind-referenced retarget (no model, no conditioning, no smooth/pin/
+    // arm-space) and export. Used only for retarget self-parity testing.
+    if (applyCanonicalMode) {
+        if (!initOgreHeadless()) return 1;
+        QFile jf(applyCanonicalPath);
+        if (!jf.open(QIODevice::ReadOnly)) {
+            err() << "Error: cannot open " << applyCanonicalPath << Qt::endl;
+            return 1;
+        }
+        const QJsonObject root =
+            QJsonDocument::fromJson(jf.readAll()).object();
+        const QJsonArray clips = root.value("clips").toArray();
+        if (clips.isEmpty()) { err() << "Error: no clips in json" << Qt::endl; return 1; }
+        const QJsonObject clip = clips.first().toObject();
+        std::vector<std::vector<std::array<float, 4>>> q;
+        for (const QJsonValue& fv : clip.value("quats").toArray()) {
+            const QJsonArray fa = fv.toArray();
+            std::vector<std::array<float, 4>> frame;
+            for (const QJsonValue& jv : fa) {
+                const QJsonArray a = jv.toArray();
+                frame.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                                 float(a[2].toDouble()), float(a[3].toDouble())});
+            }
+            q.push_back(std::move(frame));
+        }
+        std::vector<std::array<float, 4>> rw;
+        for (const QJsonValue& v : clip.value("restWorld").toArray()) {
+            const QJsonArray a = v.toArray();
+            rw.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                          float(a[2].toDouble()), float(a[3].toDouble())});
+        }
+        std::vector<std::array<float, 3>> rd;
+        for (const QJsonValue& v : clip.value("restDir").toArray()) {
+            const QJsonArray a = v.toArray();
+            rd.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                          float(a[2].toDouble())});
+        }
+        const int cfps = root.value("fps").toInt(30);
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* ent = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { ent = e; break; }
+        if (!ent) { err() << "Error: no skinned mesh" << Qt::endl; return 1; }
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        const auto res = AnimationMerger::applyMotionClip(
+            skel.get(), "generated_parity", q, cfps,
+            /*worldFrame=*/true, rw, /*refineWithModel=*/false,
+            /*refineStride=*/8, /*yaw180=*/false, rd);
+        if (!res.ok) { err() << "Error: " << res.error << Qt::endl; return 1; }
+        const QString out = outputPath.isEmpty()
+            ? QStringLiteral("/tmp/parity_out.glb") : outputPath;
+        auto* node = ent->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("applied canonical → %1 (%2 frames)\n")
+                     .arg(QFileInfo(out).fileName()).arg(res.frames));
+        return 0;
     }
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
