@@ -67,6 +67,7 @@
 #include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QThread>
 #ifdef ENABLE_PS1_RIP
 #include "PS1/runtime/PS1RipManager.h"
@@ -92,6 +93,7 @@
 #include <QMetaObject>
 #include <QPixmap>
 #include <QSet>
+#include <QUuid>
 #include <optional>
 #include <OgreException.h>
 #include <OgreLight.h>
@@ -756,8 +758,13 @@ bool MCPServer::isHeavyTool(const QString &name)
 
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
-    qDebug() << "MCP Tool Call:" << name << args;
+    qDebug() << "MCP Tool Call:" << name;
 
+    const QString invocationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QElapsedTimer telemetryTimer;
+    telemetryTimer.start();
+    SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("started"),
+        -1, false, QString(), invocationId);
     SentryReporter::addBreadcrumb("ai.tool_call", QStringLiteral("Tool call: %1").arg(name));
 
     uintptr_t txn = 0;
@@ -768,6 +775,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     // Lazily initialize Ogre/Manager on first scene-dependent tool call
     if (!name.startsWith(QStringLiteral("cloud_")) && !ensureOgreInitialized()) {
         if (txn) SentryReporter::finishTransaction(txn);
+        SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("failed"),
+            telemetryTimer.elapsed(), false, QStringLiteral("renderer"), invocationId);
         return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
 
@@ -775,6 +784,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     const auto handlerIt = handlers.constFind(name);
     if (handlerIt == handlers.constEnd()) {
         if (txn) SentryReporter::finishTransaction(txn);
+        SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("failed"),
+            telemetryTimer.elapsed(), false, QStringLiteral("unknown_tool"), invocationId);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
 
@@ -826,6 +837,33 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         if (!feature.isEmpty())
             GamificationManager::noteFeature(feature, GamificationManager::Surface::Mcp);
     }
+
+    const bool failed = toolResult.contains("isError") && toolResult["isError"].toBool();
+    static const auto sceneChangingTools = QSet{
+        QStringLiteral("load_mesh"), QStringLiteral("transform_mesh"), QStringLiteral("transform_submesh"),
+        QStringLiteral("apply_material"), QStringLiteral("create_material"), QStringLiteral("modify_material"),
+        QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
+        QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap_selection"), QStringLiteral("retopologize"),
+        QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_mesh_texture"),
+        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("create_primitive"),
+        QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
+        QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
+        QStringLiteral("bake_animation_fps"), QStringLiteral("motion_in_between"), QStringLiteral("generate_motion"),
+        QStringLiteral("adjust_arm_space"), QStringLiteral("segment_mesh"), QStringLiteral("generate_mesh_from_image"),
+        QStringLiteral("save_scene"), QStringLiteral("open_scene"), QStringLiteral("generate_lods"),
+        QStringLiteral("generate_auto_lods"), QStringLiteral("remove_lods"), QStringLiteral("decimate_mesh"),
+        QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
+        QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
+        QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("bake_vat"),
+        QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
+        QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
+        QStringLiteral("load_pose_library")
+    };
+    SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name,
+        failed ? QStringLiteral("failed") : QStringLiteral("completed"),
+        telemetryTimer.elapsed(), sceneChangingTools.contains(name) && !failed,
+        failed ? QStringLiteral("tool_error") : QString(), invocationId);
 
     if (txn) SentryReporter::finishTransaction(txn);
 
@@ -4341,6 +4379,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
     try {
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
             QStringLiteral("MCP segment_mesh"));
+        QElapsedTimer segmentTimer;
+        segmentTimer.start();
 
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
@@ -4378,6 +4418,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
         }
         const QString categoryStr = args.value("category").toString();
+        QString requestedCategory = categoryStr.isEmpty() ? QStringLiteral("auto") : categoryStr.toLower();
         if (!categoryStr.isEmpty()) {
             bool okCat = false;
             opts.category = MeshSegmenter::categoryFromName(categoryStr, &okCat);
@@ -4385,6 +4426,13 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                 return makeErrorResult("Error: category must be 'auto', 'body', "
                                        "'vegetation', 'vehicle', or 'building'");
         }
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                        {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}});
+
         // Auto → classifier (first-use download); offline/no_model → body.
         if (!noModel)
             opts.category = MeshSegmenter::resolveCategoryBlocking(
@@ -4399,15 +4447,46 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
             rigLabels.empty() ? nullptr : rigLabels.data());
-        if (!r.ok)
+        if (!r.ok) {
+            SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
+                QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                            {QStringLiteral("requested_category"), requestedCategory},
+                            {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(opts.category)},
+                            {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                            {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                            {QStringLiteral("ai"), !noModel},
+                            {QStringLiteral("geometric_fallback"), noModel},
+                            {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                            {QStringLiteral("success"), false},
+                            {QStringLiteral("failure_category"), SentryReporter::sanitizedErrorCategory(r.error)},
+                            {QStringLiteral("capability"), QStringLiteral("segmentation")}},
+                QStringLiteral("error"));
             return makeErrorResult(QString("Error: %1")
                 .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
+        }
 
         const int P = MeshSegmenter::partCount();
         std::vector<int> vCount(P, 0);
         for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
         std::vector<int> fCount(P, 0);
         for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
+
+        int resultPartCount = 0;
+        for (int p = 0; p < P; ++p)
+            if (vCount[p] > 0 || fCount[p] > 0)
+                ++resultPartCount;
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(r.category)},
+                        {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                        {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                        {QStringLiteral("ai"), r.usedModel},
+                        {QStringLiteral("geometric_fallback"), !r.usedModel},
+                        {QStringLiteral("result_part_count"), resultPartCount},
+                        {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                        {QStringLiteral("success"), true},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
         QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
             .arg(QString::fromStdString(entity->getName())).arg(vertexCount)

@@ -1570,13 +1570,17 @@ int CLIPipeline::run(int argc, char* argv[])
     }
 
     if (SentryReporter::isEnabled()) {
+        SentryReporter::configureSession(QStringLiteral("cli"));
         SentryReporter::initialize();
-        SentryReporter::setTag("os", QSysInfo::prettyProductName());
-        SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
-        SentryReporter::setTag("qt_version", qVersion());
-        SentryReporter::setTag("launch_mode", "cli");
     }
 
+    SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
+        QJsonObject{{QStringLiteral("launch_mode"), QStringLiteral("cli")}});
+    QElapsedTimer cliTimer;
+    cliTimer.start();
+    const QString cliInvocationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    SentryReporter::captureInvocationEvent(QStringLiteral("cli"), cmd, QStringLiteral("started"),
+        -1, false, QString(), cliInvocationId);
     auto cliTxn = SentryReporter::startTransaction("cli." + cmd, "cli.command");
     SentryReporter::addBreadcrumb("cli", QString("CLI command: %1").arg(cmd));
 
@@ -1660,6 +1664,9 @@ int CLIPipeline::run(int argc, char* argv[])
         GamificationManager::instance()->flushBlocking(4000);
     }
 
+    SentryReporter::captureInvocationEvent(QStringLiteral("cli"), cmd,
+        rc == 0 ? QStringLiteral("completed") : QStringLiteral("failed"),
+        cliTimer.elapsed(), rc == 0, rc == 0 ? QString() : QStringLiteral("nonzero_exit"), cliInvocationId);
     SentryReporter::finishTransaction(cliTxn);
     SentryReporter::shutdown();
     _exit(rc);
@@ -3899,6 +3906,12 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             return 1;
         }
 
+        SentryReporter::captureTelemetryEvent(QStringLiteral("animation.exported"), QJsonObject{
+            {QStringLiteral("source_surface"), QStringLiteral("cli")},
+            {QStringLiteral("output_format"), SentryReporter::extensionOnly(outputPath)},
+            {QStringLiteral("frame_count"), exported},
+            {QStringLiteral("success"), true}
+        });
         return 0;
 
     } else {
@@ -3916,6 +3929,12 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             return 1;
         }
 
+        SentryReporter::captureTelemetryEvent(QStringLiteral("animation.exported"), QJsonObject{
+            {QStringLiteral("source_surface"), QStringLiteral("cli")},
+            {QStringLiteral("output_format"), SentryReporter::extensionOnly(outputPath)},
+            {QStringLiteral("frame_count"), 1},
+            {QStringLiteral("success"), true}
+        });
         cliWrite(QString("Exported pose (t=%1s): %2\n")
             .arg(time, 0, 'f', 3)
             .arg(QFileInfo(outputPath).fileName()));
@@ -10077,7 +10096,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         QString("segment .%1 noModel=%2 category=%3")
             .arg(fi.suffix()).arg(noModel)
             .arg(MeshSegmenter::categoryName(category)));
-
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     Ogre::Entity* entity = nullptr;
     for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
@@ -10160,6 +10178,16 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         return 0;
     }
 
+    QElapsedTimer segmentTimer;
+    segmentTimer.start();
+    const QString requestedCategory = MeshSegmenter::categoryName(category);
+    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                    {QStringLiteral("requested_category"), requestedCategory},
+                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
+
     MeshSegmenter::Options opts;
     opts.upAxis = upAxis;
     opts.forceFallback = noModel;
@@ -10179,6 +10207,19 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
         modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
     if (!r.ok) {
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(opts.category)},
+                        {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                        {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                        {QStringLiteral("ai"), !noModel},
+                        {QStringLiteral("geometric_fallback"), noModel},
+                        {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                        {QStringLiteral("success"), false},
+                        {QStringLiteral("failure_category"), SentryReporter::sanitizedErrorCategory(r.error)},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}},
+            QStringLiteral("error"));
         err() << "Error: " << (r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error)
               << Qt::endl;
         return 1;
@@ -10189,6 +10230,23 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     std::vector<int> vCount(P, 0), fCount(P, 0);
     for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
     for (int l : r.faceLabels)   if (l >= 0 && l < P) ++fCount[l];
+
+    int resultPartCount = 0;
+    for (int p = 0; p < P; ++p)
+        if (vCount[p] > 0 || fCount[p] > 0)
+            ++resultPartCount;
+    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                    {QStringLiteral("requested_category"), requestedCategory},
+                    {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(r.category)},
+                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                    {QStringLiteral("ai"), r.usedModel},
+                    {QStringLiteral("geometric_fallback"), !r.usedModel},
+                    {QStringLiteral("result_part_count"), resultPartCount},
+                    {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                    {QStringLiteral("success"), true},
+                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
     if (jsonOutput) {
         QJsonObject root;
