@@ -406,6 +406,7 @@ bool AnimationControlController::boneCanTranslate(const Ogre::Bone* bone) const
 
 void AnimationControlController::selectBone(const QString& boneName)
 {
+    const bool changedSelection = m_selectedBone != boneName.toStdString();
     m_selectedTrack   = nullptr;
     m_currentKeyframe = nullptr;
     m_selectedBone    = boneName.toStdString();
@@ -444,6 +445,11 @@ void AnimationControlController::selectBone(const QString& boneName)
         }
     }
 
+    if (changedSelection) {
+        SentryReporter::captureTelemetryEvent(QStringLiteral("selection.bone"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                        {QStringLiteral("target_kind"), QStringLiteral("bone")}});
+    }
     emit boneListChanged();
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);

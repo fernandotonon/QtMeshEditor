@@ -126,7 +126,16 @@ SkinTokensPredictor.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
+FaceRigController.cpp
 UniRigPredictor.cpp
+FaceRig/ArkitTemplate.cpp
+FaceRig/NonRigidICP.cpp
+FaceRig/SparseSolve.cpp
+FaceRig/DeformationTransfer.cpp
+FaceRig/FaceRigger.cpp
+FaceRig/FaceRigAttach.cpp
+FaceRig/FaceLandmarkDetector.cpp
+FaceRig/FaceRigLandmarks.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionGenerator.cpp
@@ -184,6 +193,7 @@ MeshDecimator.cpp
 MeshDecimatorController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
+AIModelCatalog.cpp
 WelcomeScreenController.cpp
 WelcomeDialog.cpp
 ScanConfig.cpp
@@ -322,6 +332,7 @@ SkinTokensPredictor.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h
+FaceRigController.h
 UniRigPredictor.h
 MotionInbetween.h
 MotionLibrary.h
@@ -347,6 +358,7 @@ MeshDecimator.h
 MeshDecimatorController.h
 MeshValidator.h
 AIChatManager.h
+AIModelCatalog.h
 WelcomeScreenController.h
 WelcomeDialog.h
 ScanConfig.h

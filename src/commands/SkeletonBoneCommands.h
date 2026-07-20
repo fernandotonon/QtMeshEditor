@@ -106,3 +106,99 @@ private:
     QString m_entityName;
     bool m_show = false;
 };
+
+class ReparentBoneCommand : public QUndoCommand
+{
+public:
+    ReparentBoneCommand(std::string entityName,
+                        QString boneName,
+                        QString newParentName,
+                        SkeletonEditor::ReparentOptions opts,
+                        QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+
+private:
+    std::string m_entityName;
+    QString m_boneName;
+    QString m_newParentName;
+    SkeletonEditor::ReparentOptions m_opts;
+    SkeletonEditor::Snapshot m_before;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};
+
+class SplitBoneCommand : public QUndoCommand
+{
+public:
+    SplitBoneCommand(std::string entityName,
+                     QString boneName,
+                     float t,
+                     QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+    const QString& splitBoneName() const { return m_splitBoneName; }
+
+private:
+    std::string m_entityName;
+    QString m_boneName;
+    float m_t = 0.5f;
+    QString m_splitBoneName;
+    SkeletonEditor::Snapshot m_before;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};
+
+class ConnectBoneCommand : public QUndoCommand
+{
+public:
+    ConnectBoneCommand(std::string entityName,
+                       QString boneName,
+                       bool connected,
+                       QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+
+private:
+    std::string m_entityName;
+    QString m_boneName;
+    bool m_connected = true;
+    SkeletonEditor::Snapshot m_before;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};
+
+class AttachBoneToEntityCommand : public QUndoCommand
+{
+public:
+    AttachBoneToEntityCommand(std::string srcEntityName,
+                              QStringList boneNames,
+                              std::string dstEntityName,
+                              SkeletonEditor::AttachOptions opts,
+                              QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+    const QString& attachedBoneName() const { return m_attachedBoneName; }
+
+private:
+    std::string m_srcEntityName;
+    QStringList m_boneNames;
+    std::string m_dstEntityName;
+    SkeletonEditor::AttachOptions m_opts;
+    SkeletonEditor::Snapshot m_dstBefore;
+    QString m_attachedBoneName;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};

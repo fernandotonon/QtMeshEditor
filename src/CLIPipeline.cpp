@@ -42,6 +42,9 @@
 #include "SkinWeights.h"
 #include "SkinEvaluate.h"
 #include "AutoRig.h"
+#include "FaceRig/ArkitTemplate.h"
+#include "FaceRig/FaceRigAttach.h"
+#include "FaceRig/FaceRigLandmarks.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
@@ -861,6 +864,13 @@ void CLIPipeline::printUsage()
         "                                    Per-vertex weight diff vs a reference-skinned copy of the same asset\n"
         "                                    (e.g. Mixamo) — vertices matched by position, bones by name. See\n"
         "                                    docs/SKINNING_QUALITY.md for the comparison protocol.\n"
+        "  facerig <file> -o <out> [--max-shapes N] [--max-residual PCT] [--json]\n"
+        "                                    Auto-generate the 52 ARKit blendshapes on a humanoid\n"
+        "                                    FACE mesh: fit the ARKit template (non-rigid ICP) and\n"
+        "                                    transfer each expression (Sumner-Popovic) onto the\n"
+        "                                    mesh, attaching them as named morph targets. A poor\n"
+        "                                    fit (non-face mesh) is rejected. The bundled template\n"
+        "                                    downloads on first use. Feeds `qtmesh mocap --face`.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -1560,13 +1570,17 @@ int CLIPipeline::run(int argc, char* argv[])
     }
 
     if (SentryReporter::isEnabled()) {
+        SentryReporter::configureSession(QStringLiteral("cli"));
         SentryReporter::initialize();
-        SentryReporter::setTag("os", QSysInfo::prettyProductName());
-        SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
-        SentryReporter::setTag("qt_version", qVersion());
-        SentryReporter::setTag("launch_mode", "cli");
     }
 
+    SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
+        QJsonObject{{QStringLiteral("launch_mode"), QStringLiteral("cli")}});
+    QElapsedTimer cliTimer;
+    cliTimer.start();
+    const QString cliInvocationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    SentryReporter::captureInvocationEvent(QStringLiteral("cli"), cmd, QStringLiteral("started"),
+        -1, false, QString(), cliInvocationId);
     auto cliTxn = SentryReporter::startTransaction("cli." + cmd, "cli.command");
     SentryReporter::addBreadcrumb("cli", QString("CLI command: %1").arg(cmd));
 
@@ -1599,6 +1613,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
+    else if (cmd == "facerig") rc = cmdFaceRig(argc, argv);
     else if (cmd == "segment") rc = cmdSegment(argc, argv);
     else if (cmd == "generate3d") rc = cmdGenerate3d(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
@@ -1625,6 +1640,7 @@ int CLIPipeline::run(int argc, char* argv[])
             {QStringLiteral("uv"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("skin"), QStringLiteral("skin_weights")},
             {QStringLiteral("rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("facerig"), QStringLiteral("auto_rig")},
             {QStringLiteral("anim"), QStringLiteral("animation_blend")},
             {QStringLiteral("morph"), QStringLiteral("morph")},
             {QStringLiteral("vat"), QStringLiteral("vat_bake")},
@@ -1648,6 +1664,9 @@ int CLIPipeline::run(int argc, char* argv[])
         GamificationManager::instance()->flushBlocking(4000);
     }
 
+    SentryReporter::captureInvocationEvent(QStringLiteral("cli"), cmd,
+        rc == 0 ? QStringLiteral("completed") : QStringLiteral("failed"),
+        cliTimer.elapsed(), rc == 0, rc == 0 ? QString() : QStringLiteral("nonzero_exit"), cliInvocationId);
     SentryReporter::finishTransaction(cliTxn);
     SentryReporter::shutdown();
     _exit(rc);
@@ -4052,6 +4071,12 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             return 1;
         }
 
+        SentryReporter::captureTelemetryEvent(QStringLiteral("animation.exported"), QJsonObject{
+            {QStringLiteral("source_surface"), QStringLiteral("cli")},
+            {QStringLiteral("output_format"), SentryReporter::extensionOnly(outputPath)},
+            {QStringLiteral("frame_count"), exported},
+            {QStringLiteral("success"), true}
+        });
         return 0;
 
     } else {
@@ -4069,6 +4094,12 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             return 1;
         }
 
+        SentryReporter::captureTelemetryEvent(QStringLiteral("animation.exported"), QJsonObject{
+            {QStringLiteral("source_surface"), QStringLiteral("cli")},
+            {QStringLiteral("output_format"), SentryReporter::extensionOnly(outputPath)},
+            {QStringLiteral("frame_count"), 1},
+            {QStringLiteral("success"), true}
+        });
         cliWrite(QString("Exported pose (t=%1s): %2\n")
             .arg(time, 0, 'f', 3)
             .arg(QFileInfo(outputPath).fileName()));
@@ -9555,8 +9586,10 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
         QString("rig .%1 template=%2 algo=%3 skin=%4")
             .arg(fi.suffix(), templateName, algoName).arg(alsoSkin));
+    // Extension only — absolute paths leak usernames/directory structure
+    // into telemetry.
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-        QString("Importing %1").arg(fi.absoluteFilePath()));
+        QString("Importing .%1 for facerig").arg(fi.suffix()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     QList<Ogre::Entity*> meshEntities;
@@ -9625,6 +9658,252 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         QStringLiteral("auto_rig"),
         {{QStringLiteral("bones_created"), report.boneCount},
          {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}},
+        GamificationManager::Surface::Cli);
+    return 0;
+}
+
+int CLIPipeline::cmdFaceRig(int argc, char* argv[])
+{
+    // Parse: facerig <file> [-o out] [--max-shapes N] [--max-residual PCT]
+    //        [--json]
+    QString inputPath, outputPath;
+    bool jsonOutput = false;
+    FaceRig::FaceRigOptions opts;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "facerig" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--max-shapes" && i + 1 < argc) {
+            opts.maxShapes = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--max-residual" && i + 1 < argc) {
+            opts.maxFitResidualPct = QString::fromLocal8Bit(argv[++i]).toDouble();
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh facerig <file> [-o out] [--max-shapes N] "
+                 "[--max-residual PCT] [--json]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> required." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        QString("facerig .%1 max_shapes=%2").arg(fi.suffix()).arg(opts.maxShapes));
+    // Extension only — absolute paths leak usernames/directory structure
+    // into telemetry.
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QString("Importing .%1 for facerig").arg(fi.suffix()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    QList<Ogre::Entity*> meshEntities;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity")
+            meshEntities.push_back(e);
+    }
+    if (meshEntities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (meshEntities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh facerig` supports "
+                 "one entity per file." << Qt::endl;
+        return 1;
+    }
+    Ogre::Entity* entity = meshEntities.first();
+
+    FaceRig::AttachReport rep;
+    if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM")) {
+        // Diagnostic: exercise the GUI's MARKER path headlessly — seed the
+        // markers, force-place them at their seeded/default positions, and rig
+        // from those anchors (RBF warp + anchored fit), printing per-shape
+        // delta stats. Mirrors FaceRigController::rigFromMarkers.
+        const QString tpath = FaceRig::ArkitTemplate::ensureModelBlocking();
+        FaceRig::ArkitTemplate tmpl;
+        QString terr;
+        if (tpath.isEmpty() || !tmpl.load(tpath, &terr)) {
+            err() << "Error: template unavailable: " << terr << Qt::endl;
+            return 1;
+        }
+        FaceRig::FaceRigGeometry geo = FaceRig::extractGeometry(entity);
+        // per-submesh head-mask coverage (eye/teeth submeshes skinned to
+        // non-body-region bones can be silently excluded from the mask).
+        for (const auto& o : geo.owners) {
+            int inMask = 0;
+            for (int i = 0; i < o.count; ++i)
+                if (int(geo.headMask.size()) > int(o.base) + i
+                    && geo.headMask[size_t(o.base) + size_t(i)]) ++inMask;
+            err() << "[sim] submesh handle=" << o.handle << " verts=" << o.count
+                  << " inHeadMask=" << inMask << Qt::endl;
+        }
+        std::vector<float> headV; std::vector<int> headF;
+        FaceRig::headSubmesh(geo, headV, headF);
+        bool confident = false;
+        auto markers = FaceRig::seedFaceMarkers(entity, headV, headF, tmpl, &confident);
+        if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM") == 2) {
+            // sim mode 2: ignore the detection seeds and place every marker at
+            // its head-box-projected template position — approximates a user
+            // placing markers carefully on a proportional face.
+            float lo[3]={1e30f,1e30f,1e30f}, hi[3]={-1e30f,-1e30f,-1e30f};
+            const int unv = int(headV.size()/3);
+            for (int i = 0; i < unv; ++i)
+                for (int a = 0; a < 3; ++a) {
+                    lo[a]=std::min(lo[a],headV[size_t(i)*3+a]);
+                    hi[a]=std::max(hi[a],headV[size_t(i)*3+a]);
+                }
+            const auto& tn = tmpl.neutral();
+            float tlo[3]={1e30f,1e30f,1e30f}, thi[3]={-1e30f,-1e30f,-1e30f};
+            for (int i = 0; i < tmpl.vertexCount(); ++i)
+                for (int a = 0; a < 3; ++a) {
+                    tlo[a]=std::min(tlo[a],tn[size_t(i)*3+a]);
+                    thi[a]=std::max(thi[a],tn[size_t(i)*3+a]);
+                }
+            for (auto& m : markers) {
+                if (m.tmplVertex < 0) continue;
+                for (int a = 0; a < 3; ++a) {
+                    const float tv = tn[size_t(m.tmplVertex)*3+a];
+                    const float f = (thi[a]-tlo[a])>1e-6f ? (tv-tlo[a])/(thi[a]-tlo[a]) : 0.5f;
+                    m.userPos[size_t(a)] = lo[a] + f*(hi[a]-lo[a]);
+                }
+            }
+        }
+        for (auto& m : markers) m.placed = true;   // simulate the user placing all
+        const auto anchors = FaceRig::anchorsFromMarkers(markers, tmpl);
+        err() << "[sim] markers=" << markers.size() << " anchors=" << anchors.size()
+              << " seedConfident=" << confident << Qt::endl;
+        // seed-accuracy probe: when the rig target IS the template geometry
+        // (the ARKit reference), each marker's true position is its template
+        // vertex — print the seeding error per marker.
+        if (qEnvironmentVariableIntValue("QTMESH_FACERIG_MARKER_SIM") == 1) {
+            for (const auto& m : markers) {
+                if (!m.placed || m.tmplVertex < 0) continue;
+                const auto& tv = tmpl.neutral();
+                const float dx = tv[size_t(m.tmplVertex)*3]   - m.userPos[0];
+                const float dy = tv[size_t(m.tmplVertex)*3+1] - m.userPos[1];
+                const float dz = tv[size_t(m.tmplVertex)*3+2] - m.userPos[2];
+                err() << "[sim] seederr '" << m.label << "' = "
+                      << std::sqrt(dx*dx + dy*dy + dz*dz) << Qt::endl;
+            }
+        }
+        // surface-distance probe: how far does each seeded marker float off
+        // the head mesh? (box-mapped defaults used to hover off the face when
+        // protrusions inflate the head box)
+        for (const auto& m : markers) {
+            if (!m.placed) continue;
+            float best = 1e30f;
+            for (size_t i = 0; i + 2 < headV.size(); i += 3) {
+                const float dx = headV[i]   - m.userPos[0];
+                const float dy = headV[i+1] - m.userPos[1];
+                const float dz = headV[i+2] - m.userPos[2];
+                best = std::min(best, dx*dx + dy*dy + dz*dz);
+            }
+            err() << "[sim] surfdist '" << m.label << "' = "
+                  << std::sqrt(best) << Qt::endl;
+        }
+        // side probe: character faces -Z, up +Y => character-LEFT = -X.
+        for (const auto& m : markers)
+            if (m.tmplVertex >= 0)
+                err() << "[sim] marker '" << m.label << "' tmplX="
+                      << tmpl.neutral()[size_t(m.tmplVertex)*3]
+                      << (tmpl.neutral()[size_t(m.tmplVertex)*3] < 0
+                          ? "  (character-LEFT side)" : "  (character-RIGHT side)")
+                      << Qt::endl;
+        // warp diagnostics: how big is the warped template vs the user head?
+        {
+            std::vector<float> w = FaceRig::rbfWarpByAnchors(tmpl.neutral(), anchors);
+            auto diagOf = [](const std::vector<float>& v){
+                float lo[3]={1e30f,1e30f,1e30f}, hi[3]={-1e30f,-1e30f,-1e30f};
+                for (size_t i=0;i+2<v.size();i+=3) for(int a=0;a<3;a++){lo[a]=std::min(lo[a],v[i+a]);hi[a]=std::max(hi[a],v[i+a]);}
+                double s=0; for(int a=0;a<3;a++) s+=double(hi[a]-lo[a])*(hi[a]-lo[a]);
+                return std::sqrt(s); };
+            err() << "[sim] diag: tmpl=" << diagOf(tmpl.neutral())
+                  << " warped=" << (w.empty()? -1.0 : diagOf(w))
+                  << " head=" << diagOf(headV) << Qt::endl;
+        }
+        const FaceRig::FaceRigResult res = FaceRig::buildFaceRig(
+            geo.userV, geo.userF, tmpl, opts, geo.headMask, anchors);
+        if (!res.ok) {
+            err() << "Error: marker-sim fit failed — "
+                  << QString::fromStdString(res.error) << Qt::endl;
+            return 1;
+        }
+        err() << "[sim] fit mean=" << res.fitMeanResidualPct
+              << "% max=" << res.fitMaxResidualPct << "%" << Qt::endl;
+        for (const auto& sh : res.shapes)
+            if (sh.name == "jawOpen" || sh.name == "mouthSmileLeft"
+                || sh.name == "eyeBlinkLeft" || sh.name == "browInnerUp")
+                err() << "[sim] " << sh.name << ": nonZero=" << sh.nonZeroVerts
+                      << " maxDisp=" << sh.maxDisp << Qt::endl;
+        rep.userVertexCount = res.userVertexCount;
+        rep.fitMeanResidualPct = res.fitMeanResidualPct;
+        rep.fitMaxResidualPct = res.fitMaxResidualPct;
+        FaceRig::attachShapes(entity, geo, res, rep);
+        if (!rep.ok) {
+            err() << "Error: marker-sim attach failed — " << rep.error << Qt::endl;
+            return 1;
+        }
+    } else {
+        rep = FaceRig::attachFaceRigWithBundledTemplate(entity, opts);
+        if (!rep.ok) {
+            err() << "Error: face-rig failed — " << rep.error << Qt::endl;
+            return 1;
+        }
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+    // Sidecar with the ordered ARKit names (Assimp's glTF exporter drops
+    // targetNames), so `qtmesh mocap --face` / re-import can rebind by index.
+    FaceRig::writeArkitSidecar(QFileInfo(outputPath).absoluteFilePath(),
+                               rep.shapeNames);
+
+    if (jsonOutput) {
+        QJsonObject j;
+        j["shapes_attached"] = rep.shapesAttached;
+        j["user_vertex_count"] = rep.userVertexCount;
+        j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+        j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
+        j["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(j).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(QString("Face-rig: attached %1 ARKit blendshape(s)\n"
+                         "  user vertices: %2\n"
+                         "  fit residual: mean %3%  max %4%\n"
+                         "Wrote: %5\n")
+                     .arg(rep.shapesAttached)
+                     .arg(rep.userVertexCount)
+                     .arg(rep.fitMeanResidualPct, 0, 'f', 3)
+                     .arg(rep.fitMaxResidualPct, 0, 'f', 3)
+                     .arg(QFileInfo(outputPath).fileName()));
+    }
+    GamificationManager::noteOperation(
+        QStringLiteral("auto_rig"),
+        {{QStringLiteral("blendshapes_attached"), rep.shapesAttached}},
         GamificationManager::Surface::Cli);
     return 0;
 }
@@ -9982,7 +10261,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         QString("segment .%1 noModel=%2 category=%3")
             .arg(fi.suffix()).arg(noModel)
             .arg(MeshSegmenter::categoryName(category)));
-
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     Ogre::Entity* entity = nullptr;
     for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
@@ -10065,6 +10343,16 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         return 0;
     }
 
+    QElapsedTimer segmentTimer;
+    segmentTimer.start();
+    const QString requestedCategory = MeshSegmenter::categoryName(category);
+    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                    {QStringLiteral("requested_category"), requestedCategory},
+                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
+
     MeshSegmenter::Options opts;
     opts.upAxis = upAxis;
     opts.forceFallback = noModel;
@@ -10084,6 +10372,19 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
         modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
     if (!r.ok) {
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(opts.category)},
+                        {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                        {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                        {QStringLiteral("ai"), !noModel},
+                        {QStringLiteral("geometric_fallback"), noModel},
+                        {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                        {QStringLiteral("success"), false},
+                        {QStringLiteral("failure_category"), SentryReporter::sanitizedErrorCategory(r.error)},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}},
+            QStringLiteral("error"));
         err() << "Error: " << (r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error)
               << Qt::endl;
         return 1;
@@ -10094,6 +10395,23 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     std::vector<int> vCount(P, 0), fCount(P, 0);
     for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
     for (int l : r.faceLabels)   if (l >= 0 && l < P) ++fCount[l];
+
+    int resultPartCount = 0;
+    for (int p = 0; p < P; ++p)
+        if (vCount[p] > 0 || fCount[p] > 0)
+            ++resultPartCount;
+    SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
+        QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
+                    {QStringLiteral("requested_category"), requestedCategory},
+                    {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(r.category)},
+                    {QStringLiteral("automatic"), category == MeshSegmenter::Category::Auto},
+                    {QStringLiteral("manual"), category != MeshSegmenter::Category::Auto},
+                    {QStringLiteral("ai"), r.usedModel},
+                    {QStringLiteral("geometric_fallback"), !r.usedModel},
+                    {QStringLiteral("result_part_count"), resultPartCount},
+                    {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                    {QStringLiteral("success"), true},
+                    {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
     if (jsonOutput) {
         QJsonObject root;
@@ -10200,6 +10518,64 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
                 seen.insert(n);
                 targets.append(n);
             }
+        }
+    }
+
+    // Diagnostic (env-gated): verify a target actually PLAYS after import —
+    // enable it at weight 1 and measure the software-animated displacement.
+    // Distinguishes "targets listed but dead" (importer clip/pose bug) from a
+    // GUI-side playback issue.
+    if (!targets.isEmpty()
+        && qEnvironmentVariableIsSet("QTMESH_MORPH_PLAYTEST")) {
+        const QByteArray want = qgetenv("QTMESH_MORPH_PLAYTEST");
+        QString name = QString::fromUtf8(want);
+        if (name == "1" || name.isEmpty()) name = targets.first();
+        for (Ogre::Entity* entity : entities) {
+            auto* states = entity->getAllAnimationStates();
+            const bool hasState = states
+                && states->hasAnimationState(name.toStdString());
+            err() << "[playtest] entity=" << QString::fromStdString(entity->getName())
+                  << " target=" << name
+                  << " hasAnimState=" << hasState
+                  << " meshHasVertexAnim=" << entity->getMesh()->hasVertexAnimation()
+                  << Qt::endl;
+            if (!hasState) continue;
+            auto* st = states->getAnimationState(name.toStdString());
+            st->setEnabled(true);
+            st->setWeight(1.0f);
+            st->setTimePosition(0.0f);
+            entity->addSoftwareAnimationRequest(false);
+            entity->_updateAnimation();
+            // measure displacement on each subentity's software-animated data
+            double maxDisp = 0;
+            for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+                Ogre::SubEntity* se = entity->getSubEntity(si);
+                Ogre::VertexData* animVd = se->_getSoftwareVertexAnimVertexData();
+                Ogre::VertexData* baseVd = se->getSubMesh()->vertexData;
+                if (!animVd || !baseVd) continue;
+                auto readPos = [](Ogre::VertexData* vd, std::vector<float>& out) {
+                    const auto* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+                    if (!pe) return;
+                    auto vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
+                    const size_t stride = vb->getVertexSize();
+                    auto* base = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    out.resize(vd->vertexCount * 3);
+                    for (size_t i = 0; i < vd->vertexCount; ++i) {
+                        float* fp = nullptr;
+                        pe->baseVertexPointerToElement(base + i*stride, &fp);
+                        out[i*3] = fp[0]; out[i*3+1] = fp[1]; out[i*3+2] = fp[2];
+                    }
+                    vb->unlock();
+                };
+                std::vector<float> a, b;
+                readPos(animVd, a); readPos(baseVd, b);
+                for (size_t i = 0; i + 2 < std::min(a.size(), b.size()); i += 3) {
+                    const double dx = a[i]-b[i], dy = a[i+1]-b[i+1], dz = a[i+2]-b[i+2];
+                    maxDisp = std::max(maxDisp, std::sqrt(dx*dx+dy*dy+dz*dz));
+                }
+            }
+            err() << "[playtest] maxDisp after weight=1: " << maxDisp << Qt::endl;
+            entity->removeSoftwareAnimationRequest(false);
         }
     }
 

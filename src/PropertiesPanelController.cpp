@@ -1144,6 +1144,26 @@ void PropertiesPanelController::applySkeletonDebug(const QString& entityName, bo
     emit animationStateChanged();
 }
 
+bool PropertiesPanelController::isSkeletonDebugActive(const QString& entityName) const
+{
+    if (!mAnimationWidget || entityName.isEmpty()) return false;
+    Ogre::Entity* ent = entityByName(entityName);
+    return ent && mAnimationWidget->isSkeletonDebugActive(ent);
+}
+
+bool PropertiesPanelController::hasAnySkeletonDebugActive() const
+{
+    if (!mAnimationWidget) return false;
+    if (auto* mgr = Manager::getSingletonPtr()) {
+        for (Ogre::Entity* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (mAnimationWidget->isSkeletonDebugActive(ent))
+                return true;
+        }
+    }
+    return false;
+}
+
 void PropertiesPanelController::toggleSkeletonDebug(const QString& entityName, bool show)
 {
     if (!mAnimationWidget) return;

@@ -213,6 +213,23 @@ TEST(TransformOperatorTest, ShouldRouteToBoneGizmoNonTransformStatesDoNotRoute)
         TransformOperator::TS_NONE, bone, true));
 }
 
+TEST(TransformOperatorTest, ShouldPreferGizmoOverBonePickOnlyForTransformTools)
+{
+    // Translate/rotate/scale: a gizmo hit suppresses bone picking.
+    EXPECT_TRUE(TransformOperator::shouldPreferGizmoOverBonePick(
+        TransformOperator::TS_TRANSLATE));
+    EXPECT_TRUE(TransformOperator::shouldPreferGizmoOverBonePick(
+        TransformOperator::TS_ROTATE));
+    EXPECT_TRUE(TransformOperator::shouldPreferGizmoOverBonePick(
+        TransformOperator::TS_SCALE));
+    // Select/None: gizmos are hidden but still queryable — do not let them
+    // steal bone picks (Codex P2 on PR #906).
+    EXPECT_FALSE(TransformOperator::shouldPreferGizmoOverBonePick(
+        TransformOperator::TS_SELECT));
+    EXPECT_FALSE(TransformOperator::shouldPreferGizmoOverBonePick(
+        TransformOperator::TS_NONE));
+}
+
 TEST_F(TransformOperatorTests, TransformSpaceChangesOnlyWhenValueDiffers)
 {
     QSignalSpy spy(op, &TransformOperator::transformSpaceChanged);

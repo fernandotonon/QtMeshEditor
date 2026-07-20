@@ -248,6 +248,10 @@ public:
     Q_INVOKABLE bool isPlaying() const { return mPlaying; }
     Q_INVOKABLE void toggleSkeletonDebug(const QString& entityName, bool show);
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
+    /// True when the skeleton debug overlay is active for `entityName`.
+    Q_INVOKABLE bool isSkeletonDebugActive(const QString& entityName) const;
+    /// True when any entity in the scene has skeleton debug enabled.
+    bool hasAnySkeletonDebugActive() const;
     /// Apply skeleton overlay visibility without pushing undo (used by undo commands).
     void applySkeletonDebug(const QString& entityName, bool show);
     /// Rebuild skeleton/weight viewport overlays after bone CRUD.

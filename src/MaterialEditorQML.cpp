@@ -36,6 +36,7 @@
 #endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
+#include "AIModelCatalog.h"
 #include "RTShaderHelper.h"
 #include "TextureChannelPacker.h"
 #include "TextureAtlasPacker.h"
@@ -5593,6 +5594,13 @@ void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
                 Q_UNUSED(engine)
                 Q_UNUSED(scriptEngine)
                 return ModelDownloader::qmlInstance(engine, scriptEngine);
+            });
+
+        qmlRegisterSingletonType<AIModelCatalog>("MaterialEditorQML", 1, 0, "AIModelCatalog",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return AIModelCatalog::qmlInstance(engine, scriptEngine);
             });
 
         // Register QMLMaterialHighlighter for QML use

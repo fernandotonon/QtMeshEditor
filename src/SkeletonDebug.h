@@ -36,14 +36,16 @@ public:
     // meshes) so a ray-pick in the viewport can map back to the bone.
     // Returns empty string when the movable isn't a SkeletonDebug visual.
     static Ogre::String boneNameForMovable(const Ogre::MovableObject* obj);
+    /// Owning skinned entity name (paired with boneNameForMovable).
+    static Ogre::String entityNameForMovable(const Ogre::MovableObject* obj);
 
 signals:
     void boneSelected(unsigned short boneIndex);
 
 private:
     std::vector<Ogre::Entity*> mAxisEntities;
-    std::vector<Ogre::Entity*> mBoneEntities;
-    std::map<std::string, Ogre::Entity*, std::less<>> mBoneVisualByName;
+    std::vector<Ogre::Entity*> mBoneEntities;   // joints + hierarchy links
+    std::map<std::string, Ogre::Entity*, std::less<>> mBoneVisualByName; // joint only
 
     float mBoneSize;
 
@@ -52,7 +54,10 @@ private:
     Ogre::MaterialPtr mBoneMatPtr;
     Ogre::MaterialPtr mBoneMatSelectedPtr;
     Ogre::MaterialPtr mBoneMatRootPtr;
+    Ogre::MaterialPtr mLinkMatPtr;
     Ogre::MeshPtr mBoneMeshPtr;
+    Ogre::MeshPtr mJointMeshPtr;
+    Ogre::MeshPtr mLinkMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
     Ogre::SceneManager *mSceneMan;
 
@@ -66,8 +71,10 @@ private:
     void createBoneMaterial();
     void createAxesMesh();
     void createBoneMesh();
+    void createJointMesh();
+    void createLinkMesh();
     std::map<std::string, Ogre::Entity*, std::less<>> createBoneVisuals();
-    void createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt);
+    void createChildLinks(const Ogre::Bone* pBone);
     void onTimerTick();
 
     QTimer mTimer;

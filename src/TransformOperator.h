@@ -33,6 +33,9 @@ class TransformOperator : public QObject, public QtMouseListener
 public:
 
     static TransformOperator* getSingleton();
+    /// Non-creating accessor: null until getSingleton() first runs. Use from
+    /// paths that must not construct the gizmo machinery (headless CLI).
+    static TransformOperator* getSingletonPtr() { return m_pSingleton; }
     static void kill();
 
     enum TransformState
@@ -109,6 +112,11 @@ public:
                                        const Ogre::Bone* selectedBone,
                                        bool boneCanTranslate);
 
+    /// True when a gizmo ray hit should suppress bone picking. Select/None
+    /// leave gizmos in the scene (query flags set, only visibility cleared),
+    /// so bone picks must ignore them in those states.
+    static bool shouldPreferGizmoOverBonePick(TransformState state);
+
 private:
     TransformOperator ();
     ~TransformOperator () override;
@@ -173,6 +181,10 @@ public:
     /// keeps a roughly constant pixel size regardless of camera distance.
     /// Called per-frame from OgreWidget::frameStarted.
     void tickTransformGizmoScale(const Ogre::Camera* camera);
+    /// Ray-pick a skeleton-debug bone at `pos`. Only succeeds when the hit
+    /// entity has its skeleton overlay visible. Selects the owning entity and
+    /// bone in the animation controller. Returns false on miss.
+    bool tryPickBoneAt(const QPoint& pos, SelectionMode mode = NEW_SELECT);
 private:
     //Ogre::SceneNode*                        m_pSelectedNode;
     Ogre::RaySceneQuery*                    m_pRayQuery  = nullptr;
