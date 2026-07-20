@@ -457,6 +457,19 @@ SetRestPoseCommand::SetRestPoseCommand(std::string entityName,
     }
 }
 
+SetRestPoseCommand::SetRestPoseCommand(std::string entityName,
+                                       std::vector<ExplicitPose> explicitPoses,
+                                       QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_op(Op::SnapSelected)
+    , m_explicitPoses(std::move(explicitPoses))
+{
+    setText(QStringLiteral("Edit bone rest pose"));
+    for (const auto& p : m_explicitPoses)
+        m_boneNames.append(p.boneName);
+}
+
 void SetRestPoseCommand::redo()
 {
     Ogre::Entity* entity = resolveEntityByName(m_entityName);
@@ -465,16 +478,28 @@ void SetRestPoseCommand::redo()
     if (m_firstRedo) {
         m_before = SkeletonEditor::captureSnapshot(entity);
         SkeletonEditor::Result result;
-        switch (m_op) {
-        case Op::CaptureAll:
-            result = SkeletonEditor::captureRestPose(entity);
-            break;
-        case Op::SnapSelected:
-            result = SkeletonEditor::captureRestPose(entity, m_boneNames);
-            break;
-        case Op::Reset:
-            result = SkeletonEditor::resetRestPose(entity);
-            break;
+        if (!m_explicitPoses.empty()) {
+            result.ok = true;
+            for (const auto& pose : m_explicitPoses) {
+                const auto one = SkeletonEditor::commitBoneRestPose(
+                    entity, pose.boneName, pose.position, pose.orientation, pose.scale);
+                if (!one.ok) {
+                    result = one;
+                    break;
+                }
+            }
+        } else {
+            switch (m_op) {
+            case Op::CaptureAll:
+                result = SkeletonEditor::captureRestPose(entity);
+                break;
+            case Op::SnapSelected:
+                result = SkeletonEditor::captureRestPose(entity, m_boneNames);
+                break;
+            case Op::Reset:
+                result = SkeletonEditor::resetRestPose(entity);
+                break;
+            }
         }
         if (!result.ok) return;
         m_after = SkeletonEditor::captureSnapshot(entity);
@@ -487,16 +512,20 @@ void SetRestPoseCommand::redo()
 
     m_applied = true;
     QString crumb;
-    switch (m_op) {
-    case Op::CaptureAll:
-        crumb = QStringLiteral("scene.skel.rest_pose.capture");
-        break;
-    case Op::SnapSelected:
-        crumb = QStringLiteral("scene.skel.rest_pose.snap");
-        break;
-    case Op::Reset:
-        crumb = QStringLiteral("scene.skel.rest_pose.reset");
-        break;
+    if (!m_explicitPoses.empty()) {
+        crumb = QStringLiteral("scene.skel.rest_pose.edit");
+    } else {
+        switch (m_op) {
+        case Op::CaptureAll:
+            crumb = QStringLiteral("scene.skel.rest_pose.capture");
+            break;
+        case Op::SnapSelected:
+            crumb = QStringLiteral("scene.skel.rest_pose.snap");
+            break;
+        case Op::Reset:
+            crumb = QStringLiteral("scene.skel.rest_pose.reset");
+            break;
+        }
     }
     SentryReporter::addBreadcrumb(crumb,
         QStringLiteral("%1 (%2 bone(s))")

@@ -6,6 +6,7 @@
 #include <QThread>
 
 #include "SkeletonEditor.h"
+#include "SkeletonDebug.h"
 #include "UndoManager.h"
 #include "commands/SkeletonBoneCommands.h"
 #include "AnimationControlController.h"
@@ -15,6 +16,7 @@
 
 #include <OgreBone.h>
 #include <OgreEntity.h>
+#include <OgreHardwareBuffer.h>
 #include <OgreSkeleton.h>
 
 class SkeletonEditorTest : public ::testing::Test {
@@ -552,3 +554,193 @@ TEST_F(SkeletonEditorTest, SetRestPoseCommandUndoRedo) {
     EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
                 0.5f, 1e-4f);
 }
+
+// Gizmo CommitBind must use the captured after-TRS, not re-read the instance
+// bone — an animation tick can reset the bone to the old bind between drag
+// end and undo-push, which previously made the mesh snap back to rest while
+// debug joints looked posed.
+TEST_F(SkeletonEditorTest, ExplicitPoseCommitIgnoresStaleInstanceBone) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestExplicit");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+
+    const Ogre::Vector3 capturedPos(0.4f, 1.0f, 0.0f);
+    const Ogre::Quaternion capturedOri = Ogre::Quaternion::IDENTITY;
+    const Ogre::Vector3 capturedScale = Ogre::Vector3::UNIT_SCALE;
+
+    // Simulate post-drag reset: instance bone already back at old bind.
+    Ogre::SkeletonInstance* inst = entity->getSkeleton();
+    ASSERT_NE(inst, nullptr);
+    Ogre::Bone* child = inst->getBone("Child");
+    ASSERT_NE(child, nullptr);
+    child->setPosition(Ogre::Vector3::ZERO);
+    child->setOrientation(Ogre::Quaternion::IDENTITY);
+    child->setScale(Ogre::Vector3::UNIT_SCALE);
+    child->setManuallyControlled(false);
+
+    SetRestPoseCommand::ExplicitPose pose;
+    pose.boneName = QStringLiteral("Child");
+    pose.position = capturedPos;
+    pose.orientation = capturedOri;
+    pose.scale = capturedScale;
+
+    auto* cmd = new SetRestPoseCommand(entity->getName(), std::vector{pose});
+    UndoManager::getSingleton()->push(cmd);
+    ASSERT_TRUE(cmd->applied());
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.4f, 1e-4f);
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.0f, 1e-4f);
+}
+
+// Rest commit must bake skinned verts into the mesh bind buffers.
+// Changing bone initials alone leaves LBS as identity at the new bind,
+// so the mesh would always show the authored T-pose geometry again.
+TEST_F(SkeletonEditorTest, CommitBoneRestPoseBakesMeshVertices) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestBakeMesh");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    ASSERT_NE(mesh->sharedVertexData, nullptr);
+    const auto* posElem =
+        mesh->sharedVertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+    ASSERT_NE(posElem, nullptr);
+    auto vbuf = mesh->sharedVertexData->vertexBufferBinding->getBuffer(posElem->getSource());
+    auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    float* p0 = nullptr;
+    posElem->baseVertexPointerToElement(base, &p0);
+    const Ogre::Vector3 before(p0[0], p0[1], p0[2]);
+    vbuf->unlock();
+
+    // Rotate Child 90° so weighted verts must move when baked.
+    const Ogre::Quaternion rot(Ogre::Radian(Ogre::Degree(90)), Ogre::Vector3::UNIT_Z);
+    const auto result = SkeletonEditor::commitBoneRestPose(
+        entity, QStringLiteral("Child"),
+        entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition(),
+        rot, Ogre::Vector3::UNIT_SCALE);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    posElem->baseVertexPointerToElement(base, &p0);
+    const Ogre::Vector3 after(p0[0], p0[1], p0[2]);
+    vbuf->unlock();
+
+    EXPECT_GT(before.distance(after), 1e-3f)
+        << "Bind-pose mesh verts should move after rest-pose bake";
+
+    // At the new bind, skinning is identity — mesh must still show the baked pose.
+    entity->getSkeleton()->reset(true);
+    entity->_updateAnimation();
+    base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    posElem->baseVertexPointerToElement(base, &p0);
+    const Ogre::Vector3 atBind(p0[0], p0[1], p0[2]);
+    vbuf->unlock();
+    EXPECT_NEAR(atBind.distance(after), 0.0f, 1e-4f);
+}
+
+// Bake must not bump mesh state count — that forces Entity::_initialise(true)
+// and destroys SkeletonDebug TagPoints (overlay vanishes, checkbox stays on).
+TEST_F(SkeletonEditorTest, CommitBoneRestPoseDoesNotDirtyMeshState) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestNoDirty");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    const size_t stateBefore = mesh->getStateCount();
+
+    const auto result = SkeletonEditor::commitBoneRestPose(
+        entity, QStringLiteral("Child"),
+        Ogre::Vector3(0.2f, 1.0f, 0.0f),
+        Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    EXPECT_EQ(mesh->getStateCount(), stateBefore);
+}
+
+// Gizmo rest commit must NOT rebake clips to preserve absolute poses —
+// that made Mixamo-enabled meshes snap back to the pre-edit look on release.
+TEST_F(SkeletonEditorTest, CommitBoneRestPoseKeepsNewBindWithEnabledAnim) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestCommitNoRebake");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+
+    ASSERT_TRUE(entity->hasAnimationState("TestAnim"));
+    auto* state = entity->getAnimationState("TestAnim");
+    state->setEnabled(true);
+    state->setTimePosition(0.0f);
+
+    const Ogre::Vector3 newPos(0.35f, 1.0f, 0.0f);
+    const auto result = SkeletonEditor::commitBoneRestPose(
+        entity, QStringLiteral("Child"), newPos,
+        Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    EXPECT_NEAR(entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition().x,
+                0.35f, 1e-4f);
+
+    // Clip must still be enabled, and evaluating at t=0 (identity keys in
+    // this fixture) must land on the new bind — not the old.
+    ASSERT_TRUE(entity->hasAnimationState("TestAnim"));
+    EXPECT_TRUE(entity->getAnimationState("TestAnim")->getEnabled());
+    entity->getAnimationState("TestAnim")->setTimePosition(0.0f);
+    entity->_updateAnimation();
+    entity->getSkeleton()->_updateTransforms();
+    EXPECT_NEAR(entity->getSkeleton()->getBone("Child")->getPosition().x, 0.35f, 1e-3f);
+}
+
+// Rest ghost must keep a private mesh clone so a rest bake does not move it.
+TEST_F(SkeletonEditorTest, RestGhostMeshStaysAtEnableTimePoseAfterBake) {
+    Ogre::Entity* entity = createThreeBoneAnimatedEntity("SkelEd_RestGhostFreeze");
+    ASSERT_NE(entity, nullptr);
+    SkeletonEditor::ensureImportedRestCache(entity);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    SkeletonDebug ghostHost(entity, sceneMgr, 0.1f, 0.01f);
+    ghostHost.showBones(true);
+    ghostHost.showRestGhost(true);
+    ASSERT_TRUE(ghostHost.restGhostShown());
+    ASSERT_TRUE(ghostHost.bonesShown());
+
+    const Ogre::String ghostMeshName = entity->getName() + "_restGhostMeshRes";
+    Ogre::MeshPtr ghostMesh = Ogre::static_pointer_cast<Ogre::Mesh>(
+        Ogre::MeshManager::getSingleton().getByName(ghostMeshName));
+    ASSERT_NE(ghostMesh, nullptr);
+    ASSERT_NE(ghostMesh->sharedVertexData, nullptr);
+
+    auto readFirstPos = [](Ogre::Mesh* mesh) -> Ogre::Vector3 {
+        const auto* posElem =
+            mesh->sharedVertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        auto vbuf = mesh->sharedVertexData->vertexBufferBinding->getBuffer(posElem->getSource());
+        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        float* p0 = nullptr;
+        posElem->baseVertexPointerToElement(base, &p0);
+        Ogre::Vector3 v(p0[0], p0[1], p0[2]);
+        vbuf->unlock();
+        return v;
+    };
+
+    const Ogre::Vector3 ghostBefore = readFirstPos(ghostMesh.get());
+    const Ogre::Vector3 liveBefore = readFirstPos(entity->getMesh().get());
+    EXPECT_NEAR(ghostBefore.distance(liveBefore), 0.0f, 1e-4f);
+
+    const Ogre::Quaternion rot(Ogre::Radian(Ogre::Degree(90)), Ogre::Vector3::UNIT_Z);
+    const auto result = SkeletonEditor::commitBoneRestPose(
+        entity, QStringLiteral("Child"),
+        entity->getMesh()->getSkeleton()->getBone("Child")->getInitialPosition(),
+        rot, Ogre::Vector3::UNIT_SCALE);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+
+    const Ogre::Vector3 ghostAfter = readFirstPos(ghostMesh.get());
+    const Ogre::Vector3 liveAfter = readFirstPos(entity->getMesh().get());
+    EXPECT_NEAR(ghostBefore.distance(ghostAfter), 0.0f, 1e-4f)
+        << "Ghost mesh clone must stay at the enable-time rest";
+    EXPECT_GT(liveBefore.distance(liveAfter), 1e-3f)
+        << "Live mesh should bake to the new rest";
+
+    // Skeleton overlay flag must survive the bake (no mesh-state reinit).
+    EXPECT_TRUE(ghostHost.bonesShown());
+    EXPECT_TRUE(ghostHost.restGhostShown());
+}
+

@@ -100,6 +100,14 @@ public:
         std::vector<AnimationData> animations;
         std::vector<Ogre::VertexBoneAssignment> meshAssignments;
         std::vector<std::vector<Ogre::VertexBoneAssignment>> submeshAssignments;
+        /// Bind-pose mesh positions/normals (for rest-pose bake undo/reset).
+        /// submeshIndex -1 = shared VertexData; else dedicated submesh verts.
+        struct BindVertexBuffer {
+            int submeshIndex = -1;
+            std::vector<float> positions; ///< xyz packed
+            std::vector<float> normals;   ///< xyz packed (empty if none)
+        };
+        std::vector<BindVertexBuffer> bindVertexBuffers;
     };
 
     static SkeletonEditor* getSingleton();

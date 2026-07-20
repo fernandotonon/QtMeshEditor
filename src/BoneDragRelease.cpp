@@ -30,7 +30,7 @@ BoneDragRelease::Result BoneDragRelease::apply(Ogre::Bone* bone,
                                                const Ogre::Vector3& beforeScale,
                                                bool hasActiveAnim,
                                                bool autoKeyOn,
-                                               Ogre::Entity* entityForUpdate,
+                                               Ogre::Entity* /*entityForUpdate*/,
                                                bool editRestMode)
 {
     if (!bone) return Result::NoOp;
@@ -48,31 +48,15 @@ BoneDragRelease::Result BoneDragRelease::apply(Ogre::Bone* bone,
         return Result::NoOp;
     }
 
-    // Edit-rest (or no active animation): rest-pose authoring. Caller
-    // commits via SkeletonEditor::commitBoneRestPose / SetRestPoseCommand
-    // so animation tracks are re-baked against the prior bind.
-    if (editRestMode || !hasActiveAnim) {
-        bone->setManuallyControlled(false);
-        return Result::CommitBind;
-    }
-
-    if (autoKeyOn) {
-        // Caller writes the keyframe (via AnimationControlController) and
-        // pushes BoneTransformCommand. We just unfreeze the bone so the
-        // curve drives playback through the new key.
+    // Auto-key with an enabled clip: write a keyframe (caller). Edit-rest
+    // overrides this — rest authoring wins over keying.
+    if (autoKeyOn && hasActiveAnim && !editRestMode) {
         bone->setManuallyControlled(false);
         return Result::Commit;
     }
 
-    // Preview only: revert bone to its pre-drag local TRS so playback
-    // is unaffected. Don't call setInitialState — the curve stores
-    // deltas relative to initial; changing initial would double-apply
-    // the curve delta on next sample.
-    bone->setPosition(beforePos);
-    bone->setOrientation(beforeOrient);
-    bone->setScale(beforeScale);
+    // Rest-pose authoring (edit-rest, no clip, or auto-key off). Caller
+    // commits via SkeletonEditor::commitBoneRestPose / SetRestPoseCommand.
     bone->setManuallyControlled(false);
-    bone->needUpdate(true);
-    if (entityForUpdate) entityForUpdate->_updateAnimation();
-    return Result::Revert;
+    return Result::CommitBind;
 }

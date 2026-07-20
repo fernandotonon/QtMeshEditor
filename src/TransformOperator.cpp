@@ -2035,12 +2035,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                         || (afterScale  != mBoneStartScale);
             const bool autoKeyOn = AnimationControlController::instance()->autoKey();
             // Active = an animation state is currently ENABLED (driving
-            // bones), not just selected in the panel. With no enabled
-            // animation, the bone is at its bind pose and the user is
-            // doing T-pose authoring → setInitialState. With at least
-            // one enabled animation, the curve writes the bone each
-            // frame and a setInitialState would shift the whole curve
-            // → revert instead.
+            // bones), not just selected in the panel. Auto-key ON + active
+            // anim → write a keyframe. Otherwise the bone gizmo commits
+            // rest pose (Inspector: "edit rest with the bone gizmo").
             bool hasActiveAnim = false;
             if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
                 if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
@@ -2050,27 +2047,23 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 }
             }
 
-            // Restore the per-state BlendMask values we captured at
-            // press, BEFORE calling apply(). The Revert path calls
-            // _updateAnimation which runs Skeleton::reset (bone →
-            // initial) then animation tracks (initial + curve sample).
-            // With the BlendMask still muted, the curve contributes
-            // zero and the bone settles at initial (T-pose) instead
-            // of the press-time pose. Restoring before apply() lets
-            // the curve drive the bone correctly. Restore exactly the
-            // pre-drag weights — not a hardcoded 1.0 — to preserve
-            // any layered/masked setup the user had.
-            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
-                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
-                    for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
-                        if (!states->hasAnimationState(stateName)) continue;
-                        Ogre::AnimationState* st = states->getAnimationState(stateName);
-                        if (st->hasBlendMask())
-                            st->setBlendMaskEntry(bone->getHandle(), weight);
+            // Keep the per-bone blend mask MUTED through CommitBind so an
+            // enabled clip cannot overwrite the dragged pose before the rest
+            // commit lands. Restore after. For Commit (auto-key), restore
+            // first so the keyframe samples the intended curve-driven pose.
+            auto restoreBoneBlendMasks = [&]() {
+                if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                    if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                        for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
+                            if (!states->hasAnimationState(stateName)) continue;
+                            Ogre::AnimationState* st = states->getAnimationState(stateName);
+                            if (st->hasBlendMask())
+                                st->setBlendMaskEntry(bone->getHandle(), weight);
+                        }
                     }
                 }
-            }
-            mBoneDragSavedMaskWeights.clear();
+                mBoneDragSavedMaskWeights.clear();
+            };
 
             const bool editRestMode = SkeletonEditor::getSingletonPtr()
                 && SkeletonEditor::getSingletonPtr()->editRestPoseMode();
@@ -2080,6 +2073,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 AnimationControlController::instance()->selectedEntity(),
                 editRestMode);
             if (outcome == BoneDragRelease::Result::Commit) {
+                restoreBoneBlendMasks();
                 // autoKeyOnTransform → addKeyframe → AddKeyframeCommand
                 // captures the durable artifact (the keyframe). The
                 // bone's live local TRS is fully determined by the
@@ -2088,17 +2082,29 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 // undoing the keyframe is enough.
                 AnimationControlController::instance()->autoKeyOnTransform();
             } else if (outcome == BoneDragRelease::Result::CommitBind) {
-                // Rest-pose commit with animation re-bake (slice C #557).
+                // Rest-pose commit: keep blend mask muted until after the
+                // bind write so the mesh cannot snap to the old clip pose
+                // mid-commit. Pass the after-TRS captured above.
                 const std::string entityName =
                     AnimationControlController::instance()->selectedEntityName().toStdString();
+                SetRestPoseCommand::ExplicitPose pose;
+                pose.boneName = QString::fromStdString(bone->getName());
+                pose.position = afterPos;
+                pose.orientation = afterOrient;
+                pose.scale = afterScale;
                 UndoManager::getSingleton()->push(
-                    new SetRestPoseCommand(entityName,
-                                           SetRestPoseCommand::Op::SnapSelected,
-                                           QStringList{QString::fromStdString(bone->getName())}));
+                    new SetRestPoseCommand(entityName, std::vector{pose}));
+                restoreBoneBlendMasks();
+                // Force one skinning tick with the new bind + restored masks.
+                if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity())
+                    dragEnt->_updateAnimation();
             } else if (outcome == BoneDragRelease::Result::Revert) {
+                restoreBoneBlendMasks();
                 // Restore the gizmo to the press-time anchor so the
                 // viewport visually returns to the start of the drag.
                 m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
+            } else {
+                restoreBoneBlendMasks();
             }
         }
         // Restore playback if we paused it on press.

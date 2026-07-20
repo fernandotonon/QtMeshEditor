@@ -187,6 +187,9 @@ void AnimationWidget::setRestPoseGhostVisible(bool show)
         for (Ogre::Entity* ent : mgr->getEntities()) {
             if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
                 continue;
+            // Skip rest-pose ghost mesh entities (name suffix from SkeletonDebug).
+            if (QString::fromStdString(ent->getName()).endsWith(QStringLiteral("_restGhostMesh")))
+                continue;
             SkeletonDebug* sd = nullptr;
             if (mShowSkeleton.contains(ent)) {
                 sd = mShowSkeleton.value(ent);

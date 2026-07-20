@@ -5,6 +5,8 @@
 #include <QUndoCommand>
 #include <QString>
 
+#include <vector>
+
 /// Undoable bone create (epic #554 slice A).
 class CreateBoneCommand : public QUndoCommand
 {
@@ -209,9 +211,23 @@ class SetRestPoseCommand : public QUndoCommand
 public:
     enum class Op { CaptureAll, SnapSelected, Reset };
 
+    struct ExplicitPose {
+        QString boneName;
+        Ogre::Vector3 position = Ogre::Vector3::ZERO;
+        Ogre::Quaternion orientation = Ogre::Quaternion::IDENTITY;
+        Ogre::Vector3 scale = Ogre::Vector3::UNIT_SCALE;
+    };
+
     SetRestPoseCommand(std::string entityName,
                        Op op,
                        QStringList boneNames = {},
+                       QUndoCommand* parent = nullptr);
+
+    /// Gizmo CommitBind path: commit these exact local TRS values as rest
+    /// (do not re-read the skeleton — the instance may already have been
+    /// reset by an animation tick between drag end and undo-push).
+    SetRestPoseCommand(std::string entityName,
+                       std::vector<ExplicitPose> explicitPoses,
                        QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -223,6 +239,7 @@ private:
     std::string m_entityName;
     Op m_op = Op::CaptureAll;
     QStringList m_boneNames;
+    std::vector<ExplicitPose> m_explicitPoses;
     SkeletonEditor::Snapshot m_before;
     SkeletonEditor::Snapshot m_after;
     bool m_applied = false;

@@ -335,6 +335,19 @@ void SkeletonDebug::showRestGhost(bool show)
 
 void SkeletonDebug::destroyGhostVisuals()
 {
+    if (mGhostMeshEntity) {
+        if (mGhostMeshEntity->getParentSceneNode())
+            mGhostMeshEntity->detachFromParent();
+        mSceneMan->destroyEntity(mGhostMeshEntity);
+        mGhostMeshEntity = nullptr;
+    }
+    // Drop the private mesh clone so the next ghost enable re-snapshots rest.
+    if (mGhostMeshPtr) {
+        const Ogre::String name = mGhostMeshPtr->getName();
+        mGhostMeshPtr.reset();
+        if (Ogre::MeshManager::getSingleton().resourceExists(name))
+            Ogre::MeshManager::getSingleton().remove(name);
+    }
     for (auto* ent : mGhostEntities) {
         if (ent && ent->getParentSceneNode())
             ent->detachFromParent();
@@ -359,8 +372,6 @@ void SkeletonDebug::ensureGhostVisuals()
         return;
 
     createBoneMaterial();
-    if (!mJointMeshPtr)
-        createJointMesh();
 
     Ogre::SceneNode* entNode = mEntity->getParentSceneNode();
     if (!entNode)
@@ -369,51 +380,59 @@ void SkeletonDebug::ensureGhostVisuals()
     mGhostRoot = entNode->createChildSceneNode(
         mEntity->getName() + "_restGhostRoot");
 
-    Ogre::SkeletonInstance* skel = mEntity->getSkeleton();
-    for (auto* bone : skel->getBones()) {
-        const Ogre::String entName = mEntity->getName() + "_restGhostEnt_" + bone->getName();
-        Ogre::Entity* ghost = mSceneMan->createEntity(entName, "SkeletonDebug/JointMesh");
-        ghost->setMaterial(mBoneMatGhostPtr);
-        ghost->setQueryFlags(0);
-        ghost->setVisible(true);
-        Ogre::SceneNode* node = mGhostRoot->createChildSceneNode();
-        node->attachObject(ghost);
-        const float jointScale = std::max(mBoneSize * 0.9f, 0.02f);
-        node->setScale(jointScale, jointScale, jointScale);
-        mGhostEntities.push_back(ghost);
-        mGhostNodes.push_back(node);
-        mGhostBoneNames.push_back(bone->getName());
+    // Translucent blue MESH frozen at the rest pose when the ghost was enabled.
+    // Must NOT share the live mesh resource — rest-pose bake writes into that
+    // mesh and would make the ghost follow the new pose.
+    // Live skeleton joints keep their normal materials (never this blue).
+    try {
+        const Ogre::String ghostEntName = mEntity->getName() + "_restGhostMesh";
+        const Ogre::String ghostMeshRes = mEntity->getName() + "_restGhostMeshRes";
+        if (mSceneMan->hasEntity(ghostEntName))
+            mSceneMan->destroyEntity(ghostEntName);
+        if (Ogre::MeshManager::getSingleton().resourceExists(ghostMeshRes))
+            Ogre::MeshManager::getSingleton().remove(ghostMeshRes);
+
+        mGhostMeshPtr = mEntity->getMesh()->clone(ghostMeshRes);
+        mGhostMeshEntity = mSceneMan->createEntity(ghostEntName, ghostMeshRes);
+        mGhostMeshEntity->setQueryFlags(0);
+        mGhostMeshEntity->setCastShadows(false);
+        mGhostMeshEntity->setMaterial(mMeshGhostMatPtr);
+        for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+            mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        mGhostRoot->attachObject(mGhostMeshEntity);
+        // Keep ghost at its cloned bind: disable clips and reset to bind.
+        if (Ogre::AnimationStateSet* states = mGhostMeshEntity->getAllAnimationStates()) {
+            for (const auto& pair : states->getAnimationStates())
+                pair.second->setEnabled(false);
+        }
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+    } catch (const Ogre::Exception&) {
+        mGhostMeshEntity = nullptr;
+        if (mGhostMeshPtr) {
+            const Ogre::String name = mGhostMeshPtr->getName();
+            mGhostMeshPtr.reset();
+            if (Ogre::MeshManager::getSingleton().resourceExists(name))
+                Ogre::MeshManager::getSingleton().remove(name);
+        }
     }
 }
 
 void SkeletonDebug::updateGhostVisuals()
 {
-    if (!mShowRestGhost || !mEntity || !mEntity->hasSkeleton() || !mGhostRoot)
+    if (!mShowRestGhost || !mEntity || !mGhostRoot)
         return;
 
-    Ogre::SkeletonInstance* skel = mEntity->getSkeleton();
-
-    // Rest-pose transforms in skeleton/entity-local space from initial TRS.
-    std::unordered_map<std::string, std::pair<Ogre::Vector3, Ogre::Quaternion>> restLocal;
-    std::function<void(Ogre::Bone*, const Ogre::Vector3&, const Ogre::Quaternion&)> walk;
-    walk = [&](Ogre::Bone* bone, const Ogre::Vector3& parentPos, const Ogre::Quaternion& parentOri) {
-        const Ogre::Vector3 pos = parentPos + parentOri * bone->getInitialPosition();
-        const Ogre::Quaternion ori = parentOri * bone->getInitialOrientation();
-        restLocal[bone->getName()] = {pos, ori};
-        for (auto* child : bone->getChildren())
-            walk(static_cast<Ogre::Bone*>(child), pos, ori);
-    };
-    for (Ogre::Bone* root : skel->getRootBones())
-        walk(root, Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY);
-
-    const size_t n = std::min(mGhostNodes.size(), mGhostBoneNames.size());
-    for (size_t i = 0; i < n; ++i) {
-        Ogre::SceneNode* node = mGhostNodes[i];
-        if (!node) continue;
-        auto it = restLocal.find(mGhostBoneNames[i]);
-        if (it == restLocal.end()) continue;
-        node->setPosition(it->second.first);
-        node->setOrientation(it->second.second);
+    // Force the ghost mesh to the bind pose every tick so it never
+    // picks up the live animated skeleton.
+    if (mGhostMeshEntity) {
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+        mGhostMeshEntity->setVisible(true);
+        if (mMeshGhostMatPtr) {
+            for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+                mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        }
     }
 }
 
@@ -523,7 +542,27 @@ void SkeletonDebug::createBoneMaterial()
         p->setDepthCheckEnabled(false);
     }
 
-    // Translucent cyan ghost for rest-pose overlay (slice C #557).
+    // Translucent blue for rest-pose MESH ghost (slice C #557).
+    // Live skeleton joints never use this — only the ghost mesh entity.
+    Ogre::String meshGhostMatName = "SkeletonDebug/MeshGhostMat";
+    mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(meshGhostMatName));
+    if (!mMeshGhostMatPtr) {
+        mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                meshGhostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mMeshGhostMatPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(true);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_NONE);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
+    }
+
+    // Legacy joint-ghost material kept for any residual joint markers.
     Ogre::String ghostMatName = "SkeletonDebug/BoneMatGhost";
     mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
         Ogre::MaterialManager::getSingleton().getByName(ghostMatName));
@@ -537,9 +576,9 @@ void SkeletonDebug::createBoneMaterial()
         p->setDepthCheckEnabled(false);
         p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
         p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
-        p->setDiffuse(0.2f, 0.85f, 0.95f, 0.35f);
-        p->setAmbient(0.1f, 0.4f, 0.5f);
-        p->setEmissive(0.05f, 0.25f, 0.3f);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
     }
 }
 

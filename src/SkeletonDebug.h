@@ -49,8 +49,10 @@ private:
     std::vector<Ogre::Entity*> mBoneEntities;   // joints + hierarchy links
     std::map<std::string, Ogre::Entity*, std::less<>> mBoneVisualByName; // joint only
     std::vector<Ogre::SceneNode*> mGhostNodes;
-    std::vector<Ogre::Entity*> mGhostEntities;
+    std::vector<Ogre::Entity*> mGhostEntities; ///< rest-pose joint markers (optional)
     std::vector<std::string> mGhostBoneNames;
+    Ogre::Entity* mGhostMeshEntity = nullptr; ///< translucent blue mesh at bind pose
+    Ogre::MeshPtr mGhostMeshPtr; ///< private mesh clone (frozen at ghost-enable rest)
     Ogre::SceneNode* mGhostRoot = nullptr;
 
     float mBoneSize;
@@ -61,6 +63,7 @@ private:
     Ogre::MaterialPtr mBoneMatSelectedPtr;
     Ogre::MaterialPtr mBoneMatRootPtr;
     Ogre::MaterialPtr mBoneMatGhostPtr;
+    Ogre::MaterialPtr mMeshGhostMatPtr;
     Ogre::MaterialPtr mLinkMatPtr;
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mJointMeshPtr;

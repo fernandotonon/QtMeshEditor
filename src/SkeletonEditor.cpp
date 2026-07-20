@@ -11,9 +11,13 @@
 
 #include <OgreBone.h>
 #include <OgreEntity.h>
+#include <OgreHardwareBuffer.h>
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreSkeletonManager.h>
+#include <OgreAnimationState.h>
+#include <OgreSubMesh.h>
+#include <OgreSubEntity.h>
 
 #include <QSet>
 #include <QStringList>
@@ -23,6 +27,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -176,6 +181,7 @@ struct RestPoseTRS {
 
 struct ImportedRestCache {
     std::vector<std::pair<std::string, RestPoseTRS>> bones;
+    std::vector<SkeletonEditor::Snapshot::BindVertexBuffer> bindVertexBuffers;
 };
 
 // Keyed by mesh name so skeleton resource rebuilds keep the original import.
@@ -189,6 +195,206 @@ std::string restCacheKey(Ogre::Entity* entity)
 {
     if (!entity || !entity->getMesh()) return {};
     return entity->getMesh()->getName();
+}
+
+void readBindVertexBuffer(const Ogre::VertexData* vd,
+                          SkeletonEditor::Snapshot::BindVertexBuffer& out)
+{
+    out.positions.clear();
+    out.normals.clear();
+    if (!vd || vd->vertexCount == 0) return;
+
+    const size_t n = vd->vertexCount;
+    out.positions.resize(n * 3, 0.f);
+
+    const auto* posElem = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+    if (posElem) {
+        auto vbuf = vd->vertexBufferBinding->getBuffer(posElem->getSource());
+        auto* base = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (size_t i = 0; i < n; ++i) {
+            float* p = nullptr;
+            posElem->baseVertexPointerToElement(base + i * vbuf->getVertexSize(), &p);
+            out.positions[i * 3 + 0] = p[0];
+            out.positions[i * 3 + 1] = p[1];
+            out.positions[i * 3 + 2] = p[2];
+        }
+        vbuf->unlock();
+    }
+
+    const auto* normElem = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+    if (normElem) {
+        out.normals.resize(n * 3, 0.f);
+        auto vbuf = vd->vertexBufferBinding->getBuffer(normElem->getSource());
+        auto* base = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (size_t i = 0; i < n; ++i) {
+            float* p = nullptr;
+            normElem->baseVertexPointerToElement(base + i * vbuf->getVertexSize(), &p);
+            out.normals[i * 3 + 0] = p[0];
+            out.normals[i * 3 + 1] = p[1];
+            out.normals[i * 3 + 2] = p[2];
+        }
+        vbuf->unlock();
+    }
+}
+
+void writeBindVertexBuffer(Ogre::VertexData* vd,
+                           const SkeletonEditor::Snapshot::BindVertexBuffer& in)
+{
+    if (!vd || in.positions.size() < vd->vertexCount * 3) return;
+    const size_t n = vd->vertexCount;
+
+    const auto* posElem = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+    if (posElem) {
+        auto vbuf = vd->vertexBufferBinding->getBuffer(posElem->getSource());
+        auto* base = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+        for (size_t i = 0; i < n; ++i) {
+            float* p = nullptr;
+            posElem->baseVertexPointerToElement(base + i * vbuf->getVertexSize(), &p);
+            p[0] = in.positions[i * 3 + 0];
+            p[1] = in.positions[i * 3 + 1];
+            p[2] = in.positions[i * 3 + 2];
+        }
+        vbuf->unlock();
+    }
+
+    const auto* normElem = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+    if (normElem && in.normals.size() >= n * 3) {
+        auto vbuf = vd->vertexBufferBinding->getBuffer(normElem->getSource());
+        auto* base = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+        for (size_t i = 0; i < n; ++i) {
+            float* p = nullptr;
+            normElem->baseVertexPointerToElement(base + i * vbuf->getVertexSize(), &p);
+            p[0] = in.normals[i * 3 + 0];
+            p[1] = in.normals[i * 3 + 1];
+            p[2] = in.normals[i * 3 + 2];
+        }
+        vbuf->unlock();
+    }
+}
+
+std::vector<SkeletonEditor::Snapshot::BindVertexBuffer> captureMeshBindVertices(Ogre::Mesh* mesh)
+{
+    std::vector<SkeletonEditor::Snapshot::BindVertexBuffer> out;
+    if (!mesh) return out;
+    if (mesh->sharedVertexData) {
+        SkeletonEditor::Snapshot::BindVertexBuffer b;
+        b.submeshIndex = -1;
+        readBindVertexBuffer(mesh->sharedVertexData, b);
+        out.push_back(std::move(b));
+    }
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+        SkeletonEditor::Snapshot::BindVertexBuffer b;
+        b.submeshIndex = static_cast<int>(si);
+        readBindVertexBuffer(sub->vertexData, b);
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+void restoreMeshBindVertices(Ogre::Mesh* mesh,
+                             const std::vector<SkeletonEditor::Snapshot::BindVertexBuffer>& buffers)
+{
+    if (!mesh) return;
+    Ogre::AxisAlignedBox box;
+    bool any = false;
+    for (const auto& b : buffers) {
+        Ogre::VertexData* vd = nullptr;
+        if (b.submeshIndex < 0)
+            vd = mesh->sharedVertexData;
+        else if (static_cast<unsigned short>(b.submeshIndex) < mesh->getNumSubMeshes()) {
+            Ogre::SubMesh* sub = mesh->getSubMesh(static_cast<unsigned short>(b.submeshIndex));
+            if (sub && !sub->useSharedVertices)
+                vd = sub->vertexData;
+        }
+        if (!vd) continue;
+        writeBindVertexBuffer(vd, b);
+        for (size_t i = 0; i + 2 < b.positions.size(); i += 3) {
+            box.merge(Ogre::Vector3(b.positions[i], b.positions[i + 1], b.positions[i + 2]));
+            any = true;
+        }
+    }
+    if (any) {
+        mesh->_setBounds(box, false);
+        mesh->_setBoundingSphereRadius(
+            std::max(box.getMaximum().length(), box.getMinimum().length()));
+    }
+}
+
+/// Copy software-skinned positions/normals into the mesh bind buffers so the
+/// visible posed shape becomes the new rest geometry. Required because LBS at
+/// the binding pose is identity — changing bone initials alone always shows
+/// the authored T-pose verts again.
+///
+/// Caller must: disable animation states, reset non-target bones to the current
+/// bind, and pose target bones with setManuallyControlled(true). This function
+/// does not re-enable clips (setBindingPose must run while they stay muted).
+bool bakeSkinnedPoseIntoBindMesh(Ogre::Entity* entity, QString* error)
+{
+    if (!entity || !entity->hasSkeleton() || !entity->getMesh()) {
+        if (error) *error = QStringLiteral("No skinned entity to bake");
+        return false;
+    }
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+
+    if (Ogre::SkeletonInstance* inst = entity->getSkeleton()) {
+        for (Ogre::Bone* root : inst->getRootBones())
+            root->_update(true, true);
+    }
+
+    // Skip setAnimationState inside cacheBoneMatrices — a reset() there would
+    // fight our manually posed bones if the dirty-frame gate re-enters it.
+    const bool prevSkip = entity->getSkipAnimationStateUpdate();
+    entity->setSkipAnimationStateUpdate(true);
+    entity->addSoftwareAnimationRequest(true);
+    entity->_updateAnimation();
+
+    auto copySkinnedToBind = [](Ogre::VertexData* bind, const Ogre::VertexData* skinned) -> bool {
+        if (!bind || !skinned || bind->vertexCount != skinned->vertexCount)
+            return false;
+        SkeletonEditor::Snapshot::BindVertexBuffer tmp;
+        readBindVertexBuffer(skinned, tmp);
+        writeBindVertexBuffer(bind, tmp);
+        return true;
+    };
+
+    bool ok = true;
+    bool any = false;
+    if (mesh->sharedVertexData) {
+        any = true;
+        Ogre::VertexData* skinned = entity->_getSkelAnimVertexData();
+        if (!copySkinnedToBind(mesh->sharedVertexData, skinned))
+            ok = false;
+    }
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+        any = true;
+        Ogre::VertexData* skinned = entity->getSubEntity(si)->_getSkelAnimVertexData();
+        if (!copySkinnedToBind(sub->vertexData, skinned))
+            ok = false;
+    }
+
+    entity->removeSoftwareAnimationRequest(true);
+    entity->setSkipAnimationStateUpdate(prevSkip);
+
+    if (!any || !ok) {
+        if (error) *error = QStringLiteral("Failed to read software-skinned vertices");
+        return false;
+    }
+
+    // Refresh AABB from the newly baked bind verts.
+    // Do NOT call mesh->_dirtyState(): that bumps getStateCount() and forces
+    // Entity::_initialise(true) on the next frame, which destroys TagPoints and
+    // makes the Skeleton overlay disappear while the checkbox stays checked.
+    restoreMeshBindVertices(mesh, captureMeshBindVertices(mesh));
+    return true;
 }
 
 void rebakeTrackKeyframes(Ogre::NodeAnimationTrack* track,
@@ -219,14 +425,17 @@ void rebakeAnimationsForBone(Ogre::Skeleton* skel,
                              const RestPoseTRS& oldRest,
                              const RestPoseTRS& newRest)
 {
-    if (!skel) return;
+    if (!skel || !skel->hasBone(boneName)) return;
+    const unsigned short boneHandle = skel->getBone(boneName)->getHandle();
     for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
         Ogre::Animation* anim = skel->getAnimation(ai);
         if (!anim) continue;
         for (const auto& [handle, track] : anim->_getNodeTrackList()) {
             if (!track) continue;
             Ogre::Node* node = track->getAssociatedNode();
-            if (!node || node->getName() != boneName) continue;
+            const bool nameMatch = node && node->getName() == boneName;
+            const bool handleMatch = handle == boneHandle;
+            if (!nameMatch && !handleMatch) continue;
             rebakeTrackKeyframes(track, oldRest, newRest);
         }
     }
@@ -234,7 +443,9 @@ void rebakeAnimationsForBone(Ogre::Skeleton* skel,
 
 bool applyRestPoseMap(Ogre::Entity* entity,
                       const std::unordered_map<std::string, RestPoseTRS>& newRests,
-                      QString* error)
+                      QString* error,
+                      bool rebakeAnimations,
+                      bool bakeMesh)
 {
     Ogre::SkeletonPtr skel = skeletonResource(entity);
     if (!skel || newRests.empty()) {
@@ -251,18 +462,105 @@ bool applyRestPoseMap(Ogre::Entity* entity,
         }
     }
 
+    // Mute clips for the whole bind write. Re-enabling mid-bake used to let
+    // setAnimationState()/setBindingPose capture mid-clip locals as the new
+    // bind, and the mesh bake never stuck visually.
+    struct AnimMute {
+        Ogre::Entity* ent = nullptr;
+        std::vector<std::pair<std::string, bool>> saved;
+        explicit AnimMute(Ogre::Entity* e) : ent(e)
+        {
+            if (!ent) return;
+            if (Ogre::AnimationStateSet* states = ent->getAllAnimationStates()) {
+                for (const auto& pair : states->getAnimationStates()) {
+                    saved.push_back({pair.first, pair.second->getEnabled()});
+                    pair.second->setEnabled(false);
+                }
+            }
+        }
+        ~AnimMute()
+        {
+            if (!ent) return;
+            if (Ogre::AnimationStateSet* states = ent->getAllAnimationStates()) {
+                for (const auto& [name, enabled] : saved) {
+                    if (!states->hasAnimationState(name)) continue;
+                    states->getAnimationState(name)->setEnabled(enabled);
+                }
+            }
+        }
+    } animMute(entity);
+
+    // Pose from a clean bind: reset every bone, then apply only the new rests.
+    // Baking on top of a mid-clip body pose would freeze that clip into the mesh.
+    if (Ogre::SkeletonInstance* inst = entity->getSkeleton()) {
+        for (unsigned short i = 0; i < inst->getNumBones(); ++i)
+            inst->getBone(i)->setManuallyControlled(false);
+        inst->reset(true);
+        for (const auto& [name, newRest] : newRests) {
+            if (!inst->hasBone(name)) continue;
+            Ogre::Bone* ib = inst->getBone(name);
+            ib->setManuallyControlled(true);
+            ib->setPosition(newRest.position);
+            ib->setOrientation(newRest.orientation);
+            ib->setScale(newRest.scale);
+        }
+        for (Ogre::Bone* root : inst->getRootBones())
+            root->_update(true, true);
+    }
+
+    // LBS at the binding pose is identity — without baking the posed
+    // skinned verts into the mesh, changing bone initials alone always
+    // shows the authored T-pose geometry again (bones look posed, mesh
+    // snaps back). Capture/gizmo commits bake; reset restores cached verts.
+    if (bakeMesh) {
+        QString bakeErr;
+        if (!bakeSkinnedPoseIntoBindMesh(entity, &bakeErr)) {
+            if (error) *error = bakeErr;
+            return false;
+        }
+    }
+
     for (const auto& [name, newRest] : newRests) {
         Ogre::Bone* bone = skel->getBone(name);
         RestPoseTRS oldRest{bone->getInitialPosition(), bone->getInitialOrientation(),
                             bone->getInitialScale()};
-        rebakeAnimationsForBone(skel.get(), name, oldRest, newRest);
+        // Capture Rest / Reset: rebake so clip world motion is unchanged.
+        // Gizmo CommitBind: do NOT rebake — preserving absolute poses would
+        // immediately undo the user's rest edit once the clip is re-applied.
+        if (rebakeAnimations)
+            rebakeAnimationsForBone(skel.get(), name, oldRest, newRest);
         bone->setPosition(newRest.position);
         bone->setOrientation(newRest.orientation);
         bone->setScale(newRest.scale);
         bone->setInitialState();
     }
     skel->setBindingPose();
-    entity->_initialise(true);
+
+    // Sync the LIVE SkeletonInstance in place. Do NOT call entity->_initialise(true):
+    // that destroys TagPoints and leaves SkeletonDebug joint entities floating.
+    // Copy EVERY bone's new initial from the resource so setBindingPose does not
+    // freeze leftover clip locals into inverse-bind matrices.
+    if (Ogre::SkeletonInstance* inst = entity->getSkeleton()) {
+        for (unsigned short i = 0; i < inst->getNumBones(); ++i) {
+            Ogre::Bone* ib = inst->getBone(i);
+            if (!skel->hasBone(ib->getName())) continue;
+            Ogre::Bone* rb = skel->getBone(ib->getName());
+            ib->setManuallyControlled(true);
+            ib->setPosition(rb->getInitialPosition());
+            ib->setOrientation(rb->getInitialOrientation());
+            ib->setScale(rb->getInitialScale());
+        }
+        for (Ogre::Bone* root : inst->getRootBones())
+            root->_update(true, true);
+        inst->setBindingPose();
+        for (unsigned short i = 0; i < inst->getNumBones(); ++i)
+            inst->getBone(i)->setManuallyControlled(false);
+        inst->reset(true);
+        for (Ogre::Bone* root : inst->getRootBones())
+            root->_update(true, true);
+    }
+
+    entity->_updateAnimation();
     return true;
 }
 
@@ -411,6 +709,7 @@ SkeletonEditor::Snapshot SkeletonEditor::captureSnapshot(Ogre::Entity* entity)
     }
 
     gatherBoneAssignments(mesh, snap);
+    snap.bindVertexBuffers = captureMeshBindVertices(mesh);
     return snap;
 }
 
@@ -494,6 +793,8 @@ bool SkeletonEditor::restoreSnapshot(Ogre::Entity* entity, const Snapshot& snaps
     Ogre::Mesh* mesh = entity->getMesh().get();
     mesh->_notifySkeleton(skel);
     applyBoneAssignments(mesh, snapshot);
+    if (!snapshot.bindVertexBuffers.empty())
+        restoreMeshBindVertices(mesh, snapshot.bindVertexBuffers);
     entity->_initialise(true);
     return true;
 }
@@ -583,6 +884,7 @@ bool SkeletonEditor::rebuildSkeletonWithoutBones(Ogre::Entity* entity,
     filtered.skeletonName = snap.skeletonName;
     filtered.meshName = snap.meshName;
     filtered.submeshAssignments = snap.submeshAssignments;
+    filtered.bindVertexBuffers = snap.bindVertexBuffers;
 
     std::unordered_map<unsigned short, unsigned short> oldToNew;
     unsigned short nextHandle = 0;
@@ -1339,6 +1641,7 @@ void SkeletonEditor::ensureImportedRestCache(Ogre::Entity* entity)
                                {bone->getInitialPosition(), bone->getInitialOrientation(),
                                 bone->getInitialScale()}});
     }
+    cache.bindVertexBuffers = captureMeshBindVertices(entity->getMesh().get());
     caches.emplace(key, std::move(cache));
 }
 
@@ -1387,7 +1690,8 @@ SkeletonEditor::Result SkeletonEditor::captureRestPose(Ogre::Entity* entity, con
     }
 
     QString err;
-    if (!applyRestPoseMap(entity, newRests, &err)) {
+    if (!applyRestPoseMap(entity, newRests, &err, /*rebakeAnimations=*/true,
+                          /*bakeMesh=*/true)) {
         result.error = err;
         return result;
     }
@@ -1424,8 +1728,13 @@ SkeletonEditor::Result SkeletonEditor::resetRestPose(Ogre::Entity* entity)
         return result;
     }
 
+    // Restore authored bind-pose verts before re-applying imported bone TRS.
+    if (!it->second.bindVertexBuffers.empty())
+        restoreMeshBindVertices(entity->getMesh().get(), it->second.bindVertexBuffers);
+
     QString err;
-    if (!applyRestPoseMap(entity, newRests, &err)) {
+    if (!applyRestPoseMap(entity, newRests, &err, /*rebakeAnimations=*/true,
+                          /*bakeMesh=*/false)) {
         result.error = err;
         return result;
     }
@@ -1448,7 +1757,10 @@ SkeletonEditor::Result SkeletonEditor::commitBoneRestPose(Ogre::Entity* entity,
     std::unordered_map<std::string, RestPoseTRS> newRests;
     newRests[boneName.toStdString()] = {pos, orient, scale};
     QString err;
-    if (!applyRestPoseMap(entity, newRests, &err)) {
+    // Bake posed mesh into bind + update bone bind. Do not rebake clips to
+    // preserve absolute poses (that snaps the mesh back to the pre-edit look).
+    if (!applyRestPoseMap(entity, newRests, &err, /*rebakeAnimations=*/false,
+                          /*bakeMesh=*/true)) {
         result.error = err;
         return result;
     }
