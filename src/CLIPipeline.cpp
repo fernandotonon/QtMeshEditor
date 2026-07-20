@@ -2135,13 +2135,6 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     // Auto-rigged (no prior animation) meshes that face −Z would walk
     // backward — detect facing from the mesh's foot region.
     const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
-    // #837: model clips need data-space conditioning (facing flip, arm widen,
-    // foot-pitch reset). The model's canonical convention faces −Z, so it
-    // needs a 180° flip to match the +Z-forward retarget by default; the
-    // per-rig backward heuristic (yaw180) XORs with that (a backward rig
-    // cancels the model flip). Template clips are authored and skip this.
-    if (clipSource == QStringLiteral("model"))
-        AnimationMerger::conditionModelClip(quats, clipDirs, !yaw180);
     auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                 worldFrame, cmuRest,
                                                 /*refineWithModel=*/false,
