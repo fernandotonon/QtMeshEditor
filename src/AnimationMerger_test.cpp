@@ -1168,6 +1168,28 @@ TEST_F(AnimationMergerTest, FlipFacingNoOpWhenAnimationMissing)
     EXPECT_FALSE(AnimationMerger::flipAnimationFacing(nullptr, "clip"));
 }
 
+// #837 rigidity guard: a partial/body-part clip that keyframes ONLY a child
+// bone (not the hips) must be REFUSED — turning that subtree alone would tear
+// the pose apart rather than turn the whole body. makeArmRigEntity keyframes
+// every bone; here we build a clip that tracks only LeftArm.
+TEST_F(AnimationMergerTest, FlipFacingRefusesPartialChildOnlyClip)
+{
+    Ogre::Entity* ent = makeArmRigEntity("flip_partial");
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+
+    // A clip whose only track is on LeftArm (a child, not a skeleton root).
+    auto* partial = skel->createAnimation("armonly", 1.0f);
+    Ogre::Bone* la = skel->getBone("LeftArm");
+    auto* trk = partial->createNodeTrack(la->getHandle(), la);
+    trk->createNodeKeyFrame(0.0f);
+    trk->createNodeKeyFrame(1.0f);
+
+    // Refused: LeftArm has a bone parent, so it is not a skeleton root.
+    EXPECT_FALSE(AnimationMerger::flipAnimationFacing(skel, "armonly"));
+    skel->removeAnimation("armonly");
+}
+
 TEST_F(AnimationMergerTest, ArmSpaceFollowsAnimationRename)
 {
     Ogre::Entity* ent = makeArmRigEntity("armspace_rename");

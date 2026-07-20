@@ -278,7 +278,11 @@ bool AnimationMerger::flipAnimationFacing(Ogre::Skeleton* skel,
 
     // Find the ROOT track bone: the mapped bone highest in the hierarchy
     // (fewest ancestors) that has a track — the hips on a humanoid rig.
-    // Flipping only this bone turns the whole skeleton rigidly.
+    // Flipping only this bone turns the whole skeleton rigidly ONLY when
+    // every other track bone sits inside its subtree; otherwise (e.g. a
+    // partial/body-part clip that keyframes a single child) flipping the
+    // chosen subtree would corrupt the pose rather than turn the body, so
+    // we bail out below instead of silently producing garbage.
     skel->reset(true);
     skel->_updateTransforms();
     int rootBone = -1, rootDepth = 1 << 30;
@@ -292,6 +296,29 @@ bool AnimationMerger::flipAnimationFacing(Ogre::Skeleton* skel,
     if (rootBone < 0) return false;
 
     Ogre::Bone* root = skel->getBone(static_cast<unsigned short>(rootBone));
+    // Rigidity guard 1: `root` must be a plausible WHOLE-BODY root — either a
+    // true skeleton-root bone (no bone parent) or the canonical hips role. This
+    // rejects a partial/body-part clip whose only track sits on a deep bone
+    // (e.g. LeftArm): flipping that subtree alone would tear the pose apart
+    // rather than turn the body. (Static helper/armature ancestors above the
+    // hips are fine — turning the hips still turns everything under them.)
+    const bool rootIsSkeletonRoot =
+        dynamic_cast<Ogre::Bone*>(root->getParent()) == nullptr;
+    const bool rootIsHips = MotionInbetween::canonicalIndexForBone(
+        QString::fromStdString(root->getName())) == 0;
+    if (!rootIsSkeletonRoot && !rootIsHips) return false;
+    // Rigidity guard 2: every OTHER animated bone must be a descendant of
+    // `root` (so it inherits the flip). An animated sibling subtree can't turn
+    // rigidly with `root`, so refuse. Untracked helper bones outside the
+    // subtree don't matter — they're static.
+    for (const auto& [handle, trk] : anim->_getNodeTrackList()) {
+        if (!trk || trk->getNumKeyFrames() == 0 || handle == rootBone) continue;
+        bool descendant = false;
+        for (Ogre::Node* p = skel->getBone(handle); p; p = p->getParent())
+            if (p == root) { descendant = true; break; }
+        if (!descendant) return false;
+    }
+
     const Ogre::Quaternion Wbind = root->_getDerivedOrientation();
     const Ogre::Quaternion Lbind = root->getOrientation();          // bind-local
     // Parent world at bind (root's parent is usually the skeleton root node).
@@ -305,15 +332,21 @@ bool AnimationMerger::flipAnimationFacing(Ogre::Skeleton* skel,
     const Ogre::Quaternion S(Ogre::Degree(180), Ogre::Vector3::UNIT_Y);
     const Ogre::Quaternion L =
         Lbind.Inverse() * Wparent.Inverse() * S * Wparent * Lbind;
+    // Keyframe translation is a PARENT-space offset (applyToNode does
+    // node->translate(t) in TS_PARENT, BEFORE node->rotate). So to turn root
+    // motion by the world yaw S we express S in the PARENT frame — NOT the
+    // full bind-local `L` (that carries an extra Lbind conjugation that only
+    // belongs on the rotation, which applyToNode post-multiplies).
+    const Ogre::Quaternion M = Wparent.Inverse() * S * Wparent;
 
     auto* trk = anim->getNodeTrack(static_cast<unsigned short>(rootBone));
     const unsigned short nk = trk->getNumKeyFrames();
     for (unsigned short k = 0; k < nk; ++k) {
         Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
         kf->setRotation(L * kf->getRotation());
-        // Also rotate the translation so root motion (if any) turns with the
-        // body — keeps travel direction consistent with the new facing.
-        kf->setTranslate(S * kf->getTranslate());
+        // Also turn the translation so root motion (if any) travels with the
+        // new facing — in the PARENT frame, matching applyToNode's TS_PARENT.
+        kf->setTranslate(M * kf->getTranslate());
     }
     // #854 gotcha: setRotation doesn't invalidate the track's interp caches.
     trk->_keyFrameDataChanged();

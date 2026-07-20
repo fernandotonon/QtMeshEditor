@@ -2553,6 +2553,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     // orientation applied to the skeleton's own forward convention, inferred
     // from the bind pose (hip→head = up, rhip→lhip = left, fwd = left×up).
     if (facingMode) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("facing"));
         if (!initOgreHeadless()) return 1;
         MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
         Ogre::Entity* ent = nullptr;
