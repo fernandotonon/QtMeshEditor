@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <functional>
+#include <unordered_map>
 
 namespace {
 constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
@@ -115,6 +117,9 @@ void SkeletonDebug::onTimerTick()
         if (currentSelected >= 0)
             emit boneSelected(static_cast<unsigned short>(currentSelected));
     }
+
+    if (mShowRestGhost)
+        updateGhostVisuals();
 }
 
 void SkeletonDebug::rebuildVisuals()
@@ -125,8 +130,10 @@ void SkeletonDebug::rebuildVisuals()
     const bool wasAxes = mShowAxes;
     const bool wasBones = mShowBones;
     const bool wasNames = mShowNames;
+    const bool wasGhost = mShowRestGhost;
 
     mTimer.stop();
+    destroyGhostVisuals();
     mEntity->detachAllObjectsFromBone();
 
     for (auto* ent : mBoneEntities)
@@ -145,9 +152,11 @@ void SkeletonDebug::rebuildVisuals()
     mShowAxes = false;
     mShowBones = false;
     mShowNames = false;
+    mShowRestGhost = false;
     showAxes(wasAxes);
     showBones(wasBones);
     showNames(wasNames);
+    showRestGhost(wasGhost);
     mTimer.start(0);
 }
 
@@ -155,6 +164,8 @@ SkeletonDebug::~SkeletonDebug()
 {
     mTimer.stop();
     mTimer.disconnect();
+
+    destroyGhostVisuals();
 
     // Detach all bone-attached objects at once — this clears mChildObjectList
     // and frees TagPoints without leaving stale parent references.
@@ -309,6 +320,122 @@ void SkeletonDebug::showNames(bool show)
     mShowNames = show;
 }
 
+void SkeletonDebug::showRestGhost(bool show)
+{
+    if (mShowRestGhost == show)
+        return;
+    mShowRestGhost = show;
+    if (show) {
+        ensureGhostVisuals();
+        updateGhostVisuals();
+    } else {
+        destroyGhostVisuals();
+    }
+}
+
+void SkeletonDebug::destroyGhostVisuals()
+{
+    if (mGhostMeshEntity) {
+        if (mGhostMeshEntity->getParentSceneNode())
+            mGhostMeshEntity->detachFromParent();
+        mSceneMan->destroyEntity(mGhostMeshEntity);
+        mGhostMeshEntity = nullptr;
+    }
+    // Drop the private mesh clone so the next ghost enable re-snapshots rest.
+    if (mGhostMeshPtr) {
+        const Ogre::String name = mGhostMeshPtr->getName();
+        mGhostMeshPtr.reset();
+        if (Ogre::MeshManager::getSingleton().resourceExists(name))
+            Ogre::MeshManager::getSingleton().remove(name);
+    }
+    for (auto* ent : mGhostEntities) {
+        if (ent && ent->getParentSceneNode())
+            ent->detachFromParent();
+        if (ent)
+            mSceneMan->destroyEntity(ent);
+    }
+    mGhostEntities.clear();
+    mGhostNodes.clear();
+    mGhostBoneNames.clear();
+    if (mGhostRoot) {
+        mGhostRoot->removeAndDestroyAllChildren();
+        mSceneMan->destroySceneNode(mGhostRoot);
+        mGhostRoot = nullptr;
+    }
+}
+
+void SkeletonDebug::ensureGhostVisuals()
+{
+    if (!mEntity || !mEntity->hasSkeleton() || !mSceneMan)
+        return;
+    if (mGhostRoot)
+        return;
+
+    createBoneMaterial();
+
+    Ogre::SceneNode* entNode = mEntity->getParentSceneNode();
+    if (!entNode)
+        return;
+
+    mGhostRoot = entNode->createChildSceneNode(
+        mEntity->getName() + "_restGhostRoot");
+
+    // Translucent blue MESH frozen at the rest pose when the ghost was enabled.
+    // Must NOT share the live mesh resource — rest-pose bake writes into that
+    // mesh and would make the ghost follow the new pose.
+    // Live skeleton joints keep their normal materials (never this blue).
+    try {
+        const Ogre::String ghostEntName = mEntity->getName() + "_restGhostMesh";
+        const Ogre::String ghostMeshRes = mEntity->getName() + "_restGhostMeshRes";
+        if (mSceneMan->hasEntity(ghostEntName))
+            mSceneMan->destroyEntity(ghostEntName);
+        if (Ogre::MeshManager::getSingleton().resourceExists(ghostMeshRes))
+            Ogre::MeshManager::getSingleton().remove(ghostMeshRes);
+
+        mGhostMeshPtr = mEntity->getMesh()->clone(ghostMeshRes);
+        mGhostMeshEntity = mSceneMan->createEntity(ghostEntName, ghostMeshRes);
+        mGhostMeshEntity->setQueryFlags(0);
+        mGhostMeshEntity->setCastShadows(false);
+        mGhostMeshEntity->setMaterial(mMeshGhostMatPtr);
+        for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+            mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        mGhostRoot->attachObject(mGhostMeshEntity);
+        // Keep ghost at its cloned bind: disable clips and reset to bind.
+        if (Ogre::AnimationStateSet* states = mGhostMeshEntity->getAllAnimationStates()) {
+            for (const auto& pair : states->getAnimationStates())
+                pair.second->setEnabled(false);
+        }
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+    } catch (const Ogre::Exception&) {
+        mGhostMeshEntity = nullptr;
+        if (mGhostMeshPtr) {
+            const Ogre::String name = mGhostMeshPtr->getName();
+            mGhostMeshPtr.reset();
+            if (Ogre::MeshManager::getSingleton().resourceExists(name))
+                Ogre::MeshManager::getSingleton().remove(name);
+        }
+    }
+}
+
+void SkeletonDebug::updateGhostVisuals()
+{
+    if (!mShowRestGhost || !mEntity || !mGhostRoot)
+        return;
+
+    // Force the ghost mesh to the bind pose every tick so it never
+    // picks up the live animated skeleton.
+    if (mGhostMeshEntity) {
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+        mGhostMeshEntity->setVisible(true);
+        if (mMeshGhostMatPtr) {
+            for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+                mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        }
+    }
+}
+
 void SkeletonDebug::createAxesMaterial()
 {
     Ogre::String matName = "SkeletonDebug/AxesMat";
@@ -413,6 +540,45 @@ void SkeletonDebug::createBoneMaterial()
         p->setCullingMode(Ogre::CULL_NONE);
         p->setDepthWriteEnabled(false);
         p->setDepthCheckEnabled(false);
+    }
+
+    // Translucent blue for rest-pose MESH ghost (slice C #557).
+    // Live skeleton joints never use this — only the ghost mesh entity.
+    Ogre::String meshGhostMatName = "SkeletonDebug/MeshGhostMat";
+    mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(meshGhostMatName));
+    if (!mMeshGhostMatPtr) {
+        mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                meshGhostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mMeshGhostMatPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(true);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_NONE);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
+    }
+
+    // Legacy joint-ghost material kept for any residual joint markers.
+    Ogre::String ghostMatName = "SkeletonDebug/BoneMatGhost";
+    mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(ghostMatName));
+    if (!mBoneMatGhostPtr) {
+        mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                ghostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mBoneMatGhostPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
     }
 }
 

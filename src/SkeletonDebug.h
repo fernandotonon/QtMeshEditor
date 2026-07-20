@@ -22,9 +22,11 @@ public:
     void showAxes(bool show);
     void showNames(bool show);
     void showBones(bool show);
+    void showRestGhost(bool show);
     bool axesShown() const {return mShowAxes;}
     bool namesShown() const {return mShowNames;}
     bool bonesShown() const {return mShowBones;}
+    bool restGhostShown() const {return mShowRestGhost;}
 
     /// Rebuild bone/axis visuals after skeleton structure changes (bone CRUD / undo).
     void rebuildVisuals();
@@ -46,6 +48,12 @@ private:
     std::vector<Ogre::Entity*> mAxisEntities;
     std::vector<Ogre::Entity*> mBoneEntities;   // joints + hierarchy links
     std::map<std::string, Ogre::Entity*, std::less<>> mBoneVisualByName; // joint only
+    std::vector<Ogre::SceneNode*> mGhostNodes;
+    std::vector<Ogre::Entity*> mGhostEntities; ///< rest-pose joint markers (optional)
+    std::vector<std::string> mGhostBoneNames;
+    Ogre::Entity* mGhostMeshEntity = nullptr; ///< translucent blue mesh at bind pose
+    Ogre::MeshPtr mGhostMeshPtr; ///< private mesh clone (frozen at ghost-enable rest)
+    Ogre::SceneNode* mGhostRoot = nullptr;
 
     float mBoneSize;
 
@@ -54,6 +62,8 @@ private:
     Ogre::MaterialPtr mBoneMatPtr;
     Ogre::MaterialPtr mBoneMatSelectedPtr;
     Ogre::MaterialPtr mBoneMatRootPtr;
+    Ogre::MaterialPtr mBoneMatGhostPtr;
+    Ogre::MaterialPtr mMeshGhostMatPtr;
     Ogre::MaterialPtr mLinkMatPtr;
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mJointMeshPtr;
@@ -66,6 +76,7 @@ private:
     bool mShowAxes = true;
     bool mShowBones = true;
     bool mShowNames = true;
+    bool mShowRestGhost = false;
 
     void createAxesMaterial();
     void createBoneMaterial();
@@ -75,6 +86,9 @@ private:
     void createLinkMesh();
     std::map<std::string, Ogre::Entity*, std::less<>> createBoneVisuals();
     void createChildLinks(const Ogre::Bone* pBone);
+    void ensureGhostVisuals();
+    void destroyGhostVisuals();
+    void updateGhostVisuals();
     void onTimerTick();
 
     QTimer mTimer;

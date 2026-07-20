@@ -865,7 +865,8 @@ bool Manager::isForbiddenNodeName(const QString &_name)
             ||_name=="QtMeshDepthCameraNode" //offscreen depth-render camera (MeshDepthRenderer)
             ||_name==SELECTIONBOX_OBJECT_NAME
             ||_name==TRANSFORM_OBJECT_NAME
-            ||_name.startsWith("Unnamed_")); //This is the cameras's nodes
+            ||_name.startsWith("Unnamed_") //This is the cameras's nodes
+            ||_name.endsWith("_restGhostRoot")); // SkeletonDebug rest-pose mesh ghost (#557)
 }
 
 bool Manager::hasAnimationName(Ogre::Entity *entity, const QString &_name)

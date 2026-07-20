@@ -1205,6 +1205,14 @@ void PropertiesPanelController::refreshSkeletonOverlays(const QString& entityNam
     emit animationStateChanged();
 }
 
+void PropertiesPanelController::setRestPoseGhostVisible(bool show)
+{
+    if (!mAnimationWidget) return;
+    // Ghost is independent of the Skeleton debug checkbox — AnimationWidget
+    // creates bone-hidden hosts when needed and tears them down on hide.
+    mAnimationWidget->setRestPoseGhostVisible(show);
+}
+
 bool PropertiesPanelController::renameAnimation(const QString& entityName, const QString& oldName, const QString& newName)
 {
     if (newName.isEmpty() || oldName == newName) return false;
