@@ -1,5 +1,6 @@
 #include "AnimationMerger.h"
 #include "AutoRig.h"
+#include "FootContact.h"
 #include "MotionInbetween.h"
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
@@ -1470,6 +1471,274 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     return true;
 }
 
+int AnimationMerger::smoothBakeAnimation(Ogre::Skeleton* skel,
+                                          const std::string& animName,
+                                          int sparseFps, int targetFps)
+{
+    if (!skel || sparseFps <= 0 || targetFps <= 0) return 0;
+    if (sparseFps >= targetFps) return 0;   // nothing to low-pass
+    if (bakeAnimationAtFps(skel, animName, sparseFps) == 0) return 0;
+    return bakeAnimationAtFps(skel, animName, targetFps);
+}
+
+namespace {
+std::string footPinKey(const std::string& animName)
+{
+    return "qtme.footpin." + animName;
+}
+}  // namespace
+
+AnimationMerger::FootPinResult AnimationMerger::pinFeet(
+    Ogre::Skeleton* skel, const std::string& animName, int blendFrames)
+{
+    FootPinResult res;
+    if (!skel || !skel->hasAnimation(animName)) {
+        res.error = QStringLiteral("animation not found");
+        return res;
+    }
+    Ogre::Animation* anim = skel->getAnimation(animName);
+
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    // Bind-local POSITIONS (parent-relative) for the manual FK below — the
+    // skeleton is still in its reset pose after readTargetBindFrame.
+    std::vector<Ogre::Vector3> bindLocalPos(static_cast<size_t>(nBones));
+    for (int i = 0; i < nBones; ++i)
+        bindLocalPos[static_cast<size_t>(i)] =
+            skel->getBone(static_cast<unsigned short>(i))->getPosition();
+
+    // Leg chains: thigh / knee / foot roles per side (first bone per role).
+    struct Leg { int thigh, shin, foot; };
+    const Leg legs[2] = {
+        {tb.roleBoneIdx[15], tb.roleBoneIdx[16], tb.roleBoneIdx[17]},   // right
+        {tb.roleBoneIdx[19], tb.roleBoneIdx[20], tb.roleBoneIdx[21]},   // left
+    };
+
+    auto trackOf = [&](int bone) -> Ogre::NodeAnimationTrack* {
+        if (bone < 0 || !anim->hasNodeTrack(static_cast<unsigned short>(bone)))
+            return nullptr;
+        auto* t = anim->getNodeTrack(static_cast<unsigned short>(bone));
+        return (t && t->getNumKeyFrames() > 0) ? t : nullptr;
+    };
+
+    // Keyframe times come from the first available thigh track — generated
+    // clips write one keyframe per frame on every mapped bone.
+    Ogre::NodeAnimationTrack* timeSrc = trackOf(legs[0].thigh);
+    if (!timeSrc) timeSrc = trackOf(legs[1].thigh);
+    if (!timeSrc) {
+        res.error = QStringLiteral("no leg tracks on this rig/animation");
+        return res;
+    }
+    const int nk = static_cast<int>(timeSrc->getNumKeyFrames());
+    if (nk < 4) {
+        res.error = QStringLiteral("too few keyframes to detect contacts");
+        return res;
+    }
+    std::vector<float> times(static_cast<size_t>(nk));
+    for (int k = 0; k < nk; ++k)
+        times[static_cast<size_t>(k)] =
+            timeSrc->getNodeKeyFrame(static_cast<unsigned short>(k))->getTime();
+
+    // ---- manual FK over the tracks (pure math; the live skeleton — which
+    // may be a SkeletonInstance driving an on-screen entity — is untouched).
+    std::vector<std::vector<Ogre::Quaternion>> Wrot(
+        static_cast<size_t>(nk),
+        std::vector<Ogre::Quaternion>(static_cast<size_t>(nBones)));
+    std::vector<std::vector<Ogre::Vector3>> Wpos(
+        static_cast<size_t>(nk),
+        std::vector<Ogre::Vector3>(static_cast<size_t>(nBones)));
+    for (int k = 0; k < nk; ++k) {
+        const Ogre::TimeIndex ti =
+            anim->_getTimeIndex(times[static_cast<size_t>(k)]);
+        for (int i : tb.order) {
+            Ogre::Quaternion lrot = tb.bindLocal[static_cast<size_t>(i)];
+            Ogre::Vector3 lpos = bindLocalPos[static_cast<size_t>(i)];
+            if (auto* trk = trackOf(i)) {
+                Ogre::TransformKeyFrame kf(nullptr, 0.0f);
+                trk->getInterpolatedKeyFrame(ti, &kf);
+                lrot = lrot * kf.getRotation();       // applyToNode: rotate()
+                lpos = lpos + kf.getTranslate();      // translate(TS_PARENT)
+            }
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            if (pi >= 0) {
+                Wrot[static_cast<size_t>(k)][static_cast<size_t>(i)] =
+                    Wrot[static_cast<size_t>(k)][static_cast<size_t>(pi)] * lrot;
+                Wpos[static_cast<size_t>(k)][static_cast<size_t>(i)] =
+                    Wpos[static_cast<size_t>(k)][static_cast<size_t>(pi)]
+                    + Wrot[static_cast<size_t>(k)][static_cast<size_t>(pi)] * lpos;
+            } else {
+                Wrot[static_cast<size_t>(k)][static_cast<size_t>(i)] = lrot;
+                Wpos[static_cast<size_t>(k)][static_cast<size_t>(i)] = lpos;
+            }
+        }
+    }
+
+    // Detection runs in the CANONICAL frame (Ct maps rig world → X=left,
+    // Y=up, Z=forward) so "ground" is a horizontal plane regardless of the
+    // rig's own axes.
+    auto toCanon = [&](const Ogre::Vector3& p) { return tb.Ct * p; };
+    auto fromCanon = [&](const FootContact::V3& p) {
+        return tb.Ct.Inverse() * Ogre::Vector3(p[0], p[1], p[2]);
+    };
+    auto v3 = [](const Ogre::Vector3& p) {
+        return FootContact::V3{p.x, p.y, p.z};
+    };
+
+    for (const Leg& leg : legs) {
+        if (leg.thigh < 0 || leg.shin < 0 || leg.foot < 0)
+            continue;
+        auto* thighTrk = trackOf(leg.thigh);
+        auto* shinTrk = trackOf(leg.shin);
+        auto* footTrk = trackOf(leg.foot);
+        if (!thighTrk || !shinTrk
+            || static_cast<int>(thighTrk->getNumKeyFrames()) != nk
+            || static_cast<int>(shinTrk->getNumKeyFrames()) != nk
+            || (footTrk && static_cast<int>(footTrk->getNumKeyFrames()) != nk))
+            continue;   // mixed keyframe grids — not a generated clip
+        // The rewrite below indexes shin/foot keyframes by k and assumes they
+        // share timeSrc's times. Count alone isn't enough — an authored clip
+        // can have equal counts at DIFFERENT times, which would write a
+        // correction computed at time t onto a keyframe at t'. Verify the
+        // grids actually align (generated clips do by construction).
+        {
+            bool aligned = true;
+            for (int k = 0; k < nk && aligned; ++k) {
+                const float t = times[static_cast<size_t>(k)];
+                if (std::abs(thighTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f
+                    || std::abs(shinTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f
+                    || (footTrk && std::abs(footTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k))->getTime() - t) > 1e-4f))
+                    aligned = false;
+            }
+            if (!aligned) continue;   // keyframe times don't match — skip leg
+        }
+
+        std::vector<FootContact::V3> footC(static_cast<size_t>(nk));
+        for (int k = 0; k < nk; ++k)
+            footC[static_cast<size_t>(k)] = v3(toCanon(
+                Wpos[static_cast<size_t>(k)][static_cast<size_t>(leg.foot)]));
+        const float legLen =
+            (Wpos[0][static_cast<size_t>(leg.shin)]
+             - Wpos[0][static_cast<size_t>(leg.thigh)]).length()
+            + (Wpos[0][static_cast<size_t>(leg.foot)]
+               - Wpos[0][static_cast<size_t>(leg.shin)]).length();
+        auto spans = FootContact::detectContacts(footC, legLen);
+        // Coverage guard: a single "contact" spanning most of the clip is a
+        // misdetection (loose thresholds on a moving clip) — pinning it
+        // freezes the leg for the whole animation. Genuine stance phases in
+        // gait are well under this.
+        spans.erase(std::remove_if(spans.begin(), spans.end(),
+                        [&](const FootContact::Span& sp) {
+                            return (sp.end - sp.start + 1)
+                                   > (nk * 55) / 100;
+                        }),
+                    spans.end());
+        if (spans.empty())
+            continue;
+        res.spans += static_cast<int>(spans.size());
+
+        for (const auto& span : spans) {
+            const FootContact::V3 anchor = footC[static_cast<size_t>(span.start)];
+            for (int k = span.start; k <= span.end; ++k) {
+                const float w = FootContact::blendWeight(span, k, blendFrames);
+                if (w <= 0.0f)
+                    continue;
+                const size_t kc = static_cast<size_t>(k);
+                const Ogre::Vector3 hipW = Wpos[kc][static_cast<size_t>(leg.thigh)];
+                const Ogre::Vector3 kneeW = Wpos[kc][static_cast<size_t>(leg.shin)];
+                const Ogre::Vector3 footW = Wpos[kc][static_cast<size_t>(leg.foot)];
+                // pinned target: blend the current foot toward the anchor
+                const FootContact::V3 cur = footC[kc];
+                const FootContact::V3 tgtC{
+                    cur[0] + (anchor[0] - cur[0]) * w,
+                    cur[1] + (anchor[1] - cur[1]) * w,
+                    cur[2] + (anchor[2] - cur[2]) * w};
+                const FootContact::V3 kneeNewC = FootContact::solveKnee(
+                    v3(toCanon(hipW)), v3(toCanon(kneeW)), v3(toCanon(footW)),
+                    tgtC);
+                const Ogre::Vector3 kneeNew = fromCanon(kneeNewC);
+                const Ogre::Vector3 tgt = fromCanon(tgtC);
+
+                Ogre::Vector3 dThighOld = kneeW - hipW;
+                Ogre::Vector3 dThighNew = kneeNew - hipW;
+                Ogre::Vector3 dShinOld = footW - kneeW;
+                Ogre::Vector3 dShinNew = tgt - kneeNew;
+                if (dThighOld.squaredLength() < 1e-12f
+                    || dThighNew.squaredLength() < 1e-12f
+                    || dShinOld.squaredLength() < 1e-12f
+                    || dShinNew.squaredLength() < 1e-12f)
+                    continue;
+                dThighOld.normalise(); dThighNew.normalise();
+                dShinOld.normalise(); dShinNew.normalise();
+                const Ogre::Quaternion S1 = dThighOld.getRotationTo(dThighNew);
+                const Ogre::Quaternion S2 =
+                    (S1 * dShinOld).getRotationTo(dShinNew);
+
+                // Rewrite the three keyframes as world premultipliers folded
+                // into parent-relative deltas (keyframes compose as
+                // local = bindLocal · kf; world = Wp · local).
+                const Ogre::Quaternion& WpT =
+                    (tb.parentIdx[static_cast<size_t>(leg.thigh)] >= 0)
+                        ? Wrot[kc][static_cast<size_t>(
+                              tb.parentIdx[static_cast<size_t>(leg.thigh)])]
+                        : Ogre::Quaternion::IDENTITY;
+                const Ogre::Quaternion Wthigh =
+                    Wrot[kc][static_cast<size_t>(leg.thigh)];
+                const Ogre::Quaternion WthighNew = S1 * Wthigh;
+                auto* kfT = thighTrk->getNodeKeyFrame(
+                    static_cast<unsigned short>(k));
+                kfT->setRotation(
+                    tb.bindLocal[static_cast<size_t>(leg.thigh)].Inverse()
+                    * WpT.Inverse() * WthighNew);
+
+                const Ogre::Quaternion& WpS =
+                    Wrot[kc][static_cast<size_t>(
+                        tb.parentIdx[static_cast<size_t>(leg.shin)])];
+                const Ogre::Quaternion Wshin =
+                    Wrot[kc][static_cast<size_t>(leg.shin)];
+                const Ogre::Quaternion WshinNew = S2 * S1 * Wshin;
+                auto* kfS = shinTrk->getNodeKeyFrame(
+                    static_cast<unsigned short>(k));
+                kfS->setRotation(
+                    tb.bindLocal[static_cast<size_t>(leg.shin)].Inverse()
+                    * (S1 * WpS).Inverse() * WshinNew);
+
+                if (footTrk) {
+                    // foot keeps its ORIGINAL world orientation (no toe pop
+                    // inherited from the parent corrections)
+                    const Ogre::Quaternion& WpF =
+                        Wrot[kc][static_cast<size_t>(
+                            tb.parentIdx[static_cast<size_t>(leg.foot)])];
+                    auto* kfF = footTrk->getNodeKeyFrame(
+                        static_cast<unsigned short>(k));
+                    kfF->setRotation(
+                        tb.bindLocal[static_cast<size_t>(leg.foot)].Inverse()
+                        * (S2 * S1 * WpF).Inverse()
+                        * Wrot[kc][static_cast<size_t>(leg.foot)]);
+                }
+                ++res.keyframesAdjusted;
+            }
+        }
+        // setRotation does NOT invalidate the track caches (#854 lesson).
+        thighTrk->_keyFrameDataChanged();
+        shinTrk->_keyFrameDataChanged();
+        if (footTrk) footTrk->_keyFrameDataChanged();
+    }
+
+    if (skel->getNumBones() > 0)
+        skel->getBone(0)->getUserObjectBindings().setUserAny(
+            footPinKey(animName), Ogre::Any(true));
+    res.ok = true;
+    return res;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,
@@ -1480,7 +1749,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool refineWithModel,
     int refineStride,
     bool yaw180,
-    const std::vector<std::array<float, 3>>& clipRestDir)
+    const std::vector<std::array<float, 3>>& clipRestDir,
+    bool modelClip)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -1570,9 +1840,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // stored angle from a prior generation of the same name would make a
     // re-request of that same angle a no-op (delta 0) on the new keyframes —
     // forget it.
-    if (skel->getNumBones() > 0)
+    if (skel->getNumBones() > 0) {
         skel->getBone(0)->getUserObjectBindings().eraseUserAny(
             armSpaceKey(animName));
+        // #856: same for the foot-pin marker — a regenerated clip is unpinned.
+        skel->getBone(0)->getUserObjectBindings().eraseUserAny(
+            "qtme.footpin." + animName);
+    }
     Ogre::Animation* anim = skel->createAnimation(animName, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
@@ -1587,13 +1861,17 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // Generated clips therefore reference the TARGET BIND — no pose from any
     // other animation is involved (the standing-pose harvest below is only
     // the fallback for restWorld-less clips, e.g. the CMU-built libraries).
+    // A reference orientation is PRESENT when it is a valid (unit-norm) quat;
+    // unresolved roles in dumps are zero-filled. Identity counts — the v5
+    // model's canonical triple (#858) is restWorld = identity ×22 by
+    // construction, and treating it as "absent" would silently demote model
+    // clips to the synthetic-standing-pose path.
     bool haveRestWorld = false;
     if (worldFrame
         && cmuRestWorld.size() == static_cast<size_t>(
                MotionInbetween::canonicalJointCount())) {
         for (const auto& q : cmuRestWorld)
-            if (std::abs(q[0]) > 1e-5f || std::abs(q[1]) > 1e-5f
-                || std::abs(q[2]) > 1e-5f || std::abs(1.f - std::abs(q[3])) > 1e-5f) {
+            if (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 0.25f) {
                 haveRestWorld = true;
                 break;
             }
@@ -1643,6 +1921,146 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 const auto& q = clipQuats[frame][joint];
                 return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
             };
+            // #857: STABILIZED TWIST TRANSPORT. The aim above transports the
+            // bone's DIRECTION but inherits the target bind's roll — gesture-
+            // heavy clips (dance, wave) lose forearm/spine roll and read
+            // flat. Decompose the source's frame rotation into swing (the
+            // direction, already transported) + twist about the bone axis:
+            //     Δ(f)   = Ws(f) · Ws_bind⁻¹              (canonical axes)
+            //     aim(f) = arc(d_bind → d(f))
+            //     θ(f)   = signed angle of aim(f)⁻¹·Δ(f) about d_bind
+            // θ is wrapped to (−π,π] then UNWRAPPED across frames (a ±180°
+            // pop near the shortest-arc degeneracy would otherwise flip the
+            // roll direction mid-clip once a gain ≠ 1 scales it) and composed
+            // on the target about the SAME pole the source decomposed about:
+            //     Qbase  = arc(dt_bind → d_ref) · Wt_bind      (once per bone)
+            //     Wt(f)  = twist(θ·gain, ds) · arc(d_ref → ds) · Qbase
+            // Recomposing per-frame from the TARGET BIND direction instead
+            // (the pre-#857 form) decomposes about a different pole than the
+            // source did — the roll component "between" the two poles leaks
+            // into swing and inflates amplitude (measured: Mixamo self-parity
+            // arm amp +38%, elbow error 3.3°→6.3°). With matched poles the
+            // per-frame relative motion is the source's world delta exactly,
+            // conjugated into target axes — direction stays absolute, roll
+            // transports losslessly, self-parity drops below the aim-only
+            // baseline. Per-role gains: collars damped (they share the
+            // shoulder line's roll), everything else transports fully.
+            static const float kTwistGain[22] = {
+                1.f, 1.f, 1.f, 1.f, 1.f, 1.f,   // spine chain + head
+                0.5f, 1.f, 1.f, 1.f,            // rcollar damped, right arm
+                0.5f, 1.f, 1.f, 1.f,            // lcollar damped, left arm
+                1.f, 1.f, 1.f, 1.f,             // right leg + foot
+                1.f, 1.f, 1.f, 1.f };           // left leg + foot
+            // Per-role twist caps (radians). The single generous 150° cap
+            // let noisy source roll through on spine/neck/head — takes whose
+            // roll was invisible pre-#857 (dropped) came back with flailing
+            // arms and a thrown-back head. Roll matters most on forearms;
+            // the axial chain needs very little. Hip keeps a wide cap: it
+            // carries genuine facing turns (salsa).
+            // MODEL clips get tight per-role caps (the from-scratch model's
+            // roll is noisy — uncapped it flails). AUTHORED/self-parity clips
+            // carry legitimate large roll and must NOT be capped (measured:
+            // caps collapse mouse elbow 180°→124°, parity 5.1°→3.1° off).
+            static const float kTwistCapModel[22] = {
+                2.62f, 0.79f, 0.79f, 0.52f, 0.52f, 0.52f,  // hip, spine 45°, neck/head 30°
+                0.52f, 1.57f, 1.57f, 1.57f,                // rcollar 30°, right arm 90°
+                0.52f, 1.57f, 1.57f, 1.57f,                // lcollar 30°, left arm 90°
+                1.05f, 1.05f, 1.05f, 0.79f,                // right leg 60°, foot 45°
+                1.05f, 1.05f, 1.05f, 0.79f };              // left leg 60°, foot 45°
+            static const float kTwistCapOpen[22] = {
+                3.15f, 3.15f, 3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f,
+                3.15f, 3.15f, 3.15f, 3.15f };
+            const float* kTwistCapRole = modelClip ? kTwistCapModel
+                                                   : kTwistCapOpen;
+            std::vector<std::vector<float>> twistTheta(
+                static_cast<size_t>(frames),
+                std::vector<float>(static_cast<size_t>(Jc), 0.0f));
+            {
+                constexpr float kTau = 2.0f * static_cast<float>(M_PI);
+                std::vector<float> prev(static_cast<size_t>(Jc), 0.0f);
+                std::vector<char> has(static_cast<size_t>(Jc), 0);
+                for (int f = 0; f < frames; ++f)
+                    for (int c = 0; c < Jc; ++c) {
+                        const Ogre::Vector3& as =
+                            srcLocalAxis[static_cast<size_t>(c)];
+                        if (as.squaredLength() <= 1e-8f) continue;
+                        const auto& rq = cmuRestWorld[static_cast<size_t>(c)];
+                        const Ogre::Quaternion restQ(rq[3], rq[0], rq[1], rq[2]);
+                        const auto& sd = clipRestDir[static_cast<size_t>(c)];
+                        Ogre::Vector3 dbind(sd[0], sd[1], sd[2]);
+                        dbind.normalise();
+                        const Ogre::Quaternion Wf = clipQ(f, c);
+                        const Ogre::Vector3 d = Wf * as;
+                        const Ogre::Quaternion delta = Wf * restQ.Inverse();
+                        const Ogre::Quaternion aim = dbind.getRotationTo(d);
+                        const Ogre::Quaternion tw = aim.Inverse() * delta;
+                        float th = 2.0f * std::atan2(
+                            tw.x * dbind.x + tw.y * dbind.y + tw.z * dbind.z,
+                            tw.w);
+                        th = std::remainder(th, kTau);
+                        if (has[static_cast<size_t>(c)])
+                            th += kTau * std::round(
+                                (prev[static_cast<size_t>(c)] - th) / kTau);
+                        prev[static_cast<size_t>(c)] = th;
+                        has[static_cast<size_t>(c)] = 1;
+                        twistTheta[static_cast<size_t>(f)]
+                                  [static_cast<size_t>(c)] = std::clamp(
+                            th, -kTwistCapRole[c], kTwistCapRole[c]);
+                    }
+                // Low-pass the twist trajectories (5-tap binomial). θ comes
+                // from per-frame shortest-arc decompositions and jitters near
+                // degenerate aims — transporting it raw renders as trembling.
+                // Directions are untouched; only the roll is smoothed.
+                if (frames >= 5) {
+                    for (int c = 0; c < Jc; ++c) {
+                        std::vector<float> src(static_cast<size_t>(frames));
+                        for (int f = 0; f < frames; ++f)
+                            src[static_cast<size_t>(f)] =
+                                twistTheta[static_cast<size_t>(f)]
+                                          [static_cast<size_t>(c)];
+                        static const float k[5] = {1.f, 4.f, 6.f, 4.f, 1.f};
+                        for (int f = 0; f < frames; ++f) {
+                            float acc = 0.0f, wsum = 0.0f;
+                            for (int o = -2; o <= 2; ++o) {
+                                const int j = f + o;
+                                if (j < 0 || j >= frames) continue;
+                                acc += k[o + 2] * src[static_cast<size_t>(j)];
+                                wsum += k[o + 2];
+                            }
+                            twistTheta[static_cast<size_t>(f)]
+                                      [static_cast<size_t>(c)] = acc / wsum;
+                        }
+                    }
+                }
+            }
+            // Reference-aligned roll baseline per bone: aim the target bind
+            // at the source's REFERENCE direction once, so every per-frame
+            // swing below decomposes about the source's own pole.
+            std::vector<Ogre::Vector3> dref(static_cast<size_t>(Jc),
+                                            Ogre::Vector3::ZERO);
+            for (int c = 0; c < Jc; ++c) {
+                const auto& sd = clipRestDir[static_cast<size_t>(c)];
+                Ogre::Vector3 v(sd[0], sd[1], sd[2]);
+                if (v.squaredLength() > 1e-8f) {
+                    v.normalise();
+                    dref[static_cast<size_t>(c)] = CtInv * v;
+                }
+            }
+            std::vector<Ogre::Quaternion> Qbase(static_cast<size_t>(nBones),
+                                                Ogre::Quaternion::IDENTITY);
+            for (int i = 0; i < nBones; ++i) {
+                const int c = boneToCanon[i];
+                if (c >= 0 && c < Jc
+                    && srcLocalAxis[static_cast<size_t>(c)].squaredLength()
+                           > 1e-8f)
+                    Qbase[static_cast<size_t>(i)] =
+                        tb.tgtBindDir[static_cast<size_t>(c)]
+                            .getRotationTo(dref[static_cast<size_t>(c)])
+                        * tb.bindWorld[static_cast<size_t>(i)];
+            }
             std::vector<Ogre::NodeAnimationTrack*> tracks(
                 static_cast<size_t>(nBones), nullptr);
             for (int i = 0; i < nBones; ++i)
@@ -1675,10 +2093,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             (clipQ(f, c)
                              * srcLocalAxis[static_cast<size_t>(c)]);
                         const Ogre::Quaternion R =
-                            tb.tgtBindDir[static_cast<size_t>(c)]
-                                .getRotationTo(ds);
-                        const Ogre::Quaternion Wt =
-                            R * tb.bindWorld[static_cast<size_t>(i)];
+                            dref[static_cast<size_t>(c)].getRotationTo(ds);
+                        Ogre::Quaternion Wt =
+                            R * Qbase[static_cast<size_t>(i)];
+                        // #857: re-apply the source's roll about the aimed
+                        // direction (the swing above deliberately dropped it).
+                        const float th = twistTheta[static_cast<size_t>(f)]
+                                                   [static_cast<size_t>(c)]
+                                         * kTwistGain[c];
+                        if (std::abs(th) > 1e-5f) {
+                            Ogre::Vector3 axis = ds;
+                            axis.normalise();
+                            Wt = Ogre::Quaternion(Ogre::Radian(th), axis) * Wt;
+                        }
                         local = Wp.Inverse() * Wt;
                         W[static_cast<size_t>(i)] = Wt;
                     } else {

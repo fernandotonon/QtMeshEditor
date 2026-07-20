@@ -181,7 +181,14 @@ public:
         bool refineWithModel = false,
         int refineStride = 8,
         bool yaw180 = false,
-        const std::vector<std::array<float, 3>>& clipRestDir = {});
+        const std::vector<std::array<float, 3>>& clipRestDir = {},
+        // #837: tight per-role twist caps damp the from-scratch MODEL's noisy
+        // roll (flailing arms / thrown-back head). Authored template + self-
+        // parity clips carry legitimate large roll (arms up to 180°); capping
+        // them collapses real motion (measured: mouse elbow 180°→124°, total
+        // parity 5.1°→3.1° with caps off). So default = relaxed; the model
+        // path passes modelClip=true to re-enable the tight caps.
+        bool modelClip = false);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
@@ -259,6 +266,47 @@ public:
     static void migrateArmSpaceKey(Ogre::Skeleton* skel,
                                    const std::string& oldAnim,
                                    const std::string& newAnim);
+
+    /// #837 quality post-pass: re-grid the animation to a SPARSE keyframe
+    /// rate, then back to `targetFps` — a temporal low-pass that removes
+    /// retarget jitter ("trembling") while preserving the silhouette and the
+    /// clip length (both passes keep endpoints). Codifies the field-proven
+    /// trick of baking sparse and re-baking at 30 FPS. Returns the final
+    /// keyframe count (0 = animation missing / invalid fps).
+    static int smoothBakeAnimation(Ogre::Skeleton* skel,
+                                   const std::string& animName,
+                                   int sparseFps = 12, int targetFps = 30);
+
+    /// Outcome of pinFeet.
+    struct FootPinResult {
+        bool ok = false;
+        QString error;
+        int spans = 0;            ///< contact spans pinned (both feet)
+        int keyframesAdjusted = 0;
+    };
+
+    /// #856 — foot-contact cleanup. Retargeted clips slide/float feet on rigs
+    /// whose proportions differ from the source (the direction retarget
+    /// transfers bone DIRECTIONS, not world foot positions). Per foot role,
+    /// detect contact spans (foot near the clip's ground level AND nearly
+    /// stationary horizontally — FootContact::detectContacts, canonical-frame,
+    /// leg-length-scaled thresholds) and lock the foot's world position to its
+    /// span-start position with an analytic two-bone hip–knee–foot IK
+    /// (FootContact::solveKnee — keeps segment lengths and the pose's own
+    /// bend plane), blending in/out over `blendFrames` at span edges so knees
+    /// don't pop. Rewrites ONLY the thigh/shin/foot keyframes (foot keeps its
+    /// original world orientation); everything else untouched. Pure track
+    /// math — nothing is applied to the live skeleton.
+    ///
+    /// Effectively idempotent: a second run detects the already-planted spans
+    /// and re-pins to the same targets (near-no-op). The application is
+    /// recorded on bone[0]'s UserObjectBindings ("qtme.footpin.<anim>") so a
+    /// UI can reflect state; applyMotionClip clears it on clip regeneration.
+    /// Designed for generated clips (dense uniform keyframes); sparse
+    /// authored clips get keyframe-rate detection (approximate).
+    static FootPinResult pinFeet(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 int blendFrames = 3);
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role

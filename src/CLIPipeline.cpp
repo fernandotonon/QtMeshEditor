@@ -2036,7 +2036,8 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
-                                 float armSpaceDeg)
+                                 float armSpaceDeg, bool footPin,
+                                 int smoothFps)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2075,12 +2076,21 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                 action = mr.matchedAction;
                 quats = mr.clip.quats;
                 fps = mr.clip.fps;
-                worldFrame = mr.worldFrame;  // v4 models: world-frame quats
-                // Model clips carry no reference triple — borrow a template
-                // clip's canonical bone directions so the retarget can
-                // synthesize a BIND-referenced base pose instead of
-                // harvesting the rig's other animations (contamination).
-                clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                worldFrame = mr.worldFrame;  // v4/v5 models: world-frame quats
+                if (!mr.clip.restWorld.empty() && !mr.clip.restDir.empty()) {
+                    // v5 models (#858) ship their canonical reference triple
+                    // in the vocab — the clip rides the same bind-referenced
+                    // direction retarget as v5 template clips.
+                    cmuRest = mr.clip.restWorld;
+                    clipDirs = mr.clip.restDir;
+                } else {
+                    // Legacy v4 models carry no reference triple — borrow a
+                    // template clip's canonical bone directions so the
+                    // retarget can synthesize a BIND-referenced base pose
+                    // instead of harvesting the rig's other animations
+                    // (contamination).
+                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                }
                 clipSource = QStringLiteral("model");
                 gotClip = true;
             } else {
@@ -2148,11 +2158,23 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 worldFrame, cmuRest,
                                                 /*refineWithModel=*/false,
                                                 /*refineStride=*/8, yaw180,
-                                                clipDirs);
+                                                clipDirs,
+                                                clipSource == QStringLiteral("model"));
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
     err() << "(source: " << clipSource << ")" << Qt::endl;
+
+    // #837 quality post-pass (ON by default, --no-smooth-bake disables,
+    // --smooth-fps N tunes): bake sparse -> re-bake at clip rate. A temporal
+    // low-pass that removes retarget trembling; runs BEFORE arm-space and
+    // foot pinning so the pin targets stay exact.
+    if (smoothFps > 0) {
+        if (AnimationMerger::smoothBakeAnimation(skel.get(), animName,
+                                                 smoothFps, fps) > 0)
+            err() << "(smooth-bake: " << smoothFps << " -> " << fps
+                  << " fps)" << Qt::endl;
+    }
 
     // #854: optional Mixamo-style arm-space post-process before export.
     if (std::abs(armSpaceDeg) > 1e-4f) {
@@ -2164,6 +2186,19 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         } else
             err() << "Note: arm-space adjustment skipped (no arm roles)."
                   << Qt::endl;
+    }
+
+    // #856: foot-contact cleanup — ON by default (--no-foot-pin disables).
+    if (footPin) {
+        const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+        if (fp.ok && fp.spans > 0) {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ai.tool_call"),
+                QStringLiteral("foot_pin %1 spans").arg(fp.spans));
+            err() << "(foot-pin: " << fp.spans << " contact span(s), "
+                  << fp.keyframesAdjusted << " keyframes)" << Qt::endl;
+        } else if (!fp.ok)
+            err() << "Note: foot-pin skipped (" << fp.error << ")." << Qt::endl;
     }
 
     auto* node = entity->getParentSceneNode();
@@ -2213,12 +2248,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
     bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
     QString dumpCanonicalPath;        // --dump-canonical <out.json>
+    bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
+    QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
+    bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
+    bool footPinSet = false;          // --foot-pin given (standalone post-process)
+    int  generateSmoothFps = 12;      // #837: sparse-bake low-pass (0 = off)
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -2294,6 +2334,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             dumpCanonicalPath = QString(argv[++i]);
             continue;
         }
+        // #837 retarget parity harness (dev/test): apply an arbitrary
+        // canonical clip JSON (as written by --dump-canonical) through the
+        // SAME bind-referenced retarget the model path uses — no model, no
+        // conditioning. Lets a self-retarget round-trip (dump a rig's own
+        // clip → apply-canonical back onto it → re-dump → compare) measure
+        // per-bone retarget parity in isolation.
+        if (arg == "--apply-canonical" && i + 1 < argc) {
+            applyCanonicalMode = true;
+            applyCanonicalPath = QString(argv[++i]);
+            continue;
+        }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -2310,6 +2361,18 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--arm-space" && i + 1 < argc) {
             armSpaceDeg = QString(argv[++i]).toFloat();
             armSpaceSet = true;
+            continue;
+        }
+        // #856 foot-contact cleanup: ON by default during --generate
+        // (--no-foot-pin opts out); --foot-pin alone post-processes an
+        // EXISTING animation (standalone, needs --animation).
+        if (arg == "--no-foot-pin") { generateFootPin = false; continue; }
+        if (arg == "--foot-pin") { footPinSet = true; continue; }
+        // #837 smooth-bake post-pass on --generate: bake sparse then back to
+        // the clip rate (temporal low-pass, kills retarget trembling).
+        if (arg == "--no-smooth-bake") { generateSmoothFps = 0; continue; }
+        if (arg == "--smooth-fps" && i + 1 < argc) {
+            generateSmoothFps = QString(argv[++i]).toInt();
             continue;
         }
         if (arg == "--simplify") { simplifyMode = true; continue; }
@@ -2407,7 +2470,70 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
-                               generateUseModel, armSpaceDeg);
+                               generateUseModel, armSpaceDeg, generateFootPin,
+                               generateSmoothFps);
+    }
+
+    // #837 parity harness: apply a canonical clip JSON through the pure
+    // bind-referenced retarget (no model, no conditioning, no smooth/pin/
+    // arm-space) and export. Used only for retarget self-parity testing.
+    if (applyCanonicalMode) {
+        if (!initOgreHeadless()) return 1;
+        QFile jf(applyCanonicalPath);
+        if (!jf.open(QIODevice::ReadOnly)) {
+            err() << "Error: cannot open " << applyCanonicalPath << Qt::endl;
+            return 1;
+        }
+        const QJsonObject root =
+            QJsonDocument::fromJson(jf.readAll()).object();
+        const QJsonArray clips = root.value("clips").toArray();
+        if (clips.isEmpty()) { err() << "Error: no clips in json" << Qt::endl; return 1; }
+        const QJsonObject clip = clips.first().toObject();
+        std::vector<std::vector<std::array<float, 4>>> q;
+        for (const QJsonValue& fv : clip.value("quats").toArray()) {
+            const QJsonArray fa = fv.toArray();
+            std::vector<std::array<float, 4>> frame;
+            for (const QJsonValue& jv : fa) {
+                const QJsonArray a = jv.toArray();
+                frame.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                                 float(a[2].toDouble()), float(a[3].toDouble())});
+            }
+            q.push_back(std::move(frame));
+        }
+        std::vector<std::array<float, 4>> rw;
+        for (const QJsonValue& v : clip.value("restWorld").toArray()) {
+            const QJsonArray a = v.toArray();
+            rw.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                          float(a[2].toDouble()), float(a[3].toDouble())});
+        }
+        std::vector<std::array<float, 3>> rd;
+        for (const QJsonValue& v : clip.value("restDir").toArray()) {
+            const QJsonArray a = v.toArray();
+            rd.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
+                          float(a[2].toDouble())});
+        }
+        const int cfps = root.value("fps").toInt(30);
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* ent = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { ent = e; break; }
+        if (!ent) { err() << "Error: no skinned mesh" << Qt::endl; return 1; }
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        const auto res = AnimationMerger::applyMotionClip(
+            skel.get(), "generated_parity", q, cfps,
+            /*worldFrame=*/true, rw, /*refineWithModel=*/false,
+            /*refineStride=*/8, /*yaw180=*/false, rd);
+        if (!res.ok) { err() << "Error: " << res.error << Qt::endl; return 1; }
+        const QString out = outputPath.isEmpty()
+            ? QStringLiteral("/tmp/parity_out.glb") : outputPath;
+        auto* node = ent->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("applied canonical → %1 (%2 frames)\n")
+                     .arg(QFileInfo(out).fileName()).arg(res.frames));
+        return 0;
     }
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
@@ -2449,6 +2575,45 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         cliWrite(QString("Adjusted arm space of '%1' to %2 deg → %3\n")
                      .arg(animationFilter).arg(armSpaceDeg)
+                     .arg(QFileInfo(out).fileName()));
+        return 0;
+    }
+
+    // #856 standalone: pin the feet of an EXISTING animation (no --generate).
+    // `qtmesh anim <file> --foot-pin --animation <name> -o out`.
+    if (footPinSet) {
+        if (animationFilter.isEmpty()) {
+            err() << "Error: --foot-pin (standalone) requires --animation <name>."
+                  << Qt::endl;
+            return 2;
+        }
+        if (!initOgreHeadless()) return 1;
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* entity = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { entity = e; break; }
+        if (!entity) {
+            err() << "Error: " << filePath << " has no skinned mesh." << Qt::endl;
+            return 1;
+        }
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const auto fp = AnimationMerger::pinFeet(
+            skel.get(), animationFilter.toStdString());
+        if (!fp.ok) {
+            err() << "Error: foot-pin failed: " << fp.error << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+            QStringLiteral("foot_pin %1 spans").arg(fp.spans));
+        const QString out = outputPath.isEmpty() ? filePath : outputPath;
+        auto* node = entity->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("Pinned feet of '%1' (%2 span(s), %3 keyframes) → %4\n")
+                     .arg(animationFilter).arg(fp.spans)
+                     .arg(fp.keyframesAdjusted)
                      .arg(QFileInfo(out).fileName()));
         return 0;
     }

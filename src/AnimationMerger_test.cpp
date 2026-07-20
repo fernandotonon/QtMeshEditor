@@ -1139,3 +1139,207 @@ TEST_F(AnimationMergerTest, ArmSpaceFollowsAnimationRename)
                                               "walk_wide");
     EXPECT_GT(degBetween(wide, neutral), 15.0f);   // it actually moved back
 }
+
+// ── #857: twist transport in the bind-referenced direction retarget ─────────
+
+namespace {
+// Canonical-clip inputs for a virtual SOURCE rig whose bind is rotated 90°
+// about Z (a deliberately foreign convention — exercises the restWorld
+// conjugation): restDir = clean canonical T-pose directions, restWorld = the
+// same non-identity quat everywhere, and identity motion W(f) = restQ.
+constexpr int kJc = 22;
+const Ogre::Quaternion kSrcRest(Ogre::Degree(90), Ogre::Vector3::UNIT_Z);
+
+std::vector<std::array<float, 3>> canonRestDirs()
+{
+    static const float d[kJc][3] = {
+        {0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},{0,1,0},
+        {-1,0,0},{-1,0,0},{-1,0,0},{-1,0,0},
+        {1,0,0},{1,0,0},{1,0,0},{1,0,0},
+        {0,-1,0},{0,-1,0},{0,-1,0},{0,0,1},
+        {0,-1,0},{0,-1,0},{0,-1,0},{0,0,1}};
+    std::vector<std::array<float, 3>> out(kJc);
+    for (int c = 0; c < kJc; ++c) out[c] = {d[c][0], d[c][1], d[c][2]};
+    return out;
+}
+
+std::vector<std::array<float, 4>> srcRestWorld()
+{
+    return std::vector<std::array<float, 4>>(
+        kJc, {kSrcRest.x, kSrcRest.y, kSrcRest.z, kSrcRest.w});
+}
+
+// frames of identity motion (every joint sits at the source bind)
+std::vector<std::vector<std::array<float, 4>>> identityClip(int frames)
+{
+    return std::vector<std::vector<std::array<float, 4>>>(
+        frames, std::vector<std::array<float, 4>>(
+                    kJc, {kSrcRest.x, kSrcRest.y, kSrcRest.z, kSrcRest.w}));
+}
+
+// signed rotation angle of world-orientation delta `q` about unit axis `ax`
+float twistDegAbout(const Ogre::Quaternion& q, const Ogre::Vector3& ax)
+{
+    const float s = q.x * ax.x + q.y * ax.y + q.z * ax.z;
+    return 2.0f * std::atan2(s, q.w) * 180.0f / static_cast<float>(M_PI);
+}
+}  // namespace
+
+TEST_F(AnimationMergerTest, TwistTransportCarriesBoneRoll)
+{
+    // makeArmRigEntity resolves only 9/22 roles — below applyMotionClip's
+    // humanoid gate (>= 11) — so build a fuller rig (13 roles: + hands/feet).
+    auto skelRes = Ogre::SkeletonManager::getSingleton().create(
+        "twist_roll_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* par) {
+        auto* b = skelRes->createBone(n, h++);
+        b->setPosition(p);
+        if (par) par->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
+    bone("Head", {0, 0.4f, 0}, spine);
+    auto* lleg = bone("LeftUpLeg", {0.15f, -0.1f, 0}, hips);
+    bone("LeftFoot", {0, -0.8f, 0}, lleg);
+    auto* rleg = bone("RightUpLeg", {-0.15f, -0.1f, 0}, hips);
+    bone("RightFoot", {0, -0.8f, 0}, rleg);
+    auto* rsh = bone("RightArm", {-0.2f, 0.1f, 0}, spine);
+    auto* rfa = bone("RightForeArm", {-0.3f, 0, 0}, rsh);
+    bone("RightHand", {-0.25f, 0, 0}, rfa);
+    auto* lsh = bone("LeftArm", {0.2f, 0.1f, 0}, spine);
+    auto* lfa = bone("LeftForeArm", {0.3f, 0, 0}, lsh);
+    bone("LeftHand", {0.25f, 0, 0}, lfa);
+    skelRes->setBindingPose();
+    auto mesh = createInMemoryMesh("twist_roll_mesh", skelRes);
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sm->createEntity("twist_roll_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+
+    // Source: left upper arm (role 11, +X) ROLLS 60° about its own axis over
+    // the clip while its direction stays put. Pre-#857 the retarget dropped
+    // this entirely (aim-only) — the target bone never moved.
+    const int frames = 31;
+    auto quats = identityClip(frames);
+    for (int f = 0; f < frames; ++f) {
+        const float a = 60.0f * static_cast<float>(f) / (frames - 1);
+        const Ogre::Quaternion w =
+            Ogre::Quaternion(Ogre::Degree(a), Ogre::Vector3::UNIT_X)
+            * kSrcRest;
+        quats[f][11] = {w.x, w.y, w.z, w.w};
+    }
+    const auto res = AnimationMerger::applyMotionClip(
+        skel, "twistclip", quats, 30, /*worldFrame=*/true, srcRestWorld(),
+        false, 8, false, canonRestDirs());
+    ASSERT_TRUE(res.ok) << res.error.toStdString();
+
+    // Direction is invariant under a pure roll…
+    const Ogre::Vector3 dir0(1, 0, 0);
+    skel->reset(true);
+    skel->getAnimation("twistclip")->apply(skel, 1.0f);
+    skel->_updateTransforms();
+    const Ogre::Vector3 a =
+        skel->getBone("LeftArm")->_getDerivedPosition();
+    const Ogre::Vector3 b =
+        skel->getBone("LeftForeArm")->_getDerivedPosition();
+    EXPECT_GT((b - a).normalisedCopy().dotProduct(dir0), 0.99f);
+
+    // …but the bone's world orientation now carries the 60° roll about it.
+    const Ogre::Quaternion w =
+        skel->getBone("LeftArm")->_getDerivedOrientation();
+    EXPECT_NEAR(twistDegAbout(w, dir0), 60.0f, 4.0f);
+
+    // Legs saw identity source motion — they must not pick up any rotation.
+    const Ogre::Quaternion leg =
+        skel->getBone("LeftUpLeg")->_getDerivedOrientation();
+    EXPECT_NEAR(std::abs(leg.w), 1.0f, 1e-3f);
+
+    sm->destroyEntity(ent);
+}
+
+TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
+{
+    // Rig WITH clavicles (Mixamo "Shoulder" → collar roles 6/10).
+    auto skelRes = Ogre::SkeletonManager::getSingleton().create(
+        "twist_collar_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* par) {
+        auto* b = skelRes->createBone(n, h++);
+        b->setPosition(p);
+        if (par) par->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
+    bone("Head", {0, 0.4f, 0}, spine);
+    bone("LeftUpLeg", {0.15f, -0.1f, 0}, hips);
+    bone("RightUpLeg", {-0.15f, -0.1f, 0}, hips);
+    auto* lcol = bone("LeftShoulder", {0.05f, 0.25f, 0}, spine);
+    auto* larm = bone("LeftArm", {0.15f, 0, 0}, lcol);
+    bone("LeftForeArm", {0.3f, 0, 0}, larm);
+    auto* rcol = bone("RightShoulder", {-0.05f, 0.25f, 0}, spine);
+    auto* rarm = bone("RightArm", {-0.15f, 0, 0}, rcol);
+    bone("RightForeArm", {-0.3f, 0, 0}, rarm);
+    skelRes->setBindingPose();
+    auto mesh = createInMemoryMesh("twist_collar_mesh", skelRes);
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sm->createEntity("twist_collar_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+    ASSERT_NE(skel, nullptr);
+
+    // Source: left collar (role 10, +X) rolls 0 → 240° — past the ±180° wrap.
+    // This is where a missing unwrap explodes: the wrapped angle would flip
+    // sign mid-clip and snap. With unwrap, the collar's model twist cap
+    // (30° = 0.52 rad) clamps first, THEN the 0.5× collar gain applies →
+    // final steady roll ≈ 30° × 0.5 = 15° about +X.
+    const int frames = 61;
+    auto quats = identityClip(frames);
+    for (int f = 0; f < frames; ++f) {
+        const float a = 240.0f * static_cast<float>(f) / (frames - 1);
+        const Ogre::Quaternion w =
+            Ogre::Quaternion(Ogre::Degree(a), Ogre::Vector3::UNIT_X)
+            * kSrcRest;
+        quats[f][10] = {w.x, w.y, w.z, w.w};
+    }
+    // modelClip=true: the per-role twist caps only apply on the model path
+    // (authored/self clips run uncapped since #837 review). This test asserts
+    // the capped collar behavior, so it exercises the model path explicitly.
+    const auto res = AnimationMerger::applyMotionClip(
+        skel, "collarclip", quats, 30, true, srcRestWorld(),
+        false, 8, false, canonRestDirs(), /*modelClip=*/true);
+    ASSERT_TRUE(res.ok) << res.error.toStdString();
+
+    // Sample densely: the collar's world orientation must move CONTINUOUSLY
+    // (no wrap snap) and end near 240° × 0.5 = 120° about +X.
+    Ogre::Quaternion prev = Ogre::Quaternion::IDENTITY;
+    float maxStepDeg = 0.0f;
+    Ogre::Quaternion last;
+    auto* anim = skel->getAnimation("collarclip");
+    const float len = anim->getLength();
+    for (int s = 0; s <= 60; ++s) {
+        skel->reset(true);
+        anim->apply(skel, len * static_cast<float>(s) / 60.0f);
+        skel->_updateTransforms();
+        const Ogre::Quaternion w =
+            skel->getBone("LeftShoulder")->_getDerivedOrientation();
+        if (s > 0) {
+            const Ogre::Quaternion d = w * prev.Inverse();
+            const float step = 2.0f * std::acos(std::min(
+                1.0f, std::abs(d.w))) * 180.0f / static_cast<float>(M_PI);
+            maxStepDeg = std::max(maxStepDeg, step);
+        }
+        prev = w;
+        last = w;
+    }
+    EXPECT_LT(maxStepDeg, 15.0f) << "collar roll snapped mid-clip (unwrap)";
+    // 240° source twist is clamped to the collar model cap (30°) FIRST, then
+    // scaled by the 0.5× collar gain: 30 × 0.5 = 15° steady roll about +X.
+    EXPECT_NEAR(twistDegAbout(last, Ogre::Vector3::UNIT_X), 15.0f, 8.0f);
+
+    sm->destroyEntity(ent);
+}

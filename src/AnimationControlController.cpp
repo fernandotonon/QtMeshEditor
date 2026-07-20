@@ -1839,7 +1839,7 @@ double AnimationControlController::currentArmSpace(const QString& animName,
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                        double duration, bool useModel,
-                                                       double armSpaceDeg)
+                                                       double armSpaceDeg, bool footPin)
 {
     QVariantMap out;
     out["ok"] = false;
@@ -1883,10 +1883,18 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             if (mr.ok) {
                 action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
                 worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
-                // Borrow a template clip's reference directions so the
-                // retarget synthesizes a BIND-referenced base pose (no
-                // harvest from the rig's other animations).
-                clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                if (!mr.clip.restWorld.empty() && !mr.clip.restDir.empty()) {
+                    // v5 models (#858) ship their canonical reference triple
+                    // — same bind-referenced retarget as template clips.
+                    cmuRest = mr.clip.restWorld;
+                    clipDirs = mr.clip.restDir;
+                } else {
+                    // Legacy v4: borrow a template clip's reference
+                    // directions so the retarget synthesizes a BIND-
+                    // referenced base pose (no harvest from the rig's
+                    // other animations).
+                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                }
             }
         }
         if (!gotClip)
@@ -1934,14 +1942,28 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
-                                                      clipDirs);
+                                                      clipDirs,
+                                                      clipSource == QStringLiteral("model"));
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
+
+    // #837 quality post-pass: sparse-bake temporal low-pass (removes
+    // retarget trembling). Before arm-space/foot-pin so pins stay exact.
+    AnimationMerger::smoothBakeAnimation(skel.get(), animName, 12, fps);
 
     // #854: optional Mixamo-style arm-space post-process.
     if (std::abs(armSpaceDeg) > 1e-4)
         AnimationMerger::adjustArmSpace(skel.get(), animName,
                                         static_cast<float>(armSpaceDeg));
+
+    // #856: foot-contact cleanup — ON by default (checkbox opts out).
+    if (footPin) {
+        const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+        if (fp.ok && fp.spans > 0)
+            out["footPinSpans"] = fp.spans;
+        else if (!fp.ok && !fp.error.isEmpty())
+            out["footPinError"] = fp.error;   // surface why (no leg tracks, etc.)
+    }
 
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
