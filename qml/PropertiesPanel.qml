@@ -9478,6 +9478,37 @@ Rectangle {
                                         }
                                     }
 
+                                    // Flip facing (#837) — turn this clip 180°
+                                    // about the vertical axis (root track only,
+                                    // pose preserved). Fixes generated/retargeted
+                                    // clips that walk toward the camera's back.
+                                    // Applying twice restores the original facing.
+                                    Rectangle {
+                                        id: flipBtn
+                                        visible: grp.hasSkeleton
+                                        width: 22; height: 18; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: flipMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
+                                             : flipMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                                             : PropertiesPanelController.headerColor
+                                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "⟳"  // turn 180°
+                                            color: PropertiesPanelController.textColor
+                                            font.pixelSize: 12
+                                        }
+                                        ToolTip.visible: flipMouse.containsMouse
+                                        ToolTip.delay: 600
+                                        ToolTip.text: "Flip facing — turn this animation 180° (fixes back-facing walks; toggles)"
+                                        MouseArea {
+                                            id: flipMouse; anchors.fill: parent; hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: AnimationControlController.flipFacing(
+                                                           modelData.name, grp.entity)
+                                        }
+                                    }
+
                                     // Bake — resample / reduce every bone track in this
                                     // animation. Mirrors the curve editor's per-bone Bake
                                     // dropdown but applies to the whole animation in one

@@ -1819,6 +1819,42 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
     return true;
 }
 
+bool AnimationControlController::flipFacing(const QString& animName,
+                                            const QString& entityName)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return false;
+    const std::string want = entityName.isEmpty()
+        ? m_selectedEntityName : entityName.toStdString();
+    Ogre::Entity* entity = nullptr;
+    for (auto* e : mgr->getEntities()) {
+        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
+        if (want.empty() || e->getName() == want) { entity = e; break; }
+    }
+    if (!entity) return false;
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    const std::string an = animName.toStdString();
+    if (!skel || !skel->hasAnimation(an)) return false;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("GUI flip_facing %1").arg(animName));
+    if (!AnimationMerger::flipAnimationFacing(skel.get(), an))
+        return false;
+
+    // Same immediate re-pose idiom as adjustArmSpace so a paused clip updates.
+    entity->refreshAvailableAnimationState();
+    if (auto* states = entity->getAllAnimationStates()) {
+        states->_notifyDirty();
+        if (states->hasAnimationState(an)) {
+            auto* st = states->getAnimationState(an);
+            if (st->getEnabled())
+                st->setTimePosition(st->getTimePosition());
+        }
+    }
+    notifyExternalAnimationEdit();
+    return true;
+}
+
 double AnimationControlController::currentArmSpace(const QString& animName,
                                                    const QString& entityName)
 {

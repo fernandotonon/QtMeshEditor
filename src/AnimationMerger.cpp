@@ -269,6 +269,58 @@ void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
     skel->removeAnimation(oldName);
 }
 
+bool AnimationMerger::flipAnimationFacing(Ogre::Skeleton* skel,
+                                          const std::string& animName)
+{
+    if (!skel || !skel->hasAnimation(animName)) return false;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim) return false;
+
+    // Find the ROOT track bone: the mapped bone highest in the hierarchy
+    // (fewest ancestors) that has a track — the hips on a humanoid rig.
+    // Flipping only this bone turns the whole skeleton rigidly.
+    skel->reset(true);
+    skel->_updateTransforms();
+    int rootBone = -1, rootDepth = 1 << 30;
+    for (const auto& [handle, trk] : anim->_getNodeTrackList()) {
+        if (!trk || trk->getNumKeyFrames() == 0) continue;
+        Ogre::Bone* b = skel->getBone(handle);
+        int depth = 0;
+        for (Ogre::Node* p = b->getParent(); p; p = p->getParent()) ++depth;
+        if (depth < rootDepth) { rootDepth = depth; rootBone = handle; }
+    }
+    if (rootBone < 0) return false;
+
+    Ogre::Bone* root = skel->getBone(static_cast<unsigned short>(rootBone));
+    const Ogre::Quaternion Wbind = root->_getDerivedOrientation();
+    const Ogre::Quaternion Lbind = root->getOrientation();          // bind-local
+    // Parent world at bind (root's parent is usually the skeleton root node).
+    Ogre::Quaternion Wparent = Ogre::Quaternion::IDENTITY;
+    if (auto* pb = dynamic_cast<Ogre::Bone*>(root->getParent()))
+        Wparent = pb->_getDerivedOrientation();
+
+    // 180° yaw about WORLD up (+Y). applyToNode composes world as
+    //   W = Wparent · (Lbind · kf).  To inject a world pre-rotation S:
+    //   W' = S · W  ⇒  kf' = Lbind⁻¹ · Wparent⁻¹ · S · Wparent · Lbind · kf.
+    const Ogre::Quaternion S(Ogre::Degree(180), Ogre::Vector3::UNIT_Y);
+    const Ogre::Quaternion L =
+        Lbind.Inverse() * Wparent.Inverse() * S * Wparent * Lbind;
+
+    auto* trk = anim->getNodeTrack(static_cast<unsigned short>(rootBone));
+    const unsigned short nk = trk->getNumKeyFrames();
+    for (unsigned short k = 0; k < nk; ++k) {
+        Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
+        kf->setRotation(L * kf->getRotation());
+        // Also rotate the translation so root motion (if any) turns with the
+        // body — keeps travel direction consistent with the new facing.
+        kf->setTranslate(S * kf->getTranslate());
+    }
+    // #854 gotcha: setRotation doesn't invalidate the track's interp caches.
+    trk->_keyFrameDataChanged();
+    (void)Wbind;
+    return true;
+}
+
 void AnimationMerger::migrateArmSpaceKey(Ogre::Skeleton* skel,
                                          const std::string& oldAnim,
                                          const std::string& newAnim)

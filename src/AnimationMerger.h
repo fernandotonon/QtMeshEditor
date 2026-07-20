@@ -26,6 +26,20 @@ public:
                                 const std::string& oldName,
                                 const std::string& newName);
 
+    /// Turn a clip 180° to face the opposite direction (e.g. to face the
+    /// default camera, which looks toward +Z so a +Z-forward character faces
+    /// away). SAFE by construction: rewrites ONLY the ROOT bone's rotation
+    /// keyframes — folds a 180°-about-world-up yaw into each, world-conjugated
+    /// into the root's bind-local frame so applyToNode reproduces it. Every
+    /// child bone is parent-relative, so the whole body turns as a rigid unit
+    /// — no knee/arm/pose change (unlike a whole-clip flip, which reverses
+    /// hinge chirality). Idempotent-ish: two flips return to the original.
+    /// Returns false if the animation is missing or has no root track.
+    /// Which bone is "root": the highest bone in the hierarchy that has a
+    /// track (typically the hips), so the flip carries the entire skeleton.
+    static bool flipAnimationFacing(Ogre::Skeleton* skel,
+                                    const std::string& animName);
+
     /// Resample an animation to exactly N evenly-spaced keyframes.
     /// Uses interpolation to evaluate T/R/S at each sample point, producing
     /// a smooth curve with a uniform keyframe distribution.

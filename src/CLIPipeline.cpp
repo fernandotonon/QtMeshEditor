@@ -2250,6 +2250,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString dumpCanonicalPath;        // --dump-canonical <out.json>
     bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
     QString applyCanonicalPath;       // --apply-canonical <in.json>
+    bool facingMode = false;          // #837 harness: report world-space facing
+    bool flipFacingMode = false;      // #837: turn a clip 180° to face the other way
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
@@ -2345,6 +2347,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             applyCanonicalPath = QString(argv[++i]);
             continue;
         }
+        // #837 harness: report the WORLD-space facing of an animation — the
+        // ground-truth the canonical dump can't give (it re-derives its own
+        // frame, cancelling the offset). Plays `--animation <name>` and prints
+        // the hip bone's mean world forward/left/up + horizontal travel dir.
+        if (arg == "--facing") { facingMode = true; continue; }
+        // #837: turn an existing animation 180° to face the other way (e.g.
+        // toward the camera). Standalone: needs --animation, writes to -o.
+        if (arg == "--flip-facing") { flipFacingMode = true; continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -2533,6 +2543,124 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         cliWrite(QString("applied canonical → %1 (%2 frames)\n")
                      .arg(QFileInfo(out).fileName()).arg(res.frames));
+        return 0;
+    }
+
+    // #837 harness: WORLD-space facing readout. Loads the rig, plays
+    // `--animation <name>` (or the first anim), and reports the hip bone's
+    // mean world forward/left/up over the clip — the ground truth the
+    // canonical dump can't provide. Forward is derived as the bone's world
+    // orientation applied to the skeleton's own forward convention, inferred
+    // from the bind pose (hip→head = up, rhip→lhip = left, fwd = left×up).
+    if (facingMode) {
+        if (!initOgreHeadless()) return 1;
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* ent = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { ent = e; break; }
+        if (!ent) { err() << "Error: no skinned mesh" << Qt::endl; return 1; }
+        Ogre::SkeletonInstance* skel = ent->getSkeleton();
+        QString an = animationFilter;
+        if (an.isEmpty() && skel->getNumAnimations() > 0)
+            an = QString::fromStdString(skel->getAnimation(0)->getName());
+        if (!skel->hasAnimation(an.toStdString())) {
+            err() << "Error: animation '" << an << "' not found." << Qt::endl;
+            return 1;
+        }
+        // hip bone = canonical root (role 0)
+        auto boneForRole = [&](int role) -> Ogre::Bone* {
+            for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+                const int c = MotionInbetween::canonicalIndexForBone(
+                    QString::fromStdString(skel->getBone(i)->getName()));
+                if (c == role) return skel->getBone(i);
+            }
+            return nullptr;
+        };
+        Ogre::Bone* hip = boneForRole(0);
+        if (!hip) { err() << "Error: no hip bone" << Qt::endl; return 1; }
+        // Establish the skeleton's own forward at BIND (before animating):
+        // up = hip→head, left = rhip→lhip, forward = left × up (right-handed).
+        skel->reset(true); skel->_updateTransforms();
+        auto pos = [&](int role) -> Ogre::Vector3 {
+            Ogre::Bone* b = boneForRole(role);
+            return b ? b->_getDerivedPosition() : Ogre::Vector3::ZERO;
+        };
+        Ogre::Vector3 up = (pos(5) - pos(0));           // head - hip
+        if (up.squaredLength() < 1e-9f) up = Ogre::Vector3::UNIT_Y;
+        up.normalise();
+        Ogre::Vector3 left = pos(19) - pos(15);          // lhip - rhip
+        left = left - up * left.dotProduct(up);
+        if (left.squaredLength() < 1e-9f) left = Ogre::Vector3::UNIT_X;
+        left.normalise();
+        const Ogre::Vector3 fwdBind = left.crossProduct(up).normalisedCopy();
+        const Ogre::Quaternion hipBindInv = hip->_getDerivedOrientation().Inverse();
+        // Play the clip; average the hip's world forward.
+        Ogre::Animation* anim = skel->getAnimation(an.toStdString());
+        const int N = 30;
+        Ogre::Vector3 fwdSum = Ogre::Vector3::ZERO;
+        for (int f = 0; f < N; ++f) {
+            skel->reset(true);
+            anim->apply(skel, anim->getLength() * float(f) / float(N - 1));
+            skel->_updateTransforms();
+            // world forward = (hipWorld · hipBind⁻¹) applied to the bind forward
+            const Ogre::Quaternion delta =
+                hip->_getDerivedOrientation() * hipBindInv;
+            fwdSum += delta * fwdBind;
+        }
+        Ogre::Vector3 fwd = fwdSum / float(N);
+        const float mag = fwd.length();
+        if (mag > 1e-6f) fwd /= mag;
+        if (jsonOutput) {
+            QJsonObject o;
+            o["animation"] = an;
+            o["worldForwardX"] = fwd.x; o["worldForwardY"] = fwd.y;
+            o["worldForwardZ"] = fwd.z;
+            cliWrite(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)) + "\n");
+        } else {
+            cliWrite(QString("Animation '%1' hip world-forward: (%2, %3, %4)\n")
+                         .arg(an).arg(fwd.x, 0, 'f', 2).arg(fwd.y, 0, 'f', 2)
+                         .arg(fwd.z, 0, 'f', 2));
+            cliWrite(QString("  → faces %1 (%2)\n")
+                .arg(fwd.z >= 0 ? "+Z" : "-Z")
+                .arg(fwd.z >= 0 ? "toward +Z (Mixamo/GLTF default forward)"
+                                : "toward -Z (reversed vs default)"));
+        }
+        return 0;
+    }
+
+    // #837 standalone: turn an animation 180° to face the other way.
+    // `qtmesh anim <file> --flip-facing --animation <name> -o out`.
+    if (flipFacingMode) {
+        if (animationFilter.isEmpty()) {
+            err() << "Error: --flip-facing requires --animation <name>." << Qt::endl;
+            return 2;
+        }
+        if (!initOgreHeadless()) return 1;
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+        Ogre::Entity* ent = nullptr;
+        for (auto* e : Manager::getSingleton()->getEntities())
+            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { ent = e; break; }
+        if (!ent) { err() << "Error: no skinned mesh." << Qt::endl; return 1; }
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        const std::string an = animationFilter.toStdString();
+        if (!skel->hasAnimation(an)) {
+            err() << "Error: animation '" << animationFilter << "' not found." << Qt::endl;
+            return 1;
+        }
+        if (!AnimationMerger::flipAnimationFacing(skel.get(), an)) {
+            err() << "Error: flip-facing failed (no root track)." << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("flip_facing"));
+        const QString out = outputPath.isEmpty() ? filePath : outputPath;
+        auto* node = ent->getParentSceneNode();
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           formatForExtension(out)) != 0) {
+            err() << "Error: export failed." << Qt::endl; return 1;
+        }
+        cliWrite(QString("Flipped facing of '%1' → %2\n")
+                     .arg(animationFilter).arg(QFileInfo(out).fileName()));
         return 0;
     }
 
