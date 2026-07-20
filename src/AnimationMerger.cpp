@@ -1485,12 +1485,14 @@ void AnimationMerger::conditionModelClip(
     // stays well-conditioned (unlike applying the flip inside the aim, which
     // sends aims near-anti-parallel to their bind dirs).
     if (flipYaw) {
-        // yaw(π,Y) as (w,x,y,z) = (0,0,1,0); premultiply each joint's world q.
+        // yaw(π about +Y) = (x,y,z,w) = (0,1,0,0); premultiply each joint's
+        // world q. Hamilton product yaw·q with yaw=(0,1,0,0):
+        //   x' =  z,  y' =  w,  z' = -x,  w' = -y
+        // (A pure yaw leaves the vertical component of every rotated axis
+        // unchanged — negates only X/Z — which is the correctness check.)
         auto yawMul = [](const std::array<float, 4>& q) {
-            // q is (x,y,z,w); yaw*(q): yaw=(x0=0,y0=1,z0=0,w0=0)
             const float x = q[0], y = q[1], z = q[2], w = q[3];
-            // (0,1,0,0)·(x,y,z,w) in (x,y,z,w) Hamilton order:
-            return std::array<float, 4>{ -z, w, x, -y };
+            return std::array<float, 4>{ z, w, -x, -y };
         };
         for (auto& frame : quats)
             for (int c = 0; c < Jc && c < static_cast<int>(frame.size()); ++c)
