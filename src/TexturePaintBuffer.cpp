@@ -107,7 +107,7 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                                    BrushShape shape)
 {
     return paintBrush(uv, radiusUV,
-                      [&color](float, float) { return color; },
+                      [color](float, float) { return color; },
                       strength, falloff, shape);
 }
 

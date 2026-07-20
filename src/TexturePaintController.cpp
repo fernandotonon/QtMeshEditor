@@ -58,6 +58,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <set>
 
 TexturePaintController* TexturePaintController::s_instance = nullptr;
@@ -783,10 +784,10 @@ void TexturePaintController::openRampEditor()
         [](QQmlEngine* e, QJSEngine*) -> QObject* {
             return TexturePaintController::qmlInstance(e, nullptr);
         });
-    bool handled = false;
+    auto handled = std::make_shared<bool>(false);
     connect(engine, &QQmlApplicationEngine::objectCreated, this,
-        [this, engine, &handled](QObject* obj, const QUrl&) {
-            handled = true;
+        [this, engine, handled](QObject* obj, const QUrl&) {
+            *handled = true;
             if (!obj) {
                 engine->deleteLater();
                 return;
@@ -807,7 +808,7 @@ void TexturePaintController::openRampEditor()
             emit rampEditorChanged();
         }, Qt::DirectConnection);
     engine->load(QUrl(QStringLiteral("qrc:/PropertiesPanel/GradientRampEditor.qml")));
-    if (!handled)
+    if (!*handled)
         engine->deleteLater();
     SentryReporter::addBreadcrumb("paint.brush.gradient", "ramp editor opened");
 }
@@ -846,6 +847,18 @@ void TexturePaintController::setPaintTarget(int target)
     m_target = t;
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Paint target = %1").arg(target == TargetVertex ? "vertex" : "texture"));
+    // Eagerly create the texture session when switching to texture
+    // paint while the tool is already active — otherwise the first
+    // stroke races session setup against GPU flush/rebind.
+    if (m_target == TargetTexture && m_paintEnabled) {
+        if (auto* entity = activeEntity()) {
+            ensureEditableMesh(entity);
+            if (!hasActiveSession()) {
+                const int res = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+                ensurePaintableTexture(res);
+            }
+        }
+    }
     emit paintTargetChanged();
     emit sessionChanged();
     emit smartSelectChanged();  // the mask UI is texture-only
@@ -1196,6 +1209,11 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         m_buffer.resize(res, res);
         m_buffer.clear(Ogre::ColourValue::White);
         m_buffer.clearDirty();
+        // The CPU buffer is a new resolution — it won't match the model's
+        // bound GPU texture. In-place blit with mismatched sizes crashes
+        // some GL/Metal drivers (OOB HardwarePixelBuffer writes).
+        m_originalTexture.reset();
+        m_useOriginalTexture = false;
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Texture paint: starting from blank %1×%1 (existing tex='%2', err='%3')")
                 .arg(res).arg(existingTex).arg(loadError));
@@ -1408,6 +1426,23 @@ void TexturePaintController::doFlushDirtyToOgre()
     // Skip the in-place path once we've rebound the model to the
     // manual paint texture — the original is no longer what the
     // renderer samples, so blitting to it would be invisible.
+    if (m_boundSlots.empty() && m_originalTexture) {
+        try {
+            const int bufW = m_buffer.width();
+            const int bufH = m_buffer.height();
+            const int texW = static_cast<int>(m_originalTexture->getWidth());
+            const int texH = static_cast<int>(m_originalTexture->getHeight());
+            if (bufW <= 0 || bufH <= 0 || texW != bufW || texH != bufH) {
+                SentryReporter::addBreadcrumb("ui.action",
+                    QStringLiteral("Texture paint: in-place skipped — size mismatch "
+                                   "buffer=%1×%2 tex=%3×%4")
+                        .arg(bufW).arg(bufH).arg(texW).arg(texH));
+                m_originalTexture.reset();
+            }
+        } catch (...) {
+            m_originalTexture.reset();
+        }
+    }
     if (m_boundSlots.empty() && m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
@@ -1822,10 +1857,11 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
             const Ogre::ColourValue paint(sampled.r, sampled.g, sampled.b, sampled.a);
             return m_buffer.paintBrush(uv, radius, paint, strength, falloff, shape) > 0;
         }
+        const BrushEngine::SampleParams paramsCopy = params;
         return m_buffer.paintBrush(
                    uv, radius,
-                   [&params](float dx, float dy) {
-                       BrushEngine::SampleParams local = params;
+                   [paramsCopy](float dx, float dy) {
+                       BrushEngine::SampleParams local = paramsCopy;
                        local.dx = dx;
                        local.dy = dy;
                        const auto s = BrushEngine::sampleColor(local);
@@ -1979,6 +2015,11 @@ void TexturePaintController::endStroke()
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Wand stroke end (final tolerance=%1)")
                 .arg(m_smartSelectTolerance, 0, 'f', 3));
+        return;
+    }
+    if (m_target == TargetVertex) {
+        m_strokePreSnapshot.clear();
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint stroke end");
         return;
     }
     // Ensure any pending debounced GPU upload runs immediately so
