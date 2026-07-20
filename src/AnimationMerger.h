@@ -270,6 +270,24 @@ public:
                                    const std::string& animName,
                                    int sparseFps = 12, int targetFps = 30);
 
+    /// #837 model-clip conditioning (data-space, rig-independent). The v6
+    /// text-to-motion model is on-distribution but three artifacts survive
+    /// into the render: (1) some rigs face the clip backward (the aim path
+    /// can't apply yaw180 without destabilising getRotationTo, so we rotate
+    /// the CANONICAL clip 180° about up instead — well-conditioned because
+    /// directions just negate in X/Z); (2) the model's arms hang too narrow
+    /// (measured mean lateral 0.0–0.08 vs training 0.15) so we widen the
+    /// shoulder yaw toward the training spread; (3) the model under-pitches
+    /// the feet (toe-Y −0.17 vs −0.42) which the retarget then points like a
+    /// ballerina — we zero the foot restDir so the rig keeps its bind foot
+    /// pitch. All operate on `quats` (world-frame [frames][22]) and
+    /// `restDir` (22) in place; no-ops on non-model clips. `flipYaw` is the
+    /// caller's backward-facing decision (detectBackwardFacing).
+    static void conditionModelClip(
+        std::vector<std::vector<std::array<float, 4>>>& quats,
+        std::vector<std::array<float, 3>>& restDir,
+        bool flipYaw, float armWidenDeg = 12.0f);
+
     /// Outcome of pinFeet.
     struct FootPinResult {
         bool ok = false;

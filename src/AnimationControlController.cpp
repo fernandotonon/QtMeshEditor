@@ -1932,6 +1932,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // Auto-rigged (no prior animation) meshes that face −Z would walk
     // backward — detect facing from the mesh's foot region.
     const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+    // #837: model clips get data-space conditioning (facing flip, arm widen,
+    // foot-pitch reset); template clips are authored and skip it.
+    if (clipSource == QStringLiteral("model"))
+        AnimationMerger::conditionModelClip(quats, clipDirs, !yaw180);
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,

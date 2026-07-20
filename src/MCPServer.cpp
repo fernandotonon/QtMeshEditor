@@ -4125,6 +4125,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         // Auto-rigged (no prior animation) meshes that face −Z would walk
         // backward — detect facing from the mesh's foot region.
         const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+        // #837: model clips get data-space conditioning; template clips skip it.
+        if (clipSource == QStringLiteral("model"))
+            AnimationMerger::conditionModelClip(quats, clipDirs, !yaw180);
         const auto r = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                         worldFrame, cmuRest,
                                                         /*refineWithModel=*/false,

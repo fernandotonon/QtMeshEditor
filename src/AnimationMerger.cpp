@@ -1471,6 +1471,72 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     return true;
 }
 
+void AnimationMerger::conditionModelClip(
+    std::vector<std::vector<std::array<float, 4>>>& quats,
+    std::vector<std::array<float, 3>>& restDir,
+    bool flipYaw, float armWidenDeg)
+{
+    const int Jc = MotionInbetween::canonicalJointCount();
+    if (quats.empty()) return;
+
+    // (1) Backward-facing rigs: rotate the whole CANONICAL clip 180° about
+    // canonical up (+Y). In world quats a yaw of π about Y is q → yaw·q with
+    // yaw=(0,1,0,0) (x,y,z,w). Directions negate in X/Z, so getRotationTo
+    // stays well-conditioned (unlike applying the flip inside the aim, which
+    // sends aims near-anti-parallel to their bind dirs).
+    if (flipYaw) {
+        // yaw(π,Y) as (w,x,y,z) = (0,0,1,0); premultiply each joint's world q.
+        auto yawMul = [](const std::array<float, 4>& q) {
+            // q is (x,y,z,w); yaw*(q): yaw=(x0=0,y0=1,z0=0,w0=0)
+            const float x = q[0], y = q[1], z = q[2], w = q[3];
+            // (0,1,0,0)·(x,y,z,w) in (x,y,z,w) Hamilton order:
+            return std::array<float, 4>{ -z, w, x, -y };
+        };
+        for (auto& frame : quats)
+            for (int c = 0; c < Jc && c < static_cast<int>(frame.size()); ++c)
+                frame[static_cast<size_t>(c)] =
+                    yawMul(frame[static_cast<size_t>(c)]);
+        // restDir is expressed in the canonical frame → negate X/Z there too.
+        for (int c = 0; c < Jc && c < static_cast<int>(restDir.size()); ++c) {
+            restDir[static_cast<size_t>(c)][0] =
+                -restDir[static_cast<size_t>(c)][0];
+            restDir[static_cast<size_t>(c)][2] =
+                -restDir[static_cast<size_t>(c)][2];
+        }
+    }
+
+    // (2) Widen the arms: the model hangs them too narrow. Rotate each upper
+    // arm's world quat outward about the canonical FORWARD axis (+Z), mirrored
+    // per side (right = −X side rotates −, left = +X side rotates +), so both
+    // swing away from the torso. Applied to the upper-arm role and inherited
+    // by elbow/hand through the retarget hierarchy.
+    if (std::abs(armWidenDeg) > 1e-3f) {
+        const float a = armWidenDeg * static_cast<float>(M_PI) / 180.0f;
+        const Ogre::Quaternion swR(Ogre::Radian(-a), Ogre::Vector3::UNIT_Z);
+        const Ogre::Quaternion swL(Ogre::Radian(a), Ogre::Vector3::UNIT_Z);
+        auto apply = [&](int role, const Ogre::Quaternion& sw) {
+            if (role >= static_cast<int>(quats.front().size())) return;
+            for (auto& frame : quats) {
+                auto& q = frame[static_cast<size_t>(role)];
+                const Ogre::Quaternion cur(q[3], q[0], q[1], q[2]);
+                const Ogre::Quaternion out = sw * cur;   // world premultiply
+                q = { out.x, out.y, out.z, out.w };
+            }
+        };
+        apply(7, swR);    // rshoulder
+        apply(11, swL);   // lshoulder
+    }
+
+    // (3) Ballerina feet: the model under-articulates the feet, and the aim
+    // then points the toes at the canonical forward axis. Drop the foot
+    // reference dirs so the retarget leaves those bones at the rig's bind
+    // foot pitch (same rationale as the #856 foot guard, but unconditional
+    // for model clips — the model's foot signal is never trustworthy).
+    for (const int foot : {17, 21})
+        if (foot < static_cast<int>(restDir.size()))
+            restDir[static_cast<size_t>(foot)] = {0.f, 0.f, 0.f};
+}
+
 int AnimationMerger::smoothBakeAnimation(Ogre::Skeleton* skel,
                                           const std::string& animName,
                                           int sparseFps, int targetFps)
