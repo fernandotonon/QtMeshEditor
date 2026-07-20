@@ -295,7 +295,13 @@ MocapController::MocapController(QObject* parent)
 
 MocapController::~MocapController()
 {
-    stopPreview();
+    // stopPreview() touches Ogre (snapshot/restore of bone + morph state) and
+    // could throw; an exception escaping a destructor calls std::terminate.
+    // Swallow it — we're tearing down anyway.
+    try {
+        stopPreview();
+    } catch (...) {
+    }
 }
 
 bool MocapController::available() const { return true; }
