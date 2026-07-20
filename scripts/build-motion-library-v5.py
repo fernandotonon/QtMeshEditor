@@ -50,6 +50,9 @@ MODEL_EXTS = (".glb", ".gltf", ".fbx", ".dae")
 # animation-name (normalized) → action. Order matters: first hit wins.
 KEYWORDS = [
     ("tpose", None), ("t_pose", None), ("bind", None), ("rest", None),
+    # compound names FIRST — "walk"/"run" below would swallow them
+    ("crouchwalk", "crouch"), ("crouchrun", "crouch"),
+    ("sneakwalk", "sneak"), ("sneakrun", "sneak"),
     ("walk", "walk"), ("run", "run"), ("jog", "run"), ("sprint", "run"),
     ("idle", "idle"), ("stand", "idle"), ("breath", "idle"),
     ("jump", "jump"), ("hop", "jump"), ("leap", "jump"),
@@ -237,6 +240,85 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
                 upness = sum(up_terms) / len(up_terms) if up_terms else 0.35
     elif action in HORIZONTAL_OK:
         upness = 0.7
+
+    # Placeholder-arm gate: game walk/run cycles are often authored with
+    # STATIC (T-pose) arms — legs stride while the arms stick straight out.
+    # Retargeted, that reads as a broken clip. If the legs carry real motion
+    # but BOTH arms are near-frozen, drop the take.
+    ARM_ROLES = (7, 8, 11, 12)
+    LEG_ROLES = (15, 16, 19, 20)
+    if len(quats) > 1 and action not in ("idle", "sit", "sleep"):
+        # Energy RELATIVE to the chest (role 2): world quats inherit the
+        # torso's sway, so locally-frozen arms still show world energy.
+        # rel = chest^-1 * bone isolates the limb's own motion.
+        def rel(f, r):
+            c = quats[f][2]
+            b = quats[f][r]
+            ci = [-c[0], -c[1], -c[2], c[3]]
+            return qmul(ci, b)
+        def group_energy(roles):
+            tot = 0.0
+            for f in range(1, len(quats)):
+                tot += sum(quat_angle(rel(f - 1, r), rel(f, r))
+                           for r in roles) / len(roles)
+            return tot / (len(quats) - 1)
+        legs_e = group_energy(LEG_ROLES)
+        arms_e = group_energy(ARM_ROLES)
+        if legs_e > 0.004 and arms_e < 0.0015:
+            return 0.0, (f"static placeholder arms (rel arm energy "
+                         f"{arms_e:.4f} vs legs {legs_e:.4f})")
+
+    # Neck-up gate: some rigs export the neck/head bone with an INVERTED
+    # axis — the extracted direction points down for the whole clip and the
+    # retargeted head renders thrown back / buried in the torso. For any
+    # upright action, the neck chain's animated direction must stay roughly
+    # up.
+    if action not in HORIZONTAL_OK and rest_world and rest_dir:
+        for r in (3, 4, 5):                       # neck, neck1, head
+            d = vnorm(rest_dir[r])
+            if d is None:
+                continue
+            q = rest_world[r]
+            a_s = qrot([-q[0], -q[1], -q[2], q[3]], d)
+            tot = sum(qrot(quats[f][r], a_s)[1] for f in range(len(quats)))
+            if tot / max(1, len(quats)) < 0.3:
+                return 0.0, (f"neck/head direction not upright (role {r} "
+                             f"mean up-dot {tot / max(1, len(quats)):.2f}) — "
+                             "inverted neck axis, head renders thrown back")
+            break                                  # first resolvable is enough
+
+    # Horizontal-arm gate for plain locomotion: zombie-shamble / T-pose-armed
+    # walk cycles hold the upper arms near-horizontal for the whole clip
+    # (mean |up-component| of the upper-arm direction ~0 vs 0.6-0.95 on a
+    # natural walk). Retargeted onto a generic character under a generic
+    # "walk" prompt they read broken — drop them from locomotion actions.
+    RSHO, LSHO = 7, 11
+    if action in ("walk", "run", "march") and rest_world and rest_dir:
+        downdots = []
+        for r in (RSHO, LSHO):
+            d = vnorm(rest_dir[r])
+            if d is None:
+                continue
+            q = rest_world[r]
+            a_s = qrot([-q[0], -q[1], -q[2], q[3]], d)
+            tot = 0.0
+            for f in range(len(quats)):
+                tot += qrot(quats[f][r], a_s)[1]      # SIGNED up-component
+            downdots.append(tot / max(1, len(quats)))
+        if not downdots:
+            # Arm roles UNRESOLVED: the retarget leaves the target's arms at
+            # its bind pose — a literal T-pose held for the whole clip.
+            return 0.0, (f"arm roles unresolved — target arms would freeze "
+                         f"in the bind T-pose during {action}")
+        # judge each arm separately, on the SIGNED up-component: a natural
+        # locomotion arm hangs (mean Y ~ -0.6..-0.95). Horizontal zombie arms
+        # (~0) AND raised arms (+) both read broken — an abs() gate passed a
+        # straight-up arm as if it were hanging (several corpus rigs carry a
+        # per-bone axis inversion that renders one arm skyward).
+        if max(downdots) > -0.25:
+            return 0.0, (f"arm(s) not hanging (upper-arm signed up-dots "
+                         f"{[round(u, 2) for u in downdots]}) — zombie/"
+                         f"T-pose/raised style, not a generic {action}")
 
     # Energy band: below = a pose, way above = spasm/mis-mapped.
     lo, hi, cap = min_energy * 2.0, 0.10, 0.20

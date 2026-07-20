@@ -99,6 +99,7 @@ docs/*
 !docs/MOCAP.md
 !docs/FACE_RIG.md
 !docs/FACE_RIG_SPIKE.md
+!docs/TELEMETRY.md
 
 # minisign — never commit secret keys
 minisign.key

@@ -1,6 +1,7 @@
 #include <QtDebug>
 #include <QSettings>
 #include <QApplication>
+#include <QJsonObject>
 #include <cmath>
 #include <limits>
 
@@ -26,6 +27,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "commands/BoneTransformCommand.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
 #include "AutoRigController.h"
@@ -34,6 +36,7 @@
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
 #include "SkeletonDebug.h"
+#include "SkeletonEditor.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -42,6 +45,22 @@
 // Static variable initialisation
 TransformOperator* TransformOperator:: m_pSingleton = nullptr;
 const QPoint  TransformOperator::invalidPosition(-1,-1);
+
+namespace {
+QString telemetryTransformType(TransformOperator::TransformState state)
+{
+    switch (state) {
+    case TransformOperator::TS_TRANSLATE:
+        return QStringLiteral("translate");
+    case TransformOperator::TS_ROTATE:
+        return QStringLiteral("rotate");
+    case TransformOperator::TS_SCALE:
+        return QStringLiteral("scale");
+    default:
+        return QStringLiteral("other");
+    }
+}
+}
 
 ////////////////////////////////////////
 /// Static Member to build & destroy
@@ -1102,6 +1121,21 @@ void TransformOperator::performBoxSelection(const QPoint& first, const QPoint& s
 
 void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
+    // Right-click on a visible skeleton bone → pick it and open the floating
+    // hierarchy context menu (Inspector-styled).
+    if (e->button() == Qt::RightButton)
+    {
+        if (tryPickBoneAt(e->pos()))
+        {
+            if (m_pActiveWidget) {
+                const QPoint global = m_pActiveWidget->mapToGlobal(e->pos());
+                if (auto* skelEd = SkeletonEditor::getSingletonPtr())
+                    skelEd->requestBoneContextMenu(global.x(), global.y());
+            }
+            return;
+        }
+    }
+
     if (e->button()==Qt::LeftButton)
     {
         // Auto-rig marker placement (Mixamo-style) is active: left-click drops
@@ -2018,12 +2052,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                         || (afterScale  != mBoneStartScale);
             const bool autoKeyOn = AnimationControlController::instance()->autoKey();
             // Active = an animation state is currently ENABLED (driving
-            // bones), not just selected in the panel. With no enabled
-            // animation, the bone is at its bind pose and the user is
-            // doing T-pose authoring → setInitialState. With at least
-            // one enabled animation, the curve writes the bone each
-            // frame and a setInitialState would shift the whole curve
-            // → revert instead.
+            // bones), not just selected in the panel. Auto-key ON + active
+            // anim → write a keyframe. Otherwise the bone gizmo commits
+            // rest pose (Inspector: "edit rest with the bone gizmo").
             bool hasActiveAnim = false;
             if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
                 if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
@@ -2033,33 +2064,33 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 }
             }
 
-            // Restore the per-state BlendMask values we captured at
-            // press, BEFORE calling apply(). The Revert path calls
-            // _updateAnimation which runs Skeleton::reset (bone →
-            // initial) then animation tracks (initial + curve sample).
-            // With the BlendMask still muted, the curve contributes
-            // zero and the bone settles at initial (T-pose) instead
-            // of the press-time pose. Restoring before apply() lets
-            // the curve drive the bone correctly. Restore exactly the
-            // pre-drag weights — not a hardcoded 1.0 — to preserve
-            // any layered/masked setup the user had.
-            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
-                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
-                    for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
-                        if (!states->hasAnimationState(stateName)) continue;
-                        Ogre::AnimationState* st = states->getAnimationState(stateName);
-                        if (st->hasBlendMask())
-                            st->setBlendMaskEntry(bone->getHandle(), weight);
+            // Keep the per-bone blend mask MUTED through CommitBind so an
+            // enabled clip cannot overwrite the dragged pose before the rest
+            // commit lands. Restore after. For Commit (auto-key), restore
+            // first so the keyframe samples the intended curve-driven pose.
+            auto restoreBoneBlendMasks = [&]() {
+                if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                    if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                        for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
+                            if (!states->hasAnimationState(stateName)) continue;
+                            Ogre::AnimationState* st = states->getAnimationState(stateName);
+                            if (st->hasBlendMask())
+                                st->setBlendMaskEntry(bone->getHandle(), weight);
+                        }
                     }
                 }
-            }
-            mBoneDragSavedMaskWeights.clear();
+                mBoneDragSavedMaskWeights.clear();
+            };
 
+            const bool editRestMode = SkeletonEditor::getSingletonPtr()
+                && SkeletonEditor::getSingletonPtr()->editRestPoseMode();
             const auto outcome = BoneDragRelease::apply(
                 bone, mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                 hasActiveAnim, autoKeyOn,
-                AnimationControlController::instance()->selectedEntity());
+                AnimationControlController::instance()->selectedEntity(),
+                editRestMode);
             if (outcome == BoneDragRelease::Result::Commit) {
+                restoreBoneBlendMasks();
                 // autoKeyOnTransform → addKeyframe → AddKeyframeCommand
                 // captures the durable artifact (the keyframe). The
                 // bone's live local TRS is fully determined by the
@@ -2068,20 +2099,35 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 // undoing the keyframe is enough.
                 AnimationControlController::instance()->autoKeyOnTransform();
             } else if (outcome == BoneDragRelease::Result::CommitBind) {
-                // bindMode=true so undo also reverts the bone's initial
-                // (bind) state — otherwise Skeleton::reset would snap
-                // back to the new bind on the next animation update.
+                // Rest-pose commit: keep blend mask muted until after the
+                // bind write so the mesh cannot snap to the old clip pose
+                // mid-commit. Pass the after-TRS captured above.
                 const std::string entityName =
                     AnimationControlController::instance()->selectedEntityName().toStdString();
+                SetRestPoseCommand::ExplicitPose pose;
+                pose.boneName = QString::fromStdString(bone->getName());
+                pose.position = afterPos;
+                pose.orientation = afterOrient;
+                pose.scale = afterScale;
                 UndoManager::getSingleton()->push(
-                    new BoneTransformCommand(entityName, bone->getName(),
-                        mBoneStartPos, mBoneStartOrient, mBoneStartScale,
-                        afterPos,      afterOrient,      afterScale,
-                        /*bindMode=*/true));
+                    new SetRestPoseCommand(entityName, std::vector{pose}));
+                restoreBoneBlendMasks();
+                // Force one skinning tick with the new bind + restored masks.
+                if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity())
+                    dragEnt->_updateAnimation();
             } else if (outcome == BoneDragRelease::Result::Revert) {
+                restoreBoneBlendMasks();
                 // Restore the gizmo to the press-time anchor so the
                 // viewport visually returns to the start of the drag.
                 m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
+            } else {
+                restoreBoneBlendMasks();
+            }
+            if (changed && outcome != BoneDragRelease::Result::Revert) {
+                SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
+                    QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                                {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
+                                {QStringLiteral("target_kind"), QStringLiteral("bone")}});
             }
         }
         // Restore playback if we paused it on press.
@@ -2124,6 +2170,11 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 UndoManager::getSingleton()->push(
                     new EditVertexTransformCommand(mEditModeUndoSnapshot, newPositions, desc));
 
+                SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
+                    QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                                {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
+                                {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
+
                 // Validate mesh after edit
                 editCtrl->validateMesh();
             }
@@ -2146,6 +2197,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
     if (SelectionSet::getSingleton()->hasSubEntities() && !mUndoSubEntities.isEmpty()
         && (e->button() == Qt::LeftButton))
     {
+        bool subMeshTransformCommitted = false;
         for (int i = 0; i < mUndoSubEntities.size(); ++i)
         {
             Ogre::SubEntity* sub = mUndoSubEntities[i];
@@ -2162,7 +2214,14 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 QString desc = QString("SubMesh %1 Transform").arg(subIdx);
                 UndoManager::getSingleton()->push(
                     new SubMeshTransformCommand(sub, mUndoSubMeshPositions[i], desc));
+                subMeshTransformCommitted = true;
             }
+        }
+        if (subMeshTransformCommitted) {
+            SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
+                QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                            {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
+                            {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
         }
         mUndoSubEntities.clear();
         mUndoSubMeshPositions.clear();
@@ -2254,8 +2313,13 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 
         // Auto-key only when an actual transform was committed — plain clicks
         // and zero-delta releases must not pollute tracks with duplicate keys.
-        if (nodeTransformCommitted)
+        if (nodeTransformCommitted) {
+            SentryReporter::captureTelemetryEvent(QStringLiteral("transform.completed"),
+                QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
+                            {QStringLiteral("transform_type"), telemetryTransformType(mTransformState)},
+                            {QStringLiteral("target_kind"), QStringLiteral("mesh")}});
             AnimationControlController::instance()->autoKeyOnTransform();
+        }
     }
 
     if(m_pSelectionBox->isVisible())

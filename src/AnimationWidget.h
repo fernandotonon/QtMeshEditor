@@ -28,6 +28,8 @@ public:
     /// Recreate skeleton/weight overlays after rig structure edits
     /// (entity->_initialise invalidates TagPoint attachments).
     void rebuildSkeletonOverlays(Ogre::Entity* entity);
+    /// Rest-pose ghost overlay on all active SkeletonDebug instances (#557).
+    void setRestPoseGhostVisible(bool show);
     SkeletonDebug* getSkeletonDebug(Ogre::Entity* entity) const;
     BoneWeightOverlay* getBoneWeightOverlay(Ogre::Entity* entity) const;
 

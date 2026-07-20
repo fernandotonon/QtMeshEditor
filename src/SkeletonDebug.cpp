@@ -1,8 +1,11 @@
 #include "SkeletonDebug.h"
 #include "GlobalDefinitions.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <functional>
+#include <unordered_map>
 
 namespace {
 constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
@@ -53,6 +56,8 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
     createBoneMaterial();
     createAxesMesh();
     createBoneMesh();
+    createJointMesh();
+    createLinkMesh();
 
     mBoneVisualByName = createBoneVisuals();
 
@@ -70,10 +75,18 @@ void SkeletonDebug::onTimerTick()
         return;
 
     short currentSelected = -1;
+    std::string selectedName;
+
     for (auto* ent : mBoneEntities) {
         ent->setMaterial(mBoneMatPtr);
         ent->setVisible(mShowBones);
     }
+    // Dim hierarchy links so joint spheres read as the bone location.
+    for (auto* ent : mBoneEntities) {
+        if (ent->getMesh() && ent->getMesh()->getName() == "SkeletonDebug/LinkMesh")
+            ent->setMaterial(mLinkMatPtr);
+    }
+
     for (Ogre::Bone* root : mEntity->getSkeleton()->getRootBones()) {
         auto it = mBoneVisualByName.find(root->getName());
         if (it != mBoneVisualByName.end() && it->second) {
@@ -88,13 +101,15 @@ void SkeletonDebug::onTimerTick()
             continue;
 
         currentSelected = bone->getHandle();
+        selectedName = bone->getName();
 
-        auto it = mBoneVisualByName.find(bone->getName());
-        if (it == mBoneVisualByName.end() || !it->second)
-            continue;
-
-        it->second->setMaterial(mBoneMatSelectedPtr);
-        it->second->setVisible(mShowBones);
+        // Highlight the joint and its outbound links (not sibling links).
+        for (auto* ent : mBoneEntities) {
+            if (boneNameForMovable(ent) == selectedName) {
+                ent->setMaterial(mBoneMatSelectedPtr);
+                ent->setVisible(mShowBones);
+            }
+        }
     }
 
     if (currentSelected != mLastSelectedBone) {
@@ -102,6 +117,9 @@ void SkeletonDebug::onTimerTick()
         if (currentSelected >= 0)
             emit boneSelected(static_cast<unsigned short>(currentSelected));
     }
+
+    if (mShowRestGhost)
+        updateGhostVisuals();
 }
 
 void SkeletonDebug::rebuildVisuals()
@@ -112,8 +130,10 @@ void SkeletonDebug::rebuildVisuals()
     const bool wasAxes = mShowAxes;
     const bool wasBones = mShowBones;
     const bool wasNames = mShowNames;
+    const bool wasGhost = mShowRestGhost;
 
     mTimer.stop();
+    destroyGhostVisuals();
     mEntity->detachAllObjectsFromBone();
 
     for (auto* ent : mBoneEntities)
@@ -132,9 +152,11 @@ void SkeletonDebug::rebuildVisuals()
     mShowAxes = false;
     mShowBones = false;
     mShowNames = false;
+    mShowRestGhost = false;
     showAxes(wasAxes);
     showBones(wasBones);
     showNames(wasNames);
+    showRestGhost(wasGhost);
     mTimer.start(0);
 }
 
@@ -142,6 +164,8 @@ SkeletonDebug::~SkeletonDebug()
 {
     mTimer.stop();
     mTimer.disconnect();
+
+    destroyGhostVisuals();
 
     // Detach all bone-attached objects at once — this clears mChildObjectList
     // and frees TagPoints without leaving stale parent references.
@@ -156,22 +180,33 @@ SkeletonDebug::~SkeletonDebug()
     mAxisEntities.clear();
 }
 
-void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt)
+void SkeletonDebug::createChildLinks(const Ogre::Bone* pBone)
 {
-    for(unsigned short i = 0; i < pBone->numChildren(); ++i)
+    // Thin rods parent→child. These are hierarchy edges, not extra bones —
+    // the joint sphere at the parent is the actual bone location.
+    for (unsigned short i = 0; i < pBone->numChildren(); ++i)
     {
-        float length = pBone->getChild(i)->getInitialPosition().length();
-        if(length < 0.00001f)
+        Ogre::Node* childNode = pBone->getChild(i);
+        if (!childNode)
             continue;
 
-        lastEnt = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)lastEnt);
-        mBoneEntities.push_back(lastEnt);
-        tp->setScale(length, length, length);
-        // Tag every child bone visual with the parent bone's name —
-        // dragging this segment in the viewport edits the parent bone's
-        // pose (the segment visually represents that bone, not the child).
-        tagBoneVisual(lastEnt, pBone->getName(), mEntity->getName());
+        const Ogre::Vector3 childPos = childNode->getInitialPosition();
+        const float length = childPos.length();
+        if (length < 0.00001f)
+            continue;
+
+        Ogre::Entity* link = mSceneMan->createEntity("SkeletonDebug/LinkMesh");
+        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)link);
+        mBoneEntities.push_back(link);
+
+        const Ogre::Vector3 dir = childPos / length;
+        tp->setOrientation(Ogre::Vector3::UNIT_Y.getRotationTo(dir));
+        // Link mesh is unit length along +Y; keep thickness constant so
+        // multi-child fans don't look like a bundle of full bones.
+        const float thick = std::max(mBoneSize * 0.35f, 0.008f);
+        tp->setScale(thick, length, thick);
+
+        tagBoneVisual(link, pBone->getName(), mEntity->getName());
     }
 }
 
@@ -180,43 +215,64 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
     std::map<std::string, Ogre::Entity*, std::less<>> mapEntities;
     int numBones = mEntity->getSkeleton()->getNumBones();
 
-    for(unsigned short int iBone = 0; iBone < numBones; ++iBone)
+    Ogre::Vector3 entityScale = Ogre::Vector3::UNIT_SCALE;
+    if (mEntity->getParentSceneNode())
+        entityScale = mEntity->getParentSceneNode()->getScale();
+    const Ogre::Vector3 scaleMagnitude(
+        std::max(std::abs(entityScale.x), 1e-4f),
+        std::max(std::abs(entityScale.y), 1e-4f),
+        std::max(std::abs(entityScale.z), 1e-4f));
+    const float invEntScale = 1.f
+        / std::max({scaleMagnitude.x, scaleMagnitude.y, scaleMagnitude.z});
+
+    for (unsigned short int iBone = 0; iBone < numBones; ++iBone)
     {
         const Ogre::Bone* pBone = mEntity->getSkeleton()->getBone(iBone);
-        if(!pBone)
+        if (!pBone)
         {
             assert(false);
             continue;
         }
 
-        Ogre::Entity *ent = nullptr;
-
-        if(unsigned short numChildren = pBone->numChildren(); numChildren == 0)
-        {
-            ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-            auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-            mBoneEntities.push_back(ent);
-
-            float length = pBone->getInitialPosition().length();
-            if(length >= 0.00001f)
-                tp->setScale(length, length, length);
-
-            tagBoneVisual(ent, pBone->getName(), mEntity->getName());
+        // Same sizing rule as the old octahedron bones: scale from the
+        // bone's length (avg distance to children, or inbound offset for leaves).
+        float length = 0.f;
+        const unsigned short numChildren = pBone->numChildren();
+        if (numChildren > 0) {
+            for (unsigned short i = 0; i < numChildren; ++i) {
+                if (auto* child = pBone->getChild(i))
+                    length += child->getInitialPosition().length();
+            }
+            length /= static_cast<float>(numChildren);
+        } else {
+            length = pBone->getInitialPosition().length();
         }
-        else
-        {
-            createChildBoneRepresentations(pBone, ent);
-        }
+        if (length < 1e-5f)
+            length = mBoneSize;
 
-        mapEntities[pBone->getName().data()] = ent;
+        // Unit joint mesh → world radius ≈ length * mBoneSize (matches the
+        // old setScale(length) on a mesh built in mBoneSize units). Clamp so
+        // tiny bones stay pickable and long ones don't swallow neighbours.
+        const float jointScale = std::clamp(length * mBoneSize, mBoneSize * 0.2f, mBoneSize * 0.75f)
+            * invEntScale;
 
-        ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
-        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-        tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
-        mAxisEntities.push_back(ent);
-        // Tag the axes overlay too — clicking the axis cross is the most
-        // visible target for users when scaling/rotating.
-        tagBoneVisual(ent, pBone->getName(), mEntity->getName());
+        Ogre::Entity* joint = mSceneMan->createEntity("SkeletonDebug/JointMesh");
+        auto* jointTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)joint);
+        jointTp->setScale(jointScale, jointScale, jointScale);
+        mBoneEntities.push_back(joint);
+        tagBoneVisual(joint, pBone->getName(), mEntity->getName());
+        mapEntities[pBone->getName().data()] = joint;
+
+        if (numChildren > 0)
+            createChildLinks(pBone);
+
+        Ogre::Entity* axes = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
+        auto* axesTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)axes);
+        axesTp->setScale(mScaleAxes / scaleMagnitude.x,
+                         mScaleAxes / scaleMagnitude.y,
+                         mScaleAxes / scaleMagnitude.z);
+        mAxisEntities.push_back(axes);
+        tagBoneVisual(axes, pBone->getName(), mEntity->getName());
     }
 
     return mapEntities;
@@ -262,6 +318,122 @@ void SkeletonDebug::showNames(bool show)
         return;
 
     mShowNames = show;
+}
+
+void SkeletonDebug::showRestGhost(bool show)
+{
+    if (mShowRestGhost == show)
+        return;
+    mShowRestGhost = show;
+    if (show) {
+        ensureGhostVisuals();
+        updateGhostVisuals();
+    } else {
+        destroyGhostVisuals();
+    }
+}
+
+void SkeletonDebug::destroyGhostVisuals()
+{
+    if (mGhostMeshEntity) {
+        if (mGhostMeshEntity->getParentSceneNode())
+            mGhostMeshEntity->detachFromParent();
+        mSceneMan->destroyEntity(mGhostMeshEntity);
+        mGhostMeshEntity = nullptr;
+    }
+    // Drop the private mesh clone so the next ghost enable re-snapshots rest.
+    if (mGhostMeshPtr) {
+        const Ogre::String name = mGhostMeshPtr->getName();
+        mGhostMeshPtr.reset();
+        if (Ogre::MeshManager::getSingleton().resourceExists(name))
+            Ogre::MeshManager::getSingleton().remove(name);
+    }
+    for (auto* ent : mGhostEntities) {
+        if (ent && ent->getParentSceneNode())
+            ent->detachFromParent();
+        if (ent)
+            mSceneMan->destroyEntity(ent);
+    }
+    mGhostEntities.clear();
+    mGhostNodes.clear();
+    mGhostBoneNames.clear();
+    if (mGhostRoot) {
+        mGhostRoot->removeAndDestroyAllChildren();
+        mSceneMan->destroySceneNode(mGhostRoot);
+        mGhostRoot = nullptr;
+    }
+}
+
+void SkeletonDebug::ensureGhostVisuals()
+{
+    if (!mEntity || !mEntity->hasSkeleton() || !mSceneMan)
+        return;
+    if (mGhostRoot)
+        return;
+
+    createBoneMaterial();
+
+    Ogre::SceneNode* entNode = mEntity->getParentSceneNode();
+    if (!entNode)
+        return;
+
+    mGhostRoot = entNode->createChildSceneNode(
+        mEntity->getName() + "_restGhostRoot");
+
+    // Translucent blue MESH frozen at the rest pose when the ghost was enabled.
+    // Must NOT share the live mesh resource — rest-pose bake writes into that
+    // mesh and would make the ghost follow the new pose.
+    // Live skeleton joints keep their normal materials (never this blue).
+    try {
+        const Ogre::String ghostEntName = mEntity->getName() + "_restGhostMesh";
+        const Ogre::String ghostMeshRes = mEntity->getName() + "_restGhostMeshRes";
+        if (mSceneMan->hasEntity(ghostEntName))
+            mSceneMan->destroyEntity(ghostEntName);
+        if (Ogre::MeshManager::getSingleton().resourceExists(ghostMeshRes))
+            Ogre::MeshManager::getSingleton().remove(ghostMeshRes);
+
+        mGhostMeshPtr = mEntity->getMesh()->clone(ghostMeshRes);
+        mGhostMeshEntity = mSceneMan->createEntity(ghostEntName, ghostMeshRes);
+        mGhostMeshEntity->setQueryFlags(0);
+        mGhostMeshEntity->setCastShadows(false);
+        mGhostMeshEntity->setMaterial(mMeshGhostMatPtr);
+        for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+            mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        mGhostRoot->attachObject(mGhostMeshEntity);
+        // Keep ghost at its cloned bind: disable clips and reset to bind.
+        if (Ogre::AnimationStateSet* states = mGhostMeshEntity->getAllAnimationStates()) {
+            for (const auto& pair : states->getAnimationStates())
+                pair.second->setEnabled(false);
+        }
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+    } catch (const Ogre::Exception&) {
+        mGhostMeshEntity = nullptr;
+        if (mGhostMeshPtr) {
+            const Ogre::String name = mGhostMeshPtr->getName();
+            mGhostMeshPtr.reset();
+            if (Ogre::MeshManager::getSingleton().resourceExists(name))
+                Ogre::MeshManager::getSingleton().remove(name);
+        }
+    }
+}
+
+void SkeletonDebug::updateGhostVisuals()
+{
+    if (!mShowRestGhost || !mEntity || !mGhostRoot)
+        return;
+
+    // Force the ghost mesh to the bind pose every tick so it never
+    // picks up the live animated skeleton.
+    if (mGhostMeshEntity) {
+        if (Ogre::SkeletonInstance* gSkel = mGhostMeshEntity->getSkeleton())
+            gSkel->reset(true);
+        mGhostMeshEntity->setVisible(true);
+        if (mMeshGhostMatPtr) {
+            for (unsigned short i = 0; i < mGhostMeshEntity->getNumSubEntities(); ++i)
+                mGhostMeshEntity->getSubEntity(i)->setMaterial(mMeshGhostMatPtr);
+        }
+    }
 }
 
 void SkeletonDebug::createAxesMaterial()
@@ -350,6 +522,63 @@ void SkeletonDebug::createBoneMaterial()
         p->setDiffuse(1, 0.85f, 0, 1);
         p->setAmbient(1, 0.85f, 0);
         p->setEmissive(1, 0.85f, 0);
+    }
+
+    // Dimmer material for hierarchy link rods (edges, not joints).
+    Ogre::String linkMatName = "SkeletonDebug/LinkMat";
+    mLinkMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(linkMatName));
+    if (!mLinkMatPtr) {
+        mLinkMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                linkMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mLinkMatPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(false);
+        p->setPolygonModeOverrideable(false);
+        p->setVertexColourTracking(Ogre::TVC_AMBIENT);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_NONE);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+    }
+
+    // Translucent blue for rest-pose MESH ghost (slice C #557).
+    // Live skeleton joints never use this — only the ghost mesh entity.
+    Ogre::String meshGhostMatName = "SkeletonDebug/MeshGhostMat";
+    mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(meshGhostMatName));
+    if (!mMeshGhostMatPtr) {
+        mMeshGhostMatPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                meshGhostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mMeshGhostMatPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(true);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_NONE);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
+    }
+
+    // Legacy joint-ghost material kept for any residual joint markers.
+    Ogre::String ghostMatName = "SkeletonDebug/BoneMatGhost";
+    mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(ghostMatName));
+    if (!mBoneMatGhostPtr) {
+        mBoneMatGhostPtr = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                ghostMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mBoneMatGhostPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
+        p->setDiffuse(0.25f, 0.55f, 1.0f, 0.35f);
+        p->setAmbient(0.1f, 0.25f, 0.5f);
+        p->setEmissive(0.05f, 0.15f, 0.35f);
     }
 }
 
@@ -447,6 +676,76 @@ void SkeletonDebug::createBoneMesh()
 
         mBoneMeshPtr = mo.convertToMesh(meshName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
     }
+}
+
+void SkeletonDebug::createJointMesh()
+{
+    // Unit octahedron centered at origin — scaled at attach time.
+    const Ogre::String meshName = "SkeletonDebug/JointMesh";
+    mJointMeshPtr = Ogre::static_pointer_cast<Ogre::Mesh>(
+        Ogre::MeshManager::getSingleton().getByName(meshName));
+    if (mJointMeshPtr)
+        return;
+
+    Ogre::ManualObject mo("tmpJoint");
+    mo.begin(mBoneMatPtr->getName());
+    const Ogre::ColourValue col(0.85f, 0.85f, 0.9f, 1.0f);
+    const std::array<Ogre::Vector3, 6> v = {
+        Ogre::Vector3( 1, 0, 0),
+        Ogre::Vector3(-1, 0, 0),
+        Ogre::Vector3( 0, 1, 0),
+        Ogre::Vector3( 0,-1, 0),
+        Ogre::Vector3( 0, 0, 1),
+        Ogre::Vector3( 0, 0,-1),
+    };
+    auto tri = [&](int a, int b, int c) {
+        mo.position(v[a]); mo.colour(col);
+        mo.position(v[b]); mo.colour(col);
+        mo.position(v[c]); mo.colour(col);
+    };
+    tri(0, 2, 4); tri(0, 4, 3); tri(0, 3, 5); tri(0, 5, 2);
+    tri(1, 4, 2); tri(1, 3, 4); tri(1, 5, 3); tri(1, 2, 5);
+    for (unsigned short i = 0; i < 8; ++i)
+        mo.triangle(i * 3, i * 3 + 1, i * 3 + 2);
+    mo.end();
+    mJointMeshPtr = mo.convertToMesh(meshName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+}
+
+void SkeletonDebug::createLinkMesh()
+{
+    // Unit-length thin octahedron along +Y [0..1]. Scaled: (thick, length, thick).
+    const Ogre::String meshName = "SkeletonDebug/LinkMesh";
+    mLinkMeshPtr = Ogre::static_pointer_cast<Ogre::Mesh>(
+        Ogre::MeshManager::getSingleton().getByName(meshName));
+    if (mLinkMeshPtr)
+        return;
+
+    Ogre::ManualObject mo("tmpLink");
+    mo.begin(mLinkMatPtr ? mLinkMatPtr->getName() : mBoneMatPtr->getName());
+    const Ogre::ColourValue col(0.45f, 0.45f, 0.5f, 0.85f);
+    const Ogre::ColourValue col1(0.55f, 0.55f, 0.6f, 0.85f);
+    const float r = 0.5f;
+    const std::array<Ogre::Vector3, 6> basepos = {
+        Ogre::Vector3(0, 0, 0),
+        Ogre::Vector3( r, 0.5f,  r),
+        Ogre::Vector3(-r, 0.5f,  r),
+        Ogre::Vector3(-r, 0.5f, -r),
+        Ogre::Vector3( r, 0.5f, -r),
+        Ogre::Vector3(0, 1, 0),
+    };
+    auto tri = [&](int a, int b, int c, const Ogre::ColourValue& cval) {
+        mo.position(basepos[a]); mo.colour(cval);
+        mo.position(basepos[b]); mo.colour(cval);
+        mo.position(basepos[c]); mo.colour(cval);
+    };
+    tri(0, 2, 1, col);  tri(0, 3, 2, col1);
+    tri(0, 4, 3, col);  tri(0, 1, 4, col1);
+    tri(1, 2, 5, col1); tri(2, 3, 5, col);
+    tri(3, 4, 5, col1); tri(4, 1, 5, col);
+    for (unsigned short i = 0; i < 8; ++i)
+        mo.triangle(i * 3, i * 3 + 1, i * 3 + 2);
+    mo.end();
+    mLinkMeshPtr = mo.convertToMesh(meshName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
 }
 
 void SkeletonDebug::createAxesMesh()

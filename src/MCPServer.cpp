@@ -78,6 +78,7 @@
 #include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QThread>
 #ifdef ENABLE_PS1_RIP
 #include "PS1/runtime/PS1RipManager.h"
@@ -103,6 +104,7 @@
 #include <QMetaObject>
 #include <QPixmap>
 #include <QSet>
+#include <QUuid>
 #include <optional>
 #include <OgreException.h>
 #include <OgreLight.h>
@@ -664,6 +666,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
+        {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
@@ -775,8 +778,13 @@ bool MCPServer::isHeavyTool(const QString &name)
 
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
-    qDebug() << "MCP Tool Call:" << name << args;
+    qDebug() << "MCP Tool Call:" << name;
 
+    const QString invocationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QElapsedTimer telemetryTimer;
+    telemetryTimer.start();
+    SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("started"),
+        -1, false, QString(), invocationId);
     SentryReporter::addBreadcrumb("ai.tool_call", QStringLiteral("Tool call: %1").arg(name));
 
     uintptr_t txn = 0;
@@ -787,6 +795,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     // Lazily initialize Ogre/Manager on first scene-dependent tool call
     if (!name.startsWith(QStringLiteral("cloud_")) && !ensureOgreInitialized()) {
         if (txn) SentryReporter::finishTransaction(txn);
+        SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("failed"),
+            telemetryTimer.elapsed(), false, QStringLiteral("renderer"), invocationId);
         return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
 
@@ -794,6 +804,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     const auto handlerIt = handlers.constFind(name);
     if (handlerIt == handlers.constEnd()) {
         if (txn) SentryReporter::finishTransaction(txn);
+        SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name, QStringLiteral("failed"),
+            telemetryTimer.elapsed(), false, QStringLiteral("unknown_tool"), invocationId);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
 
@@ -847,6 +859,33 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         if (!feature.isEmpty())
             GamificationManager::noteFeature(feature, GamificationManager::Surface::Mcp);
     }
+
+    const bool failed = toolResult.contains("isError") && toolResult["isError"].toBool();
+    static const auto sceneChangingTools = QSet{
+        QStringLiteral("load_mesh"), QStringLiteral("transform_mesh"), QStringLiteral("transform_submesh"),
+        QStringLiteral("apply_material"), QStringLiteral("create_material"), QStringLiteral("modify_material"),
+        QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
+        QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap_selection"), QStringLiteral("retopologize"),
+        QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_mesh_texture"),
+        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("create_primitive"),
+        QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
+        QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
+        QStringLiteral("bake_animation_fps"), QStringLiteral("motion_in_between"), QStringLiteral("generate_motion"),
+        QStringLiteral("adjust_arm_space"), QStringLiteral("segment_mesh"), QStringLiteral("generate_mesh_from_image"),
+        QStringLiteral("save_scene"), QStringLiteral("open_scene"), QStringLiteral("generate_lods"),
+        QStringLiteral("generate_auto_lods"), QStringLiteral("remove_lods"), QStringLiteral("decimate_mesh"),
+        QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
+        QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
+        QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("bake_vat"),
+        QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
+        QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
+        QStringLiteral("load_pose_library")
+    };
+    SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name,
+        failed ? QStringLiteral("failed") : QStringLiteral("completed"),
+        telemetryTimer.elapsed(), sceneChangingTools.contains(name) && !failed,
+        failed ? QStringLiteral("tool_error") : QString(), invocationId);
 
     if (txn) SentryReporter::finishTransaction(txn);
 
@@ -4178,10 +4217,18 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 if (mr.ok) {
                     action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
                     worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
-                    // Borrow a template clip's reference directions so the
-                    // retarget synthesizes a BIND-referenced base pose (no
-                    // harvest from the rig's other animations).
-                    clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                    if (!mr.clip.restWorld.empty() && !mr.clip.restDir.empty()) {
+                        // v5 models (#858) ship their canonical reference
+                        // triple — same bind-referenced retarget as templates.
+                        cmuRest = mr.clip.restWorld;
+                        clipDirs = mr.clip.restDir;
+                    } else {
+                        // Legacy v4: borrow a template clip's reference
+                        // directions so the retarget synthesizes a
+                        // BIND-referenced base pose (no harvest from the
+                        // rig's other animations).
+                        clipDirs = MotionLibrary::referenceDirsForPrompt(prompt);
+                    }
                 }
             }
         }
@@ -4225,8 +4272,18 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         worldFrame, cmuRest,
                                                         /*refineWithModel=*/false,
                                                         /*refineStride=*/8, yaw180,
-                                                        clipDirs);
+                                                        clipDirs,
+                                                        clipSource == QStringLiteral("model"));
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
+
+        // #837 quality post-pass (ON by default): sparse-bake temporal
+        // low-pass — removes retarget trembling. Runs before arm-space and
+        // foot pinning so the pin targets stay exact.
+        const int smoothFps = args.value("smooth_bake").toBool(true)
+            ? args.value("smooth_fps").toInt(12) : 0;
+        if (smoothFps > 0)
+            AnimationMerger::smoothBakeAnimation(skel.get(), animName,
+                                                 smoothFps, fps);
 
         // #854: optional Mixamo-style arm-space post-process. Echo whether it
         // took effect so an MCP caller can tell the rig had no arm roles
@@ -4236,6 +4293,13 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         if (std::abs(armSpace) > 1e-4)
             armSpaceApplied = AnimationMerger::adjustArmSpace(
                 skel.get(), animName, static_cast<float>(armSpace));
+
+        // #856: foot-contact cleanup — ON by default (foot_pin:false opts out).
+        int footPinSpans = -1;
+        if (args.value("foot_pin").toBool(true)) {
+            const auto fp = AnimationMerger::pinFeet(skel.get(), animName);
+            footPinSpans = fp.ok ? fp.spans : -1;
+        }
 
         entity->refreshAvailableAnimationState();
         // Exclusively enable the generated clip — enabled states BLEND in
@@ -4272,6 +4336,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         content["tracks_written"] = r.tracksWritten; content["canonical_joints"] = r.canonicalJoints;
         content["entity"] = QString::fromStdString(entity->getName());
         if (std::abs(armSpace) > 1e-4) content["arm_space_applied"] = armSpaceApplied;
+        if (footPinSpans >= 0) content["foot_pin_spans"] = footPinSpans;
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
@@ -4357,11 +4422,83 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolPinFeet(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+            QStringLiteral("MCP pin_feet"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString animName = args.value("animation_name").toString();
+        if (animName.isEmpty())
+            return makeErrorResult("Error: animation_name is required.");
+
+        const QString entityName = args.value("entity_name").toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
+                continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) {
+                entity = ent; break;
+            }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: no skinned mesh found.")
+                : QString("Error: skinned entity '%1' not found.").arg(entityName));
+
+        // Edit the mesh's MASTER skeleton (exporter serializes the master;
+        // animations are shared, so the live viewport still updates).
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        const std::string an = animName.toStdString();
+        if (!skel || !skel->hasAnimation(an))
+            return makeErrorResult(
+                QString("Error: animation '%1' not found on entity.").arg(animName));
+
+        const auto fp = AnimationMerger::pinFeet(skel.get(), an);
+        if (!fp.ok)
+            return makeErrorResult(
+                QString("Error: foot-pin failed: %1").arg(fp.error));
+
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
+
+        const QString outPath = args.value("output_path").toString();
+        if (!outPath.isEmpty()) {
+            auto* node = entity->getParentSceneNode();
+            if (MeshImporterExporter::exporter(
+                    node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
+                return makeErrorResult(
+                    QString("Error: pinned feet but export to %1 failed")
+                        .arg(outPath));
+        }
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["animation"] = animName;
+        content["spans"] = fp.spans;
+        content["keyframes_adjusted"] = fp.keyframesAdjusted;
+        content["entity"] = QString::fromStdString(entity->getName());
+        if (!outPath.isEmpty()) content["exported"] = outPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 {
     try {
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
             QStringLiteral("MCP segment_mesh"));
+        QElapsedTimer segmentTimer;
+        segmentTimer.start();
 
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
@@ -4399,6 +4536,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
         }
         const QString categoryStr = args.value("category").toString();
+        QString requestedCategory = categoryStr.isEmpty() ? QStringLiteral("auto") : categoryStr.toLower();
         if (!categoryStr.isEmpty()) {
             bool okCat = false;
             opts.category = MeshSegmenter::categoryFromName(categoryStr, &okCat);
@@ -4406,6 +4544,13 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                 return makeErrorResult("Error: category must be 'auto', 'body', "
                                        "'vegetation', 'vehicle', or 'building'");
         }
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                        {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}});
+
         // Auto → classifier (first-use download); offline/no_model → body.
         if (!noModel)
             opts.category = MeshSegmenter::resolveCategoryBlocking(
@@ -4420,15 +4565,46 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
             rigLabels.empty() ? nullptr : rigLabels.data());
-        if (!r.ok)
+        if (!r.ok) {
+            SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
+                QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                            {QStringLiteral("requested_category"), requestedCategory},
+                            {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(opts.category)},
+                            {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                            {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                            {QStringLiteral("ai"), !noModel},
+                            {QStringLiteral("geometric_fallback"), noModel},
+                            {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                            {QStringLiteral("success"), false},
+                            {QStringLiteral("failure_category"), SentryReporter::sanitizedErrorCategory(r.error)},
+                            {QStringLiteral("capability"), QStringLiteral("segmentation")}},
+                QStringLiteral("error"));
             return makeErrorResult(QString("Error: %1")
                 .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
+        }
 
         const int P = MeshSegmenter::partCount();
         std::vector<int> vCount(P, 0);
         for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
         std::vector<int> fCount(P, 0);
         for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
+
+        int resultPartCount = 0;
+        for (int p = 0; p < P; ++p)
+            if (vCount[p] > 0 || fCount[p] > 0)
+                ++resultPartCount;
+        SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
+            QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
+                        {QStringLiteral("requested_category"), requestedCategory},
+                        {QStringLiteral("resolved_category"), MeshSegmenter::categoryName(r.category)},
+                        {QStringLiteral("automatic"), categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto")},
+                        {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
+                        {QStringLiteral("ai"), r.usedModel},
+                        {QStringLiteral("geometric_fallback"), !r.usedModel},
+                        {QStringLiteral("result_part_count"), resultPartCount},
+                        {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
+                        {QStringLiteral("success"), true},
+                        {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
         QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
             .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
@@ -8674,6 +8850,9 @@ QJsonArray MCPServer::buildToolsList()
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the new animation (e.g. /tmp/out.glb). If omitted, the animation is applied in-session only."}};
         props["model"] = QJsonObject{{"type", "boolean"}, {"description", "EXPERIMENTAL: use the trained from-scratch text-to-motion ONNX model instead of the template clip. Falls back to the template library automatically if the model is unavailable or the action isn't in its vocabulary. Default false (template). Quality is action-dependent (locomotion better than gestures)."}};
         props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Optional Mixamo-style arm-space post-process in degrees (#854): positive widens the arms away from the body, negative tucks them in. Default 0. Rescues arm-into-torso clipping on rigs whose proportions differ from the clip."}};
+        props["foot_pin"] = QJsonObject{{"type", "boolean"}, {"description", "Foot-contact cleanup (#856): detect ground-contact spans and IK-pin the feet so they plant instead of skating. Default true; set false to keep the raw retarget."}};
+        props["smooth_bake"] = QJsonObject{{"type", "boolean"}, {"description", "Temporal low-pass post-pass: bake the clip sparse then back to its native rate, removing retarget trembling. Default true."}};
+        props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
@@ -8703,6 +8882,24 @@ QJsonArray MCPServer::buildToolsList()
             "the prior value), so it maps directly to a UI slider.",
             props,
             QJsonArray{"animation_name", "arm_space"}
+        );
+    }
+
+    // pin_feet
+    {
+        QJsonObject props;
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to clean up, e.g. \"generated_walk\"."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity. If omitted, uses the first skinned entity."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the cleaned animation. If omitted, applied in-session only."}};
+        appendTool(
+            "pin_feet",
+            "Foot-contact cleanup (#856): detect frames where each foot is near the clip's ground level and "
+            "nearly stationary (contact spans) and lock the foot's world position to its span-start position "
+            "with an analytic two-bone hip-knee-foot IK, blending in/out at span edges so knees don't pop. "
+            "Fixes foot skating/floating on retargeted clips whose rig proportions differ from the source. "
+            "Only the thigh/shin/foot keyframes are rewritten; effectively idempotent.",
+            props,
+            QJsonArray{"animation_name"}
         );
     }
 

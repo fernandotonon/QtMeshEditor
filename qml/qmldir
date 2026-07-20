@@ -12,6 +12,10 @@ QuadRetopoDialog 1.0 QuadRetopoDialog.qml
 SkinWeightsDialog 1.0 SkinWeightsDialog.qml
 RemoveBoneDialog 1.0 RemoveBoneDialog.qml
 RenameBoneDialog 1.0 RenameBoneDialog.qml
+ReparentBoneDialog 1.0 ReparentBoneDialog.qml
+SplitBoneDialog 1.0 SplitBoneDialog.qml
+AttachBoneDialog 1.0 AttachBoneDialog.qml
+BoneContextMenu 1.0 BoneContextMenu.qml
 MaterialListModal 1.0 MaterialListModal.qml
 ThemedButton 1.0 ThemedButton.qml
 ThemedCheckBox 1.0 ThemedCheckBox.qml

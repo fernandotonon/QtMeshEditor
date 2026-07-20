@@ -11,6 +11,7 @@
 #include <QLibraryInfo>
 #include <QDir>
 #include <QCommandLineParser>
+#include <QJsonObject>
 #include <QScopeGuard>
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qjsengine.h>
@@ -57,10 +58,7 @@ static void forceX11PlatformIfNeeded()
 
 static void setSentrySessionTags(const QString& launchMode)
 {
-    SentryReporter::setTag("os", QSysInfo::prettyProductName());
-    SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
-    SentryReporter::setTag("qt_version", qVersion());
-    SentryReporter::setTag("launch_mode", launchMode);
+    SentryReporter::configureSession(launchMode);
 }
 
 int main(int argc, char *argv[])
@@ -128,6 +126,8 @@ int main(int argc, char *argv[])
         auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
         setSentrySessionTags("mcp");
+        SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
+            QJsonObject{{QStringLiteral("launch_mode"), QStringLiteral("mcp")}});
 
         MCPServer server;
         // Note: In standalone MCP mode, we don't have a MainWindow
@@ -203,6 +203,8 @@ int main(int argc, char *argv[])
     auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
     setSentrySessionTags(mcpWithGuiMode ? "gui+mcp" : "gui");
+    SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
+        QJsonObject{{QStringLiteral("launch_mode"), mcpWithGuiMode ? QStringLiteral("gui+mcp") : QStringLiteral("gui")}});
 
 #ifdef ENABLE_AUTO_UPDATER
     for (int i = 1; i < argc; ++i) {

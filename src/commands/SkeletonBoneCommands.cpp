@@ -249,3 +249,305 @@ void ToggleSkeletonDebugCommand::undo()
 {
     apply(!m_show);
 }
+
+ReparentBoneCommand::ReparentBoneCommand(std::string entityName,
+                                         QString boneName,
+                                         QString newParentName,
+                                         SkeletonEditor::ReparentOptions opts,
+                                         QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_boneName(std::move(boneName))
+    , m_newParentName(std::move(newParentName))
+    , m_opts(opts)
+{
+    setText(m_newParentName.isEmpty()
+                ? QStringLiteral("Detach bone")
+                : QStringLiteral("Reparent bone"));
+}
+
+void ReparentBoneCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    }
+    const auto result = SkeletonEditor::reparentBone(entity, m_boneName, m_newParentName, m_opts);
+    if (!result.ok) return;
+    m_applied = true;
+    SentryReporter::addBreadcrumb(
+        m_newParentName.isEmpty()
+            ? QStringLiteral("scene.skel.hier.detach")
+            : QStringLiteral("scene.skel.hier.reparent"),
+        QStringLiteral("%1: %2 → %3")
+            .arg(QString::fromStdString(m_entityName), m_boneName,
+                 m_newParentName.isEmpty() ? QStringLiteral("(root)") : m_newParentName));
+    SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
+}
+
+void ReparentBoneCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    QString err;
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
+    m_applied = false;
+}
+
+SplitBoneCommand::SplitBoneCommand(std::string entityName,
+                                   QString boneName,
+                                   float t,
+                                   QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_boneName(std::move(boneName))
+    , m_t(t)
+{
+    setText(QStringLiteral("Split bone"));
+}
+
+void SplitBoneCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    }
+    const auto result = SkeletonEditor::splitBone(entity, m_boneName, m_t);
+    if (!result.ok) return;
+    m_splitBoneName = result.boneName;
+    m_applied = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.hier.split"),
+        QStringLiteral("%1: %2 @%3 → %4")
+            .arg(QString::fromStdString(m_entityName), m_boneName)
+            .arg(m_t, 0, 'f', 2)
+            .arg(m_splitBoneName));
+    SkeletonEditor::refreshAfterEdit(m_entityName, m_splitBoneName);
+}
+
+void SplitBoneCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    QString err;
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
+    m_applied = false;
+}
+
+ConnectBoneCommand::ConnectBoneCommand(std::string entityName,
+                                       QString boneName,
+                                       bool connected,
+                                       QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_boneName(std::move(boneName))
+    , m_connected(connected)
+{
+    setText(connected ? QStringLiteral("Connect bone") : QStringLiteral("Disconnect bone"));
+}
+
+void ConnectBoneCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    }
+    const auto result = SkeletonEditor::setBoneConnected(entity, m_boneName, m_connected);
+    if (!result.ok) return;
+    m_applied = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.hier.connect"),
+        QStringLiteral("%1: %2 %3")
+            .arg(QString::fromStdString(m_entityName), m_boneName,
+                 m_connected ? QStringLiteral("connect") : QStringLiteral("disconnect")));
+    SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
+}
+
+void ConnectBoneCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    QString err;
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
+    m_applied = false;
+}
+
+AttachBoneToEntityCommand::AttachBoneToEntityCommand(std::string srcEntityName,
+                                                     QStringList boneNames,
+                                                     std::string dstEntityName,
+                                                     SkeletonEditor::AttachOptions opts,
+                                                     QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_srcEntityName(std::move(srcEntityName))
+    , m_boneNames(std::move(boneNames))
+    , m_dstEntityName(std::move(dstEntityName))
+    , m_opts(opts)
+{
+    setText(QStringLiteral("Attach bone to entity"));
+}
+
+void AttachBoneToEntityCommand::redo()
+{
+    Ogre::Entity* src = resolveEntityByName(m_srcEntityName);
+    Ogre::Entity* dst = resolveEntityByName(m_dstEntityName);
+    if (!src || !dst) return;
+    if (m_firstRedo) {
+        if (dst->getMesh() && dst->getMesh()->hasSkeleton() && dst->getMesh()->getSkeleton())
+            m_dstBefore = SkeletonEditor::captureSnapshot(dst);
+        m_firstRedo = false;
+    }
+
+    const auto result = SkeletonEditor::attachBonesToEntity(src, m_boneNames, dst, m_opts);
+    if (!result.ok) return;
+    m_attachedBoneName = result.boneName;
+    m_applied = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.hier.attach"),
+        QStringLiteral("%1 → %2: %3")
+            .arg(QString::fromStdString(m_srcEntityName),
+                 QString::fromStdString(m_dstEntityName),
+                 m_attachedBoneName));
+    SkeletonEditor::refreshAfterEdit(m_dstEntityName, m_attachedBoneName);
+}
+
+void AttachBoneToEntityCommand::undo()
+{
+    Ogre::Entity* dst = resolveEntityByName(m_dstEntityName);
+    if (!dst) return;
+    if (m_dstBefore.bones.empty()) {
+        // Destination had no skeleton before attach — strip skeleton binding.
+        if (dst->getMesh()) {
+            dst->getMesh()->_notifySkeleton(Ogre::SkeletonPtr());
+            dst->_initialise(true);
+        }
+        SkeletonEditor::refreshAfterEdit(m_dstEntityName);
+    } else {
+        QString err;
+        if (SkeletonEditor::restoreSnapshot(dst, m_dstBefore, &err))
+            SkeletonEditor::refreshAfterEdit(m_dstEntityName);
+    }
+    m_applied = false;
+}
+
+SetRestPoseCommand::SetRestPoseCommand(std::string entityName,
+                                       Op op,
+                                       QStringList boneNames,
+                                       QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_op(op)
+    , m_boneNames(std::move(boneNames))
+{
+    switch (m_op) {
+    case Op::CaptureAll:
+        setText(QStringLiteral("Capture rest pose"));
+        break;
+    case Op::SnapSelected:
+        setText(QStringLiteral("Snap bones to rest pose"));
+        break;
+    case Op::Reset:
+        setText(QStringLiteral("Reset rest pose"));
+        break;
+    }
+}
+
+SetRestPoseCommand::SetRestPoseCommand(std::string entityName,
+                                       std::vector<ExplicitPose> explicitPoses,
+                                       QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_op(Op::SnapSelected)
+    , m_explicitPoses(std::move(explicitPoses))
+{
+    setText(QStringLiteral("Edit bone rest pose"));
+    for (const auto& p : m_explicitPoses)
+        m_boneNames.append(p.boneName);
+}
+
+void SetRestPoseCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        SkeletonEditor::Result result;
+        if (!m_explicitPoses.empty()) {
+            result.ok = true;
+            for (const auto& pose : m_explicitPoses) {
+                const auto one = SkeletonEditor::commitBoneRestPose(
+                    entity, pose.boneName, pose.position, pose.orientation, pose.scale);
+                if (!one.ok) {
+                    result = one;
+                    break;
+                }
+            }
+        } else {
+            switch (m_op) {
+            case Op::CaptureAll:
+                result = SkeletonEditor::captureRestPose(entity);
+                break;
+            case Op::SnapSelected:
+                result = SkeletonEditor::captureRestPose(entity, m_boneNames);
+                break;
+            case Op::Reset:
+                result = SkeletonEditor::resetRestPose(entity);
+                break;
+            }
+        }
+        if (!result.ok) return;
+        m_after = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    } else {
+        QString err;
+        if (!SkeletonEditor::restoreSnapshot(entity, m_after, &err))
+            return;
+    }
+
+    m_applied = true;
+    QString crumb;
+    if (!m_explicitPoses.empty()) {
+        crumb = QStringLiteral("scene.skel.rest_pose.edit");
+    } else {
+        switch (m_op) {
+        case Op::CaptureAll:
+            crumb = QStringLiteral("scene.skel.rest_pose.capture");
+            break;
+        case Op::SnapSelected:
+            crumb = QStringLiteral("scene.skel.rest_pose.snap");
+            break;
+        case Op::Reset:
+            crumb = QStringLiteral("scene.skel.rest_pose.reset");
+            break;
+        }
+    }
+    SentryReporter::addBreadcrumb(crumb,
+        QStringLiteral("%1 (%2 bone(s))")
+            .arg(QString::fromStdString(m_entityName))
+            .arg(m_boneNames.isEmpty() ? QStringLiteral("all")
+                                       : QString::number(m_boneNames.size())));
+    SkeletonEditor::refreshAfterEdit(m_entityName);
+    if (auto* editor = SkeletonEditor::getSingletonPtr())
+        emit editor->restPoseChanged();
+}
+
+void SetRestPoseCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity || m_before.bones.empty()) return;
+    QString err;
+    if (!SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        return;
+    m_applied = false;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.rest_pose.undo"),
+        QString::fromStdString(m_entityName));
+    SkeletonEditor::refreshAfterEdit(m_entityName);
+    if (auto* editor = SkeletonEditor::getSingletonPtr())
+        emit editor->restPoseChanged();
+}
