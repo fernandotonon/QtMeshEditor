@@ -1293,9 +1293,10 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
     ASSERT_NE(skel, nullptr);
 
     // Source: left collar (role 10, +X) rolls 0 → 240° — past the ±180° wrap.
-    // The gain table damps collars to 0.5×, which is exactly where a missing
-    // unwrap explodes: wrapped −120° would scale to −60° instead of the
-    // capped +150°'s half — a mid-clip snap.
+    // This is where a missing unwrap explodes: the wrapped angle would flip
+    // sign mid-clip and snap. With unwrap, the collar's model twist cap
+    // (30° = 0.52 rad) clamps first, THEN the 0.5× collar gain applies →
+    // final steady roll ≈ 30° × 0.5 = 15° about +X.
     const int frames = 61;
     auto quats = identityClip(frames);
     for (int f = 0; f < frames; ++f) {
@@ -1336,9 +1337,9 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
         last = w;
     }
     EXPECT_LT(maxStepDeg, 15.0f) << "collar roll snapped mid-clip (unwrap)";
-    // 240° source twist hits the 150° runaway-unwrap cap FIRST, then the
-    // 0.5× collar gain: 150 × 0.5 = 75°.
-    EXPECT_NEAR(twistDegAbout(last, Ogre::Vector3::UNIT_X), 75.0f, 8.0f);
+    // 240° source twist is clamped to the collar model cap (30°) FIRST, then
+    // scaled by the 0.5× collar gain: 30 × 0.5 = 15° steady roll about +X.
+    EXPECT_NEAR(twistDegAbout(last, Ogre::Vector3::UNIT_X), 15.0f, 8.0f);
 
     sm->destroyEntity(ent);
 }
