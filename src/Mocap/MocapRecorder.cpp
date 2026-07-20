@@ -212,7 +212,14 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
                 report.headKeyframesWritten = static_cast<int>(keys.size());
                 report.headTarget = QStringLiteral("bone:") + headBone;
             }
-        } else if (entity->getParentSceneNode()) {
+        } else if (entity->getParentSceneNode()
+                   && !entity->getParentSceneNode()->getName().empty()) {
+            // The node-TRS head clip re-finds the node BY NAME through
+            // NodeAnimationManager::addKeyframe, so an anonymous parent node
+            // (empty getName()) can't be driven. Editor-loaded entities always
+            // sit under a named node (Manager::addSceneNode), so this only
+            // guards synthetic/anonymous setups — skip cleanly, leaving
+            // headTarget "none", rather than authoring an orphan clip.
             Ogre::SceneNode* node = entity->getParentSceneNode();
             auto* nam = NodeAnimationManager::instance();
             const QString clip = options.clipName + QStringLiteral("_Head");

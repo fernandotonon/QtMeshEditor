@@ -147,7 +147,12 @@ protected:
         m_mesh = createFaceTestMesh(m_meshName);
         auto* scene = Manager::getSingleton()->getSceneMgr();
         m_entity = scene->createEntity(m_meshName + "_ent", m_meshName);
-        m_node = scene->getRootSceneNode()->createChildSceneNode();
+        // Name the node: the editor's Manager::addSceneNode always names its
+        // scene nodes, and the node-TRS head clip re-finds the node BY NAME
+        // through NodeAnimationManager. An anonymous node (empty getName())
+        // can't be re-found, so mirror production and give it a unique name.
+        m_node = scene->getRootSceneNode()->createChildSceneNode(
+            m_meshName + "_node");
         m_node->attachObject(m_entity);
         m_mapping = FaceCapMapper::build(
             {QStringLiteral("jawOpen"), QStringLiteral("mouthSmileLeft")});
