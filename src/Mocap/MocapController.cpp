@@ -830,8 +830,12 @@ void MocapController::onSample(const FaceSample& sample,
         morphMgr->setWeight(entity, ch.meshTargetName,
                             sample.weights[ch.canonicalIndex]);
 
-    // live drive — head (skipped when body owns the skeleton)
-    if (!d->headBone.isEmpty() && entity->hasSkeleton()) {
+    // live drive — head (skipped when body owns the skeleton: the body
+    // retargeter already drives the Head bone from the pose landmarks, and
+    // letting both write the same bone makes them fight frame-to-frame).
+    const bool bodyOwnsSkeleton =
+        body.valid && d->bodyRetargeter && d->bodyRetargeter->valid();
+    if (!d->headBone.isEmpty() && entity->hasSkeleton() && !bodyOwnsSkeleton) {
         if (!d->calibrated) {
             d->neutral = Ogre::Quaternion(
                 sample.headRotation[3], sample.headRotation[0],

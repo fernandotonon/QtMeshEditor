@@ -4,6 +4,7 @@
 
 #include "FaceCapCanonicalData.h"
 #include "../AnimationMerger.h"
+#include "PoseIKSolver.h"
 #include "../Manager.h"
 #include "../MorphAnimationManager.h"
 #include "../MotionInbetween.h"
@@ -19,6 +20,7 @@
 #include <OgreSkeletonInstance.h>
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 
 namespace MocapRecorder {
@@ -304,6 +306,52 @@ BodyRecordReport recordBody(
     // can't be retargeted — removing it up front would destroy the user's
     // existing clip on a retarget failure. The replace is deferred to the
     // moment the take is known good.
+
+    // VALIDATION HARNESS (QTMESH_MOCAP_USE_RETARGETER=1): bake the clip with
+    // the SHARED BodyRetargeter — the EXACT math the LIVE preview runs — so a
+    // rendered clip validates the live path headlessly (the live drive can't
+    // be render-captured directly). Default path stays applyMotionClip.
+    if (qEnvironmentVariableIntValue("QTMESH_MOCAP_USE_RETARGETER")) {
+        BodyRetargeter rt(skel.get());
+        if (!rt.valid()) {
+            report.error = QStringLiteral("retargeter: not a humanoid rig");
+            return report;
+        }
+        if (skel->hasAnimation(clip)) skel->removeAnimation(clip);
+        skel->reset(true);  // bind pose
+        std::map<unsigned short, Ogre::Quaternion> bindLocal;
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+            bindLocal[i] = skel->getBone(i)->getOrientation();
+        const double dt = 1.0 / static_cast<double>(fps);
+        Ogre::Animation* anim = skel->createAnimation(
+            clip, static_cast<Ogre::Real>(dt * (clipQuats.size() - 1)));
+        anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
+        std::map<unsigned short, Ogre::NodeAnimationTrack*> tracks;
+        for (size_t f = 0; f < clipQuats.size(); ++f) {
+            std::array<std::array<float, 4>, 22> q{};
+            for (int r = 0; r < 22 && r < PoseIK::kCanonicalRoles; ++r) q[r] = clipQuats[f][r];
+            const auto locals = rt.evaluateFrame(q, 0xFFFFFFFFu);
+            for (const auto& [handle, local] : locals) {
+                auto it = tracks.find(handle);
+                if (it == tracks.end())
+                    it = tracks.emplace(handle,
+                        anim->createNodeTrack(handle, skel->getBone(handle))).first;
+                auto* kf = it->second->createNodeKeyFrame(
+                    static_cast<Ogre::Real>(dt * f));
+                // Ogre node keyframes are ABSOLUTE local rotations (they replace
+                // the reset pose), exactly as applyMotionClip writes them — do
+                // NOT subtract bindLocal.
+                kf->setRotation(local);
+            }
+        }
+        report.tracksWritten = static_cast<int>(tracks.size());
+        report.rolesResolved = static_cast<int>(tracks.size());
+        report.clipLength = anim->getLength();
+        entity->refreshAvailableAnimationState();
+        SentryReporter::addBreadcrumb("ai.assist.mocap_body",
+            QStringLiteral("recorded via BodyRetargeter (validation)"));
+        return report;
+    }
 
     // The world-frame retarget: delta vs frame 0 (the calibration frame)
     // transported into each bone's parent-world frame; rotation-only keys;
