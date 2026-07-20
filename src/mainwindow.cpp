@@ -153,6 +153,7 @@
 #include <QMenu>
 #include <QWidgetAction>
 #include <QSlider>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QSignalBlocker>
 #include <QGridLayout>
@@ -1914,15 +1915,199 @@ void MainWindow::initToolBar()
     shapeRow->addStretch();
     paintLay->addLayout(shapeRow);
 
+    // Paint v2 Slice A (#544) — colour source + gradient ramp controls.
+    // Lives in the brush portal (not the inspector) so brush settings stay
+    // one click away from the paint tool button.
+    auto* tpcPaint = TexturePaintController::instance();
+    paintLay->addWidget(new QLabel(tr("Color:"), paintSettings));
+    auto* colorSrcRow = new QHBoxLayout();
+    auto* srcSolid = new QPushButton(tr("Solid"), paintSettings);
+    auto* srcGradient = new QPushButton(tr("Gradient"), paintSettings);
+    srcSolid->setCheckable(true);
+    srcGradient->setCheckable(true);
+    srcSolid->setAutoExclusive(true);
+    srcGradient->setAutoExclusive(true);
+    srcSolid->setFixedHeight(22);
+    srcGradient->setFixedHeight(22);
+    colorSrcRow->addWidget(srcSolid);
+    colorSrcRow->addWidget(srcGradient);
+    colorSrcRow->addStretch();
+    paintLay->addLayout(colorSrcRow);
+
+    auto* gradientBox = new QWidget(paintSettings);
+    auto* gradLay = new QVBoxLayout(gradientBox);
+    gradLay->setContentsMargins(0, 0, 0, 0);
+    gradLay->setSpacing(6);
+
+    auto* modeRow = new QHBoxLayout();
+    modeRow->addWidget(new QLabel(tr("Mode:"), gradientBox));
+    auto* modeLinear = new QPushButton(tr("Linear"), gradientBox);
+    auto* modeRadial = new QPushButton(tr("Radial"), gradientBox);
+    auto* modeAngular = new QPushButton(tr("Angular"), gradientBox);
+    for (auto* b : {modeLinear, modeRadial, modeAngular}) {
+        b->setCheckable(true);
+        b->setAutoExclusive(true);
+        b->setFixedHeight(22);
+        modeRow->addWidget(b);
+    }
+    modeRow->addStretch();
+    gradLay->addLayout(modeRow);
+
+    auto* rampPreview = new QLabel(gradientBox);
+    rampPreview->setFixedHeight(18);
+    rampPreview->setMinimumWidth(200);
+    rampPreview->setScaledContents(true);
+    rampPreview->setStyleSheet(QStringLiteral("QLabel { border: 1px solid #555; }"));
+    gradLay->addWidget(rampPreview);
+
+    auto* rampRow = new QHBoxLayout();
+    rampRow->addWidget(new QLabel(tr("Ramp:"), gradientBox));
+    auto* rampCombo = new QComboBox(gradientBox);
+    rampCombo->setMinimumWidth(120);
+    rampRow->addWidget(rampCombo, 1);
+    auto* editRampBtn = new QPushButton(tr("Edit…"), gradientBox);
+    editRampBtn->setFixedHeight(22);
+    rampRow->addWidget(editRampBtn);
+    gradLay->addLayout(rampRow);
+
+    auto* optRow = new QHBoxLayout();
+    auto* fgBgCheck = new QCheckBox(tr("FG/BG"), gradientBox);
+    fgBgCheck->setToolTip(tr("Build a two-stop ramp from the foreground and background colours"));
+    auto* steppedCheck = new QCheckBox(tr("Stepped"), gradientBox);
+    optRow->addWidget(fgBgCheck);
+    optRow->addWidget(steppedCheck);
+    optRow->addStretch();
+    gradLay->addLayout(optRow);
+
+    auto* jitterLabel = new QLabel(gradientBox);
+    auto* jitterSlider = new QSlider(Qt::Horizontal, gradientBox);
+    jitterSlider->setRange(0, 100);
+    gradLay->addWidget(jitterLabel);
+    gradLay->addWidget(jitterSlider);
+
+    paintLay->addWidget(gradientBox);
+
+    auto refreshRampPreview = [rampPreview, tpcPaint]() {
+        const QString uri = tpcPaint->rampPreviewDataUri();
+        const int comma = uri.indexOf(QLatin1Char(','));
+        if (comma < 0) {
+            rampPreview->clear();
+            return;
+        }
+        const QByteArray png = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
+        QPixmap pm;
+        if (pm.loadFromData(png, "PNG"))
+            rampPreview->setPixmap(pm);
+        else
+            rampPreview->clear();
+    };
+
+    auto syncGradientUi = [srcSolid, srcGradient, gradientBox, modeLinear, modeRadial,
+                           modeAngular, rampCombo, fgBgCheck, steppedCheck, jitterSlider,
+                           jitterLabel, tpcPaint, refreshRampPreview]() {
+        const bool isGrad = tpcPaint->colorSource()
+            == static_cast<int>(TexturePaintController::ColorGradient);
+        {
+            QSignalBlocker b1(srcSolid);
+            QSignalBlocker b2(srcGradient);
+            srcSolid->setChecked(!isGrad);
+            srcGradient->setChecked(isGrad);
+        }
+        gradientBox->setVisible(isGrad);
+        if (!isGrad)
+            return;
+
+        const int mode = tpcPaint->gradientMode();
+        {
+            QSignalBlocker bl(modeLinear);
+            QSignalBlocker br(modeRadial);
+            QSignalBlocker ba(modeAngular);
+            modeLinear->setChecked(mode == static_cast<int>(TexturePaintController::GradientLinear));
+            modeRadial->setChecked(mode == static_cast<int>(TexturePaintController::GradientRadial));
+            modeAngular->setChecked(mode == static_cast<int>(TexturePaintController::GradientAngular));
+        }
+
+        {
+            QSignalBlocker bc(rampCombo);
+            const QStringList names = tpcPaint->rampNames();
+            if (rampCombo->count() != names.size()) {
+                rampCombo->clear();
+                rampCombo->addItems(names);
+            } else {
+                for (int i = 0; i < names.size(); ++i) {
+                    if (rampCombo->itemText(i) != names[i]) {
+                        rampCombo->clear();
+                        rampCombo->addItems(names);
+                        break;
+                    }
+                }
+            }
+            const int idx = rampCombo->findText(tpcPaint->activeRampName());
+            if (idx >= 0)
+                rampCombo->setCurrentIndex(idx);
+        }
+
+        {
+            QSignalBlocker bf(fgBgCheck);
+            QSignalBlocker bs(steppedCheck);
+            QSignalBlocker bj(jitterSlider);
+            fgBgCheck->setChecked(tpcPaint->useFgBgRamp());
+            steppedCheck->setChecked(tpcPaint->gradientStepped());
+            jitterSlider->setValue(qBound(0, static_cast<int>(qRound(tpcPaint->rampJitter() * 100.0)), 100));
+        }
+        jitterLabel->setText(tr("Jitter: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->rampJitter() * 100.0))));
+        refreshRampPreview();
+    };
+    syncGradientUi();
+
+    connect(srcSolid, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setColorSource(static_cast<int>(TexturePaintController::ColorSolid));
+    });
+    connect(srcGradient, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setColorSource(static_cast<int>(TexturePaintController::ColorGradient));
+    });
+    connect(modeLinear, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientLinear));
+    });
+    connect(modeRadial, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientRadial));
+    });
+    connect(modeAngular, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientAngular));
+    });
+    connect(rampCombo, QOverload<int>::of(&QComboBox::activated), this,
+            [tpcPaint, rampCombo](int index) {
+                if (index >= 0)
+                    tpcPaint->setActiveRampName(rampCombo->itemText(index));
+            });
+    connect(editRampBtn, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->openRampEditor();
+    });
+    connect(fgBgCheck, &QCheckBox::toggled, this, [tpcPaint](bool on) {
+        tpcPaint->setUseFgBgRamp(on);
+    });
+    connect(steppedCheck, &QCheckBox::toggled, this, [tpcPaint](bool on) {
+        tpcPaint->setGradientStepped(on);
+    });
+    connect(jitterSlider, &QSlider::valueChanged, this, [tpcPaint, jitterLabel](int v) {
+        tpcPaint->setRampJitter(v / 100.0);
+        jitterLabel->setText(QObject::tr("Jitter: %1%").arg(v));
+    });
+    connect(tpcPaint, &TexturePaintController::gradientChanged, this, syncGradientUi);
+
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintSettings);
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
 
-    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncRad, syncStr, syncFalloff]() {
+    connect(vertexPaintMenu, &QMenu::aboutToShow, this,
+            [syncRad, syncStr, syncFalloff, syncShape, syncGradientUi]() {
         syncRad();
         syncStr();
         syncFalloff();
+        syncShape();
+        syncGradientUi();
     });
 
     // The brush button is now a TOOL SELECTOR, not the paint-mode
