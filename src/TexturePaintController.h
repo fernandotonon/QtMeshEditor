@@ -503,6 +503,9 @@ private:
     void flushDirtyToOgre();
     /// The synchronous GPU upload. Called from the debounce timer.
     void doFlushDirtyToOgre();
+    /// Point the model's diffuse TUSes at `m_ogreTexture` on the next
+    /// event-loop tick (mat compile/reload must not run mid-stroke).
+    void scheduleRebindToPaintTexture(Ogre::Entity* entity);
 
     /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
     /// previewChanged when the URI actually changed.
@@ -550,6 +553,9 @@ private:
     Ogre::TexturePtr m_originalTexture;
     QString m_originalTextureName;
     bool m_useOriginalTexture = false;
+    /// When true, skip in-place blit into `m_originalTexture` and always
+    /// upload to `m_ogreTexture` (rebind required for the viewport).
+    bool m_forceManualPaintTexture = false;
     bool m_loggedInPlaceBlit = false;
     bool m_rebindScheduled = false;
     /// Debounce flag for the GPU upload. We accumulate dirty pixels

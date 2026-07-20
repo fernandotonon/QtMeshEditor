@@ -217,6 +217,41 @@ bool loadPaintBufferFromDiskPath(TexturePaintBuffer& buffer, const QString& path
     return copyQImageToPaintBuffer(buffer, QImage(path));
 }
 
+bool isPlainUncompressedFormat(Ogre::PixelFormat fmt)
+{
+    return fmt == Ogre::PF_BYTE_RGBA
+        || fmt == Ogre::PF_BYTE_RGB
+        || fmt == Ogre::PF_BYTE_BGRA
+        || fmt == Ogre::PF_BYTE_BGR
+        || fmt == Ogre::PF_A8R8G8B8
+        || fmt == Ogre::PF_R8G8B8A8
+        || fmt == Ogre::PF_A8B8G8R8
+        || fmt == Ogre::PF_X8R8G8B8
+        || fmt == Ogre::PF_R8G8B8;
+}
+
+/// True when we can blit dirty rects straight into the model's bound GPU
+/// texture without rebinding materials.
+bool canWriteOriginalTextureInPlace(const Ogre::TexturePtr& tex,
+                                    int bufferW,
+                                    int bufferH)
+{
+    if (!tex || bufferW <= 0 || bufferH <= 0)
+        return false;
+    try {
+        if (static_cast<int>(tex->getWidth()) != bufferW
+            || static_cast<int>(tex->getHeight()) != bufferH)
+            return false;
+        if (!isPlainUncompressedFormat(tex->getFormat()))
+            return false;
+        if (!tex->getBuffer())
+            return false;
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
 // CPU-side sources first — same order as MaterialEditorQML::previewUrlFromOgreTexture.
 // GPU readback (convertToImage / blitToMemory) is unreliable for imported FBX textures.
 bool loadPaintBufferFromNonGpuSources(TexturePaintBuffer& buffer,
@@ -1209,11 +1244,12 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         m_buffer.resize(res, res);
         m_buffer.clear(Ogre::ColourValue::White);
         m_buffer.clearDirty();
-        // The CPU buffer is a new resolution — it won't match the model's
-        // bound GPU texture. In-place blit with mismatched sizes crashes
-        // some GL/Metal drivers (OOB HardwarePixelBuffer writes).
+        // CPU buffer size won't match the model's bound GPU texture. In-place
+        // blit with mismatched sizes crashes some GL/Metal drivers (OOB
+        // HardwarePixelBuffer writes).
         m_originalTexture.reset();
         m_useOriginalTexture = false;
+        m_forceManualPaintTexture = true;
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Texture paint: starting from blank %1×%1 (existing tex='%2', err='%3')")
                 .arg(res).arg(existingTex).arg(loadError));
@@ -1244,6 +1280,20 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         m_sessionEntity = nullptr;
         emit sessionChanged();
         return false;
+    }
+
+    // Decide up-front whether the viewport can keep sampling the original
+    // texture (in-place GPU writes) or must be rebound to our manual
+    // paint texture. Rebind is scheduled here — before the first stroke —
+    // so pixels uploaded during painting are visible on the model.
+    if (!m_forceManualPaintTexture) {
+        m_forceManualPaintTexture =
+            !canWriteOriginalTextureInPlace(m_originalTexture,
+                                            m_buffer.width(), m_buffer.height());
+    }
+    if (m_forceManualPaintTexture) {
+        m_originalTexture.reset();
+        scheduleRebindToPaintTexture(entity);
     }
 
     SentryReporter::addBreadcrumb("ui.action",
@@ -1318,10 +1368,12 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity,
 void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* entity)
 {
     if (!entity || m_textureName.isEmpty()) return;
-    // Capture the original texture name from the user's active slot
-    // (or the first diffuse-like TUS as fallback).
+    // Use the texture name captured at session-create time — the live
+    // TUS may already point at a prior paint texture if a rebind failed.
     auto* tu = findOrCreateActiveTextureUnit(entity);
-    const std::string originalTexName = tu ? tu->getTextureName() : "";
+    const std::string originalTexName = !m_originalTextureName.isEmpty()
+        ? m_originalTextureName.toStdString()
+        : (tu ? tu->getTextureName() : std::string{});
     const std::string texName = m_textureName.toStdString();
 
     SentryReporter::addBreadcrumb("ui.action",
@@ -1386,6 +1438,28 @@ void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* ent
     }
 }
 
+void TexturePaintController::scheduleRebindToPaintTexture(Ogre::Entity* entity)
+{
+    if (!entity || m_textureName.isEmpty() || !m_ogreTexture)
+        return;
+    if (!m_boundSlots.empty())
+        return;
+    if (m_rebindScheduled)
+        return;
+    m_rebindScheduled = true;
+    QTimer::singleShot(0, this, [this, entity]() {
+        m_rebindScheduled = false;
+        if (m_sessionEntity != entity || !m_boundSlots.empty())
+            return;
+        if (!m_ogreTexture || m_textureName.isEmpty())
+            return;
+        rebindEntityDiffuseToPaintTexture(entity);
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: viewport rebound (%1 TUSes)")
+                .arg(m_boundSlots.size()));
+    });
+}
+
 void TexturePaintController::flushDirtyToOgre()
 {
     const auto& dirty = m_buffer.dirtyRect();
@@ -1398,7 +1472,7 @@ void TexturePaintController::flushDirtyToOgre()
     // no pixels are lost — just batched.
     if (m_gpuFlushScheduled) return;
     m_gpuFlushScheduled = true;
-    QTimer::singleShot(16, this, [this]() {
+    QTimer::singleShot(33, this, [this]() {
         m_gpuFlushScheduled = false;
         if (m_buffer.dirtyRect().empty()) return;
         doFlushDirtyToOgre();
@@ -1413,9 +1487,7 @@ void TexturePaintController::doFlushDirtyToOgre()
     // Preferred path: paint directly INTO the model's original
     // texture. No rebind needed — the existing material binding
     // continues to work, and the paint just modifies pixels in place.
-    // Re-resolve the handle each flush so a reloaded material
-    // doesn't dangle.
-    if (!m_originalTextureName.isEmpty()) {
+    if (!m_forceManualPaintTexture && !m_originalTextureName.isEmpty()) {
         try {
             auto fresh = Ogre::TextureManager::getSingleton().getByName(
                 m_originalTextureName.toStdString(),
@@ -1426,56 +1498,20 @@ void TexturePaintController::doFlushDirtyToOgre()
     // Skip the in-place path once we've rebound the model to the
     // manual paint texture — the original is no longer what the
     // renderer samples, so blitting to it would be invisible.
-    if (m_boundSlots.empty() && m_originalTexture) {
-        try {
-            const int bufW = m_buffer.width();
-            const int bufH = m_buffer.height();
-            const int texW = static_cast<int>(m_originalTexture->getWidth());
-            const int texH = static_cast<int>(m_originalTexture->getHeight());
-            if (bufW <= 0 || bufH <= 0 || texW != bufW || texH != bufH) {
-                SentryReporter::addBreadcrumb("ui.action",
-                    QStringLiteral("Texture paint: in-place skipped — size mismatch "
-                                   "buffer=%1×%2 tex=%3×%4")
-                        .arg(bufW).arg(bufH).arg(texW).arg(texH));
-                m_originalTexture.reset();
-            }
-        } catch (...) {
-            m_originalTexture.reset();
-        }
-    }
-    if (m_boundSlots.empty() && m_originalTexture) {
+    if (!m_forceManualPaintTexture && m_boundSlots.empty() && m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
             if (pixbuf) {
                 const int W = m_buffer.width();
                 const int rectW = dirty.width();
                 const int rectH = dirty.height();
-                // Blit in the texture's NATIVE format. blitFromMemory
-                // does internal conversion if the source PixelBox
-                // format differs, but on some Metal backends the
-                // conversion silently produces no upload — so we
-                // convert our RGBA8 source to the texture's format
-                // up front and submit it raw.
                 const Ogre::PixelFormat dstFmt = m_originalTexture->getFormat();
-                // Only handle plain uncompressed formats in-place.
-                // Compressed formats (DXT/BC) need real CPU encoders
-                // which can crash bulkPixelConversion on Metal.
-                const bool plainFmt =
-                    dstFmt == Ogre::PF_BYTE_RGBA
-                 || dstFmt == Ogre::PF_BYTE_RGB
-                 || dstFmt == Ogre::PF_BYTE_BGRA
-                 || dstFmt == Ogre::PF_BYTE_BGR
-                 || dstFmt == Ogre::PF_A8R8G8B8
-                 || dstFmt == Ogre::PF_R8G8B8A8
-                 || dstFmt == Ogre::PF_A8B8G8R8
-                 || dstFmt == Ogre::PF_X8R8G8B8
-                 || dstFmt == Ogre::PF_R8G8B8;
-                if (!plainFmt) {
+                if (!isPlainUncompressedFormat(dstFmt)) {
                     SentryReporter::addBreadcrumb("ui.action",
                         QStringLiteral("Texture paint: in-place skipped — compressed format %1")
                             .arg(static_cast<int>(dstFmt)));
                     m_originalTexture.reset();
-                    // Fall through to manual-texture path.
+                    m_forceManualPaintTexture = true;
                 } else {
                     std::vector<uint8_t> srcRow(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
                     const auto& src = m_buffer.data();
@@ -1522,56 +1558,57 @@ void TexturePaintController::doFlushDirtyToOgre()
             SentryReporter::addBreadcrumb("ui.action",
                 QStringLiteral("Texture paint: in-place blit FAILED → fallback to manual texture (%1)")
                     .arg(QString::fromStdString(e.getDescription())));
-            // Fall through to manual-texture path. Clear the
-            // original-texture handle so we don't keep trying.
             m_originalTexture.reset();
+            m_forceManualPaintTexture = true;
         } catch (...) {
             m_originalTexture.reset();
+            m_forceManualPaintTexture = true;
         }
     }
 
     if (!m_ogreTexture) return;
 
-    // Fallback path: the model's diffuse TUSes are rebound to our
-    // manual paint texture on first flush. Defer the rebind via a
-    // singleShot timer so material compile/reload doesn't run on
-    // the same call stack as the mouse-move event — that was
-    // racing against the active stroke and crashing.
-    if (m_boundSlots.empty() && m_paintMeshEntity && !m_rebindScheduled) {
-        m_rebindScheduled = true;
-        Ogre::Entity* ent = m_paintMeshEntity;
-        QTimer::singleShot(0, this, [this, ent]() {
-            m_rebindScheduled = false;
-            // The captured Ogre::Entity* could have been destroyed by the
-            // time this fires (entity removed, mesh reimport, selection
-            // change closing the session). Validate it's still both the
-            // active paint target AND a live entity SelectionSet knows
-            // about before dereferencing.
-            if (m_paintMeshEntity != ent || !m_boundSlots.empty()) return;
-            auto* sel = SelectionSet::getSingleton();
-            if (!sel || !sel->contains(ent)) return;
-            rebindEntityDiffuseToPaintTexture(ent);
-        });
-    }
+    // Fallback path: upload into our manual paint texture. Rebind once
+    // (scheduled at session create) so the viewport samples it.
+    if (m_boundSlots.empty() && m_paintMeshEntity)
+        scheduleRebindToPaintTexture(m_paintMeshEntity);
+
     try {
         auto buf = m_ogreTexture->getBuffer();
         if (!buf) return;
         const int W = m_buffer.width();
         const int H = m_buffer.height();
-        // Upload the FULL buffer each flush. Sub-rect blits via
-        // blitFromMemory are unreliable on macOS Metal — sometimes
-        // they don't end up visible. Full-frame upload is heavier
-        // but always lands. (At 1024² that's ~4 MB per stroke; the
-        // debounce on previewDataUri amortises CPU cost separately.)
-        //
-        // Copy m_buffer.data() into a transient std::vector first.
-        // Ogre's Metal backend can queue the blit asynchronously;
-        // pointing the PixelBox at our live buffer caused
-        // use-after-free crashes when the next stroke modified
-        // pixels before the GPU finished reading.
-        std::vector<uint8_t> uploadCopy(m_buffer.data().begin(), m_buffer.data().end());
-        Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, uploadCopy.data());
-        buf->blitFromMemory(pb);
+        const int rectW = dirty.width();
+        const int rectH = dirty.height();
+        const bool partialDirty =
+            rectW > 0 && rectH > 0
+            && static_cast<size_t>(rectW) * static_cast<size_t>(rectH)
+                   < static_cast<size_t>(W) * static_cast<size_t>(H);
+#if defined(Q_OS_MACOS)
+        // Sub-rect blits are unreliable on Metal — upload the full frame.
+        const bool usePartialUpload = false;
+#else
+        const bool usePartialUpload = partialDirty;
+#endif
+        if (usePartialUpload) {
+            std::vector<uint8_t> uploadCopy(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
+            const auto& src = m_buffer.data();
+            for (int row = 0; row < rectH; ++row) {
+                const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
+                                       + static_cast<size_t>(dirty.x0)) * 4u;
+                const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
+                std::memcpy(uploadCopy.data() + dstOff, src.data() + srcOff,
+                            static_cast<size_t>(rectW) * 4u);
+            }
+            Ogre::PixelBox pb(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, uploadCopy.data());
+            Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+            buf->blitFromMemory(pb, dst);
+        } else {
+            // Full-frame upload (macOS Metal, or dirty ≈ whole buffer).
+            std::vector<uint8_t> uploadCopy(m_buffer.data().begin(), m_buffer.data().end());
+            Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, uploadCopy.data());
+            buf->blitFromMemory(pb);
+        }
     } catch (const Ogre::Exception& e) {
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Texture paint: blit failed — %1")
@@ -2356,6 +2393,7 @@ void TexturePaintController::closeSession()
     m_originalTexture.reset();
     m_originalTextureName.clear();
     m_useOriginalTexture = false;
+    m_forceManualPaintTexture = false;
     m_loggedInPlaceBlit = false;
     m_rebindScheduled = false;
     m_gpuFlushScheduled = false;
