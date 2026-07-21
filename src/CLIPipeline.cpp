@@ -2251,7 +2251,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
     QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool facingMode = false;          // #837 harness: report world-space facing
-    bool flipFacingMode = false;      // #837: turn a clip 180° to face the other way
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
@@ -2354,7 +2353,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--facing") { facingMode = true; continue; }
         // #837: turn an existing animation 180° to face the other way (e.g.
         // toward the camera). Standalone: needs --animation, writes to -o.
-        if (arg == "--flip-facing") { flipFacingMode = true; continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -2627,42 +2625,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 .arg(fwd.z >= 0 ? "toward +Z (Mixamo/GLTF default forward)"
                                 : "toward -Z (reversed vs default)"));
         }
-        return 0;
-    }
-
-    // #837 standalone: turn an animation 180° to face the other way.
-    // `qtmesh anim <file> --flip-facing --animation <name> -o out`.
-    if (flipFacingMode) {
-        if (animationFilter.isEmpty()) {
-            err() << "Error: --flip-facing requires --animation <name>." << Qt::endl;
-            return 2;
-        }
-        if (!initOgreHeadless()) return 1;
-        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
-        Ogre::Entity* ent = nullptr;
-        for (auto* e : Manager::getSingleton()->getEntities())
-            if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { ent = e; break; }
-        if (!ent) { err() << "Error: no skinned mesh." << Qt::endl; return 1; }
-        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
-        const std::string an = animationFilter.toStdString();
-        if (!skel->hasAnimation(an)) {
-            err() << "Error: animation '" << animationFilter << "' not found." << Qt::endl;
-            return 1;
-        }
-        if (!AnimationMerger::flipAnimationFacing(skel.get(), an)) {
-            err() << "Error: flip-facing failed (no root track)." << Qt::endl;
-            return 1;
-        }
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-                                      QStringLiteral("flip_facing"));
-        const QString out = outputPath.isEmpty() ? filePath : outputPath;
-        auto* node = ent->getParentSceneNode();
-        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
-                                           formatForExtension(out)) != 0) {
-            err() << "Error: export failed." << Qt::endl; return 1;
-        }
-        cliWrite(QString("Flipped facing of '%1' → %2\n")
-                     .arg(animationFilter).arg(QFileInfo(out).fileName()));
         return 0;
     }
 

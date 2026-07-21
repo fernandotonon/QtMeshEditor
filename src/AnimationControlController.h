@@ -366,14 +366,6 @@ public:
     Q_INVOKABLE double currentArmSpace(const QString& animName,
                                        const QString& entityName = QString());
 
-    /// Turn `animName` 180° about the vertical axis (#837): rewrites only the
-    /// root/hips track so the whole body faces the other way while the pose is
-    /// preserved exactly. Use when a generated clip walks toward the camera's
-    /// back. Applying twice restores the original facing. Returns true on
-    /// success; refreshes the viewport (re-poses even when paused).
-    Q_INVOKABLE bool flipFacing(const QString& animName,
-                                const QString& entityName = QString());
-
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope

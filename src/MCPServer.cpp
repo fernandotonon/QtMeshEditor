@@ -656,7 +656,6 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
-        {QStringLiteral("flip_facing"), &MCPServer::toolFlipFacing},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
@@ -851,7 +850,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
         QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"), QStringLiteral("motion_in_between"), QStringLiteral("generate_motion"),
-        QStringLiteral("adjust_arm_space"), QStringLiteral("flip_facing"), QStringLiteral("segment_mesh"), QStringLiteral("generate_mesh_from_image"),
+        QStringLiteral("adjust_arm_space"), QStringLiteral("segment_mesh"), QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"), QStringLiteral("open_scene"), QStringLiteral("generate_lods"),
         QStringLiteral("generate_auto_lods"), QStringLiteral("remove_lods"), QStringLiteral("decimate_mesh"),
         QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
@@ -4391,72 +4390,6 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
         content["ok"] = true;
         content["animation"] = animName;
         content["arm_space"] = degrees;
-        content["entity"] = QString::fromStdString(entity->getName());
-        if (!outPath.isEmpty()) content["exported"] = outPath;
-        return makeSuccessResult(
-            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error: %1").arg(e.what()));
-    }
-}
-
-QJsonObject MCPServer::toolFlipFacing(const QJsonObject &args)
-{
-    try {
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-            QStringLiteral("MCP flip_facing"));
-
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) return makeErrorResult("Error: Manager not available");
-
-        const QString animName = args.value("animation_name").toString();
-        if (animName.isEmpty())
-            return makeErrorResult("Error: animation_name is required.");
-
-        const QString entityName = args.value("entity_name").toString();
-        Ogre::Entity* entity = nullptr;
-        for (auto* ent : mgr->getEntities()) {
-            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton())
-                continue;
-            if (entityName.isEmpty()
-                || QString::fromStdString(ent->getName()) == entityName) {
-                entity = ent; break;
-            }
-        }
-        if (!entity)
-            return makeErrorResult(entityName.isEmpty()
-                ? QString("Error: no skinned mesh found to flip.")
-                : QString("Error: skinned entity '%1' not found.").arg(entityName));
-
-        // Edit the mesh's MASTER skeleton (same rationale as adjust_arm_space).
-        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
-        const std::string an = animName.toStdString();
-        if (!skel || !skel->hasAnimation(an))
-            return makeErrorResult(
-                QString("Error: animation '%1' not found on entity.").arg(animName));
-
-        if (!AnimationMerger::flipAnimationFacing(skel.get(), an))
-            return makeErrorResult(
-                "Error: flip-facing failed (no root track on this rig).");
-
-        if (auto* acc = AnimationControlController::instance())
-            acc->notifyExternalAnimationEdit();
-
-        const QString outPath = args.value("output_path").toString();
-        if (!outPath.isEmpty()) {
-            auto* node = entity->getParentSceneNode();
-            if (MeshImporterExporter::exporter(
-                    node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
-                return makeErrorResult(
-                    QString("Error: flipped facing but export to %1 failed")
-                        .arg(outPath));
-        }
-
-        QJsonObject content;
-        content["ok"] = true;
-        content["animation"] = animName;
         content["entity"] = QString::fromStdString(entity->getName());
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
@@ -8509,24 +8442,6 @@ QJsonArray MCPServer::buildToolsList()
             "with an analytic two-bone hip-knee-foot IK, blending in/out at span edges so knees don't pop. "
             "Fixes foot skating/floating on retargeted clips whose rig proportions differ from the source. "
             "Only the thigh/shin/foot keyframes are rewritten; effectively idempotent.",
-            props,
-            QJsonArray{"animation_name"}
-        );
-    }
-
-    // flip_facing
-    {
-        QJsonObject props;
-        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to turn around, e.g. \"generated_walk\"."}};
-        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity. If omitted, uses the first skinned entity."}};
-        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the flipped animation. If omitted, applied in-session only."}};
-        appendTool(
-            "flip_facing",
-            "Turn an animation 180° about the vertical axis (#837): rotates only the root (hips) track, so the "
-            "whole body faces the opposite direction while the pose (stride, arm swing, posture) is preserved "
-            "exactly. Use when a generated/retargeted clip walks or runs toward the camera's back (clips face +Z "
-            "by the Mixamo/GLTF convention, which is away from a default camera looking toward +Z). Applying twice "
-            "restores the original facing.",
             props,
             QJsonArray{"animation_name"}
         );
