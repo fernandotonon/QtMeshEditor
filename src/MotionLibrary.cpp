@@ -40,6 +40,18 @@ const Syn kSynonyms[] = {
     {"sitting", "sit"}, {"seat", "sit"},
     {"throwing", "throw"}, {"toss", "throw"}, {"pitch", "throw"},
     {"box", "boxing"}, {"fight", "boxing"}, {"spar", "boxing"},
+    // #837 v5 corpus actions
+    {"die", "death"}, {"dying", "death"}, {"killed", "death"}, {"dead", "death"},
+    {"attacking", "attack"}, {"swing", "attack"}, {"slash", "attack"},
+    {"crawling", "crawl"},
+    {"rolling", "roll"}, {"dodge", "roll"},
+    {"swimming", "swim"},
+    {"praying", "pray"}, {"kneel", "pray"},
+    {"grab", "pickup"}, {"pick", "pickup"}, {"lift", "pickup"},
+    {"handshake", "shake"}, {"shakehand", "shake"},
+    {"sing", "sing"}, {"singing", "sing"},
+    {"fly", "fly"}, {"flying", "fly"},
+    {"strafe", "strafeleft"},
 };
 } // namespace
 

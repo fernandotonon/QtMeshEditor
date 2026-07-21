@@ -1,0 +1,148 @@
+# Third-Party Motion Corpus Attribution
+
+The text-to-motion template library (`motion-library.json`, #837/#838) is derived from a CC0/CC-BY corpus scraped by `scripts/scrape-motion-corpus.py` (Sketchfab + OpenGameArt + Quaternius CC0 packs). CC0 sources need no credit; the CC-BY sources below MUST be credited wherever the library or anything derived from it (trained weights included) is redistributed. Regenerate with `scripts/build-motion-library-v5.py`; this file mirrors the corpus `ATTRIBUTION.md` shipped alongside the library on Hugging Face.
+
+
+This corpus (and anything derived from it: motion libraries, trained weights)
+includes CC-BY licensed work requiring the following credits:
+
+- ""GIGI"- The Little Female Fox Warrior (Animated)" by Realidad Aumentada Empezando Desde Cero (https://sketchfab.com/3d-models/none-db51a4356af94bddba9a39a44f21e56e) — CC-BY-4.0
+- ""KAI" - The Little Fox Warrior (Animated)" by Realidad Aumentada Empezando Desde Cero (https://sketchfab.com/3d-models/none-aa56e447b578470b8d6b1b9587fd29ac) — CC-BY-4.0
+- ".Fuse Orion Male Clothes 1" by Leonardo Carvalho (https://sketchfab.com/3d-models/none-829016745f4c430ea7597d20d3b1fda6) — CC-BY-4.0
+- ".Fuse Orion Male Clothes 2" by Leonardo Carvalho (https://sketchfab.com/3d-models/none-8dc8884c98c444dcaf3cb171c70d27a6) — CC-BY-4.0
+- "2PAC ANIMATED" by Shockwave7 (https://sketchfab.com/3d-models/none-34929ebd065145209f4ee1f0863aecf6) — CC-BY-4.0
+- "2PAC ANIMATED" by Shockwave7 (https://sketchfab.com/3d-models/none-34929ebd065145209f4ee1f0863aecf6) — CC-BY-4.0
+- "3D Chibi Animations - Idle and Walk" by Chad Wolfe (https://opengameart.org/content/3d-chibi-animations-idle-and-walk) — CC-BY-3.0
+- "614230025 Ortiz Hurricane Kick" by 614230025 (https://sketchfab.com/3d-models/none-763e00939f6b4c058ed8b520d108926c) — CC-BY-4.0
+- "614230026 Y-bot Hook" by 614230026 (https://sketchfab.com/3d-models/none-bb7d9b9ed7fe42f19f9e489c18b6323f) — CC-BY-4.0
+- "614230027 Castle Guad02 Boxing Fbx" by 614230027 (https://sketchfab.com/3d-models/none-65fc6471ad094a55a5c503c64ad886b7) — CC-BY-4.0
+- "634230008 low polygon human (Kick to the groin)" by 634230008 (https://sketchfab.com/3d-models/none-e85f6622f1c24ab6acee0b3c9afb82c0) — CC-BY-4.0
+- "644230046 - CHAD - Kicking" by 644230046 (https://sketchfab.com/3d-models/none-e3d1cdab0d4e405183cfd21d623ec4b7) — CC-BY-4.0
+- "Animated Astronaut Character in Space Suit Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-8fe5c8d3365e4d87bb7bc253d53a64e1) — CC-BY-4.0
+- "Animated Astronaut Character in Space Suit Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-8fe5c8d3365e4d87bb7bc253d53a64e1) — CC-BY-4.0
+- "Animated Astronaut Character in Space Suit Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-8fe5c8d3365e4d87bb7bc253d53a64e1) — CC-BY-4.0
+- "Animated Floating Astronaut in Space Suit Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-e2c4b146e58141e4b87917456a9970b1) — CC-BY-4.0
+- "Animated humanoid robot" by pinguinoconpulgares (https://sketchfab.com/3d-models/none-8993602ca91f4c499e690e5dae19f978) — CC-BY-4.0
+- "Animated Kicked Groin Construction Worker" by LasquetiSpice (https://sketchfab.com/3d-models/none-f645e75088f4482a82b888e17175d335) — CC-BY-4.0
+- "Animated Old Man Character" by Théo Lerbeil (https://sketchfab.com/3d-models/none-3f74a8547aaf422686bb28768f7ce27c) — CC-BY-4.0
+- "Animated Tyrannosaurus Rex Dinosaur Running Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-38007d947ae74dea83988cb0b08ee053) — CC-BY-4.0
+- "Animated Tyrannosaurus Rex Dinosaur Running Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-38007d947ae74dea83988cb0b08ee053) — CC-BY-4.0
+- "Animated Tyrannosaurus Rex Dinosaur Running Loop" by LasquetiSpice (https://sketchfab.com/3d-models/none-38007d947ae74dea83988cb0b08ee053) — CC-BY-4.0
+- "Astronaut redux (animated)" by Jungle Jim (https://sketchfab.com/3d-models/none-4680fc69d16147199f7a538ef0905903) — CC-BY-4.0
+- "Autumn | Original work" by Partaevil (https://sketchfab.com/3d-models/none-c89325dde9b14ce4b5c9001504b92085) — CC-BY-4.0
+- "Baby Cactus!" by pixipui (https://sketchfab.com/3d-models/none-2a403b03dbf64f1fb34cf35a295ba8b6) — CC-BY-4.0
+- "Background People for Blender promo | Animated" by Jungle Jim (https://sketchfab.com/3d-models/none-ee74d352e49347658dd8675ffebf13eb) — CC-BY-4.0
+- "BadAssJailer" by RG3D (https://sketchfab.com/3d-models/none-c076ae16cf17416c93d8371c84c50bbf) — CC-BY-4.0
+- "Basic Thick Stick Rig" by retrosleep (https://sketchfab.com/3d-models/none-de876a03851147b6ab44ba2a5811d744) — CC-BY-4.0
+- "Basic&Simple Character Animations" by HolyShine (https://sketchfab.com/3d-models/none-dcb9ea2d0e574b08be25b78c3cd721e1) — CC-BY-4.0
+- "Baylie" by Aranel1500 (https://sketchfab.com/3d-models/none-03d10c0ce2c54a0689884b73afc3db12) — CC-BY-4.0
+- "Blu (Rio) (Animations)" by Guilherme Navarro (https://sketchfab.com/3d-models/none-a6cb84cb28d74cb4a863809fa15d8d02) — CC-BY-4.0
+- "Boneca Ambalabu 3D model Rigged Free download" by Alex CGW (https://sketchfab.com/3d-models/none-75ce268bc9194a29947f6d8f1e103d84) — CC-BY-4.0
+- "Cartoon Horse with animations" by Jungle Jim (https://sketchfab.com/3d-models/none-1210663c398745cb9898e7d66fa51500) — CC-BY-4.0
+- "Cartoon Jump (Anticipation)" by Rukh3D (https://sketchfab.com/3d-models/none-a62e3527988a4906804da72dd8085016) — CC-BY-4.0
+- "Casual Man Character" by Bogdan Strielecki (https://sketchfab.com/3d-models/none-05d9dd5bdddd4157bd46dc179781ee6e) — CC-BY-4.0
+- "Catfish Mech low-poly (animated)" by Jungle Jim (https://sketchfab.com/3d-models/none-ad9bc16464744935b1ac9b7768a17474) — CC-BY-4.0
+- "Catfish Mech low-poly (animated)" by Jungle Jim (https://sketchfab.com/3d-models/none-ad9bc16464744935b1ac9b7768a17474) — CC-BY-4.0
+- "Character animated" by sikoro (https://sketchfab.com/3d-models/none-5db0241c92644179b33b87a0eaf61f63) — CC-BY-4.0
+- "Character Teen Black 2k" by samsikua (https://sketchfab.com/3d-models/none-058c9393f51648a0861c732d32a90065) — CC-BY-4.0
+- "Cool Broccoli" by FeatheredSnek (https://sketchfab.com/3d-models/none-5744520600de4934b44cc3e5005da2c1) — CC-BY-4.0
+- "Corporate Patrol Droid" by gueriero (https://sketchfab.com/3d-models/none-9d943813e89d433cbc68b3e8aaf114c7) — CC-BY-4.0
+- "Cosmic Garou - One Punch Man" by DarienToad (https://sketchfab.com/3d-models/none-8ade32faee7a4b358f842e42e1ec27d5) — CC-BY-4.0
+- "Cultist armed" by DJMaesen (https://sketchfab.com/3d-models/none-63af0c04ad5d4d6180c15dd0c09d6a3a) — CC-BY-4.0
+- "Dance Moves ue4 female" by B._.render (https://sketchfab.com/3d-models/none-6448ff6cff9e4054ab26353cf227d8aa) — CC-BY-4.0
+- "Dance | Japanese Samurai Ninja Hat" by YadroGames (https://sketchfab.com/3d-models/none-8560f555469a46e085952a890ce9785b) — CC-BY-4.0
+- "DanMachi- ダンまち - Hestia" by Kaijin (https://sketchfab.com/3d-models/none-006a9e4038c54028898e44ed5bc51447) — CC-BY-4.0
+- "Destiny 2 Character Bust" by Daniel Cardona (https://sketchfab.com/3d-models/none-a56b08cf4d6948bdbdd1f7cd7a12d98a) — CC-BY-4.0
+- "Enderman" by TheUnknownSpecimen (https://sketchfab.com/3d-models/none-3a46af7ab0264717b6d8b0fd56435c08) — CC-BY-4.0
+- "European Dragon" by Regina Cachoa (https://sketchfab.com/3d-models/none-82f393a2e6c048ad80c171ce3b3a7b87) — CC-BY-4.0
+- "European Dragon" by Regina Cachoa (https://sketchfab.com/3d-models/none-82f393a2e6c048ad80c171ce3b3a7b87) — CC-BY-4.0
+- "Female Sitting Down Animation UE4 rig" by B._.render (https://sketchfab.com/3d-models/none-6c244f030787482290268dfbbfda77ab) — CC-BY-4.0
+- "Fred, the middle ages middle-aged man" by Vaporworks (https://sketchfab.com/3d-models/none-5e621480914a48aaa7e32b803ebc859e) — CC-BY-4.0
+- "Free Animated Boss Character" by GameAssetsFin (https://sketchfab.com/3d-models/none-f62b643bd7e64b3b8700bf73e2e44c0c) — CC-BY-4.0
+- "Free Game Character - Ancient" by Kaan Tezcan (https://sketchfab.com/3d-models/none-19e18c8e8d5941deb3f9dd0a2a349b56) — CC-BY-4.0
+- "Free Mixamo retextured Model" by JonnyMANSON (https://sketchfab.com/3d-models/none-62990b050faf48dd8590d5d15872857c) — CC-BY-4.0
+- "Free Shar Pei Animated Dog" by Artsiom Savelyeu (https://sketchfab.com/3d-models/none-ed151fd59a894b3290d9eee3f716f0bf) — CC-BY-4.0
+- "Free Toon Panda Character - Detective" by GameAssetsFin (https://sketchfab.com/3d-models/none-b7008e99dbec4f43af2f0c9c119bf5d2) — CC-BY-4.0
+- "FSB Operator" by SpatialNeglect (https://sketchfab.com/3d-models/none-43a561e941704eefb1ab0614be4f0049) — CC-BY-4.0
+- "Gabi (Rio) (Rig Animations)" by Guilherme Navarro (https://sketchfab.com/3d-models/none-af54429adb5a4173bf25da593f70f82f) — CC-BY-4.0
+- "Girl with clothes. Worker set" by cattleya (https://sketchfab.com/3d-models/none-4cf10e2dde6d4b12b6dccd25a4cf3b77) — CC-BY-4.0
+- "Goblin Animations" by codywellman (https://sketchfab.com/3d-models/none-b9705b05dd6c47b29ec943bc096cbf3a) — CC-BY-4.0
+- "Green Alien" by Bogdan Strielecki (https://sketchfab.com/3d-models/none-9096e628a04242708126cf7b7c8008a1) — CC-BY-4.0
+- "Gynoid 1000 Series" by Loves_Art (https://sketchfab.com/3d-models/none-69fe1348d12c4338b2d32b7f3f3393d3) — CC-BY-4.0
+- "Gynoid 2000 Series" by Loves_Art (https://sketchfab.com/3d-models/none-56993f528d7041f9b734c0221f5dffe0) — CC-BY-4.0
+- "Indian Man in suit" by Nodeaxis Interactive (https://sketchfab.com/3d-models/none-985dd9756d89464b9380414b5b12d8aa) — CC-BY-4.0
+- "Kangaroo Character Assignment" by acdiorr (https://sketchfab.com/3d-models/none-7ea774fb19184aa8a6f9b7f9a41262d4) — CC-BY-4.0
+- "Kip Ridel - Sitting Idle" by pengudeus (https://sketchfab.com/3d-models/none-01096930a70f4a3aaf74864e4d423d3a) — CC-BY-4.0
+- "Krystal - Assault : "Kick"" by Doğancan ÖZGÖKÇELER (https://sketchfab.com/3d-models/none-fb4d36c720694d1080dcc974da0bf9ca) — CC-BY-4.0
+- "Low Poly Woman or Humanoid A.I." by Juri Knauth (https://sketchfab.com/3d-models/none-73bb5a356a0e493cbe0ce58da8a98807) — CC-BY-4.0
+- "LowPoly Person Boxing" by Nimmerschnell (https://sketchfab.com/3d-models/none-d6e40d149e48497ea61b0b8dc262aeb9) — CC-BY-4.0
+- "LowPoly Person Boxing" by Nimmerschnell (https://sketchfab.com/3d-models/none-d6e40d149e48497ea61b0b8dc262aeb9) — CC-BY-4.0
+- "Lowpoly Toon Characters (Free Demo + Animations)" by joaobaltieri (https://sketchfab.com/3d-models/none-f774333ab1b6400288a069b12d582555) — CC-BY-4.0
+- "Lowpoly Toon Characters (Free Demo + Animations)" by joaobaltieri (https://sketchfab.com/3d-models/none-f774333ab1b6400288a069b12d582555) — CC-BY-4.0
+- "Medieval Knight | Sculpture | Game ready" by by__Rx (https://sketchfab.com/3d-models/none-6cdd055b4afa41eb9360dbbfe75c7f10) — CC-BY-4.0
+- "Medieval Knight | Sculpture | Game ready" by by__Rx (https://sketchfab.com/3d-models/none-6cdd055b4afa41eb9360dbbfe75c7f10) — CC-BY-4.0
+- "Mei" by cgart.com (https://sketchfab.com/3d-models/none-5478ddd14bf044e59e02bda57ec46edb) — CC-BY-4.0
+- "Miku - Dance animation" by Falah3D (https://sketchfab.com/3d-models/none-6838bd798a9b4121bfe7d88fda4f2096) — CC-BY-4.0
+- "Mini Chibi Kid (Free Demo)" by joaobaltieri (https://sketchfab.com/3d-models/none-6feb5bd7ade54b5fac25a0e1e5fbe729) — CC-BY-4.0
+- "Mini Simple Character (Free Demo + Animations)" by joaobaltieri (https://sketchfab.com/3d-models/none-ffcb3490d35148a5951d3b32d1e5a7cb) — CC-BY-4.0
+- "Mini Simple Character (Free Demo + Animations)" by joaobaltieri (https://sketchfab.com/3d-models/none-ffcb3490d35148a5951d3b32d1e5a7cb) — CC-BY-4.0
+- "Mini Simple Character (Free Demo + Animations)" by joaobaltieri (https://sketchfab.com/3d-models/none-ffcb3490d35148a5951d3b32d1e5a7cb) — CC-BY-4.0
+- "Mini Simple Characters | Skeleton (Free Demo)" by joaobaltieri (https://sketchfab.com/3d-models/none-915225c38cef4352ad463f1061b6cad6) — CC-BY-4.0
+- "Mini Simple Characters | Skeleton (Free Demo)" by joaobaltieri (https://sketchfab.com/3d-models/none-915225c38cef4352ad463f1061b6cad6) — CC-BY-4.0
+- "Mini Simple Characters | Skeleton (Free Demo)" by joaobaltieri (https://sketchfab.com/3d-models/none-915225c38cef4352ad463f1061b6cad6) — CC-BY-4.0
+- "Minotaur Berserker - Free Game-Ready Character" by Yury Misiyuk (https://sketchfab.com/3d-models/none-42da47ae59574ed5a6b86b49734294cc) — CC-BY-4.0
+- "MMA KICK" by glooriashanda (https://sketchfab.com/3d-models/none-e8373afef8464ee49ea8ace7b14a4260) — CC-BY-4.0
+- "Monkey D. Luffy" by nitwit.friends (https://sketchfab.com/3d-models/none-3d9fb8bd86854aa69ee6f69fcbeaca51) — CC-BY-4.0
+- "Monkey D. Luffy" by nitwit.friends (https://sketchfab.com/3d-models/none-3d9fb8bd86854aa69ee6f69fcbeaca51) — CC-BY-4.0
+- "Mountain Climber" by Charles Wooll (https://sketchfab.com/3d-models/none-4a4366bb54fa41a192486b7b6e1a0218) — CC-BY-4.0
+- "Mr Sexy Man (Fighter with 13 Animations)" by Jungle Jim (https://sketchfab.com/3d-models/none-127cc242790c422fb9599f774b1c9642) — CC-BY-4.0
+- "Mr Sexy Man (Fighter with 13 Animations)" by Jungle Jim (https://sketchfab.com/3d-models/none-127cc242790c422fb9599f774b1c9642) — CC-BY-4.0
+- "Mutant Grunt" by Luka.Aleksic (https://sketchfab.com/3d-models/none-532d7a02a5e24248831871ea42549a80) — CC-BY-4.0
+- "Nathan Animated 003 - Walking 3D Man" by Renderpeople (https://sketchfab.com/3d-models/none-143a2b1ea5eb4385ae90a73657aca3bc) — CC-BY-4.0
+- "Paperbox Guy - Free 3D Character Model (Game)" by Uniday Studio (https://sketchfab.com/3d-models/none-7645c2b7679b4ed7aabf9eae41d3bdbf) — CC-BY-4.0
+- "Parameswara Chronicles: Arab Trader Drop Kick" by Dr Helmi Norman (https://sketchfab.com/3d-models/none-d1ff2c7b2ef6438d8add808cebe11c8f) — CC-BY-4.0
+- "Parameswara Chronicles: Sorcerer Idle" by Dr Helmi Norman (https://sketchfab.com/3d-models/none-b3192340866b49f9904ce88af444b49d) — CC-BY-4.0
+- "Pearl Krabs" by hodaart (https://sketchfab.com/3d-models/none-c47bff1c46204c76ad31292d430a8f60) — CC-BY-4.0
+- "pere noel type3" by jeanpierre3d (https://sketchfab.com/3d-models/none-48e24488c83f4f2eb26cb84a2af42013) — CC-BY-4.0
+- "Pilot Avatar" by 3DRaven (https://sketchfab.com/3d-models/none-7949d8eb4d594f5ea4f524e0197a012b) — CC-BY-4.0
+- "Player Anatomy & player bowing" by Ivanprocookie (https://sketchfab.com/3d-models/none-0495b95578cc4a6b8e50299ff5d16619) — CC-BY-4.0
+- "Prowler Dragon Variant Rig" by DM-913 (https://sketchfab.com/3d-models/none-7ee71aaf323d426bbbdf28d73d55bbd9) — CC-BY-4.0
+- "Punch Animation" by DFLEX (https://sketchfab.com/3d-models/none-045b22e7c1c249a4acd58f14d63977f3) — CC-BY-4.0
+- "Rainbow Butterfly" by March Gutman (https://sketchfab.com/3d-models/none-42cf06f571cb4434a212eab3768024de) — CC-BY-4.0
+- "Red Riding Hood" by iamjohnhult (https://sketchfab.com/3d-models/none-9424c4ce7989422f937eae09c2230f3e) — CC-BY-4.0
+- "Robot Animation" by PlasmaDiffusion (https://sketchfab.com/3d-models/none-af74b32b2d1048bda447f76a5e9c5714) — CC-BY-4.0
+- "Robot walk animation" by AntijnvanderGun (https://sketchfab.com/3d-models/none-40e2de1d942f43eca60e2344c5e91d12) — CC-BY-4.0
+- "Rocky Beyond - or from the Future" by Adokin VIAR (https://sketchfab.com/3d-models/none-9ab2844e3b8a42eb9da819b665faeda1) — CC-BY-4.0
+- "S.W.A.T. Operator" by SpatialNeglect (https://sketchfab.com/3d-models/none-9e82fabf26194896b5ad4a364d864eab) — CC-BY-4.0
+- "SCI-FI SuperSoldier - Game-ready [ANIMATED]" by SihaGames (https://sketchfab.com/3d-models/none-09e0bd9c9715463584cd847d9b30a140) — CC-BY-4.0
+- "Security Guard – Rigged 3D Model" by Q.SARDOR (https://sketchfab.com/3d-models/none-1e3307732bbf4453b30f021bfec5bcaf) — CC-BY-4.0
+- "Shadow Boxing girl" by tariktoon (https://sketchfab.com/3d-models/none-1d47f1eca6bb4305a825aa43f775bb38) — CC-BY-4.0
+- "Silver Soldier (Animated)" by Jungle Jim (https://sketchfab.com/3d-models/none-a8f0d843735047b2999fbe4a9d7a1245) — CC-BY-4.0
+- "Sir Foxen" by Thomas (https://sketchfab.com/3d-models/none-91858bb7440745e79624e956049bb639) — CC-BY-4.0
+- "Skeleton Lord" by DJMaesen (https://sketchfab.com/3d-models/none-a3f7b44275cf4c489ad62c535268ac16) — CC-BY-4.0
+- "Slow Dance Female Human Character" by LasquetiSpice (https://sketchfab.com/3d-models/none-29c2259b42084585a5dae869cb768fd0) — CC-BY-4.0
+- "Snake's Tamer (Sitting animation)" by adrianadesp (https://sketchfab.com/3d-models/none-2ba4a1d9cdd84748beb5d51eac3623a4) — CC-BY-4.0
+- "Sonic the Hedgehog" by Sonic the Hedgehog Fan # 9,945,677 (https://sketchfab.com/3d-models/none-54c954f265d94925878bd023629236f0) — CC-BY-4.0
+- "Sophia Animated 003 - Animated 3D Woman" by Renderpeople (https://sketchfab.com/3d-models/none-dc448c3be0e74f96a55fb475a13433cf) — CC-BY-4.0
+- "space survivor" by s.probka (https://sketchfab.com/3d-models/none-cd2576b76a0d4ff5a33e0806c25b86c8) — CC-BY-4.0
+- "Spartan Armour MKV - Halo Reach" by McCarthy3D (https://sketchfab.com/3d-models/none-57070b2fd9ff472c8988e76d8c5cbe66) — CC-BY-4.0
+- "Spider Slam II [Possusota]" by Jorma Rysky (https://sketchfab.com/3d-models/none-b2cc6b068d114c3392a57c63f0830957) — CC-BY-4.0
+- "Spider-Man 2 Advanced Suit 2.0 PS5" by jerrylxia (https://sketchfab.com/3d-models/none-90907e9f6ad04e299239f306d22848f8) — CC-BY-4.0
+- "Spider-Man 2 Symbiote Suit (PS5)" by jerrylxia (https://sketchfab.com/3d-models/none-0845c06a538746c8a8111b241575bd9d) — CC-BY-4.0
+- "Spider-Man 2 Symbiote Suit (PS5)" by jerrylxia (https://sketchfab.com/3d-models/none-0845c06a538746c8a8111b241575bd9d) — CC-BY-4.0
+- "SpongeBob Fish - Incidental 90" by hodaart (https://sketchfab.com/3d-models/none-1bb8ba21007949be9cfac235082bc7e3) — CC-BY-4.0
+- "SpongeBob Male Fish" by hodaart (https://sketchfab.com/3d-models/none-d2d0b64891ba4f2da3561300f3d6356e) — CC-BY-4.0
+- "Square Head Character (Free Demo)" by joaobaltieri (https://sketchfab.com/3d-models/none-2b56f800db6e437b80d2f5cfcc16885c) — CC-BY-4.0
+- "Steven Universe: The Space Race" by ASideOfChidori (https://sketchfab.com/3d-models/none-f676c7f92fb04b6596d60977e7ace040) — CC-BY-4.0
+- "Strong Security - Boxing" by Instinto Ideal Studio (https://sketchfab.com/3d-models/none-df05380e99c941f690db62c81eef0b46) — CC-BY-4.0
+- "Stylized Bengal Tiger with 4 animations" by Jungle Jim (https://sketchfab.com/3d-models/none-d87e750f18aa416dbccdd5ca7b81f751) — CC-BY-4.0
+- "Stylized Dog" by Sod's Low (https://sketchfab.com/3d-models/none-f8197b0813aa4d9cacb7c3939459950b) — CC-BY-4.0
+- "Suavio (animated character)" by Jungle Jim (https://sketchfab.com/3d-models/none-7bb4d68c63714217a718b64306790193) — CC-BY-4.0
+- "Super Drink Bros Jug & Mug w/ Animation" by Dosan96 (https://sketchfab.com/3d-models/none-5b06f485a2774da8bdc25921f1111924) — CC-BY-4.0
+- "Super Drink Bros Jug & Mug w/ Animation" by Dosan96 (https://sketchfab.com/3d-models/none-5b06f485a2774da8bdc25921f1111924) — CC-BY-4.0
+- "Tired Caracter Animation" by Charlatan (https://sketchfab.com/3d-models/none-5d60ee3573b2439887b9865ae2e38414) — CC-BY-4.0
+- "Topology Practice: (ft. JoseDiaz)" by noahm1216 (https://sketchfab.com/3d-models/none-6752fe49b0914f3db3120252ac12f965) — CC-BY-4.0
+- "TV_Family" by SamThePie (https://sketchfab.com/3d-models/none-fa4daf46d16a484f83dc3673413d293e) — CC-BY-4.0
+- "Walking Robot Guy - Blockbench Animation" by ArtsByKev (https://sketchfab.com/3d-models/none-7190ff66cb3d4e729a2ab95aeb9e797f) — CC-BY-4.0
+- "Water Dancer" by Pavel Shabanov (https://sketchfab.com/3d-models/none-cb8843e12f85474687cd51cbf3f352a5) — CC-BY-4.0
+- "zombie monster slasher necromorph" by wojciechmiedziocha (https://sketchfab.com/3d-models/none-d2f9be4f379a410f8c88745921bde6a0) — CC-BY-4.0
