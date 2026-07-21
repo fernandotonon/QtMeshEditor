@@ -1006,6 +1006,15 @@ jobs:
       run: |
         npm install -g sonar-scanner
 
+    # SonarQube Cloud dropped Java 17 (the runner default) — the scanner now
+    # aborts with "Please upgrade to Java 21 or later". setup-java puts JDK 21
+    # on PATH + JAVA_HOME so the npm sonar-scanner wrapper runs under it.
+    - name: Set up Java 21 for sonar-scanner
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+
     - name: Setup ccache
       # Cache compiler outputs across CI runs so the test build (the
       # slowest step in this job, dominated by ~500 .cpp compiles)
