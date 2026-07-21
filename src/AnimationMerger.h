@@ -202,15 +202,7 @@ public:
         // them collapses real motion (measured: mouse elbow 180°→124°, total
         // parity 5.1°→3.1° with caps off). So default = relaxed; the model
         // path passes modelClip=true to re-enable the tight caps.
-        bool modelClip = false,
-        // #837: text-to-motion clips face +Z (Mixamo/GLTF forward), which is
-        // AWAY from a default viewport camera looking toward +Z, so they read
-        // as "facing backward". When true, flip the finished clip 180° so it
-        // faces the camera out of the box (the two real generate call sites
-        // pass true; the parity harness + other callers leave it false so the
-        // raw retarget is measured/used unturned). The per-clip ⟳ button
-        // (flipAnimationFacing is self-inverse) still lets the user re-flip.
-        bool faceCamera = false);
+        bool modelClip = false);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,

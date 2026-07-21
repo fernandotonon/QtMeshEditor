@@ -1979,8 +1979,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
-                                                      clipSource == QStringLiteral("model"),
-                                                      /*faceCamera=*/true);
+                                                      clipSource == QStringLiteral("model"));
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

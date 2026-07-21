@@ -2159,8 +2159,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 /*refineWithModel=*/false,
                                                 /*refineStride=*/8, yaw180,
                                                 clipDirs,
-                                                clipSource == QStringLiteral("model"),
-                                                /*faceCamera=*/true);
+                                                clipSource == QStringLiteral("model"));
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }

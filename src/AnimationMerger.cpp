@@ -1835,8 +1835,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     int refineStride,
     bool yaw180,
     const std::vector<std::array<float, 3>>& clipRestDir,
-    bool modelClip,
-    bool faceCamera)
+    bool modelClip)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -2213,11 +2212,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     }
                 }
             }
-            // #837: face the camera when requested (see the note at the tail
-            // of this function). This world-frame path returns early, so flip
-            // here too.
-            if (faceCamera)
-                flipAnimationFacing(skel, animName);
             res.ok = true;
             res.canonicalJoints = distinct;
             res.frames = frames;
@@ -2537,17 +2531,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         res.refined = fill.ok;
         res.usedModel = fill.ok && fill.usedModel;
     }
-
-    // #837: text-to-motion clips face +Z (the Mixamo/GLTF forward convention),
-    // which is AWAY from a default viewport camera looking toward +Z — so
-    // generated walk/run/sit/etc. all read as "facing backward". When the
-    // caller asks (the two real generate sites), turn the finished clip 180°
-    // so it faces the camera out of the box. This is a toggle: the per-clip ⟳
-    // button (flipAnimationFacing is self-inverse) lets the user flip it back.
-    // Other callers (parity harness, raw-retarget consumers, unit tests) leave
-    // faceCamera false so the retarget is measured/used unturned.
-    if (faceCamera)
-        flipAnimationFacing(skel, animName);
 
     res.ok = true;
     return res;
