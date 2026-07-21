@@ -103,6 +103,28 @@ struct Ps1NormalizerSettings {
      *  ×0.01 editor magnitude. Triangles with area <= this are removed. */
     float zeroAreaEpsilon = 1.0e-7f;
 
+    /** Same-object cross-frame merge (#412): scene captures group prims by the
+     *  exact per-frame GTE matrix, so a moving object (or a moving camera)
+     *  produces one sparse part per frame — the game NCLIP-culls back faces
+     *  before GP0, so each frame only carries the triangles facing the camera
+     *  that frame. When true, MeshReconstructor clusters tracked groups by
+     *  object-space vertex-set overlap (the raw s16 GTE registers are
+     *  bit-identical across frames for rigid objects) and merges each cluster
+     *  into ONE part whose triangle union reconstructs the full object,
+     *  including faces no single frame showed. Groups drawn in the SAME frame
+     *  never merge (simultaneous instances / hierarchy limbs stay separate).
+     *  A duplicate-triangle cull (position+UV key, colour ignored — gouraud
+     *  lighting varies per frame) removes the once-per-frame repeats.
+     *  Vertex-animated objects (which defeat exact matching) are chained by
+     *  texture/prim-count/draw-order continuity and collapsed to their best
+     *  single frame. Only meaningful for in-core tracked captures; a RAM-scan
+     *  capture has no object-space identity and is untouched. ON by default:
+     *  the raw per-frame stream is hundreds of sparse fragments of a handful
+     *  of objects, so merging is what makes a scene capture usable. Turn it
+     *  off (CLI --no-merge-objects, MCP merge_objects:false, GUI checkbox) to
+     *  inspect the raw per-frame parts. */
+    bool mergeSameObjectParts = true;
+
     /** Rigid animation capture (#429): during a *Capture Scene* the per-frame
      *  in-core GTE records carry each object's changing (rt,tr). When true, the
      *  builder extracts one matrix track per moving object and authors an

@@ -16,6 +16,17 @@ struct MeshReconstructionStats {
     int outlierDroppedVertices = 0;
     /** Triangles dropped by the zero-area cleanup cull (#428 cleanup pipeline). */
     int zeroAreaTrianglesDropped = 0;
+    /** Tracked groups merged into an earlier same-object group by the
+     *  cross-frame object merge's RIGID stage (#412, exact vertex overlap —
+     *  triangles union). */
+    int mergedPartGroups = 0;
+    /** Tracked groups of vertex-ANIMATED objects whose prims were dropped in
+     *  favour of the chain's representative frame (#412 non-rigid stage —
+     *  texture/count/draw-order continuity matching). */
+    int nonRigidMergedGroups = 0;
+    /** Repeated triangles (same position+UV, one copy per captured frame)
+     *  dropped by the duplicate cull that runs with the object merge (#412). */
+    int duplicateTrianglesDropped = 0;
     /** Prims whose tracked vertices resolved to more than one GTE matrix (skinned, #816). */
     int mixedMatrixPrims = 0;
     int primsTotal = 0;
