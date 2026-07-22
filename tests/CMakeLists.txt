@@ -257,6 +257,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsMesh.cpp
 
         # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
         # Include them so the MaterialEditorQML test executables link successfully.
