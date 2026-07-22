@@ -2049,7 +2049,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
                                  float armSpaceDeg, bool footPin,
-                                 int smoothFps)
+                                 int smoothFps, int variantIndex)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2123,7 +2123,21 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         if (!lib.loadFromFile(libPath)) {
             err() << "Error: " << lib.error() << Qt::endl; return 1;
         }
-        const int idx = lib.matchPrompt(prompt, &action);
+        // Curation harness (#838): --variant N forces a SPECIFIC clip index,
+        // bypassing the quality-weighted random pick, so every variant of an
+        // action can be rendered and reviewed one-by-one.
+        int idx;
+        if (variantIndex >= 0) {
+            if (variantIndex >= lib.clipCount()) {
+                err() << "Error: --variant " << variantIndex << " out of range (0.."
+                      << (lib.clipCount() - 1) << ")." << Qt::endl;
+                return 1;
+            }
+            idx = variantIndex;
+            action = lib.clip(idx).action;
+        } else {
+            idx = lib.matchPrompt(prompt, &action);
+        }
         if (idx < 0) {
             err() << "Error: no motion matched \"" << prompt << "\". Known actions:";
             for (const QString& a : lib.actions()) err() << " " << a;
@@ -2267,6 +2281,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
+    int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
@@ -2374,6 +2389,12 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // text-to-motion model for --generate; falls back to the template library
         // automatically if the model is unavailable.
         if (arg == "--model" && generateMode) { generateUseModel = true; continue; }
+        // --variant N: curation harness — render a SPECIFIC template clip index
+        // (from `qtmesh anim <file> --list-variants`) instead of the random pick.
+        if (arg == "--variant" && i + 1 < argc) {
+            generateVariant = QString(argv[++i]).toInt();
+            continue;
+        }
         if (arg == "--duration" && i + 1 < argc) {
             generateDuration = QString(argv[++i]).toFloat();
             continue;
@@ -2491,7 +2512,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
                                generateUseModel, armSpaceDeg, generateFootPin,
-                               generateSmoothFps);
+                               generateSmoothFps, generateVariant);
     }
 
     // #837 parity harness: apply a canonical clip JSON through the pure

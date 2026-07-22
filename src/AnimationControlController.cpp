@@ -1837,9 +1837,52 @@ double AnimationControlController::currentArmSpace(const QString& animName,
     return 0.0;
 }
 
+QVariantList AnimationControlController::listMotionClips()
+{
+    QVariantList out;
+    const QString libPath = MotionLibrary::ensureLibraryBlocking();
+    if (libPath.isEmpty()) return out;
+    MotionLibrary lib;
+    if (!lib.loadFromFile(libPath)) return out;
+
+    for (int i = 0; i < lib.clipCount(); ++i) {
+        const MotionLibrary::Clip& c = lib.clip(i);
+        // Human-readable label: "Walk (Zombie)" — Title-case the action, and
+        // the most descriptive segment of the source. Sources look like
+        // "<asset> — <animation>" or, for Quaternius, "Quaternius — <pack> —
+        // <armature>". The first segment is a generic vendor for Quaternius,
+        // so prefer the SECOND (the pack, e.g. "Zombie Animated"); otherwise
+        // use the first (the character/asset name).
+        QString actLabel = c.action;
+        if (!actLabel.isEmpty()) actLabel[0] = actLabel[0].toUpper();
+        const QStringList segs = c.source.split(QStringLiteral("—"));
+        QString asset = segs.value(0).trimmed();
+        if (asset.compare(QStringLiteral("Quaternius"), Qt::CaseInsensitive) == 0
+            && segs.size() > 1) {
+            asset = segs.value(1).trimmed();
+            // "Man Animated - Oct 2017" → "Man" (drop the "Animated"/date tail)
+            asset = asset.section(QStringLiteral(" Animated"), 0, 0).trimmed();
+        }
+        asset.remove('"');
+        if (asset.size() > 34) asset = asset.left(33) + QStringLiteral("…");
+        const QString name = asset.isEmpty()
+            ? actLabel : QStringLiteral("%1  (%2)").arg(actLabel, asset);
+        QVariantMap m;
+        m["index"] = i;
+        m["action"] = c.action;
+        m["name"] = name;
+        m["source"] = c.source;
+        m["quality"] = c.quality;
+        m["frames"] = c.frames;
+        out.append(m);
+    }
+    return out;
+}
+
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                        double duration, bool useModel,
-                                                       double armSpaceDeg, bool footPin)
+                                                       double armSpaceDeg, bool footPin,
+                                                       int variantIndex)
 {
     QVariantMap out;
     out["ok"] = false;
@@ -1875,6 +1918,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     std::vector<std::array<float, 3>> clipDirs;
     bool gotClip = false;
 
+    // The animation PICKER passes an explicit clip index — force the template
+    // path and that exact clip (no model, no random matchAmong).
+    if (variantIndex >= 0) useModel = false;
+
     if (useModel) {
         const QString mp = MotionGenerator::ensureModelBlocking();
         if (!mp.isEmpty()) {
@@ -1909,10 +1956,18 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         MotionLibrary lib;
         if (!lib.loadFromFile(libPath))
             return fail(lib.error());
-        const int idx = lib.matchPrompt(prompt, &action);
-        if (idx < 0) {
-            QString known; for (const QString& a : lib.actions()) known += " " + a;
-            return fail(QStringLiteral("No motion matched \"%1\". Try:%2").arg(prompt, known));
+        int idx;
+        if (variantIndex >= 0) {
+            if (variantIndex >= lib.clipCount())
+                return fail(QStringLiteral("Animation index out of range."));
+            idx = variantIndex;
+            action = lib.clip(idx).action;
+        } else {
+            idx = lib.matchPrompt(prompt, &action);
+            if (idx < 0) {
+                QString known; for (const QString& a : lib.actions()) known += " " + a;
+                return fail(QStringLiteral("No motion matched \"%1\". Try:%2").arg(prompt, known));
+            }
         }
         const MotionLibrary::Clip& clip = lib.clip(idx);
         quats = clip.quats; fps = clip.fps;
