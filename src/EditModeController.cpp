@@ -183,6 +183,17 @@ EditModeController::EditModeController()
     // Track selection changes to update canEnterEditMode and auto-exit
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &EditModeController::onSelectionChanged);
+
+    // PartOps Slice A (#860): any topology-mutating edit emits meshDataChanged
+    // (vertex-only commits do too — clearing then is merely conservative,
+    // re-running segmentation is cheap). This invalidates the cached per-
+    // triangle labels whose triangle-stream mapping the edit just reshuffled.
+    // Segmentation's own selection path emits editSelectionChanged, NOT
+    // meshDataChanged, so it never self-clears. rewriteEntityAfterTopologyChange
+    // is static (no `this`), so the invalidation lives here, at the one
+    // non-static signal every topology op already fires.
+    connect(this, &EditModeController::meshDataChanged,
+            this, &EditModeController::clearSegmentationCache);
 }
 
 EditModeController::~EditModeController()
@@ -651,6 +662,10 @@ void EditModeController::exitEditMode(bool commitChanges)
     m_editEntity = nullptr;
     m_editModeActive = false;
 
+    // PartOps Slice A (#860): stale segmentation state must not survive an
+    // edit-mode exit (the next mesh has a different topology / label mapping).
+    clearSegmentationCache();
+
     // Reset validation state for next session
     m_degenerateTriangleCount = 0;
 
@@ -1074,6 +1089,16 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
         return;
     }
 
+    // PartOps Slice A (#860): cache the labels so the preview workflow reuses
+    // them without rerunning the model. A fresh run resets user rename/exclude/
+    // hide state (they were keyed to the previous label set).
+    m_segLabels.assign(faceLabels.begin(),
+                       faceLabels.begin() + totalTris);
+    m_partExcluded.clear();
+    m_partHidden.clear();
+    m_partDisplayName.clear();
+    rebuildPartGroupsFromLabels();
+
     // Which labels to select: labels of currently-selected faces, or (nothing
     // selected) the single largest predicted part so one click is useful.
     std::set<int> wantLabels;
@@ -1143,6 +1168,118 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
             .arg(names.join(QStringLiteral(", ")))
             .arg(note),
         false);
+}
+
+// ---- PartOps Slice A: segmentation preview & editable part groups (#860) ----
+
+void EditModeController::rebuildPartGroupsFromLabels()
+{
+    m_partGroups.clear();
+    if (!m_segLabels.empty()) {
+        std::map<int, int> counts; // label -> face count, ordered by label
+        for (int l : m_segLabels)
+            ++counts[l];
+        m_partGroups.reserve(counts.size());
+        for (const auto& kv : counts)
+            m_partGroups.push_back(PartGroupState{kv.first, kv.second});
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.segment_preview"),
+                                  QStringLiteral("groups=%1").arg(m_partGroups.size()));
+    emit partGroupsChanged();
+}
+
+void EditModeController::clearSegmentationCache()
+{
+    if (m_segLabels.empty() && m_partGroups.empty())
+        return;
+    m_segLabels.clear();
+    m_partGroups.clear();
+    m_partExcluded.clear();
+    m_partHidden.clear();
+    m_partDisplayName.clear();
+    emit partGroupsChanged();
+}
+
+QVariantList EditModeController::partGroups() const
+{
+    QVariantList out;
+    for (const PartGroupState& g : m_partGroups) {
+        QVariantMap m;
+        m[QStringLiteral("label")] = g.label;
+        const QString defName = MeshSegmenter::partName(g.label);
+        m[QStringLiteral("name")] = defName;
+        const auto dn = m_partDisplayName.find(g.label);
+        m[QStringLiteral("displayName")] = dn != m_partDisplayName.end() ? dn->second : defName;
+        m[QStringLiteral("faceCount")] = g.faceCount;
+        m[QStringLiteral("excluded")] = m_partExcluded.count(g.label) > 0;
+        m[QStringLiteral("hidden")] = m_partHidden.count(g.label) > 0;
+        out.append(m);
+    }
+    return out;
+}
+
+int EditModeController::selectPartGroup(int label, bool addToSelection)
+{
+    if (m_segLabels.empty() || !m_editModeActive || !m_editableMesh)
+        return 0;
+    const int totalTris = static_cast<int>(m_editableMesh->totalTriangleCount());
+    if (static_cast<int>(m_segLabels.size()) < totalTris)
+        return 0;
+
+    if (m_selectionMode != FaceMode)
+        setSelectionMode(static_cast<int>(FaceMode));
+    if (!addToSelection) {
+        m_selectedVertices.clear();
+        m_selectedEdges.clear();
+        m_selectedFaces.clear();
+    }
+
+    // De-dup polygon expansion exactly like finishSegmentOnMain.
+    std::unordered_set<int> seenPolygons;
+    int selectedPolygons = 0;
+    for (int t = 0; t < totalTris; ++t) {
+        if (m_segLabels[t] != label)
+            continue;
+        auto [subIdx, localTri] = globalTriToLocal(t);
+        if (subIdx >= m_editableMesh->subMeshes().size())
+            continue;
+        const auto& sub = m_editableMesh->subMeshes()[subIdx];
+        size_t faceFirstTri = localTri, faceTriCount = 1;
+        faceIndexForTriangle(sub, localTri, &faceFirstTri, &faceTriCount);
+        const int faceKey = localTriToGlobal(subIdx, faceFirstTri);
+        if (!seenPolygons.insert(faceKey).second)
+            continue;
+        selectFace(t, /*addToSelection=*/true, /*notify=*/false);
+        ++selectedPolygons;
+    }
+    updateSelectionOverlay();
+    emit editSelectionChanged();
+    return selectedPolygons;
+}
+
+void EditModeController::setPartGroupHidden(int label, bool hidden)
+{
+    const bool changed = hidden ? m_partHidden.insert(label).second
+                                : (m_partHidden.erase(label) > 0);
+    if (changed)
+        emit partGroupsChanged();
+}
+
+void EditModeController::setPartGroupExcluded(int label, bool excluded)
+{
+    const bool changed = excluded ? m_partExcluded.insert(label).second
+                                  : (m_partExcluded.erase(label) > 0);
+    if (changed)
+        emit partGroupsChanged();
+}
+
+void EditModeController::setPartGroupDisplayName(int label, const QString& name)
+{
+    if (name.trimmed().isEmpty())
+        m_partDisplayName.erase(label);
+    else
+        m_partDisplayName[label] = name.trimmed();
+    emit partGroupsChanged();
 }
 
 void EditModeController::cancelSegment()

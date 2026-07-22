@@ -239,6 +239,7 @@ EditableMesh.cpp
 EditModeController.cpp
 EditorModeController.cpp
 HalfEdgeMesh.cpp
+SubMeshOps.cpp
 )
 
 set(HEADER_FILES
