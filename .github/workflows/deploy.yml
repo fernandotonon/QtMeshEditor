@@ -1002,19 +1002,6 @@ jobs:
       env:
         SONAR_HOST_URL: https://sonarcloud.io
 
-    - name: Install sonar-scanner
-      run: |
-        npm install -g sonar-scanner
-
-    # SonarQube Cloud dropped Java 17 (the runner default) — the scanner now
-    # aborts with "Please upgrade to Java 21 or later". setup-java puts JDK 21
-    # on PATH + JAVA_HOME so the npm sonar-scanner wrapper runs under it.
-    - name: Set up Java 21 for sonar-scanner
-      uses: actions/setup-java@v4
-      with:
-        distribution: temurin
-        java-version: '21'
-
     - name: Setup ccache
       # Cache compiler outputs across CI runs so the test build (the
       # slowest step in this job, dominated by ~500 .cpp compiles)
@@ -1495,19 +1482,18 @@ jobs:
             exit 1
         fi
 
-    - name: Run sonar-scanner
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    # Prep the inputs the scanner reads (compile DB + sanity checks). The scan
+    # itself runs via the official action below, which bundles its own JDK —
+    # so it no longer depends on the runner's default Java (SonarCloud dropped
+    # Java 17, which broke the old npm `sonar-scanner` + runner-JDK approach).
+    - name: Prepare SonarCloud inputs
       run: |
           echo "=== SonarCloud Analysis Setup ==="
-
           # Ensure compile_commands.json is available for C++ analysis
           if [ -f build/compile_commands.json ]; then
             cp build/compile_commands.json .
             echo "Copied compile_commands.json from build/"
           fi
-
           # Check build-wrapper output
           BW_DIR="build-wrapper-output"
           if [ -d "$BW_DIR" ]; then
@@ -1517,32 +1503,34 @@ jobs:
             echo "WARNING: Build-wrapper output not found at $BW_DIR"
             find . -name "build-wrapper-dump.json" -type f 2>/dev/null | head -5
           fi
-
-          # Check coverage files
           echo "=== Coverage files ==="
           ls -la coverage.xml 2>/dev/null || echo "coverage.xml not found"
 
-          echo "=== Running SonarCloud analysis ==="
-          # Keep coverage exclusions in sonar-project.properties as the single source of truth.
-          sonar-scanner \
-            -Dsonar.projectKey=fernandotonon_QtMeshEditor \
-            -Dsonar.organization=fernandotonon \
-            -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.token="$SONAR_TOKEN" \
-            -Dsonar.sources=src/ \
-            -Dsonar.tests=src/,tests/ \
-            -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
-            -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
-            -Dsonar.coverageReportPaths=coverage.xml \
-            -Dsonar.c.file.suffixes=.c \
-            -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
-            -Dsonar.objc.file.suffixes=.m,.mm \
-            -Dsonar.cfamily.build-wrapper-output=$BW_DIR \
-            -Dsonar.cfamily.cache.enabled=true \
-            -Dsonar.cfamily.threads=4 \
+    - name: Run sonar-scanner
+      uses: SonarSource/sonarqube-scan-action@v4
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+      with:
+          # Keep coverage exclusions in sonar-project.properties as the single
+          # source of truth. Token/host come from env above.
+          args: >
+            -Dsonar.projectKey=fernandotonon_QtMeshEditor
+            -Dsonar.organization=fernandotonon
+            -Dsonar.sources=src/
+            -Dsonar.tests=src/,tests/
+            -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp
+            -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/**
+            -Dsonar.coverageReportPaths=coverage.xml
+            -Dsonar.c.file.suffixes=.c
+            -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h
+            -Dsonar.objc.file.suffixes=.m,.mm
+            -Dsonar.cfamily.build-wrapper-output=build-wrapper-output
+            -Dsonar.cfamily.cache.enabled=true
+            -Dsonar.cfamily.threads=4
             -Dsonar.verbose=true
 
-            
     - name: Upload Coverage Reports
       uses: actions/upload-artifact@v4
       if: always()
