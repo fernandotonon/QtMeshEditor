@@ -202,6 +202,13 @@ void PS1RipManager::initializeWorkerThread()
                     SentryReporter::addBreadcrumb(
                         QStringLiteral("ps1.rip.cleanup.zero_area"),
                         QStringLiteral("dropped=%1").arg(reconStats.zeroAreaTrianglesDropped));
+                if (normalize.mergeSameObjectParts)
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("ps1.rip.cleanup.merge_objects"),
+                        QStringLiteral("mergedGroups=%1 nonRigidGroups=%2 duplicateTrisDropped=%3")
+                            .arg(reconStats.mergedPartGroups)
+                            .arg(reconStats.nonRigidMergedGroups)
+                            .arg(reconStats.duplicateTrianglesDropped));
 
                 PS1RipMeshBuilder::BuildResult built;
                 QString buildErr;

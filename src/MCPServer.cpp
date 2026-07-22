@@ -7512,11 +7512,13 @@ QJsonObject MCPServer::toolPs1RipCapture(const QJsonObject &args)
     const bool trackedOnly = args.value(QStringLiteral("tracked_only")).toBool();
     const bool smooth = args.value(QStringLiteral("smooth")).toBool();
     const bool removeZeroArea = args.value(QStringLiteral("remove_zero_area")).toBool();
+    const bool mergeObjects = args.value(QStringLiteral("merge_objects")).toBool(true);
     const bool rigidAnimation = args.value(QStringLiteral("rigid_animation")).toBool();
     Ps1NormalizerSettings ns = mgr->normalizerSettings();
     ns.trackedGeometryOnly = trackedOnly;
     ns.cleanupWeldNormals = smooth;
     ns.cleanupRemoveZeroArea = removeZeroArea;
+    ns.mergeSameObjectParts = mergeObjects;
     ns.captureRigidAnimation = rigidAnimation;
     mgr->setNormalizerSettings(ns);
 
@@ -9883,6 +9885,13 @@ QJsonArray MCPServer::buildToolsList()
         props["remove_zero_area"] = QJsonObject{{"type", "boolean"},
             {"description", "Clean-up: drop zero-area (collinear / duplicate-vertex) sliver "
                             "triangles common in raw PS1 captures (default false)."}};
+        props["merge_objects"] = QJsonObject{{"type", "boolean"},
+            {"description", "Merge the per-frame sparse parts of the same object (scene "
+                            "captures) into one mesh: clusters tracked groups by object-space "
+                            "vertex overlap, unions triangles across frames, drops the "
+                            "once-per-frame repeats (vertex-animated objects collapse to their "
+                            "best single frame). Needs in-core tracked capture. Default TRUE — "
+                            "set false to keep the raw per-frame parts."}};
         props["rigid_animation"] = QJsonObject{{"type", "boolean"},
             {"description", "Scene capture only: extract per-object rigid animation from the "
                             "per-frame GTE matrices and author node tracks that play in the "

@@ -57,6 +57,7 @@ constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kTrackedOnlyKey = "trackedGeometryOnly";
 constexpr auto kCleanupKey = "cleanupWeldNormals";
 constexpr auto kRemoveZeroAreaKey = "cleanupRemoveZeroArea";
+constexpr auto kMergeObjectsKey = "mergeSameObjectParts";
 constexpr auto kRigidAnimKey = "captureRigidAnimation";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
@@ -344,6 +345,33 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         QSettings().setValue(ps1SettingsKey(kRemoveZeroAreaKey), on);
     });
     toolbar->addWidget(removeZeroArea);
+
+    // #412: merge same-object parts across the frames of a scene capture.
+    // Grouping is per exact GTE matrix, so a moving object lands in one sparse
+    // part per frame; this clusters them by object-space vertex overlap and
+    // unions the triangles into one full object.
+    auto *mergeObjects = new QCheckBox(tr("Merge frames"), this);
+    mergeObjects->setToolTip(tr("Clean up: merge the per-frame sparse parts of the same object "
+                                "(scene captures) into one mesh — rigid objects union their "
+                                "triangles across frames; vertex-animated objects (warping text, "
+                                "breathing characters) keep their best single frame. Needs "
+                                "in-core tracked capture. Takes effect on the next "
+                                "Capture Frame/Scene."));
+    mergeObjects->setChecked(settings.value(ps1SettingsKey(kMergeObjectsKey), true).toBool());
+    {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.mergeSameObjectParts = mergeObjects->isChecked();
+        m_manager->setNormalizerSettings(s);
+    }
+    connect(mergeObjects, &QCheckBox::toggled, this, [this](bool on) {
+        Ps1NormalizerSettings s = m_manager->normalizerSettings();
+        s.mergeSameObjectParts = on;
+        m_manager->setNormalizerSettings(s);
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.cleanup.merge_objects"),
+                                      on ? QStringLiteral("on") : QStringLiteral("off"));
+        QSettings().setValue(ps1SettingsKey(kMergeObjectsKey), on);
+    });
+    toolbar->addWidget(mergeObjects);
 
     // #429: capture rigid animation from a *scene* capture — authors an Ogre
     // node-animation track per moving object so the ripped motion plays in the

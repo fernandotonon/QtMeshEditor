@@ -10909,6 +10909,7 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
     bool trackedOnly = false;
     bool smooth = false;
     bool dropSlivers = false;
+    bool mergeObjects = true; // #412: on by default; --no-merge-objects opts out
     bool rigidAnim = false;
     bool dedupeStrict = false;
     bool jsonOut = false;
@@ -10930,6 +10931,9 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
                 "  --tracked-only      Keep only in-core tracked+depth 3D geometry\n"
                 "  --smooth            Weld verts + recompute normals\n"
                 "  --drop-slivers      Remove zero-area triangles (#428 cleanup)\n"
+                "  --no-merge-objects  Keep the raw per-frame sparse parts (disables the default\n"
+                "                      same-object merge that unions each object's triangles\n"
+                "                      across the captured frames)\n"
                 "  --rigid-animation   Extract per-object rigid animation (scene capture;\n"
                 "                      in-editor preview — node tracks don't export yet)\n"
                 "  --dedupe-strict     Bit-exact instance dedupe\n"
@@ -10955,6 +10959,8 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
         if (arg == QStringLiteral("--tracked-only")) { trackedOnly = true; continue; }
         if (arg == QStringLiteral("--smooth")) { smooth = true; continue; }
         if (arg == QStringLiteral("--drop-slivers")) { dropSlivers = true; continue; }
+        if (arg == QStringLiteral("--no-merge-objects")) { mergeObjects = false; continue; }
+        if (arg == QStringLiteral("--merge-objects")) { mergeObjects = true; continue; } // now the default; kept for back-compat
         if (arg == QStringLiteral("--rigid-animation")) { rigidAnim = true; continue; }
         if (arg == QStringLiteral("--dedupe-strict")) { dedupeStrict = true; continue; }
         if (arg == QStringLiteral("--json")) { jsonOut = true; continue; }
@@ -11056,6 +11062,7 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
         ns.trackedGeometryOnly = trackedOnly;
         ns.cleanupWeldNormals = smooth;
         ns.cleanupRemoveZeroArea = dropSlivers;
+        ns.mergeSameObjectParts = mergeObjects;
         ns.captureRigidAnimation = rigidAnim;
         mgr->setNormalizerSettings(ns);
     }
