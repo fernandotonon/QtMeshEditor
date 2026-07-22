@@ -125,48 +125,38 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         return result;
     }
 
-    // One output submesh per accepted label. We accumulate into EditableSubMesh
-    // copies that inherit the *first contributing* source submesh's material +
-    // n-gon-ness; a vertex is duplicated into every group it touches so parts
-    // are independent (the boundary-vertex-duplication requirement, #861).
+    // One output submesh per (accepted label, source material). Keying on the
+    // material too is required for multi-material assets: a single part label
+    // (e.g. "torso") whose triangles come from two different source materials
+    // must emit TWO submeshes so each keeps its own material — collapsing them
+    // onto whichever triangle came first silently repaints the model (#859
+    // review). When assignPartMaterials is set the part gets one generated
+    // material regardless, so it keys on the label alone.
     struct Builder {
         int label = 0;
         QString name;
+        std::string sourceMaterial;  // the key's material (empty when part-mat)
         EditableSubMesh sub;
         bool sourceHadFaces = false;
-        std::string sourceMaterial;
-        // per source-submesh: source-local vertex -> new local index in `sub`
+        int firstGlobalTri = 0;      // for deterministic output ordering
         std::vector<std::unordered_map<unsigned int, unsigned int>> remap;
     };
 
-    // Deterministic builder order = accepted group order sorted by label.
-    std::vector<int> orderedLabels;
-    orderedLabels.reserve(accepted.size());
-    for (const auto& kv : accepted)
-        orderedLabels.push_back(kv.first);
-    std::sort(orderedLabels.begin(), orderedLabels.end());
-
-    std::unordered_map<int, size_t> builderOfLabel;
+    // Builder key: label, plus source material unless we're assigning one
+    // material per part. Kept ordered for determinism.
+    using BuilderKey = std::pair<int, std::string>;
+    std::map<BuilderKey, size_t> builderOfKey;
     std::vector<Builder> builders;
-    builders.reserve(orderedLabels.size());
-    for (int label : orderedLabels) {
-        Builder b;
-        b.label = label;
-        b.name = accepted[label]->name;
-        b.remap.resize(subMeshes.size());
-        builderOfLabel[label] = builders.size();
-        builders.push_back(std::move(b));
-    }
 
     int duplicated = 0;
-    // Track how many groups each (source submesh, source vertex) landed in, to
-    // count boundary duplications (a vertex used by >1 group is duplicated).
+    // Track how many builders each (source submesh, source vertex) landed in,
+    // to count boundary duplications (a vertex used by >1 builder is dup'd).
     std::vector<std::unordered_map<unsigned int, int>> groupUseCount(subMeshes.size());
 
     for (uint32_t gtri = 0; gtri < faceLabels.size(); ++gtri) {
         const int label = faceLabels[gtri];
-        auto bit = builderOfLabel.find(label);
-        if (bit == builderOfLabel.end())
+        auto ait = accepted.find(label);
+        if (ait == accepted.end())
             continue; // excluded / no accepted group -> dropped
 
         size_t s = 0, localTri = 0;
@@ -175,16 +165,33 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         const EditableSubMesh& src = subMeshes[s];
         const EditableTriangle& tri = src.triangles[localTri];
 
-        Builder& b = builders[bit->second];
-        if (b.sub.vertices.empty() && b.sub.triangles.empty()) {
-            b.sourceMaterial = src.materialName;
-            b.sub.materialName =
+        // assignPartMaterials → one submesh per label (material is generated);
+        // else split per source material so multi-material parts round-trip.
+        const std::string keyMat = opts.assignPartMaterials ? std::string() : src.materialName;
+        const BuilderKey key{label, keyMat};
+        auto kit = builderOfKey.find(key);
+        size_t bi;
+        if (kit == builderOfKey.end()) {
+            Builder nb;
+            nb.label = label;
+            nb.name = ait->second->name;
+            nb.sourceMaterial = keyMat;
+            nb.firstGlobalTri = static_cast<int>(gtri);
+            nb.remap.resize(subMeshes.size());
+            nb.sub.materialName =
                 opts.assignPartMaterials
                     ? (opts.namePrefix.isEmpty()
-                           ? b.name.toStdString()
-                           : (opts.namePrefix + QStringLiteral(".") + b.name).toStdString())
+                           ? nb.name.toStdString()
+                           : (opts.namePrefix + QStringLiteral(".") + nb.name).toStdString())
                     : src.materialName;
+            bi = builders.size();
+            builderOfKey.emplace(key, bi);
+            builders.push_back(std::move(nb));
+        } else {
+            bi = kit->second;
         }
+
+        Builder& b = builders[bi];
         b.sourceHadFaces = b.sourceHadFaces || !src.faces.empty();
 
         EditableTriangle newTri;
@@ -198,7 +205,7 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
                 b.sub.vertices.push_back(src.vertices[srcV]);
                 map.emplace(srcV, newV);
                 // Boundary bookkeeping: this source vertex is now used by one
-                // more group. The 2nd+ group to claim it is a duplication.
+                // more builder. The 2nd+ builder to claim it is a duplication.
                 int& uses = groupUseCount[s][srcV];
                 if (uses >= 1)
                     ++duplicated;
@@ -211,9 +218,24 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         b.sub.triangles.push_back(newTri);
     }
 
+    // Deterministic emit order: by part label, then by first-contributing
+    // triangle (so multi-material pieces of one part stay grouped + stable).
+    std::sort(builders.begin(), builders.end(), [](const Builder& a, const Builder& b) {
+        if (a.label != b.label)
+            return a.label < b.label;
+        return a.firstGlobalTri < b.firstGlobalTri;
+    });
+
     // Emit submeshes; rebuild n-gon faces where the source had them (promote
     // the triangle soup back to trivial faces — the exporter/edit layer expects
     // `faces` canonical when non-empty). Optional connected-component split.
+    //
+    // A part label can now produce MORE than one submesh (multiple source
+    // materials and/or disconnected islands), so names get a per-label running
+    // suffix: `torso`, `torso.1`, `torso.2`, … The first piece of each label
+    // keeps the bare name. Builders are label-sorted, so the counter is simply
+    // reset when the label changes.
+    std::unordered_map<int, int> nameCounterByLabel;
     for (Builder& b : builders) {
         if (b.sub.triangles.empty())
             continue;
@@ -264,18 +286,17 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
             pieces.push_back(std::move(b.sub));
         }
 
-        int pieceIdx = 0;
         for (EditableSubMesh& piece : pieces) {
             if (piece.triangles.empty())
                 continue;
             if (b.sourceHadFaces)
                 promoteTrianglesToFaces(piece); // keep n-gon storage canonical
+            const int n = nameCounterByLabel[b.label]++;
             QString partName = b.name;
-            if (pieces.size() > 1 && pieceIdx > 0)
-                partName += QStringLiteral(".%1").arg(pieceIdx);
+            if (n > 0)
+                partName += QStringLiteral(".%1").arg(n);
             result.subMeshes.push_back(std::move(piece));
             result.partNames.push_back(partName);
-            ++pieceIdx;
         }
     }
 

@@ -1406,13 +1406,17 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     return true;
 }
 
-Ogre::MeshPtr EditableMesh::createNewMesh(const std::string& baseName)
+Ogre::MeshPtr EditableMesh::createNewMesh(const std::string& baseName, bool recomputeNormals)
 {
-    // Recalculate normals
-    if (m_flatNormals)
-        recalculateNormalsFlat();
-    else
-        recalculateNormals();
+    // Recalculate normals unless the caller already carries authored normals
+    // (PartOps split copies source normals verbatim — recomputing would flatten
+    // hard edges / custom shading, #859 review).
+    if (recomputeNormals) {
+        if (m_flatNormals)
+            recalculateNormalsFlat();
+        else
+            recalculateNormals();
+    }
 
     // Generate a unique name
     static int counter = 0;

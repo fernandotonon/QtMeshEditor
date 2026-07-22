@@ -1190,6 +1190,15 @@ void EditModeController::rebuildPartGroupsFromLabels()
 
 void EditModeController::clearSegmentationCache()
 {
+    // Cancel any in-flight segmentation worker so it can't repopulate the cache
+    // with labels indexed to the OLD triangle stream after a topology change
+    // (CodeRabbit: if the edit leaves the triangle count unchanged, the
+    // completion size-check would otherwise pass and map stale labels onto the
+    // reshuffled faces). The worker's completion handler already no-ops on a
+    // set cancel flag; finishSegmentOnMain (the rig fast-path) checks it too.
+    if (m_segmentCancel)
+        m_segmentCancel->store(true);
+
     if (m_segLabels.empty() && m_partGroups.empty())
         return;
     m_segLabels.clear();

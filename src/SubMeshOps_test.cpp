@@ -102,6 +102,59 @@ TEST(SubMeshOpsTest, SplitByFaceGroupsCreatesOneSubmeshPerLabel)
     EXPECT_EQ(SubMeshOps::totalTriangleCount(r.subMeshes), 4u);
 }
 
+TEST(SubMeshOpsTest, SplitKeepsSourceMaterialsWhenLabelSpansMaterials)
+{
+    // #859 review (Codex P2): a single part label whose triangles come from
+    // TWO source materials must emit two submeshes — one per material — not
+    // collapse onto whichever triangle came first. Two source submeshes with
+    // different materials; every triangle labelled the same part (1).
+    EditableSubMesh matA;
+    matA.materialName = "MatA";
+    matA.vertices = {vtx(0, 0, 0), vtx(1, 0, 0), vtx(0, 0, 1)};
+    addTri(matA, 0, 1, 2);
+    EditableSubMesh matB;
+    matB.materialName = "MatB";
+    matB.vertices = {vtx(2, 0, 0), vtx(3, 0, 0), vtx(2, 0, 1)};
+    addTri(matB, 0, 1, 2);
+    std::vector<EditableSubMesh> in = {matA, matB};
+    std::vector<int> faceLabels = {1, 1}; // both tris → same part label
+
+    auto groups = SubMeshOps::groupFacesByLabel(faceLabels);
+    SubMeshOps::SplitResult r = SubMeshOps::splitByFaceGroups(in, faceLabels, groups);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    // Two output submeshes: one per source material, both from part "head"(1).
+    ASSERT_EQ(r.subMeshes.size(), 2u);
+    std::set<std::string> mats = {r.subMeshes[0].materialName, r.subMeshes[1].materialName};
+    EXPECT_TRUE(mats.count("MatA"));
+    EXPECT_TRUE(mats.count("MatB"));
+    // Both name variants derive from the same part; the second gets a suffix.
+    const QString base = MeshSegmenter::partName(1);
+    EXPECT_EQ(r.partNames[0], base);
+    EXPECT_EQ(r.partNames[1], base + QStringLiteral(".1"));
+}
+
+TEST(SubMeshOpsTest, SplitAssignPartMaterialsCollapsesAcrossSourceMaterials)
+{
+    // With assignPartMaterials the part gets ONE generated material, so a label
+    // spanning source materials becomes a single submesh (the material split is
+    // intentionally suppressed).
+    EditableSubMesh matA; matA.materialName = "MatA";
+    matA.vertices = {vtx(0,0,0), vtx(1,0,0), vtx(0,0,1)}; addTri(matA,0,1,2);
+    EditableSubMesh matB; matB.materialName = "MatB";
+    matB.vertices = {vtx(2,0,0), vtx(3,0,0), vtx(2,0,1)}; addTri(matB,0,1,2);
+    std::vector<EditableSubMesh> in = {matA, matB};
+    std::vector<int> faceLabels = {1, 1};
+    auto groups = SubMeshOps::groupFacesByLabel(faceLabels);
+    SubMeshOps::SplitOptions opts;
+    opts.assignPartMaterials = true;
+    opts.namePrefix = QStringLiteral("Body");
+    SubMeshOps::SplitResult r = SubMeshOps::splitByFaceGroups(in, faceLabels, groups, opts);
+    ASSERT_TRUE(r.ok);
+    ASSERT_EQ(r.subMeshes.size(), 1u);
+    EXPECT_EQ(r.subMeshes[0].materialName,
+              (QStringLiteral("Body.") + MeshSegmenter::partName(1)).toStdString());
+}
+
 TEST(SubMeshOpsTest, SplitExcludesGroupAndDropsItsFaces)
 {
     std::vector<EditableSubMesh> in = {twoQuadSubmesh()};
