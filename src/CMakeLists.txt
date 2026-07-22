@@ -240,6 +240,7 @@ EditModeController.cpp
 EditorModeController.cpp
 HalfEdgeMesh.cpp
 SubMeshOps.cpp
+PartOpsMesh.cpp
 )
 
 set(HEADER_FILES

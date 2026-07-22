@@ -158,6 +158,8 @@ qtmesh segment tree.glb --category vegetation  # force a category (skip the poin
 qtmesh segment car.glb --category vehicle      # vehicle_body/wheel/window/wing/rotor; `building` = wall/roof/window/door/chimney/foundation
 qtmesh segment model.fbx --no-model --up-axis y  # force the deterministic geometric fallback (skip the ONNX models; auto → body)
 qtmesh segment rigged.fbx --dump-training-data sample.json  # mine EXACT rig-prior labels from a SKINNED mesh → training sample (#410; feed to export-meshseg-onnx.py --real-data)
+qtmesh segment model.fbx --write-labels labels.json  # PartOps (#859/#861): dump per-vertex+per-face part labels (schema qtmesh-partops-labels-v1) without splitting
+qtmesh segment model.fbx --split-parts -o parts.fbx  # PartOps (#859/#861): split the segmented mesh into one named submesh per part (head/torso/left_arm/…); boundary verts duplicated so parts are independent; preserves normals/uv/colour/tangent + skeleton & bone weights (skinned meshes stay riggable). FBX keeps the submesh boundaries; glTF coalesces same-material parts. Add --no-model for the offline geometric/rig-prior path
 qtmesh mocap talk.mp4 --face --mesh avatar.glb -o out.glb    # performance capture (#869, needs -DENABLE_MOCAP): facial expressions -> ARKit-blendshape weight keyframes + head rotation (Head bone or node); models download on first use
 qtmesh mocap dance.mp4 --body --mesh rigged.fbx -o out.glb   # full-body pose -> skeletal clip on the humanoid rig (root locked; --algo sam3dbody|pose-ik, sam3dbody falls back to pose-ik while its checkpoints are gated; --no-model forces the fallback)
 qtmesh mocap take.mp4 --face --body --mesh char.glb -o out.glb  # both in one decode pass ("<clip>_Body" for the body clip)

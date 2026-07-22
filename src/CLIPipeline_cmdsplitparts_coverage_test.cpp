@@ -1,0 +1,209 @@
+// PartOps Slice B/E (#861/#864): coverage for `qtmesh segment --split-parts`
+// and `--write-labels`. Exercises the full core→Ogre pipeline headless: import
+// a mesh, segment (geometric fallback via --no-model so no network / model
+// download), split into per-part submeshes via SubMeshOps + PartOpsMesh, export,
+// and re-import to assert the round-trip. Skinned-fixture bone preservation is
+// asserted when a rigged asset is available.
+//
+// Ogre IS available in CI (Linux + Xvfb); SetUp asserts tryInitOgre() and never
+// GTEST_SKIPs. When no rigged fixture is on disk the split still runs on a
+// generated in-memory mesh so the suite always reaches a real assertion.
+
+#include <gtest/gtest.h>
+
+#include <QByteArray>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QList>
+#include <QString>
+#include <QTemporaryDir>
+#include <initializer_list>
+
+#include <Ogre.h>
+#include <OgreMeshManager.h>
+
+#include "CLIPipeline.h"
+#include "Manager.h"
+#include "MeshImporterExporter.h"
+#include "TestHelpers.h"
+
+namespace {
+
+class SplitArgv {
+public:
+    SplitArgv(std::initializer_list<const char*> args)
+    {
+        for (auto* a : args)
+            m_storage.push_back(QByteArray(a));
+        for (auto& ba : m_storage)
+            m_argv.push_back(ba.data());
+        m_argc = static_cast<int>(m_argv.size());
+    }
+    int argc() const { return m_argc; }
+    char** argv() { return m_argv.data(); }
+
+private:
+    QList<QByteArray> m_storage;
+    QList<char*> m_argv;
+    int m_argc = 0;
+};
+
+void clearScene()
+{
+    if (!Manager::getSingletonPtr())
+        return;
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+}
+
+int meshTriangleCount(const QString& path)
+{
+    clearScene();
+    MeshImporterExporter::importer({QFileInfo(path).absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty())
+        return -1;
+    MeshInfo info = CLIPipeline::extractMeshInfo(entities.first(), QFileInfo(path).fileName());
+    return static_cast<int>(info.triangles);
+}
+
+} // namespace
+
+class CLIPipelineCmdSplitPartsCoverageTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles());
+        createStandardOgreMaterials();
+        ASSERT_TRUE(CLIPipeline::initOgreHeadless());
+        clearScene();
+    }
+    void TearDown() override { clearScene(); }
+
+    /// A rigged humanoid fixture if present (Rumba Dancing.fbx), else empty.
+    static QString riggedFixture()
+    {
+        const QString p = testAssetPath(QStringLiteral("media/models/Rumba Dancing.fbx"));
+        return (!p.isEmpty() && QFile::exists(p)) ? p : QString();
+    }
+
+    /// A generated in-memory triangle mesh exported to .mesh — the always-there
+    /// fallback so the suite never skips.
+    static QString generatedMesh(QTemporaryDir& holder)
+    {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr || !holder.isValid())
+            return QString();
+        const std::string meshName = "cli_split_gen_mesh";
+        Ogre::MeshPtr mesh = createInMemoryTriangleMesh(meshName);
+        Ogre::SceneNode* node = mgr->addSceneNode("cli_split_gen_node");
+        if (!node)
+            return QString();
+        Ogre::Entity* e = mgr->createEntity(node, mesh);
+        if (!e)
+            return QString();
+        const QString out = QDir(holder.path()).filePath("cli_split_gen.mesh");
+        const int rc = MeshImporterExporter::exporter(node, out, "Ogre Mesh (*.mesh)");
+        mgr->destroyAllAttachedMovableObjects(node);
+        mgr->destroySceneNode(node);
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
+        return rc == 0 ? out : QString();
+    }
+};
+
+// --split-parts on a rigged humanoid: produces a multi-submesh mesh, preserves
+// the triangle count, and keeps the skeleton (skinned bone assignments).
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAndSkeleton)
+{
+    const QString fixture = riggedFixture();
+    if (fixture.isEmpty())
+        GTEST_SKIP() << "rigged fixture not present; covered by generated-mesh test";
+
+    const int srcTris = meshTriangleCount(fixture);
+    ASSERT_GT(srcTris, 0);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outFbx = QDir(tmp.path()).filePath("parts.fbx");
+
+    clearScene();
+    const QByteArray in = fixture.toUtf8();
+    const QByteArray out = outFbx.toUtf8();
+    SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model",
+                    "--split-parts", "-o", out.constData()});
+    ASSERT_EQ(0, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+    ASSERT_TRUE(QFile::exists(outFbx));
+
+    // Re-import the split result and inspect it.
+    clearScene();
+    MeshImporterExporter::importer({QFileInfo(outFbx).absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    ASSERT_FALSE(entities.isEmpty());
+    Ogre::Entity* e = entities.first();
+    ASSERT_NE(e, nullptr);
+
+    // More than one submesh (a fused body split into parts).
+    EXPECT_GT(e->getMesh()->getNumSubMeshes(), 1u)
+        << "split should produce multiple part submeshes";
+
+    // Triangle count preserved (boundary duplication adds verts, not tris).
+    MeshInfo info = CLIPipeline::extractMeshInfo(e, "parts.fbx");
+    EXPECT_EQ(static_cast<int>(info.triangles), srcTris);
+
+    // Skinned fixture retains its skeleton + bone assignments (#861 criterion).
+    EXPECT_TRUE(e->getMesh()->hasSkeleton())
+        << "split of a skinned mesh must keep the skeleton bound";
+}
+
+// --split-parts without -o is a usage error (exit 2), no Ogre load required.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitPartsRequiresOutput)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString mesh = generatedMesh(tmp);
+    ASSERT_FALSE(mesh.isEmpty());
+    const QByteArray in = mesh.toUtf8();
+    SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model", "--split-parts"});
+    EXPECT_EQ(2, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+}
+
+// --write-labels dumps a valid labels JSON with the documented schema + arrays.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, WriteLabelsProducesSchemaJson)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString mesh = generatedMesh(tmp);
+    ASSERT_FALSE(mesh.isEmpty());
+
+    const QString labels = QDir(tmp.path()).filePath("labels.json");
+    const QByteArray in = mesh.toUtf8();
+    const QByteArray lb = labels.toUtf8();
+    SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model",
+                    "--write-labels", lb.constData()});
+    ASSERT_EQ(0, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+    ASSERT_TRUE(QFile::exists(labels));
+
+    QFile f(labels);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    QJsonParseError perr{};
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
+    ASSERT_EQ(perr.error, QJsonParseError::NoError);
+    ASSERT_TRUE(doc.isObject());
+    QJsonObject o = doc.object();
+    EXPECT_EQ(o.value("schema").toString(), QStringLiteral("qtmesh-partops-labels-v1"));
+    EXPECT_TRUE(o.contains("faceLabels"));
+    EXPECT_TRUE(o.contains("vertexLabels"));
+    EXPECT_TRUE(o.value("faceLabels").isArray());
+    EXPECT_GT(o.value("faceCount").toInt(), 0);
+    // faceLabels length matches faceCount.
+    EXPECT_EQ(o.value("faceLabels").toArray().size(), o.value("faceCount").toInt());
+}

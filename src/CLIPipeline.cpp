@@ -50,6 +50,8 @@
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
+#include "SubMeshOps.h"
+#include "PartOpsMesh.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -10301,6 +10303,9 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     //                        [--dump-training-data <out.json>]
     QString inputPath;
     QString dumpPath;
+    QString writeLabelsPath;   // PartOps #864: dump face/vertex labels to JSON
+    QString outputPath;        // PartOps #864: --split-parts output mesh
+    bool splitParts = false;   // PartOps #861/#864
     bool jsonOutput = false;
     bool noModel = false;
     int upAxis = 1;   // +Y default
@@ -10311,6 +10316,23 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "segment" || arg == "--cli") continue;
         if (arg == "--json")     { jsonOutput = true; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--split-parts") { splitParts = true; continue; }
+        if (arg == "--write-labels") {
+            if (i + 1 >= argc) {
+                err() << "Error: --write-labels requires an output path." << Qt::endl;
+                return 2;
+            }
+            writeLabelsPath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) {
+                err() << "Error: -o requires an output path." << Qt::endl;
+                return 2;
+            }
+            outputPath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (arg == "--category") {
             if (i + 1 >= argc) {
                 err() << "Error: --category requires a value (auto, body, "
@@ -10354,11 +10376,16 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
                  "[--category auto|body|vegetation|vehicle|building] "
-                 "[--dump-training-data <out.json>]" << Qt::endl;
+                 "[--dump-training-data <out.json>] [--write-labels <out.json>] "
+                 "[--split-parts -o <out.glb>]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
     if (!fi.exists()) { err() << "Error: file not found: " << inputPath << Qt::endl; return 1; }
+    if (splitParts && outputPath.isEmpty()) {
+        err() << "Error: --split-parts requires -o <output mesh>." << Qt::endl;
+        return 2;
+    }
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
@@ -10516,6 +10543,87 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                     {QStringLiteral("duration_ms"), segmentTimer.elapsed()},
                     {QStringLiteral("success"), true},
                     {QStringLiteral("capability"), QStringLiteral("segmentation")}});
+
+    // --- PartOps: write labels (#864) --------------------------------------
+    if (!writeLabelsPath.isEmpty()) {
+        QJsonObject root;
+        root["schema"] = QStringLiteral("qtmesh-partops-labels-v1");
+        root["mesh"] = fi.fileName();
+        root["category"] = MeshSegmenter::categoryName(r.category);
+        root["vertexCount"] = vertexCount;
+        root["faceCount"] = static_cast<int>(r.faceLabels.size());
+        QJsonArray vl, fl;
+        for (int l : r.vertexLabels) vl.append(l);
+        for (int l : r.faceLabels)   fl.append(l);
+        root["vertexLabels"] = vl;
+        root["faceLabels"] = fl;
+        QJsonObject names;
+        for (int p = 0; p < P; ++p)
+            if (vCount[p] > 0 || fCount[p] > 0)
+                names[QString::number(p)] = MeshSegmenter::partName(p);
+        root["partNames"] = names;
+        QFile lf(writeLabelsPath);
+        if (!lf.open(QIODevice::WriteOnly)) {
+            err() << "Error: cannot write labels to " << writeLabelsPath << Qt::endl;
+            return 1;
+        }
+        lf.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        lf.close();
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.segment_preview"),
+                                      QStringLiteral("write-labels faces=%1")
+                                          .arg(r.faceLabels.size()));
+        if (!splitParts && !jsonOutput)
+            cliWrite(QString("Wrote labels: %1 (%2 faces)\n")
+                         .arg(QFileInfo(writeLabelsPath).fileName())
+                         .arg(r.faceLabels.size()));
+    }
+
+    // --- PartOps: split into per-part submeshes (#861/#864) ----------------
+    if (splitParts) {
+        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
+        SubMeshOps::SplitOptions sopts; // default "Body" prefix, preserve material
+        PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
+            entity, r.faceLabels, groups, sopts, fi.completeBaseName().toStdString());
+        if (!so.ok) {
+            err() << "Error: split failed — "
+                  << (so.error.isEmpty() ? QStringLiteral("unknown") : so.error) << Qt::endl;
+            return 1;
+        }
+        auto* mgr = Manager::getSingletonPtr();
+        Ogre::SceneNode* node = mgr ? mgr->addSceneNode("PartOpsSplit") : nullptr;
+        if (!node || !mgr->createEntity(node, so.mesh)) {
+            err() << "Error: could not build scene node for split mesh." << Qt::endl;
+            return 1;
+        }
+        const QString fmt = formatForExtension(outputPath);
+        if (MeshImporterExporter::exporter(
+                node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+            err() << "Error: export failed for " << outputPath << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("mesh.parts.split_segments"),
+            QStringLiteral("parts=%1 dupVerts=%2")
+                .arg(so.createdSubMeshes).arg(so.duplicatedBoundaryVertices));
+        if (jsonOutput) {
+            QJsonObject root;
+            root["mesh"] = fi.fileName();
+            root["output"] = QFileInfo(outputPath).fileName();
+            root["createdSubMeshes"] = so.createdSubMeshes;
+            root["duplicatedBoundaryVertices"] = so.duplicatedBoundaryVertices;
+            QJsonArray pn;
+            for (const QString& n : so.partNames) pn.append(n);
+            root["partNames"] = pn;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
+        } else {
+            cliWrite(QString("Split %1 into %2 part submeshes → %3\n")
+                         .arg(fi.fileName()).arg(so.createdSubMeshes)
+                         .arg(QFileInfo(outputPath).fileName()));
+            for (const QString& n : so.partNames)
+                cliWrite(QString("  %1\n").arg(n));
+        }
+        return 0; // split path produces its own output; skip the label dump below
+    }
 
     if (jsonOutput) {
         QJsonObject root;

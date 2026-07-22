@@ -117,6 +117,35 @@ static inline QString testRobotMeshPath()
 }
 
 /**
+ * Resolve a repo-relative asset path (e.g. "media/models/Rumba Dancing.fbx")
+ * against the same locations testRobotMeshPath() searches: two levels up from
+ * the test binary, the configured QTMESH_UT_SOURCE_ROOT, then the CWD-relative
+ * legacy path. Returns an absolute path if found, else empty. Use for optional
+ * fixtures (skip gracefully when absent).
+ */
+static inline QString testAssetPath(const QString& relative)
+{
+    const QString binDir = QCoreApplication::applicationDirPath();
+    QDir dir(binDir);
+    if (dir.cdUp() && dir.cdUp()) {
+        const QString p = dir.absoluteFilePath(relative);
+        if (QFile::exists(p))
+            return p;
+    }
+#ifdef QTMESH_UT_SOURCE_ROOT
+    {
+        const QString p = QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT)).filePath(relative);
+        if (QFile::exists(p))
+            return p;
+    }
+#endif
+    const QString legacy = QStringLiteral("./") + relative;
+    if (QFile::exists(legacy))
+        return QFileInfo(legacy).absoluteFilePath();
+    return {};
+}
+
+/**
  * Creates a hidden 1x1 QWidget and uses its native window handle to
  * create an Ogre RenderWindow named "TestHidden".  This provides the
  * GL context that Ogre needs for hardware buffer operations (creating
