@@ -13,7 +13,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0 \
     libfontconfig1 libfreetype6 \
     libsecret-1-0 \
+    libpulse0 libasound2t64 \
+    libavformat60 libavcodec60 libavutil58 libswscale7 libswresample4 \
     && rm -rf /var/lib/apt/lists/*
+
+# Qt Multimedia (linked by the mocap build, epic #869) pulls in libpulse /
+# ALSA and, for its FFmpeg backend plugin, the libav* runtime libs. Without
+# these, the qtmesheditor binary aborts at load with
+# "libQt6Multimedia.so.6: cannot open shared object file" — even for CLI/scan
+# runs that never touch video. (The .deb bundles libQt6Multimedia itself.)
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)
 COPY qtmesheditor.deb /tmp/qtmesheditor.deb

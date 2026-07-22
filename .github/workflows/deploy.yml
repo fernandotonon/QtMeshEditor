@@ -896,12 +896,25 @@ jobs:
             cp -R "$QT_DIR/qml/QtQml" ./pack-deb/usr/share/qtmesheditor/qml/
 
             # Copy Qt QML runtime libraries
+            # Multimedia / MultimediaQuick: mocap (ENABLE_MOCAP, epic #869)
+            # links Qt6::Multimedia, so the .deb MUST ship its .so or the
+            # binary aborts at load with "libQt6Multimedia.so.6: cannot open
+            # shared object file" (broke the scan-assets Docker job on 3.23.0).
             for lib in QuickControls2 QuickControls2Impl QuickControls2Basic QuickControls2BasicStyleImpl \
                        QuickDialogs2 QuickDialogs2Utils QuickDialogs2QuickImpl \
                        QuickTemplates2 QuickLayouts Quick QmlModels QmlMeta QmlWorkerScript Qml QmlCore \
+                       Multimedia MultimediaQuick \
                        OpenGL; do
                 cp -R "$QT_DIR/lib/libQt6${lib}.so"* ./pack-deb/usr/lib/qtmesheditor/ 2>/dev/null || true
             done
+
+            # Qt Multimedia FFmpeg backend plugin (video/webcam decode for mocap).
+            # Without it Multimedia loads but can't open any media source.
+            if [ -d "$QT_DIR/plugins/multimedia" ]; then
+                mkdir -p ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia
+                cp -R "$QT_DIR/plugins/multimedia/"*.so \
+                    ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/ 2>/dev/null || true
+            fi
 
             dpkg-deb --build --root-owner-group pack-deb
             mv pack-deb.deb qtmesheditor_amd64.deb
