@@ -181,6 +181,56 @@ def vnorm(v):
 # Actions that legitimately go horizontal — no uprightness gate for these.
 HORIZONTAL_OK = {"death", "roll", "crawl", "swim", "fall", "sleep"}
 
+# License exclusion: Adobe Mixamo animations cannot be redistributed as a
+# standalone library (Mixamo ToS), even when a Sketchfab uploader re-published
+# the model under CC-BY — the CC-BY covers the upload, not the underlying
+# Adobe animation data. Drop any clip whose animation/source name is Mixamo-
+# derived. Matched case-insensitively against "<title> — <animation>".
+MIXAMO_MARKERS = ("mixamo",)
+
+# Manual review drop-list (#838 curation): specific (asset-title-substring,
+# animation-substring) pairs the user reviewed and rejected — bad retargets
+# (Fox-rig tip/hunch/invert) or off-action clips. Matched case-insensitively;
+# animation "" matches any animation of that asset. Kept as (title, anim) so
+# it survives library rebuilds (JSON indices are not stable).
+REVIEW_DROP = [
+    ("GIGI", ""),          # Fox rig — tips/hunches on every action reviewed
+    ("KAI", ""),           # Fox rig — same
+    ("Shar Pei", ""),      # dog rig — wrong body plan for humanoid retarget
+    ("Square Head Character", "Loose"),  # shake [100] — weak/ambiguous
+    ("Dance | Japanese Samurai", ""),    # dance [49] — crouched, off
+]
+
+
+def _excluded(title, anim):
+    """True if this (asset, animation) is dropped by license or review rules."""
+    hay = f"{title} {anim}".lower()
+    if any(m in hay for m in MIXAMO_MARKERS):
+        return "mixamo (license: Adobe ToS, not redistributable)"
+    for t, a in REVIEW_DROP:
+        if t.lower() in title.lower() and (not a or a.lower() in anim.lower()):
+            return f"review drop-list ({t}{'/' + a if a else ''})"
+    return None
+
+
+def fix_first_frame_flip(quats):
+    """Mini Chibi Kid (and similar) clips export frame 0 with a rotated/flipped
+    hip while the rest of the clip is upright — a loop-seam artifact. If frame 0
+    is a strong outlier vs frame 1 (hip up-Y flipped past horizontal) but the
+    clip is otherwise upright, replace frame 0 with frame 1 so the retarget
+    doesn't open on the glitch. Returns the (possibly repaired) list."""
+    if len(quats) < 3:
+        return quats
+    def up_y(f):
+        x, y, z, w = f[HIP]
+        return 1.0 - 2.0 * (x * x + z * z)
+    u0, u1, u2 = up_y(quats[0]), up_y(quats[1]), up_y(quats[2])
+    # frame 0 inverted/tilted-past-horizontal but 1 & 2 upright → repair
+    if u0 < 0.3 and u1 > 0.7 and u2 > 0.7:
+        quats = list(quats)
+        quats[0] = quats[1]
+    return quats
+
 # canonical role indices
 HIP, ABDOMEN, CHEST, NECK = 0, 1, 2, 3
 RHIP, LHIP = 15, 19
@@ -564,10 +614,19 @@ def main():
                     for c in dump.get("clips", []):
                         if c.get("resolvedRoles", 0) < args.min_roles:
                             continue
+                        anim = c.get("animation", "")
+                        excl = _excluded(title, anim)
+                        if excl:
+                            print(f"  - {'':<10} {title[:38]:<40} {anim} "
+                                  f"EXCLUDED: {excl}")
+                            continue
                         q = c.get("quats", [])
                         if len(q) < args.min_frames:
                             continue
-                        action = action_for(c.get("animation", ""), tags)
+                        # Repair a rotated/flipped first frame (Mini Chibi etc.)
+                        # before windowing, so a window opening at frame 0 is clean.
+                        q = fix_first_frame_flip(q)
+                        action = action_for(anim, tags)
                         if not action:
                             continue
                         s, epos = select_window(q, args.max_frames)
