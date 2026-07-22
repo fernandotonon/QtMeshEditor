@@ -1427,7 +1427,16 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
             if (h >= static_cast<unsigned short>(d->nBones)) continue;
             Ogre::TransformKeyFrame f0(nullptr, 0.0f);
             trk->getInterpolatedKeyFrame(ref->_getTimeIndex(tCalm), &f0);
-            d->standLocal[h] = f0.getRotation();
+            // A NodeAnimationTrack keyframe rotation is RELATIVE — Ogre applies
+            // it as node->rotate(kf) ON TOP of the bone's reset/bind local
+            // (applyToNode accumulates, it does NOT replace). evaluateFrame
+            // returns an ABSOLUTE local for Bone::setOrientation() (which
+            // replaces), so bake the bind in here: absoluteLocal = bind · kf.
+            // Without this, non-identity-rest bones drive wrong and the figure
+            // inverts under the live setOrientation path (baked-clip playback
+            // hid it by re-accumulating the reset pose).
+            d->standLocal[h] = d->tb.bindLocal[static_cast<size_t>(h)]
+                               * f0.getRotation();
             d->haveStand[h] = true;
             d->haveAnyStand = true;
         }

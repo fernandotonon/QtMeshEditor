@@ -365,10 +365,14 @@ BodyRecordReport recordBody(
                         anim->createNodeTrack(handle, skel->getBone(handle))).first;
                 auto* kf = it->second->createNodeKeyFrame(
                     static_cast<Ogre::Real>(dt * f));
-                // Ogre node keyframes are ABSOLUTE local rotations (they replace
-                // the reset pose), exactly as applyMotionClip writes them — do
-                // NOT subtract bindLocal.
-                kf->setRotation(local);
+                // NodeAnimationTrack::applyToNode ACCUMULATES the keyframe onto
+                // the reset/bind pose (node->rotate(kf)), so a keyframe is a
+                // RELATIVE rotation. evaluateFrame returns the ABSOLUTE local
+                // the live setOrientation() path wants, so convert to relative
+                // for the baked clip: kf = bindLocal⁻¹ · absoluteLocal. This
+                // makes the baked render reproduce EXACTLY what the live drive
+                // shows (both end at the same final local orientation).
+                kf->setRotation(bindLocal[handle].Inverse() * local);
             }
         }
         report.tracksWritten = static_cast<int>(tracks.size());
