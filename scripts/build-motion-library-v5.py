@@ -93,6 +93,19 @@ def norm_anim_name(name):
     return " ".join(words)
 
 
+# Fold verbatim-word actions onto a canonical base so we don't split a
+# handful of clips across near-duplicate labels ("waving"→"wave"). Keeps the
+# runtime kSynonyms table and these labels consistent.
+CANON_ACTION = {
+    "waving": "wave", "singing": "sing", "walking": "walk",
+    "running": "run", "jumping": "jump", "dancing": "dance",
+    "kicking": "kick", "punching": "punch", "crawling": "crawl",
+    "climbing": "climb", "rolling": "roll", "swimming": "swim",
+    "sitting": "sit", "praying": "pray", "dying": "death",
+    "shakehand": "shake", "handshake": "shake",
+}
+
+
 def action_for(anim_name, tags):
     n = norm_anim_name(anim_name)
     for kw, action in KEYWORDS:
@@ -103,7 +116,7 @@ def action_for(anim_name, tags):
     if len(words) == 1 and 3 <= len(words[0]) <= 16 \
             and words[0] not in BAD_ACTIONS \
             and not any(sw in words[0] for sw in STOPWORDS if len(sw) > 3):
-        return words[0]
+        return CANON_ACTION.get(words[0], words[0])
     for t in tags or []:
         for kw, action in KEYWORDS:
             if action and kw in str(t).lower():
@@ -210,9 +223,12 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         thigh_axes = [(r, axis(r)) for r in (RHIP, LHIP)]
         thigh_axes = [(r, a) for r, a in thigh_axes if a is not None]
         spine_up, thigh_down, ns, nt = 0.0, 0.0, 0, 0
+        spine_up_min = 1.0                       # worst (lowest) frame
         for f in range(0, len(quats), 3):
             if a_spine is not None:
-                spine_up += qrot(quats[f][spine_role], a_spine)[1]; ns += 1
+                su = qrot(quats[f][spine_role], a_spine)[1]
+                spine_up += su; ns += 1
+                spine_up_min = min(spine_up_min, su)
             if thigh_axes:
                 thigh_down += sum(-qrot(quats[f][r], a)[1]
                                   for r, a in thigh_axes) / len(thigh_axes)
@@ -232,6 +248,13 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
                 # Animated gate: torso must stay up, thighs hang down.
                 if spine_up is not None and spine_up < 0.5:
                     return 0.0, f"not upright (spine-up {spine_up:.2f})"
+                # Topple gate: even if the MEAN stays up, reject clips whose
+                # torso pitches head-below-horizontal in any frame — a
+                # ground/fall kick or a mid-clip topple that averages out but
+                # renders as the character lying down on a biped rig.
+                if spine_up is not None and spine_up_min < -0.25:
+                    return 0.0, (f"topples mid-clip (spine-up min "
+                                 f"{spine_up_min:.2f})")
                 if spine_up is None and thigh_down is not None \
                         and thigh_down < 0.3:
                     return 0.0, f"not upright (thigh-down {thigh_down:.2f})"
