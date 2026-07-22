@@ -11,6 +11,17 @@
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
+#ifdef ENABLE_MOCAP
+#include "Mocap/FaceCapMapper.h"
+#include "Mocap/FaceCapPredictor.h"
+#include "Mocap/MocapRecorder.h"
+#include "Mocap/OneEuroFilter.h"
+#include "Mocap/PoseCapPredictor.h"
+#include "Mocap/PoseIKSolver.h"
+#include "Mocap/VideoFrameSource.h"
+#include "commands/RecordMocapClipCommand.h"
+#include "Mocap/MocapController.h"
+#endif
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
 #include "PrimitiveObject.h"
@@ -699,6 +710,12 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
+        {QStringLiteral("capture_face_from_video"), &MCPServer::toolCaptureFaceFromVideo},
+        {QStringLiteral("capture_body_from_video"), &MCPServer::toolCaptureBodyFromVideo},
+        {QStringLiteral("list_capture_devices"), &MCPServer::toolListCaptureDevices},
+        {QStringLiteral("start_live_capture"), &MCPServer::toolStartLiveCapture},
+        {QStringLiteral("stop_live_capture"), &MCPServer::toolStopLiveCapture},
+        {QStringLiteral("set_capture_channels"), &MCPServer::toolSetCaptureChannels},
         {QStringLiteral("play_vertex_animation"), &MCPServer::toolPlayVertexAnimation},
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
@@ -752,6 +769,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("bake_vat"),
         QStringLiteral("list_morph_targets"),
         QStringLiteral("import_alembic"),
+        QStringLiteral("capture_face_from_video"),
+        QStringLiteral("capture_body_from_video"),
         QStringLiteral("cloud_upload")
     };
     return heavyTools.contains(name);
@@ -818,6 +837,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
+            {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
+            {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
             {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
@@ -6747,6 +6768,441 @@ QJsonObject MCPServer::toolSetMorphWeight(const QJsonObject &args)
 // Vertex-anim B3 (#519) — Alembic import + vertex-clip playback.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Performance capture (epic #869, Slice D #873)
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolCaptureFaceFromVideo(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "capture_face_from_video");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    const QString videoPath = args.value("video_path").toString();
+    if (videoPath.isEmpty())
+        return makeErrorResult("Error: missing required 'video_path' argument");
+    if (!QFileInfo::exists(videoPath))
+        return makeErrorResult(QString("Error: video not found: %1").arg(videoPath));
+
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Error: Manager not available");
+
+    const QString entityName = args.value("entity_name").toString();
+    Ogre::Entity* entity = nullptr;
+    if (entityName.isEmpty()) {
+        // Schema says the target defaults to the selected entity — honour
+        // SelectionSet, then fall back to the first entity in the scene.
+        if (auto* sel = SelectionSet::getSingleton()) {
+            const auto resolved = sel->getResolvedEntities();
+            if (!resolved.isEmpty()) entity = resolved.first();
+        }
+    }
+    if (!entity) {
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+    }
+    if (!entity) {
+        return makeErrorResult(entityName.isEmpty()
+            ? QString("Error: No mesh entity found")
+            : QString("Error: Entity '%1' not found").arg(entityName));
+    }
+
+    const QStringList targets =
+        MorphAnimationManager::instance()->morphTargetsFor(entity);
+    const bool head = args.value("head").toBool(true);
+    if (targets.isEmpty() && !head)
+        return makeErrorResult(
+            "Error: the entity has no morph targets and head=false — nothing to record. "
+            "Face capture drives ARKit-style blendshape targets (jawOpen, mouthSmileLeft, ...).");
+
+    const FaceCapMapper::Mapping mapping =
+        FaceCapMapper::build(targets, args.value("map_path").toString());
+    if (!mapping.error.isEmpty())
+        return makeErrorResult(QString("Error: %1").arg(mapping.error));
+
+    if (!FaceCapPredictor::modelsPresent()
+        && FaceCapPredictor::ensureModelsBlocking().isEmpty())
+        return makeErrorResult(
+            "Error: face capture models are not available (download failed, offline "
+            "guard set, or not hosted yet). Set QTMESH_MOCAP_MODEL_BASE_URL or place "
+            "the graphs in " + FaceCapPredictor::modelDir());
+    auto predictor = std::make_shared<FaceCapPredictor>();
+    if (!predictor->load())
+        return makeErrorResult(QString("Error: %1").arg(predictor->lastError()));
+
+    double fps = args.value("fps").toDouble(30.0);
+    if (fps <= 0 || fps > 240) fps = 30.0;
+    const bool smooth = args.value("smooth").toBool(true);
+
+    auto source = std::make_shared<FileFrameSource>(videoPath, fps);
+    QString openError;
+    if (!source->open(&openError))
+        return makeErrorResult(QString("Error: %1").arg(openError));
+
+    auto samples = std::make_shared<std::vector<FaceSample>>();
+    auto weightFilters = std::make_shared<std::array<OneEuroFilter, 52>>();
+    auto headFilter = std::make_shared<OneEuroQuatFilter>();
+
+    QEventLoop loop;
+    bool finished = false;
+    QString streamError;
+    QObject::connect(source.get(), &VideoFrameSource::frameReady,
+                     [&, predictor, samples, weightFilters, headFilter](const MocapFrame& frame) {
+                         FaceSample s = predictor->predict(frame.image, frame.timeSec);
+                         if (smooth && s.confidence > 0.f) {
+                             for (int c = 0; c < 52; ++c)
+                                 s.weights[c] = static_cast<float>(
+                                     (*weightFilters)[c].filter(s.weights[c], s.timeSec));
+                             s.headRotation = headFilter->filter(s.headRotation, s.timeSec);
+                         }
+                         samples->push_back(s);
+                     });
+    QObject::connect(source.get(), &VideoFrameSource::finished, [&] {
+        finished = true; loop.quit();
+    });
+    QObject::connect(source.get(), &VideoFrameSource::errorOccurred,
+                     [&](const QString& message) {
+                         streamError = message; finished = true; loop.quit();
+                     });
+    source->start();
+    if (!finished)
+        loop.exec();
+    source->stop();
+    if (!streamError.isEmpty())
+        return makeErrorResult(QString("Error: %1").arg(streamError));
+    if (samples->empty())
+        return makeErrorResult("Error: the video produced no frames");
+
+    MocapRecorder::FaceRecordOptions options;
+    options.clipName = args.value("clip_name").toString(QStringLiteral("FaceCap"));
+    options.head = head;
+
+    return runOgreOp([&]() -> QJsonObject {
+        // ONE undoable step for the whole take
+        auto* cmd = new RecordMocapClipCommand(entity->getName(), *samples,
+                                               mapping, options);
+        UndoManager::getSingleton()->push(cmd);
+        const MocapRecorder::FaceRecordReport& report = cmd->report();
+        if (!report.ok())
+            return makeErrorResult(QString("Error: %1").arg(report.error));
+
+        const QString outputPath = args.value("output_path").toString();
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            const QString fmt = CLIPipeline::formatForExtension(outputPath);
+            if (!node || MeshImporterExporter::exporter(
+                    node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
+                return makeErrorResult(
+                    QString("Error: recorded, but export to %1 failed").arg(outputPath));
+        }
+
+        GamificationManager::noteOperation(
+            QStringLiteral("mocap_face"),
+            {{QStringLiteral("frames"), static_cast<qint64>(report.framesProcessed)},
+             {QStringLiteral("keyframes"),
+              static_cast<qint64>(report.keyframesWritten + report.headKeyframesWritten)}},
+            GamificationManager::Surface::Mcp);
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["clipName"] = report.clipName;
+        content["framesProcessed"] = report.framesProcessed;
+        content["framesNoFace"] = report.framesNoFace;
+        content["keyframesWritten"] = report.keyframesWritten;
+        content["headKeyframesWritten"] = report.headKeyframesWritten;
+        content["headTarget"] = report.headTarget;
+        content["clipLength"] = report.clipLength;
+        content["matchedChannels"] = QJsonArray::fromStringList(report.matchedChannels);
+        content["unmatchedCanonical"] = QJsonArray::fromStringList(report.unmatchedCanonical);
+        content["unmatchedMesh"] = QJsonArray::fromStringList(report.unmatchedMesh);
+        if (!outputPath.isEmpty())
+            content["output"] = outputPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    });
+#endif // ENABLE_MOCAP
+}
+
+QJsonObject MCPServer::toolListCaptureDevices(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_capture_devices");
+#ifndef ENABLE_MOCAP
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    QJsonArray devices;
+    for (const auto& dev : CameraFrameSource::availableDevices()) {
+        QJsonObject o;
+        o["id"] = dev.id;
+        o["description"] = dev.description;
+        devices.append(o);
+    }
+    QJsonObject content;
+    content["devices"] = devices;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolStartLiveCapture(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "start_live_capture");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getMainWindow())
+        return makeErrorResult(
+            "Error: live capture needs the GUI (run with --with-mcp, not --mcp).");
+    auto* c = MocapController::instance();
+    if (c->state() != MocapController::Idle)
+        return makeErrorResult("Error: a live capture session is already running");
+
+    // Optional channel toggles — set BEFORE starting so drivability is
+    // evaluated with the requested channels (default: leave as-is).
+    if (args.contains("face")) c->setFaceEnabled(args.value("face").toBool());
+    if (args.contains("head")) c->setHeadEnabled(args.value("head").toBool());
+    if (args.contains("body")) c->setBodyEnabled(args.value("body").toBool());
+
+    // video_path drives from a file (the macOS-camera-blocked path); else the
+    // webcam device_id (empty = default camera).
+    const QString videoPath = args.value("video_path").toString();
+    const bool started = videoPath.isEmpty()
+        ? c->startPreview(args.value("device_id").toString())
+        : c->startPreviewFromVideo(videoPath);
+    if (!started)
+        return makeErrorResult(QString("Error: %1").arg(c->statusMessage()));
+    QJsonObject content;
+    content["ok"] = true;
+    content["state"] = "previewing";
+    content["source"] = videoPath.isEmpty() ? "camera" : "video";
+    content["matchedChannels"] = c->matchedChannelCount();
+    content["headAvailable"] = c->headAvailable();
+    content["bodyAvailable"] = c->bodyAvailable();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolSetCaptureChannels(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_capture_channels");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    auto* c = MocapController::instance();
+    if (args.contains("face")) c->setFaceEnabled(args.value("face").toBool());
+    if (args.contains("head")) c->setHeadEnabled(args.value("head").toBool());
+    if (args.contains("body")) c->setBodyEnabled(args.value("body").toBool());
+    QJsonObject content;
+    content["ok"] = true;
+    content["face"] = c->faceEnabled();
+    content["head"] = c->headEnabled();
+    content["body"] = c->bodyEnabled();
+    content["matchedChannels"] = c->matchedChannelCount();
+    content["headAvailable"] = c->headAvailable();
+    content["bodyAvailable"] = c->bodyAvailable();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolStopLiveCapture(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "stop_live_capture");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    auto* c = MocapController::instance();
+    if (c->state() == MocapController::Idle)
+        return makeErrorResult("Error: no live capture session is running");
+    if (args.value("record").toBool(false)
+        && c->state() == MocapController::Recording)
+        c->stopRecording();
+    c->stopPreview();
+    QJsonObject content;
+    content["ok"] = true;
+    content["status"] = c->statusMessage();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+#endif
+}
+
+QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "capture_body_from_video");
+#ifndef ENABLE_MOCAP
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Error: this build has no performance-capture support. Rebuild with "
+        "-DENABLE_MOCAP=ON -DENABLE_ONNX=ON.");
+#else
+    const QString videoPath = args.value("video_path").toString();
+    if (videoPath.isEmpty())
+        return makeErrorResult("Error: missing required 'video_path' argument");
+    if (!QFileInfo::exists(videoPath))
+        return makeErrorResult(QString("Error: video not found: %1").arg(videoPath));
+
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Error: Manager not available");
+
+    const QString entityName = args.value("entity_name").toString();
+    Ogre::Entity* entity = nullptr;
+    if (entityName.isEmpty()) {
+        // Schema says the target defaults to the selected entity — honour
+        // SelectionSet, then fall back to the first entity in the scene.
+        if (auto* sel = SelectionSet::getSingleton()) {
+            const auto resolved = sel->getResolvedEntities();
+            if (!resolved.isEmpty()) entity = resolved.first();
+        }
+    }
+    if (!entity) {
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+    }
+    if (!entity) {
+        return makeErrorResult(entityName.isEmpty()
+            ? QString("Error: No mesh entity found")
+            : QString("Error: Entity '%1' not found").arg(entityName));
+    }
+    if (!entity->hasSkeleton())
+        return makeErrorResult(
+            "Error: the entity is not skinned — body capture retargets onto a "
+            "humanoid skeleton (auto_rig with skin:true first).");
+
+    if (!PoseCapPredictor::modelsPresent()
+        && PoseCapPredictor::ensureModelsBlocking().isEmpty())
+        return makeErrorResult(
+            "Error: pose capture models are not available (download failed, offline "
+            "guard set, or not hosted yet). Set QTMESH_MOCAP_MODEL_BASE_URL or place "
+            "the graphs in " + PoseCapPredictor::modelDir());
+    auto posePredictor = std::make_shared<PoseCapPredictor>();
+    if (!posePredictor->load())
+        return makeErrorResult(QString("Error: %1").arg(posePredictor->lastError()));
+
+    double fps = args.value("fps").toDouble(30.0);
+    if (fps <= 0 || fps > 240) fps = 30.0;
+    const bool smooth = args.value("smooth").toBool(true);
+    const QString algo = args.value("algo").toString(QStringLiteral("sam3dbody"));
+
+    auto source = std::make_shared<FileFrameSource>(videoPath, fps);
+    QString openError;
+    if (!source->open(&openError))
+        return makeErrorResult(QString("Error: %1").arg(openError));
+
+    auto poseSamples = std::make_shared<std::vector<PoseSample>>();
+    QEventLoop loop;
+    bool finished = false;
+    QString streamError;
+    QObject::connect(source.get(), &VideoFrameSource::frameReady,
+                     [&, posePredictor, poseSamples](const MocapFrame& frame) {
+                         poseSamples->push_back(
+                             posePredictor->predict(frame.image, frame.timeSec));
+                     });
+    QObject::connect(source.get(), &VideoFrameSource::finished, [&] {
+        finished = true; loop.quit();
+    });
+    QObject::connect(source.get(), &VideoFrameSource::errorOccurred,
+                     [&](const QString& message) {
+                         streamError = message; finished = true; loop.quit();
+                     });
+    source->start();
+    if (!finished)
+        loop.exec();
+    source->stop();
+    if (!streamError.isEmpty())
+        return makeErrorResult(QString("Error: %1").arg(streamError));
+
+    std::vector<std::vector<std::array<float, 4>>> clipQuats;
+    {
+        std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
+        PoseIK::Solver solver;
+        for (const PoseSample& s : *poseSamples) {
+            if (s.confidence <= 0.f)
+                continue;
+            PoseIK::FrameResult fr =
+                solver.solveFrame(s.world.data(), s.visibility.data());
+            if (smooth)
+                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
+                    fr.quats[r] = roleFilters[r].filter(fr.quats[r], s.timeSec);
+            clipQuats.push_back(std::vector<std::array<float, 4>>(
+                fr.quats.begin(), fr.quats.end()));
+        }
+    }
+    if (clipQuats.size() < 2)
+        return makeErrorResult("Error: no person tracked in the video");
+
+    MocapRecorder::BodyRecordOptions options;
+    options.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
+    options.algorithmUsed = QStringLiteral("pose-ik");
+    options.fallbackReason = algo == QLatin1String("pose-ik")
+        ? QString()
+        : QStringLiteral("sam3dbody model not available (checkpoint access "
+                         "pending — see THIRD_PARTY_AI_MODELS.md); used pose-ik");
+
+    return runOgreOp([&]() -> QJsonObject {
+        auto* cmd = new RecordBodyClipCommand(entity->getName(), clipQuats,
+                                              static_cast<int>(fps), options);
+        UndoManager::getSingleton()->push(cmd);
+        MocapRecorder::BodyRecordReport report = cmd->report();
+        report.framesProcessed = static_cast<int>(poseSamples->size());
+        if (!report.ok())
+            return makeErrorResult(QString("Error: %1").arg(report.error));
+
+        const QString outputPath = args.value("output_path").toString();
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            const QString fmt = CLIPipeline::formatForExtension(outputPath);
+            if (!node || MeshImporterExporter::exporter(
+                    node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
+                return makeErrorResult(
+                    QString("Error: recorded, but export to %1 failed").arg(outputPath));
+        }
+
+        GamificationManager::noteOperation(
+            QStringLiteral("mocap_body"),
+            {{QStringLiteral("frames"), static_cast<qint64>(report.framesProcessed)},
+             {QStringLiteral("tracks"), static_cast<qint64>(report.tracksWritten)}},
+            GamificationManager::Surface::Mcp);
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["clipName"] = report.clipName;
+        content["algorithmUsed"] = report.algorithmUsed;
+        if (!report.fallbackReason.isEmpty())
+            content["fallbackReason"] = report.fallbackReason;
+        content["framesProcessed"] = report.framesProcessed;
+        content["rolesResolved"] = report.rolesResolved;
+        content["tracksWritten"] = report.tracksWritten;
+        content["clipLength"] = report.clipLength;
+        if (!outputPath.isEmpty())
+            content["output"] = outputPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    });
+#endif // ENABLE_MOCAP
+}
+
 QJsonObject MCPServer::toolImportAlembic(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "import_alembic");
@@ -9575,6 +10031,103 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // capture_face_from_video (epic #869, Slice D #873)
+    {
+        QJsonObject props;
+        props["video_path"] = QJsonObject{{"type", "string"}, {"description", "Path to a video file of a face performance."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Target entity (default: first/selected entity)."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional export path (e.g. out.glb) written after recording."}};
+        props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "Morph weight clip name (default FaceCap)."}};
+        props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate; frames are decimated to this (default 30)."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
+        props["map_path"] = QJsonObject{{"type", "string"}, {"description", "Optional JSON mapping-override sidecar."}};
+        props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Also record head pose (default true)."}};
+        QJsonArray required;
+        required.append("video_path");
+        appendTool(
+            "capture_face_from_video",
+            "Performance capture: run the face-capture models over a video and record the "
+            "expressions as morph-target weight keyframes (plus head rotation) on the entity, "
+            "as ONE undoable clip. The entity needs ARKit-style blendshape morph targets "
+            "(jawOpen, mouthSmileLeft, ...). Unmatched channels are reported, never dropped. "
+            "Requires a build with ENABLE_MOCAP=ON; models download on first use.",
+            props,
+            required
+        );
+    }
+
+    // capture_body_from_video (epic #869, Slice E #874)
+    {
+        QJsonObject props;
+        props["video_path"] = QJsonObject{{"type", "string"}, {"description", "Path to a video of a full-body performance."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Target skinned entity (default: first/selected)."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional export path written after recording."}};
+        props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "Skeletal clip name (default BodyCap)."}};
+        props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (quality path; falls back while its checkpoints are gated) or pose-ik."}};
+        QJsonArray required;
+        required.append("video_path");
+        appendTool(
+            "capture_body_from_video",
+            "Performance capture: track a person in a video and record the full-body pose as a "
+            "skeletal animation on the entity's humanoid rig (rotation-only, root locked, "
+            "ONE undoable clip). Needs a skinned mesh resolving at least half of the 22 "
+            "canonical roles. Requires a build with ENABLE_MOCAP=ON; models download on first use.",
+            props,
+            required
+        );
+    }
+
+    // live capture (epic #869, Slice F #875) — GUI-attached sessions only
+    {
+        QJsonObject props;
+        appendTool(
+            "list_capture_devices",
+            "List the available camera devices for live performance capture "
+            "(id + description). Requires a build with ENABLE_MOCAP=ON.",
+            props, QJsonArray());
+    }
+    {
+        QJsonObject props;
+        props["device_id"] = QJsonObject{{"type", "string"}, {"description", "Camera id from list_capture_devices (default camera when omitted)."}};
+        props["video_path"] = QJsonObject{{"type", "string"}, {"description", "Drive from a VIDEO FILE instead of the camera (the macOS-camera-blocked path). Local path, not a URL."}};
+        props["face"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Face (morph-target) drive. Default: leave current toggle."}};
+        props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Head-bone drive."}};
+        props["body"] = QJsonObject{{"type", "boolean"}, {"description", "Enable full-body drive (humanoid rig)."}};
+        QJsonArray required;
+        appendTool(
+            "start_live_capture",
+            "Start a live performance-capture preview driving the SELECTED entity's morph "
+            "targets + Head bone + (humanoid) body — the GUI Performance Capture panel's "
+            "session. Source is the webcam (device_id) or a video file (video_path). The "
+            "face/head/body flags toggle channels before starting. Only works in --with-mcp "
+            "(GUI) mode. Follow with stop_live_capture.",
+            props, required);
+    }
+    {
+        QJsonObject props;
+        props["face"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the Face (morph-target) channel."}};
+        props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the Head-bone channel."}};
+        props["body"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the full-body channel."}};
+        appendTool(
+            "set_capture_channels",
+            "Set the Face/Head/Body capture channel toggles for the SELECTED entity (the "
+            "Performance Capture checkboxes). Returns each flag plus what the selection can "
+            "actually drive (matchedChannels, headAvailable, bodyAvailable). Set BEFORE "
+            "start_live_capture, or between sessions.",
+            props, QJsonArray());
+    }
+    {
+        QJsonObject props;
+        props["record"] = QJsonObject{{"type", "boolean"}, {"description", "true: stop and commit the recording in progress (if any) before stopping the preview."}};
+        appendTool(
+            "stop_live_capture",
+            "Stop the live performance-capture preview started by start_live_capture, "
+            "restoring the entity's prior state exactly.",
+            props, QJsonArray());
     }
 
     // import_alembic

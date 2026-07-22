@@ -33,6 +33,11 @@ const QList<FeatureInfo>& featureCatalog()
          QStringLiteral("Create and animate morph (blend shape) targets.")},
         {QStringLiteral("motion_inbetween"), QStringLiteral("AI In-Betweening"),
          QStringLiteral("Fill gaps between keyframes with smooth, plausible motion.")},
+        // NB: adding a key here requires the matching DISCOVERY_FEATURES
+        // entry in qtmesh-cloud (the CLAUDE.md contract) — 'mocap' is
+        // coordinated as part of epic #869 Slice G.
+        {QStringLiteral("mocap"), QStringLiteral("Performance Capture"),
+         QStringLiteral("Capture facial and body performance from video or a live webcam.")},
         {QStringLiteral("pose_library"), QStringLiteral("Pose Library"),
          QStringLiteral("Save and reuse skeleton poses across animations.")},
         {QStringLiteral("vat_bake"), QStringLiteral("VAT Baking"),

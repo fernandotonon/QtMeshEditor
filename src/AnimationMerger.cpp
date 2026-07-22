@@ -1346,6 +1346,205 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
 }
 } // namespace
 
+// ── BodyRetargeter — the applyMotionClip direction-match, per single frame ──
+struct BodyRetargeter::Impl {
+    TargetBindFrame tb;
+    std::vector<int> boneToCanon;   // per bone
+    Ogre::Quaternion CtInv = Ogre::Quaternion::IDENTITY;
+    int nBones = 0;
+    int Jc = 0;
+    // Harvested STANDING pose per bone (the calmest frame of the rig's existing
+    // authored animation) — the base local rotation each frame's articulation
+    // delta is composed onto. This is what makes arms sit at the chest instead
+    // of splayed at the T-pose bind. Mirrors applyMotionClip's legacy transport.
+    std::vector<Ogre::Quaternion> standLocal;     // per bone
+    std::vector<bool> haveStand;                  // per bone
+    std::vector<Ogre::Quaternion> Mc, McInv;      // per bone (roll correction)
+    bool restsAreIdentity = true;
+    bool haveAnyStand = false;
+    // neutral (first-frame) canonical quats — the reference the per-frame
+    // local-articulation delta is taken against.
+    std::array<std::array<float, 4>, 22> neutral{};
+    bool haveNeutral = false;
+};
+
+BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
+{
+    if (!skel) return;
+    d = std::make_shared<Impl>();
+    d->nBones = static_cast<int>(skel->getNumBones());
+    d->Jc = MotionInbetween::canonicalJointCount();
+    d->boneToCanon.assign(static_cast<size_t>(d->nBones), -1);
+    for (int i = 0; i < d->nBones; ++i)
+        d->boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    d->tb = readTargetBindFrame(skel, d->boneToCanon);
+    d->CtInv = d->tb.Ct.Inverse();
+
+    // ── Harvest the STANDING pose (calmest frame of the rig's first authored,
+    //    non-generated animation) — the same pose applyMotionClip's legacy
+    //    transport composes onto. Without it the live arms sit at the T-pose
+    //    bind and look splayed. ──
+    d->standLocal.assign(static_cast<size_t>(d->nBones), Ogre::Quaternion::IDENTITY);
+    d->haveStand.assign(static_cast<size_t>(d->nBones), false);
+    Ogre::Animation* ref = nullptr;
+    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+        Ogre::Animation* a = skel->getAnimation(ai);
+        if (a && a->getName().rfind("generated_", 0) != 0) { ref = a; break; }
+    }
+    if (ref) {
+        const float len = ref->getLength();
+        const int samples = std::clamp(
+            static_cast<int>(std::lround(len * 30.0f)) + 1, 2, 301);
+        const auto& tracks = ref->_getNodeTrackList();
+        std::vector<double> energy(static_cast<size_t>(samples), 0.0);
+        for (const auto& [h, trk] : tracks) {
+            if (!trk || trk->getNumKeyFrames() == 0) continue;
+            Ogre::Quaternion prevQ;
+            for (int f = 0; f < samples; ++f) {
+                const float t = len * static_cast<float>(f)
+                                / static_cast<float>(samples - 1);
+                Ogre::TransformKeyFrame kf(nullptr, 0.0f);
+                trk->getInterpolatedKeyFrame(ref->_getTimeIndex(t), &kf);
+                const Ogre::Quaternion q = kf.getRotation();
+                if (f > 0) {
+                    const double dd = std::min(1.0, std::abs(
+                        static_cast<double>(q.Dot(prevQ))));
+                    energy[static_cast<size_t>(f)] += 2.0 * std::acos(dd);
+                }
+                prevQ = q;
+            }
+        }
+        int calm = 1;
+        for (int f = 2; f < samples; ++f)
+            if (energy[static_cast<size_t>(f)] < energy[static_cast<size_t>(calm)])
+                calm = f;
+        const float tCalm = len * static_cast<float>(calm)
+                            / static_cast<float>(samples - 1);
+        for (const auto& [h, trk] : tracks) {
+            if (!trk || trk->getNumKeyFrames() == 0) continue;
+            if (h >= static_cast<unsigned short>(d->nBones)) continue;
+            Ogre::TransformKeyFrame f0(nullptr, 0.0f);
+            trk->getInterpolatedKeyFrame(ref->_getTimeIndex(tCalm), &f0);
+            // A NodeAnimationTrack keyframe rotation is RELATIVE — Ogre applies
+            // it as node->rotate(kf) ON TOP of the bone's reset/bind local
+            // (applyToNode accumulates, it does NOT replace). evaluateFrame
+            // returns an ABSOLUTE local for Bone::setOrientation() (which
+            // replaces), so bake the bind in here: absoluteLocal = bind · kf.
+            // Without this, non-identity-rest bones drive wrong and the figure
+            // inverts under the live setOrientation path (baked-clip playback
+            // hid it by re-accumulating the reset pose).
+            d->standLocal[h] = d->tb.bindLocal[static_cast<size_t>(h)]
+                               * f0.getRotation();
+            d->haveStand[h] = true;
+            d->haveAnyStand = true;
+        }
+    }
+    // Rig bone rests identity? (Mixamo yes → Mc heuristic valid; UniRig/template
+    // no → skip Mc, use raw delta on the standing pose.)
+    for (int i = 0; i < d->nBones && d->restsAreIdentity; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,
+                                               Ogre::Radian(0.02f)))
+            d->restsAreIdentity = false;
+    }
+    d->Mc.assign(static_cast<size_t>(d->nBones), Ogre::Quaternion::IDENTITY);
+    d->McInv.assign(static_cast<size_t>(d->nBones), Ogre::Quaternion::IDENTITY);
+
+    // valid only if at least half the canonical roles map (the humanoid gate)
+    int mapped = 0;
+    for (int c = 0; c < d->Jc; ++c)
+        if (d->tb.roleBoneIdx[static_cast<size_t>(c)] >= 0) ++mapped;
+    m_valid = mapped * 2 >= d->Jc;
+}
+
+std::vector<std::pair<unsigned short, Ogre::Quaternion>>
+BodyRetargeter::evaluateFrame(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask) const
+{
+    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
+    if (!m_valid || !d) return out;
+    const TargetBindFrame& tb = d->tb;
+    const int Jc = d->Jc;
+    auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
+        -> Ogre::Quaternion {
+        const auto& q = src[static_cast<size_t>(joint)];
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+    };
+    // First frame becomes the NEUTRAL reference — the clip's "calm" frame, which
+    // is what applyMotionClip's legacy transport takes its per-joint LOCAL
+    // articulation delta and its Mc roll-correction frame against. Composing the
+    // delta onto the harvested STANDING pose (arms at chest) is what makes the
+    // live preview match the Record path.
+    if (!d->haveNeutral) {
+        d->neutral = canonicalQuats;
+        d->haveNeutral = true;
+        // Mc[i] = standWorldOf(bone)⁻¹ · clipQ(neutral, c) — Mixamo-only roll
+        // correction; on non-identity-rest rigs it is left identity.
+        if (d->haveAnyStand && d->restsAreIdentity) {
+            std::vector<Ogre::Quaternion> standW(static_cast<size_t>(d->nBones),
+                                                 Ogre::Quaternion::IDENTITY);
+            for (int i : tb.order) {
+                const int pi = tb.parentIdx[static_cast<size_t>(i)];
+                const Ogre::Quaternion Wp = (pi >= 0)
+                    ? standW[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
+                const Ogre::Quaternion localRot = d->haveStand[static_cast<size_t>(i)]
+                    ? d->standLocal[static_cast<size_t>(i)]
+                    : tb.bindLocal[static_cast<size_t>(i)];
+                standW[static_cast<size_t>(i)] = Wp * localRot;
+            }
+            for (int i = 0; i < d->nBones; ++i) {
+                const int c = d->boneToCanon[static_cast<size_t>(i)];
+                if (c <= 0 || c >= Jc) continue;   // root (c==0) keeps identity Mc
+                d->Mc[static_cast<size_t>(i)] =
+                    standW[static_cast<size_t>(i)].Inverse() * clipQ(d->neutral, c);
+                d->McInv[static_cast<size_t>(i)] = d->Mc[static_cast<size_t>(i)].Inverse();
+            }
+        }
+    }
+    for (int i : tb.order) {
+        const int c = d->boneToCanon[static_cast<size_t>(i)];
+        if (c < 0 || c >= Jc) continue;
+        const int pc = MotionInbetween::canonicalParentOf(c);
+        // world -> parent-relative LOCAL articulation, current and neutral
+        auto localArtic = [&](const std::array<std::array<float, 4>, 22>& src) {
+            return (pc >= 0 && pc < Jc)
+                ? clipQ(src, pc).Inverse() * clipQ(src, c)
+                : clipQ(src, c);
+        };
+        // base = harvested standing pose local (arms at chest), else bind local.
+        const Ogre::Quaternion base = d->haveStand[static_cast<size_t>(i)]
+            ? d->standLocal[static_cast<size_t>(i)]
+            : tb.bindLocal[static_cast<size_t>(i)];
+        // UNRESOLVED role (e.g. legs of a seated subject) → hold the standing
+        // pose; never drive a bone from a role PoseIK couldn't observe.
+        const bool resolved = (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
+        if (!resolved) {
+            out.emplace_back(static_cast<unsigned short>(i), base);
+            continue;
+        }
+        if (c == 0) {
+            // Root/hip: MediaPipe/CMU bake the whole-body FACING into the hip.
+            // Locking the root to the standing pose keeps the figure upright
+            // (applying the full hip delta folds the torso forward). A subtle
+            // pelvic sway could be re-added later; upright + stable first.
+            out.emplace_back(static_cast<unsigned short>(i), base);
+            continue;
+        }
+        const Ogre::Quaternion cur = localArtic(canonicalQuats);
+        const Ogre::Quaternion ref = localArtic(d->neutral);
+        const Ogre::Quaternion delta = ref.Inverse() * cur;
+        // roll-corrected articulation, composed onto the standing pose.
+        const Ogre::Quaternion artic =
+            d->McInv[static_cast<size_t>(i)] * delta * d->Mc[static_cast<size_t>(i)];
+        const Ogre::Quaternion local = base * artic;
+        out.emplace_back(static_cast<unsigned short>(i), local);
+    }
+    return out;
+}
+
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
                                        const std::string& animName)
 {

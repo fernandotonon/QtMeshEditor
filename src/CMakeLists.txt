@@ -171,6 +171,18 @@ NodeAnimationManager.cpp
 PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
+Mocap/VideoFrameSource.cpp
+Mocap/OneEuroFilter.cpp
+Mocap/FaceCapMapper.cpp
+Mocap/FaceCapPose.cpp
+Mocap/FaceCapGeom.cpp
+Mocap/FaceCapPredictor.cpp
+Mocap/MocapRecorder.cpp
+Mocap/PoseCapPredictor.cpp
+Mocap/PoseIKSolver.cpp
+Mocap/MocapCLI.cpp
+Mocap/MocapController.cpp
+commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
@@ -767,6 +779,23 @@ if(ENABLE_PS1_RIP AND TARGET Qt6::Gamepad)
     target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Gamepad)
 endif()
 
+# Performance capture (epic #869): Qt Multimedia for the frame sources
+if(ENABLE_MOCAP)
+    target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Multimedia)
+    # macOS: the camera/microphone PERMISSION backends ship as STATIC Qt
+    # plugins (libqdarwin*permission.a). Merely linking QtMultimedia does NOT
+    # pull them in — without an explicit import, QCameraPermission's
+    # requestPermission() logs "Could not find permission plugin" and returns
+    # Denied instantly, so macOS never shows the prompt and the app never
+    # appears under Privacy & Security → Camera. Import them so the request
+    # reaches TCC. (Qt's QDarwin{Camera,Microphone}PermissionPlugin.)
+    if(APPLE)
+        qt_import_plugins(${CMAKE_PROJECT_NAME}
+            INCLUDE Qt6::QDarwinCameraPermissionPlugin
+                    Qt6::QDarwinMicrophonePermissionPlugin)
+    endif()
+endif()
+
 if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh-relauncher)
     if(APPLE)
@@ -911,6 +940,11 @@ if(BUILD_TESTS)
     endif()
 
     ADD_DEPENDENCIES(UnitTests ui)
+
+    # Performance capture (epic #869): Qt Multimedia for the frame sources
+    if(ENABLE_MOCAP)
+        target_link_libraries(UnitTests Qt6::Multimedia)
+    endif()
 
     if(ENABLE_PS1_RIP)
         add_dependencies(UnitTests qtmesh_ps1core_stub)
@@ -1098,7 +1132,22 @@ endif()
 #  Configure Info.plist for Mac OS X
 ##############################################################
 if(APPLE)
-    configure_file (
+    # Configure the real Info.plist into the build tree AND set it as the
+    # bundle's plist on the target, so the .app that the plain build produces
+    # carries NSCameraUsageDescription + a stable CFBundleIdentifier + the file
+    # associations — not CMake's empty MACOSX_BUNDLE default. Without this the
+    # OS refuses the camera-permission prompt (empty bundle id + no usage
+    # string) and the app never appears under Privacy & Security → Camera.
+    # (Release/deploy.yml still copies the install-prefix copy too; harmless.)
+    set(_QTMESH_BUNDLE_PLIST "${CMAKE_CURRENT_BINARY_DIR}/QtMeshEditor-Info.plist")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        "${_QTMESH_BUNDLE_PLIST}"
+        @ONLY)
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${_QTMESH_BUNDLE_PLIST}")
+    # Keep the install-prefix copy for the release manual-copy step.
+    configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
         "${CMAKE_INSTALL_PREFIX}/Info.plist"
         @ONLY)

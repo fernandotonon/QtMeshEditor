@@ -54,7 +54,11 @@ QJsonObject sampleStatsJson()
 TEST(GamificationTypes, FeatureCatalogMatchesCloudContract)
 {
     const auto& catalog = featureCatalog();
-    EXPECT_EQ(catalog.size(), 25);  // qtmesh-cloud DISCOVERY_FEATURES count
+    // qtmesh-cloud DISCOVERY_FEATURES count. 26 since epic #869 added the
+    // 'mocap' (Performance Capture) discovery cluster — the matching
+    // DISCOVERY_FEATURES entry is coordinated on the cloud side (CLAUDE.md
+    // contract).
+    EXPECT_EQ(catalog.size(), 26);
     for (const FeatureInfo& f : catalog) {
         EXPECT_TRUE(isValidEventKey(f.key)) << f.key.toStdString();
         EXPECT_FALSE(f.title.isEmpty());

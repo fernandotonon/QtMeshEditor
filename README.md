@@ -286,6 +286,7 @@ Split View|Skeleton Animation Controls
 - **Material editor** — visual editing with AI-assisted generation; PBR + HDR/IBL materials look correct on first import (bundled studio HDRI, ACES tonemap, env intensity/tint per material)
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
+- **Performance capture** — video/webcam → facial morph animation (ARKit blendshapes), head pose, and full-body skeletal capture onto humanoid rigs; live preview + record in the editor, `qtmesh mocap` on the CLI (`-DENABLE_MOCAP` builds)
 - **AI chat** — natural language scene editing via local LLMs
 - **MCP server** — 57+ tools for AI agents (Claude, Cursor, etc.), including HDR/IBL (`set_hdr_environment`, `set_tonemap`, …) and QtMesh Cloud (`cloud_*`)
 - **REST API** — HTTP interface for external automation

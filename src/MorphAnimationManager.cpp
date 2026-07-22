@@ -243,29 +243,23 @@ bool isPoseShapeClip(Ogre::Mesh* mesh, const std::string& animName)
 
 } // namespace
 
-bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
-                                                   double time, double weight)
+bool MorphAnimationManager::writeWeightKeyOn(Ogre::Entity* entity,
+                                             const std::string& clip,
+                                             const std::string& targetName,
+                                             float time, float weight)
 {
-    assertMainThread();
-    if (name.isEmpty() || time < 0.0) return false;
-
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel) return false;
-    auto ents = sel->getResolvedEntities();
-    if (ents.isEmpty() || !ents.first()) return false;
-    Ogre::Entity* entity = ents.first();
+    if (!entity || targetName.empty() || time < 0.0f) return false;
     Ogre::MeshPtr mesh = entity->getMesh();
     if (!mesh) return false;
 
-    const std::string clip = m_activeMorphClip.toStdString();
-    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    const int pi = poseIndexForName(mesh.get(), targetName);
     if (pi < 0) return false;
     Ogre::VertexAnimationTrack* track =
-        weightTrackFor(mesh.get(), name.toStdString(), clip, true);
+        weightTrackFor(mesh.get(), targetName, clip, true);
     if (!track) return false;
 
-    const float t = static_cast<float>(time);
-    const float w = std::clamp(static_cast<float>(weight), 0.0f, 1.0f);
+    const float t = time;
+    const float w = std::clamp(weight, 0.0f, 1.0f);
 
     // Update in place if a keyframe already exists at ~t, else create one.
     Ogre::VertexPoseKeyFrame* kf = nullptr;
@@ -286,6 +280,26 @@ bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
     Ogre::Animation* anim = mesh->getAnimation(clip);
     if (anim && t > anim->getLength())
         anim->setLength(t);
+    return true;
+}
+
+bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
+                                                   double time, double weight)
+{
+    assertMainThread();
+    if (name.isEmpty() || time < 0.0) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+
+    const float t = static_cast<float>(time);
+    const float w = std::clamp(static_cast<float>(weight), 0.0f, 1.0f);
+    if (!writeWeightKeyOn(entity, m_activeMorphClip.toStdString(),
+                          name.toStdString(), t, w))
+        return false;
 
     // Refresh the entity's animation-state mirror so the new clip is playable.
     entity->refreshAvailableAnimationState();

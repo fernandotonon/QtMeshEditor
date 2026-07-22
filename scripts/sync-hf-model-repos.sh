@@ -29,6 +29,12 @@
 #   segveh     → QtMeshEditor-mesh-segmentation-vehicle    (CC-BY-4.0, in-house #818 B2)
 #   segbld     → QtMeshEditor-mesh-segmentation-building   (CC-BY-4.0, in-house #818 B2)
 #   segcls     → QtMeshEditor-mesh-segmentation-category   (CC-BY-4.0, in-house #818 B2 Auto dispatcher)
+#   mocap-* (5, #869; Apache, converted Google MediaPipe graphs):
+#     blazeface       → QtMeshEditor-blazeface-onnx       (face detector)
+#     facemesh        → QtMeshEditor-facemesh-onnx        (478 face landmarks)
+#     faceblendshapes → QtMeshEditor-faceblendshapes-onnx (52 ARKit blendshapes)
+#     blazepose       → QtMeshEditor-blazepose-onnx       (person detector)
+#     poselandmarks   → QtMeshEditor-poselandmarks-onnx   (33 world landmarks)
 set -euo pipefail
 
 OWNER=fernandotonon
@@ -50,6 +56,11 @@ declare -A REPOS=(
   [segveh]=QtMeshEditor-mesh-segmentation-vehicle
   [segbld]=QtMeshEditor-mesh-segmentation-building
   [segcls]=QtMeshEditor-mesh-segmentation-category
+  [blazeface]=QtMeshEditor-blazeface-onnx
+  [facemesh]=QtMeshEditor-facemesh-onnx
+  [faceblendshapes]=QtMeshEditor-faceblendshapes-onnx
+  [blazepose]=QtMeshEditor-blazepose-onnx
+  [poselandmarks]=QtMeshEditor-poselandmarks-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -65,6 +76,11 @@ declare -A FILES=(
   [segveh]="segment/meshseg_vehicle.onnx"
   [segbld]="segment/meshseg_building.onnx"
   [segcls]="segment/meshseg_category.onnx"
+  [blazeface]="mocap/face/face_detector.onnx"
+  [facemesh]="mocap/face/face_landmarks.onnx"
+  [faceblendshapes]="mocap/face/face_blendshapes.onnx"
+  [blazepose]="mocap/pose/pose_detector.onnx"
+  [poselandmarks]="mocap/pose/pose_landmarks.onnx"
 )
 
 sync_one() {
@@ -72,8 +88,9 @@ sync_one() {
   echo "=== $model → $repo"
   for f in ${FILES[$model]}; do
     echo "  $f"
-    huggingface-cli download "$AGG" "$f" --local-dir "$WORK" --quiet
-    huggingface-cli upload "$repo" "$WORK/$f" "$(basename "$f")" --quiet
+    # `hf` replaces the removed `huggingface-cli` (huggingface_hub >= 1.0).
+    hf download "$AGG" "$f" --local-dir "$WORK" --quiet
+    hf upload "$repo" "$WORK/$f" "$(basename "$f")" --quiet
     rm -f "$WORK/$f"          # multi-GB files — don't accumulate
   done
 }

@@ -733,6 +733,8 @@ jobs:
         host: 'linux'
         target: 'desktop'
         arch: 'linux_gcc_64'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: change folder permissions
       run: |
@@ -781,6 +783,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -958,6 +961,8 @@ jobs:
         host: 'linux'
         target: 'desktop'
         arch: 'linux_gcc_64'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: change folder permissions
       run: |
@@ -1070,7 +1075,8 @@ jobs:
             -DBUILD_QT_MESH_EDITOR=OFF \
             -DENABLE_SENTRY=OFF \
             -DENABLE_PS1_RIP=ON \
-            -DENABLE_ONNX=ON
+            -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON
 
     - name: Run build-wrapper
       env:
@@ -1796,6 +1802,8 @@ jobs:
         target: 'desktop'
         arch: 'clang_64'
         tools: 'tools_cmake'
+        # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
+        modules: 'qtmultimedia'
 
     - name: Debug Qt Installation
       run: |
@@ -1882,6 +1890,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_MOCAP=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
@@ -2132,10 +2141,24 @@ jobs:
                 ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
             fi
             
-            # Finally sign the entire app bundle
-            echo "Signing app bundle..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app || echo "Failed to sign app bundle (non-fatal)"
-            
+            # Finally sign the entire app bundle WITH the camera/microphone
+            # entitlements (epic #869). NOTE: this is still an ad-hoc signature
+            # (`--sign -`); macOS only PROMPTS for camera access when the app
+            # is signed with a real Apple Developer ID + notarized. Until this
+            # pipeline gains a Developer ID cert (secret) + notarization step,
+            # the live-camera capture will be blocked on end-user machines the
+            # same way it is on an ad-hoc dev build (the CLI `qtmesh mocap`
+            # video path and file-based capture are unaffected). The
+            # entitlements + Info.plist NSCameraUsageDescription are in place so
+            # that flipping to a Developer ID signature is the ONLY remaining
+            # step to enable the prompt. See docs/MOCAP.md.
+            echo "Signing app bundle (with camera entitlements)..."
+            ENT="${{github.workspace}}/cfg/QtMeshEditor.entitlements"
+            sudo codesign --force --sign - --entitlements "$ENT" \
+                ${{github.workspace}}/bin/QtMeshEditor.app \
+                || sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app \
+                || echo "Failed to sign app bundle (non-fatal)"
+
             echo "Code signing process completed"
             
             # Verify the signing

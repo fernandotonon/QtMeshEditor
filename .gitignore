@@ -96,6 +96,7 @@ docs/*
 !docs/IMAGE_TO_3D_QUALITY.md
 !docs/TRIPOSG_EXPORT_NOTES.md
 !docs/MESH_SEGMENTATION_STRATEGY.md
+!docs/MOCAP.md
 !docs/FACE_RIG.md
 !docs/FACE_RIG_SPIKE.md
 !docs/TELEMETRY.md
@@ -157,3 +158,6 @@ __pycache__/
 !docs/img/twist_bar_90_lbs.png
 !docs/img/twist_bar_90_lbs_vp.png
 !docs/img/twist_bar_90_dqs_vp.png
+!docs/MOCAP_SPIKE.md
+.mocap_work/
+.venv-mocap/

@@ -89,6 +89,22 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigAttach.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceLandmarkDetector.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigLandmarks.cpp
+        # Performance capture (#869): MCPServer/CLIPipeline/mainwindow
+        # reference these too. The .cpp files self-guard with #ifdef
+        # ENABLE_MOCAP (empty TU when off), so listing them unconditionally is
+        # safe and keeps the per-suite test executables linking either way.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/VideoFrameSource.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/OneEuroFilter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapMapper.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPose.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapGeom.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapRecorder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseCapPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseIKSolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCLI.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RecordMocapClipCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.cpp
@@ -597,6 +613,15 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         target_link_libraries(qtmesh_test_common PUBLIC "-framework Security")
     elseif(WIN32)
         target_link_libraries(qtmesh_test_common PUBLIC advapi32)
+    endif()
+
+    # Performance capture (#869): the Mocap frame sources include Qt
+    # Multimedia headers (QCamera/QMediaPlayer/QVideoSink). The main build
+    # links Qt6::Multimedia into UnitTests under ENABLE_MOCAP; do the same for
+    # the per-suite test library so MCPServer/mainwindow (which reference the
+    # Mocap layer) both compile and link.
+    if(ENABLE_MOCAP)
+        target_link_libraries(qtmesh_test_common PUBLIC Qt6::Multimedia)
     endif()
 
     if(ENABLE_PS1_RIP)
