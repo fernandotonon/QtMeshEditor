@@ -162,6 +162,11 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
 #else
     constexpr bool captionAvailable = false;
 #endif
+#ifdef ENABLE_MOCAP
+    constexpr bool mocapAvailable = true;
+#else
+    constexpr bool mocapAvailable = false;
+#endif
 
     const QString pbrBase = resolveBaseUrl(
         "ai/pbrModelBaseUrl", "QTMESH_PBR_MODEL_BASE_URL",
@@ -196,6 +201,17 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     const QString captionBase = resolveBaseUrl(
         "ai/captionModelBaseUrl", "QTMESH_CAPTION_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/caption/");
+    // Mocap models live under mocap/face and mocap/pose; the predictors read a
+    // single "ai/mocapModelBaseUrl" and append "face/"/"pose/" themselves, so
+    // bake those suffixes onto the catalog base after resolving the shared key.
+    const QString mocapBase = resolveBaseUrl(
+        "ai/mocapModelBaseUrl", "QTMESH_MOCAP_MODEL_BASE_URL",
+        "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/mocap/");
+    const QString mocapFaceBase = joinUrl(mocapBase, QStringLiteral("face/"));
+    const QString mocapPoseBase = joinUrl(mocapBase, QStringLiteral("pose/"));
+    const QString facerigBase = resolveBaseUrl(
+        "ai/facerigModelBaseUrl", "QTMESH_FACERIG_MODEL_BASE_URL",
+        "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/facerig/");
 
     QList<ModelSpec> out;
     out << ModelSpec{
@@ -331,6 +347,30 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
         {
             file(QStringLiteral("caption"), QStringLiteral("SmolVLM-500M-Instruct-Q8_0.gguf"), captionBase, QStringLiteral("Caption SmolVLM-500M-Instruct-Q8_0.gguf")),
             file(QStringLiteral("caption"), QStringLiteral("mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"), captionBase, QStringLiteral("Caption mmproj-SmolVLM-500M-Instruct-Q8_0.gguf")),
+        }};
+    out << ModelSpec{
+        QStringLiteral("facerig-arkit"), tr("ARKit Face Rig Template"), tr("Rigging"),
+        tr("ICT-FaceKit template used to auto-generate the 52 ARKit blendshapes on a humanoid face mesh."),
+        QStringLiteral("Small"), QString(), true,
+        { file(QStringLiteral("facerig"), QStringLiteral("arkit_template.bin"), facerigBase, QStringLiteral("ARKit face-rig template")) }};
+    out << ModelSpec{
+        QStringLiteral("mocap-face"), tr("Performance Capture — Face"), tr("Animation"),
+        tr("MediaPipe face detector, mesh, and blendshape ONNX models used to capture facial expressions and head pose from video/webcam."),
+        QStringLiteral("~7 MB"), mocapAvailable ? QString() : tr("Requires a mocap-enabled build"),
+        mocapAvailable,
+        {
+            file(QStringLiteral("mocap/face"), QStringLiteral("face_detector.onnx"), mocapFaceBase, QStringLiteral("Face detector")),
+            file(QStringLiteral("mocap/face"), QStringLiteral("face_landmarks.onnx"), mocapFaceBase, QStringLiteral("Face landmarks")),
+            file(QStringLiteral("mocap/face"), QStringLiteral("face_blendshapes.onnx"), mocapFaceBase, QStringLiteral("Face blendshapes")),
+        }};
+    out << ModelSpec{
+        QStringLiteral("mocap-body"), tr("Performance Capture — Body"), tr("Animation"),
+        tr("MediaPipe BlazePose detector and landmark ONNX models used to capture full-body pose from video/webcam."),
+        QStringLiteral("Small"), mocapAvailable ? QString() : tr("Requires a mocap-enabled build"),
+        mocapAvailable,
+        {
+            file(QStringLiteral("mocap/pose"), QStringLiteral("pose_detector.onnx"), mocapPoseBase, QStringLiteral("Pose detector")),
+            file(QStringLiteral("mocap/pose"), QStringLiteral("pose_landmarks.onnx"), mocapPoseBase, QStringLiteral("Pose landmarks")),
         }};
     return out;
 }
