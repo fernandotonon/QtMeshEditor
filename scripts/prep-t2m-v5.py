@@ -216,13 +216,14 @@ def corpus_clips(corpus, min_roles):
 
 
 # ---------- CMU source ----------
-def bvh_rest(path):
+def bvh_rest(path, aliases=None):
     """Rest joint positions from a BVH's OFFSET tree → restDir per canonical
-    joint (identity rest rotations ⇒ world dir = offset-chain direction)."""
+    joint (identity rest rotations ⇒ world dir = offset-chain direction).
+    `aliases` selects a non-default skeleton-name table (see resolve_canon)."""
     from bvh import Bvh
     with open(path) as f:
         m = Bvh(f.read())
-    cmap = prep4.resolve_canon(m.get_joints_names())
+    cmap = prep4.resolve_canon(m.get_joints_names(), aliases)
     if cmap is None:
         return None
     pos = {}
@@ -273,11 +274,69 @@ def cmu_clips(bvh_dir, index):
         yield labels[mid], cq, valid, f"CMU {mid}"
 
 
+# 100STYLE (CC-BY-4.0, Zenodo 8127870) skeleton. Its own alias table — kept
+# SEPARATE from the CMU one because names collide semantically: 100STYLE's
+# `RightShoulder` is the UPPER ARM (CMU calls that `RightArm`; CMU's
+# `RightShoulder` is the collar). `neck1`→Neck and buttocks→Hips are duplicate
+# maps for joints 100STYLE lacks — the duplicated slot yields a near-identity
+# local articulation, i.e. exactly how a missing intermediate joint behaves.
+STYLE100_ALIASES = {
+    "hip":       ["Hips"],       "abdomen":   ["Chest"],
+    "chest":     ["Chest2"],     "neck":      ["Neck"],
+    "neck1":     ["Neck"],       "head":      ["Head"],
+    "rcollar":   ["RightCollar"], "rshoulder": ["RightShoulder"],
+    "relbow":    ["RightElbow"], "rhand":     ["RightWrist"],
+    "lcollar":   ["LeftCollar"], "lshoulder": ["LeftShoulder"],
+    "lelbow":    ["LeftElbow"],  "lhand":     ["LeftWrist"],
+    "rbuttock":  ["Hips"],       "rhip":      ["RightHip"],
+    "rknee":     ["RightKnee"],  "rfoot":     ["RightAnkle"],
+    "lbuttock":  ["Hips"],       "lhip":      ["LeftHip"],
+    "lknee":     ["LeftKnee"],   "lfoot":     ["LeftAnkle"],
+}
+# 100STYLE file suffix → canonical action. Forward = the clean straight
+# locomotion the model most needs; backward reuses the same action label
+# (still upright, opposite travel — fine for a rotation-only clip). Sideways
+# → strafe; ID → idle; TR (transitions) skipped.
+STYLE100_SUFFIX = {
+    "FW": "walk", "FR": "run", "BW": "walk", "BR": "run",
+    "SW": "strafe", "SR": "strafe", "ID": "idle",
+}
+
+
+def style100_clips(root):
+    """Yield (action, canonical-quats, valid-mask, src) for each 100STYLE BVH
+    whose suffix maps to a known action. Reuses the CMU FK+canonicalize path
+    with the 100STYLE alias table."""
+    ident = np.zeros((J, 4), np.float32)
+    ident[:, 3] = 1.0
+    files = sorted(glob.glob(os.path.join(root, "**/*.bvh"), recursive=True))
+    for path in files:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        suf = stem.rsplit("_", 1)[-1] if "_" in stem else ""
+        # TR1/TR2/TR3 → TR
+        key = re.sub(r"\d+$", "", suf)
+        action = STYLE100_SUFFIX.get(key)
+        if action is None:
+            continue
+        r = prep4.parse_bvh(path, STYLE100_ALIASES)
+        if r is None:
+            continue
+        _lq, wq = r
+        rd = bvh_rest(path, STYLE100_ALIASES)
+        if rd is None:
+            continue
+        cq, valid = canonicalize(wq, ident, rd)
+        yield action, cq, valid, f"100STYLE {stem}"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", default="")
     ap.add_argument("--bvh", default="")
     ap.add_argument("--index", default="")
+    ap.add_argument("--style100", default="",
+                    help="100STYLE root (extracted/100STYLE) — CC-BY-4.0 "
+                         "locomotion BVH, the clean walk/run/idle source")
     ap.add_argument("--out", default="/tmp/t2m_v5.npz")
     ap.add_argument("--T", type=int, default=40)
     ap.add_argument("--min-roles", type=int, default=12)
@@ -368,6 +427,17 @@ def main():
                 bad += 1
                 print(f"  skip cmu trial ({src}): {e}")
         print(f"cmu: {n0} trials → {len(mo) - w0} windows ({bad} skipped)")
+
+    if a.style100:
+        n0, w0, bad = 0, len(mo), 0
+        for action, cq, valid, src in style100_clips(
+                os.path.expanduser(a.style100)):
+            try:
+                window(action, cq, valid, src); n0 += 1
+            except Exception as e:                          # noqa: BLE001
+                bad += 1
+                print(f"  skip 100style clip ({src}): {e}")
+        print(f"100style: {n0} clips → {len(mo) - w0} windows ({bad} skipped)")
 
     print(f"posture gates dropped {dropped[0]} windows")
     if not mo:

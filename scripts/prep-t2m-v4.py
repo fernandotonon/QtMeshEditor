@@ -78,13 +78,17 @@ ALIASES = {
 }
 
 
-def resolve_canon(names):
+def resolve_canon(names, aliases=None):
     """Map each canonical joint to its source-joint name, or None if any is
-    missing (non-humanoid / unexpected skeleton)."""
+    missing (non-humanoid / unexpected skeleton). `aliases` overrides the
+    default CMU-flavour table — pass a skeleton-specific map (e.g. 100STYLE,
+    whose `RightShoulder` is the UPPER ARM, not the collar CMU calls that) so
+    two conventions never share one ambiguous alias list."""
+    tbl = aliases if aliases is not None else ALIASES
     out = {}
     nameset = set(names)
     for c in CANON:
-        hit = next((a for a in ALIASES[c] if a in nameset), None)
+        hit = next((a for a in tbl[c] if a in nameset), None)
         if hit is None:
             return None
         out[c] = hit
@@ -137,12 +141,13 @@ def euler_to_quat_vec(rad, order):
     return q
 
 
-def parse_bvh(path):
-    """One BVH -> (local[T,J,4], world[T,J,4]) canonical quats @ OUT_FPS, or None."""
+def parse_bvh(path, aliases=None):
+    """One BVH -> (local[T,J,4], world[T,J,4]) canonical quats @ OUT_FPS, or None.
+    `aliases` selects a non-default skeleton-name table (see resolve_canon)."""
     from bvh import Bvh
     with open(path) as f:
         m = Bvh(f.read())
-    cmap = resolve_canon(m.get_joints_names())
+    cmap = resolve_canon(m.get_joints_names(), aliases)
     if cmap is None:
         return None
     all_names = m.get_joints_names()
