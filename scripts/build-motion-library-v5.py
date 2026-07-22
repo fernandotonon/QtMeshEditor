@@ -199,6 +199,16 @@ REVIEW_DROP = [
     ("Shar Pei", ""),      # dog rig — wrong body plan for humanoid retarget
     ("Square Head Character", "Loose"),  # shake [100] — weak/ambiguous
     ("Dance | Japanese Samurai", ""),    # dance [49] — crouched, off
+    # These Quaternius packs mis-map the RIGHT upper-arm bone: it stays raised/
+    # out (mean up-Y positive) the whole clip on every action instead of
+    # hanging. Redundant with the clean Man/Woman (Oct/Dec 2017) packs, so drop
+    # them wholesale. NB: match the FULL pack name — "Animated Men/Women
+    # Characters" and "Man/Woman Animated" are DIFFERENT releases (the latter
+    # are the good ones), so do NOT use a loose "Men"/"Man" substring.
+    ("Animated Men Characters", ""),     # Feb 2019 — raised right arm
+    ("Animated Women Characters", ""),   # Feb 2019 — raised right arm
+    ("Alien Animated", ""),              # April 2019 — raised right arm
+    ("Knight Character Animated", ""),   # Jul 2018 — raised right arm
 ]
 
 
