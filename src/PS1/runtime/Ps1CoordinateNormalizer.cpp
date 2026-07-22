@@ -209,7 +209,10 @@ QString Ps1CoordinateNormalizer::describe(const Ps1NormalizerSettings &settings)
     if (settings.trackedGeometryOnly) parts.append(QStringLiteral("trackedOnly"));
     if (settings.cleanupWeldNormals) parts.append(QStringLiteral("weldNormals"));
     if (settings.cleanupRemoveZeroArea) parts.append(QStringLiteral("removeZeroArea"));
-    if (settings.mergeSameObjectParts) parts.append(QStringLiteral("mergeObjects"));
+    // mergeSameObjectParts defaults to TRUE, so the deviation to record is
+    // when the user turns it OFF (every other token here is a default-false
+    // field emitted when true — this one is inverted to match its default).
+    if (!settings.mergeSameObjectParts) parts.append(QStringLiteral("noMergeObjects"));
     if (settings.captureRigidAnimation) parts.append(QStringLiteral("rigidAnim"));
     if (!nearlyEqual(settings.spikeEdgeFactor, Ps1NormalizerSettings{}.spikeEdgeFactor))
         parts.append(QStringLiteral("spike=%1").arg(settings.spikeEdgeFactor, 0, 'g', 3));

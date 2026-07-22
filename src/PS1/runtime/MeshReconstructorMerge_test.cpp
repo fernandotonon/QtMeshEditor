@@ -441,4 +441,46 @@ TEST(MeshReconstructorMergeTest, DifferentTexturesNeverChainAcrossFrames)
     EXPECT_EQ(totalTriangles(set), 24) << "12 tris per surviving object";
 }
 
+TEST(MeshReconstructorMergeTest, LegacyCaptureCoincidentTrianglesSurviveMergeOn)
+{
+    // Codex P2 regression: with merge now default-ON, the duplicate-triangle
+    // cull must NOT touch legacy matrixId groups (key.first == 0) — RAM-scan
+    // captures and any stock capture where mergeSameObjectGroups did nothing.
+    // Those have no cross-frame identity, so a game that legitimately draws a
+    // coincident triangle twice with DIFFERENT gouraud colours (colour is not
+    // in the dedupe key) must keep both copies. The cull is gated to tracked
+    // (key.first == 1) groups; this proves a legacy capture is untouched.
+    CaptureSnapshot snap;
+    // Two prims at the SAME screen position, different vertex colours, no
+    // in-core provenance and no GTE records → both land in a legacy matrixId
+    // group and share a position key.
+    for (int copy = 0; copy < 2; ++copy) {
+        PrimRecord p;
+        p.kind = PrimKind::ShadedTri;
+        p.vertexCount = 3;
+        const int xy[3][2] = {{40, 30}, {80, 30}, {40, 70}};
+        for (int v = 0; v < 3; ++v) {
+            p.verts[v].x = xy[v][0];
+            p.verts[v].y = xy[v][1];
+            p.verts[v].r = p.verts[v].g = p.verts[v].b =
+                static_cast<uint8_t>(copy == 0 ? 80 : 220); // gouraud differs per copy
+            p.verts[v].provenance = static_cast<uint8_t>(PsxVertexProvenance::None);
+            p.verts[v].gteRecordIndex = UINT32_MAX;
+            p.verts[v].viewW = 0.0f;
+        }
+        snap.prims.append(p);
+    }
+
+    Ps1NormalizerSettings merge; // mergeSameObjectParts defaults to true now
+    ASSERT_TRUE(merge.mergeSameObjectParts);
+    MeshReconstructionStats stats;
+    const ReconstructedCaptureSet set =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, merge, &stats);
+
+    ASSERT_FALSE(set.isEmpty());
+    EXPECT_EQ(stats.duplicateTrianglesDropped, 0)
+        << "legacy (non-tracked) coincident triangles must not be de-duplicated";
+    EXPECT_EQ(totalTriangles(set), 2) << "both colour variants of the triangle survive";
+}
+
 #endif // ENABLE_PS1_RIP

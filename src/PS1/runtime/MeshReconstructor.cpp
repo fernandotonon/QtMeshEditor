@@ -1337,12 +1337,22 @@ MatrixGroupsResult buildMatrixGroups(const CaptureSnapshot &snapshot,
 
     // Duplicate-triangle cull (#412): with the merge on, an object's triangles
     // repeat once per captured frame — both in merged cross-frame groups and in
-    // the single group a static object (unchanged matrix) accumulates. Runs on
-    // every bucket, before the edge/outlier passes, so repeats can't skew the
-    // median-edge statistics.
+    // the single group a static object (unchanged matrix) accumulates. Gated to
+    // TRACKED groups only (`key.first == 1`): those are the only buckets with a
+    // real cross-frame / static-repeat identity. Legacy matrixId groups
+    // (`key.first == 0`) — RAM-scan captures, and any stock capture where
+    // mergeSameObjectGroups did nothing — must NOT be culled: they have no
+    // object identity, so a game that legitimately draws a coincident triangle
+    // twice with different gouraud colours (colour is not in the dedupe key)
+    // would lose the second copy. Now-default merge therefore never changes
+    // output that lacks in-core identity (Codex P2). Runs before the
+    // edge/outlier passes so repeats can't skew the median-edge statistics.
     if (settings.mergeSameObjectParts) {
-        for (auto it = out.groups.begin(); it != out.groups.end(); ++it)
+        for (auto it = out.groups.begin(); it != out.groups.end(); ++it) {
+            if (it.key().first != 1)
+                continue;
             applyDuplicateTriangleCull(it.value(), statsOut);
+        }
     }
 
     // Outlier + spike passes run only on parts that contain Tier 0/1 vertices
