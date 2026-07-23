@@ -1526,6 +1526,12 @@ jobs:
           ls -la coverage.xml 2>/dev/null || echo "coverage.xml not found"
 
     - name: Run sonar-scanner
+      # Dependabot PRs run without access to repository secrets, so SONAR_TOKEN
+      # is empty there and the scan fails with a 401 that blocks the PR through
+      # no fault of its own. Skip the scan for Dependabot; the analysis still
+      # runs on branch pushes and same-repo PRs, which is where the quality gate
+      # matters.
+      if: ${{ github.actor != 'dependabot[bot]' }}
       uses: SonarSource/sonarqube-scan-action@v4
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
