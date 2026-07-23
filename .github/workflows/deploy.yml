@@ -1532,6 +1532,7 @@ jobs:
       # runs on branch pushes and same-repo PRs, which is where the quality gate
       # matters.
       if: ${{ github.actor != 'dependabot[bot]' }}
+      uses: SonarSource/sonarqube-scan-action@v4
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
