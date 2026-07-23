@@ -1888,7 +1888,9 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     out["ok"] = false;
     auto fail = [&](const QString& e) { out["error"] = e; emit generateMotionStatus(e, true); return out; };
 
-    if (prompt.trimmed().isEmpty())
+    // The picker supplies an explicit clip index instead of a prompt, so the
+    // prompt is only required for the match/model paths (variantIndex < 0).
+    if (variantIndex < 0 && prompt.trimmed().isEmpty())
         return fail(QStringLiteral("Enter a motion prompt (e.g. \"walking\")."));
 
     // Resolve a rigged entity: the selected one, else the first skinned mesh.

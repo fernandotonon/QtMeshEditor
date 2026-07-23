@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import PropertiesPanel 1.0
+import AnimationControl 1.0
 
 // #838: Mixamo-style animation PICKER. Lists every clip in the template
 // motion library with a human-readable name (e.g. "Walk (Tired Character)")
