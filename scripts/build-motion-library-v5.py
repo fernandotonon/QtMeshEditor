@@ -197,14 +197,22 @@ def _quat_fwd(q):
 
 
 def _mean_hip_yaw_deg(quats):
-    """Mean absolute yaw (deg off +Z) of the hip's world forward across the
+    """|circular mean| yaw (deg off +Z) of the hip's world forward across the
     clip. ~0 = faces straight ahead; large = the stride is baked sideways
-    (the stylized/quadruped-rig locomotion failure)."""
-    ys = []
+    (the stylized/quadruped-rig locomotion failure). Uses a CIRCULAR mean
+    (atan2 of summed sin/cos) — a plain arithmetic mean of signed angles
+    cancels across the ±180° wrap (a backward walk jittering +179°/−179°
+    would average to ~0° and wrongly PASS the cull); the circular mean keeps
+    it near ±180°."""
+    if not quats:
+        return 0.0
+    sin_sum = cos_sum = 0.0
     for f in quats:
         fx, fy, fz = _quat_fwd(f[HIP])
-        ys.append(math.degrees(math.atan2(fx, fz)))
-    return abs(sum(ys) / len(ys)) if ys else 0.0
+        yaw = math.atan2(fx, fz)
+        sin_sum += math.sin(yaw)
+        cos_sum += math.cos(yaw)
+    return abs(math.degrees(math.atan2(sin_sum, cos_sum)))
 
 
 def _inverted_frame_fraction(quats):
