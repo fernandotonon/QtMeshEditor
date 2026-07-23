@@ -8088,17 +8088,20 @@ Rectangle {
             if (!item) return
             if (!animPickerLoader.wired) {
                 animPickerLoader.wired = true
+                // Re-emit on root: lastGeneratedAnim / setArmSpaceTarget /
+                // refreshAnimData live in the animationComponent instance, NOT
+                // here in the root Loader scope — calling them directly throws
+                // a ReferenceError. The animation component connects to this
+                // signal and does the wiring in its own scope.
                 item.applied.connect(function(anim, entity) {
-                    if (anim) {
-                        lastGeneratedAnim = anim
-                        setArmSpaceTarget(anim, entity || "")
-                    }
-                    refreshAnimData()
+                    root.animationPicked(anim || "", entity || "")
                 })
             }
             if (item.open) item.open()
         }
     }
+    // Emitted after the picker applies a clip; handled inside animationComponent.
+    signal animationPicked(string animation, string entity)
     function openAnimationPicker() {
         if (!animPickerLoader.active) {
             animPickerLoader.active = true
@@ -9091,6 +9094,19 @@ Rectangle {
             Connections {
                 target: MorphAnimationManager
                 function onMorphClipsChanged() { refreshAnimData() }
+            }
+            // #838: the animation picker applied a clip. Handle it HERE (in the
+            // animation component scope) so lastGeneratedAnim / setArmSpaceTarget
+            // / refreshAnimData resolve — the root-level Loader can't reach them.
+            Connections {
+                target: root
+                function onAnimationPicked(animation, entity) {
+                    if (animation) {
+                        lastGeneratedAnim = animation
+                        setArmSpaceTarget(animation, entity || "")
+                    }
+                    refreshAnimData()
+                }
             }
 
             // ── Add animation (#838 picker + #411 text-to-motion) ────────────
