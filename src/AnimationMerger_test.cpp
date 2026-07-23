@@ -1359,20 +1359,37 @@ TEST_F(AnimationMergerTest, VerticalDescentLowersRootDescentOnly)
         if (par) par->addChild(b);
         return b;
     };
-    // Hips at world Y=1.0; a foot chain reaching down to Y=0 → leg length 1.0.
-    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);           // role 0
-    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
-    bone("Head", {0, 0.4f, 0}, spine);
-    // Legs are PURELY VERTICAL (no lateral X offset) so the bind-pose hip→foot
-    // Euclidean distance the retarget uses for targetLegLen is exactly 1.0 —
-    // then rootY=-0.5 maps to an exact -0.5 hip delta (a lateral offset would
-    // make the 3D leg length sqrt(0.15²+1²)≈1.011 and skew the expectation).
-    auto* rleg = bone("RightUpLeg", {0, -0.5f, 0}, hips);
-    bone("RightFoot", {0, -0.5f, 0}, rleg);                    // role 17 → Y=0
-    auto* lleg = bone("LeftUpLeg", {0, -0.5f, 0}, hips);
-    bone("LeftFoot", {0, -0.5f, 0}, lleg);
-    bone("RightArm", {-0.2f, 0.1f, 0}, spine);
-    bone("LeftArm", {0.2f, 0.1f, 0}, spine);
+    // A FULL humanoid bone set — applyMotionClip rejects a rig that resolves
+    // fewer than ~half of the 22 canonical roles ("not a humanoid rig"), so the
+    // minimal 9-bone skeleton isn't enough. Mixamo-style names map onto the
+    // canonical roles (hip/spine/chest/neck/head, collar/shoulder/elbow/hand,
+    // upleg/leg/foot per side).
+    // Hips at world Y=1.0; each leg chain reaches down to Y=0 → leg length 1.0.
+    // Legs are PURELY VERTICAL (no lateral X) so the bind-pose hip→foot
+    // Euclidean distance the retarget scales by is exactly 1.0 — then rootY=-0.5
+    // maps to an exact -0.5 hip delta (a lateral offset would make the 3D leg
+    // length sqrt(0.15²+1²)≈1.011 and skew the expectation).
+    auto* hips  = bone("Hips",  {0, 1.0f, 0}, nullptr);        // role 0
+    auto* spine = bone("Spine", {0, 0.2f, 0}, hips);           // role 1 (abdomen)
+    auto* chest = bone("Spine1", {0, 0.2f, 0}, spine);         // role 2 (chest)
+    auto* neck  = bone("Neck",  {0, 0.2f, 0}, chest);          // role 3
+    bone("Head", {0, 0.15f, 0}, neck);                         // role 5
+    // Arms: Shoulder(collar) → Arm(shoulder) → ForeArm(elbow) → Hand.
+    auto* rsh = bone("RightShoulder", {-0.05f, 0.1f, 0}, chest);
+    auto* rarm = bone("RightArm", {-0.15f, 0, 0}, rsh);
+    auto* rfa = bone("RightForeArm", {-0.25f, 0, 0}, rarm);
+    bone("RightHand", {-0.2f, 0, 0}, rfa);
+    auto* lsh = bone("LeftShoulder", {0.05f, 0.1f, 0}, chest);
+    auto* larm = bone("LeftArm", {0.15f, 0, 0}, lsh);
+    auto* lfa = bone("LeftForeArm", {0.25f, 0, 0}, larm);
+    bone("LeftHand", {0.2f, 0, 0}, lfa);
+    // Legs: UpLeg(hip) → Leg(knee) → Foot.
+    auto* rleg = bone("RightUpLeg", {0, -0.25f, 0}, hips);
+    auto* rknee = bone("RightLeg", {0, -0.25f, 0}, rleg);
+    bone("RightFoot", {0, -0.5f, 0}, rknee);                   // role 17 → Y=0
+    auto* lleg = bone("LeftUpLeg", {0, -0.25f, 0}, hips);
+    auto* lknee = bone("LeftLeg", {0, -0.25f, 0}, lleg);
+    bone("LeftFoot", {0, -0.5f, 0}, lknee);                    // role 21 → Y=0
     skelRes->setBindingPose();
     auto mesh = createInMemoryMesh("descent_mesh", skelRes);
     auto* sm = Manager::getSingleton()->getSceneMgr();
