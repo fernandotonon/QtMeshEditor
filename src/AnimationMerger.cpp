@@ -1168,6 +1168,35 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 dirBetween(parent, j, restDir[static_cast<size_t>(j)]);
         }
 
+        // Spine-chain sanity (#838): the spine (hip→abdomen→chest→neck→neck1→
+        // head, roles 0..5) is monotonically UPWARD on any humanoid. Some rigs
+        // (e.g. the Samurai dance clip) stack a spine joint BELOW its parent in
+        // bind pose — its bone direction points DOWN the hip→head axis. That
+        // makes the source bone's own frame degenerate/inverted, so the aim-
+        // based retarget folds the chest UNDER the hip and snaps the model in
+        // half. We can't trust that bone's motion, so ZERO its restDir: the
+        // retarget skips it (`squaredLength() <= 1e-8` guard) and the target
+        // bone HOLDS its upright bind pose while the rest of the clip plays.
+        {
+            const Ogre::Bone* hipB  = roleBone[0];
+            const Ogre::Bone* headB = roleBone[5];
+            if (hipB && headB) {
+                Ogre::Vector3 up = C * (headB->_getDerivedPosition()
+                                        - hipB->_getDerivedPosition());
+                if (up.squaredLength() > 1e-9f) {
+                    up.normalise();
+                    for (int j = 1; j <= 4; ++j) {   // abdomen..neck1
+                        auto& d = restDir[static_cast<size_t>(j)];
+                        const Ogre::Vector3 v(d[0], d[1], d[2]);
+                        if (v.squaredLength() > 1e-9f
+                            && v.dotProduct(up) < -0.2f) {   // clearly downward
+                            d = {0.f, 0.f, 0.f};             // drop this bone
+                        }
+                    }
+                }
+            }
+        }
+
         // Pass 2: conjugate the stored raw worlds into the canonical frame.
         clip.quats.reserve(static_cast<size_t>(frames));
         for (int f = 0; f < frames; ++f) {
