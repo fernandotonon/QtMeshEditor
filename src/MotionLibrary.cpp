@@ -353,6 +353,17 @@ bool MotionLibrary::isVerticalDescentAction(const QString& action)
         QStringLiteral("sit"),    QStringLiteral("crawl"),
         QStringLiteral("crouch"), QStringLiteral("death"),
         QStringLiteral("pray"),
+        // Ground-work actions (Gregório worker set, #838): build/cut/farm/
+        // fruit/gather all crouch or kneel at ground level — they must sink,
+        // not float in a folded-leg pose. Covers the "*loop" variants too.
+        QStringLiteral("build"),  QStringLiteral("buildloop"),
+        QStringLiteral("cut"),    QStringLiteral("cutloop"),
+        QStringLiteral("farm"),   QStringLiteral("farmloop"),
+        QStringLiteral("fruit"),  QStringLiteral("fruitloop"),
+        QStringLiteral("gather"),
+        QStringLiteral("cartgive"),  QStringLiteral("cartgiveloop"),
+        QStringLiteral("stonegive"), QStringLiteral("stonegiveloop"),
+        QStringLiteral("woodgive"),  QStringLiteral("woodgiveloop"),
     };
     return kDescent.contains(action.trimmed().toLower());
 }

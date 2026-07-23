@@ -2214,6 +2214,13 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                   << " fps)" << Qt::endl;
     }
 
+    // #838: ground crouch/kneel/work clips (drop the root so the lowest foot
+    // plants on the floor — fixes the "floating worker"). Descent actions only.
+    if (verticalDescent && MotionLibrary::isVerticalDescentAction(action)) {
+        if (AnimationMerger::groundRootToFeet(skel.get(), animName) > 0)
+            err() << "(grounded to feet)" << Qt::endl;
+    }
+
     // #854: optional Mixamo-style arm-space post-process before export.
     if (std::abs(armSpaceDeg) > 1e-4f) {
         if (AnimationMerger::adjustArmSpace(skel.get(), animName, armSpaceDeg)) {

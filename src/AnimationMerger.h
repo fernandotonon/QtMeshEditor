@@ -358,6 +358,20 @@ public:
                                  const std::string& animName,
                                  int blendFrames = 3);
 
+    /// #838 — GROUND a crouch/kneel/ground-work clip. The direction retarget
+    /// transfers bone DIRECTIONS, not world foot positions, and locks the root
+    /// at the target's standing height. A folded-leg crouch (build/farm/kneel)
+    /// then leaves the FEET dangling in the air on a rig whose proportions
+    /// differ from the source (the "floating worker" case). This drops the ROOT
+    /// bone's Y each frame by exactly how far the lowest foot sits ABOVE the
+    /// bind ground plane, so the character plants on the floor. Target-rig FK
+    /// (like pinFeet) — reads the finished keyframes, rewrites only the root
+    /// translate. Only sensible on non-locomotion descent actions (the caller
+    /// gates via MotionLibrary::isVerticalDescentAction); a walk would lose its
+    /// foot lift. Returns how many root keyframes were lowered.
+    static int groundRootToFeet(Ogre::Skeleton* skel,
+                                const std::string& animName);
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher

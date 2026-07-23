@@ -2029,6 +2029,101 @@ AnimationMerger::FootPinResult AnimationMerger::pinFeet(
     return res;
 }
 
+int AnimationMerger::groundRootToFeet(Ogre::Skeleton* skel,
+                                      const std::string& animName)
+{
+    if (!skel || !skel->hasAnimation(animName)) return 0;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    const int nBones = static_cast<int>(skel->getNumBones());
+
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    // Bind-local positions for the manual FK (skeleton is in reset pose).
+    std::vector<Ogre::Vector3> bindLocalPos(static_cast<size_t>(nBones));
+    for (int i = 0; i < nBones; ++i)
+        bindLocalPos[static_cast<size_t>(i)] =
+            skel->getBone(static_cast<unsigned short>(i))->getPosition();
+
+    const int rootIdx = tb.roleBoneIdx[0];
+    const int rFoot = tb.roleBoneIdx[17];
+    const int lFoot = tb.roleBoneIdx[21];
+    if (rootIdx < 0 || (rFoot < 0 && lFoot < 0)) return 0;
+    auto* rootTrk = anim->hasNodeTrack(static_cast<unsigned short>(rootIdx))
+        ? anim->getNodeTrack(static_cast<unsigned short>(rootIdx)) : nullptr;
+    if (!rootTrk || rootTrk->getNumKeyFrames() == 0) return 0;
+
+    // Bind ground = the lowest foot's canonical-Y in the reset pose.
+    auto canonY = [&](int bone) {
+        return (tb.Ct * tb.bindPos[static_cast<size_t>(bone)]).y;
+    };
+    float groundY = std::numeric_limits<float>::max();
+    if (rFoot >= 0) groundY = std::min(groundY, canonY(rFoot));
+    if (lFoot >= 0) groundY = std::min(groundY, canonY(lFoot));
+
+    // Root's parent-local UP direction (canonical +Y mapped into the frame the
+    // keyframe translate is applied in) — for a top-of-hierarchy root this is
+    // world up, matching applyMotionClip's descent convention.
+    const Ogre::Vector3 dropAxis =
+        tb.Ct.Inverse() * Ogre::Vector3(0.0f, 1.0f, 0.0f);
+
+    const int nk = static_cast<int>(rootTrk->getNumKeyFrames());
+    auto trackOf = [&](int bone) -> Ogre::NodeAnimationTrack* {
+        if (bone < 0 || !anim->hasNodeTrack(static_cast<unsigned short>(bone)))
+            return nullptr;
+        return anim->getNodeTrack(static_cast<unsigned short>(bone));
+    };
+
+    int adjusted = 0;
+    for (int k = 0; k < nk; ++k) {
+        Ogre::TransformKeyFrame* rkf =
+            rootTrk->getNodeKeyFrame(static_cast<unsigned short>(k));
+        const float t = rkf->getTime();
+        const Ogre::TimeIndex ti = anim->_getTimeIndex(t);
+        // Manual FK at this time to find world foot positions.
+        std::vector<Ogre::Quaternion> Wrot(static_cast<size_t>(nBones));
+        std::vector<Ogre::Vector3> Wpos(static_cast<size_t>(nBones));
+        for (int i : tb.order) {
+            Ogre::Quaternion lrot = tb.bindLocal[static_cast<size_t>(i)];
+            Ogre::Vector3 lpos = bindLocalPos[static_cast<size_t>(i)];
+            if (auto* trk = trackOf(i)) {
+                Ogre::TransformKeyFrame kf(nullptr, 0.0f);
+                trk->getInterpolatedKeyFrame(ti, &kf);
+                lrot = lrot * kf.getRotation();
+                lpos = lpos + kf.getTranslate();
+            }
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            if (pi >= 0) {
+                Wrot[static_cast<size_t>(i)] =
+                    Wrot[static_cast<size_t>(pi)] * lrot;
+                Wpos[static_cast<size_t>(i)] =
+                    Wpos[static_cast<size_t>(pi)]
+                    + Wrot[static_cast<size_t>(pi)] * lpos;
+            } else {
+                Wrot[static_cast<size_t>(i)] = lrot;
+                Wpos[static_cast<size_t>(i)] = lpos;
+            }
+        }
+        float lowest = std::numeric_limits<float>::max();
+        if (rFoot >= 0)
+            lowest = std::min(lowest, (tb.Ct * Wpos[static_cast<size_t>(rFoot)]).y);
+        if (lFoot >= 0)
+            lowest = std::min(lowest, (tb.Ct * Wpos[static_cast<size_t>(lFoot)]).y);
+        // How far the lowest foot floats above the bind ground (≥ 0). Lower the
+        // root by that much so the foot re-plants. Never RAISE (max(0,...)).
+        const float above = std::max(0.0f, lowest - groundY);
+        if (above > 1e-4f) {
+            rkf->setTranslate(rkf->getTranslate() - dropAxis * above);
+            ++adjusted;
+        }
+    }
+    if (adjusted > 0) rootTrk->_keyFrameDataChanged();
+    return adjusted;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,

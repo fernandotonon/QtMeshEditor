@@ -4314,6 +4314,12 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             AnimationMerger::smoothBakeAnimation(skel.get(), animName,
                                                  smoothFps, fps);
 
+        // #838: ground crouch/kneel/work clips (plant the lowest foot on the
+        // floor — fixes the "floating worker"). Descent actions only.
+        if (args.value("vertical_descent").toBool(true)
+            && MotionLibrary::isVerticalDescentAction(action))
+            AnimationMerger::groundRootToFeet(skel.get(), animName);
+
         // #854: optional Mixamo-style arm-space post-process. Echo whether it
         // took effect so an MCP caller can tell the rig had no arm roles
         // (rather than silently getting an unadjusted clip).

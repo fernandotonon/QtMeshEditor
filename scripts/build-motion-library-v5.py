@@ -82,7 +82,8 @@ STOPWORDS = {"armature", "action", "anim", "animation", "animations",
              "character", "model", "mesh", "skeleton", "base", "layer",
              "scene", "root", "main", "default", "final", "new", "test"}
 # junk that survives normalization but is not an action
-BAD_ACTIONS = {"ation", "bot", "jad", "loose", "pose", "still", "static"}
+BAD_ACTIONS = {"ation", "bot", "jad", "loose", "pose", "still", "static",
+               "tempmotion", "temp", "motion", "untitled", "clip", "newanim"}
 
 
 def norm_anim_name(name):

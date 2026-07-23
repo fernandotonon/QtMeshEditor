@@ -2024,6 +2024,14 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // retarget trembling). Before arm-space/foot-pin so pins stay exact.
     AnimationMerger::smoothBakeAnimation(skel.get(), animName, 12, fps);
 
+    // #838: ground crouch/kneel/work clips — a folded-leg pose retargeted onto
+    // a differently-proportioned rig leaves the feet dangling (the "floating
+    // worker"); drop the root so the lowest foot plants on the floor. Only for
+    // descent actions (a walk needs its foot lift). Runs after smooth-bake (on
+    // the baked keyframes) and before foot-pin (which then re-plants exactly).
+    if (doDescent)
+        AnimationMerger::groundRootToFeet(skel.get(), animName);
+
     // #854: optional Mixamo-style arm-space post-process.
     if (std::abs(armSpaceDeg) > 1e-4)
         AnimationMerger::adjustArmSpace(skel.get(), animName,
