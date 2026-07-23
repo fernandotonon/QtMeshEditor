@@ -1122,12 +1122,37 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             if (e < bestE) { bestE = e; fStar = f - 1; }
         }
 
-        // Measure the reference triple at f*: canonical frame C, reference
-        // world orientation and bone directions — all from the SAME applied
-        // pose, so they share one frame with the sampled quats.
+        // Reference pose for C + the triple (restWorld/restDir). Normally the
+        // calm frame f*, but if f*'s torso is NOT upright (a kneel/crouch clip
+        // may have no upright frame — Gregório BuildLoop's calm frame leans
+        // ~60°), the leveling frame C bakes that tilt in and the whole retarget
+        // reclines. Detect it (f* torso-up vs bind torso-up) and, when f*
+        // leans, reference the BIND pose instead so C is level AND the triple
+        // is sampled in that same upright pose — keeping them consistent with
+        // the per-frame quats (which are C·raw·Cinv either way).
+        auto torsoUpNow = [&]() -> Ogre::Vector3 {
+            const Ogre::Bone* hip = roleBone[0];
+            const Ogre::Bone* head = roleBone[5] ? roleBone[5] : roleBone[3];
+            if (!hip || !head) return Ogre::Vector3::ZERO;
+            Ogre::Vector3 u = head->_getDerivedPosition()
+                              - hip->_getDerivedPosition();
+            return (u.squaredLength() > 1e-9f) ? u.normalisedCopy()
+                                               : Ogre::Vector3::ZERO;
+        };
+        skel->reset(true); skel->_updateTransforms();
+        const Ogre::Vector3 bindUp = torsoUpNow();
         skel->reset(true);
         anim->apply(skel, std::min(length,
             static_cast<float>(fStar) / static_cast<float>(fps)));
+        skel->_updateTransforms();
+        const Ogre::Vector3 starUp = torsoUpNow();
+        const bool useBindRef =
+            bindUp.squaredLength() > 1e-9f && starUp.squaredLength() > 1e-9f
+            && bindUp.dotProduct(starUp) < 0.94f;   // f* torso > ~20° off bind
+        skel->reset(true);
+        if (!useBindRef)
+            anim->apply(skel, std::min(length,
+                static_cast<float>(fStar) / static_cast<float>(fps)));
         skel->_updateTransforms();
         const Ogre::Quaternion C = deriveFrame();
         const Ogre::Quaternion Cinv = C.Inverse();
