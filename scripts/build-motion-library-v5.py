@@ -185,6 +185,65 @@ HORIZONTAL_OK = {"death", "roll", "crawl", "swim", "fall", "sleep"}
 HIP, ABDOMEN, CHEST, NECK = 0, 1, 2, 3
 RHIP, LHIP = 15, 19
 
+# Forward-locomotion actions where the body must FACE forward. Excludes
+# strafes (deliberately angled), turns, and the HORIZONTAL_OK ground actions.
+FORWARD_FACING = {"walk", "run", "march", "jog", "sprint"}
+
+
+def _quat_fwd(q):
+    """World +Z basis rotated by quat q=(x,y,z,w) → world forward vector."""
+    x, y, z, w = q
+    return (2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y))
+
+
+def _mean_hip_yaw_deg(quats):
+    """Mean PER-FRAME absolute yaw deviation (deg) of the hip's world forward
+    from +Z. ~0 = every frame faces straight ahead; large = the stride is
+    baked sideways (the stylized/quadruped-rig locomotion failure).
+
+    We take |yaw| PER FRAME and then average — NOT |average of signed yaw|.
+    Aggregating first hides opposing bad frames: a clip jittering +90°/−90°
+    (or the ±180° wrap +179°/−179°) has a zero mean/resultant yet faces
+    sideways every single frame. Per-frame-abs-then-mean flags both."""
+    if not quats:
+        return 0.0
+    tot = 0.0
+    for f in quats:
+        fx, fy, fz = _quat_fwd(f[HIP])
+        tot += abs(math.degrees(math.atan2(fx, fz)))
+    return tot / len(quats)
+
+
+def _inverted_frame_fraction(quats):
+    """Fraction of frames where the hip's world UP-vector Y drops below +0.3
+    (tilted past ~70° toward horizontal/upside-down). A clean upright clip
+    holds ~+1 every frame (fraction ~0); a systematically mis-oriented rig
+    (persistent axis offset — GIGI Fox, some dance rigs) reads 1.0. A rare
+    transient loop-seam spike reads a few percent. Mirror-invariant."""
+    if not quats:
+        return 0.0
+    bad = 0
+    for f in quats:
+        x, y, z, w = f[HIP]
+        if 1.0 - 2.0 * (x * x + z * z) < 0.3:   # Y of R·(0,1,0)
+            bad += 1
+    return bad / len(quats)
+
+
+def _mean_hip_pitch_deg(quats):
+    """Mean PER-FRAME absolute pitch deviation (deg) of the hip's world forward
+    from level. Clean upright walk/run stays within ~17°; a diving/lunging clip
+    reads 70–80°. As with yaw, take |pitch| PER FRAME then average — averaging
+    signed pitch first lets +70°/−70° frames cancel to 0° (and slip under the
+    inversion cutoff too), so an off-axis clip would wrongly pass."""
+    if not quats:
+        return 0.0
+    tot = 0.0
+    for f in quats:
+        _, fy, _ = _quat_fwd(f[HIP])
+        tot += abs(math.degrees(math.asin(max(-1.0, min(1.0, fy)))))
+    return tot / len(quats)
+
 
 def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
                  mean_energy, min_energy):
@@ -342,6 +401,50 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             return 0.0, (f"arm(s) not hanging (upper-arm signed up-dots "
                          f"{[round(u, 2) for u in downdots]}) — zombie/"
                          f"T-pose/raised style, not a generic {action}")
+
+    # Directionality gate (#838 follow-up): a forward-locomotion clip whose hip
+    # faces sideways renders as "walking sideways" once the root is locked at
+    # retarget. Measured across the corpus, clean human walks/runs sit at
+    # |mean hip yaw| < 10°, while stylized/quadruped rigs (Fox Warriors, Gynoid,
+    # SpongeBob) land 38–153°. Cull at 25° — a wide, safe margin in the gap.
+    # Locomotion facing/orientation gates. Scoped to FORWARD_FACING (walk/run/
+    # march) — a locomotion clip must travel upright and forward, so an off-axis
+    # or inverted hip is unambiguously broken there. Gestures / dance / crouch
+    # legitimately lean or bend, so these gates would false-positive on them
+    # (the spine-based topple gate above already protects non-locomotion
+    # actions from genuine head-below-hips). All three reads are on the hip's
+    # world-forward/up vectors: mirror-invariant and rig-agnostic.
+    if action in FORWARD_FACING and len(quats) > 1:
+        # Sideways: hip faces off +Z. Clean human walks/runs < 10°; stylized/
+        # quadruped rigs (Fox, Gynoid, SpongeBob) land 38–153°. Cull at 25°.
+        yaw = _mean_hip_yaw_deg(quats)
+        if yaw > 25.0:
+            return 0.0, (f"faces sideways (mean hip yaw {yaw:.0f}° off "
+                         f"forward) — off-axis {action}, renders sideways")
+        # Diving/lunging: clip runs face-down. Clean ≤17°; superhero dive
+        # runs read 68–79°. Cull at 30°.
+        pitch = _mean_hip_pitch_deg(quats)
+        if pitch > 30.0:
+            return 0.0, (f"pitches over (mean hip pitch {pitch:.0f}° off "
+                         f"level) — diving/lunging, not an upright {action}")
+        # Inverted: the hip tilts past horizontal for a sustained fraction of
+        # the clip (a systematically mis-oriented rig renders head-down while
+        # "walking"). Clean clips ~0%; mis-oriented rigs read ~100%.
+        inv = _inverted_frame_fraction(quats)
+        if inv > 0.15:
+            return 0.0, (f"hip tilted/inverted for {inv:.0%} of the clip — "
+                         f"mis-oriented rig, renders wrong for {action}")
+
+    # NOTE: a knee-hyperextension gate was prototyped here (user-reported
+    # backward-bending knees on the Fox/stylized rigs) but REMOVED. The signed
+    # knee-flex read from quaternions is not mirror-invariant — the left leg's
+    # local axis is mirrored on many rigs, so a straight-standing knee reads
+    # +170° on the right but −30° on the left, producing FALSE positives that
+    # culled clean Quaternius idle/jump clips. Crucially, every knee-broken
+    # LOCOMOTION clip (the Fox rigs) is ALREADY caught by the yaw gate above —
+    # the knee gate added zero unique locomotion coverage. A reliable knee
+    # check needs joint POSITIONS (bind-relative hinge sign), not bare quats;
+    # that belongs in the retargeting-math pass (foot-lock / IK), not here.
 
     # Energy band: below = a pose, way above = spasm/mis-mapped.
     lo, hi, cap = min_energy * 2.0, 0.10, 0.20
