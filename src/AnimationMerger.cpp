@@ -1076,6 +1076,17 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         Ogre::Bone* hipBone = roleBone[0];                 // "hip"
         Ogre::Bone* footBone = roleBone[17];               // "rfoot"
         if (!footBone) footBone = roleBone[21];            // "lfoot" fallback
+        // Bind-pose (T-pose STANDING) hip + foot positions — the absolute
+        // reference for crouch depth. Using the clip's own max hip-height as
+        // "standing" fails for always-low actions (a crawl never stands, so
+        // relative-to-max reads ~0); the bind pose is the true upright height.
+        Ogre::Vector3 bindHip = Ogre::Vector3::ZERO, bindFoot = Ogre::Vector3::ZERO;
+        {
+            skel->reset(true);
+            skel->_updateTransforms();
+            if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
+            if (footBone) bindFoot = footBone->_getDerivedPosition();
+        }
         for (int f = 0; f < frames; ++f) {
             skel->reset(true);
             anim->apply(skel, std::min(length,
@@ -1186,22 +1197,29 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         // read the hip RISING during pickup/sit) — a genuine crouch always
         // lowers the hip toward the planted foot regardless of rig axes.
         if (hipBone && footBone && frames > 0) {
+            // Standing reference = the BIND-pose hip height above the foot
+            // (canonical +Y). Absolute, so an always-low crawl still reads a
+            // real drop — but fall back to the clip's own max if the bind pose
+            // is degenerate (hip ≈ foot height, e.g. a T-pose that isn't
+            // upright), so we never divide the descent away.
+            const Ogre::Vector3 bh = C * bindHip;
+            const Ogre::Vector3 bf = C * bindFoot;
+            float standH = bh.y - bf.y;
+            const float legLen = (bindHip - bindFoot).length();
             std::vector<float> hipAboveFoot(static_cast<size_t>(frames));
-            float legLen = 0.0f, standH = 0.0f;
+            float clipMaxH = 0.0f;
             for (int f = 0; f < frames; ++f) {
                 const Ogre::Vector3 hp = C * hipPos[static_cast<size_t>(f)];
                 const Ogre::Vector3 fp = C * footPos[static_cast<size_t>(f)];
-                hipAboveFoot[static_cast<size_t>(f)] = hp.y - fp.y;   // canon +Y up
-                standH = std::max(standH, hp.y - fp.y);
-                legLen = std::max(legLen,
-                    (hipPos[static_cast<size_t>(f)]
-                     - footPos[static_cast<size_t>(f)]).length());
+                hipAboveFoot[static_cast<size_t>(f)] = hp.y - fp.y;
+                clipMaxH = std::max(clipMaxH, hp.y - fp.y);
             }
+            // If the clip ever stands TALLER than the bind pose (bind wasn't a
+            // clean upright T-pose), anchor to the clip max so drops stay ≤ 0.
+            standH = std::max(standH, clipMaxH);
             if (legLen > 1e-3f && standH > 1e-3f) {
                 clip.rootY.reserve(static_cast<size_t>(frames));
                 for (int f = 0; f < frames; ++f) {
-                    // Drop below standing (≤ 0), in leg-lengths. Clamp to one
-                    // leg length; a deeper value is a mis-resolved foot glitch.
                     const float drop =
                         (hipAboveFoot[static_cast<size_t>(f)] - standH) / legLen;
                     clip.rootY.push_back(std::clamp(drop, -1.0f, 0.0f));

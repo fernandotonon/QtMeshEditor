@@ -211,6 +211,8 @@ REVIEW_DROP = [
     ("Knight Character Animated", ""),   # Jul 2018 — raised right arm
     ("Rigged and Animated Humanoid", ""),  # bad retarget on BOTH Mixamo &
                                            # UniRig skeletons (user review)
+    ("FNaf_DLC_moon_sun", ""),           # Moon/Sun man — jumpscare rig, bad
+    ("Low_Poly_Zombie_Game_Animation", ""),  # weak zombie clips (user review)
 ]
 
 
@@ -695,22 +697,18 @@ def main():
                         # retarget deltas the descent against its start frame).
                         ry = c.get("rootY")
                         if ry and len(ry) == len(q):
-                            # rootY is already a crouch DEPTH (hip-to-foot
-                            # compression, ≤ 0 leg-lengths, anchored to the
-                            # clip's own standing height) — window-slice and
-                            # RE-ANCHOR to the window's shallowest frame so the
-                            # clip opens at 0 (the active window may start
-                            # already partly crouched).
+                            # rootY is a crouch DEPTH vs the rig's BIND-pose
+                            # standing height (absolute, ≤ 0 leg-lengths), so an
+                            # always-low crawl/sit keeps its real depth — do NOT
+                            # re-anchor to the window (that would zero a clip
+                            # that opens already crouched). Just window-slice and
+                            # apply the 0.6 display gain (full-kneel hip-to-foot
+                            # compression is nearly a whole leg; 0.6 lands a
+                            # believable depth).
                             wry = ry[s:epos]
                             if wry:
-                                base = max(wry)   # shallowest (closest to 0)
-                                # 0.6 gain: the raw hip-to-foot compression at a
-                                # full kneel is nearly a whole leg length, which
-                                # over-sinks the body; 0.6 lands a believable
-                                # crouch depth (tuned on working/crouch/death).
                                 clip["rootY"] = [
-                                    round(0.6 * min(0.0, v - base), 5)
-                                    for v in wry]
+                                    round(0.6 * min(0.0, v), 5) for v in wry]
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
