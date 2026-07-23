@@ -8076,6 +8076,40 @@ Rectangle {
         }
     }
 
+    // #838: Mixamo-style animation picker — browse/select a specific library
+    // clip instead of the free-text random pick.
+    Loader {
+        id: animPickerLoader
+        active: false
+        property bool wired: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/AnimationPickerDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (!animPickerLoader.wired) {
+                animPickerLoader.wired = true
+                // Re-emit on root: lastGeneratedAnim / setArmSpaceTarget /
+                // refreshAnimData live in the animationComponent instance, NOT
+                // here in the root Loader scope — calling them directly throws
+                // a ReferenceError. The animation component connects to this
+                // signal and does the wiring in its own scope.
+                item.applied.connect(function(anim, entity) {
+                    root.animationPicked(anim || "", entity || "")
+                })
+            }
+            if (item.open) item.open()
+        }
+    }
+    // Emitted after the picker applies a clip; handled inside animationComponent.
+    signal animationPicked(string animation, string entity)
+    function openAnimationPicker() {
+        if (!animPickerLoader.active) {
+            animPickerLoader.active = true
+        } else if (animPickerLoader.item) {
+            animPickerLoader.item.open()
+        }
+    }
+
     Loader {
         id: removeBoneLoader
         active: false
@@ -9061,13 +9095,46 @@ Rectangle {
                 target: MorphAnimationManager
                 function onMorphClipsChanged() { refreshAnimData() }
             }
+            // #838: the animation picker applied a clip. Handle it HERE (in the
+            // animation component scope) so lastGeneratedAnim / setArmSpaceTarget
+            // / refreshAnimData resolve — the root-level Loader can't reach them.
+            Connections {
+                target: root
+                function onAnimationPicked(animation, entity) {
+                    if (animation) {
+                        lastGeneratedAnim = animation
+                        setArmSpaceTarget(animation, entity || "")
+                    }
+                    refreshAnimData()
+                }
+            }
 
-            // ── Generate from text (#411, experimental) ──────────────────────
+            // ── Add animation (#838 picker + #411 text-to-motion) ────────────
             // Lives in the Animations group and shows for any skeleton-bearing
             // selection (incl. a freshly auto-rigged mesh with no clips yet).
+            // PRIMARY path: browse the curated library and pick a named clip
+            // (reliable). The free-text field below drives the experimental
+            // AI model.
             Text {
-                text: "Generate from text (experimental):"
-                color: PropertiesPanelController.textColor; font.pixelSize: 11
+                text: "Add animation:"
+                color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true
+            }
+            // Browse the library — the reliable, Mixamo-style pick-a-clip flow.
+            Rectangle {
+                width: parent.width - 16; height: 26; radius: 3
+                color: browseMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : browseMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                     : PropertiesPanelController.highlightColor
+                Text { anchors.centerIn: parent; text: "Browse animation library…"
+                       color: "white"; font.pixelSize: 11 }
+                MouseArea { id: browseMa; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.openAnimationPicker() }
+            }
+            Text {
+                text: "— or generate from text (experimental AI model):"
+                color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
+                topPadding: 4
             }
             Row {
                 width: parent.width - 16; spacing: 6
@@ -9133,7 +9200,8 @@ Rectangle {
                         // skewing every new clip is exactly the bug this fixes).
                         var gr = AnimationControlController.generateMotion(
                                      genPromptIn.text, 0.0, useModelChk.checked,
-                                     0.0, footPinChk.checked)
+                                     0.0, footPinChk.checked, -1,
+                                     descentChk.checked)
                         if (gr && gr.animation) {
                             lastGeneratedAnim = gr.animation
                             // Point the slider at the fresh clip at a neutral 0
@@ -9195,6 +9263,31 @@ Rectangle {
                 }
                 Text {
                     text: "Pin feet (contact cleanup)"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            // #838: vertical root descent — lower the body to the ground on
+            // crouch/pickup/sit/crawl/death clips. ON by default; helps most
+            // such clips but a few author the squat purely in the joints, so
+            // this lets the user turn it off when it over-sinks.
+            Row {
+                spacing: 6
+                Rectangle {
+                    id: descentChk
+                    property bool checked: true
+                    width: 14; height: 14; radius: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: checked ? PropertiesPanelController.highlightColor
+                                   : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { anchors.centerIn: parent; visible: parent.checked
+                           text: "✓"; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                                onClicked: descentChk.checked = !descentChk.checked }
+                }
+                Text {
+                    text: "Lower body (crouch/pickup)"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                 }

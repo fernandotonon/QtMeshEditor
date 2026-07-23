@@ -2049,7 +2049,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
                                  float armSpaceDeg, bool footPin,
-                                 int smoothFps)
+                                 int smoothFps, int variantIndex,
+                                 bool verticalDescent)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2071,6 +2072,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
     std::vector<std::array<float, 3>> clipDirs;
+    std::vector<float> clipRootY;              // #838 non-locomotion hip drop
     QString clipSource;
 
     bool gotClip = false;
@@ -2123,7 +2125,21 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         if (!lib.loadFromFile(libPath)) {
             err() << "Error: " << lib.error() << Qt::endl; return 1;
         }
-        const int idx = lib.matchPrompt(prompt, &action);
+        // Curation harness (#838): --variant N forces a SPECIFIC clip index,
+        // bypassing the quality-weighted random pick, so every variant of an
+        // action can be rendered and reviewed one-by-one.
+        int idx;
+        if (variantIndex >= 0) {
+            if (variantIndex >= lib.clipCount()) {
+                err() << "Error: --variant " << variantIndex << " out of range (0.."
+                      << (lib.clipCount() - 1) << ")." << Qt::endl;
+                return 1;
+            }
+            idx = variantIndex;
+            action = lib.clip(idx).action;
+        } else {
+            idx = lib.matchPrompt(prompt, &action);
+        }
         if (idx < 0) {
             err() << "Error: no motion matched \"" << prompt << "\". Known actions:";
             for (const QString& a : lib.actions()) err() << " " << a;
@@ -2137,16 +2153,23 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRootY = clip.rootY;
         clipSource = QStringLiteral("template");
         // Optionally retime the clip to a requested duration by frame stride/pad.
         if (duration > 0.05f) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
+            std::vector<float> retimedY;
+            const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            if (hadY) retimedY.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                retimed[f] = quats[si];
+                if (hadY) retimedY[f] = clipRootY[si];
             }
             quats.swap(retimed);
+            if (hadY) clipRootY.swap(retimedY);
         }
     }
 
@@ -2171,7 +2194,10 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 /*refineWithModel=*/false,
                                                 /*refineStride=*/8, yaw180,
                                                 clipDirs,
-                                                clipSource == QStringLiteral("model"));
+                                                clipSource == QStringLiteral("model"),
+                                                clipRootY,
+                                                verticalDescent
+                                                && MotionLibrary::isVerticalDescentAction(action));
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
@@ -2267,10 +2293,12 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
+    int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
     bool footPinSet = false;          // --foot-pin given (standalone post-process)
+    bool generateDescent = true;      // #838: lower body on crouch/pickup (default ON)
     int  generateSmoothFps = 12;      // #837: sparse-bake low-pass (0 = off)
     bool jsonOutput = false;
     int resampleCount = 0;
@@ -2374,6 +2402,18 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // text-to-motion model for --generate; falls back to the template library
         // automatically if the model is unavailable.
         if (arg == "--model" && generateMode) { generateUseModel = true; continue; }
+        // --variant N: curation harness — render a SPECIFIC template clip index
+        // (from `qtmesh anim <file> --list-variants`) instead of the random pick.
+        if (arg == "--variant" && i + 1 < argc) {
+            bool ok = false;
+            const int variant = QString(argv[++i]).toInt(&ok);
+            if (!ok || variant < 0) {
+                err() << "Error: --variant requires a non-negative integer." << Qt::endl;
+                return 2;
+            }
+            generateVariant = variant;
+            continue;
+        }
         if (arg == "--duration" && i + 1 < argc) {
             generateDuration = QString(argv[++i]).toFloat();
             continue;
@@ -2388,6 +2428,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // EXISTING animation (standalone, needs --animation).
         if (arg == "--no-foot-pin") { generateFootPin = false; continue; }
         if (arg == "--foot-pin") { footPinSet = true; continue; }
+        // #838 vertical descent: lower the body on crouch/pickup/sit/crawl/
+        // death clips (default ON); --no-descent keeps the root flat.
+        if (arg == "--no-descent") { generateDescent = false; continue; }
         // #837 smooth-bake post-pass on --generate: bake sparse then back to
         // the clip rate (temporal low-pass, kills retarget trembling).
         if (arg == "--no-smooth-bake") { generateSmoothFps = 0; continue; }
@@ -2491,7 +2534,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
                                generateUseModel, armSpaceDeg, generateFootPin,
-                               generateSmoothFps);
+                               generateSmoothFps, generateVariant, generateDescent);
     }
 
     // #837 parity harness: apply a canonical clip JSON through the pure
@@ -2872,6 +2915,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 dirs.append(vec);
             }
             co["restDir"] = dirs;
+            // #838 vertical root descent: per-frame normalised hip Y offset.
+            if (!c.rootY.empty()) {
+                QJsonArray ry;
+                for (float v : c.rootY)
+                    ry.append(static_cast<double>(
+                        std::round(v * 100000.0f) / 100000.0f));
+                co["rootY"] = ry;
+            }
             clipArr.append(co);
         }
         root["clips"] = clipArr;

@@ -345,11 +345,24 @@ public:
     /// false = the reliable template-clip retarget.
     /// `footPin` (default true) runs the #856 foot-contact cleanup on the
     /// generated clip (contact detection + two-bone IK pinning).
+    /// `verticalDescent` (#838, default true) lets the root lower to the ground
+    /// on non-locomotion crouch/pickup/sit/crawl/death clips (descent-only). It
+    /// helps most such clips but not all (source rigs vary in whether they bake
+    /// hip translation), so it is exposed as a checkbox the user can turn off.
     Q_INVOKABLE QVariantMap generateMotion(const QString& prompt,
                                            double duration = 0.0,
                                            bool useModel = false,
                                            double armSpaceDeg = 0.0,
-                                           bool footPin = true);
+                                           bool footPin = true,
+                                           int variantIndex = -1,
+                                           bool verticalDescent = true);
+
+    /// List every clip in the template motion library for the animation
+    /// PICKER (Mixamo-style browse). Each entry is a QVariantMap
+    /// { index, action, name, source, quality, frames } where `name` is a
+    /// human-readable label like "Walk (Tired Character)". Downloads the
+    /// library on first use (blocking). Empty list if unavailable.
+    Q_INVOKABLE QVariantList listMotionClips();
 
     /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
     /// the selected entity. Positive `degrees` widens the arms away from the

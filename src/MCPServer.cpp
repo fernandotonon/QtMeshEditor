@@ -4181,8 +4181,16 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         if (!mgr) return makeErrorResult("Error: Manager not available");
 
         const QString prompt = args.value("prompt").toString();
-        if (prompt.trimmed().isEmpty())
-            return makeErrorResult("Error: 'prompt' is required (e.g. \"walking\").");
+        // #838: a variant_index selects an EXACT curated clip (parity with the
+        // CLI --variant flag and the GUI picker), forcing the template path.
+        // prompt is then optional; without either, we can't pick a clip.
+        const bool hasVariant = args.contains("variant_index");
+        const int variantIndex = hasVariant
+            ? args.value("variant_index").toInt(-1) : -1;
+        if (hasVariant && variantIndex < 0)
+            return makeErrorResult("Error: 'variant_index' must be a non-negative integer.");
+        if (!hasVariant && prompt.trimmed().isEmpty())
+            return makeErrorResult("Error: 'prompt' is required (e.g. \"walking\") unless 'variant_index' is given.");
 
         QString entityName = args["entity_name"].toString();
         Ogre::Entity* entity = nullptr;
@@ -4198,7 +4206,8 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
 
         const double duration = args.value("duration").toDouble(0.0);
-        const bool useModel = args.value("model").toBool(false);
+        // A variant_index forces the template path (no model, no random match).
+        const bool useModel = !hasVariant && args.value("model").toBool(false);
 
         // Acquire the canonical clip: EXPERIMENTAL trained model first (when
         // model:true), else the reliable TEMPLATE library (also the fallback).
@@ -4207,6 +4216,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         int fps = 30; bool worldFrame = false;
         std::vector<std::array<float, 4>> cmuRest;
         std::vector<std::array<float, 3>> clipDirs;
+        std::vector<float> clipRootY;          // #838 non-locomotion hip drop
         bool gotClip = false;
 
         if (useModel) {
@@ -4240,11 +4250,20 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             MotionLibrary lib;
             if (!lib.loadFromFile(libPath))
                 return makeErrorResult(QString("Error: %1").arg(lib.error()));
-            const int idx = lib.matchPrompt(prompt, &action);
-            if (idx < 0) {
-                QString known; for (const QString& a : lib.actions()) known += " " + a;
-                return makeErrorResult(QString("Error: no motion matched \"%1\". Known actions:%2")
-                                           .arg(prompt, known));
+            int idx;
+            if (hasVariant) {
+                if (variantIndex >= lib.clipCount())
+                    return makeErrorResult(QString("Error: variant_index %1 out of range (0..%2)")
+                                               .arg(variantIndex).arg(lib.clipCount() - 1));
+                idx = variantIndex;
+                action = lib.clip(idx).action;
+            } else {
+                idx = lib.matchPrompt(prompt, &action);
+                if (idx < 0) {
+                    QString known; for (const QString& a : lib.actions()) known += " " + a;
+                    return makeErrorResult(QString("Error: no motion matched \"%1\". Known actions:%2")
+                                               .arg(prompt, known));
+                }
             }
             const MotionLibrary::Clip& clip = lib.clip(idx);
             quats = clip.quats; fps = clip.fps;
@@ -4252,15 +4271,22 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                              : clip.restWorld;
             clipDirs = clip.restDir;
+            clipRootY = clip.rootY;
             clipSource = QStringLiteral("template");
             if (duration > 0.05) {
                 const int want = std::max(2, int(duration * clip.fps));
                 std::vector<std::vector<std::array<float,4>>> retimed(want);
+                std::vector<float> retimedY;
+                const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+                if (hadY) retimedY.resize(want);
                 for (int f = 0; f < want; ++f) {
                     const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                    retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                    const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                    retimed[f] = quats[si];
+                    if (hadY) retimedY[f] = clipRootY[si];
                 }
                 quats.swap(retimed);
+                if (hadY) clipRootY.swap(retimedY);
             }
         }
 
@@ -4273,7 +4299,10 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         /*refineWithModel=*/false,
                                                         /*refineStride=*/8, yaw180,
                                                         clipDirs,
-                                                        clipSource == QStringLiteral("model"));
+                                                        clipSource == QStringLiteral("model"),
+                                                        clipRootY,
+                                                        args.value("vertical_descent").toBool(true)
+                                                        && MotionLibrary::isVerticalDescentAction(action));
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal
@@ -8855,16 +8884,19 @@ QJsonArray MCPServer::buildToolsList()
         props["foot_pin"] = QJsonObject{{"type", "boolean"}, {"description", "Foot-contact cleanup (#856): detect ground-contact spans and IK-pin the feet so they plant instead of skating. Default true; set false to keep the raw retarget."}};
         props["smooth_bake"] = QJsonObject{{"type", "boolean"}, {"description", "Temporal low-pass post-pass: bake the clip sparse then back to its native rate, removing retarget trembling. Default true."}};
         props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
+        props["vertical_descent"] = QJsonObject{{"type", "boolean"}, {"description", "Lower the body to the ground on non-locomotion crouch/pickup/sit/crawl/death clips (#838, descent-only). Default true; set false to keep the root at standing height when the descent over-sinks on a given clip. No effect on locomotion actions."}};
+        props["variant_index"] = QJsonObject{{"type", "integer"}, {"description", "Select an EXACT clip from the library by index (parity with CLI --variant / the GUI picker) instead of keyword-matching a prompt. Forces the template path. When given, 'prompt' is optional. Out-of-range indices error."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
             "retarget it onto a rigged mesh. MVP approach — matches the prompt to a curated, permissively-"
             "licensed motion clip (CMU MoCap) and retargets it onto the skeleton via the canonical-joint "
-            "mapping (same as #409). The clip library downloads on first use. Requires a humanoid rig; reports "
-            "which action matched and how many bones/joints were retargeted. (Not generative diffusion — see "
+            "mapping (same as #409). Pass 'variant_index' to pick an exact clip deterministically. The clip "
+            "library downloads on first use. Requires a humanoid rig; reports which action matched and how "
+            "many bones/joints were retargeted. (Not generative diffusion — see "
             "docs/TEXT_TO_MOTION_SPIKE_411.md for why the template approach ships first.)",
             props,
-            QJsonArray{"prompt"}
+            QJsonArray{}   // neither prompt nor variant_index is unconditionally required; handler validates
         );
     }
 

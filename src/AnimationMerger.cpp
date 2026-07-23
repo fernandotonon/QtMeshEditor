@@ -1064,10 +1064,29 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         const int frames =
             std::max(2, static_cast<int>(std::lround(length * fps)) + 1);
 
-        // Pass 1: sample RAW world orientations per frame per role.
+        // Pass 1: sample RAW world orientations per frame per role, plus the
+        // hip and a foot world POSITION per frame (for #838 vertical descent).
         std::vector<std::vector<Ogre::Quaternion>> raw(
             static_cast<size_t>(frames),
             std::vector<Ogre::Quaternion>(static_cast<size_t>(J)));
+        std::vector<Ogre::Vector3> hipPos(static_cast<size_t>(frames),
+                                          Ogre::Vector3::ZERO);
+        std::vector<Ogre::Vector3> footPos(static_cast<size_t>(frames),
+                                           Ogre::Vector3::ZERO);
+        Ogre::Bone* hipBone = roleBone[0];                 // "hip"
+        Ogre::Bone* footBone = roleBone[17];               // "rfoot"
+        if (!footBone) footBone = roleBone[21];            // "lfoot" fallback
+        // Bind-pose (T-pose STANDING) hip + foot positions — the absolute
+        // reference for crouch depth. Using the clip's own max hip-height as
+        // "standing" fails for always-low actions (a crawl never stands, so
+        // relative-to-max reads ~0); the bind pose is the true upright height.
+        Ogre::Vector3 bindHip = Ogre::Vector3::ZERO, bindFoot = Ogre::Vector3::ZERO;
+        {
+            skel->reset(true);
+            skel->_updateTransforms();
+            if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
+            if (footBone) bindFoot = footBone->_getDerivedPosition();
+        }
         for (int f = 0; f < frames; ++f) {
             skel->reset(true);
             anim->apply(skel, std::min(length,
@@ -1077,6 +1096,10 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 if (Ogre::Bone* b = roleBone[static_cast<size_t>(j)])
                     raw[static_cast<size_t>(f)][static_cast<size_t>(j)] =
                         b->_getDerivedOrientation();
+            if (hipBone)
+                hipPos[static_cast<size_t>(f)] = hipBone->_getDerivedPosition();
+            if (footBone)
+                footPos[static_cast<size_t>(f)] = footBone->_getDerivedPosition();
         }
 
         // Calm reference frame f*: minimum mean joint rotation speed —
@@ -1145,6 +1168,35 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 dirBetween(parent, j, restDir[static_cast<size_t>(j)]);
         }
 
+        // Spine-chain sanity (#838): the spine (hip→abdomen→chest→neck→neck1→
+        // head, roles 0..5) is monotonically UPWARD on any humanoid. Some rigs
+        // (e.g. the Samurai dance clip) stack a spine joint BELOW its parent in
+        // bind pose — its bone direction points DOWN the hip→head axis. That
+        // makes the source bone's own frame degenerate/inverted, so the aim-
+        // based retarget folds the chest UNDER the hip and snaps the model in
+        // half. We can't trust that bone's motion, so ZERO its restDir: the
+        // retarget skips it (`squaredLength() <= 1e-8` guard) and the target
+        // bone HOLDS its upright bind pose while the rest of the clip plays.
+        {
+            const Ogre::Bone* hipB  = roleBone[0];
+            const Ogre::Bone* headB = roleBone[5];
+            if (hipB && headB) {
+                Ogre::Vector3 up = C * (headB->_getDerivedPosition()
+                                        - hipB->_getDerivedPosition());
+                if (up.squaredLength() > 1e-9f) {
+                    up.normalise();
+                    for (int j = 1; j <= 4; ++j) {   // abdomen..neck1
+                        auto& d = restDir[static_cast<size_t>(j)];
+                        const Ogre::Vector3 v(d[0], d[1], d[2]);
+                        if (v.squaredLength() > 1e-9f
+                            && v.dotProduct(up) < -0.2f) {   // clearly downward
+                            d = {0.f, 0.f, 0.f};             // drop this bone
+                        }
+                    }
+                }
+            }
+        }
+
         // Pass 2: conjugate the stored raw worlds into the canonical frame.
         clip.quats.reserve(static_cast<size_t>(frames));
         for (int f = 0; f < frames; ++f) {
@@ -1164,6 +1216,45 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         clip.frames = static_cast<int>(clip.quats.size());
         clip.restWorld = std::move(restWorld);
         clip.restDir = std::move(restDir);
+
+        // #838 vertical root descent: how far the hip sinks toward the feet as
+        // a CROUCH measure. Sign-safe by construction — we measure the hip's
+        // height ABOVE the foot along the canonical +Y (always ≥ 0), take the
+        // standing height as the MAX across the clip, and report each frame's
+        // DROP below that as a NEGATIVE rootY in leg-lengths. This avoids the
+        // per-rig sign chaos of raw hip-Y translation (some Quaternius rigs
+        // read the hip RISING during pickup/sit) — a genuine crouch always
+        // lowers the hip toward the planted foot regardless of rig axes.
+        if (hipBone && footBone && frames > 0) {
+            // Standing reference = the BIND-pose hip height above the foot
+            // (canonical +Y). Absolute, so an always-low crawl still reads a
+            // real drop — but fall back to the clip's own max if the bind pose
+            // is degenerate (hip ≈ foot height, e.g. a T-pose that isn't
+            // upright), so we never divide the descent away.
+            const Ogre::Vector3 bh = C * bindHip;
+            const Ogre::Vector3 bf = C * bindFoot;
+            float standH = bh.y - bf.y;
+            const float legLen = (bindHip - bindFoot).length();
+            std::vector<float> hipAboveFoot(static_cast<size_t>(frames));
+            float clipMaxH = 0.0f;
+            for (int f = 0; f < frames; ++f) {
+                const Ogre::Vector3 hp = C * hipPos[static_cast<size_t>(f)];
+                const Ogre::Vector3 fp = C * footPos[static_cast<size_t>(f)];
+                hipAboveFoot[static_cast<size_t>(f)] = hp.y - fp.y;
+                clipMaxH = std::max(clipMaxH, hp.y - fp.y);
+            }
+            // If the clip ever stands TALLER than the bind pose (bind wasn't a
+            // clean upright T-pose), anchor to the clip max so drops stay ≤ 0.
+            standH = std::max(standH, clipMaxH);
+            if (legLen > 1e-3f && standH > 1e-3f) {
+                clip.rootY.reserve(static_cast<size_t>(frames));
+                for (int f = 0; f < frames; ++f) {
+                    const float drop =
+                        (hipAboveFoot[static_cast<size_t>(f)] - standH) / legLen;
+                    clip.rootY.push_back(std::clamp(drop, -1.0f, 0.0f));
+                }
+            }
+        }
         out.push_back(std::move(clip));
     }
 
@@ -1949,7 +2040,9 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     int refineStride,
     bool yaw180,
     const std::vector<std::array<float, 3>>& clipRestDir,
-    bool modelClip)
+    bool modelClip,
+    const std::vector<float>& clipRootY,
+    bool verticalDescent)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -2269,6 +2362,22 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         skel->getBone(static_cast<unsigned short>(i)));
                     ++res.tracksWritten;
                 }
+            // #838 vertical descent (bind-referenced path): TARGET leg length
+            // from the bind-pose derived positions (hip role 0 → foot role 17,
+            // else 21), so the clip's leg-normalized rootY scales to this rig.
+            const bool doVerticalDescentBR =
+                verticalDescent && !clipRootY.empty()
+                && static_cast<int>(clipRootY.size()) == frames;
+            float tgtLegLenBR = 0.0f;
+            if (doVerticalDescentBR) {
+                const int hipB = tb.roleBoneIdx[0];
+                int footB = tb.roleBoneIdx[17];
+                if (footB < 0) footB = tb.roleBoneIdx[21];
+                if (hipB >= 0 && footB >= 0)
+                    tgtLegLenBR = (tb.bindPos[static_cast<size_t>(hipB)]
+                                   - tb.bindPos[static_cast<size_t>(footB)])
+                                      .length();
+            }
             std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
             for (int f = 0; f < frames; ++f) {
                 for (int i : tb.order) {
@@ -2321,7 +2430,21 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         kf->setRotation(
                             tb.bindLocal[static_cast<size_t>(i)].Inverse()
                             * local);
-                        kf->setTranslate(Ogre::Vector3::ZERO);
+                        Ogre::Vector3 tdelta = Ogre::Vector3::ZERO;
+                        // #838: lower the ROOT (canon 0) by the clip's descent
+                        // (negative rootY only) × target leg length, along the
+                        // canonical UP axis mapped into the rig's world frame.
+                        // The keyframe is a parent-space translate delta; for a
+                        // top-of-hierarchy root the parent frame is world, so
+                        // the canonical-up vector (Ct⁻¹·+Y) is the drop axis.
+                        if (c == 0 && doVerticalDescentBR && tgtLegLenBR > 1e-4f) {
+                            const float drop =
+                                std::min(0.0f, clipRootY[static_cast<size_t>(f)])
+                                * tgtLegLenBR;
+                            tdelta = tb.Ct.Inverse()
+                                     * Ogre::Vector3(0.0f, drop, 0.0f);
+                        }
+                        kf->setTranslate(tdelta);
                         kf->setScale(Ogre::Vector3::UNIT_SCALE);
                     }
                 }
@@ -2541,6 +2664,28 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             restsAreIdentity = false;
     }
 
+    // #838 vertical descent: TARGET rig hip→foot length (bind pose) so the
+    // clip's source-normalized rootY (leg-lengths) scales to this rig's world
+    // units. Only wired when the caller enabled verticalDescent AND the clip
+    // carries a rootY track (non-locomotion actions). Uses the derived bind
+    // positions of the hip (canon 0) and a foot (canon 17 = left, else 21).
+    float targetLegLen = 0.0f;
+    const bool doVerticalDescent =
+        verticalDescent && !clipRootY.empty()
+        && static_cast<int>(clipRootY.size()) == frames;
+    if (doVerticalDescent) {
+        // Measure the leg length from the BIND pose (readTargetBindFrame resets
+        // + updates the skeleton, then reads derived positions), NOT the live
+        // pose — otherwise a crouched runtime pose would skew the scale.
+        const TargetBindFrame tbd = readTargetBindFrame(skel, boneToCanon);
+        const int hipB  = tbd.roleBoneIdx[0];
+        int footB = tbd.roleBoneIdx[17];
+        if (footB < 0) footB = tbd.roleBoneIdx[21];
+        if (hipB >= 0 && footB >= 0)
+            targetLegLen = (tbd.bindPos[static_cast<size_t>(hipB)]
+                            - tbd.bindPos[static_cast<size_t>(footB)]).length();
+    }
+
     for (int i = 0; i < nBones; ++i) {
         const int c = boneToCanon[i];
         if (c < 0 || c >= J) continue;       // unmapped bone keeps its bind pose
@@ -2612,7 +2757,24 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             }
             Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
             kf->setRotation(local);
-            kf->setTranslate(standPos);
+            Ogre::Vector3 trans = standPos;
+            // #838 vertical descent: lower the ROOT along its parent-local Y by
+            // the clip's normalized hip drop × the target leg length. The hip's
+            // parent-local +Y is the world up axis for an unrotated root, so
+            // this reads as the body crouching straight down. Only the root
+            // (c==0) moves; children follow through the hierarchy.
+            //
+            // DESCENT-ONLY: apply only the negative (lowering) component. Source
+            // rigs vary wildly in whether/which-sign they bake hip translation
+            // for crouch/pickup/sit (some author the whole squat in the KNEE/HIP
+            // joint rotations we already retarget, leaving the hip pinned; a few
+            // read spuriously POSITIVE). Clamping positive to 0 makes this strictly
+            // safe — it can pull a floating crouch down but never lift a grounded
+            // pose up. Genuine descents (working/crawl/death, measured ≤ ~1.8 leg)
+            // still land.
+            if (c == 0 && doVerticalDescent && targetLegLen > 1e-4f)
+                trans.y += std::min(0.0f, clipRootY[f]) * targetLegLen;
+            kf->setTranslate(trans);
             kf->setScale(standScale);
         }
         ++res.tracksWritten;

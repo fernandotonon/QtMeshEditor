@@ -132,6 +132,44 @@ TEST(MotionLibrary, ParsesPerClipRestWorldAndRestDir)
     EXPECT_EQ(lib2.clipCount(), 2);
 }
 
+TEST(MotionLibrary, ParsesPerClipRootY)
+{
+    // #838 vertical descent: a clip may carry a per-frame `rootY` (hip drop in
+    // leg-lengths, size == frames). Absent → empty; present-and-correct-size →
+    // parsed; wrong size → ignored.
+    MotionLibrary plain;
+    ASSERT_TRUE(plain.loadFromJson(miniLib())) << plain.error().toStdString();
+    EXPECT_TRUE(plain.clip(0).rootY.empty());
+
+    QByteArray good = miniLib();                  // 2 frames → 2 rootY entries
+    good.insert(good.indexOf("\"quats\""), "\"rootY\":[0.0,-0.5],");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(good)) << lib.error().toStdString();
+    ASSERT_EQ(lib.clip(0).rootY.size(), 2u);
+    EXPECT_NEAR(lib.clip(0).rootY[1], -0.5f, 1e-6f);
+    EXPECT_TRUE(lib.clip(1).rootY.empty());       // only the walk clip got it
+
+    QByteArray bad = miniLib();                   // size mismatch (1 != 2) → drop
+    bad.insert(bad.indexOf("\"quats\""), "\"rootY\":[-0.3],");
+    MotionLibrary lib2;
+    ASSERT_TRUE(lib2.loadFromJson(bad)) << lib2.error().toStdString();
+    EXPECT_TRUE(lib2.clip(0).rootY.empty());
+}
+
+TEST(MotionLibrary, VerticalDescentActionClassification)
+{
+    // Non-locomotion crouch/lower actions descend; locomotion stays flat.
+    EXPECT_TRUE(MotionLibrary::isVerticalDescentAction("pickup"));
+    EXPECT_TRUE(MotionLibrary::isVerticalDescentAction("working"));
+    EXPECT_TRUE(MotionLibrary::isVerticalDescentAction("sit"));
+    EXPECT_TRUE(MotionLibrary::isVerticalDescentAction("crawl"));
+    EXPECT_TRUE(MotionLibrary::isVerticalDescentAction(" Death "));  // trim+lower
+    EXPECT_FALSE(MotionLibrary::isVerticalDescentAction("walk"));
+    EXPECT_FALSE(MotionLibrary::isVerticalDescentAction("run"));
+    EXPECT_FALSE(MotionLibrary::isVerticalDescentAction("jump"));
+    EXPECT_FALSE(MotionLibrary::isVerticalDescentAction(""));
+}
+
 TEST(MotionLibrary, ParsesQualityAndDefaultsToOne)
 {
     MotionLibrary plain;
