@@ -13,6 +13,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <OgreTexture.h>
@@ -283,6 +284,8 @@ public:
     bool beginStroke(OgreWidget* widget, const QPoint& screenPos);
     void updateStroke(OgreWidget* widget, const QPoint& screenPos);
     void endStroke();
+    /// @deprecated Stroke GPU sync is deferred to stroke end / live-preview timer.
+    void onRenderFrame();
     /// @}
 
     /**
@@ -472,6 +475,20 @@ private:
     /// recover the barycentric-interpolated UV at the hit point. Returns
     /// false on miss.
     bool hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const;
+    /// Ray-test only the cached triangle (see m_hitCache). Used while
+    /// dragging along a continuous surface patch.
+    bool tryHitTestCachedTriangle(const Ogre::Vector3& localOrigin,
+                                  const Ogre::Vector3& localDir,
+                                  Ogre::Vector2& outUV) const;
+    /// Stroke-only hit test: extrapolates UV from recent screen deltas
+    /// to skip full mesh raycasts on most mouse-move events.
+    bool hitTestUVForStroke(const QPoint& screenPos, OgreWidget* widget,
+                            Ogre::Vector2& outUV);
+    /// Coalesce rapid mouse-move events into one paint step per tick.
+    void scheduleStrokeUpdate(OgreWidget* widget, const QPoint& screenPos);
+    void processPendingStrokeUpdate();
+    void scheduleStrokeUpdateUV(double u, double v);
+    void processPendingStrokeUpdateUV();
 
     /// Same hit-test but returns the local-space position and normal
     /// at the hit (for vertex paint, which works in 3D space).
@@ -502,7 +519,23 @@ private:
     /// actual GPU work happens in doFlushDirtyToOgre on a timer.
     void flushDirtyToOgre();
     /// The synchronous GPU upload. Called from the debounce timer.
-    void doFlushDirtyToOgre();
+    void doFlushDirtyToOgre(bool immediate = false);
+    /// Upload one dirty rect as 64×64 tiles, one tile per event-loop
+    /// tick, so GL blits never stall the UI for long.
+    void scheduleStrokeGpuFlush();
+    void startTiledGpuUpload(bool finishingStroke);
+    void processNextTiledUploadTile();
+    void onTiledUploadPassComplete();
+    /// Texture the viewport samples — original (in-place) or manual paint tex.
+    Ogre::TexturePtr gpuUploadTargetTexture() const;
+    bool blitBufferRectToOgreTexture(int x0, int y0, int x1, int y1);
+    void finishStrokeAfterGpuUpload();
+    void finishStrokeAfterGpuUploadDeferred();
+    void ensureStrokePreSnapshot();
+    /// 3D brush ring during strokes — uses the cached hit triangle only.
+    bool localPointFromHitCache(const Ogre::Vector2& uv,
+                                Ogre::Vector3& outLocal,
+                                Ogre::Vector3& outNormal) const;
     /// Point the model's diffuse TUSes at `m_ogreTexture` on the next
     /// event-loop tick (mat compile/reload must not run mid-stroke).
     void scheduleRebindToPaintTexture(Ogre::Entity* entity);
@@ -521,6 +554,13 @@ private:
     /// Apply the brush stamp at a UV coord using the current tool.
     /// Returns true if any pixel changed.
     bool applyBrushAtUV(const Ogre::Vector2& uv);
+
+    /// Brush radius mapped into UV space (matches applyBrushAtUV).
+    float brushRadiusUV() const;
+
+    /// Stamp along a UV segment so fast cursor moves don't leave gaps.
+    /// Returns true if any dab modified pixels.
+    bool paintBrushAlongSegment(const Ogre::Vector2& from, const Ogre::Vector2& to);
 
     /// Resolve the active GradientRamp (FG/BG quick mode, custom, or bundled).
     const GradientRamp::Ramp* resolveActiveRamp() const;
@@ -563,6 +603,30 @@ private:
     /// blitting on every mouse-move (which hits 100+ Hz and uploads
     /// 4 MB each time on macOS Metal).
     bool m_gpuFlushScheduled = false;
+    /// Set during an active stroke when CPU pixels changed; consumed
+    /// by scheduleStrokeGpuFlush() for tiled GPU uploads.
+    bool m_strokeGpuFlushScheduled = false;
+    bool m_strokeLiveUploadStarted = false;
+    bool m_strokeGpuFlushPending = false;
+    struct UploadTile { int x0 = 0; int y0 = 0; int x1 = 0; int y1 = 0; };
+    std::vector<UploadTile> m_tiledUploadQueue;
+    int m_tiledUploadIndex = 0;
+    bool m_tiledUploadRunning = false;
+    bool m_strokeEndAfterUpload = false;
+    TexturePaintBuffer::DirtyRect m_uploadPassDirty;
+    /// Batches hundreds of mouse-move events into one paint/upload step.
+    bool m_strokeUpdateScheduled = false;
+    OgreWidget* m_pendingStrokeWidget = nullptr;
+    QPoint m_pendingStrokePos;
+    bool m_strokeUpdateUVScheduled = false;
+    double m_pendingStrokeU = 0.0;
+    double m_pendingStrokeV = 0.0;
+    /// Screen→UV gradient for cheap extrapolation between raycasts.
+    bool m_strokeHaveHitScreen = false;
+    QPoint m_strokeLastHitScreen;
+    Ogre::Vector2 m_strokeLastHitUV = Ogre::Vector2::ZERO;
+    float m_strokeUvPerScreenX = 0.0f;
+    float m_strokeUvPerScreenY = 0.0f;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;
@@ -590,6 +654,17 @@ private:
     /// EMA of the stroke direction unit vector — keeps linear sampling
     /// stable when the cursor turns sharply mid-stroke.
     Ogre::Vector2 m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+
+    /// Last ray-hit triangle for fast stroke tracking (avoids walking
+    /// every triangle on each mouse-move while the cursor stays on the
+    /// same surface patch).
+    struct PaintHitCache {
+        int submesh = -1;
+        int triangle = -1;
+        QPoint screenPos;
+        bool valid = false;
+    };
+    mutable PaintHitCache m_hitCache;
 
     /// Track every TUS we rebound to the paint texture so closeSession()
     /// can restore the originals. We keep the *material name* (not a

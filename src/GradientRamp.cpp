@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <functional>
 
 namespace GradientRamp {
 namespace {
@@ -257,12 +259,21 @@ std::string safeFileStem(const std::string& name)
     return out;
 }
 
+std::string customRampFileStem(const std::string& name)
+{
+    const std::string base = safeFileStem(name.empty() ? "custom" : name);
+    const auto h = static_cast<uint32_t>(std::hash<std::string>{}(name));
+    char suffix[10];
+    std::snprintf(suffix, sizeof(suffix), "_%08x", h);
+    return base + suffix;
+}
+
 std::string saveCustom(const Ramp& ramp)
 {
     const std::string dir = rampsDirectory();
     if (dir.empty() || !ramp.isValid())
         return {};
-    const std::string stem = safeFileStem(ramp.name.empty() ? "custom" : ramp.name);
+    const std::string stem = customRampFileStem(ramp.name.empty() ? "custom" : ramp.name);
     const QString path =
         QString::fromStdString(dir) + QLatin1Char('/')
         + QString::fromStdString(stem) + QStringLiteral(".json");
@@ -303,8 +314,22 @@ bool deleteCustom(const std::string& name)
         return false;
     const QString path =
         QString::fromStdString(dir) + QLatin1Char('/')
-        + QString::fromStdString(safeFileStem(name)) + QStringLiteral(".json");
-    return QFile::remove(path);
+        + QString::fromStdString(customRampFileStem(name)) + QStringLiteral(".json");
+    if (QFile::remove(path))
+        return true;
+    // Legacy stems (pre-hash) or hand-edited files: match by ramp.name in JSON.
+    const QDir qdir(QString::fromStdString(dir));
+    const QStringList files =
+        qdir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    for (const QString& file : files) {
+        QFile f(qdir.filePath(file));
+        if (!f.open(QIODevice::ReadOnly))
+            continue;
+        Ramp ramp;
+        if (fromJson(f.readAll().toStdString(), ramp) && ramp.name == name)
+            return QFile::remove(qdir.filePath(file));
+    }
+    return false;
 }
 
 } // namespace GradientRamp

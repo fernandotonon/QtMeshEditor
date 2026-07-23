@@ -288,6 +288,13 @@ inline const QString& paintGradientRampName()
     return k;
 }
 
+/** @brief One-time migration: solid brush default for Paint v2 (#544). */
+inline const QString& paintColorSourceSolidDefaultApplied()
+{
+    static const QString k(QStringLiteral("Paint/v544SolidDefaultApplied"));
+    return k;
+}
+
 /** @brief Paint brush colour source: 0=solid, 1=gradient. */
 inline const QString& paintColorSource()
 {
