@@ -50,18 +50,20 @@ Ogre::Entity* SplitMeshCommand::swapEntityMesh(const Ogre::MeshPtr& mesh)
     if (!node)
         return nullptr;
 
-    // CRITICAL: drop every reference to the entity we're about to free.
-    // SelectionSet tracks the selected entity + its sub-entities (and the
-    // transform gizmos + Scene tree mirror that selection); it only auto-cleans
-    // on Manager::sceneNodeDestroyed, but we destroy the ENTITY while keeping
-    // the NODE — so without clearing the selection first, those references
-    // dangle and the next gizmo/tree touch crashes on freed memory.
+    // CRITICAL: drop EVERY selection reference before freeing the entity.
+    // SelectionSet tracks the selected entity AND its sub-entities (and the
+    // transform gizmos + Scene tree mirror that). It only auto-cleans on
+    // Manager::sceneNodeDestroyed, but we destroy the ENTITY while keeping the
+    // NODE. A targeted removeOne is NOT enough: getResolvedEntities() resolves
+    // through the SUB-entity list (sub->getParent()), and destroyEntity frees
+    // the sub-entities too — so any lingering sub-entity ref makes the next
+    // selection query dereference freed memory (the offline/GUI split crash).
+    // clearList() is the SelectionSet API built for exactly this — "use this
+    // one [when] items in the list have been destroyed" — it drops all
+    // references without touching the objects. Reselect the node afterward.
     if (auto* sel = SelectionSet::getSingleton()) {
-        const bool wasSelected = sel->contains(node);
-        sel->removeOne(cur);
-        for (auto* subEnt : cur->getSubEntities())
-            sel->removeOne(subEnt);
-        mReselectNode = wasSelected ? node : nullptr;
+        mReselectNode = sel->contains(node) ? node : nullptr;
+        sel->clearList();
     }
 
     // Destroy the current entity FIRST — Manager::createEntity names the new

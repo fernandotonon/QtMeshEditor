@@ -6411,9 +6411,13 @@ Rectangle {
             }
 
             ThemedCheckBox {
-                id: partOpsOfflineCheck
-                text: "Offline (skip AI model)"
-                checked: false
+                id: partOpsAiCheck
+                // Checked = AI-assisted (the ONNX segmentation model, downloaded
+                // on first use). Unchecked = the deterministic geometric /
+                // rig-prior fallback. Both run locally; the model is the only
+                // thing that downloads. Default ON.
+                text: "AI assisted"
+                checked: true
             }
 
             ThemedButton {
@@ -6422,10 +6426,11 @@ Rectangle {
                 onClicked: {
                     partOpsSplitFeedback.color = PropertiesPanelController.textColor
                     partOpsSplitFeedback.text = "Splitting…"
+                    // noModel is the inverse of "AI assisted".
                     PartOpsController.splitSelectedIntoParts(
                         "y",
                         partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
-                        partOpsOfflineCheck.checked)
+                        !partOpsAiCheck.checked)
                 }
             }
 
