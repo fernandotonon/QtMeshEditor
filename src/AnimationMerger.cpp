@@ -1177,31 +1177,34 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         clip.restWorld = std::move(restWorld);
         clip.restDir = std::move(restDir);
 
-        // #838 vertical root descent: per-frame hip Y displacement from the
-        // reference frame f*, in the CANONICAL frame, normalised by the source
-        // leg length (hip→foot at f*). Only Y — X/Z travel is discarded to
-        // avoid skate. Skipped unless both hip and a foot resolved (need a
-        // leg length to normalise by, else the target can't rescale it).
+        // #838 vertical root descent: how far the hip sinks toward the feet as
+        // a CROUCH measure. Sign-safe by construction — we measure the hip's
+        // height ABOVE the foot along the canonical +Y (always ≥ 0), take the
+        // standing height as the MAX across the clip, and report each frame's
+        // DROP below that as a NEGATIVE rootY in leg-lengths. This avoids the
+        // per-rig sign chaos of raw hip-Y translation (some Quaternius rigs
+        // read the hip RISING during pickup/sit) — a genuine crouch always
+        // lowers the hip toward the planted foot regardless of rig axes.
         if (hipBone && footBone && frames > 0) {
-            // Leg length = the MAX hip→foot distance across the clip (the leg
-            // fully extended), NOT the distance at f* — a crouch frame bends
-            // the knee and shrinks hip→ankle, which would over-normalise the
-            // ratio into absurd multi-leg-length drops.
-            float legLen = 0.0f;
-            for (int f = 0; f < frames; ++f)
+            std::vector<float> hipAboveFoot(static_cast<size_t>(frames));
+            float legLen = 0.0f, standH = 0.0f;
+            for (int f = 0; f < frames; ++f) {
+                const Ogre::Vector3 hp = C * hipPos[static_cast<size_t>(f)];
+                const Ogre::Vector3 fp = C * footPos[static_cast<size_t>(f)];
+                hipAboveFoot[static_cast<size_t>(f)] = hp.y - fp.y;   // canon +Y up
+                standH = std::max(standH, hp.y - fp.y);
                 legLen = std::max(legLen,
                     (hipPos[static_cast<size_t>(f)]
                      - footPos[static_cast<size_t>(f)]).length());
-            if (legLen > 1e-3f) {
-                // Canonical-frame Y of the reference hip position.
-                const float refY = (C * hipPos[static_cast<size_t>(fStar)]).y;
+            }
+            if (legLen > 1e-3f && standH > 1e-3f) {
                 clip.rootY.reserve(static_cast<size_t>(frames));
                 for (int f = 0; f < frames; ++f) {
-                    const float y = (C * hipPos[static_cast<size_t>(f)]).y;
-                    // Clamp: a real crouch drops ≤ ~1 leg length; a larger
-                    // value is a capture glitch / mis-resolved foot, not motion.
-                    const float r = std::clamp((y - refY) / legLen, -1.2f, 0.6f);
-                    clip.rootY.push_back(r);
+                    // Drop below standing (≤ 0), in leg-lengths. Clamp to one
+                    // leg length; a deeper value is a mis-resolved foot glitch.
+                    const float drop =
+                        (hipAboveFoot[static_cast<size_t>(f)] - standH) / legLen;
+                    clip.rootY.push_back(std::clamp(drop, -1.0f, 0.0f));
                 }
             }
         }

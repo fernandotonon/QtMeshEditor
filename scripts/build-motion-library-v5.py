@@ -695,16 +695,22 @@ def main():
                         # retarget deltas the descent against its start frame).
                         ry = c.get("rootY")
                         if ry and len(ry) == len(q):
+                            # rootY is already a crouch DEPTH (hip-to-foot
+                            # compression, ≤ 0 leg-lengths, anchored to the
+                            # clip's own standing height) — window-slice and
+                            # RE-ANCHOR to the window's shallowest frame so the
+                            # clip opens at 0 (the active window may start
+                            # already partly crouched).
                             wry = ry[s:epos]
                             if wry:
-                                base = wry[0]
-                                # Re-base to the window start, then clamp the
-                                # DESCENT to one leg length (hip at foot level =
-                                # fully seated/prone on the ground). Deeper
-                                # values are capture glitches / mis-resolved feet;
-                                # the retarget only applies the negative part.
+                                base = max(wry)   # shallowest (closest to 0)
+                                # 0.6 gain: the raw hip-to-foot compression at a
+                                # full kneel is nearly a whole leg length, which
+                                # over-sinks the body; 0.6 lands a believable
+                                # crouch depth (tuned on working/crouch/death).
                                 clip["rootY"] = [
-                                    round(max(-1.0, v - base), 5) for v in wry]
+                                    round(0.6 * min(0.0, v - base), 5)
+                                    for v in wry]
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
