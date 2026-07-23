@@ -44,6 +44,13 @@ public:
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
+        // Optional (#838 vertical descent): per-frame hip vertical offset in
+        // LEG-LENGTHS (canonical-frame hip Y minus the window's first frame,
+        // normalized by the source hip→foot distance), size == frames. The
+        // retarget scales this by the TARGET rig's leg length and writes it to
+        // the root bone's Y so crouch/pickup/working actually lower the body
+        // instead of running in place. Empty → flat root (locomotion clips).
+        std::vector<float> rootY;
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;
@@ -104,6 +111,12 @@ public:
     // returns empty when unavailable — callers then keep the harvest path.
     static std::vector<std::array<float, 3>> referenceDirsForPrompt(
         const QString& prompt);
+
+    // #838 vertical descent: true for NON-LOCOMOTION actions whose motion
+    // lowers the body (pickup / working / sit / crawl / death / pray). For
+    // these the retarget applies the clip's `rootY` so the body actually
+    // crouches; locomotion (walk/run/jump/…) keeps a flat root (returns false).
+    static bool isVerticalDescentAction(const QString& action);
 
 private:
     bool parse(const QByteArray& json);

@@ -221,7 +221,16 @@ public:
         // them collapses real motion (measured: mouse elbow 180°→124°, total
         // parity 5.1°→3.1° with caps off). So default = relaxed; the model
         // path passes modelClip=true to re-enable the tight caps.
-        bool modelClip = false);
+        bool modelClip = false,
+        // #838 vertical descent: per-frame hip Y offset in SOURCE leg-lengths
+        // (from the library's `rootY`). When non-empty AND verticalDescent is
+        // true (the caller enables it only for non-locomotion actions like
+        // pickup/working/sit/crawl), the root bone's keyframe Y is lowered by
+        // clipRootY[f] × (target rig hip→foot length) so the body actually
+        // crouches instead of running in place. Locomotion clips pass empty /
+        // false to keep the root flat.
+        const std::vector<float>& clipRootY = {},
+        bool verticalDescent = false);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
@@ -250,6 +259,14 @@ public:
         /// same way, so every retargeted bone POINTS where the source bone
         /// points each frame. 22 × [x,y,z]; zero for unresolved roles.
         std::vector<std::array<float, 3>> restDir;
+        /// #838 vertical root descent: per-frame hip VERTICAL displacement
+        /// from the clip's reference frame, NORMALISED by the source rig's
+        /// leg length (so it's proportion-independent — the target scales it
+        /// by its own leg length). Length == `frames`; a value of −0.5 means
+        /// the hip dropped half a leg-length below its reference height (a
+        /// crouch). Only the Y axis is captured — X/Z travel is deliberately
+        /// discarded to avoid skate/drift. Empty when the hip wasn't resolved.
+        std::vector<float> rootY;
     };
 
     /// Post-process a generated animation to widen (+) or tuck (−) the arm

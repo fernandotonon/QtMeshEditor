@@ -4207,6 +4207,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         int fps = 30; bool worldFrame = false;
         std::vector<std::array<float, 4>> cmuRest;
         std::vector<std::array<float, 3>> clipDirs;
+        std::vector<float> clipRootY;          // #838 non-locomotion hip drop
         bool gotClip = false;
 
         if (useModel) {
@@ -4252,15 +4253,22 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                              : clip.restWorld;
             clipDirs = clip.restDir;
+            clipRootY = clip.rootY;
             clipSource = QStringLiteral("template");
             if (duration > 0.05) {
                 const int want = std::max(2, int(duration * clip.fps));
                 std::vector<std::vector<std::array<float,4>>> retimed(want);
+                std::vector<float> retimedY;
+                const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+                if (hadY) retimedY.resize(want);
                 for (int f = 0; f < want; ++f) {
                     const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                    retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                    const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                    retimed[f] = quats[si];
+                    if (hadY) retimedY[f] = clipRootY[si];
                 }
                 quats.swap(retimed);
+                if (hadY) clipRootY.swap(retimedY);
             }
         }
 
@@ -4273,7 +4281,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         /*refineWithModel=*/false,
                                                         /*refineStride=*/8, yaw180,
                                                         clipDirs,
-                                                        clipSource == QStringLiteral("model"));
+                                                        clipSource == QStringLiteral("model"),
+                                                        clipRootY,
+                                                        MotionLibrary::isVerticalDescentAction(action));
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal

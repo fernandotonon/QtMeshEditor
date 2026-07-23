@@ -1918,6 +1918,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
+    std::vector<float> clipRootY;
     bool gotClip = false;
 
     // The animation PICKER passes an explicit clip index — force the template
@@ -1979,15 +1980,22 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRootY = clip.rootY;
         clipSource = QStringLiteral("template");
         if (duration > 0.05) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
+            std::vector<float> retimedY;
+            const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            if (hadY) retimedY.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                retimed[f] = quats[si];
+                if (hadY) retimedY[f] = clipRootY[si];
             }
             quats.swap(retimed);
+            if (hadY) clipRootY.swap(retimedY);
         }
     }
 
@@ -1995,12 +2003,14 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // Auto-rigged (no prior animation) meshes that face −Z would walk
     // backward — detect facing from the mesh's foot region.
     const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+    const bool verticalDescent = MotionLibrary::isVerticalDescentAction(action);
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
-                                                      clipSource == QStringLiteral("model"));
+                                                      clipSource == QStringLiteral("model"),
+                                                      clipRootY, verticalDescent);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

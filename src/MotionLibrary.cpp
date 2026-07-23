@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -158,6 +159,12 @@ bool MotionLibrary::parse(const QByteArray& json)
                     static_cast<float>(v.at(1).toDouble()),
                     static_cast<float>(v.at(2).toDouble())});
             }
+        }
+        const QJsonArray rootYArr = co.value("rootY").toArray();
+        if (rootYArr.size() == clip.frames) {
+            clip.rootY.reserve(clip.frames);
+            for (const auto& yv : rootYArr)
+                clip.rootY.push_back(static_cast<float>(yv.toDouble()));
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
@@ -333,4 +340,18 @@ std::vector<std::array<float, 3>> MotionLibrary::referenceDirsForPrompt(
         }
     }
     return best ? best->restDir : std::vector<std::array<float, 3>>{};
+}
+
+bool MotionLibrary::isVerticalDescentAction(const QString& action)
+{
+    // Non-locomotion actions whose motion lowers the torso. Walk/run/jump/
+    // dance/etc. keep a flat root (the retarget locks the hip to the stand
+    // pose). Kept deliberately small + explicit — matched on the canonical
+    // action label the library builder folds prompts down to.
+    static const QSet<QString> kDescent = {
+        QStringLiteral("pickup"), QStringLiteral("working"),
+        QStringLiteral("sit"),    QStringLiteral("crawl"),
+        QStringLiteral("death"),  QStringLiteral("pray"),
+    };
+    return kDescent.contains(action.trimmed().toLower());
 }

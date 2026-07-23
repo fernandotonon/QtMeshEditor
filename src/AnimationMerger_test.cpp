@@ -1343,3 +1343,73 @@ TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
 
     sm->destroyEntity(ent);
 }
+
+TEST_F(AnimationMergerTest, VerticalDescentLowersRootDescentOnly)
+{
+    // #838: a non-locomotion clip carrying a per-frame rootY (hip drop in
+    // leg-lengths) lowers the ROOT bone's keyframe Y by rootY × target-leg-len,
+    // but ONLY the negative (descent) component — positive rootY never lifts.
+    auto skelRes = Ogre::SkeletonManager::getSingleton().create(
+        "descent_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* par) {
+        auto* b = skelRes->createBone(n, h++);
+        b->setPosition(p);
+        if (par) par->addChild(b);
+        return b;
+    };
+    // Hips at world Y=1.0; a foot chain reaching down to Y=0 → leg length 1.0.
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);           // role 0
+    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
+    bone("Head", {0, 0.4f, 0}, spine);
+    auto* rleg = bone("RightUpLeg", {-0.15f, -0.5f, 0}, hips);
+    bone("RightFoot", {0, -0.5f, 0}, rleg);                    // role 17 → Y=0
+    auto* lleg = bone("LeftUpLeg", {0.15f, -0.5f, 0}, hips);
+    bone("LeftFoot", {0, -0.5f, 0}, lleg);
+    bone("RightArm", {-0.2f, 0.1f, 0}, spine);
+    bone("LeftArm", {0.2f, 0.1f, 0}, spine);
+    skelRes->setBindingPose();
+    auto mesh = createInMemoryMesh("descent_mesh", skelRes);
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sm->createEntity("descent_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+
+    const int frames = 3;
+    auto quats = identityClip(frames);   // no rotation — isolate translation
+    // rootY: flat, then −0.5 leg (descend), then +0.4 leg (would rise, clamped)
+    const std::vector<float> rootY = {0.0f, -0.5f, +0.4f};
+
+    const auto res = AnimationMerger::applyMotionClip(
+        skel, "descentclip", quats, 30, /*worldFrame=*/true, srcRestWorld(),
+        false, 8, false, canonRestDirs(), /*modelClip=*/false,
+        rootY, /*verticalDescent=*/true);
+    ASSERT_TRUE(res.ok) << res.error.toStdString();
+
+    // Target leg length here is hip(Y=1) → foot(Y=0) = 1.0, so the descent
+    // frame drops the hip by 0.5 world units; the "rising" frame clamps to 0.
+    auto* anim = skel->getAnimation("descentclip");
+    auto* track = anim->getNodeTrack(hips->getHandle());
+    ASSERT_NE(track, nullptr);
+    const float y0 = track->getNodeKeyFrame(0)->getTranslate().y;
+    const float y1 = track->getNodeKeyFrame(1)->getTranslate().y;
+    const float y2 = track->getNodeKeyFrame(2)->getTranslate().y;
+    EXPECT_NEAR(y1, y0 - 0.5f, 1e-3f) << "descent frame did not lower the hip";
+    EXPECT_NEAR(y2, y0, 1e-3f) << "positive rootY must not lift the hip";
+
+    // Control: a LOCOMOTION clip (verticalDescent=false) keeps the root flat
+    // even when a rootY is present.
+    const auto res2 = AnimationMerger::applyMotionClip(
+        skel, "flatclip", quats, 30, /*worldFrame=*/true, srcRestWorld(),
+        false, 8, false, canonRestDirs(), /*modelClip=*/false,
+        rootY, /*verticalDescent=*/false);
+    ASSERT_TRUE(res2.ok) << res2.error.toStdString();
+    auto* track2 = skel->getAnimation("flatclip")->getNodeTrack(hips->getHandle());
+    ASSERT_NE(track2, nullptr);
+    EXPECT_NEAR(track2->getNodeKeyFrame(1)->getTranslate().y,
+                track2->getNodeKeyFrame(0)->getTranslate().y, 1e-3f)
+        << "locomotion clip must keep a flat root";
+
+    sm->destroyEntity(ent);
+}

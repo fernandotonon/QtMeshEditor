@@ -2071,6 +2071,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
     std::vector<std::array<float, 3>> clipDirs;
+    std::vector<float> clipRootY;              // #838 non-locomotion hip drop
     QString clipSource;
 
     bool gotClip = false;
@@ -2151,16 +2152,23 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRootY = clip.rootY;
         clipSource = QStringLiteral("template");
         // Optionally retime the clip to a requested duration by frame stride/pad.
         if (duration > 0.05f) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
+            std::vector<float> retimedY;
+            const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            if (hadY) retimedY.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                retimed[f] = quats[si];
+                if (hadY) retimedY[f] = clipRootY[si];
             }
             quats.swap(retimed);
+            if (hadY) clipRootY.swap(retimedY);
         }
     }
 
@@ -2185,7 +2193,9 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 /*refineWithModel=*/false,
                                                 /*refineStride=*/8, yaw180,
                                                 clipDirs,
-                                                clipSource == QStringLiteral("model"));
+                                                clipSource == QStringLiteral("model"),
+                                                clipRootY,
+                                                MotionLibrary::isVerticalDescentAction(action));
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
@@ -2893,6 +2903,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 dirs.append(vec);
             }
             co["restDir"] = dirs;
+            // #838 vertical root descent: per-frame normalised hip Y offset.
+            if (!c.rootY.empty()) {
+                QJsonArray ry;
+                for (float v : c.rootY)
+                    ry.append(static_cast<double>(
+                        std::round(v * 100000.0f) / 100000.0f));
+                co["rootY"] = ry;
+            }
             clipArr.append(co);
         }
         root["clips"] = clipArr;

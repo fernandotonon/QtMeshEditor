@@ -687,6 +687,22 @@ def main():
                             clip["restWorld"] = rest_world
                         if rest_dir:
                             clip["restDir"] = rest_dir
+                        # #838 vertical descent: carry the per-frame hip Y
+                        # offset, sliced to the SAME active window as the quats
+                        # and re-based so frame 0 of the window reads ~0 (the
+                        # retarget deltas the descent against its start frame).
+                        ry = c.get("rootY")
+                        if ry and len(ry) == len(q):
+                            wry = ry[s:epos]
+                            if wry:
+                                base = wry[0]
+                                # Re-base to the window start, then clamp the
+                                # DESCENT to one leg length (hip at foot level =
+                                # fully seated/prone on the ground). Deeper
+                                # values are capture glitches / mis-resolved feet;
+                                # the retarget only applies the negative part.
+                                clip["rootY"] = [
+                                    round(max(-1.0, v - base), 5) for v in wry]
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
