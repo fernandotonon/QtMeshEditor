@@ -152,11 +152,24 @@ void SceneTreeModel::buildChildren(Ogre::SceneNode* sceneNode, SceneTreeItem* pa
             auto* entItem = new SceneTreeItem(entName, SceneTreeItem::Entity, entity, nodeItem);
             nodeItem->appendChild(entItem);
 
-            // Add sub-entities
+            // Add sub-entities. Prefer the mesh's registered submesh name
+            // (Mesh::nameSubMesh — e.g. PartOps "head"/"torso") over the bare
+            // positional index, so split part names show in the tree.
+            const Ogre::Mesh::SubMeshNameMap* nameMap = nullptr;
+            if (entity->getMesh())
+                nameMap = &entity->getMesh()->getSubMeshNameMap();
             for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s)
             {
                 Ogre::SubEntity* sub = entity->getSubEntity(s);
                 QString subName = QString::number(s);
+                if (nameMap) {
+                    for (const auto& kv : *nameMap) {
+                        if (kv.second == s && !kv.first.empty()) {
+                            subName = QString::fromStdString(kv.first);
+                            break;
+                        }
+                    }
+                }
                 auto* subItem = new SceneTreeItem(subName, SceneTreeItem::SubEntity, sub, entItem);
                 entItem->appendChild(subItem);
             }

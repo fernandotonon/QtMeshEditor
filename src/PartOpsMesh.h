@@ -53,7 +53,8 @@ public:
      *  skeleton. */
     static Ogre::MeshPtr buildMesh(const std::vector<EditableSubMesh>& subMeshes,
                                    const std::string& baseName,
-                                   const QString& skeletonName = QString());
+                                   const QString& skeletonName = QString(),
+                                   const std::vector<QString>& subMeshNames = {});
 
     struct SplitOutcome {
         bool ok = false;

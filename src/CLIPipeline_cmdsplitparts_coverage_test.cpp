@@ -30,6 +30,7 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "TestHelpers.h"
+#include "MeshSegmenter.h"
 
 namespace {
 
@@ -162,6 +163,25 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     // Skinned fixture retains its skeleton + bone assignments (#861 criterion).
     EXPECT_TRUE(e->getMesh()->hasSkeleton())
         << "split of a skinned mesh must keep the skeleton bound";
+
+    // Part NAMES survive the FBX export → reimport round-trip: the mesh's
+    // submesh-name map is non-empty and every name is a known body part
+    // (so the Scene tree shows "head"/"torso"/… not a positional index).
+    const auto& nameMap = e->getMesh()->getSubMeshNameMap();
+    EXPECT_FALSE(nameMap.empty())
+        << "split part names must round-trip through FBX as named submeshes";
+    for (const auto& kv : nameMap) {
+        // Strip a trailing ".N" multi-material suffix before matching.
+        QString base = QString::fromStdString(kv.first);
+        const int dot = base.indexOf(QLatin1Char('.'));
+        if (dot > 0)
+            base = base.left(dot);
+        bool known = false;
+        for (int p = 1; p < MeshSegmenter::partCount(); ++p) {
+            if (base == MeshSegmenter::partName(p)) { known = true; break; }
+        }
+        EXPECT_TRUE(known) << "unexpected submesh name: " << kv.first;
+    }
 }
 
 // --split-parts without -o is a usage error (exit 2), no Ogre load required.

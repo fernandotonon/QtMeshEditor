@@ -55,6 +55,8 @@ void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
 
 SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     SubMeshData* subMeshData = new SubMeshData();
+    if (mesh->mName.length > 0)
+        subMeshData->name = mesh->mName.C_Str();
 
     // Rotation applied to vertex data when the source file uses a Z-up coordinate system.
     // Baking it here avoids a scene-node rotation and keeps the entity in its natural pose.
@@ -178,6 +180,16 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     for(const auto& subMeshData : subMeshesData) {
         // Create a submesh
         Ogre::SubMesh* subMesh = ogreMesh->createSubMesh();
+
+        // Register the source name (aiMesh::mName) so named submeshes — e.g.
+        // PartOps parts "head"/"torso" round-tripped through FBX — are
+        // addressable by name and shown in the Scene tree. Skipped when the
+        // source mesh was unnamed.
+        if (!subMeshData->name.empty()) {
+            const unsigned short idx =
+                static_cast<unsigned short>(ogreMesh->getNumSubMeshes() - 1);
+            ogreMesh->nameSubMesh(subMeshData->name, idx);
+        }
 
         // Create the vertex data
         Ogre::VertexData* vertexData = new Ogre::VertexData();

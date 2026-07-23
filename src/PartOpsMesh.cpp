@@ -23,7 +23,8 @@ bool PartOpsMesh::readSubMeshes(Ogre::Entity* entity,
 
 Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMeshes,
                                      const std::string& baseName,
-                                     const QString& skeletonName)
+                                     const QString& skeletonName,
+                                     const std::vector<QString>& subMeshNames)
 {
     if (subMeshes.empty())
         return Ogre::MeshPtr();
@@ -38,6 +39,18 @@ Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMesh
     Ogre::MeshPtr mesh = em.createNewMesh(baseName, /*recomputeNormals=*/false);
     if (!mesh)
         return mesh;
+
+    // Register each part's name on the submesh (Mesh::nameSubMesh) so the Scene
+    // tree shows "head"/"torso"/… instead of a positional index, and the name
+    // round-trips through FBX export (FBXExporter reads getSubMeshNameMap) →
+    // reimport (MeshProcessor reads aiMesh::mName). NB createNewMesh skips empty
+    // editable submeshes, so guard on the built count.
+    for (unsigned short i = 0;
+         i < mesh->getNumSubMeshes() && i < static_cast<unsigned short>(subMeshNames.size());
+         ++i) {
+        if (!subMeshNames[i].isEmpty())
+            mesh->nameSubMesh(subMeshNames[i].toStdString(), i);
+    }
 
     // createNewMesh only authors geometry; a SKINNED source needs its skeleton
     // rebound and bone assignments recompiled onto the new mesh (mirrors
@@ -100,7 +113,7 @@ PartOpsMesh::splitEntity(Ogre::Entity* entity,
     QString skelName;
     if (entity->getMesh() && entity->getMesh()->hasSkeleton())
         skelName = QString::fromStdString(entity->getMesh()->getSkeletonName());
-    Ogre::MeshPtr mesh = buildMesh(split.subMeshes, baseName, skelName);
+    Ogre::MeshPtr mesh = buildMesh(split.subMeshes, baseName, skelName, split.partNames);
     if (!mesh) {
         out.error = QStringLiteral("failed to build split mesh");
         return out;
