@@ -44,12 +44,15 @@ public:
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
-        // Optional (#838 vertical descent): per-frame hip vertical offset in
-        // LEG-LENGTHS (canonical-frame hip Y minus the window's first frame,
-        // normalized by the source hip→foot distance), size == frames. The
-        // retarget scales this by the TARGET rig's leg length and writes it to
-        // the root bone's Y so crouch/pickup/working actually lower the body
-        // instead of running in place. Empty → flat root (locomotion clips).
+        // Optional (#838 vertical descent): per-frame crouch DEPTH in
+        // LEG-LENGTHS (≤ 0), preserving BIND-POSE-relative hip height — a clip
+        // that opens already crouched keeps its lowered value (NOT re-based to
+        // the window's first frame), so always-low actions like crawl stay
+        // down. Measured as the hip's height above the foot minus the rig's
+        // bind-pose standing height, normalized by the source hip→foot
+        // distance; size == frames. The retarget scales it by the TARGET rig's
+        // leg length and lowers the root bone's Y (descent-only) so crouch/
+        // pickup/working actually sink. Empty → flat root (locomotion clips).
         std::vector<float> rootY;
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.

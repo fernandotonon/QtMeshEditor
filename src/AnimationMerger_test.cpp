@@ -1363,9 +1363,13 @@ TEST_F(AnimationMergerTest, VerticalDescentLowersRootDescentOnly)
     auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);           // role 0
     auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
     bone("Head", {0, 0.4f, 0}, spine);
-    auto* rleg = bone("RightUpLeg", {-0.15f, -0.5f, 0}, hips);
+    // Legs are PURELY VERTICAL (no lateral X offset) so the bind-pose hip→foot
+    // Euclidean distance the retarget uses for targetLegLen is exactly 1.0 —
+    // then rootY=-0.5 maps to an exact -0.5 hip delta (a lateral offset would
+    // make the 3D leg length sqrt(0.15²+1²)≈1.011 and skew the expectation).
+    auto* rleg = bone("RightUpLeg", {0, -0.5f, 0}, hips);
     bone("RightFoot", {0, -0.5f, 0}, rleg);                    // role 17 → Y=0
-    auto* lleg = bone("LeftUpLeg", {0.15f, -0.5f, 0}, hips);
+    auto* lleg = bone("LeftUpLeg", {0, -0.5f, 0}, hips);
     bone("LeftFoot", {0, -0.5f, 0}, lleg);
     bone("RightArm", {-0.2f, 0.1f, 0}, spine);
     bone("LeftArm", {0.2f, 0.1f, 0}, spine);

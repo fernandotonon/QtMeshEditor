@@ -351,7 +351,8 @@ bool MotionLibrary::isVerticalDescentAction(const QString& action)
     static const QSet<QString> kDescent = {
         QStringLiteral("pickup"), QStringLiteral("working"),
         QStringLiteral("sit"),    QStringLiteral("crawl"),
-        QStringLiteral("death"),  QStringLiteral("pray"),
+        QStringLiteral("crouch"), QStringLiteral("death"),
+        QStringLiteral("pray"),
     };
     return kDescent.contains(action.trimmed().toLower());
 }

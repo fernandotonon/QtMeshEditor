@@ -2405,7 +2405,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // --variant N: curation harness — render a SPECIFIC template clip index
         // (from `qtmesh anim <file> --list-variants`) instead of the random pick.
         if (arg == "--variant" && i + 1 < argc) {
-            generateVariant = QString(argv[++i]).toInt();
+            bool ok = false;
+            const int variant = QString(argv[++i]).toInt(&ok);
+            if (!ok || variant < 0) {
+                err() << "Error: --variant requires a non-negative integer." << Qt::endl;
+                return 2;
+            }
+            generateVariant = variant;
             continue;
         }
         if (arg == "--duration" && i + 1 < argc) {

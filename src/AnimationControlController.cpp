@@ -1840,6 +1840,8 @@ double AnimationControlController::currentArmSpace(const QString& animName,
 QVariantList AnimationControlController::listMotionClips()
 {
     QVariantList out;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("browse motion library (picker)"));
     const QString libPath = MotionLibrary::ensureLibraryBlocking();
     if (libPath.isEmpty()) return out;
     MotionLibrary lib;

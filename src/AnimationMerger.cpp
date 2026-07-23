@@ -2674,18 +2674,16 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         verticalDescent && !clipRootY.empty()
         && static_cast<int>(clipRootY.size()) == frames;
     if (doVerticalDescent) {
-        auto derivedYForCanon = [&](int canon) -> std::pair<bool, Ogre::Vector3> {
-            for (int i = 0; i < nBones; ++i)
-                if (boneToCanon[i] == canon)
-                    return {true, skel->getBone(static_cast<unsigned short>(i))
-                                      ->_getDerivedPosition()};
-            return {false, Ogre::Vector3::ZERO};
-        };
-        auto [hasHip, hipP] = derivedYForCanon(0);
-        auto foot = derivedYForCanon(17);
-        if (!foot.first) foot = derivedYForCanon(21);
-        if (hasHip && foot.first)
-            targetLegLen = (hipP - foot.second).length();
+        // Measure the leg length from the BIND pose (readTargetBindFrame resets
+        // + updates the skeleton, then reads derived positions), NOT the live
+        // pose — otherwise a crouched runtime pose would skew the scale.
+        const TargetBindFrame tbd = readTargetBindFrame(skel, boneToCanon);
+        const int hipB  = tbd.roleBoneIdx[0];
+        int footB = tbd.roleBoneIdx[17];
+        if (footB < 0) footB = tbd.roleBoneIdx[21];
+        if (hipB >= 0 && footB >= 0)
+            targetLegLen = (tbd.bindPos[static_cast<size_t>(hipB)]
+                            - tbd.bindPos[static_cast<size_t>(footB)]).length();
     }
 
     for (int i = 0; i < nBones; ++i) {
