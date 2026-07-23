@@ -6410,27 +6410,57 @@ Rectangle {
                 }
             }
 
-            ThemedCheckBox {
+            // Checked = AI-assisted (the ONNX segmentation model, downloaded on
+            // first use). Unchecked = the deterministic geometric / rig-prior
+            // fallback. Both run locally; the model is the only thing that
+            // downloads. Default ON. Uses the inspector's own InspectorCheckBox
+            // so it matches the other panel toggles (not the Material-Editor
+            // Themed* look).
+            InspectorCheckBox {
                 id: partOpsAiCheck
-                // Checked = AI-assisted (the ONNX segmentation model, downloaded
-                // on first use). Unchecked = the deterministic geometric /
-                // rig-prior fallback. Both run locally; the model is the only
-                // thing that downloads. Default ON.
                 text: "AI assisted"
                 checked: true
             }
 
-            ThemedButton {
-                text: "Split into Parts"
-                enabled: PartOpsController.hasSelection
-                onClicked: {
-                    partOpsSplitFeedback.color = PropertiesPanelController.textColor
-                    partOpsSplitFeedback.text = "Splitting…"
-                    // noModel is the inverse of "AI assisted".
-                    PartOpsController.splitSelectedIntoParts(
-                        "y",
-                        partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
-                        !partOpsAiCheck.checked)
+            // Inspector-styled button (same Rectangle+MouseArea idiom as the
+            // in-file InspectorButton, inlined because that component is scoped
+            // to another section's tree, not this top-level Component).
+            Rectangle {
+                id: partOpsSplitBtn
+                property bool clickEnabled: PartOpsController.hasSelection
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsSplitBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsSplitBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsSplitBtnLabel
+                    anchors.centerIn: parent
+                    text: "Split into Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsSplitBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsSplitBtn.clickEnabled
+                    cursorShape: partOpsSplitBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsSplitFeedback.color = PropertiesPanelController.textColor
+                        partOpsSplitFeedback.text = "Splitting…"
+                        // noModel is the inverse of "AI assisted".
+                        PartOpsController.splitSelectedIntoParts(
+                            "y",
+                            partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
+                            !partOpsAiCheck.checked)
+                    }
                 }
             }
 
