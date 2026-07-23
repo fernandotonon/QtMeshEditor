@@ -89,6 +89,31 @@ Window {
                 }
             }
 
+            // #838: lower the body on crouch/pickup/sit/crawl/death clips
+            // (descent-only). ON by default; uncheck to keep the root at
+            // standing height. No effect on locomotion clips.
+            Row {
+                spacing: 6
+                Rectangle {
+                    id: pickDescentChk
+                    property bool checked: true
+                    width: 14; height: 14; radius: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: checked ? PropertiesPanelController.highlightColor
+                                   : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { anchors.centerIn: parent; visible: parent.checked
+                           text: "✓"; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                                onClicked: pickDescentChk.checked = !pickDescentChk.checked }
+                }
+                Text {
+                    text: "Lower body (crouch/pickup)"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
             // the list
             Rectangle {
                 width: parent.width
@@ -188,7 +213,9 @@ Window {
         pickStatus.isError = false
         pickStatus.text = "Applying " + name + "…"
         // variantIndex forces this exact clip (template path, no random pick).
-        var r = AnimationControlController.generateMotion("", 0.0, false, 0.0, true, idx)
+        // Pass the picker's own descent checkbox (#838) as the last arg.
+        var r = AnimationControlController.generateMotion("", 0.0, false, 0.0, true, idx,
+                                                          pickDescentChk.checked)
         dialog.busyIndex = -1
         if (r && r.ok) {
             pickStatus.text = "Applied: " + name
