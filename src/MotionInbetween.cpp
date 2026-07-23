@@ -6,8 +6,10 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTimer>
 
 #include <algorithm>
@@ -46,14 +48,38 @@ const char* const kCanonJoints[] = {
 };
 constexpr int kCanonCount = 22;
 
-// normalise: lowercase, strip a leading "mixamorig[N]:" / "bip01 " style prefix,
+// 3ds Max Biped side token: names are space-delimited like "Bip001 L UpperArm"
+// / "Bip001 R Thigh", so the side is a standalone single-letter TOKEN ('l'/'r')
+// that vanishes once spaces are stripped (leaving e.g. "bip001lupperarm", whose
+// sideOf() can't tell 'l' apart from the "bip001" prefix). Detect it from the
+// raw space-split tokens BEFORE normalisation and fold it into a "left"/"right"
+// word so the rest of the matcher works unchanged.
+char bipedSideToken(const QString& raw)
+{
+    const QStringList toks = raw.split(QRegularExpression("[ _\\-.:]"),
+                                       Qt::SkipEmptyParts);
+    for (const QString& t : toks) {
+        const QString tl = t.toLower();
+        if (tl == "l") return 'l';
+        if (tl == "r") return 'r';
+    }
+    return 0;
+}
+
+// normalise: lowercase, strip a leading "mixamorig[N]:" / "bip001 " style prefix,
 // drop separators, fold side tokens so "LeftArm"/"L_Arm"/"arm.l" all compare.
 QString normaliseBoneName(const QString& raw)
 {
     QString s = raw.toLower();
     int colon = s.lastIndexOf(':');           // mixamorig:LeftArm → LeftArm
     if (colon >= 0) s = s.mid(colon + 1);
+    // Fold a 3ds Max Biped standalone side token into a "left"/"right" word so
+    // it survives separator stripping (and drop the "bipNNN" armature prefix).
+    const char bipedSide = bipedSideToken(raw);
     s.remove(' ').remove('_').remove('-').remove('.');
+    s.remove(QRegularExpression("^bip\\d+"));      // "bip001pelvis" → "pelvis"
+    if (bipedSide == 'l') s.prepend("left");
+    else if (bipedSide == 'r') s.prepend("right");
     return s;
 }
 
