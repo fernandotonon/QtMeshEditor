@@ -197,22 +197,21 @@ def _quat_fwd(q):
 
 
 def _mean_hip_yaw_deg(quats):
-    """|circular mean| yaw (deg off +Z) of the hip's world forward across the
-    clip. ~0 = faces straight ahead; large = the stride is baked sideways
-    (the stylized/quadruped-rig locomotion failure). Uses a CIRCULAR mean
-    (atan2 of summed sin/cos) — a plain arithmetic mean of signed angles
-    cancels across the ±180° wrap (a backward walk jittering +179°/−179°
-    would average to ~0° and wrongly PASS the cull); the circular mean keeps
-    it near ±180°."""
+    """Mean PER-FRAME absolute yaw deviation (deg) of the hip's world forward
+    from +Z. ~0 = every frame faces straight ahead; large = the stride is
+    baked sideways (the stylized/quadruped-rig locomotion failure).
+
+    We take |yaw| PER FRAME and then average — NOT |average of signed yaw|.
+    Aggregating first hides opposing bad frames: a clip jittering +90°/−90°
+    (or the ±180° wrap +179°/−179°) has a zero mean/resultant yet faces
+    sideways every single frame. Per-frame-abs-then-mean flags both."""
     if not quats:
         return 0.0
-    sin_sum = cos_sum = 0.0
+    tot = 0.0
     for f in quats:
         fx, fy, fz = _quat_fwd(f[HIP])
-        yaw = math.atan2(fx, fz)
-        sin_sum += math.sin(yaw)
-        cos_sum += math.cos(yaw)
-    return abs(math.degrees(math.atan2(sin_sum, cos_sum)))
+        tot += abs(math.degrees(math.atan2(fx, fz)))
+    return tot / len(quats)
 
 
 def _inverted_frame_fraction(quats):
@@ -232,15 +231,18 @@ def _inverted_frame_fraction(quats):
 
 
 def _mean_hip_pitch_deg(quats):
-    """Mean pitch (deg, +up/−down) of the hip's world forward across the clip.
-    Same reliable, mirror-invariant hip-forward-vector read as yaw, on the Y
-    axis. A clean upright walk/run sits within ±17°; a diving/lunging clip
-    (e.g. a superhero run pitched face-down) reads −70..−80°."""
-    ps = []
+    """Mean PER-FRAME absolute pitch deviation (deg) of the hip's world forward
+    from level. Clean upright walk/run stays within ~17°; a diving/lunging clip
+    reads 70–80°. As with yaw, take |pitch| PER FRAME then average — averaging
+    signed pitch first lets +70°/−70° frames cancel to 0° (and slip under the
+    inversion cutoff too), so an off-axis clip would wrongly pass."""
+    if not quats:
+        return 0.0
+    tot = 0.0
     for f in quats:
         _, fy, _ = _quat_fwd(f[HIP])
-        ps.append(math.degrees(math.asin(max(-1.0, min(1.0, fy)))))
-    return abs(sum(ps) / len(ps)) if ps else 0.0
+        tot += abs(math.degrees(math.asin(max(-1.0, min(1.0, fy)))))
+    return tot / len(quats)
 
 
 def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
