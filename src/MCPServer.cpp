@@ -4698,6 +4698,10 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
                                       QStringLiteral("MCP split_mesh_by_segments"));
 
+        // Capture the entity NAME before push(): push runs redo() synchronously,
+        // which destroys this Ogre::Entity (mesh swap). Reading entity->getName()
+        // after would dereference the freed pointer (CodeRabbit Critical).
+        const QString entityNameOut = QString::fromStdString(entity->getName());
         auto* cmd = new SplitMeshCommand(entity->getName(), axis, category, noModel,
                                          QStringLiteral("Body"));
         UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
@@ -4706,7 +4710,7 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
                 ? QString("Error: split failed") : ("Error: " + cmd->error()));
 
         QJsonObject o;
-        o["entity"] = QString::fromStdString(entity->getName());
+        o["entity"] = entityNameOut;
         o["createdSubMeshes"] = cmd->createdSubMeshes();
         QJsonArray names;
         for (const QString& n : cmd->partNames()) names.append(n);

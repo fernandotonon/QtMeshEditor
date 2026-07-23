@@ -526,7 +526,7 @@ void appendCylinder(EditableSubMesh& sub, const Ogre::Vector3& base,
 
     std::vector<unsigned int> ringBase(segments), ringTop(segments);
     for (int i = 0; i < segments; ++i) {
-        const float a = 2.0f * float(M_PI) * float(i) / float(segments);
+        const float a = 2.0f * Ogre::Math::PI * float(i) / float(segments);
         const Ogre::Vector3 radial = (u * std::cos(a) + w * std::sin(a));
         ringBase[i] = addVert(base + radial * r, radial);
         ringTop[i] = addVert(top + radial * r, radial);
@@ -576,7 +576,7 @@ int SubMeshOps::buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions&
     for (int i = 0; i < nPegs; ++i) {
         Ogre::Vector3 center = plane.center;
         if (nPegs > 1) {
-            const float a = 2.0f * float(M_PI) * float(i) / float(nPegs);
+            const float a = 2.0f * Ogre::Math::PI * float(i) / float(nPegs);
             center += (u * std::cos(a) + w * std::sin(a)) * placeRadius;
         }
         // Male peg protrudes from the boundary along +normal; socket cutter

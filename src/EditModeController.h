@@ -711,7 +711,8 @@ public:
 
     /// Select every face of the group with the given part label (replacing the
     /// current selection unless `addToSelection`). Switches to Face mode.
-    /// No-op without a cached segmentation. Returns the face count selected.
+    /// No-op without a cached segmentation. Returns the number of POLYGONS
+    /// selected (n-gons count once, not per fan-triangle).
     Q_INVOKABLE int selectPartGroup(int label, bool addToSelection = false);
 
     /// Hide / show a group's faces in the viewport overlay preview. Purely

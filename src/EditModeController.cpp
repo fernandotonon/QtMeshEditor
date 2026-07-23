@@ -1263,6 +1263,10 @@ int EditModeController::selectPartGroup(int label, bool addToSelection)
     }
     updateSelectionOverlay();
     emit editSelectionChanged();
+    // Breadcrumb the part id (a stable enum name), never a user string.
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("part_group_select %1")
+                                      .arg(MeshSegmenter::partName(label)));
     return selectedPolygons;
 }
 
@@ -1270,16 +1274,28 @@ void EditModeController::setPartGroupHidden(int label, bool hidden)
 {
     const bool changed = hidden ? m_partHidden.insert(label).second
                                 : (m_partHidden.erase(label) > 0);
-    if (changed)
+    if (changed) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("part_group_%1 %2")
+                                          .arg(hidden ? QStringLiteral("hide")
+                                                      : QStringLiteral("show"))
+                                          .arg(MeshSegmenter::partName(label)));
         emit partGroupsChanged();
+    }
 }
 
 void EditModeController::setPartGroupExcluded(int label, bool excluded)
 {
     const bool changed = excluded ? m_partExcluded.insert(label).second
                                   : (m_partExcluded.erase(label) > 0);
-    if (changed)
+    if (changed) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("part_group_%1 %2")
+                                          .arg(excluded ? QStringLiteral("exclude")
+                                                        : QStringLiteral("include"))
+                                          .arg(MeshSegmenter::partName(label)));
         emit partGroupsChanged();
+    }
 }
 
 void EditModeController::setPartGroupDisplayName(int label, const QString& name)
@@ -1288,6 +1304,10 @@ void EditModeController::setPartGroupDisplayName(int label, const QString& name)
         m_partDisplayName.erase(label);
     else
         m_partDisplayName[label] = name.trimmed();
+    // NB: only the part id, NOT the user-provided display name (no content leak).
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("part_group_rename %1")
+                                      .arg(MeshSegmenter::partName(label)));
     emit partGroupsChanged();
 }
 

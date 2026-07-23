@@ -34,6 +34,7 @@
 #include "EditableMesh.h"
 
 #include <cmath>
+#include <set>
 
 namespace {
 
@@ -197,12 +198,29 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     const auto& nameMap = e->getMesh()->getSubMeshNameMap();
     EXPECT_FALSE(nameMap.empty())
         << "split part names must round-trip through FBX as named submeshes";
+    std::set<std::string> seenNames;
     for (const auto& kv : nameMap) {
-        // Strip a trailing ".N" multi-material suffix before matching.
+        // Every registered submesh name must be UNIQUE — nameSubMesh overwrites
+        // on collision, so a duplicate would make two submeshes resolve to one.
+        // The importer disambiguates same aiMesh::mName with an "_N" suffix.
+        EXPECT_TRUE(seenNames.insert(kv.first).second)
+            << "duplicate submesh name registered: " << kv.first;
+        // Strip a trailing ".N" (multi-material) or "_N" (import-collision)
+        // NUMERIC suffix before matching. Part names themselves contain '_'
+        // (e.g. "right_leg"), so only a trailing all-digit segment after the
+        // LAST '.'/'_' is a disambiguation suffix — not the base name's own '_'.
         QString base = QString::fromStdString(kv.first);
-        const int dot = base.indexOf(QLatin1Char('.'));
-        if (dot > 0)
-            base = base.left(dot);
+        for (const QChar sep : {QLatin1Char('.'), QLatin1Char('_')}) {
+            const int at = base.lastIndexOf(sep);
+            if (at > 0) {
+                const QString tail = base.mid(at + 1);
+                bool allDigits = !tail.isEmpty();
+                for (const QChar c : tail)
+                    if (!c.isDigit()) { allDigits = false; break; }
+                if (allDigits)
+                    base = base.left(at);
+            }
+        }
         bool known = false;
         for (int p = 1; p < MeshSegmenter::partCount(); ++p) {
             if (base == MeshSegmenter::partName(p)) { known = true; break; }

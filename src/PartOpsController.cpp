@@ -61,6 +61,9 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
     if (a == QStringLiteral("x")) axis = 0;
     else if (a == QStringLiteral("z")) axis = 2;
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("split_into_parts%1")
+                                      .arg(noModel ? QStringLiteral(" offline") : QString()));
     const std::string entName = entities.first()->getName();
     // push() runs redo() synchronously (AutoRigController pattern); read the
     // result back. A failed split leaves a harmless no-op on the undo stack.

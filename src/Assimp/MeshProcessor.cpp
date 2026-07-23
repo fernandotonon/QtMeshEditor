@@ -184,11 +184,25 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         // Register the source name (aiMesh::mName) so named submeshes — e.g.
         // PartOps parts "head"/"torso" round-tripped through FBX — are
         // addressable by name and shown in the Scene tree. Skipped when the
-        // source mesh was unnamed.
+        // source mesh was unnamed OR the name is already taken: nameSubMesh
+        // overwrites the SubMeshNameMap entry, so a duplicate aiMesh::mName
+        // would make BOTH names resolve to the last submesh (CodeRabbit). On a
+        // collision we disambiguate with an index suffix instead of dropping
+        // the name, so every submesh stays addressable.
         if (!subMeshData->name.empty()) {
             const unsigned short idx =
                 static_cast<unsigned short>(ogreMesh->getNumSubMeshes() - 1);
-            ogreMesh->nameSubMesh(subMeshData->name, idx);
+            const Ogre::Mesh::SubMeshNameMap& nameMap = ogreMesh->getSubMeshNameMap();
+            std::string name = subMeshData->name;
+            if (nameMap.find(name) != nameMap.end()) {
+                unsigned int suffix = 1;
+                std::string candidate;
+                do {
+                    candidate = name + "_" + std::to_string(suffix++);
+                } while (nameMap.find(candidate) != nameMap.end());
+                name = candidate;
+            }
+            ogreMesh->nameSubMesh(name, idx);
         }
 
         // Create the vertex data
