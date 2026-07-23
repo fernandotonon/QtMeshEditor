@@ -372,6 +372,7 @@ DrawCallAnalyzer.h
 VertexCacheOptimizer.h
 MeshDecimator.h
 MeshDecimatorController.h
+PartOpsController.h
 MeshValidator.h
 AIChatManager.h
 AIModelCatalog.h
