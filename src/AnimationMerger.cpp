@@ -2482,7 +2482,28 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         : Ogre::Quaternion::IDENTITY;
                     const int c = boneToCanon[i];
                     Ogre::Quaternion local;
-                    if (c >= 0 && c < Jc
+                    // ROOT/HIP full-orientation transport — ONLY for descent
+                    // (crouch/ground-work) clips (#838). The hip is the FK-chain
+                    // base, so its FULL 3-DOF orientation matters: a direction-
+                    // aim (hip→abdomen) captures the spine lean but DROPS the
+                    // pelvis PITCH, leaving a crouch torso-vertical when it
+                    // should tip forward over the hands (the "won't rotate"
+                    // bug). Transport the source hip's full rotation relative to
+                    // its own reference onto the target bind hip. NOT done for
+                    // locomotion — the full delta carries the source's whole-
+                    // body FACING (yaw), which must stay locked so a walk
+                    // doesn't spin; those clips keep the aim-only path below.
+                    if (c == 0 && doVerticalDescentBR
+                        && srcLocalAxis[0].squaredLength() > 1e-8f) {
+                        const auto& rq = cmuRestWorld[0];
+                        const Ogre::Quaternion refQ(rq[3], rq[0], rq[1], rq[2]);
+                        const Ogre::Quaternion srcDelta =
+                            clipQ(f, 0) * refQ.Inverse();     // canonical-frame
+                        const Ogre::Quaternion Wt =
+                            srcDelta * Qbase[static_cast<size_t>(i)];
+                        local = Wp.Inverse() * Wt;   // Wp == identity (root)
+                        W[static_cast<size_t>(i)] = Wt;
+                    } else if (c >= 0 && c < Jc
                         && srcLocalAxis[static_cast<size_t>(c)]
                                .squaredLength() > 1e-8f) {
                         // NB: yaw180 is deliberately NOT applied here — this
