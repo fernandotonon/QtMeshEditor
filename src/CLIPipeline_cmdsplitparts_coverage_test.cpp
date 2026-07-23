@@ -31,6 +31,9 @@
 #include "MeshImporterExporter.h"
 #include "TestHelpers.h"
 #include "MeshSegmenter.h"
+#include "EditableMesh.h"
+
+#include <cmath>
 
 namespace {
 
@@ -163,6 +166,30 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     // Skinned fixture retains its skeleton + bone assignments (#861 criterion).
     EXPECT_TRUE(e->getMesh()->hasSkeleton())
         << "split of a skinned mesh must keep the skeleton bound";
+
+    // Normals are preserved as valid unit vectors — NOT zeroed/degenerate.
+    // The split builds with recomputeNormals=false (to keep authored normals),
+    // so a bug there would leave black geometry (the "model is dark" symptom).
+    // Read the reimported normals back and assert the vast majority are
+    // unit-length; a handful of legitimately-degenerate verts is tolerated.
+    {
+        EditableMesh em;
+        ASSERT_TRUE(em.loadFromEntity(e));
+        int total = 0, unitLen = 0, zeroLen = 0;
+        for (const auto& sm : em.subMeshes()) {
+            for (const auto& v : sm.vertices) {
+                if (!v.hasNormal) continue;
+                ++total;
+                const float len = v.normal.length();
+                if (len < 1e-4f) ++zeroLen;
+                else if (std::fabs(len - 1.0f) < 0.05f) ++unitLen;
+            }
+        }
+        ASSERT_GT(total, 0) << "reimported split has no normals — would render black";
+        EXPECT_LT(zeroLen, total / 100 + 1) << "too many zero-length normals";
+        EXPECT_GT(unitLen, total * 9 / 10)
+            << "split normals must stay unit-length so lighting works (dark-model regression)";
+    }
 
     // Part NAMES survive the FBX export → reimport round-trip: the mesh's
     // submesh-name map is non-empty and every name is a known body part
