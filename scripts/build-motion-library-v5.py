@@ -361,29 +361,27 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         if action in HORIZONTAL_OK:
             upness = 0.7  # horizontal by design: neutral, no gate
         else:
-            # Bind-frame gate: the torso's REST direction must already be
-            # roughly vertical, else the rig is non-biped (horizontal torso)
-            # regardless of the animation.
+            # Bind-frame gate (KEPT): the torso's REST direction must already
+            # be roughly vertical, else the rig is non-biped (horizontal torso:
+            # quadruped / dino / spider) and CANNOT retarget onto the humanoid
+            # canonical skeleton — it would render as horizontal garbage. This
+            # is a BODY-PLAN check on the rest skeleton, independent of what the
+            # animation does. (Multi-body-plan support is future work — task
+            # #24.)
             if spine_bind is not None and spine_bind[1] < 0.4:
                 return 0.0, (f"non-biped torso (bind spine-up "
                              f"{spine_bind[1]:.2f})")
+            # ANIMATED uprightness gates REMOVED (#838): a humanoid rig may
+            # LEAN, crouch, recline, throw its head back, or go to the ground
+            # as legitimate motion — the old spine-up / mid-clip-topple /
+            # thigh-down gates wrongly rejected (and their scoring skewed) those
+            # clips. We now keep any clip on a biped rest skeleton regardless of
+            # the animated torso pitch. Uprightness no longer factors into the
+            # quality score; use the measured up-terms only as a soft signal.
             if ns or nt:
-                # Animated gate: torso must stay up, thighs hang down.
-                if spine_up is not None and spine_up < 0.5:
-                    return 0.0, f"not upright (spine-up {spine_up:.2f})"
-                # Topple gate: even if the MEAN stays up, reject clips whose
-                # torso pitches head-below-horizontal in any frame — a
-                # ground/fall kick or a mid-clip topple that averages out but
-                # renders as the character lying down on a biped rig.
-                if spine_up is not None and spine_up_min < -0.25:
-                    return 0.0, (f"topples mid-clip (spine-up min "
-                                 f"{spine_up_min:.2f})")
-                if spine_up is None and thigh_down is not None \
-                        and thigh_down < 0.3:
-                    return 0.0, f"not upright (thigh-down {thigh_down:.2f})"
                 up_terms = [max(0.0, v) for v in (spine_up, thigh_down)
                             if v is not None]
-                upness = sum(up_terms) / len(up_terms) if up_terms else 0.35
+                upness = sum(up_terms) / len(up_terms) if up_terms else 0.5
     elif action in HORIZONTAL_OK:
         upness = 0.7
 
@@ -414,24 +412,13 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             return 0.0, (f"static placeholder arms (rel arm energy "
                          f"{arms_e:.4f} vs legs {legs_e:.4f})")
 
-    # Neck-up gate: some rigs export the neck/head bone with an INVERTED
-    # axis — the extracted direction points down for the whole clip and the
-    # retargeted head renders thrown back / buried in the torso. For any
-    # upright action, the neck chain's animated direction must stay roughly
-    # up.
-    if action not in HORIZONTAL_OK and rest_world and rest_dir:
-        for r in (3, 4, 5):                       # neck, neck1, head
-            d = vnorm(rest_dir[r])
-            if d is None:
-                continue
-            q = rest_world[r]
-            a_s = qrot([-q[0], -q[1], -q[2], q[3]], d)
-            tot = sum(qrot(quats[f][r], a_s)[1] for f in range(len(quats)))
-            if tot / max(1, len(quats)) < 0.3:
-                return 0.0, (f"neck/head direction not upright (role {r} "
-                             f"mean up-dot {tot / max(1, len(quats)):.2f}) — "
-                             "inverted neck axis, head renders thrown back")
-            break                                  # first resolvable is enough
+    # Neck/head ANIMATED uprightness gate REMOVED (#838): a leaning/reclining/
+    # head-thrown-back motion is legitimate on a humanoid and this gate wrongly
+    # rejected it (and was implicated in the retarget tilt reported on the
+    # Gregorio give-item clips). A genuinely INVERTED neck AXIS (rig export bug)
+    # is a rig-level problem better handled in the retarget's spine-chain sanity
+    # pass (AnimationMerger zeroes an inverted spine restDir), not by dropping
+    # the whole clip here.
 
     # Horizontal-arm gate for plain locomotion: zombie-shamble / T-pose-armed
     # walk cycles hold the upper arms near-horizontal for the whole clip
