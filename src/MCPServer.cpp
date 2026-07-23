@@ -4283,7 +4283,8 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipDirs,
                                                         clipSource == QStringLiteral("model"),
                                                         clipRootY,
-                                                        MotionLibrary::isVerticalDescentAction(action));
+                                                        args.value("vertical_descent").toBool(true)
+                                                        && MotionLibrary::isVerticalDescentAction(action));
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal
@@ -8865,6 +8866,7 @@ QJsonArray MCPServer::buildToolsList()
         props["foot_pin"] = QJsonObject{{"type", "boolean"}, {"description", "Foot-contact cleanup (#856): detect ground-contact spans and IK-pin the feet so they plant instead of skating. Default true; set false to keep the raw retarget."}};
         props["smooth_bake"] = QJsonObject{{"type", "boolean"}, {"description", "Temporal low-pass post-pass: bake the clip sparse then back to its native rate, removing retarget trembling. Default true."}};
         props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
+        props["vertical_descent"] = QJsonObject{{"type", "boolean"}, {"description", "Lower the body to the ground on non-locomotion crouch/pickup/sit/crawl/death clips (#838, descent-only). Default true; set false to keep the root at standing height when the descent over-sinks on a given clip. No effect on locomotion actions."}};
         appendTool(
             "generate_motion",
             "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "

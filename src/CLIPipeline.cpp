@@ -2049,7 +2049,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
                                  float armSpaceDeg, bool footPin,
-                                 int smoothFps, int variantIndex)
+                                 int smoothFps, int variantIndex,
+                                 bool verticalDescent)
 {
     // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
     // CMU motion clip from the downloadable library, retarget it onto the mesh's
@@ -2195,7 +2196,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 clipDirs,
                                                 clipSource == QStringLiteral("model"),
                                                 clipRootY,
-                                                MotionLibrary::isVerticalDescentAction(action));
+                                                verticalDescent
+                                                && MotionLibrary::isVerticalDescentAction(action));
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
@@ -2296,6 +2298,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
     bool footPinSet = false;          // --foot-pin given (standalone post-process)
+    bool generateDescent = true;      // #838: lower body on crouch/pickup (default ON)
     int  generateSmoothFps = 12;      // #837: sparse-bake low-pass (0 = off)
     bool jsonOutput = false;
     int resampleCount = 0;
@@ -2419,6 +2422,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // EXISTING animation (standalone, needs --animation).
         if (arg == "--no-foot-pin") { generateFootPin = false; continue; }
         if (arg == "--foot-pin") { footPinSet = true; continue; }
+        // #838 vertical descent: lower the body on crouch/pickup/sit/crawl/
+        // death clips (default ON); --no-descent keeps the root flat.
+        if (arg == "--no-descent") { generateDescent = false; continue; }
         // #837 smooth-bake post-pass on --generate: bake sparse then back to
         // the clip rate (temporal low-pass, kills retarget trembling).
         if (arg == "--no-smooth-bake") { generateSmoothFps = 0; continue; }
@@ -2522,7 +2528,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
                                generateUseModel, armSpaceDeg, generateFootPin,
-                               generateSmoothFps, generateVariant);
+                               generateSmoothFps, generateVariant, generateDescent);
     }
 
     // #837 parity harness: apply a canonical clip JSON through the pure

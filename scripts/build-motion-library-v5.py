@@ -209,6 +209,8 @@ REVIEW_DROP = [
     ("Animated Women Characters", ""),   # Feb 2019 — raised right arm
     ("Alien Animated", ""),              # April 2019 — raised right arm
     ("Knight Character Animated", ""),   # Jul 2018 — raised right arm
+    ("Rigged and Animated Humanoid", ""),  # bad retarget on BOTH Mixamo &
+                                           # UniRig skeletons (user review)
 ]
 
 

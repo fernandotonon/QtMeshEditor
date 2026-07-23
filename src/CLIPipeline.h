@@ -94,7 +94,8 @@ public:
                                float duration, const QString& outputPath,
                                bool jsonOutput, bool useModel = false,
                                float armSpaceDeg = 0.0f, bool footPin = true,
-                               int smoothFps = 12, int variantIndex = -1);
+                               int smoothFps = 12, int variantIndex = -1,
+                               bool verticalDescent = true);
     static int cmdValidate(int argc, char* argv[]);
     static int cmdLod(int argc, char* argv[]);
     static int cmdPose(int argc, char* argv[]);

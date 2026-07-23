@@ -9200,7 +9200,8 @@ Rectangle {
                         // skewing every new clip is exactly the bug this fixes).
                         var gr = AnimationControlController.generateMotion(
                                      genPromptIn.text, 0.0, useModelChk.checked,
-                                     0.0, footPinChk.checked)
+                                     0.0, footPinChk.checked, -1,
+                                     descentChk.checked)
                         if (gr && gr.animation) {
                             lastGeneratedAnim = gr.animation
                             // Point the slider at the fresh clip at a neutral 0
@@ -9262,6 +9263,31 @@ Rectangle {
                 }
                 Text {
                     text: "Pin feet (contact cleanup)"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            // #838: vertical root descent — lower the body to the ground on
+            // crouch/pickup/sit/crawl/death clips. ON by default; helps most
+            // such clips but a few author the squat purely in the joints, so
+            // this lets the user turn it off when it over-sinks.
+            Row {
+                spacing: 6
+                Rectangle {
+                    id: descentChk
+                    property bool checked: true
+                    width: 14; height: 14; radius: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: checked ? PropertiesPanelController.highlightColor
+                                   : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { anchors.centerIn: parent; visible: parent.checked
+                           text: "✓"; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                                onClicked: descentChk.checked = !descentChk.checked }
+                }
+                Text {
+                    text: "Lower body (crouch/pickup)"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                 }

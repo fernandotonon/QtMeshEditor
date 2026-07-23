@@ -1882,7 +1882,8 @@ QVariantList AnimationControlController::listMotionClips()
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                        double duration, bool useModel,
                                                        double armSpaceDeg, bool footPin,
-                                                       int variantIndex)
+                                                       int variantIndex,
+                                                       bool verticalDescent)
 {
     QVariantMap out;
     out["ok"] = false;
@@ -2003,14 +2004,17 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // Auto-rigged (no prior animation) meshes that face −Z would walk
     // backward — detect facing from the mesh's foot region.
     const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
-    const bool verticalDescent = MotionLibrary::isVerticalDescentAction(action);
+    // Descent applies only to non-locomotion actions AND only when the user
+    // left the checkbox on (#838).
+    const bool doDescent =
+        verticalDescent && MotionLibrary::isVerticalDescentAction(action);
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
                                                       clipSource == QStringLiteral("model"),
-                                                      clipRootY, verticalDescent);
+                                                      clipRootY, doDescent);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 
