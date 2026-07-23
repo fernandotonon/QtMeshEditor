@@ -40,6 +40,7 @@
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
     <file alias="TextureEditorWindow.qml">../qml/TextureEditorWindow.qml</file>
+    <file alias="GradientRampEditor.qml">../qml/GradientRampEditor.qml</file>
   </qresource>
   <qresource prefix="/ModeBar">
     <file alias="ModeBar.qml">../qml/ModeBar.qml</file>

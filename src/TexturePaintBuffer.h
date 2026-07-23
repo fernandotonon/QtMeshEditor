@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -103,6 +104,22 @@ public:
     int paintBrush(const Ogre::Vector2& uv,
                    float radiusUV,
                    const Ogre::ColourValue& color,
+                   float strength = 1.0f,
+                   float falloff = 0.5f,
+                   BrushShape shape = BrushShape::Round);
+
+    /**
+     * @brief Paint a brush stamp with a per-pixel colour callback.
+     *
+     * `colorAt(dx, dy)` receives normalised brush-space offsets (−1..1)
+     * from the stamp centre. Used by gradient radial / angular modes
+     * (Paint v2 Slice A / #544) so each texel can sample a different
+     * ramp position without a separate code path for solid stamps.
+     */
+    using ColorAtFn = std::function<Ogre::ColourValue(float dx, float dy)>;
+    int paintBrush(const Ogre::Vector2& uv,
+                   float radiusUV,
+                   const ColorAtFn& colorAt,
                    float strength = 1.0f,
                    float falloff = 0.5f,
                    BrushShape shape = BrushShape::Round);

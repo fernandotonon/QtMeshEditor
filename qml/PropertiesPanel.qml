@@ -4494,6 +4494,8 @@ Rectangle {
             // / Wand) live in the left toolbar \u2014 see mainwindow.cpp
             // \u2014 so the user picks the tool with the same buttons
             // regardless of which target they're painting.
+            // Brush colour source / gradient ramps also live in the
+            // brush portal (paint tool ▾), not here.
 
             // Smart-select panel. Visible whenever there's an active
             // session \u2014 tolerance is always meaningful, and once the

@@ -146,6 +146,8 @@ TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
+GradientRamp.cpp
+BrushEngine.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
@@ -356,6 +358,8 @@ TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
 PaintSelectionMask.h
+GradientRamp.h
+BrushEngine.h
 TexturePaintBuffer.h
 UpdateVersion.h
 TexturePaintController.h

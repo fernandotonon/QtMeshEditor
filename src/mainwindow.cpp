@@ -153,7 +153,11 @@
 #include <QStyle>
 #include <QMenu>
 #include <QWidgetAction>
+#include <QButtonGroup>
+#include <QFrame>
+#include <QScrollArea>
 #include <QSlider>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QSignalBlocker>
 #include <QGridLayout>
@@ -1887,20 +1891,61 @@ void MainWindow::initToolBar()
     paintLay->addWidget(falloffLabel);
     paintLay->addWidget(falloffSlider);
 
-    // Brush shape selector: Round (circular falloff) vs Square
-    // (axis-aligned constant strength, no falloff). Falloff slider
-    // is ignored when Square is selected — kept enabled for
-    // discoverability of "switch back to Round".
+    // Inspector-style toggle buttons (blue QPalette::Highlight when checked).
+    auto inspectorToggleStyle = []() -> QString {
+        const QPalette pal = QApplication::palette();
+        const QColor hi = pal.color(QPalette::Highlight);
+        const QColor hiText = pal.color(QPalette::HighlightedText);
+        const QColor btn = pal.color(QPalette::Button);
+        const QColor text = pal.color(QPalette::ButtonText);
+        const QColor border = pal.color(QPalette::Mid);
+        return QStringLiteral(
+            "QPushButton {"
+            "  background-color: %1; color: %2;"
+            "  border: 1px solid %3; border-radius: 3px;"
+            "  padding: 2px 10px; min-width: 44px;"
+            "}"
+            "QPushButton:checked {"
+            "  background-color: %4; color: %5;"
+            "  border: 1px solid %6;"
+            "}"
+            "QPushButton:hover:!checked { background-color: %7; }"
+            "QPushButton:disabled { color: %8; }")
+            .arg(btn.name(QColor::HexRgb), text.name(QColor::HexRgb), border.name(QColor::HexRgb),
+                 hi.name(QColor::HexRgb), hiText.name(QColor::HexRgb),
+                 hi.lighter(130).name(QColor::HexRgb),
+                 btn.lighter(115).name(QColor::HexRgb),
+                 pal.color(QPalette::Disabled, QPalette::ButtonText).name(QColor::HexRgb));
+    };
+    const QString paintToggleStyle = inspectorToggleStyle();
+
+    auto addSectionSeparator = [paintSettings, paintLay]() {
+        auto* line = new QFrame(paintSettings);
+        line->setFrameShape(QFrame::HLine);
+        line->setFrameShadow(QFrame::Sunken);
+        line->setFixedHeight(2);
+        paintLay->addWidget(line);
+    };
+
+    addSectionSeparator();
+
+    // Brush shape: Round vs Square. QButtonGroup keeps exclusivity
+    // scoped to this pair — do NOT use setAutoExclusive on siblings
+    // that share paintSettings as parent (Qt treats them as one group).
     auto* shapeRow = new QHBoxLayout();
     shapeRow->addWidget(new QLabel(tr("Shape:"), paintSettings));
     auto* shapeRound = new QPushButton(tr("Round"), paintSettings);
     auto* shapeSquare = new QPushButton(tr("Square"), paintSettings);
     shapeRound->setCheckable(true);
     shapeSquare->setCheckable(true);
-    shapeRound->setAutoExclusive(true);
-    shapeSquare->setAutoExclusive(true);
     shapeRound->setFixedHeight(22);
     shapeSquare->setFixedHeight(22);
+    shapeRound->setStyleSheet(paintToggleStyle);
+    shapeSquare->setStyleSheet(paintToggleStyle);
+    auto* shapeGroup = new QButtonGroup(paintSettings);
+    shapeGroup->setExclusive(true);
+    shapeGroup->addButton(shapeRound);
+    shapeGroup->addButton(shapeSquare);
     auto syncShape = [shapeRound, shapeSquare, emPaint]() {
         const bool square = emPaint->vertexPaintShape() == EditModeController::ShapeSquare;
         QSignalBlocker br(shapeRound);
@@ -1921,15 +1966,230 @@ void MainWindow::initToolBar()
     shapeRow->addStretch();
     paintLay->addLayout(shapeRow);
 
+    addSectionSeparator();
+
+    // Paint v2 Slice A (#544) — colour source + gradient ramp controls.
+    // Lives in the brush portal (not the inspector) so brush settings stay
+    // one click away from the paint tool button.
+    auto* tpcPaint = TexturePaintController::instance();
+    auto* colorRow = new QHBoxLayout();
+    colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
+    auto* srcSolid = new QPushButton(tr("Solid"), paintSettings);
+    auto* srcGradient = new QPushButton(tr("Gradient"), paintSettings);
+    srcSolid->setCheckable(true);
+    srcGradient->setCheckable(true);
+    srcSolid->setFixedHeight(22);
+    srcGradient->setFixedHeight(22);
+    srcSolid->setStyleSheet(paintToggleStyle);
+    srcGradient->setStyleSheet(paintToggleStyle);
+    auto* colorGroup = new QButtonGroup(paintSettings);
+    colorGroup->setExclusive(true);
+    colorGroup->addButton(srcSolid);
+    colorGroup->addButton(srcGradient);
+    colorRow->addWidget(srcSolid);
+    colorRow->addWidget(srcGradient);
+    colorRow->addStretch();
+    paintLay->addLayout(colorRow);
+
+    auto* gradientBox = new QWidget(paintSettings);
+    auto* gradLay = new QVBoxLayout(gradientBox);
+    gradLay->setContentsMargins(0, 0, 0, 0);
+    gradLay->setSpacing(6);
+
+    auto* modeRow = new QHBoxLayout();
+    modeRow->addWidget(new QLabel(tr("Mode:"), gradientBox));
+    auto* modeLinear = new QPushButton(tr("Linear"), gradientBox);
+    auto* modeRadial = new QPushButton(tr("Radial"), gradientBox);
+    auto* modeAngular = new QPushButton(tr("Angular"), gradientBox);
+    for (auto* b : {modeLinear, modeRadial, modeAngular}) {
+        b->setCheckable(true);
+        b->setFixedHeight(22);
+        b->setStyleSheet(paintToggleStyle);
+        modeRow->addWidget(b);
+    }
+    auto* modeGroup = new QButtonGroup(gradientBox);
+    modeGroup->setExclusive(true);
+    modeGroup->addButton(modeLinear);
+    modeGroup->addButton(modeRadial);
+    modeGroup->addButton(modeAngular);
+    modeRow->addStretch();
+    gradLay->addLayout(modeRow);
+
+    auto* rampPreview = new QLabel(gradientBox);
+    rampPreview->setFixedHeight(18);
+    rampPreview->setMinimumWidth(200);
+    rampPreview->setScaledContents(true);
+    rampPreview->setStyleSheet(QStringLiteral("QLabel { border: 1px solid #555; }"));
+    gradLay->addWidget(rampPreview);
+
+    auto* rampRow = new QHBoxLayout();
+    rampRow->addWidget(new QLabel(tr("Ramp:"), gradientBox));
+    auto* rampCombo = new QComboBox(gradientBox);
+    rampCombo->setMinimumWidth(120);
+    rampRow->addWidget(rampCombo, 1);
+    auto* editRampBtn = new QPushButton(tr("Edit…"), gradientBox);
+    editRampBtn->setFixedHeight(22);
+    rampRow->addWidget(editRampBtn);
+    gradLay->addLayout(rampRow);
+
+    auto* optRow = new QHBoxLayout();
+    auto* fgBgCheck = new QCheckBox(tr("FG/BG"), gradientBox);
+    fgBgCheck->setToolTip(tr("Build a two-stop ramp from the foreground and background colours"));
+    auto* steppedCheck = new QCheckBox(tr("Stepped"), gradientBox);
+    optRow->addWidget(fgBgCheck);
+    optRow->addWidget(steppedCheck);
+    optRow->addStretch();
+    gradLay->addLayout(optRow);
+
+    auto* jitterLabel = new QLabel(gradientBox);
+    auto* jitterSlider = new QSlider(Qt::Horizontal, gradientBox);
+    jitterSlider->setRange(0, 100);
+    gradLay->addWidget(jitterLabel);
+    gradLay->addWidget(jitterSlider);
+
+    paintLay->addWidget(gradientBox);
+
+    auto refreshRampPreview = [rampPreview, tpcPaint]() {
+        const QString uri = tpcPaint->rampPreviewDataUri();
+        const int comma = uri.indexOf(QLatin1Char(','));
+        if (comma < 0) {
+            rampPreview->clear();
+            return;
+        }
+        const QByteArray png = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
+        QPixmap pm;
+        if (pm.loadFromData(png, "PNG"))
+            rampPreview->setPixmap(pm);
+        else
+            rampPreview->clear();
+    };
+
+    auto syncGradientUi = [srcSolid, srcGradient, gradientBox, modeLinear, modeRadial,
+                           modeAngular, rampCombo, fgBgCheck, steppedCheck, jitterSlider,
+                           jitterLabel, tpcPaint, refreshRampPreview]() {
+        const bool isGrad = tpcPaint->colorSource()
+            == static_cast<int>(TexturePaintController::ColorGradient);
+        {
+            QSignalBlocker b1(srcSolid);
+            QSignalBlocker b2(srcGradient);
+            srcSolid->setChecked(!isGrad);
+            srcGradient->setChecked(isGrad);
+        }
+        gradientBox->setVisible(isGrad);
+        if (!isGrad)
+            return;
+
+        const int mode = tpcPaint->gradientMode();
+        {
+            QSignalBlocker bl(modeLinear);
+            QSignalBlocker br(modeRadial);
+            QSignalBlocker ba(modeAngular);
+            modeLinear->setChecked(mode == static_cast<int>(TexturePaintController::GradientLinear));
+            modeRadial->setChecked(mode == static_cast<int>(TexturePaintController::GradientRadial));
+            modeAngular->setChecked(mode == static_cast<int>(TexturePaintController::GradientAngular));
+        }
+
+        {
+            QSignalBlocker bc(rampCombo);
+            const QStringList names = tpcPaint->rampNames();
+            if (rampCombo->count() != names.size()) {
+                rampCombo->clear();
+                rampCombo->addItems(names);
+            } else {
+                for (int i = 0; i < names.size(); ++i) {
+                    if (rampCombo->itemText(i) != names[i]) {
+                        rampCombo->clear();
+                        rampCombo->addItems(names);
+                        break;
+                    }
+                }
+            }
+            const int idx = rampCombo->findText(tpcPaint->activeRampName());
+            if (idx >= 0)
+                rampCombo->setCurrentIndex(idx);
+        }
+
+        {
+            QSignalBlocker bf(fgBgCheck);
+            QSignalBlocker bs(steppedCheck);
+            QSignalBlocker bj(jitterSlider);
+            fgBgCheck->setChecked(tpcPaint->useFgBgRamp());
+            steppedCheck->setChecked(tpcPaint->gradientStepped());
+            jitterSlider->setValue(qBound(0, static_cast<int>(qRound(tpcPaint->rampJitter() * 100.0)), 100));
+        }
+        jitterLabel->setText(tr("Jitter: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->rampJitter() * 100.0))));
+        refreshRampPreview();
+    };
+    syncGradientUi();
+
+    connect(srcSolid, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setColorSource(static_cast<int>(TexturePaintController::ColorSolid));
+    });
+    connect(srcGradient, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setColorSource(static_cast<int>(TexturePaintController::ColorGradient));
+    });
+    connect(modeLinear, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientLinear));
+    });
+    connect(modeRadial, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientRadial));
+    });
+    connect(modeAngular, &QPushButton::clicked, this, [tpcPaint]() {
+        tpcPaint->setGradientMode(static_cast<int>(TexturePaintController::GradientAngular));
+    });
+    connect(rampCombo, QOverload<int>::of(&QComboBox::activated), this,
+            [tpcPaint, rampCombo](int index) {
+                if (index >= 0)
+                    tpcPaint->setActiveRampName(rampCombo->itemText(index));
+            });
+    connect(editRampBtn, &QPushButton::clicked, this, [this, tpcPaint, vertexPaintMenu]() {
+        vertexPaintMenu->close();
+        QTimer::singleShot(0, this, [tpcPaint]() {
+            tpcPaint->openRampEditor();
+        });
+    });
+    connect(fgBgCheck, &QCheckBox::toggled, this, [tpcPaint](bool on) {
+        tpcPaint->setUseFgBgRamp(on);
+    });
+    connect(steppedCheck, &QCheckBox::toggled, this, [tpcPaint](bool on) {
+        tpcPaint->setGradientStepped(on);
+    });
+    connect(jitterSlider, &QSlider::valueChanged, this, [tpcPaint, jitterLabel](int v) {
+        tpcPaint->setRampJitter(v / 100.0);
+        jitterLabel->setText(QObject::tr("Jitter: %1%").arg(v));
+    });
+    connect(tpcPaint, &TexturePaintController::gradientChanged, this, syncGradientUi);
+
+    paintSettings->setMinimumWidth(280);
+    paintSettings->adjustSize();
+
+    // QMenu + QWidgetAction often clips tall panels on Linux/GTK — wrap in a
+    // scroll area with an explicit minimum height so every control is reachable.
+    auto* paintPortal = new QScrollArea();
+    paintPortal->setWidget(paintSettings);
+    paintPortal->setWidgetResizable(true);
+    paintPortal->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    paintPortal->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    paintPortal->setFrameShape(QFrame::NoFrame);
+    paintPortal->setMinimumWidth(296);
+    paintPortal->setMinimumHeight(420);
+    paintPortal->setMaximumHeight(640);
+
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
-    paintWa->setDefaultWidget(paintSettings);
+    paintWa->setDefaultWidget(paintPortal);
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
 
-    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncRad, syncStr, syncFalloff]() {
+    connect(vertexPaintMenu, &QMenu::aboutToShow, this,
+            [paintSettings, paintPortal, syncRad, syncStr, syncFalloff, syncShape, syncGradientUi]() {
         syncRad();
         syncStr();
         syncFalloff();
+        syncShape();
+        syncGradientUi();
+        paintSettings->adjustSize();
+        paintPortal->updateGeometry();
     });
 
     // The brush button is now a TOOL SELECTOR, not the paint-mode
@@ -2314,9 +2574,10 @@ void MainWindow::initToolBar()
         connect(fg, &QPushButton::clicked, this, [this, syncSwatches]() {
             SentryReporter::addBreadcrumb("ui.action", "Toolbar: FG color picker opened");
             auto* em = EditModeController::instance();
+            // DontUseNativeDialog — native pickers freeze against Ogre GL.
             QColor c = QColorDialog::getColor(em->vertexPaintColor(), this,
                 tr("Foreground color"),
-                QColorDialog::ShowAlphaChannel);
+                QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
             if (c.isValid())
                 em->setVertexPaintColor(c);
             syncSwatches();
@@ -2326,7 +2587,7 @@ void MainWindow::initToolBar()
             auto* em = EditModeController::instance();
             QColor c = QColorDialog::getColor(em->vertexPaintBackgroundColor(), this,
                 tr("Background color"),
-                QColorDialog::ShowAlphaChannel);
+                QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
             if (c.isValid())
                 em->setVertexPaintBackgroundColor(c);
             syncSwatches();
