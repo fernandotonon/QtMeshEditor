@@ -849,6 +849,17 @@ Rectangle {
                 Component.onCompleted: content = hdrEnvironmentComponent
             }
 
+            // ---- Split into Parts (AI segmentation, #859/#861, Object mode) ----
+            CollapsibleSection {
+                title: "Split into Parts (AI)"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    PartOpsController.hasSelection)
+                expanded: false
+
+                Component.onCompleted: content = partOpsSplitComponent
+            }
+
             // ---- Decimate (single-pass) ----
             CollapsibleSection {
                 title: "Decimate (single-pass)"
@@ -6356,6 +6367,90 @@ Rectangle {
     // Live slider + preview that swaps a temporary LOD into the viewport,
     // mirroring the LOD section's previewLod pattern but for one-shot
     // base-mesh reduction. Apply commits the swap permanently.
+    // PartOps split (#859/#861): segment the selected fused mesh and replace
+    // it with one submesh per detected part (head/torso/…). Undoable (Ctrl+Z
+    // restores the fused mesh). Runs in Object mode; no Edit Mode required.
+    Component {
+        id: partOpsSplitComponent
+
+        Column {
+            id: partOpsSplitContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Category id list, index-aligned with partOpsCategoryCombo.
+            readonly property var partOpsCategories:
+                ["auto", "body", "vegetation", "vehicle", "building"]
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: "Split the selected mesh into named part submeshes "
+                    + "(head, torso, arms, legs). Undoable."
+            }
+
+            Row {
+                spacing: 6
+                Text {
+                    text: "Category:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: partOpsCategoryCombo
+                    width: 140
+                    height: 22
+                    font.pixelSize: 11
+                    model: partOpsSplitContent.partOpsCategories
+                    currentIndex: 0
+                }
+            }
+
+            ThemedCheckBox {
+                id: partOpsOfflineCheck
+                text: "Offline (skip AI model)"
+                checked: false
+            }
+
+            ThemedButton {
+                text: "Split into Parts"
+                enabled: PartOpsController.hasSelection
+                onClicked: {
+                    partOpsSplitFeedback.color = PropertiesPanelController.textColor
+                    partOpsSplitFeedback.text = "Splitting…"
+                    PartOpsController.splitSelectedIntoParts(
+                        "y",
+                        partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
+                        partOpsOfflineCheck.checked)
+                }
+            }
+
+            Text {
+                id: partOpsSplitFeedback
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: ""
+            }
+
+            Connections {
+                target: PartOpsController
+                function onSplitFinished(status, isError) {
+                    partOpsSplitFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsSplitFeedback.text = status
+                }
+                function onSelectionChanged() {
+                    partOpsSplitFeedback.text = ""
+                }
+            }
+        }
+    }
+
     Component {
         id: decimateComponent
 

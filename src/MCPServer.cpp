@@ -133,6 +133,9 @@
 #include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
+#include "SubMeshOps.h"
+#include "PartOpsMesh.h"
+#include "commands/SplitMeshCommand.h"
 #include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
@@ -668,6 +671,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
+        {QStringLiteral("split_mesh_by_segments"), &MCPServer::toolSplitMeshBySegments},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
@@ -762,6 +766,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("split_mesh_by_segments"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
@@ -837,6 +842,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
+            {QStringLiteral("split_mesh_by_segments"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
@@ -4650,6 +4656,63 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
+{
+    // PartOps split (#859/#861/#864): segment the selected/named entity and
+    // replace it with one submesh per detected part, via the SAME undoable
+    // SplitMeshCommand the GUI button uses (so Ctrl+Z / undo works identically).
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: No mesh entity found")
+                : QString("Error: Entity '%1' not found").arg(entityName));
+
+        int axis = 1;
+        const QString upAxisStr = args.value("up_axis").toString().toLower();
+        if (upAxisStr == "x") axis = 0;
+        else if (upAxisStr == "z") axis = 2;
+        else if (!upAxisStr.isEmpty() && upAxisStr != "y")
+            return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
+
+        const QString category = args.value("category").toString().isEmpty()
+            ? QStringLiteral("auto") : args.value("category").toString();
+        const bool noModel = args.value("no_model").toBool(false);
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
+                                      QStringLiteral("MCP split_mesh_by_segments"));
+
+        auto* cmd = new SplitMeshCommand(entity->getName(), axis, category, noModel,
+                                         QStringLiteral("Body"));
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: split failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["entity"] = QString::fromStdString(entity->getName());
+        o["createdSubMeshes"] = cmd->createdSubMeshes();
+        QJsonArray names;
+        for (const QString& n : cmd->partNames()) names.append(n);
+        o["partNames"] = names;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
     } catch (std::exception& e) {
@@ -8925,6 +8988,26 @@ QJsonArray MCPServer::buildToolsList()
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
             "which path ran.",
+            props
+        );
+    }
+
+    // split_mesh_by_segments (#859/#861): PartOps split into per-part submeshes.
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Entity to split. Empty → the first mesh entity in the scene."}};
+        props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the offline geometric/rig-prior segmentation (skip the ONNX model). Default false."}};
+        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for segmentation. Default 'y'."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Segmentation category (default 'auto')."}};
+        appendTool(
+            "split_mesh_by_segments",
+            "PartOps split (#859/#861): segment the selected/named mesh and REPLACE "
+            "it with one named submesh per detected part (head/torso/left_arm/…). "
+            "Boundary vertices are duplicated so parts are independent; normals, "
+            "UVs, colours, tangents, the skeleton and bone weights are preserved. "
+            "Undoable (same command as the GUI 'Split into Parts' button). Returns "
+            "the created submesh count + part names. FBX export keeps the submesh "
+            "boundaries; glTF coalesces same-material parts.",
             props
         );
     }

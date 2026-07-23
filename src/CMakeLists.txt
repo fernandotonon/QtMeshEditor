@@ -94,6 +94,7 @@ commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
+commands/SplitMeshCommand.cpp
 commands/SkeletonBoneCommands.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
@@ -241,6 +242,7 @@ EditorModeController.cpp
 HalfEdgeMesh.cpp
 SubMeshOps.cpp
 PartOpsMesh.cpp
+PartOpsController.cpp
 )
 
 set(HEADER_FILES

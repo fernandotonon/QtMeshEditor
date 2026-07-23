@@ -186,6 +186,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonBoneCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UvSeamCommands.cpp
