@@ -849,6 +849,17 @@ Rectangle {
                 Component.onCompleted: content = hdrEnvironmentComponent
             }
 
+            // ---- Split into Parts (AI segmentation, #859/#861, Object mode) ----
+            CollapsibleSection {
+                title: "Split into Parts (AI)"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    PartOpsController.hasSelection)
+                expanded: false
+
+                Component.onCompleted: content = partOpsSplitComponent
+            }
+
             // ---- Decimate (single-pass) ----
             CollapsibleSection {
                 title: "Decimate (single-pass)"
@@ -6358,6 +6369,125 @@ Rectangle {
     // Live slider + preview that swaps a temporary LOD into the viewport,
     // mirroring the LOD section's previewLod pattern but for one-shot
     // base-mesh reduction. Apply commits the swap permanently.
+    // PartOps split (#859/#861): segment the selected fused mesh and replace
+    // it with one submesh per detected part (head/torso/…). Undoable (Ctrl+Z
+    // restores the fused mesh). Runs in Object mode; no Edit Mode required.
+    Component {
+        id: partOpsSplitComponent
+
+        Column {
+            id: partOpsSplitContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Category id list, index-aligned with partOpsCategoryCombo.
+            readonly property var partOpsCategories:
+                ["auto", "body", "vegetation", "vehicle", "building"]
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: "Split the selected mesh into named part submeshes "
+                    + "(head, torso, arms, legs). Undoable."
+            }
+
+            Row {
+                spacing: 6
+                Text {
+                    text: "Category:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: partOpsCategoryCombo
+                    width: 140
+                    height: 22
+                    font.pixelSize: 11
+                    model: partOpsSplitContent.partOpsCategories
+                    currentIndex: 0
+                }
+            }
+
+            // Checked = AI-assisted (the ONNX segmentation model, downloaded on
+            // first use). Unchecked = the deterministic geometric / rig-prior
+            // fallback. Both run locally; the model is the only thing that
+            // downloads. Default ON. Uses the inspector's own InspectorCheckBox
+            // so it matches the other panel toggles (not the Material-Editor
+            // Themed* look).
+            InspectorCheckBox {
+                id: partOpsAiCheck
+                text: "AI assisted"
+                checked: true
+            }
+
+            // Inspector-styled button (same Rectangle+MouseArea idiom as the
+            // in-file InspectorButton, inlined because that component is scoped
+            // to another section's tree, not this top-level Component).
+            Rectangle {
+                id: partOpsSplitBtn
+                property bool clickEnabled: PartOpsController.hasSelection
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsSplitBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsSplitBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsSplitBtnLabel
+                    anchors.centerIn: parent
+                    text: "Split into Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsSplitBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsSplitBtn.clickEnabled
+                    cursorShape: partOpsSplitBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsSplitFeedback.color = PropertiesPanelController.textColor
+                        partOpsSplitFeedback.text = "Splitting…"
+                        // noModel is the inverse of "AI assisted".
+                        PartOpsController.splitSelectedIntoParts(
+                            "y",
+                            partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
+                            !partOpsAiCheck.checked)
+                    }
+                }
+            }
+
+            Text {
+                id: partOpsSplitFeedback
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: ""
+            }
+
+            Connections {
+                target: PartOpsController
+                function onSplitFinished(status, isError) {
+                    partOpsSplitFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsSplitFeedback.text = status
+                }
+                function onSelectionChanged() {
+                    partOpsSplitFeedback.text = ""
+                }
+            }
+        }
+    }
+
     Component {
         id: decimateComponent
 

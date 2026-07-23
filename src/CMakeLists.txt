@@ -94,6 +94,7 @@ commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
+commands/SplitMeshCommand.cpp
 commands/SkeletonBoneCommands.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
@@ -241,6 +242,9 @@ EditableMesh.cpp
 EditModeController.cpp
 EditorModeController.cpp
 HalfEdgeMesh.cpp
+SubMeshOps.cpp
+PartOpsMesh.cpp
+PartOpsController.cpp
 )
 
 set(HEADER_FILES
@@ -372,6 +376,7 @@ DrawCallAnalyzer.h
 VertexCacheOptimizer.h
 MeshDecimator.h
 MeshDecimatorController.h
+PartOpsController.h
 MeshValidator.h
 AIChatManager.h
 AIModelCatalog.h

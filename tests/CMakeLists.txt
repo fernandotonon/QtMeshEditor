@@ -188,6 +188,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonBoneCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UvSeamCommands.cpp
@@ -214,6 +215,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimatorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVEditorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVTransform.cpp
@@ -259,6 +261,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsMesh.cpp
 
         # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
         # Include them so the MaterialEditorQML test executables link successfully.

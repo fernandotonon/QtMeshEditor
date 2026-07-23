@@ -39,6 +39,8 @@
     <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
+    <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>
+    <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="TextureEditorWindow.qml">../qml/TextureEditorWindow.qml</file>
     <file alias="GradientRampEditor.qml">../qml/GradientRampEditor.qml</file>
   </qresource>

@@ -698,6 +698,42 @@ public:
     /// Cancel an in-flight selectByPart worker (no-op otherwise).
     Q_INVOKABLE void cancelSegment();
 
+    /// @name PartOps segmentation preview (#860)
+    /// @{
+    /// True once a segmentation has run and its labels are cached for reuse.
+    bool hasSegmentation() const { return !m_segLabels.empty(); }
+
+    /// The detected part groups as a QVariantList of maps for QML:
+    /// `{ label:int, name:string, displayName:string, faceCount:int,
+    ///    excluded:bool, hidden:bool }`, sorted by label (unknown first).
+    /// Empty until a segmentation runs.
+    Q_INVOKABLE QVariantList partGroups() const;
+
+    /// Select every face of the group with the given part label (replacing the
+    /// current selection unless `addToSelection`). Switches to Face mode.
+    /// No-op without a cached segmentation. Returns the number of POLYGONS
+    /// selected (n-gons count once, not per fan-triangle).
+    Q_INVOKABLE int selectPartGroup(int label, bool addToSelection = false);
+
+    /// Hide / show a group's faces in the viewport overlay preview. Purely
+    /// visual; does not affect split/explode. (Hidden groups render dimmed via
+    /// the segmentation preview overlay.)
+    Q_INVOKABLE void setPartGroupHidden(int label, bool hidden);
+
+    /// Exclude / include a group from downstream split & explode operations.
+    Q_INVOKABLE void setPartGroupExcluded(int label, bool excluded);
+
+    /// Override a group's display name (does not change the underlying part
+    /// label used for downstream submesh naming unless the caller opts in).
+    Q_INVOKABLE void setPartGroupDisplayName(int label, const QString& name);
+
+    /// The cached per-global-triangle labels (empty when no segmentation).
+    /// Used by the split/explode adapters (Slices B/C) and CLI/MCP tests.
+    const std::vector<int>& cachedFaceLabels() const { return m_segLabels; }
+    /// Labels the user excluded from downstream ops.
+    const std::set<int>& excludedPartLabels() const { return m_partExcluded; }
+    /// @}
+
     bool segmentBusy() const { return m_segmentBusy; }
     bool segmentDownloading() const { return m_segmentDownloading; }
     int  segmentProgress() const { return m_segmentProgress; }   // 0..segmentTotal
@@ -893,6 +929,10 @@ signals:
     void segmentProgressChanged();
     /// Final result of an async selectByPart() (status string; isError flag).
     void segmentFinished(const QString& status, bool isError);
+    /// PartOps Slice A (#860): the cached part-group list changed (a
+    /// segmentation completed, a group was renamed/excluded/hidden, or the
+    /// cache was cleared). QML rebinds `partGroups`.
+    void partGroupsChanged();
     /// Emitted when entering or exiting edit mode.
     void editModeChanged();
     /// Emitted when a morph sculpt session starts/ends (#519).
@@ -984,6 +1024,27 @@ private:
     // (main thread); emits segmentFinished. Declared here, defined in the .cpp.
     void finishSegmentOnMain(const std::vector<int>& faceLabels,
                              bool usedModel, const QString& predictError);
+
+    // PartOps Slice A (#860): cache the last segmentation's per-face labels so
+    // the preview workflow (select/hide/rename/exclude a group, then split /
+    // explode downstream) reuses them WITHOUT rerunning the model. Cleared on
+    // edit-mode exit and whenever topology changes invalidate the mapping.
+    // `m_segLabels` is one label per GLOBAL triangle (parallel to the flat
+    // triangle stream, submesh-then-local). `m_partGroups` is the grouped view
+    // exposed to QML. `m_partExcluded[label]` marks a group the user removed
+    // from downstream split/explode. `m_partDisplayName[label]` overrides the
+    // default part name for display.
+    std::vector<int> m_segLabels;
+    struct PartGroupState {
+        int label = 0;
+        int faceCount = 0;
+    };
+    std::vector<PartGroupState> m_partGroups;    // sorted by label
+    std::set<int> m_partExcluded;                // labels excluded downstream
+    std::map<int, QString> m_partDisplayName;    // label -> user rename
+    std::set<int> m_partHidden;                  // labels hidden in the viewport
+    void rebuildPartGroupsFromLabels();          // (re)derive m_partGroups + emit
+    void clearSegmentationCache();               // drop labels/groups/state + emit
 
     // Selection overlay
     Ogre::ManualObject* m_overlayVertices = nullptr;

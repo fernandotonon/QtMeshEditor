@@ -113,6 +113,7 @@
 #include "PropertiesPanelController.h"
 #include "MeshLodController.h"
 #include "MeshDecimatorController.h"
+#include "PartOpsController.h"
 #include "MeshValidator.h"
 #include "AssetScanController.h"
 #include "UvUnwrapController.h"
@@ -759,6 +760,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "UvUnwrapController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return UvUnwrapController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<PartOpsController>(
+            "PropertiesPanel", 1, 0, "PartOpsController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PartOpsController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<UVEditorController>(
             "PropertiesPanel", 1, 0, "UVEditorController",

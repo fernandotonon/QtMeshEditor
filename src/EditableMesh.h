@@ -506,9 +506,15 @@ public:
      * resizeEntityBuffers() instead to keep Entity SubEntity caches valid.
      *
      * @param baseName Base name for the new mesh (a suffix is appended for uniqueness).
+     * @param recomputeNormals When true (default), per-vertex normals are
+     *        recalculated before upload — the legacy behaviour for edit-mode
+     *        topology ops that leave normals stale. Pass false to UPLOAD the
+     *        existing `EditableVertex::normal` values verbatim; callers that
+     *        copied authored / hard-edge normals from a source mesh (PartOps
+     *        split) must do this or shading changes on the output (#859 review).
      * @return The new MeshPtr, or null on failure.
      */
-    Ogre::MeshPtr createNewMesh(const std::string& baseName);
+    Ogre::MeshPtr createNewMesh(const std::string& baseName, bool recomputeNormals = true);
 
     /**
      * @brief Resize and update existing Ogre::Mesh buffers in-place.
