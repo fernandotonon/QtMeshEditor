@@ -1,5 +1,5 @@
 
-# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
+# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor 
 
 Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D assets with GUI + CLI + CI/CD support.
 
@@ -15,14 +15,9 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
 #### QtMesh Cloud Badges
-[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
-[![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.dev)
-[![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-animations.svg)](https://qtmesh.dev)
-[![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-skeletons.svg)](https://qtmesh.dev)
-[![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-materials.svg)](https://qtmesh.dev)
+Badges|Certificate
+-|-
+[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev) [![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev) [![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev) [![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.dev) [![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.dev) [![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-animations.svg)](https://qtmesh.dev) [![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-skeletons.svg)](https://qtmesh.dev) [![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-materials.svg)](https://qtmesh.dev)|[![qtmesh certified](https://api.qtmesh.dev/v1/u/fernandotonon/p/qtmesheditor/badges/qtmesh-certified.svg)](https://api.qtmesh.dev/fernandotonon/qtmesheditor/verify)
 
 ---
 
