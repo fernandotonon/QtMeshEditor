@@ -54,6 +54,11 @@ public:
         // leg length and lowers the root bone's Y (descent-only) so crouch/
         // pickup/working actually sink. Empty → flat root (locomotion clips).
         std::vector<float> rootY;
+        /// Optional (#838 finger animation): per-frame LOCAL finger curl,
+        /// size frames × 30 (2 sides × 5 fingers × 3 segments, see
+        /// AnimationMerger::fingerSlot). Empty when the source rig has no
+        /// fingers. The retarget maps these onto the target rig's fingers.
+        std::vector<std::vector<std::array<float, 4>>> fingers;
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;

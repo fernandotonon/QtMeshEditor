@@ -196,6 +196,77 @@ int MotionInbetween::canonicalIndexForBone(const QString& boneName)
     return -1;
 }
 
+MotionInbetween::FingerRole MotionInbetween::fingerRoleForBone(
+    const QString& boneName)
+{
+    FingerRole r;
+    const char side = bipedSideToken(boneName);   // Biped "L"/"R" token
+    QString n = boneName.toLower();
+    const int colon = n.lastIndexOf(':');
+    if (colon >= 0) n = n.mid(colon + 1);
+    n.remove(' ').remove('_').remove('-').remove('.');
+    // Side: word or single-letter affix, falling back to the Biped token.
+    if (n.contains("left")) r.side = 1;
+    else if (n.contains("right")) r.side = 0;
+    else if (side == 'l') r.side = 1;
+    else if (side == 'r') r.side = 0;
+    else if (n.startsWith('l')) r.side = 1;
+    else if (n.startsWith('r')) r.side = 0;
+
+    // Named (Mixamo) convention: Thumb/Index/Middle/Ring/Pinky + trailing seg.
+    static const char* kNamed[5] =
+        {"thumb", "index", "middle", "ring", "pinky"};
+    for (int fi = 0; fi < 5; ++fi) {
+        const QString key = QLatin1String(kNamed[fi]);
+        const int at = n.indexOf(key);
+        if (at < 0) continue;
+        r.finger = fi;
+        // segment = trailing number after the finger word (1-based → 0-based).
+        const QString tail = n.mid(at + key.size());
+        int seg = 0; bool got = false;
+        for (const QChar& ch : tail)
+            if (ch.isDigit()) { seg = ch.digitValue(); got = true; break; }
+        r.segment = got ? std::max(0, seg - 1) : 0;
+        return r;
+    }
+    // "pinkie" spelling.
+    if (n.contains("pinkie")) {
+        r.finger = 4;
+        const int at = n.indexOf("pinkie");
+        const QString tail = n.mid(at + 6);
+        int seg = 0; bool got = false;
+        for (const QChar& ch : tail)
+            if (ch.isDigit()) { seg = ch.digitValue(); got = true; break; }
+        r.segment = got ? std::max(0, seg - 1) : 0;
+        return r;
+    }
+
+    // Numeric (3ds Max Biped) convention: "finger<F>[<S>]" where F=0..4 is the
+    // finger (0=thumb … 4=pinky) and an OPTIONAL trailing digit is the segment
+    // (Finger0 = seg0, Finger01 = seg1, Finger02 = seg2). "fingerNub" ignored.
+    const int fpos = n.indexOf("finger");
+    if (fpos >= 0) {
+        const QString tail = n.mid(fpos + 6);      // after "finger"
+        if (tail.contains("nub")) return {};       // helper tip, skip
+        // digits after "finger": first = finger id, rest = segment.
+        QString digits;
+        for (const QChar& ch : tail) {
+            if (ch.isDigit()) digits += ch;
+            else break;
+        }
+        if (!digits.isEmpty()) {
+            const int fid = digits.at(0).digitValue();
+            if (fid >= 0 && fid <= 4) {
+                r.finger = fid;
+                r.segment = (digits.size() >= 2)
+                    ? std::max(0, digits.at(1).digitValue()) : 0;
+                return r;
+            }
+        }
+    }
+    return {};   // not a finger
+}
+
 bool MotionInbetween::isModelBackendAvailable()
 {
 #ifdef ENABLE_ONNX

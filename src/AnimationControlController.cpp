@@ -1922,6 +1922,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
     std::vector<float> clipRootY;
+    std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
     bool gotClip = false;
 
     // The animation PICKER passes an explicit clip index — force the template
@@ -1984,21 +1985,27 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                          : clip.restWorld;
         clipDirs = clip.restDir;
         clipRootY = clip.rootY;
+        clipFingers = clip.fingers;
         clipSource = QStringLiteral("template");
         if (duration > 0.05) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
+            std::vector<std::vector<std::array<float, 4>>> retimedF;
             const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            const bool hadF = static_cast<int>(clipFingers.size()) == clip.frames;
             if (hadY) retimedY.resize(want);
+            if (hadF) retimedF.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
                 const int si = std::min(clip.frames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
+                if (hadF) retimedF[f] = clipFingers[si];
             }
             quats.swap(retimed);
             if (hadY) clipRootY.swap(retimedY);
+            if (hadF) clipFingers.swap(retimedF);
         }
     }
 
@@ -2046,6 +2053,22 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             out["footPinError"] = fp.error;   // surface why (no leg tracks, etc.)
     }
 
+    // #838 finger animation: transfer the source clip's finger curl onto the
+    // target's fingers (no-op if either rig lacks fingers or the clip has none).
+    if (!clipFingers.empty()) {
+        const int nf = AnimationMerger::applyFingerCurl(
+            skel.get(), animName, clipFingers, fps);
+        if (nf > 0) out["fingerBones"] = nf;
+    }
+
+
+    // The post-passes (grounding, finger tracks) edit/add tracks on the MASTER
+    // skeleton AFTER the live SkeletonInstance was built. The instance shares
+    // the master's animations by reference, but caches per-bone
+    // AnimationState/track bindings — newly-added finger tracks and the edited
+    // root translate aren't picked up until the instance re-reads the skeleton.
+    // Re-initialise it so the live viewport reflects every pass (#838).
+    entity->_initialise(true);
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
     // enabled animation states, so leaving the import's auto-enabled clip (or

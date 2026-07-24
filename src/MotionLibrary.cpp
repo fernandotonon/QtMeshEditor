@@ -166,6 +166,28 @@ bool MotionLibrary::parse(const QByteArray& json)
             for (const auto& yv : rootYArr)
                 clip.rootY.push_back(static_cast<float>(yv.toDouble()));
         }
+        // #838 finger animation: frames × 30 × [x,y,z,w] local curl.
+        const QJsonArray fingersArr = co.value("fingers").toArray();
+        if (fingersArr.size() == clip.frames) {
+            clip.fingers.reserve(clip.frames);
+            bool ok = true;
+            for (const auto& fv : fingersArr) {
+                const QJsonArray slotArr = fv.toArray();
+                std::vector<std::array<float, 4>> row;
+                row.reserve(slotArr.size());
+                for (const auto& qv : slotArr) {
+                    const QJsonArray q = qv.toArray();
+                    if (q.size() != 4) { ok = false; break; }
+                    row.push_back({static_cast<float>(q.at(0).toDouble()),
+                                   static_cast<float>(q.at(1).toDouble()),
+                                   static_cast<float>(q.at(2).toDouble()),
+                                   static_cast<float>(q.at(3).toDouble(1.0))});
+                }
+                if (!ok) break;
+                clip.fingers.push_back(std::move(row));
+            }
+            if (!ok) clip.fingers.clear();
+        }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
         if (clip.frames > 0 && !clip.action.isEmpty())

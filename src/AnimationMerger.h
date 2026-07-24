@@ -267,7 +267,24 @@ public:
         /// crouch). Only the Y axis is captured — X/Z travel is deliberately
         /// discarded to avoid skate/drift. Empty when the hip wasn't resolved.
         std::vector<float> rootY;
+        /// #838 finger animation. Fingers are NOT canonical body joints, so
+        /// they ride a parallel channel: per frame, the LOCAL (parent-relative)
+        /// rotation of every finger segment, indexed by
+        /// fingerSlot(side,finger,segment). Local rotation transfers directly
+        /// between rigs (a curl is a local hinge — no canonical-frame
+        /// conjugation needed). Slots the source rig doesn't have hold identity;
+        /// empty when the rig has no fingers. Size == frames × kFingerSlots.
+        std::vector<std::vector<std::array<float, 4>>> fingers;
     };
+
+    /// Finger channel layout: 2 sides × 5 fingers × up to 3 segments = 30.
+    static constexpr int kFingerSegs = 3;
+    static constexpr int kFingerSlots = 2 * 5 * kFingerSegs;   // 30
+    static int fingerSlot(int side, int finger, int segment) {
+        if (side < 0 || finger < 0 || segment < 0 || segment >= kFingerSegs)
+            return -1;
+        return (side * 5 + finger) * kFingerSegs + segment;
+    }
 
     /// Post-process a generated animation to widen (+) or tuck (−) the arm
     /// chains, à la Mixamo's "Character Arm-Space" (#854). Rescues arm-into-
@@ -371,6 +388,21 @@ public:
     /// foot lift. Returns how many root keyframes were lowered.
     static int groundRootToFeet(Ogre::Skeleton* skel,
                                 const std::string& animName);
+
+    /// #838 finger animation transfer. Fingers aren't canonical body joints,
+    /// so they ride this separate pass: `clipFingers` is the source clip's
+    /// per-frame LOCAL finger curl (frames × kFingerSlots, from the library),
+    /// and this writes matching keyframes onto the TARGET rig's finger bones.
+    /// Handles differently-named/segmented rigs (Biped Finger0-4 × 2 vs Mixamo
+    /// Thumb/Index/… × 3) by mapping via FingerRole and redistributing source
+    /// segments across the target's per finger. Curl is bind-relative local
+    /// rotation, so it transfers directly (no canonical-frame conjugation).
+    /// Returns the number of finger bones animated. No-op if either rig lacks
+    /// fingers or the clip carries none.
+    static int applyFingerCurl(
+        Ogre::Skeleton* skel, const std::string& animName,
+        const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
+        int fps);
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role

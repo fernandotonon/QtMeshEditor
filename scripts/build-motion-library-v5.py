@@ -697,6 +697,11 @@ def main():
                             if wry:
                                 clip["rootY"] = [
                                     round(0.6 * min(0.0, v), 5) for v in wry]
+                        # #838 finger animation: window it to the same frames as
+                        # the quats. Per-frame × kFingerSlots × [x,y,z,w].
+                        fingers = c.get("fingers")
+                        if fingers and len(fingers) == len(q):
+                            clip["fingers"] = fingers[s:epos]
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")

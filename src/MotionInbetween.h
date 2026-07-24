@@ -123,6 +123,24 @@ public:
     // (left/right, l/r, _l/_r). Pure-data + unit-testable.
     static int canonicalIndexForBone(const QString& boneName);
 
+    // ---- Finger roles (#838 hand retarget) ---------------------------------
+    // Fingers are NOT part of the 22-joint canonical body (which stops at the
+    // hand). This classifies a finger bone into a rig-independent role so the
+    // retarget can transfer finger animation between differently-named rigs
+    // (3ds Max Biped "Finger0/Finger01…" vs Mixamo "HandThumb1/Index1…").
+    struct FingerRole {
+        int side = -1;     // 0 = right, 1 = left, -1 = not a finger
+        int finger = -1;   // 0=thumb 1=index 2=middle 3=ring 4=pinky
+        int segment = -1;  // 0-based joint along the finger (0=proximal)
+        bool valid() const { return side >= 0 && finger >= 0 && segment >= 0; }
+    };
+    // Returns the finger role for a bone, or an invalid role if it isn't a
+    // finger. Handles the Biped numeric convention (Finger0=thumb … Finger4=
+    // pinky, trailing digits = segment) and the Mixamo named convention
+    // (Thumb/Index/Middle/Ring/Pinky + 1/2/3). Pure-data + unit-testable.
+    static FingerRole fingerRoleForBone(const QString& boneName);
+    static constexpr int kFingerCount = 5;    // thumb..pinky
+    static constexpr int kMaxFingerSeg = 4;   // generous segment cap
     // ---- ONNX RMIB path (model when available, else spline) -----------------
     // Absolute path the RMIB model is expected at
     // (AppData/ai_models/inbetween/rmib.onnx). Same per-user cache convention as

@@ -2073,6 +2073,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
     std::vector<std::array<float, 3>> clipDirs;
     std::vector<float> clipRootY;              // #838 non-locomotion hip drop
+    std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838 fingers
     QString clipSource;
 
     bool gotClip = false;
@@ -2154,6 +2155,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                          : clip.restWorld;
         clipDirs = clip.restDir;
         clipRootY = clip.rootY;
+        clipFingers = clip.fingers;
         clipSource = QStringLiteral("template");
         // Optionally retime the clip to a requested duration by frame stride/pad.
         if (duration > 0.05f) {
@@ -2219,6 +2221,13 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     if (verticalDescent && MotionLibrary::isVerticalDescentAction(action)) {
         if (AnimationMerger::groundRootToFeet(skel.get(), animName) > 0)
             err() << "(grounded to feet)" << Qt::endl;
+    }
+
+    // #838: transfer finger animation onto the target rig's fingers.
+    if (!clipFingers.empty()) {
+        const int nf = AnimationMerger::applyFingerCurl(
+            skel.get(), animName, clipFingers, fps);
+        if (nf > 0) err() << "(fingers: " << nf << " bones)" << Qt::endl;
     }
 
     // #854: optional Mixamo-style arm-space post-process before export.
@@ -2929,6 +2938,22 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                     ry.append(static_cast<double>(
                         std::round(v * 100000.0f) / 100000.0f));
                 co["rootY"] = ry;
+            }
+            // #838 finger animation: per-frame local curl, kFingerSlots wide.
+            if (!c.fingers.empty()) {
+                QJsonArray fr;
+                for (const auto& frame : c.fingers) {
+                    QJsonArray slotArr;
+                    for (const auto& q : frame) {
+                        QJsonArray qa;
+                        for (float v : q)
+                            qa.append(static_cast<double>(
+                                std::round(v * 100000.0f) / 100000.0f));
+                        slotArr.append(qa);
+                    }
+                    fr.append(slotArr);
+                }
+                co["fingers"] = fr;
             }
             clipArr.append(co);
         }

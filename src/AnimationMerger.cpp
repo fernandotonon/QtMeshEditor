@@ -987,6 +987,23 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     if (resolved == 0)
         return out;
 
+    // #838 finger bones → finger slots (parallel to the body roles). Keep only
+    // the first kFingerSegs (3) segments per finger; a rig with 2-segment
+    // fingers (Biped) fills slots 0..1, a 3-segment rig (Mixamo) fills 0..2.
+    std::vector<Ogre::Bone*> fingerBone(
+        static_cast<size_t>(kFingerSlots), nullptr);
+    int fingerResolved = 0;
+    for (auto* bone : skel->getBones()) {
+        const auto fr = MotionInbetween::fingerRoleForBone(
+            QString::fromStdString(bone->getName()));
+        if (!fr.valid()) continue;
+        const int slot = fingerSlot(fr.side, fr.finger, fr.segment);
+        if (slot >= 0 && !fingerBone[static_cast<size_t>(slot)]) {
+            fingerBone[static_cast<size_t>(slot)] = bone;
+            ++fingerResolved;
+        }
+    }
+
     // ── source-frame → canonical-frame conjugation ─────────────────────
     // Scraped rigs live in arbitrary file frames (Blender FBX armatures are
     // commonly Z-up), while the motion library's world convention is Y-up,
@@ -1087,6 +1104,37 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
             if (footBone) bindFoot = footBone->_getDerivedPosition();
         }
+        // Finger transfer uses DIRECTIONS (body-retarget style), NOT rotations:
+        // the Biped finger bones have large, wildly-varying per-segment bind
+        // axes (measured 300-350° about arbitrary axes), so copying local/world
+        // rotation mangles them on a differently-axised Mixamo hand. But a
+        // finger segment's POINTING direction (toward its child/tip) is
+        // rig-independent — aim the target segment there each frame, like the
+        // body limbs. Per frame we store each segment's canonical-frame world
+        // pointing direction as [dx,dy,dz,0] (w=0 marks a direction, not a quat).
+        // The child bone per slot (next segment along the finger), for the
+        // pointing direction (segment → child position).
+        std::vector<Ogre::Bone*> fingerChild(
+            static_cast<size_t>(kFingerSlots), nullptr);
+        for (int s = 0; s < kFingerSlots; ++s) {
+            Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+            if (!b) continue;
+            // child = the same finger's next segment bone, if resolved
+            const int side = (s / (5 * kFingerSegs));
+            const int rem = s - side * 5 * kFingerSegs;
+            const int fgr = rem / kFingerSegs, seg = rem % kFingerSegs;
+            if (seg + 1 < kFingerSegs) {
+                const int cslot = fingerSlot(side, fgr, seg + 1);
+                if (cslot >= 0) fingerChild[static_cast<size_t>(s)] =
+                    fingerBone[static_cast<size_t>(cslot)];
+            }
+        }
+        std::vector<std::vector<std::array<float, 4>>> fingerCurl;
+        if (fingerResolved > 0)
+            fingerCurl.assign(static_cast<size_t>(frames),
+                std::vector<std::array<float, 4>>(
+                    static_cast<size_t>(kFingerSlots), {0.f, 0.f, 0.f, 0.f}));
+
         for (int f = 0; f < frames; ++f) {
             skel->reset(true);
             anim->apply(skel, std::min(length,
@@ -1100,6 +1148,23 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 hipPos[static_cast<size_t>(f)] = hipBone->_getDerivedPosition();
             if (footBone)
                 footPos[static_cast<size_t>(f)] = footBone->_getDerivedPosition();
+            // Finger pointing direction (segment → child), canonical frame.
+            if (fingerResolved > 0) {
+                for (int s = 0; s < kFingerSlots; ++s) {
+                    Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+                    Ogre::Bone* c = fingerChild[static_cast<size_t>(s)];
+                    if (!b || !c) continue;
+                    Ogre::Vector3 dir = c->_getDerivedPosition()
+                                        - b->_getDerivedPosition();
+                    if (dir.squaredLength() < 1e-12f) continue;
+                    dir.normalise();
+                    // stored in canonical frame at finalize (via C); raw world
+                    // here.
+                    fingerCurl[static_cast<size_t>(f)][static_cast<size_t>(s)] =
+                        {static_cast<float>(dir.x), static_cast<float>(dir.y),
+                         static_cast<float>(dir.z), 0.0f};
+                }
+            }
         }
 
         // Calm reference frame f*: minimum mean joint rotation speed —
@@ -1279,6 +1344,18 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                     clip.rootY.push_back(std::clamp(drop, -1.0f, 0.0f));
                 }
             }
+        }
+        if (fingerResolved > 0) {
+            // Rotate each finger pointing DIRECTION into the canonical frame C
+            // (w==0 → it's a direction vector; leave zero/unfilled slots alone).
+            for (auto& frame : fingerCurl)
+                for (auto& q : frame) {
+                    if (q[0] == 0.f && q[1] == 0.f && q[2] == 0.f) continue;
+                    const Ogre::Vector3 v = C * Ogre::Vector3(q[0], q[1], q[2]);
+                    q = {static_cast<float>(v.x), static_cast<float>(v.y),
+                         static_cast<float>(v.z), 0.0f};
+                }
+            clip.fingers = std::move(fingerCurl);
         }
         out.push_back(std::move(clip));
     }
@@ -2147,6 +2224,156 @@ int AnimationMerger::groundRootToFeet(Ogre::Skeleton* skel,
     }
     if (adjusted > 0) rootTrk->_keyFrameDataChanged();
     return adjusted;
+}
+
+int AnimationMerger::applyFingerCurl(
+    Ogre::Skeleton* skel, const std::string& animName,
+    const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
+    int fps)
+{
+    if (!skel || !skel->hasAnimation(animName) || clipFingers.empty())
+        return 0;
+    if (fps <= 0) fps = 30;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    const int frames = static_cast<int>(clipFingers.size());
+    const float dt = 1.0f / static_cast<float>(fps);
+    const int nBones = static_cast<int>(skel->getNumBones());
+
+    // The stored curl is C·(source world delta)·C⁻¹ (canonical frame). To
+    // reproduce the same WORLD bend on the target, map it into the target's
+    // world via Ct⁻¹ (Ct = target world→canonical), then express as the
+    // finger bone's local keyframe delta. Need the target's Ct + per-bone bind
+    // world/local + parent bind world — all from the reset (bind) pose.
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+    // Capture finger bones' bind world + bind local + parent bind world.
+    skel->reset(true); skel->_updateTransforms();
+    std::vector<Ogre::Quaternion> bindWorld(static_cast<size_t>(nBones));
+    std::vector<Ogre::Quaternion> bindLocal(static_cast<size_t>(nBones));
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        bindWorld[static_cast<size_t>(i)] = b->_getDerivedOrientation();
+        bindLocal[static_cast<size_t>(i)] = b->getOrientation();
+    }
+    auto parentBindWorld = [&](Ogre::Bone* b) -> Ogre::Quaternion {
+        if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+            return bindWorld[static_cast<size_t>(p->getHandle())];
+        return Ogre::Quaternion::IDENTITY;
+    };
+
+    // Map the TARGET rig's finger bones by (side,finger,segment). Keep, per
+    // (side,finger), the segments in order so we can redistribute.
+    std::vector<std::vector<std::pair<int, Ogre::Bone*>>> tgt(
+        2 * MotionInbetween::kFingerCount);
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        const auto fr = MotionInbetween::fingerRoleForBone(
+            QString::fromStdString(b->getName()));
+        if (!fr.valid()) continue;
+        tgt[static_cast<size_t>(fr.side * MotionInbetween::kFingerCount
+                                + fr.finger)].push_back({fr.segment, b});
+    }
+    int animated = 0;
+    for (auto& v : tgt)
+        std::sort(v.begin(), v.end(),
+                  [](auto& a, auto& b){ return a.first < b.first; });
+
+    // Target bind pointing direction per bone (segment → child, canonical
+    // frame). Same signal the source stored — aiming one at the other bends
+    // the finger the same way regardless of local axis conventions.
+    auto childOfTarget = [&](Ogre::Bone* b) -> Ogre::Bone* {
+        // the finger child = a child bone that is also a finger of the same
+        // (side,finger) with segment+1; simplest: any finger-role child.
+        for (unsigned short k = 0; k < b->numChildren(); ++k) {
+            auto* c = dynamic_cast<Ogre::Bone*>(b->getChild(k));
+            if (c && MotionInbetween::fingerRoleForBone(
+                    QString::fromStdString(c->getName())).valid())
+                return c;
+        }
+        return nullptr;
+    };
+    std::vector<Ogre::Vector3> tgtBindDir(static_cast<size_t>(nBones),
+                                          Ogre::Vector3::ZERO);
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        Ogre::Bone* c = childOfTarget(b);
+        if (!c) continue;
+        Ogre::Vector3 d = c->_getDerivedPosition() - b->_getDerivedPosition();
+        if (d.squaredLength() < 1e-12f) continue;
+        tgtBindDir[static_cast<size_t>(i)] = (tb.Ct * d).normalisedCopy();
+    }
+
+    // For each target finger segment, pull the proportional source segment's
+    // pointing direction and AIM the target bone's bind direction at it.
+    for (int side = 0; side < 2; ++side) {
+        for (int fgr = 0; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            auto& segs = tgt[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty()) continue;
+            // How many source segments carry a direction (are populated)?
+            int srcSegs = 0;
+            for (int s = 0; s < kFingerSegs; ++s) {
+                const int slot = fingerSlot(side, fgr, s);
+                bool filled = false;
+                for (int f = 0; f < frames && !filled; ++f) {
+                    const auto& q = clipFingers[static_cast<size_t>(f)]
+                                              [static_cast<size_t>(slot)];
+                    if (q[0] != 0.f || q[1] != 0.f || q[2] != 0.f) filled = true;
+                }
+                if (filled) srcSegs = s + 1;
+            }
+            if (srcSegs == 0) continue;
+            const int tgtSegs = static_cast<int>(segs.size());
+            for (int ts = 0; ts < tgtSegs; ++ts) {
+                int ss = (tgtSegs <= 1) ? 0
+                    : static_cast<int>(std::round(
+                          double(ts) * (srcSegs - 1) / (tgtSegs - 1)));
+                ss = std::clamp(ss, 0, kFingerSegs - 1);
+                const int slot = fingerSlot(side, fgr, ss);
+                Ogre::Bone* b = segs[static_cast<size_t>(ts)].second;
+                const int bi = b->getHandle();
+                const Ogre::Vector3 dbind = tgtBindDir[static_cast<size_t>(bi)];
+                if (dbind.squaredLength() < 1e-9f) continue;   // tip, no child
+                const Ogre::Quaternion Lbind = bindLocal[static_cast<size_t>(bi)];
+                const Ogre::Quaternion Pbind = parentBindWorld(b);
+                const Ogre::Quaternion Wbind = bindWorld[static_cast<size_t>(bi)];
+                auto* trk = anim->hasNodeTrack(static_cast<unsigned short>(bi))
+                    ? anim->getNodeTrack(static_cast<unsigned short>(bi))
+                    : anim->createNodeTrack(static_cast<unsigned short>(bi), b);
+                for (int f = 0; f < frames; ++f) {
+                    const auto& q = clipFingers[static_cast<size_t>(f)]
+                                              [static_cast<size_t>(slot)];
+                    Ogre::Vector3 dsrc(q[0], q[1], q[2]);   // canonical dir
+                    Ogre::Quaternion kf;
+                    if (dsrc.squaredLength() > 1e-9f) {
+                        dsrc.normalise();
+                        // Rotation (canonical frame) that swings the target's
+                        // bind pointing dir onto the source's this frame.
+                        const Ogre::Quaternion aimC = dbind.getRotationTo(dsrc);
+                        // canonical → world, apply on bind world, → local delta.
+                        const Ogre::Quaternion aimW = CtInv * aimC * tb.Ct;
+                        const Ogre::Quaternion newWorld = aimW * Wbind;
+                        const Ogre::Quaternion newLocal =
+                            Pbind.Inverse() * newWorld;
+                        kf = Lbind.Inverse() * newLocal;
+                    }  // else identity (no source dir this frame)
+                    Ogre::TransformKeyFrame* nk =
+                        trk->createNodeKeyFrame(f * dt);
+                    nk->setRotation(kf);
+                    nk->setTranslate(Ogre::Vector3::ZERO);
+                    nk->setScale(Ogre::Vector3::UNIT_SCALE);
+                }
+                trk->_keyFrameDataChanged();
+                ++animated;
+            }
+        }
+    }
+    return animated;
 }
 
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
