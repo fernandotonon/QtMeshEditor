@@ -426,25 +426,7 @@ bool MocapController::startPreview(const QString& deviceId)
             if (result.status() == Qt::PermissionStatus::Granted) {
                 beginPreview(deviceId);
             } else {
-                setStatusMessage(
-#ifdef Q_OS_MACOS
-                    tr("Camera access was not granted. If no prompt appeared, "
-                       "enable it for QtMeshEditor in System Settings → "
-                       "Privacy & Security → Camera, then click Preview again.")
-#elif defined(Q_OS_LINUX)
-                    MocapCameraHints::runningAsSnap()
-                        ? tr("Camera access was not granted. Connect the camera "
-                             "interface, then click Preview again:\n"
-                             "  snap connect qtmesheditor:camera")
-                        : tr("Camera access was not granted. Allow camera access "
-                             "for QtMeshEditor in your system privacy settings "
-                             "(or via xdg-desktop-portal), then click Preview "
-                             "again.")
-#else
-                    tr("Camera access was not granted. Allow camera access for "
-                       "QtMeshEditor, then click Preview again.")
-#endif
-                );
+                setStatusMessage(MocapCameraHints::permissionDeniedMessage());
                 emit errorOccurred(d->status);
             }
         });

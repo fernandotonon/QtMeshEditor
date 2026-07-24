@@ -232,7 +232,7 @@ bool CameraFrameSource::open(QString* error)
     }
     if (device.isNull()) {
         if (error) {
-            if (devices.isEmpty()) {
+            if (m_deviceId.isEmpty()) {
                 *error = tr("no camera available") + MocapCameraHints::snapConnectHint();
             } else {
                 *error = tr("camera not found: %1").arg(m_deviceId);
@@ -258,9 +258,7 @@ bool CameraFrameSource::open(QString* error)
             [this](QCamera::Error err, const QString& message) {
                 if (err == QCamera::CameraError && message.contains(
                         QStringLiteral("permission"), Qt::CaseInsensitive)) {
-                    emit errorOccurred(
-                        tr("camera permission denied — %1")
-                            .arg(MocapCameraHints::permissionDeniedMessage()));
+                    emit errorOccurred(MocapCameraHints::permissionDeniedMessage());
                 } else {
                     emit errorOccurred(tr("camera error: %1").arg(message));
                 }

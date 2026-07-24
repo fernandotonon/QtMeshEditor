@@ -854,7 +854,7 @@ jobs:
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
 
             # Create proper launcher script
-            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
             # Create qtmesh symlink for CLI mode (name starts with "qtmesh" but not "qtmesheditor")
