@@ -94,6 +94,7 @@ if(BUILD_TESTS)
         # ENABLE_MOCAP (empty TU when off), so listing them unconditionally is
         # safe and keeps the per-suite test executables linking either way.
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/VideoFrameSource.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCameraHints.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/OneEuroFilter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapMapper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPose.cpp
