@@ -860,6 +860,17 @@ Rectangle {
                 Component.onCompleted: content = partOpsSplitComponent
             }
 
+            // ---- Explode / Join Parts (#859/#862, Object mode) ----
+            CollapsibleSection {
+                title: "Explode / Join Parts"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    PartOpsController.canExplode || PartOpsController.canJoin)
+                expanded: false
+
+                Component.onCompleted: content = partOpsExplodeJoinComponent
+            }
+
             // ---- Decimate (single-pass) ----
             CollapsibleSection {
                 title: "Decimate (single-pass)"
@@ -6483,6 +6494,155 @@ Rectangle {
                 }
                 function onSelectionChanged() {
                     partOpsSplitFeedback.text = ""
+                }
+            }
+        }
+    }
+
+    // Explode a multi-submesh mesh (typically one produced by "Split into
+    // Parts") into independent scene nodes for inspection/editing, and join a
+    // multi-selection of part nodes back into one fused mesh (baking their
+    // world transforms into vertices). Both undoable (#859/#862, Object mode).
+    Component {
+        id: partOpsExplodeJoinComponent
+
+        Column {
+            id: partOpsEjContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            property real explodeDistance: 0.5
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: "Explode the selected multi-part mesh into separate, "
+                    + "movable scene nodes. Select 2+ parts and Join to merge "
+                    + "them back into one mesh. Undoable."
+            }
+
+            // --- Explode distance ---
+            Row {
+                spacing: 6
+                Text {
+                    text: "Explode distance:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: explodeDistSlider
+                    width: 110
+                    from: 0.0
+                    to: 2.0
+                    stepSize: 0.05
+                    value: partOpsEjContent.explodeDistance
+                    onValueChanged: partOpsEjContent.explodeDistance = value
+                }
+                Text {
+                    text: partOpsEjContent.explodeDistance.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // --- Explode button ---
+            Rectangle {
+                id: partOpsExplodeBtn
+                property bool clickEnabled: PartOpsController.canExplode
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsExplodeBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsExplodeBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsExplodeBtnLabel
+                    anchors.centerIn: parent
+                    text: "Explode Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsExplodeBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsExplodeBtn.clickEnabled
+                    cursorShape: partOpsExplodeBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsEjFeedback.color = PropertiesPanelController.textColor
+                        partOpsEjFeedback.text = "Exploding…"
+                        PartOpsController.explodeSelected(partOpsEjContent.explodeDistance)
+                    }
+                }
+            }
+
+            // --- Join button ---
+            Rectangle {
+                id: partOpsJoinBtn
+                property bool clickEnabled: PartOpsController.canJoin
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsJoinBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsJoinBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsJoinBtnLabel
+                    anchors.centerIn: parent
+                    text: "Join Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsJoinBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsJoinBtn.clickEnabled
+                    cursorShape: partOpsJoinBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsEjFeedback.color = PropertiesPanelController.textColor
+                        partOpsEjFeedback.text = "Joining…"
+                        PartOpsController.joinSelected()
+                    }
+                }
+            }
+
+            Text {
+                id: partOpsEjFeedback
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: ""
+            }
+
+            Connections {
+                target: PartOpsController
+                function onExplodeFinished(status, isError) {
+                    partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsEjFeedback.text = status
+                }
+                function onJoinFinished(status, isError) {
+                    partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsEjFeedback.text = status
+                }
+                function onSelectionChanged() {
+                    partOpsEjFeedback.text = ""
                 }
             }
         }

@@ -4,8 +4,11 @@
 #include "UndoManager.h"
 #include "SentryReporter.h"
 #include "commands/SplitMeshCommand.h"
+#include "commands/ExplodePartsCommand.h"
+#include "commands/JoinPartsCommand.h"
 
 #include <OgreEntity.h>
+#include <OgreMesh.h>
 
 PartOpsController* PartOpsController::m_pSingleton = nullptr;
 
@@ -40,6 +43,24 @@ bool PartOpsController::hasSelection() const
 {
     const auto* sel = SelectionSet::getSingleton();
     return sel && sel->getResolvedEntities().size() == 1;
+}
+
+bool PartOpsController::canExplode() const
+{
+    const auto* sel = SelectionSet::getSingleton();
+    if (!sel)
+        return false;
+    const QList<Ogre::Entity*> entities = sel->getResolvedEntities();
+    if (entities.size() != 1 || !entities.first() || !entities.first()->getMesh())
+        return false;
+    // Nothing to explode from a single-submesh mesh.
+    return entities.first()->getMesh()->getNumSubMeshes() >= 2;
+}
+
+bool PartOpsController::canJoin() const
+{
+    const auto* sel = SelectionSet::getSingleton();
+    return sel && sel->getResolvedEntities().size() >= 2;
 }
 
 void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QString& category,
@@ -78,4 +99,71 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
                                   QStringLiteral("gui parts=%1").arg(cmd->createdSubMeshes()));
     emit splitFinished(tr("Split into %1 part submeshes.").arg(cmd->createdSubMeshes()), false);
+}
+
+void PartOpsController::explodeSelected(double distance)
+{
+    const auto* sel = SelectionSet::getSingleton();
+    if (!sel) {
+        emit explodeFinished(tr("No selection."), true);
+        return;
+    }
+    const QList<Ogre::Entity*> entities = sel->getResolvedEntities();
+    if (entities.size() != 1 || !entities.first() || !entities.first()->getMesh()) {
+        emit explodeFinished(tr("Select a single mesh to explode."), true);
+        return;
+    }
+    if (entities.first()->getMesh()->getNumSubMeshes() < 2) {
+        emit explodeFinished(tr("Mesh has a single part — split it first."), true);
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("explode_parts"));
+    const std::string entName = entities.first()->getName();
+    auto* cmd = new ExplodePartsCommand(entName, static_cast<float>(distance));
+    UndoManager::getSingleton()->push(cmd);
+
+    if (!cmd->ok()) {
+        emit explodeFinished(cmd->error().isEmpty() ? tr("Explode failed.") : cmd->error(), true);
+        return;
+    }
+    emit explodeFinished(tr("Exploded into %1 part nodes.").arg(cmd->createdParts()), false);
+}
+
+void PartOpsController::joinSelected()
+{
+    const auto* sel = SelectionSet::getSingleton();
+    if (!sel) {
+        emit joinFinished(tr("No selection."), true);
+        return;
+    }
+    const QList<Ogre::Entity*> entities = sel->getResolvedEntities();
+    if (entities.size() < 2) {
+        emit joinFinished(tr("Select two or more parts to join."), true);
+        return;
+    }
+
+    std::vector<std::string> names;
+    names.reserve(entities.size());
+    // The fused node is named after the first selected part with a "_fused"
+    // suffix (Manager uniquifies), so it's obviously the join result.
+    QString fusedBase;
+    for (Ogre::Entity* e : entities) {
+        if (!e)
+            continue;
+        names.push_back(e->getName());
+        if (fusedBase.isEmpty())
+            fusedBase = QString::fromStdString(e->getName()) + QStringLiteral("_fused");
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("join_parts"));
+    auto* cmd = new JoinPartsCommand(std::move(names), fusedBase);
+    UndoManager::getSingleton()->push(cmd);
+
+    if (!cmd->ok()) {
+        emit joinFinished(cmd->error().isEmpty() ? tr("Join failed.") : cmd->error(), true);
+        return;
+    }
+    emit joinFinished(tr("Joined %1 parts into one mesh (%2 submeshes).")
+                          .arg(entities.size()).arg(cmd->createdSubMeshes()), false);
 }
