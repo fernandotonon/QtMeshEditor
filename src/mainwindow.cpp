@@ -165,6 +165,8 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QMouseEvent>
+#include <QAbstractSlider>
 #include <QToolBar>
 #include <QAction>
 #include <QPlainTextEdit>
@@ -296,6 +298,49 @@ protected:
 
 private:
     TexturePaintController* m_tpc = nullptr;
+};
+
+/// QMenu closes on the first mouse-release inside embedded widgets unless we
+/// opt out — without this, every toggle/slider click dismisses the brush portal.
+void applyEmbeddedMenuWidgetHints(QWidget* widget)
+{
+    if (!widget)
+        return;
+    widget->setAttribute(Qt::WA_NoMouseReplay);
+    if (!qobject_cast<QAbstractSlider*>(widget) && !qobject_cast<QComboBox*>(widget))
+        widget->setFocusPolicy(Qt::NoFocus);
+    for (QWidget* child : widget->findChildren<QWidget*>())
+        applyEmbeddedMenuWidgetHints(child);
+}
+
+class PaintMenuKeepOpenFilter : public QObject {
+public:
+    PaintMenuKeepOpenFilter(QMenu* menu, QWidget* panel, QObject* parent = nullptr)
+        : QObject(parent)
+        , m_menu(menu)
+        , m_panel(panel)
+    {
+        menu->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched != m_menu || event->type() != QEvent::MouseButtonRelease)
+            return false;
+        const QPoint global = static_cast<QMouseEvent*>(event)->globalPosition().toPoint();
+        QWidget* at = QApplication::widgetAt(global);
+        while (at) {
+            if (at == m_panel || m_panel->isAncestorOf(at))
+                return true;
+            at = at->parentWidget();
+        }
+        return false;
+    }
+
+private:
+    QMenu* m_menu = nullptr;
+    QWidget* m_panel = nullptr;
 };
 
 } // namespace
@@ -1876,6 +1921,7 @@ void MainWindow::initToolBar()
     paintLay->setSpacing(8);
 
     auto* emPaint = EditModeController::instance();
+    auto* tpcPaint = TexturePaintController::instance();
 
     // (Color selection deliberately removed from the brush popup —
     // the FG/BG swatch widget on the main toolbar is now the single
@@ -1977,11 +2023,10 @@ void MainWindow::initToolBar()
 
     addSectionSeparator();
 
-    // Brush shape: Round vs Square. QButtonGroup keeps exclusivity
-    // scoped to this pair — do NOT use setAutoExclusive on siblings
-    // that share paintSettings as parent (Qt treats them as one group).
+    // Soft round vs hard square edge — only applies to Round/Square footprints.
     auto* shapeRow = new QHBoxLayout();
-    shapeRow->addWidget(new QLabel(tr("Shape:"), paintSettings));
+    auto* shapeLabel = new QLabel(tr("Edge:"), paintSettings);
+    shapeRow->addWidget(shapeLabel);
     auto* shapeRound = new QPushButton(tr("Round"), paintSettings);
     auto* shapeSquare = new QPushButton(tr("Square"), paintSettings);
     shapeRound->setCheckable(true);
@@ -1994,12 +2039,17 @@ void MainWindow::initToolBar()
     shapeGroup->setExclusive(true);
     shapeGroup->addButton(shapeRound);
     shapeGroup->addButton(shapeSquare);
-    auto syncShape = [shapeRound, shapeSquare, emPaint]() {
+    auto syncShape = [shapeRound, shapeSquare, shapeLabel, emPaint, tpcPaint]() {
         const bool square = emPaint->vertexPaintShape() == EditModeController::ShapeSquare;
         QSignalBlocker br(shapeRound);
         QSignalBlocker bs(shapeSquare);
         shapeRound->setChecked(!square);
         shapeSquare->setChecked(square);
+        const int ft = tpcPaint->footprintType();
+        const bool classicFootprint = ft == 0 || ft == 1;
+        shapeLabel->setVisible(classicFootprint);
+        shapeRound->setVisible(classicFootprint);
+        shapeSquare->setVisible(classicFootprint);
     };
     syncShape();
     connect(shapeRound, &QPushButton::clicked, this, [emPaint]() {
@@ -2009,6 +2059,7 @@ void MainWindow::initToolBar()
         emPaint->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncShape);
+    connect(tpcPaint, &TexturePaintController::stampChanged, this, syncShape);
     shapeRow->addWidget(shapeRound);
     shapeRow->addWidget(shapeSquare);
     shapeRow->addStretch();
@@ -2019,9 +2070,10 @@ void MainWindow::initToolBar()
     // Paint v2 Slice A (#544) — colour source + gradient ramp controls.
     // Lives in the brush portal (not the inspector) so brush settings stay
     // one click away from the paint tool button.
-    auto* tpcPaint = TexturePaintController::instance();
     auto* colorRow = new QHBoxLayout();
     colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
+    srcSolid->setToolTip(tr("Single foreground colour"));
+    srcGradient->setToolTip(tr("Gradient ramp tints the brush (works with all dab shapes)"));
     auto* srcSolid = new QPushButton(tr("Solid"), paintSettings);
     auto* srcGradient = new QPushButton(tr("Gradient"), paintSettings);
     srcSolid->setCheckable(true);
@@ -2218,7 +2270,7 @@ void MainWindow::initToolBar()
     footLay->setSpacing(6);
 
     auto* footRow = new QHBoxLayout();
-    footRow->addWidget(new QLabel(tr("Footprint:"), footprintBox));
+    footRow->addWidget(new QLabel(tr("Dab shape:"), footprintBox));
     auto* footRound = new QPushButton(tr("Round"), footprintBox);
     auto* footSquare = new QPushButton(tr("Square"), footprintBox);
     auto* footStamp = new QPushButton(tr("Stamp"), footprintBox);
@@ -2237,6 +2289,11 @@ void MainWindow::initToolBar()
     footGroup->addButton(footTiling);
     footLay->addLayout(footRow);
 
+    auto* footprintHint = new QLabel(footprintBox);
+    footprintHint->setWordWrap(true);
+    footprintHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+    footLay->addWidget(footprintHint);
+
     auto* stampPreview = new QLabel(footprintBox);
     stampPreview->setFixedSize(48, 48);
     stampPreview->setScaledContents(true);
@@ -2244,7 +2301,8 @@ void MainWindow::initToolBar()
     footLay->addWidget(stampPreview);
 
     auto* stampRow = new QHBoxLayout();
-    stampRow->addWidget(new QLabel(tr("Stamp:"), footprintBox));
+    auto* stampRowLabel = new QLabel(tr("Stamp:"), footprintBox);
+    stampRow->addWidget(stampRowLabel);
     auto* stampCombo = new QComboBox(footprintBox);
     stampRow->addWidget(stampCombo, 1);
     auto* importStampBtn = new QPushButton(tr("Import…"), footprintBox);
@@ -2252,7 +2310,8 @@ void MainWindow::initToolBar()
     footLay->addLayout(stampRow);
 
     auto* tilingRow = new QHBoxLayout();
-    tilingRow->addWidget(new QLabel(tr("Tiling:"), footprintBox));
+    auto* tilingRowLabel = new QLabel(tr("Tiling:"), footprintBox);
+    tilingRow->addWidget(tilingRowLabel);
     auto* tilingCombo = new QComboBox(footprintBox);
     tilingRow->addWidget(tilingCombo, 1);
     auto* importTilingBtn = new QPushButton(tr("Import…"), footprintBox);
@@ -2272,7 +2331,8 @@ void MainWindow::initToolBar()
     footLay->addWidget(scatterSlider);
 
     auto* rotRow = new QHBoxLayout();
-    rotRow->addWidget(new QLabel(tr("Rotation:"), footprintBox));
+    auto* rotLabel = new QLabel(tr("Rotation:"), footprintBox);
+    rotRow->addWidget(rotLabel);
     auto* rotCombo = new QComboBox(footprintBox);
     rotCombo->addItems({tr("None"), tr("Fixed"), tr("Stroke"), tr("Random")});
     rotRow->addWidget(rotCombo, 1);
@@ -2323,7 +2383,8 @@ void MainWindow::initToolBar()
     stampLibraryGrid->setContentsMargins(0, 0, 0, 0);
     stampLibraryGrid->setSpacing(4);
     stampLibraryScroll->setWidget(stampLibraryHost);
-    footLay->addWidget(new QLabel(tr("Stamp library (drop PNG):"), footprintBox));
+    auto* stampLibLabel = new QLabel(tr("Stamp library (drop PNG):"), footprintBox);
+    footLay->addWidget(stampLibLabel);
     footLay->addWidget(stampLibraryScroll);
 
     auto* stampManageRow = new QHBoxLayout();
@@ -2370,6 +2431,7 @@ void MainWindow::initToolBar()
             if (!pm.isNull())
                 btn->setIcon(QIcon(pm));
             btn->setIconSize(QSize(32, 32));
+            applyEmbeddedMenuWidgetHints(btn);
             QObject::connect(btn, &QToolButton::clicked, tpcPaint, [tpcPaint, name]() {
                 tpcPaint->setActiveStampName(name);
             });
@@ -2389,14 +2451,16 @@ void MainWindow::initToolBar()
             stampPreview->setPixmap(pm);
     };
 
-    auto syncFootprintUi = [footRound, footSquare, footStamp, footTiling, stampCombo,
-                            tilingCombo, spacingSlider, spacingLabel, scatterSlider,
-                            scatterLabel, rotCombo, sizeJitterSlider, sizeJitterLabel,
-                            opacityJitterSlider, opacityJitterLabel, tilingScaleSlider,
-                            tilingScaleLabel, tilingRotSlider, tilingRotLabel,
-                            tilingOffsetUSlider, tilingOffsetULabel, tilingOffsetVSlider,
-                            tilingOffsetVLabel, deleteStampBtn, renameStampBtn, tpcPaint,
-                            refreshStampPreview, refreshStampLibraryGrid]() {
+    auto syncFootprintUi = [footRound, footSquare, footStamp, footTiling, footprintHint,
+                            stampPreview, stampRowLabel, stampCombo, importStampBtn,
+                            stampLibLabel, stampLibraryScroll, deleteStampBtn, renameStampBtn,
+                            tilingRowLabel, tilingCombo, importTilingBtn, spacingSlider,
+                            spacingLabel, scatterSlider, scatterLabel, rotLabel, rotCombo,
+                            sizeJitterSlider, sizeJitterLabel, opacityJitterSlider,
+                            opacityJitterLabel, tilingScaleSlider, tilingScaleLabel,
+                            tilingRotSlider, tilingRotLabel, tilingOffsetUSlider,
+                            tilingOffsetULabel, tilingOffsetVSlider, tilingOffsetVLabel,
+                            tpcPaint, refreshStampPreview, refreshStampLibraryGrid]() {
         const int ft = tpcPaint->footprintType();
         {
             QSignalBlocker b1(footRound);
@@ -2410,6 +2474,49 @@ void MainWindow::initToolBar()
         }
         const bool stampMode = ft == 2;
         const bool tilingMode = ft == 3;
+        if (stampMode) {
+            footprintHint->setText(tr(
+                "Image stamp: pick a stamp below, then paint. "
+                "Use Color → Solid or Gradient above to tint each stamp."));
+        } else if (tilingMode) {
+            footprintHint->setText(tr(
+                "Tiling texture: pick wood/brick/etc. below. "
+                "Solid or Gradient color multiplies with the tile."));
+        } else {
+            footprintHint->setText(tr(
+                "Classic round/square dab. Use Color → Solid or Gradient for fill."));
+        }
+
+        stampRowLabel->setVisible(stampMode);
+        stampPreview->setVisible(stampMode);
+        stampCombo->setVisible(stampMode);
+        importStampBtn->setVisible(stampMode);
+        spacingLabel->setVisible(stampMode);
+        spacingSlider->setVisible(stampMode);
+        scatterLabel->setVisible(stampMode);
+        scatterSlider->setVisible(stampMode);
+        rotLabel->setVisible(stampMode);
+        rotCombo->setVisible(stampMode);
+        sizeJitterLabel->setVisible(stampMode);
+        sizeJitterSlider->setVisible(stampMode);
+        opacityJitterLabel->setVisible(stampMode);
+        opacityJitterSlider->setVisible(stampMode);
+        stampLibLabel->setVisible(stampMode);
+        stampLibraryScroll->setVisible(stampMode);
+        deleteStampBtn->setVisible(stampMode);
+        renameStampBtn->setVisible(stampMode);
+        tilingRowLabel->setVisible(tilingMode);
+        tilingCombo->setVisible(tilingMode);
+        importTilingBtn->setVisible(tilingMode);
+        tilingScaleLabel->setVisible(tilingMode);
+        tilingScaleSlider->setVisible(tilingMode);
+        tilingRotLabel->setVisible(tilingMode);
+        tilingRotSlider->setVisible(tilingMode);
+        tilingOffsetULabel->setVisible(tilingMode);
+        tilingOffsetUSlider->setVisible(tilingMode);
+        tilingOffsetVLabel->setVisible(tilingMode);
+        tilingOffsetVSlider->setVisible(tilingMode);
+
         stampCombo->setEnabled(stampMode);
         spacingSlider->setEnabled(stampMode);
         scatterSlider->setEnabled(stampMode);
@@ -2598,6 +2705,8 @@ void MainWindow::initToolBar()
     paintWa->setDefaultWidget(paintPortal);
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
+    applyEmbeddedMenuWidgetHints(paintPortal);
+    new PaintMenuKeepOpenFilter(vertexPaintMenu, paintPortal, vertexPaintMenu);
 
     connect(vertexPaintMenu, &QMenu::aboutToShow, this,
             [paintSettings, paintPortal, syncRad, syncStr, syncFalloff, syncShape, syncGradientUi, syncFootprintUi]() {
