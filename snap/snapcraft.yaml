@@ -56,11 +56,13 @@ apps:
       - home
       - network
       - removable-media
+      - camera
     environment:
       LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
       QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH
       QT_QPA_PLATFORM: xcb
-      QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
+      # Multimedia FFmpeg backend lives under usr/lib/qtmesheditor/plugins/multimedia/
+      QT_PLUGIN_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor
       OGRE_PLUGIN_DIR: $SNAP/usr/lib/qtmesheditor
       FONTCONFIG_PATH: $SNAP/etc/fonts
       FONTCONFIG_FILE: $SNAP/etc/fonts/fonts.conf

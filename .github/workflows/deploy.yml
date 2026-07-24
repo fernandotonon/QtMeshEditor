@@ -854,7 +854,7 @@ jobs:
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
 
             # Create proper launcher script
-            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
             # Create qtmesh symlink for CLI mode (name starts with "qtmesh" but not "qtmesheditor")
@@ -914,6 +914,19 @@ jobs:
                 mkdir -p ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia
                 cp -R "$QT_DIR/plugins/multimedia/"*.so \
                     ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/ 2>/dev/null || true
+            fi
+
+            # Bundle FFmpeg libs required by libffmpegmediaplugin.so so confined
+            # Snap / minimal .deb installs can open webcams and video files.
+            FFMPEG_PLUGIN="./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/libffmpegmediaplugin.so"
+            if [ -f "$FFMPEG_PLUGIN" ]; then
+              for lib in $(ldd "$FFMPEG_PLUGIN" | awk '/=> \// {print $3}'); do
+                case "$lib" in
+                  */libav*|*/libsw*)
+                    cp -L "$lib" ./pack-deb/usr/lib/qtmesheditor/
+                    ;;
+                esac
+              done
             fi
 
             dpkg-deb --build --root-owner-group pack-deb

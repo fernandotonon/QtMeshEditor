@@ -98,6 +98,23 @@ ad-hoc dev build will NOT get the prompt. If you hit that on a dev build, use
 the file-based capture (`qtmesh mocap <video>`) instead — it needs no camera
 permission and exercises the identical pipeline.
 
+## Linux Snap camera access
+
+The Snap is strictly confined, so webcam access needs two things:
+
+1. **Connect the camera interface** (one-time, not auto-connected on install):
+
+   ```bash
+   snap connect qtmesheditor:camera
+   ```
+
+2. **Use a build that bundles the Qt Multimedia FFmpeg backend** (3.24.3+).
+   The Performance Capture panel will suggest the `snap connect` command if no
+   cameras appear or permission is denied.
+
+On desktop Linux outside Snap, allow camera access via your desktop portal /
+privacy settings when prompted.
+
 ## Known limitations (v1)
 
 - Single person per frame; the highest-scoring detection wins.

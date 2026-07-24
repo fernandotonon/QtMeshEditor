@@ -1,6 +1,7 @@
 #ifdef ENABLE_MOCAP
 
 #include "VideoFrameSource.h"
+#include "MocapCameraHints.h"
 
 #include <QCamera>
 #include <QCameraDevice>
@@ -230,10 +231,13 @@ bool CameraFrameSource::open(QString* error)
         }
     }
     if (device.isNull()) {
-        if (error)
-            *error = devices.isEmpty()
-                         ? tr("no camera available")
-                         : tr("camera not found: %1").arg(m_deviceId);
+        if (error) {
+            if (devices.isEmpty()) {
+                *error = tr("no camera available") + MocapCameraHints::snapConnectHint();
+            } else {
+                *error = tr("camera not found: %1").arg(m_deviceId);
+            }
+        }
         return false;
     }
 
@@ -254,9 +258,9 @@ bool CameraFrameSource::open(QString* error)
             [this](QCamera::Error err, const QString& message) {
                 if (err == QCamera::CameraError && message.contains(
                         QStringLiteral("permission"), Qt::CaseInsensitive)) {
-                    emit errorOccurred(tr("camera permission denied — allow "
-                                          "camera access for QtMeshEditor in "
-                                          "the system settings"));
+                    emit errorOccurred(
+                        tr("camera permission denied — %1")
+                            .arg(MocapCameraHints::permissionDeniedMessage()));
                 } else {
                     emit errorOccurred(tr("camera error: %1").arg(message));
                 }

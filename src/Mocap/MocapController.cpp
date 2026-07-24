@@ -6,6 +6,7 @@
 #include "PoseCapPredictor.h"
 #include "PoseIKSolver.h"
 #include "VideoFrameSource.h"
+#include "MocapCameraHints.h"
 #include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
 #include "../Manager.h"
@@ -426,9 +427,24 @@ bool MocapController::startPreview(const QString& deviceId)
                 beginPreview(deviceId);
             } else {
                 setStatusMessage(
+#ifdef Q_OS_MACOS
                     tr("Camera access was not granted. If no prompt appeared, "
                        "enable it for QtMeshEditor in System Settings → "
-                       "Privacy & Security → Camera, then click Preview again."));
+                       "Privacy & Security → Camera, then click Preview again.")
+#elif defined(Q_OS_LINUX)
+                    MocapCameraHints::runningAsSnap()
+                        ? tr("Camera access was not granted. Connect the camera "
+                             "interface, then click Preview again:\n"
+                             "  snap connect qtmesheditor:camera")
+                        : tr("Camera access was not granted. Allow camera access "
+                             "for QtMeshEditor in your system privacy settings "
+                             "(or via xdg-desktop-portal), then click Preview "
+                             "again.")
+#else
+                    tr("Camera access was not granted. Allow camera access for "
+                       "QtMeshEditor, then click Preview again.")
+#endif
+                );
                 emit errorOccurred(d->status);
             }
         });
