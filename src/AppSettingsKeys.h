@@ -309,6 +309,85 @@ inline const QString& paintGradientMode()
     return k;
 }
 
+/** @brief Paint footprint type (Paint v2 Slice B / #545). */
+inline const QString& paintFootprintType()
+{
+    static const QString k(QStringLiteral("Paint/footprintType"));
+    return k;
+}
+
+inline const QString& paintActiveStampName()
+{
+    static const QString k(QStringLiteral("Paint/activeStampName"));
+    return k;
+}
+
+inline const QString& paintActiveTilingName()
+{
+    static const QString k(QStringLiteral("Paint/activeTilingName"));
+    return k;
+}
+
+inline const QString& paintStampSpacing()
+{
+    static const QString k(QStringLiteral("Paint/stampSpacing"));
+    return k;
+}
+
+inline const QString& paintStampScatter()
+{
+    static const QString k(QStringLiteral("Paint/stampScatter"));
+    return k;
+}
+
+inline const QString& paintStampSizeJitter()
+{
+    static const QString k(QStringLiteral("Paint/stampSizeJitter"));
+    return k;
+}
+
+inline const QString& paintStampOpacityJitter()
+{
+    static const QString k(QStringLiteral("Paint/stampOpacityJitter"));
+    return k;
+}
+
+inline const QString& paintStampRotation()
+{
+    static const QString k(QStringLiteral("Paint/stampRotation"));
+    return k;
+}
+
+inline const QString& paintStampFixedAngle()
+{
+    static const QString k(QStringLiteral("Paint/stampFixedAngle"));
+    return k;
+}
+
+inline const QString& paintTilingScale()
+{
+    static const QString k(QStringLiteral("Paint/tilingScale"));
+    return k;
+}
+
+inline const QString& paintTilingRotation()
+{
+    static const QString k(QStringLiteral("Paint/tilingRotation"));
+    return k;
+}
+
+inline const QString& paintTilingOffsetU()
+{
+    static const QString k(QStringLiteral("Paint/tilingOffsetU"));
+    return k;
+}
+
+inline const QString& paintTilingOffsetV()
+{
+    static const QString k(QStringLiteral("Paint/tilingOffsetV"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

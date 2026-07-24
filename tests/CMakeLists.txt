@@ -159,6 +159,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GradientRamp.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushEngine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushFootprint.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushAssetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp

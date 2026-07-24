@@ -4,6 +4,8 @@
 #include "PaintSelectionMask.h"
 #include "TexturePaintBuffer.h"
 #include "BrushEngine.h"
+#include "BrushAssetLibrary.h"
+#include "BrushFootprint.h"
 #include "GradientRamp.h"
 
 #include <QColor>
@@ -225,6 +227,69 @@ public:
     Q_INVOKABLE void closeRampEditor();
     Q_PROPERTY(bool rampEditorOpen READ rampEditorOpen NOTIFY rampEditorChanged)
     bool rampEditorOpen() const { return m_rampEditorWindow != nullptr; }
+    /// @}
+
+    /// @name Paint v2 Slice B — textured / stamp brushes (#545)
+    /// @{
+    Q_PROPERTY(int footprintType READ footprintType WRITE setFootprintType NOTIFY stampChanged)
+    Q_PROPERTY(QString activeStampName READ activeStampName WRITE setActiveStampName NOTIFY stampChanged)
+    Q_PROPERTY(QString activeTilingName READ activeTilingName WRITE setActiveTilingName NOTIFY stampChanged)
+    Q_PROPERTY(QStringList stampNames READ stampNames NOTIFY stampChanged)
+    Q_PROPERTY(QStringList tilingNames READ tilingNames NOTIFY stampChanged)
+    Q_PROPERTY(QString activeStampPreviewUri READ activeStampPreviewUri NOTIFY stampChanged)
+    Q_PROPERTY(QString activeTilingPreviewUri READ activeTilingPreviewUri NOTIFY stampChanged)
+    Q_PROPERTY(double stampSpacing READ stampSpacing WRITE setStampSpacing NOTIFY stampChanged)
+    Q_PROPERTY(double stampScatter READ stampScatter WRITE setStampScatter NOTIFY stampChanged)
+    Q_PROPERTY(double stampSizeJitter READ stampSizeJitter WRITE setStampSizeJitter NOTIFY stampChanged)
+    Q_PROPERTY(double stampOpacityJitter READ stampOpacityJitter WRITE setStampOpacityJitter NOTIFY stampChanged)
+    Q_PROPERTY(int stampRotation READ stampRotation WRITE setStampRotation NOTIFY stampChanged)
+    Q_PROPERTY(double stampFixedAngle READ stampFixedAngle WRITE setStampFixedAngle NOTIFY stampChanged)
+    Q_PROPERTY(double tilingScale READ tilingScale WRITE setTilingScale NOTIFY stampChanged)
+    Q_PROPERTY(double tilingRotation READ tilingRotation WRITE setTilingRotation NOTIFY stampChanged)
+    Q_PROPERTY(double tilingOffsetU READ tilingOffsetU WRITE setTilingOffsetU NOTIFY stampChanged)
+    Q_PROPERTY(double tilingOffsetV READ tilingOffsetV WRITE setTilingOffsetV NOTIFY stampChanged)
+
+    int footprintType() const { return static_cast<int>(m_footprintType); }
+    void setFootprintType(int type);
+    QString activeStampName() const { return m_activeStampName; }
+    void setActiveStampName(const QString& name);
+    QString activeTilingName() const { return m_activeTilingName; }
+    void setActiveTilingName(const QString& name);
+    QStringList stampNames() const;
+    QStringList tilingNames() const;
+    QString activeStampPreviewUri() const { return m_stampPreviewUri; }
+    QString activeTilingPreviewUri() const { return m_tilingPreviewUri; }
+    double stampSpacing() const { return m_stampSettings.spacing; }
+    void setStampSpacing(double v);
+    double stampScatter() const { return m_stampSettings.scatter; }
+    void setStampScatter(double v);
+    double stampSizeJitter() const { return m_stampSettings.sizeJitter; }
+    void setStampSizeJitter(double v);
+    double stampOpacityJitter() const { return m_stampSettings.opacityJitter; }
+    void setStampOpacityJitter(double v);
+    int stampRotation() const { return static_cast<int>(m_stampSettings.rotation); }
+    void setStampRotation(int mode);
+    double stampFixedAngle() const { return m_stampSettings.fixedAngleDeg; }
+    void setStampFixedAngle(double deg);
+    double tilingScale() const { return m_tilingSettings.scale; }
+    void setTilingScale(double v);
+    double tilingRotation() const { return m_tilingSettings.rotationDeg; }
+    void setTilingRotation(double deg);
+    double tilingOffsetU() const { return m_tilingSettings.offsetU; }
+    void setTilingOffsetU(double v);
+    double tilingOffsetV() const { return m_tilingSettings.offsetV; }
+    void setTilingOffsetV(double v);
+
+    Q_INVOKABLE QString importStampAsset(const QString& filePath);
+    Q_INVOKABLE QString importTilingAsset(const QString& filePath);
+    Q_INVOKABLE bool deleteCustomStamp(const QString& name);
+    Q_INVOKABLE bool deleteCustomTiling(const QString& name);
+    Q_INVOKABLE bool renameCustomStamp(const QString& oldName, const QString& newName);
+    Q_INVOKABLE bool renameCustomTiling(const QString& oldName, const QString& newName);
+    Q_INVOKABLE bool isBundledStamp(const QString& name) const;
+    Q_INVOKABLE bool isBundledTiling(const QString& name) const;
+    Q_INVOKABLE QString stampThumbnailUri(const QString& name) const;
+    Q_INVOKABLE QString tilingThumbnailUri(const QString& name) const;
     /// @}
 
     /// @name Paint target (texture or vertex colors)
@@ -449,6 +514,7 @@ signals:
     void editorWindowChanged();
     void gradientChanged();
     void rampEditorChanged();
+    void stampChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -569,6 +635,15 @@ private:
     void refreshRampPreviewUri();
     /// Update stroke path-length tracking used by linear gradients.
     void noteStrokeSample(const Ogre::Vector2& uv, bool isStart);
+    float strokeDirectionRad() const;
+    TexturePaintBuffer::BrushShape currentBrushShape() const;
+    TexturePaintBuffer::ColorAtFn buildBrushColorAtFn(float strokeT) const;
+    bool paintColorFootprintAtUV(const Ogre::Vector2& uv, float radiusUv,
+                                 float strength);
+    void reloadStampImage();
+    void reloadTilingImage();
+    void rebuildStampCache(float radiusUv);
+    void refreshStampPreviewUris();
 
     /// Draw the hover ring on the mesh at a given local position +
     /// normal. Shared between viewport-driven and panel-driven hover.
@@ -654,6 +729,20 @@ private:
     /// EMA of the stroke direction unit vector — keeps linear sampling
     /// stable when the cursor turns sharply mid-stroke.
     Ogre::Vector2 m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+
+    // Paint v2 Slice B — stamp / tiling footprint state.
+    BrushFootprint::FootprintType m_footprintType = BrushFootprint::FootprintType::Round;
+    QString m_activeStampName = QStringLiteral("Soft Circle");
+    QString m_activeTilingName = QStringLiteral("Wood");
+    BrushFootprint::StampSettings m_stampSettings;
+    BrushFootprint::TilingSettings m_tilingSettings;
+    BrushFootprint::ImageRgba m_stampImage;
+    BrushFootprint::ImageRgba m_tilingImage;
+    BrushFootprint::RasterizedStamp m_stampCache;
+    int m_stampCachePixelSize = 0;
+    QString m_stampPreviewUri;
+    QString m_tilingPreviewUri;
+    float m_lastStampDabPathLength = 0.0f;
 
     /// Last ray-hit triangle for fast stroke tracking (avoids walking
     /// every triangle on each mouse-move while the cursor stays on the

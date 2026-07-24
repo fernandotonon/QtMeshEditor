@@ -149,6 +149,8 @@ PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 BrushEngine.cpp
+BrushFootprint.cpp
+BrushAssetLibrary.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
