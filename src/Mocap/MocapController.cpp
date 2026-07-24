@@ -6,6 +6,7 @@
 #include "PoseCapPredictor.h"
 #include "PoseIKSolver.h"
 #include "VideoFrameSource.h"
+#include "MocapCameraHints.h"
 #include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
 #include "../Manager.h"
@@ -425,10 +426,7 @@ bool MocapController::startPreview(const QString& deviceId)
             if (result.status() == Qt::PermissionStatus::Granted) {
                 beginPreview(deviceId);
             } else {
-                setStatusMessage(
-                    tr("Camera access was not granted. If no prompt appeared, "
-                       "enable it for QtMeshEditor in System Settings → "
-                       "Privacy & Security → Camera, then click Preview again."));
+                setStatusMessage(MocapCameraHints::permissionDeniedMessage());
                 emit errorOccurred(d->status);
             }
         });
