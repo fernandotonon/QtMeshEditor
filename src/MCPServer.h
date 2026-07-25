@@ -346,6 +346,20 @@ private:
     /// Remove a morph weight keyframe. Args: `target`, `time`. Light.
     QJsonObject toolClearMorphWeightKeyframe(const QJsonObject &args);
 
+    // ── Skeletal keyframe editing + navigation (AnimationControlController) ──
+    /// Write one channel value into a bone's keyframe at a time.
+    /// Args: `bone`, `channel` (tx/ty/tz/rw/rx/ry/rz/sx/sy/sz),
+    /// `time`, `value`. Light, undoable.
+    QJsonObject toolSetKeyframeValue(const QJsonObject &args);
+    /// Re-time a bone keyframe. Args: `bone`, `old_time`, `new_time`. Light.
+    QJsonObject toolMoveBoneKeyframe(const QJsonObject &args);
+    /// Move the playhead to the next/prev keyframe. Args: `direction`
+    /// ("next"|"prev"). Light.
+    QJsonObject toolStepKeyframe(const QJsonObject &args);
+    /// Read a bone channel's value at every keyframe. Args: `bone`,
+    /// `channel`. Light — pure read.
+    QJsonObject toolGetChannelValues(const QJsonObject &args);
+
     /// Pose-lib D-MCP: list saved pose names on the first selected
     /// entity. Light read; returns `{ count, poses: [name…] }`.
     QJsonObject toolListPoses(const QJsonObject &args);

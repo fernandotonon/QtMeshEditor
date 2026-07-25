@@ -732,6 +732,10 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("select_bone"), &MCPServer::toolSelectBone},
         {QStringLiteral("set_morph_weight_keyframe"), &MCPServer::toolSetMorphWeightKeyframe},
         {QStringLiteral("clear_morph_weight_keyframe"), &MCPServer::toolClearMorphWeightKeyframe},
+        {QStringLiteral("set_keyframe_value"), &MCPServer::toolSetKeyframeValue},
+        {QStringLiteral("move_bone_keyframe"), &MCPServer::toolMoveBoneKeyframe},
+        {QStringLiteral("step_keyframe"), &MCPServer::toolStepKeyframe},
+        {QStringLiteral("get_channel_values"), &MCPServer::toolGetChannelValues},
         {QStringLiteral("list_poses"), &MCPServer::toolListPoses},
         {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
@@ -7720,6 +7724,113 @@ QJsonObject MCPServer::toolClearMorphWeightKeyframe(const QJsonObject &args)
 }
 
 // ---------------------------------------------------------------------------
+// Skeletal keyframe editing + navigation (AnimationControlController). These
+// operate on the currently-selected entity+animation+bone (set via
+// select_animation / select_bone), matching the dope-sheet / curve editor.
+// ---------------------------------------------------------------------------
+
+static bool isValidChannelId(const QString& ch)
+{
+    static const QSet<QString> ids = {
+        "tx","ty","tz","rw","rx","ry","rz","sx","sy","sz"};
+    return ids.contains(ch);
+}
+
+QJsonObject MCPServer::toolSetKeyframeValue(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_keyframe_value");
+    const QString bone = args.value("bone").toString();
+    const QString channel = args.value("channel").toString();
+    if (bone.isEmpty())
+        return makeErrorResult("Error: missing required 'bone' argument");
+    if (!isValidChannelId(channel))
+        return makeErrorResult("Error: 'channel' must be one of "
+                               "tx,ty,tz,rw,rx,ry,rz,sx,sy,sz");
+    if (!args.value("time").isDouble() || !args.value("value").isDouble())
+        return makeErrorResult("Error: 'time' and 'value' must be numbers");
+    const double time = args.value("time").toDouble();
+    const double value = args.value("value").toDouble();
+    if (!std::isfinite(time) || time < 0.0 || !std::isfinite(value))
+        return makeErrorResult("Error: time must be >= 0 and finite; value finite");
+    if (!AnimationControlController::instance()->setKeyframeValue(bone, channel, time, value))
+        return makeErrorResult(
+            QString("Error: no keyframe at %1s on bone '%2' (select the animation "
+                    "first with select_animation)").arg(time, 0, 'f', 3).arg(bone));
+    QJsonObject content;
+    content["ok"] = true;
+    content["bone"] = bone;
+    content["channel"] = channel;
+    content["time"] = time;
+    content["value"] = value;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMoveBoneKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "move_bone_keyframe");
+    const QString bone = args.value("bone").toString();
+    if (bone.isEmpty())
+        return makeErrorResult("Error: missing required 'bone' argument");
+    if (!args.value("old_time").isDouble() || !args.value("new_time").isDouble())
+        return makeErrorResult("Error: 'old_time' and 'new_time' must be numbers");
+    const double oldT = args.value("old_time").toDouble();
+    const double newT = args.value("new_time").toDouble();
+    if (!std::isfinite(oldT) || !std::isfinite(newT) || newT < 0.0)
+        return makeErrorResult("Error: times must be finite and new_time >= 0");
+    if (!AnimationControlController::instance()->moveKeyframe(bone, oldT, newT))
+        return makeErrorResult(
+            "Error: move rejected (no key at old_time, collision at new_time, "
+            "or no animation/bone selected)");
+    QJsonObject content;
+    content["ok"] = true;
+    content["bone"] = bone;
+    content["old_time"] = oldT;
+    content["new_time"] = newT;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolStepKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "step_keyframe");
+    const QString dir = args.value("direction").toString();
+    auto* c = AnimationControlController::instance();
+    if (dir == "next") c->nextKeyframe();
+    else if (dir == "prev") c->prevKeyframe();
+    else return makeErrorResult("Error: 'direction' must be 'next' or 'prev'");
+    QJsonObject content;
+    content["ok"] = true;
+    content["direction"] = dir;
+    content["time"] = c->sliderValue() / 1000.0;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolGetChannelValues(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "get_channel_values");
+    const QString bone = args.value("bone").toString();
+    const QString channel = args.value("channel").toString();
+    if (bone.isEmpty())
+        return makeErrorResult("Error: missing required 'bone' argument");
+    if (!isValidChannelId(channel))
+        return makeErrorResult("Error: 'channel' must be one of "
+                               "tx,ty,tz,rw,rx,ry,rz,sx,sy,sz");
+    const QVariantList vals =
+        AnimationControlController::instance()->channelValuesAt(bone, channel);
+    QJsonArray arr;
+    for (const QVariant& v : vals) arr.append(v.toDouble());
+    QJsonObject content;
+    content["bone"] = bone;
+    content["channel"] = channel;
+    content["values"] = arr;
+    content["count"] = arr.size();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
 // Pose-lib D-MCP — named bone-TRS snapshots on the live scene.
 // ---------------------------------------------------------------------------
 // All four tools operate on the first selected entity, same surface as
@@ -10653,6 +10764,56 @@ QJsonArray MCPServer::buildToolsList()
         QJsonArray required; required.append("target"); required.append("time");
         appendTool("clear_morph_weight_keyframe",
             "Remove a morph weight keyframe at the given time.", props, required);
+    }
+
+    // set_keyframe_value
+    {
+        QJsonObject props;
+        props["bone"]    = QJsonObject{{"type", "string"}, {"description", "Bone whose keyframe to edit (select_animation first)."}};
+        props["channel"] = QJsonObject{{"type", "string"}, {"description", "One of tx,ty,tz (translation), rw,rx,ry,rz (rotation quat), sx,sy,sz (scale)."}};
+        props["time"]    = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds (must already exist)."}};
+        props["value"]   = QJsonObject{{"type", "number"}, {"description", "New value for that single channel."}};
+        QJsonArray required; required.append("bone"); required.append("channel"); required.append("time"); required.append("value");
+        appendTool("set_keyframe_value",
+            "Write one channel of a bone keyframe (leaving the other 9 untouched), "
+            "undoable. The keyframe must already exist at `time` — use add_keyframe first.",
+            props, required);
+    }
+
+    // move_bone_keyframe
+    {
+        QJsonObject props;
+        props["bone"]     = QJsonObject{{"type", "string"}, {"description", "Bone whose keyframe to move."}};
+        props["old_time"] = QJsonObject{{"type", "number"}, {"description", "Existing keyframe time (seconds)."}};
+        props["new_time"] = QJsonObject{{"type", "number"}, {"description", "New time (seconds), no existing key there."}};
+        QJsonArray required; required.append("bone"); required.append("old_time"); required.append("new_time");
+        appendTool("move_bone_keyframe",
+            "Re-time a skeletal keyframe on the selected animation. Rejected on "
+            "collision or when no key exists at old_time.",
+            props, required);
+    }
+
+    // step_keyframe
+    {
+        QJsonObject props;
+        props["direction"] = QJsonObject{{"type", "string"}, {"description", "'next' or 'prev' — moves the playhead to the adjacent keyframe."}};
+        QJsonArray required; required.append("direction");
+        appendTool("step_keyframe",
+            "Move the playhead to the next or previous keyframe of the selected "
+            "animation. Returns the resulting time.",
+            props, required);
+    }
+
+    // get_channel_values
+    {
+        QJsonObject props;
+        props["bone"]    = QJsonObject{{"type", "string"}, {"description", "Bone to read."}};
+        props["channel"] = QJsonObject{{"type", "string"}, {"description", "Channel id (tx..sz)."}};
+        QJsonArray required; required.append("bone"); required.append("channel");
+        appendTool("get_channel_values",
+            "Read a bone channel's value at every keyframe of the selected animation, "
+            "in time order. Use for inspecting or plotting a curve.",
+            props, required);
     }
 
     // list_poses
