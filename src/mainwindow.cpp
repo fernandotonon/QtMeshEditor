@@ -340,17 +340,13 @@ public:
         connect(m_importBtn, &QPushButton::clicked, this, [this]() { importStamp(); });
         connect(m_renameBtn, &QPushButton::clicked, this, [this]() { renameStamp(); });
         connect(m_deleteBtn, &QPushButton::clicked, this, [this]() { deleteStamp(); });
-        connect(m_tpc, &TexturePaintController::stampChanged, this, [this]() { rebuildGrid(); });
-        connect(m_group, &QButtonGroup::idClicked, this, [this](int id) {
-            QAbstractButton* btn = m_group->button(id);
-            if (btn)
-                m_tpc->setActiveStampName(btn->toolTip());
-        });
+        connect(m_tpc, &TexturePaintController::stampChanged, this, [this]() { onStampChanged(); });
 
         setAcceptDrops(true);
         auto* dropFilter = new PaintAssetDropFilter(m_tpc, this);
         dropFilter->installEventFilter(this);
 
+        m_catalog = m_tpc->stampNames();
         rebuildGrid();
     }
 
@@ -363,6 +359,17 @@ private:
         QPixmap pm;
         pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
         return pm;
+    }
+
+    void onStampChanged()
+    {
+        const QStringList names = m_tpc->stampNames();
+        if (names != m_catalog) {
+            m_catalog = names;
+            rebuildGrid();
+        } else {
+            updateSelection();
+        }
     }
 
     void clearGrid()
@@ -384,23 +391,42 @@ private:
         int col = 0;
         int row = 0;
         constexpr int kCols = 6;
-        for (const QString& name : m_tpc->stampNames()) {
+        const QString tileStyle = QStringLiteral(
+            "QToolButton { border: 1px solid palette(mid); border-radius: 4px; padding: 2px; }"
+            "QToolButton:checked { border: 2px solid palette(highlight);"
+            " background-color: palette(highlight); }"
+            "QToolButton:hover:!checked { border-color: palette(highlight); }");
+        for (const QString& name : m_catalog) {
             auto* btn = new QToolButton(m_host);
             btn->setFixedSize(48, 48);
             btn->setToolTip(name);
             btn->setCheckable(true);
-            btn->setAutoRaise(true);
+            btn->setAutoRaise(false);
+            btn->setStyleSheet(tileStyle);
             const QPixmap pm = pixmapFromDataUri(m_tpc->stampThumbnailUri(name));
             if (!pm.isNull())
                 btn->setIcon(QIcon(pm));
             btn->setIconSize(QSize(44, 44));
             btn->setChecked(QString::compare(name, active, Qt::CaseInsensitive) == 0);
             m_group->addButton(btn);
+            connect(btn, &QToolButton::clicked, this, [this, name]() {
+                m_tpc->setActiveStampName(name);
+            });
             m_grid->addWidget(btn, row, col);
             if (++col >= kCols) {
                 col = 0;
                 ++row;
             }
+        }
+        updateManageButtons();
+    }
+
+    void updateSelection()
+    {
+        const QString active = m_tpc->activeStampName();
+        QSignalBlocker block(m_group);
+        for (QAbstractButton* btn : m_group->buttons()) {
+            btn->setChecked(QString::compare(btn->toolTip(), active, Qt::CaseInsensitive) == 0);
         }
         updateManageButtons();
     }
@@ -414,11 +440,15 @@ private:
 
     void importStamp()
     {
-        const QString path = QFileDialog::getOpenFileName(
-            this, tr("Import Stamp"), {},
-            tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
-        if (!path.isEmpty())
-            m_tpc->importStampAsset(path);
+        QFileDialog dlg(this, tr("Import Stamp"));
+        dlg.setFileMode(QFileDialog::ExistingFile);
+        dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
+        dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        const QStringList files = dlg.selectedFiles();
+        if (!files.isEmpty())
+            m_tpc->importStampAsset(files.first());
     }
 
     void renameStamp()
@@ -437,6 +467,7 @@ private:
     }
 
     TexturePaintController* m_tpc = nullptr;
+    QStringList m_catalog;
     QScrollArea* m_scroll = nullptr;
     QWidget* m_host = nullptr;
     QGridLayout* m_grid = nullptr;

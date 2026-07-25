@@ -27,6 +27,7 @@
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QSettings>
+#include <QSet>
 #include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
@@ -1113,8 +1114,9 @@ QString TexturePaintController::importStampAsset(const QString& filePath)
         filePath.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
     if (stored.empty())
         return {};
-    setActiveStampName(QFileInfo(filePath).completeBaseName());
-    emit stampChanged();
+    const QString importedName =
+        QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName();
+    setActiveStampName(importedName);
     return QString::fromStdString(stored);
 }
 
@@ -1124,8 +1126,9 @@ QString TexturePaintController::importTilingAsset(const QString& filePath)
         filePath.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
     if (stored.empty())
         return {};
-    setActiveTilingName(QFileInfo(filePath).completeBaseName());
-    emit stampChanged();
+    const QString importedName =
+        QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName();
+    setActiveTilingName(importedName);
     return QString::fromStdString(stored);
 }
 
