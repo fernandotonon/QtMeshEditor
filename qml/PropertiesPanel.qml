@@ -790,16 +790,20 @@ Rectangle {
             // ---- Animation Control (keyframe editor) ----
             // Gated on a skeletal animation OR any mesh/vertex animation
             // (morph + Alembic vertex clips surface as AnimationStates, which
-            // PropertiesPanelController.hasAnimations picks up). Without the
-            // hasAnimations clause the dope sheet / curve editor never appeared
-            // for a morph-only mesh, so a freshly-authored morph target had no
-            // timeline to key/scrub — even though allMorphRows() enumerates it.
+            // PropertiesPanelController.hasAnimations picks up) OR simply having
+            // a selection — the last clause is for #517 node-transform
+            // animation, which authors clips on UNRIGGED objects (props, doors,
+            // lights) that have no existing animation. Without it the "Node
+            // Transform Animation" subsection (and its dope-sheet band) never
+            // appeared for exactly the meshes it's meant for. The dope sheet /
+            // curve editor already handle the no-clip case with a placeholder.
             CollapsibleSection {
                 title: "Animation Control"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
                     AnimationControlController.hasAnimation
-                        || PropertiesPanelController.hasAnimations)
+                        || PropertiesPanelController.hasAnimations
+                        || PropertiesPanelController.hasSelection)
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent

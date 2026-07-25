@@ -4282,6 +4282,98 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
     return result;
 }
 
+// Build aiAnimations for the SceneManager-level node-transform clips
+// (NodeAnimationManager, #517 slice C / C5 export). These are distinct
+// from skeletal animations: their tracks target real Ogre::SceneNodes
+// (animated props/doors/lights/cameras), not bones. glTF/FBX/DAE all
+// support plain node TRS animation natively, so each clip becomes one
+// aiAnimation whose aiNodeAnim channels target the scene node by name —
+// the SAME name buildSceneAiScene() gives each entity's aiNode, so the
+// importer rebinds them on round-trip.
+//
+// Unlike buildAiAnimation() (skeletal), node keyframes store the node's
+// ABSOLUTE local TRS (that's what NodeAnimationManager writes via
+// setTranslate/setRotation/setScale = node->getPosition()/Orientation()/
+// Scale()), so we emit them directly with no bind-pose offset.
+//
+// `exportedNodeNames` gates channels to nodes actually being exported, so
+// a clip that references a since-deleted node contributes nothing rather
+// than an orphan channel. Empty clips (no surviving channels) are skipped.
+static std::vector<aiAnimation*> buildNodeClipAnimations(
+    const std::set<std::string, std::less<>>& exportedNodeNames)
+{
+    std::vector<aiAnimation*> out;
+    auto* manager = Manager::getSingletonPtr();
+    if (!manager) return out;
+    auto* scene = manager->getSceneMgr();
+    if (!scene) return out;
+
+    for (unsigned short ai = 0; ai < scene->getNumAnimations(); ++ai)
+    {
+        Ogre::Animation* ogreAnim = scene->getAnimation(ai);
+        if (!ogreAnim) continue;
+
+        std::vector<aiNodeAnim*> channels;
+        for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
+        {
+            if (!track) continue;
+            Ogre::Node* target = track->getAssociatedNode();
+            if (!target) continue;
+            // Skip bone tracks — those belong to the skeletal path. Node
+            // clips target SceneNodes. (A bone is-a Node, so exclude it.)
+            if (dynamic_cast<Ogre::Bone*>(target)) continue;
+            const std::string nodeName = target->getName();
+            if (exportedNodeNames.find(nodeName) == exportedNodeNames.end())
+                continue;
+
+            const unsigned short numKeys = track->getNumKeyFrames();
+            if (numKeys == 0) continue;
+
+            auto* ch = new aiNodeAnim();
+            ch->mNodeName = aiString(nodeName);
+            ch->mNumPositionKeys = numKeys;
+            ch->mNumRotationKeys = numKeys;
+            ch->mNumScalingKeys  = numKeys;
+            ch->mPositionKeys = new aiVectorKey[numKeys];
+            ch->mRotationKeys = new aiQuatKey[numKeys];
+            ch->mScalingKeys  = new aiVectorKey[numKeys];
+
+            for (unsigned short ki = 0; ki < numKeys; ++ki)
+            {
+                auto* kf = track->getNodeKeyFrame(ki);
+                const double t = kf->getTime();
+
+                const Ogre::Vector3 pos = kf->getTranslate();
+                ch->mPositionKeys[ki].mTime = t;
+                ch->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
+
+                Ogre::Quaternion rot = kf->getRotation();
+                rot.normalise();
+                ch->mRotationKeys[ki].mTime = t;
+                ch->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
+
+                const Ogre::Vector3 scl = kf->getScale();
+                ch->mScalingKeys[ki].mTime = t;
+                ch->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
+            }
+            channels.push_back(ch);
+        }
+
+        if (channels.empty()) continue;
+
+        auto* anim = new aiAnimation();
+        anim->mName = aiString(ogreAnim->getName());
+        anim->mTicksPerSecond = 1.0;  // key times are in seconds
+        anim->mDuration = ogreAnim->getLength();
+        anim->mNumChannels = static_cast<unsigned int>(channels.size());
+        anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
+        for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
+            anim->mChannels[ci] = channels[ci];
+        out.push_back(anim);
+    }
+    return out;
+}
+
 // ─── Scene-level export: all scene nodes → single glTF ──────────────
 static aiScene* buildSceneAiScene()
 {
@@ -4363,6 +4455,9 @@ static aiScene* buildSceneAiScene()
     unsigned int globalMeshIdx = 0;
     std::set<Ogre::Skeleton*> processedSkeletons;
     std::vector<aiAnimation*> allAnimations;
+    // Names of the aiNodes we emit (one per scene node) — used to bind
+    // NodeAnimationManager node-transform clips (#517 C5) on export.
+    std::set<std::string, std::less<>> exportedNodeNames;
 
     for (unsigned int ni = 0; ni < nodeEntities.size(); ++ni)
     {
@@ -4426,6 +4521,7 @@ static aiScene* buildSceneAiScene()
         Ogre::Matrix4 nodeTransform;
         nodeTransform.makeTransform(sn->getPosition(), sn->getScale(), sn->getOrientation());
         entityNode->mTransformation = toAiMatrix(nodeTransform);
+        exportedNodeNames.insert(std::string(sn->getName()));
 
         scene->mRootNode->mChildren[ni] = entityNode;
 
@@ -4476,6 +4572,15 @@ static aiScene* buildSceneAiScene()
         }
 
         globalMeshIdx += numSub;
+    }
+
+    // Append SceneManager-level node-transform clips (#517 C5). These
+    // target the scene-node aiNodes by name and coexist with skeletal
+    // animations in the same glTF `animations` array.
+    {
+        auto nodeClipAnims = buildNodeClipAnimations(exportedNodeNames);
+        allAnimations.insert(allAnimations.end(),
+                             nodeClipAnims.begin(), nodeClipAnims.end());
     }
 
     // Assign animations to scene

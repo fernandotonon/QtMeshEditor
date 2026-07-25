@@ -12,10 +12,13 @@ The MIT License
 
 #include "Manager.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/NodeAnimCommands.h"
 
 #include <QCoreApplication>
 #include <QHash>
 #include <QThread>
+#include <QVariantMap>
 
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -309,6 +312,215 @@ QList<double> NodeAnimationManager::keyTimesForNode(const QString& clipName,
         if (kf) out.append(static_cast<double>(kf->getTime()));
     }
     return out;
+}
+
+void NodeAnimationManager::emitKeyframesChanged(const QString& clipName)
+{
+    emit keyframesChanged(clipName);
+}
+
+void NodeAnimationManager::emitClipsChanged()
+{
+    emit clipsChanged();
+}
+
+void NodeAnimationManager::setActiveClip(const QString& name)
+{
+    assertMainThread();
+    if (m_activeClip == name) return;
+    m_activeClip = name;
+    emit activeClipChanged();
+}
+
+namespace {
+// The Ogre Animation for a clip, or null. Shared by the read helpers.
+Ogre::Animation* animForClip(const QString& clipName)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    auto* scene = mgr->getSceneMgr();
+    if (!scene) return nullptr;
+    const std::string sclip = clipName.toStdString();
+    return scene->hasAnimation(sclip) ? scene->getAnimation(sclip) : nullptr;
+}
+} // namespace
+
+QStringList NodeAnimationManager::animatedNodes(const QString& clipName) const
+{
+    QStringList out;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return out;
+    // Iterate in handle order (the track map is keyed by handle) so
+    // the row order is stable across rebuilds.
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t) continue;
+        if (Ogre::Node* node = t->getAssociatedNode())
+            out << QString::fromStdString(node->getName());
+    }
+    return out;
+}
+
+double NodeAnimationManager::clipLength(const QString& clipName) const
+{
+    Ogre::Animation* anim = animForClip(clipName);
+    return anim ? static_cast<double>(anim->getLength()) : 0.0;
+}
+
+QVariantList NodeAnimationManager::nodeRows(const QString& clipName) const
+{
+    QVariantList rows;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return rows;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t) continue;
+        Ogre::Node* node = t->getAssociatedNode();
+        if (!node) continue;
+
+        QVariantList keyTimes;
+        keyTimes.reserve(static_cast<int>(t->getNumKeyFrames()));
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i)
+            keyTimes.append(static_cast<double>(t->getKeyFrame(i)->getTime()));
+
+        QVariantMap row;
+        row[QStringLiteral("node")]     = QString::fromStdString(node->getName());
+        row[QStringLiteral("keyTimes")] = keyTimes;
+        rows.append(row);
+    }
+    return rows;
+}
+
+bool NodeAnimationManager::isClipEnabled(const QString& name) const
+{
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return false;
+    auto* scene = mgr->getSceneMgr();
+    if (!scene) return false;
+    const std::string sn = name.toStdString();
+    if (!scene->hasAnimationState(sn)) return false;
+    auto* state = scene->getAnimationState(sn);
+    return state && state->getEnabled();
+}
+
+void NodeAnimationManager::scrubClip(const QString& /*clipName*/, double /*time*/)
+{
+    // Intentionally a no-op on the node.
+    //
+    // Node clips are authored by moving the SceneNode with the gizmo,
+    // so the node must stay under the USER's control while paused. If
+    // we enabled the AnimationState, SceneManager::_applySceneAnimations()
+    // would reset + re-drive the node every render frame and the gizmo
+    // could no longer move it (bug: "after I keyed the node it did not
+    // allow me to move anymore"). Applying a one-shot pose via
+    // Animation::apply() is also unsafe here: bare apply() does not reset
+    // the node first, so repeated scrubs accumulate transforms.
+    //
+    // The clean authoring model (matches Blender/Maya): while PAUSED the
+    // node is fully editable and shows whatever transform you set; press
+    // Play to preview the animated motion. Scrubbing only moves the
+    // timeline playhead (so "Key" lands at the right time) — it does not
+    // pose the node. Kept as a stable API point in case a future slice
+    // adds a proper reset-then-apply preview.
+    assertMainThread();
+}
+
+bool NodeAnimationManager::createClipUndoable(const QString& name, double length)
+{
+    assertMainThread();
+    if (name.isEmpty() || length <= 0.0) return false;
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr()) return false;
+    // Reject an existing name up front so we never push a no-op.
+    if (mgr->getSceneMgr()->hasAnimation(name.toStdString())) return false;
+    UndoManager::getSingleton()->push(new CreateNodeAnimClipCommand(name, length));
+    return true;
+}
+
+bool NodeAnimationManager::deleteClipUndoable(const QString& name)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr()) return false;
+    if (!mgr->getSceneMgr()->hasAnimation(name.toStdString())) return false;
+    UndoManager::getSingleton()->push(new DeleteNodeAnimClipCommand(name));
+    return true;
+}
+
+bool NodeAnimationManager::keyNodeCurrentTransform(const QString& clipName,
+                                                   const QString& nodeName,
+                                                   double time)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty() || time < 0.0) return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+    if (time > anim->getLength()) return false;
+    Ogre::SceneNode* node = findSceneNode(nodeName);
+    if (!node) return false;
+    // Capture the node's CURRENT local transform. NodeAnimationTrack
+    // keyframes store the node-space TRS Ogre resets to and interpolates
+    // between, so we snapshot what the user set with the gizmo.
+    UndoManager::getSingleton()->push(new SetNodeKeyframeCommand(
+        clipName, nodeName, time,
+        node->getPosition(), node->getOrientation(), node->getScale()));
+    return true;
+}
+
+bool NodeAnimationManager::moveNodeKeyframe(const QString& clipName,
+                                            const QString& nodeName,
+                                            double oldTime,
+                                            double newTime)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty()) return false;
+    if (newTime < 0.0) return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+    if (newTime > anim->getLength()) return false;
+    if (std::abs(oldTime - newTime) < kKeyframeMergeEpsilon) return false;
+
+    // Validate there IS a key at oldTime and NONE already at newTime,
+    // so we never push a command that would no-op or clobber. Read
+    // times straight off the Ogre track (not the m_trackHandles cache,
+    // which an undo-rebuilt clip can leave stale for a node).
+    Ogre::NodeAnimationTrack* track = nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        auto* t = it->second;
+        if (t && t->getAssociatedNode() &&
+            QString::fromStdString(t->getAssociatedNode()->getName()) == nodeName) {
+            track = t;
+            break;
+        }
+    }
+    if (!track) return false;
+    bool haveOld = false, clashNew = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const double t = static_cast<double>(track->getKeyFrame(i)->getTime());
+        if (std::abs(t - oldTime) < kKeyframeMergeEpsilon) haveOld = true;
+        if (std::abs(t - newTime) < kKeyframeMergeEpsilon) clashNew = true;
+    }
+    if (!haveOld || clashNew) return false;
+
+    UndoManager::getSingleton()->push(
+        new MoveNodeKeyframeCommand(clipName, nodeName, oldTime, newTime));
+    return true;
+}
+
+bool NodeAnimationManager::deleteNodeKeyframe(const QString& clipName,
+                                              const QString& nodeName,
+                                              double time)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty()) return false;
+    auto* cmd = new DeleteNodeKeyframeCommand(clipName, nodeName, time);
+    if (!cmd->valid()) { delete cmd; return false; }
+    UndoManager::getSingleton()->push(cmd);
+    return true;
 }
 
 bool NodeAnimationManager::createClipForName(const QString& name, double length)

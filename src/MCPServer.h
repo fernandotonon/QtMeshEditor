@@ -310,6 +310,42 @@ private:
     /// `rotation` ([w,x,y,z] quaternion), `scale` ([x,y,z]). Light.
     QJsonObject toolSetNodeKeyframe(const QJsonObject &args);
 
+    // ── Node-anim: playback + editing parity (all-anim-via-MCP) ──────
+    /// Enable/disable a node clip's playback (its own Play toggle).
+    /// Args: `clip`, `enabled` (bool). Light.
+    QJsonObject toolSetNodeAnimationPlaying(const QJsonObject &args);
+    /// Delete a node clip. Args: `clip`. Light.
+    QJsonObject toolDeleteNodeAnimationClip(const QJsonObject &args);
+    /// Re-time a keyframe. Args: `clip`, `node`, `old_time`, `new_time`. Light.
+    QJsonObject toolMoveNodeKeyframe(const QJsonObject &args);
+    /// Delete the keyframe nearest `time`. Args: `clip`, `node`, `time`. Light.
+    QJsonObject toolDeleteNodeKeyframe(const QJsonObject &args);
+    /// Inspect a clip: animated node names, per-node key times, length,
+    /// enabled. Args: `clip`. Light.
+    QJsonObject toolGetNodeAnimation(const QJsonObject &args);
+
+    // ── Global playback controls (AnimationControlController) ─────────
+    /// Set global playback speed multiplier. Args: `speed` (>0). Light.
+    QJsonObject toolSetPlaybackSpeed(const QJsonObject &args);
+    /// Set/clear the loop region. Args: `start`, `end` (seconds),
+    /// `active` (bool). Light.
+    QJsonObject toolSetLoopRegion(const QJsonObject &args);
+    /// Read playback state: speed, loop region, playing, time, length,
+    /// selected entity/animation/bone. No args. Light.
+    QJsonObject toolGetPlaybackState(const QJsonObject &args);
+    /// Select the active entity+animation for keyframe editing.
+    /// Args: `entity`, `animation`. Light.
+    QJsonObject toolSelectAnimation(const QJsonObject &args);
+    /// Select the active bone for keyframe editing. Args: `bone`. Light.
+    QJsonObject toolSelectBone(const QJsonObject &args);
+
+    // ── Morph weight keyframing over time (MorphAnimationManager) ─────
+    /// Key a morph target's weight at a time on the shared MorphAnim
+    /// clip. Args: `target`, `time`, `weight`. Light.
+    QJsonObject toolSetMorphWeightKeyframe(const QJsonObject &args);
+    /// Remove a morph weight keyframe. Args: `target`, `time`. Light.
+    QJsonObject toolClearMorphWeightKeyframe(const QJsonObject &args);
+
     /// Pose-lib D-MCP: list saved pose names on the first selected
     /// entity. Light read; returns `{ count, poses: [name…] }`.
     QJsonObject toolListPoses(const QJsonObject &args);

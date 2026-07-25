@@ -143,6 +143,7 @@
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
 #include <QDockWidget>
@@ -974,6 +975,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<VertexAnimationManager>("PropertiesPanel", 1, 0, "VertexAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VertexAnimationManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<NodeAnimationManager>("PropertiesPanel", 1, 0, "NodeAnimationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return NodeAnimationManager::qmlInstance(engine, nullptr);
             });
 
         // Same image provider the detached editor window uses — serves the
@@ -3766,17 +3771,34 @@ void advanceEntityStates(Ogre::Entity* ent, bool isActiveEntity,
 
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
+    const auto* animCtrl = AnimationControlController::instance();
+    const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
+    const double scaledDt = dt * animCtrl->playbackSpeed();
+
+    // Advance SceneManager-level animation states — the NodeAnimationManager's
+    // transform clips (animated props/doors/lights, #517 slice C) live here.
+    // These are driven by their OWN per-clip "Play" toggle (the AnimationState's
+    // enabled flag set from the Inspector's Node Transform Animation section),
+    // NOT the global skeletal Play button — so they must advance regardless of
+    // `isPlaying`. Entity states below are per-mesh and gated on the global
+    // button; node clips are owned by the SceneManager and otherwise never
+    // ticked. Loop is on by default so an enabled node clip plays continuously.
+    if (auto* sm = Manager::getSingleton()->getSceneMgr()) {
+        for (const auto& [key, state] : sm->getAnimationStates()) {
+            if (state && state->getEnabled())
+                state->addTime(static_cast<float>(scaledDt));
+        }
+    }
+
     // Advance time for every entity that has enabled animation states.
     // Speed is global (scales dt for all states). The loop region applies only
-    // to the entity+animation selected in the Animation Control panel.
+    // to the entity+animation selected in the Animation Control panel. Gated on
+    // the global Play button.
     if (!isPlaying) return true;
 
-    const auto* animCtrl = AnimationControlController::instance();
     auto*       blender  = AnimationBlender::instance();
     const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
     const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
-    const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
-    const double scaledDt = dt * animCtrl->playbackSpeed();
 
     for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
         if (!node) continue;

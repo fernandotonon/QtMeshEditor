@@ -5,6 +5,7 @@
 #include "Manager.h"
 #include "NodeAnimationManager.h"
 #include "TestHelpers.h"
+#include "UndoManager.h"
 #include "commands/NodeAnimCommands.h"
 
 #include <OgreAnimation.h>
@@ -68,7 +69,11 @@ protected:
                 "NA_OutOfRange", "NA_Enable", "NA_Signals",
                 "NA_Collision",
                 "NA_CmdCreate", "NA_CmdDelete", "NA_CmdSetKey",
-                "NA_CmdHandleStale"
+                "NA_CmdHandleStale",
+                // Slice C GUI surface (#517)
+                "NA_Rows", "NA_Length", "NA_Active", "NA_Scrub",
+                "NA_UndoCreate", "NA_UndoDelete", "NA_KeyCurrent",
+                "NA_MoveKf", "NA_DeleteKf"
             };
             for (const auto& n : drops) {
                 if (scene->hasAnimationState(n))
@@ -77,6 +82,10 @@ protected:
                     scene->removeAnimation(n);
             }
         }
+        // The undoable GUI-surface tests push onto the shared undo
+        // stack; clear it between tests so a leftover command can't
+        // be undone into a prior test's clip.
+        UndoManager::getSingleton()->clear();
     }
 };
 
@@ -448,4 +457,198 @@ TEST_F(NodeAnimationManagerSceneTest, DistinctNodesGetDistinctTracks) {
     ASSERT_EQ(keysB.size(), 1);
     EXPECT_NEAR(keysA[0], 0.25, 1e-4);
     EXPECT_NEAR(keysB[0], 0.75, 1e-4);
+}
+
+// ─── Slice C GUI surface (#517) ──────────────────────────────────────
+
+TEST_F(NodeAnimationManagerSceneTest, NodeRowsAndAnimatedNodesReflectTracks) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_Rows"), 2.0));
+    makeNamedNode("NA_Rows_A");
+    makeNamedNode("NA_Rows_B");
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_Rows"), QStringLiteral("NA_Rows_A"),
+                               0.5, Ogre::Vector3(1,0,0), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_Rows"), QStringLiteral("NA_Rows_A"),
+                               1.5, Ogre::Vector3(2,0,0), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_Rows"), QStringLiteral("NA_Rows_B"),
+                               1.0, Ogre::Vector3(0,1,0), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+
+    const QStringList nodes = m->animatedNodes(QStringLiteral("NA_Rows"));
+    EXPECT_EQ(nodes.size(), 2);
+    EXPECT_TRUE(nodes.contains(QStringLiteral("NA_Rows_A")));
+    EXPECT_TRUE(nodes.contains(QStringLiteral("NA_Rows_B")));
+
+    const QVariantList rows = m->nodeRows(QStringLiteral("NA_Rows"));
+    ASSERT_EQ(rows.size(), 2);
+    // Each row is { node, keyTimes }.
+    int keysForA = -1;
+    for (const QVariant& v : rows) {
+        const QVariantMap row = v.toMap();
+        EXPECT_TRUE(row.contains(QStringLiteral("node")));
+        EXPECT_TRUE(row.contains(QStringLiteral("keyTimes")));
+        if (row.value(QStringLiteral("node")).toString() == QStringLiteral("NA_Rows_A"))
+            keysForA = row.value(QStringLiteral("keyTimes")).toList().size();
+    }
+    EXPECT_EQ(keysForA, 2);
+
+    // Missing clip → empty.
+    EXPECT_TRUE(m->animatedNodes(QStringLiteral("Nope")).isEmpty());
+    EXPECT_TRUE(m->nodeRows(QStringLiteral("Nope")).isEmpty());
+}
+
+TEST_F(NodeAnimationManagerSceneTest, ClipLengthReported) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_Length"), 3.25));
+    EXPECT_NEAR(m->clipLength(QStringLiteral("NA_Length")), 3.25, 1e-4);
+    EXPECT_NEAR(m->clipLength(QStringLiteral("Missing")), 0.0, 1e-4);
+}
+
+TEST_F(NodeAnimationManagerSceneTest, ActiveClipPropertyAndSignal) {
+    auto* m = NodeAnimationManager::instance();
+    QSignalSpy spy(m, &NodeAnimationManager::activeClipChanged);
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_Active"), 1.0));
+
+    m->setActiveClip(QStringLiteral("NA_Active"));
+    EXPECT_EQ(m->activeClip(), QStringLiteral("NA_Active"));
+    EXPECT_EQ(spy.count(), 1);
+
+    // Setting the same value is a no-op (no extra signal).
+    m->setActiveClip(QStringLiteral("NA_Active"));
+    EXPECT_EQ(spy.count(), 1);
+
+    m->setActiveClip(QString());
+    EXPECT_TRUE(m->activeClip().isEmpty());
+    EXPECT_EQ(spy.count(), 2);
+}
+
+TEST_F(NodeAnimationManagerSceneTest, ScrubClipLeavesNodeEditable) {
+    // scrubClip must NOT enable the AnimationState — an enabled node
+    // clip is re-driven every render frame and would lock the node
+    // against gizmo edits (the authoring bug we fixed). Scrubbing is a
+    // deliberate no-op on the node: paused node clips stay editable.
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_Scrub"), 2.0));
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* state = scene->getAnimationState("NA_Scrub");
+    ASSERT_NE(state, nullptr);
+    ASSERT_FALSE(state->getEnabled());
+
+    m->scrubClip(QStringLiteral("NA_Scrub"), 1.0);
+    EXPECT_FALSE(state->getEnabled());  // stays disabled → node editable
+
+    // Missing clip is a safe no-op.
+    m->scrubClip(QStringLiteral("Missing"), 0.5);
+}
+
+TEST_F(NodeAnimationManagerSceneTest, CreateAndDeleteClipUndoablePushOntoStack) {
+    auto* m = NodeAnimationManager::instance();
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+
+    EXPECT_TRUE(m->createClipUndoable(QStringLiteral("NA_UndoCreate"), 1.5));
+    EXPECT_TRUE(scene->hasAnimation("NA_UndoCreate"));
+    // Duplicate rejected without pushing.
+    EXPECT_FALSE(m->createClipUndoable(QStringLiteral("NA_UndoCreate"), 1.0));
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_FALSE(scene->hasAnimation("NA_UndoCreate"));
+    UndoManager::getSingleton()->redo();
+    EXPECT_TRUE(scene->hasAnimation("NA_UndoCreate"));
+
+    // Delete (undoable) then undo restores.
+    EXPECT_TRUE(m->deleteClipUndoable(QStringLiteral("NA_UndoCreate")));
+    EXPECT_FALSE(scene->hasAnimation("NA_UndoCreate"));
+    UndoManager::getSingleton()->undo();
+    EXPECT_TRUE(scene->hasAnimation("NA_UndoCreate"));
+
+    // Deleting a missing clip is rejected (no push).
+    EXPECT_FALSE(m->deleteClipUndoable(QStringLiteral("Missing")));
+}
+
+TEST_F(NodeAnimationManagerSceneTest, KeyNodeCurrentTransformCapturesLiveTransform) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_KeyCurrent"), 2.0));
+    auto* node = makeNamedNode("NA_KeyCurrent_Node");
+    node->setPosition(Ogre::Vector3(4, 5, 6));
+    node->setScale(Ogre::Vector3(2, 2, 2));
+
+    EXPECT_TRUE(m->keyNodeCurrentTransform(QStringLiteral("NA_KeyCurrent"),
+                                           QStringLiteral("NA_KeyCurrent_Node"), 0.5));
+    auto keys = m->keyTimesForNode(QStringLiteral("NA_KeyCurrent"),
+                                   QStringLiteral("NA_KeyCurrent_Node"));
+    ASSERT_EQ(keys.size(), 1);
+    EXPECT_NEAR(keys[0], 0.5, 1e-4);
+
+    // Undo removes the key.
+    UndoManager::getSingleton()->undo();
+    keys = m->keyTimesForNode(QStringLiteral("NA_KeyCurrent"),
+                              QStringLiteral("NA_KeyCurrent_Node"));
+    EXPECT_EQ(keys.size(), 0);
+
+    // Missing node / out-of-range time are rejected.
+    EXPECT_FALSE(m->keyNodeCurrentTransform(QStringLiteral("NA_KeyCurrent"),
+                                            QStringLiteral("Nope"), 0.5));
+    EXPECT_FALSE(m->keyNodeCurrentTransform(QStringLiteral("NA_KeyCurrent"),
+                                            QStringLiteral("NA_KeyCurrent_Node"), 99.0));
+}
+
+TEST_F(NodeAnimationManagerSceneTest, MoveNodeKeyframeUndoable) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_MoveKf"), 3.0));
+    makeNamedNode("NA_MoveKf_Node");
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_MoveKf"), QStringLiteral("NA_MoveKf_Node"),
+                               0.5, Ogre::Vector3(1,2,3), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+
+    EXPECT_TRUE(m->moveNodeKeyframe(QStringLiteral("NA_MoveKf"),
+                                    QStringLiteral("NA_MoveKf_Node"), 0.5, 1.5));
+    auto keys = m->keyTimesForNode(QStringLiteral("NA_MoveKf"),
+                                   QStringLiteral("NA_MoveKf_Node"));
+    ASSERT_EQ(keys.size(), 1);
+    EXPECT_NEAR(keys[0], 1.5, 1e-4);
+
+    UndoManager::getSingleton()->undo();
+    keys = m->keyTimesForNode(QStringLiteral("NA_MoveKf"),
+                              QStringLiteral("NA_MoveKf_Node"));
+    ASSERT_EQ(keys.size(), 1);
+    EXPECT_NEAR(keys[0], 0.5, 1e-4);
+
+    // No key at oldTime → rejected. Move onto an existing key → rejected.
+    EXPECT_FALSE(m->moveNodeKeyframe(QStringLiteral("NA_MoveKf"),
+                                     QStringLiteral("NA_MoveKf_Node"), 2.0, 2.5));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_MoveKf"), QStringLiteral("NA_MoveKf_Node"),
+                               2.0, Ogre::Vector3(9,9,9), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+    EXPECT_FALSE(m->moveNodeKeyframe(QStringLiteral("NA_MoveKf"),
+                                     QStringLiteral("NA_MoveKf_Node"), 0.5, 2.0));
+}
+
+TEST_F(NodeAnimationManagerSceneTest, DeleteNodeKeyframeUndoable) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_DeleteKf"), 2.0));
+    makeNamedNode("NA_DeleteKf_Node");
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_DeleteKf"), QStringLiteral("NA_DeleteKf_Node"),
+                               0.5, Ogre::Vector3(1,2,3), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_DeleteKf"), QStringLiteral("NA_DeleteKf_Node"),
+                               1.5, Ogre::Vector3(4,5,6), Ogre::Quaternion::IDENTITY,
+                               Ogre::Vector3(1,1,1)));
+
+    EXPECT_TRUE(m->deleteNodeKeyframe(QStringLiteral("NA_DeleteKf"),
+                                      QStringLiteral("NA_DeleteKf_Node"), 0.5));
+    auto keys = m->keyTimesForNode(QStringLiteral("NA_DeleteKf"),
+                                   QStringLiteral("NA_DeleteKf_Node"));
+    ASSERT_EQ(keys.size(), 1);
+    EXPECT_NEAR(keys[0], 1.5, 1e-4);
+
+    UndoManager::getSingleton()->undo();
+    keys = m->keyTimesForNode(QStringLiteral("NA_DeleteKf"),
+                              QStringLiteral("NA_DeleteKf_Node"));
+    EXPECT_EQ(keys.size(), 2);
+
+    // Deleting where there is no key → rejected (no push).
+    EXPECT_FALSE(m->deleteNodeKeyframe(QStringLiteral("NA_DeleteKf"),
+                                       QStringLiteral("NA_DeleteKf_Node"), 0.9));
 }

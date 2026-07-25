@@ -720,6 +720,18 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
         {QStringLiteral("set_node_keyframe"), &MCPServer::toolSetNodeKeyframe},
+        {QStringLiteral("set_node_animation_playing"), &MCPServer::toolSetNodeAnimationPlaying},
+        {QStringLiteral("delete_node_animation_clip"), &MCPServer::toolDeleteNodeAnimationClip},
+        {QStringLiteral("move_node_keyframe"), &MCPServer::toolMoveNodeKeyframe},
+        {QStringLiteral("delete_node_keyframe"), &MCPServer::toolDeleteNodeKeyframe},
+        {QStringLiteral("get_node_animation"), &MCPServer::toolGetNodeAnimation},
+        {QStringLiteral("set_playback_speed"), &MCPServer::toolSetPlaybackSpeed},
+        {QStringLiteral("set_loop_region"), &MCPServer::toolSetLoopRegion},
+        {QStringLiteral("get_playback_state"), &MCPServer::toolGetPlaybackState},
+        {QStringLiteral("select_animation"), &MCPServer::toolSelectAnimation},
+        {QStringLiteral("select_bone"), &MCPServer::toolSelectBone},
+        {QStringLiteral("set_morph_weight_keyframe"), &MCPServer::toolSetMorphWeightKeyframe},
+        {QStringLiteral("clear_morph_weight_keyframe"), &MCPServer::toolClearMorphWeightKeyframe},
         {QStringLiteral("list_poses"), &MCPServer::toolListPoses},
         {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
@@ -7422,6 +7434,292 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
 }
 
 // ---------------------------------------------------------------------------
+// Node-anim: playback + editing parity (all-animation-controls-via-MCP).
+// These complete the node-transform surface so an agent can do everything
+// the Inspector's "Node Transform Animation" section can: play, delete,
+// re-time / delete keyframes, and inspect a clip.
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolSetNodeAnimationPlaying(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_node_animation_playing");
+    const QString clip = args.value("clip").toString();
+    if (clip.isEmpty())
+        return makeErrorResult("Error: missing required 'clip' argument");
+    if (!args.value("enabled").isBool())
+        return makeErrorResult("Error: 'enabled' must be a boolean");
+    const bool enabled = args.value("enabled").toBool();
+    auto* m = NodeAnimationManager::instance();
+    if (!m->setClipEnabled(clip, enabled))
+        return makeErrorResult(QString("Error: clip '%1' not found").arg(clip));
+    QJsonObject content;
+    content["ok"] = true;
+    content["clip"] = clip;
+    content["enabled"] = enabled;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolDeleteNodeAnimationClip(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "delete_node_animation_clip");
+    const QString clip = args.value("clip").toString();
+    if (clip.isEmpty())
+        return makeErrorResult("Error: missing required 'clip' argument");
+    auto* m = NodeAnimationManager::instance();
+    if (!m->deleteClip(clip))
+        return makeErrorResult(QString("Error: clip '%1' not found").arg(clip));
+    QJsonObject content;
+    content["ok"] = true;
+    content["clip"] = clip;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMoveNodeKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "move_node_keyframe");
+    const QString clip = args.value("clip").toString();
+    const QString node = args.value("node").toString();
+    if (clip.isEmpty() || node.isEmpty())
+        return makeErrorResult("Error: 'clip' and 'node' are required");
+    if (!args.value("old_time").isDouble() || !args.value("new_time").isDouble())
+        return makeErrorResult("Error: 'old_time' and 'new_time' must be numbers");
+    const double oldT = args.value("old_time").toDouble();
+    const double newT = args.value("new_time").toDouble();
+    if (!std::isfinite(oldT) || !std::isfinite(newT) || newT < 0.0)
+        return makeErrorResult("Error: times must be finite and new_time >= 0");
+    auto* m = NodeAnimationManager::instance();
+    if (!m->moveNodeKeyframe(clip, node, oldT, newT))
+        return makeErrorResult(
+            "Error: move rejected (no key at old_time, a key already at new_time, "
+            "clip/node missing, or new_time out of range)");
+    QJsonObject content;
+    content["ok"] = true;
+    content["clip"] = clip;
+    content["node"] = node;
+    content["old_time"] = oldT;
+    content["new_time"] = newT;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolDeleteNodeKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "delete_node_keyframe");
+    const QString clip = args.value("clip").toString();
+    const QString node = args.value("node").toString();
+    if (clip.isEmpty() || node.isEmpty())
+        return makeErrorResult("Error: 'clip' and 'node' are required");
+    if (!args.value("time").isDouble())
+        return makeErrorResult("Error: 'time' must be a number");
+    const double t = args.value("time").toDouble();
+    if (!std::isfinite(t))
+        return makeErrorResult("Error: 'time' must be finite");
+    auto* m = NodeAnimationManager::instance();
+    if (!m->deleteNodeKeyframe(clip, node, t))
+        return makeErrorResult(
+            QString("Error: no keyframe near %1s on clip '%2' node '%3'")
+                .arg(t, 0, 'f', 3).arg(clip, node));
+    QJsonObject content;
+    content["ok"] = true;
+    content["clip"] = clip;
+    content["node"] = node;
+    content["time"] = t;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolGetNodeAnimation(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "get_node_animation");
+    const QString clip = args.value("clip").toString();
+    if (clip.isEmpty())
+        return makeErrorResult("Error: missing required 'clip' argument");
+    auto* m = NodeAnimationManager::instance();
+    const QStringList clips = m->listClips();
+    if (!clips.contains(clip))
+        return makeErrorResult(QString("Error: clip '%1' not found").arg(clip));
+
+    QJsonObject content;
+    content["clip"] = clip;
+    content["length"] = m->clipLength(clip);
+    content["enabled"] = m->isClipEnabled(clip);
+    QJsonArray nodesArr;
+    const QStringList nodes = m->animatedNodes(clip);
+    for (const QString& n : nodes) {
+        QJsonObject nodeObj;
+        nodeObj["node"] = n;
+        QJsonArray times;
+        for (double t : m->keyTimesForNode(clip, n)) times.append(t);
+        nodeObj["key_times"] = times;
+        nodesArr.append(nodeObj);
+    }
+    content["nodes"] = nodesArr;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
+// Global playback controls (AnimationControlController) — speed, loop
+// region, selection, and a state read-back.
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolSetPlaybackSpeed(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_playback_speed");
+    if (!args.value("speed").isDouble())
+        return makeErrorResult("Error: 'speed' must be a number");
+    const double speed = args.value("speed").toDouble();
+    if (!std::isfinite(speed) || speed <= 0.0)
+        return makeErrorResult("Error: 'speed' must be a positive finite number");
+    AnimationControlController::instance()->setPlaybackSpeed(speed);
+    QJsonObject content;
+    content["ok"] = true;
+    content["speed"] = speed;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetLoopRegion(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_loop_region");
+    auto* c = AnimationControlController::instance();
+    if (args.contains("start")) {
+        if (!args.value("start").isDouble())
+            return makeErrorResult("Error: 'start' must be a number");
+        c->setLoopStart(args.value("start").toDouble());
+    }
+    if (args.contains("end")) {
+        if (!args.value("end").isDouble())
+            return makeErrorResult("Error: 'end' must be a number");
+        c->setLoopEnd(args.value("end").toDouble());
+    }
+    if (args.contains("active")) {
+        if (!args.value("active").isBool())
+            return makeErrorResult("Error: 'active' must be a boolean");
+        c->setLoopRegionActive(args.value("active").toBool());
+    }
+    QJsonObject content;
+    content["ok"] = true;
+    content["start"] = c->loopStart();
+    content["end"] = c->loopEnd();
+    content["active"] = c->loopRegionActive();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolGetPlaybackState(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "get_playback_state");
+    auto* c = AnimationControlController::instance();
+    QJsonObject content;
+    content["speed"] = c->playbackSpeed();
+    content["loop_start"] = c->loopStart();
+    content["loop_end"] = c->loopEnd();
+    content["loop_active"] = c->loopRegionActive();
+    content["time"] = c->sliderValue() / 1000.0;
+    content["length"] = c->animationLength();
+    content["has_animation"] = c->hasAnimation();
+    content["selected_entity"] = c->selectedEntityName();
+    content["selected_animation"] = c->selectedAnimation();
+    content["selected_bone"] = c->selectedBone();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSelectAnimation(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "select_animation");
+    const QString entity = args.value("entity").toString();
+    const QString anim = args.value("animation").toString();
+    if (entity.isEmpty() || anim.isEmpty())
+        return makeErrorResult("Error: 'entity' and 'animation' are required");
+    AnimationControlController::instance()->selectAnimation(entity, anim);
+    auto* c = AnimationControlController::instance();
+    if (c->selectedAnimation() != anim || c->selectedEntityName() != entity)
+        return makeErrorResult(
+            QString("Error: could not select '%1' on '%2' (not found?)").arg(anim, entity));
+    QJsonObject content;
+    content["ok"] = true;
+    content["entity"] = entity;
+    content["animation"] = anim;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSelectBone(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "select_bone");
+    const QString bone = args.value("bone").toString();
+    if (bone.isEmpty())
+        return makeErrorResult("Error: missing required 'bone' argument");
+    AnimationControlController::instance()->selectBone(bone);
+    QJsonObject content;
+    content["ok"] = true;
+    content["bone"] = AnimationControlController::instance()->selectedBone();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
+// Morph weight keyframing over time (MorphAnimationManager). The existing
+// set_morph_weight sets an instantaneous weight; these author weight KEYS on
+// the shared MorphAnim clip so a blend-shape animates over time.
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolSetMorphWeightKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_morph_weight_keyframe");
+    const QString target = args.value("target").toString();
+    if (target.isEmpty())
+        return makeErrorResult("Error: missing required 'target' argument");
+    if (!args.value("time").isDouble() || !args.value("weight").isDouble())
+        return makeErrorResult("Error: 'time' and 'weight' must be numbers");
+    const double time = args.value("time").toDouble();
+    const double weight = args.value("weight").toDouble();
+    if (!std::isfinite(time) || time < 0.0 || !std::isfinite(weight))
+        return makeErrorResult("Error: time must be >= 0 and finite; weight finite");
+    auto* m = MorphAnimationManager::instance();
+    if (!m->setMorphWeightKeyframe(target, time, weight))
+        return makeErrorResult(
+            QString("Error: failed to key morph '%1' (target missing or no selection?)")
+                .arg(target));
+    m->activateWeightClip();
+    QJsonObject content;
+    content["ok"] = true;
+    content["target"] = target;
+    content["time"] = time;
+    content["weight"] = weight;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolClearMorphWeightKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "clear_morph_weight_keyframe");
+    const QString target = args.value("target").toString();
+    if (target.isEmpty())
+        return makeErrorResult("Error: missing required 'target' argument");
+    if (!args.value("time").isDouble())
+        return makeErrorResult("Error: 'time' must be a number");
+    const double time = args.value("time").toDouble();
+    if (!std::isfinite(time))
+        return makeErrorResult("Error: 'time' must be finite");
+    auto* m = MorphAnimationManager::instance();
+    if (!m->clearMorphWeightKeyframe(target, time))
+        return makeErrorResult(
+            QString("Error: no morph weight key near %1s for '%2'")
+                .arg(time, 0, 'f', 3).arg(target));
+    QJsonObject content;
+    content["ok"] = true;
+    content["target"] = target;
+    content["time"] = time;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
 // Pose-lib D-MCP — named bone-TRS snapshots on the live scene.
 // ---------------------------------------------------------------------------
 // All four tools operate on the first selected entity, same surface as
@@ -10220,6 +10518,141 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // set_node_animation_playing
+    {
+        QJsonObject props;
+        props["clip"]    = QJsonObject{{"type", "string"}, {"description", "Clip name."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "true to play the clip, false to pause. A paused clip leaves its nodes editable."}};
+        QJsonArray required; required.append("clip"); required.append("enabled");
+        appendTool("set_node_animation_playing",
+            "Play or pause a node-transform clip. Node clips play from their own "
+            "toggle, independent of the global skeletal Play button.",
+            props, required);
+    }
+
+    // delete_node_animation_clip
+    {
+        QJsonObject props;
+        props["clip"] = QJsonObject{{"type", "string"}, {"description", "Clip name to delete."}};
+        QJsonArray required; required.append("clip");
+        appendTool("delete_node_animation_clip",
+            "Delete a node-transform clip and its driving AnimationState.",
+            props, required);
+    }
+
+    // move_node_keyframe
+    {
+        QJsonObject props;
+        props["clip"]     = QJsonObject{{"type", "string"}, {"description", "Clip name."}};
+        props["node"]     = QJsonObject{{"type", "string"}, {"description", "Animated SceneNode name."}};
+        props["old_time"] = QJsonObject{{"type", "number"}, {"description", "Existing keyframe time (seconds)."}};
+        props["new_time"] = QJsonObject{{"type", "number"}, {"description", "New time (seconds, 0..length, no existing key there)."}};
+        QJsonArray required; required.append("clip"); required.append("node"); required.append("old_time"); required.append("new_time");
+        appendTool("move_node_keyframe",
+            "Re-time a node keyframe, preserving its TRS. Rejected if there is no key "
+            "at old_time or a key already sits at new_time.",
+            props, required);
+    }
+
+    // delete_node_keyframe
+    {
+        QJsonObject props;
+        props["clip"] = QJsonObject{{"type", "string"}, {"description", "Clip name."}};
+        props["node"] = QJsonObject{{"type", "string"}, {"description", "Animated SceneNode name."}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Time (seconds) of the keyframe to delete (nearest within 1ms)."}};
+        QJsonArray required; required.append("clip"); required.append("node"); required.append("time");
+        appendTool("delete_node_keyframe",
+            "Delete the node keyframe nearest `time`.", props, required);
+    }
+
+    // get_node_animation
+    {
+        QJsonObject props;
+        props["clip"] = QJsonObject{{"type", "string"}, {"description", "Clip name to inspect."}};
+        QJsonArray required; required.append("clip");
+        appendTool("get_node_animation",
+            "Inspect a node clip: its length, whether it's playing, and each animated "
+            "node with its keyframe times. Complements list_node_animations.",
+            props, required);
+    }
+
+    // set_playback_speed
+    {
+        QJsonObject props;
+        props["speed"] = QJsonObject{{"type", "number"}, {"description", "Playback speed multiplier (>0). 1.0 = real time, 2.0 = double speed."}};
+        QJsonArray required; required.append("speed");
+        appendTool("set_playback_speed",
+            "Set the global animation playback speed multiplier (applies to all playing clips).",
+            props, required);
+    }
+
+    // set_loop_region
+    {
+        QJsonObject props;
+        props["start"]  = QJsonObject{{"type", "number"}, {"description", "Loop start time (seconds). Optional."}};
+        props["end"]    = QJsonObject{{"type", "number"}, {"description", "Loop end time (seconds). Optional."}};
+        props["active"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable looping over [start,end]. Optional."}};
+        appendTool("set_loop_region",
+            "Set the playback loop region for the selected clip (start/end seconds) and "
+            "toggle it on/off. All fields optional; omitted fields keep their value.",
+            props);
+    }
+
+    // get_playback_state
+    {
+        QJsonObject props;
+        appendTool("get_playback_state",
+            "Read the current playback state: speed, loop region, current time, clip "
+            "length, and the selected entity/animation/bone. No args.",
+            props);
+    }
+
+    // select_animation
+    {
+        QJsonObject props;
+        props["entity"]    = QJsonObject{{"type", "string"}, {"description", "Entity name owning the animation."}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Animation (clip) name on that entity."}};
+        QJsonArray required; required.append("entity"); required.append("animation");
+        appendTool("select_animation",
+            "Select the active entity+animation for keyframe editing and playback. "
+            "Use list_skeletal_animations / get_animation_info to enumerate.",
+            props, required);
+    }
+
+    // select_bone
+    {
+        QJsonObject props;
+        props["bone"] = QJsonObject{{"type", "string"}, {"description", "Bone name to make active for keyframe editing."}};
+        QJsonArray required; required.append("bone");
+        appendTool("select_bone",
+            "Select the active bone for per-bone keyframe editing (add_keyframe / "
+            "remove_keyframe operate on the selected bone).",
+            props, required);
+    }
+
+    // set_morph_weight_keyframe
+    {
+        QJsonObject props;
+        props["target"] = QJsonObject{{"type", "string"}, {"description", "Morph target (blend shape) name."}};
+        props["time"]   = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds (>= 0)."}};
+        props["weight"] = QJsonObject{{"type", "number"}, {"description", "Weight at this time (typically 0..1)."}};
+        QJsonArray required; required.append("target"); required.append("time"); required.append("weight");
+        appendTool("set_morph_weight_keyframe",
+            "Key a morph target's weight at a time on the shared MorphAnim clip so the "
+            "blend shape animates over time (set_morph_weight is instantaneous only).",
+            props, required);
+    }
+
+    // clear_morph_weight_keyframe
+    {
+        QJsonObject props;
+        props["target"] = QJsonObject{{"type", "string"}, {"description", "Morph target name."}};
+        props["time"]   = QJsonObject{{"type", "number"}, {"description", "Time (seconds) of the weight key to remove."}};
+        QJsonArray required; required.append("target"); required.append("time");
+        appendTool("clear_morph_weight_keyframe",
+            "Remove a morph weight keyframe at the given time.", props, required);
     }
 
     // list_poses
