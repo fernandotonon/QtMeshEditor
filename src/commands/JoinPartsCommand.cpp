@@ -151,17 +151,22 @@ void JoinPartsCommand::undo()
     if (auto* sel = SelectionSet::getSingleton())
         sel->clearList();
 
-    // CREATE-THEN-DESTROY: recreate every part node FIRST (their names don't
-    // collide with the fused "<part0>_fused" node), then destroy the fused node
-    // once the parts are back. addSceneNode creates at root; reparentNode
-    // preserves WORLD transform, so set the local TRS AFTER the reparent to
-    // restore the exact pose relative to the group. Undo never leaves the scene
-    // empty (CodeRabbit).
+    // CREATE-THEN-DESTROY, all-or-nothing: recreate every part node FIRST (their
+    // names don't collide with the fused "<part0>_fused" node), validating each,
+    // and only destroy the fused node once EVERY part is restored. If any part
+    // fails, roll back the ones already created and leave the fused node intact —
+    // undo never leaves the scene with only a subset of the parts (CodeRabbit).
+    // addSceneNode creates at root; reparentNode preserves WORLD transform, so
+    // set the local TRS AFTER the reparent to restore the exact group-relative pose.
     Ogre::SceneNode* last = nullptr;
+    std::vector<std::string> restored;
+    bool allOk = true;
     for (const auto& sp : mSources) {
         Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(sp.name));
-        if (!node)
-            continue;
+        if (!node) {
+            allOk = false;
+            break;
+        }
         if (!sp.parentName.empty()) {
             if (Ogre::SceneNode* parent =
                     mgr->getSceneNode(QString::fromStdString(sp.parentName)))
@@ -170,11 +175,25 @@ void JoinPartsCommand::undo()
         node->setPosition(sp.pos);
         node->setOrientation(sp.orient);
         node->setScale(sp.scale);
-        mgr->createEntity(node, sp.mesh);
+        if (!mgr->createEntity(node, sp.mesh)) {
+            mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
+            allOk = false;
+            break;
+        }
+        restored.push_back(node->getName());
         last = node;
     }
 
-    // Parts are back — now destroy the fused node.
+    if (!allOk) {
+        // Roll back — leave the fused node in place (undo is a no-op this time).
+        for (const auto& n : restored) {
+            if (Ogre::SceneNode* node = mgr->getSceneNode(QString::fromStdString(n)))
+                mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
+        }
+        return;
+    }
+
+    // Every part is back — now destroy the fused node.
     if (!mFusedNodeName.empty()) {
         if (Ogre::SceneNode* fused = mgr->getSceneNode(QString::fromStdString(mFusedNodeName)))
             mgr->destroySceneNode(fused, /*destroyChildrenFirst=*/true);
@@ -184,11 +203,11 @@ void JoinPartsCommand::undo()
     // Reselect the restored parts.
     if (auto* sel = SelectionSet::getSingleton()) {
         sel->clearList();
-        for (const auto& sp : mSources) {
-            if (Ogre::SceneNode* node = mgr->getSceneNode(QString::fromStdString(sp.name)))
+        for (const auto& n : restored) {
+            if (Ogre::SceneNode* node = mgr->getSceneNode(QString::fromStdString(n)))
                 sel->append(node);
         }
-        if (mSources.size() == 1 && last)
+        if (restored.size() == 1 && last)
             sel->selectOne(last);
     }
 }
