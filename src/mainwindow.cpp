@@ -1,3 +1,4 @@
+#include <memory>
 #include <QMessageBox>
 #include <QDir>
 #include <QFileDialog>
@@ -31,6 +32,7 @@
 #include <QJSEngine>
 #include <QFileInfo>
 #include <QEvent>
+#include "BrushFootprint.h"
 #include "SentryReporter.h"
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
@@ -261,6 +263,16 @@ QString primaryCloudAssetPath()
     return {};
 }
 
+QPixmap pixmapFromDataUri(const QString& uri)
+{
+    const int comma = uri.indexOf(QLatin1Char(','));
+    if (comma < 0)
+        return {};
+    QPixmap pm;
+    pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
+    return pm;
+}
+
 class PaintAssetDropFilter : public QObject {
 public:
     explicit PaintAssetDropFilter(TexturePaintController* tpc, QObject* parent = nullptr)
@@ -344,23 +356,13 @@ public:
 
         setAcceptDrops(true);
         auto* dropFilter = new PaintAssetDropFilter(m_tpc, this);
-        dropFilter->installEventFilter(this);
+        installEventFilter(dropFilter);
 
         m_catalog = m_tpc->stampNames();
         rebuildGrid();
     }
 
 private:
-    static QPixmap pixmapFromDataUri(const QString& uri)
-    {
-        const int comma = uri.indexOf(QLatin1Char(','));
-        if (comma < 0)
-            return {};
-        QPixmap pm;
-        pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
-        return pm;
-    }
-
     void onStampChanged()
     {
         const QStringList names = m_tpc->stampNames();
@@ -410,7 +412,9 @@ private:
             btn->setChecked(QString::compare(name, active, Qt::CaseInsensitive) == 0);
             m_group->addButton(btn);
             connect(btn, &QToolButton::clicked, this, [this, name]() {
-                m_tpc->setActiveStampName(name);
+                QTimer::singleShot(0, this, [this, name]() {
+                    m_tpc->setActiveStampName(name);
+                });
             });
             m_grid->addWidget(btn, row, col);
             if (++col >= kCols) {
@@ -447,8 +451,11 @@ private:
         if (dlg.exec() != QDialog::Accepted)
             return;
         const QStringList files = dlg.selectedFiles();
-        if (!files.isEmpty())
+        if (!files.isEmpty()) {
+            SentryReporter::addBreadcrumb("file.import",
+                QStringLiteral("paint stamp import %1").arg(files.first()));
             m_tpc->importStampAsset(files.first());
+        }
     }
 
     void renameStamp()
@@ -463,7 +470,15 @@ private:
 
     void deleteStamp()
     {
-        m_tpc->deleteCustomStamp(m_tpc->activeStampName());
+        const QString name = m_tpc->activeStampName();
+        if (QMessageBox::question(
+                this, tr("Delete Stamp"),
+                tr("Permanently delete custom stamp \"%1\"?").arg(name))
+            != QMessageBox::Yes)
+            return;
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("paint stamp delete %1").arg(name));
+        m_tpc->deleteCustomStamp(name);
     }
 
     TexturePaintController* m_tpc = nullptr;
@@ -2327,18 +2342,11 @@ void MainWindow::initToolBar()
     paintLay->addWidget(gradientBox);
 
     auto refreshRampPreview = [rampPreview, tpcPaint]() {
-        const QString uri = tpcPaint->rampPreviewDataUri();
-        const int comma = uri.indexOf(QLatin1Char(','));
-        if (comma < 0) {
+        const QPixmap pm = pixmapFromDataUri(tpcPaint->rampPreviewDataUri());
+        if (pm.isNull())
             rampPreview->clear();
-            return;
-        }
-        const QByteArray png = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
-        QPixmap pm;
-        if (pm.loadFromData(png, "PNG"))
-            rampPreview->setPixmap(pm);
         else
-            rampPreview->clear();
+            rampPreview->setPixmap(pm);
     };
 
     auto syncGradientUi = [srcSolid, srcGradient, gradientBox, modeLinear, modeRadial,
@@ -2548,20 +2556,54 @@ void MainWindow::initToolBar()
 
     paintLay->addWidget(footprintBox);
 
-    auto pixmapFromDataUri = [](const QString& uri) -> QPixmap {
-        const int comma = uri.indexOf(QLatin1Char(','));
-        if (comma < 0)
-            return {};
-        QPixmap pm;
-        pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
-        return pm;
-    };
-
-    auto refreshStampPicker = [stampPickBtn, tpcPaint, pixmapFromDataUri]() {
+    auto refreshStampPicker = [stampPickBtn, tpcPaint]() {
         const QString name = tpcPaint->activeStampName();
         const QPixmap pm = pixmapFromDataUri(tpcPaint->activeStampPreviewUri());
         stampPickBtn->setIcon(pm.isNull() ? QIcon() : QIcon(pm));
         stampPickBtn->setText(name.isEmpty() ? tr("Choose stamp…") : name);
+    };
+
+    struct FootprintAssetUiState {
+        int footprintType = -1;
+        QString activeStamp;
+        QString activeTiling;
+        QStringList tilingNames;
+    };
+    auto footprintAssetState = std::make_shared<FootprintAssetUiState>();
+
+    auto syncFootprintAssets = [tilingCombo, tpcPaint, refreshStampPicker, footprintAssetState]() {
+        const int ft = tpcPaint->footprintType();
+        const QString stamp = tpcPaint->activeStampName();
+        const QString tiling = tpcPaint->activeTilingName();
+        const QStringList names = tpcPaint->tilingNames();
+        const bool assetsChanged = ft != footprintAssetState->footprintType
+            || stamp != footprintAssetState->activeStamp
+            || tiling != footprintAssetState->activeTiling
+            || names != footprintAssetState->tilingNames;
+        if (!assetsChanged)
+            return;
+        *footprintAssetState = {ft, stamp, tiling, names};
+
+        {
+            QSignalBlocker bt(tilingCombo);
+            bool rebuild = tilingCombo->count() != names.size();
+            if (!rebuild) {
+                for (int i = 0; i < names.size(); ++i) {
+                    if (tilingCombo->itemText(i) != names[i]) {
+                        rebuild = true;
+                        break;
+                    }
+                }
+            }
+            if (rebuild) {
+                tilingCombo->clear();
+                tilingCombo->addItems(names);
+            }
+            const int idx = tilingCombo->findText(tiling);
+            if (idx >= 0)
+                tilingCombo->setCurrentIndex(idx);
+        }
+        refreshStampPicker();
     };
 
     auto syncFootprintUi = [footRound, footSquare, footStamp, footTiling, footprintHint,
@@ -2571,20 +2613,21 @@ void MainWindow::initToolBar()
                             opacityJitterLabel, tilingScaleSlider, tilingScaleLabel,
                             tilingRotSlider, tilingRotLabel, tilingOffsetUSlider,
                             tilingOffsetULabel, tilingOffsetVSlider, tilingOffsetVLabel,
-                            tpcPaint, refreshStampPicker]() {
+                            tpcPaint, syncFootprintAssets]() {
+        using FT = BrushFootprint::FootprintType;
         const int ft = tpcPaint->footprintType();
         {
             QSignalBlocker b1(footRound);
             QSignalBlocker b2(footSquare);
             QSignalBlocker b3(footStamp);
             QSignalBlocker b4(footTiling);
-            footRound->setChecked(ft == 0);
-            footSquare->setChecked(ft == 1);
-            footStamp->setChecked(ft == 2);
-            footTiling->setChecked(ft == 3);
+            footRound->setChecked(ft == static_cast<int>(FT::Round));
+            footSquare->setChecked(ft == static_cast<int>(FT::Square));
+            footStamp->setChecked(ft == static_cast<int>(FT::StampImage));
+            footTiling->setChecked(ft == static_cast<int>(FT::TilingSource));
         }
-        const bool stampMode = ft == 2;
-        const bool tilingMode = ft == 3;
+        const bool stampMode = ft == static_cast<int>(FT::StampImage);
+        const bool tilingMode = ft == static_cast<int>(FT::TilingSource);
         if (stampMode) {
             footprintHint->setText(tr(
                 "Image stamp: click the stamp below to choose a brush image. "
@@ -2634,17 +2677,6 @@ void MainWindow::initToolBar()
         tilingOffsetVSlider->setEnabled(tilingMode);
 
         {
-            QSignalBlocker bt(tilingCombo);
-            const QStringList names = tpcPaint->tilingNames();
-            if (tilingCombo->count() != names.size()) {
-                tilingCombo->clear();
-                tilingCombo->addItems(names);
-            }
-            const int idx = tilingCombo->findText(tpcPaint->activeTilingName());
-            if (idx >= 0)
-                tilingCombo->setCurrentIndex(idx);
-        }
-        {
             QSignalBlocker bsp(spacingSlider);
             QSignalBlocker bsc(scatterSlider);
             QSignalBlocker bro(rotCombo);
@@ -2688,23 +2720,28 @@ void MainWindow::initToolBar()
             .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetU() * 100.0))));
         tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%")
             .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetV() * 100.0))));
-        refreshStampPicker();
+        syncFootprintAssets();
     };
     syncFootprintUi();
 
     connect(footRound, &QPushButton::clicked, this, [tpcPaint]() {
-        tpcPaint->setFootprintType(0);
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=round"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::Round));
     });
     connect(footSquare, &QPushButton::clicked, this, [tpcPaint]() {
-        tpcPaint->setFootprintType(1);
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=square"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::Square));
     });
     connect(footStamp, &QPushButton::clicked, this, [tpcPaint]() {
-        tpcPaint->setFootprintType(2);
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=stamp"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::StampImage));
     });
     connect(footTiling, &QPushButton::clicked, this, [tpcPaint]() {
-        tpcPaint->setFootprintType(3);
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=tiling"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::TilingSource));
     });
     connect(stampPickBtn, &QPushButton::clicked, this, [this, tpcPaint, vertexPaintMenu]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint stamp library open"));
         vertexPaintMenu->close();
         StampLibraryDialog dlg(tpcPaint, this);
         dlg.exec();
@@ -2715,11 +2752,18 @@ void MainWindow::initToolBar()
                     tpcPaint->setActiveTilingName(tilingCombo->itemText(idx));
             });
     connect(importTilingBtn, &QPushButton::clicked, this, [this, tpcPaint]() {
-        const QString path = QFileDialog::getOpenFileName(
-            this, tr("Import Tiling"), {},
-            tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
-        if (!path.isEmpty())
-            tpcPaint->importTilingAsset(path);
+        QFileDialog dlg(this, tr("Import Tiling"));
+        dlg.setFileMode(QFileDialog::ExistingFile);
+        dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
+        dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        const QStringList files = dlg.selectedFiles();
+        if (files.isEmpty())
+            return;
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("paint tiling import %1").arg(files.first()));
+        tpcPaint->importTilingAsset(files.first());
     });
     connect(spacingSlider, &QSlider::valueChanged, this, [tpcPaint, spacingLabel](int v) {
         tpcPaint->setStampSpacing(v / 100.0);

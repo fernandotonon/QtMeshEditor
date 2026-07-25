@@ -382,32 +382,44 @@ TexturePaintController::TexturePaintController(QObject* parent)
 
     {
         QSettings s;
-        m_footprintType = static_cast<BrushFootprint::FootprintType>(
-            s.value(AppSettingsKeys::paintFootprintType(), 0).toInt());
+        {
+            auto t = static_cast<BrushFootprint::FootprintType>(
+                s.value(AppSettingsKeys::paintFootprintType(), 0).toInt());
+            if (t < BrushFootprint::FootprintType::Round
+                || t > BrushFootprint::FootprintType::TilingSource)
+                t = BrushFootprint::FootprintType::Round;
+            m_footprintType = t;
+        }
         m_activeStampName = s.value(AppSettingsKeys::paintActiveStampName(),
                                     QStringLiteral("Soft Circle")).toString();
         m_activeTilingName = s.value(AppSettingsKeys::paintActiveTilingName(),
                                      QStringLiteral("Wood")).toString();
-        m_stampSettings.spacing = static_cast<float>(
-            s.value(AppSettingsKeys::paintStampSpacing(), 0.35).toDouble());
-        m_stampSettings.scatter = static_cast<float>(
-            s.value(AppSettingsKeys::paintStampScatter(), 0.0).toDouble());
-        m_stampSettings.sizeJitter = static_cast<float>(
-            s.value(AppSettingsKeys::paintStampSizeJitter(), 0.0).toDouble());
-        m_stampSettings.opacityJitter = static_cast<float>(
-            s.value(AppSettingsKeys::paintStampOpacityJitter(), 0.0).toDouble());
-        m_stampSettings.rotation = static_cast<BrushFootprint::StampRotation>(
-            s.value(AppSettingsKeys::paintStampRotation(), 0).toInt());
+        m_stampSettings.spacing = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampSpacing(), 0.35).toDouble(), 0.05, 2.0));
+        m_stampSettings.scatter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampScatter(), 0.0).toDouble(), 0.0, 1.0));
+        m_stampSettings.sizeJitter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampSizeJitter(), 0.0).toDouble(), 0.0, 1.0));
+        m_stampSettings.opacityJitter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampOpacityJitter(), 0.0).toDouble(), 0.0, 1.0));
+        {
+            auto r = static_cast<BrushFootprint::StampRotation>(
+                s.value(AppSettingsKeys::paintStampRotation(), 0).toInt());
+            if (r < BrushFootprint::StampRotation::None
+                || r > BrushFootprint::StampRotation::RandomJitter)
+                r = BrushFootprint::StampRotation::None;
+            m_stampSettings.rotation = r;
+        }
         m_stampSettings.fixedAngleDeg = static_cast<float>(
             s.value(AppSettingsKeys::paintStampFixedAngle(), 0.0).toDouble());
-        m_tilingSettings.scale = static_cast<float>(
-            s.value(AppSettingsKeys::paintTilingScale(), 1.0).toDouble());
-        m_tilingSettings.rotationDeg = static_cast<float>(
-            s.value(AppSettingsKeys::paintTilingRotation(), 0.0).toDouble());
-        m_tilingSettings.offsetU = static_cast<float>(
-            s.value(AppSettingsKeys::paintTilingOffsetU(), 0.0).toDouble());
-        m_tilingSettings.offsetV = static_cast<float>(
-            s.value(AppSettingsKeys::paintTilingOffsetV(), 0.0).toDouble());
+        m_tilingSettings.scale = static_cast<float>(std::max(
+            s.value(AppSettingsKeys::paintTilingScale(), 1.0).toDouble(), 0.01));
+        m_tilingSettings.rotationDeg = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingRotation(), 0.0).toDouble(), 0.0, 360.0));
+        m_tilingSettings.offsetU = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingOffsetU(), 0.0).toDouble(), -1.0, 1.0));
+        m_tilingSettings.offsetV = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingOffsetV(), 0.0).toDouble(), -1.0, 1.0));
         reloadStampImage();
         reloadTilingImage();
         refreshStampPreviewUris();
@@ -1037,29 +1049,33 @@ QStringList TexturePaintController::tilingNames() const
 
 void TexturePaintController::setStampSpacing(double v)
 {
-    m_stampSettings.spacing = static_cast<float>(std::clamp(v, 0.05, 2.0));
-    QSettings().setValue(AppSettingsKeys::paintStampSpacing(), v);
+    const double clamped = std::clamp(v, 0.05, 2.0);
+    m_stampSettings.spacing = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampSpacing(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setStampScatter(double v)
 {
-    m_stampSettings.scatter = static_cast<float>(std::clamp(v, 0.0, 1.0));
-    QSettings().setValue(AppSettingsKeys::paintStampScatter(), v);
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.scatter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampScatter(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setStampSizeJitter(double v)
 {
-    m_stampSettings.sizeJitter = static_cast<float>(std::clamp(v, 0.0, 1.0));
-    QSettings().setValue(AppSettingsKeys::paintStampSizeJitter(), v);
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.sizeJitter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampSizeJitter(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setStampOpacityJitter(double v)
 {
-    m_stampSettings.opacityJitter = static_cast<float>(std::clamp(v, 0.0, 1.0));
-    QSettings().setValue(AppSettingsKeys::paintStampOpacityJitter(), v);
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.opacityJitter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampOpacityJitter(), clamped);
     emit stampChanged();
 }
 
@@ -1082,29 +1098,33 @@ void TexturePaintController::setStampFixedAngle(double deg)
 
 void TexturePaintController::setTilingScale(double v)
 {
-    m_tilingSettings.scale = static_cast<float>(std::max(v, 0.01));
-    QSettings().setValue(AppSettingsKeys::paintTilingScale(), v);
+    const double clamped = std::max(v, 0.01);
+    m_tilingSettings.scale = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingScale(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setTilingRotation(double deg)
 {
-    m_tilingSettings.rotationDeg = static_cast<float>(deg);
-    QSettings().setValue(AppSettingsKeys::paintTilingRotation(), deg);
+    const double clamped = std::clamp(deg, 0.0, 360.0);
+    m_tilingSettings.rotationDeg = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingRotation(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setTilingOffsetU(double v)
 {
-    m_tilingSettings.offsetU = static_cast<float>(v);
-    QSettings().setValue(AppSettingsKeys::paintTilingOffsetU(), v);
+    const double clamped = std::clamp(v, -1.0, 1.0);
+    m_tilingSettings.offsetU = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingOffsetU(), clamped);
     emit stampChanged();
 }
 
 void TexturePaintController::setTilingOffsetV(double v)
 {
-    m_tilingSettings.offsetV = static_cast<float>(v);
-    QSettings().setValue(AppSettingsKeys::paintTilingOffsetV(), v);
+    const double clamped = std::clamp(v, -1.0, 1.0);
+    m_tilingSettings.offsetV = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingOffsetV(), clamped);
     emit stampChanged();
 }
 
@@ -1114,8 +1134,10 @@ QString TexturePaintController::importStampAsset(const QString& filePath)
         filePath.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
     if (stored.empty())
         return {};
-    const QString importedName =
-        QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName();
+    const QString importedName = QString::fromUtf8(
+        BrushAssetLibrary::safeFileStem(
+            QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName().toStdString())
+            .c_str());
     setActiveStampName(importedName);
     return QString::fromStdString(stored);
 }
@@ -1126,8 +1148,10 @@ QString TexturePaintController::importTilingAsset(const QString& filePath)
         filePath.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
     if (stored.empty())
         return {};
-    const QString importedName =
-        QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName();
+    const QString importedName = QString::fromUtf8(
+        BrushAssetLibrary::safeFileStem(
+            QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName().toStdString())
+            .c_str());
     setActiveTilingName(importedName);
     return QString::fromStdString(stored);
 }
@@ -1323,18 +1347,18 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
         if (m_tilingImage.empty())
             return false;
         const Ogre::Vector2 center = uv;
-        const BrushFootprint::ImageRgba tilingCopy = m_tilingImage;
-        const BrushFootprint::TilingSettings settingsCopy = m_tilingSettings;
         const float radiusCopy = radiusUv;
+        const BrushFootprint::ImageRgba& tilingRef = m_tilingImage;
+        const BrushFootprint::TilingSettings& settingsRef = m_tilingSettings;
         return m_buffer.paintBrush(
                    uv, radiusUv,
-                   [colorAt, center, radiusCopy, tilingCopy, settingsCopy](float dx, float dy) {
+                   [colorAt, center, radiusCopy, &tilingRef, &settingsRef](float dx, float dy) {
                        float tu = 0.0f;
                        float tv = 0.0f;
                        BrushFootprint::brushOffsetToUv(
                            center.x, center.y, radiusCopy, dx, dy, tu, tv);
                        const auto tile = BrushFootprint::sampleTiling(
-                           tilingCopy, tu, tv, settingsCopy);
+                           tilingRef, tu, tv, settingsRef);
                        const Ogre::ColourValue brush = colorAt(dx, dy);
                        return Ogre::ColourValue(
                            tile.r * brush.r,
@@ -1485,22 +1509,26 @@ bool TexturePaintController::paintBrushAlongSegment(const Ogre::Vector2& from,
     float spacing = std::max(radius * 0.35f, 0.002f);
     if (m_footprintType == BrushFootprint::FootprintType::StampImage) {
         spacing = BrushFootprint::stampSpacingUv(radius, m_stampSettings.spacing);
-        const float projectedLen = m_strokePathLength + dist;
+        const float pathBase = m_strokePathLength;
+        const float projectedLen = pathBase + dist;
         if (projectedLen - m_lastStampDabPathLength < spacing) {
             noteStrokeSample(to, false);
             return false;
         }
         bool changed = false;
         float dabPath = m_lastStampDabPathLength + spacing;
-        while (dabPath <= projectedLen + 1e-6f) {
+        int dabCount = 0;
+        while (dabPath <= projectedLen + 1e-6f && dabCount < 8) {
             const float t = std::clamp(
-                (dabPath - m_strokePathLength) / std::max(dist, 1e-6f), 0.0f, 1.0f);
+                (dabPath - pathBase) / std::max(dist, 1e-6f), 0.0f, 1.0f);
             const Ogre::Vector2 pt(from.x + delta.x * t, from.y + delta.y * t);
             if (applyBrushAtUV(pt))
                 changed = true;
             dabPath += spacing;
+            ++dabCount;
         }
         m_lastStampDabPathLength = dabPath - spacing;
+        noteStrokeSample(to, false);
         return changed;
     }
 

@@ -192,6 +192,8 @@ std::string importAsset(const std::string& sourcePath, AssetKind kind,
         : QString::fromUtf8(desiredName.c_str());
     name = QString::fromUtf8(safeFileStem(qstrToStd(name)).c_str());
     const QString dest = QDir(dir).filePath(name + QStringLiteral(".png"));
+    if (QFile::exists(dest))
+        return {};
 
     QImage img(src);
     if (img.isNull())

@@ -168,6 +168,8 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
             }
             if (blend <= 0.0f) continue;
             const Ogre::ColourValue color = colorAt(dx, dy);
+            blend *= color.a;
+            if (blend <= 0.0f) continue;
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
             const int blend256 = static_cast<int>(std::lround(blend * 256.0f));
             if (blend256 <= 0) continue;
@@ -214,11 +216,14 @@ int TexturePaintBuffer::paintStamp(const Ogre::Vector2& uv,
     const float centerYf = uv.y * static_cast<float>(m_height);
     const float cosA = std::cos(angleRad);
     const float sinA = std::sin(angleRad);
+    const float rotExpand = std::abs(cosA) + std::abs(sinA);
+    const float extXf = radiusXf * rotExpand;
+    const float extYf = radiusYf * rotExpand;
 
-    int x0 = static_cast<int>(std::floor(centerXf - radiusXf));
-    int x1 = static_cast<int>(std::ceil(centerXf + radiusXf));
-    int y0 = static_cast<int>(std::floor(centerYf - radiusYf));
-    int y1 = static_cast<int>(std::ceil(centerYf + radiusYf));
+    int x0 = static_cast<int>(std::floor(centerXf - extXf));
+    int x1 = static_cast<int>(std::ceil(centerXf + extXf));
+    int y0 = static_cast<int>(std::floor(centerYf - extYf));
+    int y1 = static_cast<int>(std::ceil(centerYf + extYf));
     x0 = std::max(0, x0);
     y0 = std::max(0, y0);
     x1 = std::min(m_width, x1);

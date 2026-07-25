@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <QFile>
 #include <QImage>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include "BrushAssetLibrary.h"
@@ -39,6 +41,13 @@ TEST(BrushFootprintTest, StampSpacingScalesWithRadius)
 {
     EXPECT_NEAR(BrushFootprint::stampSpacingUv(0.1f, 0.35f), 0.035f, 1e-5f);
     EXPECT_GE(BrushFootprint::stampSpacingUv(0.001f, 0.05f), 0.002f);
+}
+
+TEST(BrushFootprintTest, StampSpacingIsAlwaysPositive)
+{
+    EXPECT_GT(BrushFootprint::stampSpacingUv(0.1f, 0.0f), 0.0f);
+    EXPECT_GT(BrushFootprint::stampSpacingUv(0.1f, -1.0f), 0.0f);
+    EXPECT_GT(BrushFootprint::stampSpacingUv(0.0f, 0.35f), 0.0f);
 }
 
 TEST(BrushFootprintTest, RasterizedStampHasStrongCenterAlpha)
@@ -85,8 +94,27 @@ TEST(BrushAssetLibraryTest, BundledCatalogCounts)
     EXPECT_EQ(BrushAssetLibrary::bundledTilingNames().size(), 4u);
 }
 
+TEST(BrushAssetLibraryTest, BundledAssetsResolveOnDisk)
+{
+    for (const auto& name : BrushAssetLibrary::bundledStampNames()) {
+        const std::string path = BrushAssetLibrary::resolvePath(
+            name, BrushAssetLibrary::AssetKind::Stamp);
+        if (path.empty())
+            GTEST_SKIP() << "Bundled stamp media not beside test binary";
+        EXPECT_TRUE(QFile::exists(QString::fromUtf8(path.c_str()))) << name;
+    }
+    for (const auto& name : BrushAssetLibrary::bundledTilingNames()) {
+        const std::string path = BrushAssetLibrary::resolvePath(
+            name, BrushAssetLibrary::AssetKind::Tiling);
+        if (path.empty())
+            GTEST_SKIP() << "Bundled tiling media not beside test binary";
+        EXPECT_TRUE(QFile::exists(QString::fromUtf8(path.c_str()))) << name;
+    }
+}
+
 TEST(BrushAssetLibraryTest, ImportCustomStamp)
 {
+    QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     const QString src = tmp.filePath(QStringLiteral("leaf.png"));
@@ -96,8 +124,9 @@ TEST(BrushAssetLibraryTest, ImportCustomStamp)
 
     const std::string stored = BrushAssetLibrary::importAsset(
         src.toStdString(), BrushAssetLibrary::AssetKind::Stamp, "Leaf");
-    EXPECT_FALSE(stored.empty());
+    ASSERT_FALSE(stored.empty());
     const auto loaded = BrushAssetLibrary::loadImage(stored);
     EXPECT_FALSE(loaded.empty());
     EXPECT_TRUE(BrushAssetLibrary::deleteCustom("Leaf", BrushAssetLibrary::AssetKind::Stamp));
+    QStandardPaths::setTestModeEnabled(false);
 }
