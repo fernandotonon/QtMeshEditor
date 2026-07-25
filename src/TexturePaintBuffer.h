@@ -124,7 +124,8 @@ public:
                    const ColorAtFn& colorAt,
                    float strength = 1.0f,
                    float falloff = 0.5f,
-                   BrushShape shape = BrushShape::Round);
+                   BrushShape shape = BrushShape::Round,
+                   bool multiplyBlendByColorAlpha = false);
 
     /**
      * @brief Paint a rotated stamp alpha mask at UV coordinate.

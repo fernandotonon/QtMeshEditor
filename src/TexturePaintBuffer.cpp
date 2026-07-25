@@ -116,7 +116,8 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                                    const ColorAtFn& colorAt,
                                    float strength,
                                    float falloff,
-                                   BrushShape shape)
+                                   BrushShape shape,
+                                   bool multiplyBlendByColorAlpha)
 {
     if (m_width <= 0 || m_height <= 0) return 0;
     if (radiusUV <= 0.0f) return 0;
@@ -168,7 +169,8 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
             }
             if (blend <= 0.0f) continue;
             const Ogre::ColourValue color = colorAt(dx, dy);
-            blend *= color.a;
+            if (multiplyBlendByColorAlpha)
+                blend *= color.a;
             if (blend <= 0.0f) continue;
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
             const int blend256 = static_cast<int>(std::lround(blend * 256.0f));
@@ -306,7 +308,7 @@ int TexturePaintBuffer::paintTilingBrush(const Ogre::Vector2& uv,
             const auto c = BrushFootprint::sampleTiling(*tilingPtr, tu, tv, settingsCopy);
             return Ogre::ColourValue(c.r, c.g, c.b, c.a);
         },
-        strength, falloff, shape);
+        strength, falloff, shape, true);
 }
 
 int TexturePaintBuffer::floodFill(int sx, int sy, const Ogre::ColourValue& fill)

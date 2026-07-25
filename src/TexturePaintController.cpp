@@ -1366,7 +1366,7 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
                            tile.b * brush.b,
                            tile.a * brush.a);
                    },
-                   strength, falloff, shape)
+                   strength, falloff, shape, true)
             > 0;
     }
 
