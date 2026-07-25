@@ -1014,8 +1014,15 @@ void TexturePaintController::setActiveTilingName(const QString& name)
 QStringList TexturePaintController::stampNames() const
 {
     QStringList names;
-    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Stamp))
-        names << QString::fromStdString(a.name);
+    QSet<QString> seen;
+    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Stamp)) {
+        const QString name = QString::fromStdString(a.name);
+        const QString key = name.toLower();
+        if (seen.contains(key))
+            continue;
+        seen.insert(key);
+        names << name;
+    }
     return names;
 }
 

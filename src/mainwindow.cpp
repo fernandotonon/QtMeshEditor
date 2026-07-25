@@ -284,11 +284,7 @@ protected:
             for (const QUrl& url : e->mimeData()->urls()) {
                 if (!url.isLocalFile())
                     continue;
-                const QString path = url.toLocalFile();
-                if (m_tpc->footprintType() == 3)
-                    m_tpc->importTilingAsset(path);
-                else
-                    m_tpc->importStampAsset(path);
+                m_tpc->importStampAsset(url.toLocalFile());
             }
             e->acceptProposedAction();
             return true;
@@ -298,6 +294,156 @@ protected:
 
 private:
     TexturePaintController* m_tpc = nullptr;
+};
+
+class StampLibraryDialog : public QDialog {
+public:
+    StampLibraryDialog(TexturePaintController* tpc, QWidget* parent)
+        : QDialog(parent)
+        , m_tpc(tpc)
+    {
+        setWindowTitle(tr("Stamp library"));
+        setMinimumSize(380, 340);
+        auto* lay = new QVBoxLayout(this);
+        lay->addWidget(new QLabel(
+            tr("Choose a stamp brush. Drop PNG files here or use Import."), this));
+
+        m_scroll = new QScrollArea(this);
+        m_scroll->setWidgetResizable(true);
+        m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_host = new QWidget(m_scroll);
+        m_grid = new QGridLayout(m_host);
+        m_grid->setContentsMargins(0, 0, 0, 0);
+        m_grid->setSpacing(6);
+        m_scroll->setWidget(m_host);
+        lay->addWidget(m_scroll, 1);
+
+        m_group = new QButtonGroup(this);
+        m_group->setExclusive(true);
+
+        auto* btnRow = new QHBoxLayout();
+        m_importBtn = new QPushButton(tr("Import…"), this);
+        m_renameBtn = new QPushButton(tr("Rename…"), this);
+        m_deleteBtn = new QPushButton(tr("Delete"), this);
+        btnRow->addWidget(m_importBtn);
+        btnRow->addWidget(m_renameBtn);
+        btnRow->addWidget(m_deleteBtn);
+        lay->addLayout(btnRow);
+
+        auto* closeRow = new QHBoxLayout();
+        closeRow->addStretch();
+        auto* doneBtn = new QPushButton(tr("Done"), this);
+        closeRow->addWidget(doneBtn);
+        lay->addLayout(closeRow);
+
+        connect(doneBtn, &QPushButton::clicked, this, &QDialog::accept);
+        connect(m_importBtn, &QPushButton::clicked, this, [this]() { importStamp(); });
+        connect(m_renameBtn, &QPushButton::clicked, this, [this]() { renameStamp(); });
+        connect(m_deleteBtn, &QPushButton::clicked, this, [this]() { deleteStamp(); });
+        connect(m_tpc, &TexturePaintController::stampChanged, this, [this]() { rebuildGrid(); });
+        connect(m_group, &QButtonGroup::idClicked, this, [this](int id) {
+            QAbstractButton* btn = m_group->button(id);
+            if (btn)
+                m_tpc->setActiveStampName(btn->toolTip());
+        });
+
+        setAcceptDrops(true);
+        auto* dropFilter = new PaintAssetDropFilter(m_tpc, this);
+        dropFilter->installEventFilter(this);
+
+        rebuildGrid();
+    }
+
+private:
+    static QPixmap pixmapFromDataUri(const QString& uri)
+    {
+        const int comma = uri.indexOf(QLatin1Char(','));
+        if (comma < 0)
+            return {};
+        QPixmap pm;
+        pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
+        return pm;
+    }
+
+    void clearGrid()
+    {
+        while (QLayoutItem* item = m_grid->takeAt(0)) {
+            if (QWidget* w = item->widget()) {
+                if (auto* btn = qobject_cast<QAbstractButton*>(w))
+                    m_group->removeButton(btn);
+                delete w;
+            }
+            delete item;
+        }
+    }
+
+    void rebuildGrid()
+    {
+        clearGrid();
+        const QString active = m_tpc->activeStampName();
+        int col = 0;
+        int row = 0;
+        constexpr int kCols = 6;
+        for (const QString& name : m_tpc->stampNames()) {
+            auto* btn = new QToolButton(m_host);
+            btn->setFixedSize(48, 48);
+            btn->setToolTip(name);
+            btn->setCheckable(true);
+            btn->setAutoRaise(true);
+            const QPixmap pm = pixmapFromDataUri(m_tpc->stampThumbnailUri(name));
+            if (!pm.isNull())
+                btn->setIcon(QIcon(pm));
+            btn->setIconSize(QSize(44, 44));
+            btn->setChecked(QString::compare(name, active, Qt::CaseInsensitive) == 0);
+            m_group->addButton(btn);
+            m_grid->addWidget(btn, row, col);
+            if (++col >= kCols) {
+                col = 0;
+                ++row;
+            }
+        }
+        updateManageButtons();
+    }
+
+    void updateManageButtons()
+    {
+        const bool custom = !m_tpc->isBundledStamp(m_tpc->activeStampName());
+        m_deleteBtn->setEnabled(custom);
+        m_renameBtn->setEnabled(custom);
+    }
+
+    void importStamp()
+    {
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Import Stamp"), {},
+            tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
+        if (!path.isEmpty())
+            m_tpc->importStampAsset(path);
+    }
+
+    void renameStamp()
+    {
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, tr("Rename Stamp"), tr("New name:"), QLineEdit::Normal,
+            m_tpc->activeStampName(), &ok);
+        if (ok && !name.trimmed().isEmpty())
+            m_tpc->renameCustomStamp(m_tpc->activeStampName(), name.trimmed());
+    }
+
+    void deleteStamp()
+    {
+        m_tpc->deleteCustomStamp(m_tpc->activeStampName());
+    }
+
+    TexturePaintController* m_tpc = nullptr;
+    QScrollArea* m_scroll = nullptr;
+    QWidget* m_host = nullptr;
+    QGridLayout* m_grid = nullptr;
+    QButtonGroup* m_group = nullptr;
+    QPushButton* m_importBtn = nullptr;
+    QPushButton* m_renameBtn = nullptr;
+    QPushButton* m_deleteBtn = nullptr;
 };
 
 /// QMenu closes on the first mouse-release inside embedded widgets unless we
@@ -2072,10 +2218,10 @@ void MainWindow::initToolBar()
     // one click away from the paint tool button.
     auto* colorRow = new QHBoxLayout();
     colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
-    srcSolid->setToolTip(tr("Single foreground colour"));
-    srcGradient->setToolTip(tr("Gradient ramp tints the brush (works with all dab shapes)"));
     auto* srcSolid = new QPushButton(tr("Solid"), paintSettings);
     auto* srcGradient = new QPushButton(tr("Gradient"), paintSettings);
+    srcSolid->setToolTip(tr("Single foreground colour"));
+    srcGradient->setToolTip(tr("Gradient ramp tints the brush (works with all dab shapes)"));
     srcSolid->setCheckable(true);
     srcGradient->setCheckable(true);
     srcSolid->setFixedHeight(22);
@@ -2294,20 +2440,15 @@ void MainWindow::initToolBar()
     footprintHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
     footLay->addWidget(footprintHint);
 
-    auto* stampPreview = new QLabel(footprintBox);
-    stampPreview->setFixedSize(48, 48);
-    stampPreview->setScaledContents(true);
-    stampPreview->setStyleSheet(QStringLiteral("QLabel { border: 1px solid #555; }"));
-    footLay->addWidget(stampPreview);
-
-    auto* stampRow = new QHBoxLayout();
-    auto* stampRowLabel = new QLabel(tr("Stamp:"), footprintBox);
-    stampRow->addWidget(stampRowLabel);
-    auto* stampCombo = new QComboBox(footprintBox);
-    stampRow->addWidget(stampCombo, 1);
-    auto* importStampBtn = new QPushButton(tr("Import…"), footprintBox);
-    stampRow->addWidget(importStampBtn);
-    footLay->addLayout(stampRow);
+    auto* stampPickBtn = new QPushButton(footprintBox);
+    stampPickBtn->setFixedHeight(56);
+    stampPickBtn->setIconSize(QSize(48, 48));
+    stampPickBtn->setToolTip(tr("Open stamp library"));
+    stampPickBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { text-align: left; padding: 4px 8px; border: 1px solid palette(mid);"
+        " border-radius: 4px; }"
+        "QPushButton:hover { border-color: palette(highlight); }"));
+    footLay->addWidget(stampPickBtn);
 
     auto* tilingRow = new QHBoxLayout();
     auto* tilingRowLabel = new QLabel(tr("Tiling:"), footprintBox);
@@ -2374,30 +2515,6 @@ void MainWindow::initToolBar()
     footLay->addWidget(tilingOffsetVLabel);
     footLay->addWidget(tilingOffsetVSlider);
 
-    auto* stampLibraryScroll = new QScrollArea(footprintBox);
-    stampLibraryScroll->setWidgetResizable(true);
-    stampLibraryScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    stampLibraryScroll->setFixedHeight(84);
-    auto* stampLibraryHost = new QWidget(stampLibraryScroll);
-    auto* stampLibraryGrid = new QGridLayout(stampLibraryHost);
-    stampLibraryGrid->setContentsMargins(0, 0, 0, 0);
-    stampLibraryGrid->setSpacing(4);
-    stampLibraryScroll->setWidget(stampLibraryHost);
-    auto* stampLibLabel = new QLabel(tr("Stamp library (drop PNG):"), footprintBox);
-    footLay->addWidget(stampLibLabel);
-    footLay->addWidget(stampLibraryScroll);
-
-    auto* stampManageRow = new QHBoxLayout();
-    auto* deleteStampBtn = new QPushButton(tr("Delete"), footprintBox);
-    auto* renameStampBtn = new QPushButton(tr("Rename…"), footprintBox);
-    stampManageRow->addWidget(deleteStampBtn);
-    stampManageRow->addWidget(renameStampBtn);
-    footLay->addLayout(stampManageRow);
-
-    footprintBox->setAcceptDrops(true);
-    auto* paintDropFilter = new PaintAssetDropFilter(tpcPaint, footprintBox);
-    paintDropFilter->installEventFilter(footprintBox);
-
     paintLay->addWidget(footprintBox);
 
     auto pixmapFromDataUri = [](const QString& uri) -> QPixmap {
@@ -2409,58 +2526,21 @@ void MainWindow::initToolBar()
         return pm;
     };
 
-    auto refreshStampLibraryGrid = [stampLibraryHost, stampLibraryGrid, tpcPaint, pixmapFromDataUri]() {
-        while (QLayoutItem* item = stampLibraryGrid->takeAt(0)) {
-            if (QWidget* w = item->widget())
-                w->deleteLater();
-            delete item;
-        }
-        const QStringList names = tpcPaint->stampNames();
-        const QString active = tpcPaint->activeStampName();
-        int col = 0;
-        int row = 0;
-        constexpr int kCols = 6;
-        for (const QString& name : names) {
-            auto* btn = new QToolButton(stampLibraryHost);
-            btn->setFixedSize(36, 36);
-            btn->setToolTip(name);
-            btn->setCheckable(true);
-            btn->setChecked(name == active);
-            btn->setAutoRaise(true);
-            const QPixmap pm = pixmapFromDataUri(tpcPaint->stampThumbnailUri(name));
-            if (!pm.isNull())
-                btn->setIcon(QIcon(pm));
-            btn->setIconSize(QSize(32, 32));
-            applyEmbeddedMenuWidgetHints(btn);
-            QObject::connect(btn, &QToolButton::clicked, tpcPaint, [tpcPaint, name]() {
-                tpcPaint->setActiveStampName(name);
-            });
-            stampLibraryGrid->addWidget(btn, row, col);
-            if (++col >= kCols) {
-                col = 0;
-                ++row;
-            }
-        }
-    };
-
-    auto refreshStampPreview = [stampPreview, tpcPaint, pixmapFromDataUri]() {
+    auto refreshStampPicker = [stampPickBtn, tpcPaint, pixmapFromDataUri]() {
+        const QString name = tpcPaint->activeStampName();
         const QPixmap pm = pixmapFromDataUri(tpcPaint->activeStampPreviewUri());
-        if (pm.isNull())
-            stampPreview->clear();
-        else
-            stampPreview->setPixmap(pm);
+        stampPickBtn->setIcon(pm.isNull() ? QIcon() : QIcon(pm));
+        stampPickBtn->setText(name.isEmpty() ? tr("Choose stamp…") : name);
     };
 
     auto syncFootprintUi = [footRound, footSquare, footStamp, footTiling, footprintHint,
-                            stampPreview, stampRowLabel, stampCombo, importStampBtn,
-                            stampLibLabel, stampLibraryScroll, deleteStampBtn, renameStampBtn,
-                            tilingRowLabel, tilingCombo, importTilingBtn, spacingSlider,
-                            spacingLabel, scatterSlider, scatterLabel, rotLabel, rotCombo,
-                            sizeJitterSlider, sizeJitterLabel, opacityJitterSlider,
+                            stampPickBtn, tilingRowLabel, tilingCombo, importTilingBtn,
+                            spacingSlider, spacingLabel, scatterSlider, scatterLabel, rotLabel,
+                            rotCombo, sizeJitterSlider, sizeJitterLabel, opacityJitterSlider,
                             opacityJitterLabel, tilingScaleSlider, tilingScaleLabel,
                             tilingRotSlider, tilingRotLabel, tilingOffsetUSlider,
                             tilingOffsetULabel, tilingOffsetVSlider, tilingOffsetVLabel,
-                            tpcPaint, refreshStampPreview, refreshStampLibraryGrid]() {
+                            tpcPaint, refreshStampPicker]() {
         const int ft = tpcPaint->footprintType();
         {
             QSignalBlocker b1(footRound);
@@ -2476,8 +2556,8 @@ void MainWindow::initToolBar()
         const bool tilingMode = ft == 3;
         if (stampMode) {
             footprintHint->setText(tr(
-                "Image stamp: pick a stamp below, then paint. "
-                "Use Color → Solid or Gradient above to tint each stamp."));
+                "Image stamp: click the stamp below to choose a brush image. "
+                "Color → Solid or Gradient tints each stamp."));
         } else if (tilingMode) {
             footprintHint->setText(tr(
                 "Tiling texture: pick wood/brick/etc. below. "
@@ -2487,10 +2567,7 @@ void MainWindow::initToolBar()
                 "Classic round/square dab. Use Color → Solid or Gradient for fill."));
         }
 
-        stampRowLabel->setVisible(stampMode);
-        stampPreview->setVisible(stampMode);
-        stampCombo->setVisible(stampMode);
-        importStampBtn->setVisible(stampMode);
+        stampPickBtn->setVisible(stampMode);
         spacingLabel->setVisible(stampMode);
         spacingSlider->setVisible(stampMode);
         scatterLabel->setVisible(stampMode);
@@ -2501,10 +2578,6 @@ void MainWindow::initToolBar()
         sizeJitterSlider->setVisible(stampMode);
         opacityJitterLabel->setVisible(stampMode);
         opacityJitterSlider->setVisible(stampMode);
-        stampLibLabel->setVisible(stampMode);
-        stampLibraryScroll->setVisible(stampMode);
-        deleteStampBtn->setVisible(stampMode);
-        renameStampBtn->setVisible(stampMode);
         tilingRowLabel->setVisible(tilingMode);
         tilingCombo->setVisible(tilingMode);
         importTilingBtn->setVisible(tilingMode);
@@ -2517,7 +2590,7 @@ void MainWindow::initToolBar()
         tilingOffsetVLabel->setVisible(tilingMode);
         tilingOffsetVSlider->setVisible(tilingMode);
 
-        stampCombo->setEnabled(stampMode);
+        stampPickBtn->setEnabled(stampMode);
         spacingSlider->setEnabled(stampMode);
         scatterSlider->setEnabled(stampMode);
         rotCombo->setEnabled(stampMode);
@@ -2528,21 +2601,7 @@ void MainWindow::initToolBar()
         tilingRotSlider->setEnabled(tilingMode);
         tilingOffsetUSlider->setEnabled(tilingMode);
         tilingOffsetVSlider->setEnabled(tilingMode);
-        const bool customStamp = stampMode && !tpcPaint->isBundledStamp(tpcPaint->activeStampName());
-        deleteStampBtn->setEnabled(customStamp);
-        renameStampBtn->setEnabled(customStamp);
 
-        {
-            QSignalBlocker bs(stampCombo);
-            const QStringList names = tpcPaint->stampNames();
-            if (stampCombo->count() != names.size()) {
-                stampCombo->clear();
-                stampCombo->addItems(names);
-            }
-            const int idx = stampCombo->findText(tpcPaint->activeStampName());
-            if (idx >= 0)
-                stampCombo->setCurrentIndex(idx);
-        }
         {
             QSignalBlocker bt(tilingCombo);
             const QStringList names = tpcPaint->tilingNames();
@@ -2598,8 +2657,7 @@ void MainWindow::initToolBar()
             .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetU() * 100.0))));
         tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%")
             .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetV() * 100.0))));
-        refreshStampPreview();
-        refreshStampLibraryGrid();
+        refreshStampPicker();
     };
     syncFootprintUi();
 
@@ -2615,23 +2673,16 @@ void MainWindow::initToolBar()
     connect(footTiling, &QPushButton::clicked, this, [tpcPaint]() {
         tpcPaint->setFootprintType(3);
     });
-    connect(stampCombo, QOverload<int>::of(&QComboBox::activated), this,
-            [tpcPaint, stampCombo](int idx) {
-                if (idx >= 0)
-                    tpcPaint->setActiveStampName(stampCombo->itemText(idx));
-            });
+    connect(stampPickBtn, &QPushButton::clicked, this, [this, tpcPaint, vertexPaintMenu]() {
+        vertexPaintMenu->close();
+        StampLibraryDialog dlg(tpcPaint, this);
+        dlg.exec();
+    });
     connect(tilingCombo, QOverload<int>::of(&QComboBox::activated), this,
             [tpcPaint, tilingCombo](int idx) {
                 if (idx >= 0)
                     tpcPaint->setActiveTilingName(tilingCombo->itemText(idx));
             });
-    connect(importStampBtn, &QPushButton::clicked, this, [this, tpcPaint]() {
-        const QString path = QFileDialog::getOpenFileName(
-            this, tr("Import Stamp"), {},
-            tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
-        if (!path.isEmpty())
-            tpcPaint->importStampAsset(path);
-    });
     connect(importTilingBtn, &QPushButton::clicked, this, [this, tpcPaint]() {
         const QString path = QFileDialog::getOpenFileName(
             this, tr("Import Tiling"), {},
@@ -2673,17 +2724,6 @@ void MainWindow::initToolBar()
         tpcPaint->setTilingOffsetV(v / 100.0);
         tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%").arg(v));
     });
-    connect(deleteStampBtn, &QPushButton::clicked, this, [tpcPaint]() {
-        tpcPaint->deleteCustomStamp(tpcPaint->activeStampName());
-    });
-    connect(renameStampBtn, &QPushButton::clicked, this, [this, tpcPaint]() {
-        bool ok = false;
-        const QString name = QInputDialog::getText(
-            this, tr("Rename Stamp"), tr("New name:"), QLineEdit::Normal,
-            tpcPaint->activeStampName(), &ok);
-        if (ok && !name.trimmed().isEmpty())
-            tpcPaint->renameCustomStamp(tpcPaint->activeStampName(), name.trimmed());
-    });
     connect(tpcPaint, &TexturePaintController::stampChanged, this, syncFootprintUi);
 
     paintSettings->setMinimumWidth(280);
@@ -2698,8 +2738,8 @@ void MainWindow::initToolBar()
     paintPortal->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     paintPortal->setFrameShape(QFrame::NoFrame);
     paintPortal->setMinimumWidth(296);
-    paintPortal->setMinimumHeight(620);
-    paintPortal->setMaximumHeight(820);
+    paintPortal->setMinimumHeight(520);
+    paintPortal->setMaximumHeight(720);
 
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintPortal);
