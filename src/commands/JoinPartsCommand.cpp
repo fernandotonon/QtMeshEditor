@@ -102,27 +102,36 @@ void JoinPartsCommand::redo()
         return;
     }
 
-    // Drop selection refs before destroying source entities (SplitMeshCommand
-    // rationale: dangling sub-entity refs crash the next selection query).
-    if (auto* sel = SelectionSet::getSingleton())
-        sel->clearList();
-
-    // Destroy the source part nodes (frees their names for undo to recreate).
-    for (const auto& sp : mSources) {
-        if (Ogre::SceneNode* node = mgr->getSceneNode(QString::fromStdString(sp.name)))
-            mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
-    }
-
-    // Create the fused node at the ORIGIN — join baked world transforms into the
-    // vertex positions, so an identity node reproduces the assembled pose.
+    // CREATE-THEN-DESTROY: create the fused node FIRST (its name
+    // "<part0>_fused" doesn't collide with the source part names, so it can
+    // coexist), and only destroy the source parts once it exists. If it can't be
+    // created, leave the parts in place — the scene is never left empty
+    // (CodeRabbit). The fused node sits at the ORIGIN: join baked the parts'
+    // world transforms into the vertex positions, so an identity node reproduces
+    // the assembled pose.
     Ogre::SceneNode* fused = mgr->addSceneNode(mFusedNameBase);
     if (!fused) {
         mOk = false;
         mError = QStringLiteral("failed to create joined node");
         return;
     }
+    if (!mgr->createEntity(fused, mFusedMesh)) {
+        mgr->destroySceneNode(fused, /*destroyChildrenFirst=*/true);
+        mOk = false;
+        mError = QStringLiteral("failed to create joined entity");
+        return;
+    }
     mFusedNodeName = fused->getName();
-    mgr->createEntity(fused, mFusedMesh);
+
+    // Fused node is live — now drop selection refs and destroy the source parts
+    // (SplitMeshCommand rationale: dangling sub-entity refs crash the next
+    // selection query).
+    if (auto* sel = SelectionSet::getSingleton())
+        sel->clearList();
+    for (const auto& sp : mSources) {
+        if (Ogre::SceneNode* node = mgr->getSceneNode(QString::fromStdString(sp.name)))
+            mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
+    }
 
     if (auto* sel = SelectionSet::getSingleton())
         sel->selectOne(fused);
@@ -142,17 +151,12 @@ void JoinPartsCommand::undo()
     if (auto* sel = SelectionSet::getSingleton())
         sel->clearList();
 
-    // Destroy the fused node.
-    if (!mFusedNodeName.empty()) {
-        if (Ogre::SceneNode* fused = mgr->getSceneNode(QString::fromStdString(mFusedNodeName)))
-            mgr->destroySceneNode(fused, /*destroyChildrenFirst=*/true);
-        mFusedNodeName.clear();
-    }
-
-    // Recreate each part node with its captured LOCAL transform + original mesh,
-    // reparented under its original group (if any). addSceneNode creates at root;
-    // reparentNode preserves WORLD transform, so set the local TRS AFTER the
-    // reparent to restore the exact pose relative to the group.
+    // CREATE-THEN-DESTROY: recreate every part node FIRST (their names don't
+    // collide with the fused "<part0>_fused" node), then destroy the fused node
+    // once the parts are back. addSceneNode creates at root; reparentNode
+    // preserves WORLD transform, so set the local TRS AFTER the reparent to
+    // restore the exact pose relative to the group. Undo never leaves the scene
+    // empty (CodeRabbit).
     Ogre::SceneNode* last = nullptr;
     for (const auto& sp : mSources) {
         Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(sp.name));
@@ -168,6 +172,13 @@ void JoinPartsCommand::undo()
         node->setScale(sp.scale);
         mgr->createEntity(node, sp.mesh);
         last = node;
+    }
+
+    // Parts are back — now destroy the fused node.
+    if (!mFusedNodeName.empty()) {
+        if (Ogre::SceneNode* fused = mgr->getSceneNode(QString::fromStdString(mFusedNodeName)))
+            mgr->destroySceneNode(fused, /*destroyChildrenFirst=*/true);
+        mFusedNodeName.clear();
     }
 
     // Reselect the restored parts.

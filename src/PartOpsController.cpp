@@ -60,7 +60,17 @@ bool PartOpsController::canExplode() const
 bool PartOpsController::canJoin() const
 {
     const auto* sel = SelectionSet::getSingleton();
-    return sel && sel->getResolvedEntities().size() >= 2;
+    if (!sel)
+        return false;
+    // Count only real mesh entities — getResolvedEntities() can contain nulls
+    // (mixed selections with non-mesh nodes), and canExplode() already guards
+    // that. Join needs >= 2 ACTUAL parts, else the button would enable on a
+    // 1-mesh+1-null selection and the command would be built with one name.
+    int meshCount = 0;
+    for (Ogre::Entity* e : sel->getResolvedEntities())
+        if (e && e->getMesh())
+            ++meshCount;
+    return meshCount >= 2;
 }
 
 void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QString& category,
@@ -137,24 +147,26 @@ void PartOpsController::joinSelected()
         emit joinFinished(tr("No selection."), true);
         return;
     }
-    const QList<Ogre::Entity*> entities = sel->getResolvedEntities();
-    if (entities.size() < 2) {
-        emit joinFinished(tr("Select two or more parts to join."), true);
-        return;
-    }
-
+    // Collect only real mesh entities — getResolvedEntities() can contain nulls
+    // (non-mesh nodes in a mixed selection), so gating on the raw size would let
+    // a 1-mesh+1-null selection through with a single real part. Build the name
+    // list first, then require >= 2 ACTUAL parts.
     std::vector<std::string> names;
-    names.reserve(entities.size());
-    // The fused node is named after the first selected part with a "_fused"
-    // suffix (Manager uniquifies), so it's obviously the join result.
     QString fusedBase;
-    for (Ogre::Entity* e : entities) {
-        if (!e)
+    for (Ogre::Entity* e : sel->getResolvedEntities()) {
+        if (!e || !e->getMesh())
             continue;
         names.push_back(e->getName());
+        // The fused node is named after the first selected part with a "_fused"
+        // suffix (Manager uniquifies), so it's obviously the join result.
         if (fusedBase.isEmpty())
             fusedBase = QString::fromStdString(e->getName()) + QStringLiteral("_fused");
     }
+    if (names.size() < 2) {
+        emit joinFinished(tr("Select two or more parts to join."), true);
+        return;
+    }
+    const int partCount = static_cast<int>(names.size());
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("join_parts"));
     auto* cmd = new JoinPartsCommand(std::move(names), fusedBase);
@@ -165,5 +177,5 @@ void PartOpsController::joinSelected()
         return;
     }
     emit joinFinished(tr("Joined %1 parts into one mesh (%2 submeshes).")
-                          .arg(entities.size()).arg(cmd->createdSubMeshes()), false);
+                          .arg(partCount).arg(cmd->createdSubMeshes()), false);
 }

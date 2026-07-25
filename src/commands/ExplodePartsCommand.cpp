@@ -117,37 +117,56 @@ void ExplodePartsCommand::redo()
         return;
     }
 
-    // Drop selection refs before destroying the source entity (SplitMeshCommand
-    // rationale: sub-entity refs would dangle through getResolvedEntities()).
-    if (auto* sel = SelectionSet::getSingleton())
-        sel->clearList();
-
-    // Destroy the fused source node (frees its name so undo can recreate it).
-    Ogre::Entity* src = resolveSourceEntity();
-    if (src) {
-        Ogre::SceneNode* node = src->getParentSceneNode();
-        if (node)
-            mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
-    }
-
-    // Create one node+entity per part at the source transform, offset outward.
-    // The offset is applied in the source node's LOCAL frame (orient·(scale∘off))
-    // so a rotated/scaled source explodes consistently with how it sat.
-    mPartNodeNames.clear();
+    // CREATE-THEN-DESTROY: build every part node FIRST (their names —
+    // "<entity>_<part>" — don't collide with the source "<entity>", so both can
+    // coexist momentarily), and only destroy the source once ALL parts exist.
+    // If any part fails to create, roll back the ones already created and keep
+    // the source intact — the scene is never left with neither (CodeRabbit).
+    std::vector<std::string> created;
+    bool allOk = true;
     for (const auto& p : mParts) {
         Ogre::SceneNode* pn = mgr->addSceneNode(
             QString::fromStdString(mEntityName + "_" + p.name.toStdString()));
-        if (!pn)
-            continue;
+        if (!pn) {
+            allOk = false;
+            break;
+        }
         // Offset applied in the source node's LOCAL frame (orient·(scale∘off)),
         // then reparented under the source's original group so parts sit where
         // the fused mesh sat + separated. addSceneNode created it at root.
         const Ogre::Vector3 localOffset = mSrcOrient * (mSrcScale * p.offset);
         reparentAndSetLocal(mgr, pn, mParentNodeName,
                             mSrcPos + localOffset, mSrcOrient, mSrcScale);
-        mgr->createEntity(pn, p.mesh);
-        mPartNodeNames.push_back(pn->getName());
+        if (!mgr->createEntity(pn, p.mesh)) {
+            mgr->destroySceneNode(pn, /*destroyChildrenFirst=*/true);
+            allOk = false;
+            break;
+        }
+        created.push_back(pn->getName());
     }
+
+    if (!allOk) {
+        // Roll back — leave the source node untouched.
+        for (const auto& n : created) {
+            if (Ogre::SceneNode* pn = mgr->getSceneNode(QString::fromStdString(n)))
+                mgr->destroySceneNode(pn, /*destroyChildrenFirst=*/true);
+        }
+        mOk = false;
+        if (mError.isEmpty())
+            mError = QStringLiteral("failed to create part nodes");
+        return;
+    }
+
+    // All parts exist — now drop selection refs and destroy the fused source
+    // node (SplitMeshCommand rationale: sub-entity refs would dangle through
+    // getResolvedEntities() once the entity is freed).
+    if (auto* sel = SelectionSet::getSingleton())
+        sel->clearList();
+    if (Ogre::Entity* src = resolveSourceEntity()) {
+        if (Ogre::SceneNode* node = src->getParentSceneNode())
+            mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
+    }
+    mPartNodeNames = std::move(created);
 
     // Reselect the created part nodes so the user can immediately move/join.
     if (auto* sel = SelectionSet::getSingleton()) {
@@ -158,12 +177,9 @@ void ExplodePartsCommand::redo()
         }
     }
 
-    mOk = !mPartNodeNames.empty();
-    if (mOk)
-        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.explode"),
-                                      QStringLiteral("parts=%1").arg(mPartNodeNames.size()));
-    else if (mError.isEmpty())
-        mError = QStringLiteral("failed to create part nodes");
+    mOk = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.explode"),
+                                  QStringLiteral("parts=%1").arg(mPartNodeNames.size()));
 }
 
 void ExplodePartsCommand::undo()
@@ -172,23 +188,29 @@ void ExplodePartsCommand::undo()
     if (!mgr || !mOriginalMesh)
         return;
 
+    // CREATE-THEN-DESTROY: recreate the fused node FIRST (its name "<entity>"
+    // doesn't collide with the part names "<entity>_<part>", so it can coexist),
+    // and only destroy the parts once the fused node + entity exist. If the
+    // fused node can't be created, leave the parts in place — undo never leaves
+    // the scene empty (CodeRabbit).
+    Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(mEntityName));
+    if (!node)
+        return;
+    reparentAndSetLocal(mgr, node, mParentNodeName, mSrcPos, mSrcOrient, mSrcScale);
+    if (!mgr->createEntity(node, mOriginalMesh)) {
+        mgr->destroySceneNode(node, /*destroyChildrenFirst=*/true);
+        return;
+    }
+
     if (auto* sel = SelectionSet::getSingleton())
         sel->clearList();
 
-    // Destroy the part nodes.
+    // Fused node is live — now destroy the part nodes.
     for (const auto& n : mPartNodeNames) {
         if (Ogre::SceneNode* pn = mgr->getSceneNode(QString::fromStdString(n)))
             mgr->destroySceneNode(pn, /*destroyChildrenFirst=*/true);
     }
     mPartNodeNames.clear();
-
-    // Recreate the fused node bound to the original mesh at the source transform,
-    // reparented under its original group (if any).
-    Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(mEntityName));
-    if (!node)
-        return;
-    reparentAndSetLocal(mgr, node, mParentNodeName, mSrcPos, mSrcOrient, mSrcScale);
-    mgr->createEntity(node, mOriginalMesh);
 
     if (auto* sel = SelectionSet::getSingleton())
         sel->selectOne(node);

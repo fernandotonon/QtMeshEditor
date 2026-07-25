@@ -6,6 +6,7 @@
 
 #include <OgreMesh.h>
 #include <OgreVector3.h>
+#include <OgreQuaternion.h>
 
 #include <string>
 #include <vector>
