@@ -31,7 +31,10 @@ fi
 call() { curl -s -m 30 -X POST "$BASE/$1" -H "Content-Type: application/json" -d "$2"; }
 # text field of the MCP content[0]
 ctext() { python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('content',[{}])[0].get('text',''))" 2>/dev/null; }
-iserr() { python3 -c "import sys,json;d=json.load(sys.stdin);print('1' if d.get('isError') else '0')" 2>/dev/null; }
+# An error is either an MCP tool error (isError:true) OR a transport-level
+# rejection (top-level "error", e.g. Qt's JSON parser refusing an illegal
+# number like 1e400 before the handler runs). Both are "handled cleanly".
+iserr() { python3 -c "import sys,json;d=json.load(sys.stdin);print('1' if (d.get('isError') or d.get('error')) else '0')" 2>/dev/null; }
 
 check() { # check <desc> <expect: ok|err> <response>
   local desc="$1" expect="$2" resp="$3"
@@ -139,6 +142,20 @@ if [ -f "$BODY" ]; then
 else
   echo "SKIP: skeletal keyframe editing (no out_body.glb)"
 fi
+
+echo "===== INPUT VALIDATION (malformed args must error, never crash) ====="
+# Wrong types / out-of-range on the new anim tools. Each must return an MCP
+# error (isError=true), and the app must survive (checked in SUMMARY).
+check "speed string rejected"        err "$(call set_playback_speed '{"speed":"fast"}')"
+check "node clip length string rej"  err "$(call add_node_animation_clip '{"name":"X","length":"long"}')"
+check "node key time string rej"     err "$(call set_node_keyframe '{"clip":"NC","node":"n","time":"soon"}')"
+check "node key negative time rej"   err "$(call set_node_keyframe '{"clip":"NC","node":"n","time":-1}')"
+check "playing enabled string rej"   err "$(call set_node_animation_playing '{"clip":"NC","enabled":"yes"}')"
+check "morph weight string rej"      err "$(call set_morph_weight_keyframe '{"target":"Shape_0","time":0.5,"weight":"high"}')"
+check "keyframe value nan rej"       err "$(call set_keyframe_value '{"bone":"Hips","channel":"tx","time":0,"value":1e400}')"
+check "get_node_animation missing"   err "$(call get_node_animation '{"clip":"DoesNotExist"}')"
+check "loop region bad type rej"     err "$(call set_loop_region '{"start":"a"}')"
+check "empty-args get_playback_state ok" ok "$(call get_playback_state '{}')"
 
 echo
 echo "===== SUMMARY: PASS=$PASS FAIL=$FAIL ====="
