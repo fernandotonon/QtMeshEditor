@@ -6512,7 +6512,24 @@ Rectangle {
             padding: 8
             spacing: 6
 
-            property real explodeDistance: 0.5
+            // Explode distance is driven through a LOGARITHMIC slider so the
+            // small values (where inspection usually happens) get most of the
+            // travel and the large ones are coarse. The slider position t is
+            // normalised [0..1]; distance = A·(e^(k·t) − 1) maps t=0→0 and
+            // t=1→10 with fine resolution near 0. k=4 is the curve steepness;
+            // A = 10/(e^k − 1) pins the top of the range to 10.
+            readonly property real explodeLogK: 4.0
+            readonly property real explodeLogMax: 10.0
+            readonly property real explodeLogA:
+                explodeLogMax / (Math.exp(explodeLogK) - 1.0)
+            function explodePosToDist(t) {
+                return explodeLogA * (Math.exp(explodeLogK * t) - 1.0)
+            }
+            function explodeDistToPos(d) {
+                return Math.log(d / explodeLogA + 1.0) / explodeLogK
+            }
+
+            property real explodeDistance: 0.1
 
             Text {
                 width: parent.width - 16
@@ -6536,11 +6553,16 @@ Rectangle {
                 Slider {
                     id: explodeDistSlider
                     width: 110
+                    // Runs on the normalised log position [0..1]; the content's
+                    // explodePosToDist() converts it to the actual distance.
                     from: 0.0
-                    to: 2.0
-                    stepSize: 0.05
-                    value: partOpsEjContent.explodeDistance
-                    onValueChanged: partOpsEjContent.explodeDistance = value
+                    to: 1.0
+                    // Seed the handle from the default distance (0.1) and keep
+                    // it in sync if explodeDistance is set programmatically.
+                    value: partOpsEjContent.explodeDistToPos(
+                               partOpsEjContent.explodeDistance)
+                    onMoved: partOpsEjContent.explodeDistance =
+                                 partOpsEjContent.explodePosToDist(value)
                 }
                 Text {
                     text: partOpsEjContent.explodeDistance.toFixed(2)
