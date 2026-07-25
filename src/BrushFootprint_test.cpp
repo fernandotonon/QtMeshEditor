@@ -26,9 +26,9 @@ BrushFootprint::ImageRgba makeDiskStamp(int size)
             const float r2 = dx * dx + dy * dy;
             const uint8_t a = r2 <= 1.0f ? 255 : 0;
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)) * 4u;
-            img.pixels[off + 0] = 255;
-            img.pixels[off + 1] = 255;
-            img.pixels[off + 2] = 255;
+            img.pixels[off + 0] = a ? 255 : 0;
+            img.pixels[off + 1] = a ? 255 : 0;
+            img.pixels[off + 2] = a ? 255 : 0;
             img.pixels[off + 3] = a;
         }
     }
@@ -55,7 +55,8 @@ TEST(BrushFootprintTest, RasterizedStampHasStrongCenterAlpha)
     const auto disk = makeDiskStamp(32);
     const auto raster = BrushFootprint::rasterizeStamp(disk, 16);
     ASSERT_FALSE(raster.empty());
-    EXPECT_GT(raster.alpha[8 * raster.size + 8], 0.9f);
+    const int center = (raster.size / 2) * raster.size + (raster.size / 2);
+    EXPECT_GT(raster.alpha[static_cast<size_t>(center)], 0.9f);
     EXPECT_LT(raster.alpha[0], 0.05f);
 }
 
