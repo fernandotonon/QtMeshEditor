@@ -9,6 +9,29 @@
 #include <OgreSceneNode.h>
 #include <OgreSceneManager.h>
 
+namespace {
+// Reparent `node` under the saved parent name (no-op when empty == scene root),
+// then stamp the given LOCAL transform so it sits correctly relative to that
+// parent. Manager::reparentNode preserves WORLD transform, which we don't want
+// here — we want the source's original local pose under its group — so we set
+// the local TRS explicitly afterward.
+void reparentAndSetLocal(Manager* mgr, Ogre::SceneNode* node,
+                         const std::string& parentName,
+                         const Ogre::Vector3& pos, const Ogre::Quaternion& orient,
+                         const Ogre::Vector3& scale)
+{
+    if (!mgr || !node)
+        return;
+    if (!parentName.empty()) {
+        if (Ogre::SceneNode* parent = mgr->getSceneNode(QString::fromStdString(parentName)))
+            mgr->reparentNode(node, parent);
+    }
+    node->setPosition(pos);
+    node->setOrientation(orient);
+    node->setScale(scale);
+}
+} // namespace
+
 ExplodePartsCommand::ExplodePartsCommand(std::string entityName, float distance,
                                          QUndoCommand* parent)
     : QUndoCommand(parent)
@@ -46,10 +69,24 @@ void ExplodePartsCommand::buildOnce()
         mError = QStringLiteral("entity has no scene node");
         return;
     }
+    // Reject a node with child nodes: destroying it would recursively delete an
+    // arbitrary subtree that this command doesn't serialise, so undo could never
+    // restore it. (A node in a GROUP is fine — its parent is preserved below.)
+    if (node->numChildren() > 0) {
+        mError = QStringLiteral("cannot explode a node that has child nodes — "
+                                "ungroup or detach children first");
+        return;
+    }
     mOriginalMesh = entity->getMesh(); // resident for undo.
     mSrcPos = node->getPosition();
     mSrcOrient = node->getOrientation();
     mSrcScale = node->getScale();
+    // Preserve the source node's PARENT so parts (and the restored fused node)
+    // stay in the same group. Empty == direct child of the scene root.
+    Manager* mgr = Manager::getSingletonPtr();
+    Ogre::SceneNode* parent = static_cast<Ogre::SceneNode*>(node->getParent());
+    if (mgr && parent && parent != mgr->getSceneMgr()->getRootSceneNode())
+        mParentNodeName = parent->getName();
 
     PartOpsScene::ExplodeResult r =
         PartOpsScene::explodeEntity(entity, mDistance, mEntityName + std::string("_part"));
@@ -102,10 +139,12 @@ void ExplodePartsCommand::redo()
             QString::fromStdString(mEntityName + "_" + p.name.toStdString()));
         if (!pn)
             continue;
-        const Ogre::Vector3 worldOffset = mSrcOrient * (mSrcScale * p.offset);
-        pn->setPosition(mSrcPos + worldOffset);
-        pn->setOrientation(mSrcOrient);
-        pn->setScale(mSrcScale);
+        // Offset applied in the source node's LOCAL frame (orient·(scale∘off)),
+        // then reparented under the source's original group so parts sit where
+        // the fused mesh sat + separated. addSceneNode created it at root.
+        const Ogre::Vector3 localOffset = mSrcOrient * (mSrcScale * p.offset);
+        reparentAndSetLocal(mgr, pn, mParentNodeName,
+                            mSrcPos + localOffset, mSrcOrient, mSrcScale);
         mgr->createEntity(pn, p.mesh);
         mPartNodeNames.push_back(pn->getName());
     }
@@ -143,13 +182,12 @@ void ExplodePartsCommand::undo()
     }
     mPartNodeNames.clear();
 
-    // Recreate the fused node bound to the original mesh at the source transform.
+    // Recreate the fused node bound to the original mesh at the source transform,
+    // reparented under its original group (if any).
     Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(mEntityName));
     if (!node)
         return;
-    node->setPosition(mSrcPos);
-    node->setOrientation(mSrcOrient);
-    node->setScale(mSrcScale);
+    reparentAndSetLocal(mgr, node, mParentNodeName, mSrcPos, mSrcOrient, mSrcScale);
     mgr->createEntity(node, mOriginalMesh);
 
     if (auto* sel = SelectionSet::getSingleton())

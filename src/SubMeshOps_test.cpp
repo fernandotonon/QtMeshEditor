@@ -279,6 +279,52 @@ TEST(SubMeshOpsTest, JoinBakesRotationIntoPositionsAndNormals)
     EXPECT_NEAR(n0.z, 1.0f, 1e-5f);
 }
 
+TEST(SubMeshOpsTest, JoinReversesWindingUnderMirrorTransform)
+{
+    // A negative-X-scale transform (determinant < 0) mirrors positions; join
+    // must reverse triangle winding + flip tangent handedness so the part
+    // doesn't render back-facing / with inverted normal mapping.
+    EditableSubMesh a;
+    a.materialName = "Mat";
+    a.vertices = {vtx(0, 0, 0), vtx(1, 0, 0), vtx(0, 0, 1)};
+    a.vertices[0].hasTangent = true; a.vertices[0].tangent = Ogre::Vector4(1, 0, 0, 1);
+    addTri(a, 0, 1, 2);
+
+    Ogre::Matrix4 mirror = Ogre::Matrix4::IDENTITY;
+    mirror[0][0] = -1.0f; // flip X
+
+    SubMeshOps::JoinPart pa;
+    pa.subMeshes = {a};
+    pa.transform = mirror;
+
+    auto r = SubMeshOps::joinParts({pa});
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.subMeshes.size(), 1u);
+    // Winding reversed: last two corners swapped (0,1,2 → 0,2,1).
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[0], 0u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[1], 2u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[2], 1u);
+    // Tangent handedness flipped (+1 → −1).
+    EXPECT_FLOAT_EQ(r.subMeshes[0].vertices[0].tangent.w, -1.0f);
+}
+
+TEST(SubMeshOpsTest, JoinKeepsWindingUnderNonMirrorTransform)
+{
+    // A plain rotation (determinant +1) must NOT reverse winding.
+    EditableSubMesh a;
+    a.materialName = "Mat";
+    a.vertices = {vtx(0, 0, 0), vtx(1, 0, 0), vtx(0, 0, 1)};
+    addTri(a, 0, 1, 2);
+    Ogre::Matrix4 rot(Ogre::Quaternion(Ogre::Degree(45), Ogre::Vector3::UNIT_Y));
+
+    SubMeshOps::JoinPart pa; pa.subMeshes = {a}; pa.transform = rot;
+    auto r = SubMeshOps::joinParts({pa});
+    ASSERT_TRUE(r.ok);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[0], 0u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[1], 1u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[2], 2u);
+}
+
 TEST(SubMeshOpsTest, JoinRejectsFewerThanExpectedIsCallerConcern)
 {
     // joinParts itself accepts a single part (used by the explode-then-rejoin

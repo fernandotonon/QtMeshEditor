@@ -56,9 +56,22 @@ void JoinPartsCommand::buildOnce()
         sp.name = n;
         sp.mesh = e->getMesh();
         if (Ogre::SceneNode* node = e->getParentSceneNode()) {
+            // Reject a part with child nodes: destroying it recursively removes
+            // a subtree this command doesn't serialise, so undo can't restore it.
+            if (node->numChildren() > 0) {
+                mError = QStringLiteral("part '%1' has child nodes — ungroup or "
+                                        "detach children before joining")
+                             .arg(QString::fromStdString(n));
+                mSources.clear();
+                return;
+            }
             sp.pos = node->getPosition();
             sp.orient = node->getOrientation();
             sp.scale = node->getScale();
+            // Remember the part's group so undo restores it there.
+            Ogre::SceneNode* parent = static_cast<Ogre::SceneNode*>(node->getParent());
+            if (parent && parent != mgr->getSceneMgr()->getRootSceneNode())
+                sp.parentName = parent->getName();
         }
         mSources.push_back(std::move(sp));
         entities.push_back(e);
@@ -136,12 +149,20 @@ void JoinPartsCommand::undo()
         mFusedNodeName.clear();
     }
 
-    // Recreate each part node with its captured transform + original mesh.
+    // Recreate each part node with its captured LOCAL transform + original mesh,
+    // reparented under its original group (if any). addSceneNode creates at root;
+    // reparentNode preserves WORLD transform, so set the local TRS AFTER the
+    // reparent to restore the exact pose relative to the group.
     Ogre::SceneNode* last = nullptr;
     for (const auto& sp : mSources) {
         Ogre::SceneNode* node = mgr->addSceneNode(QString::fromStdString(sp.name));
         if (!node)
             continue;
+        if (!sp.parentName.empty()) {
+            if (Ogre::SceneNode* parent =
+                    mgr->getSceneNode(QString::fromStdString(sp.parentName)))
+                mgr->reparentNode(node, parent);
+        }
         node->setPosition(sp.pos);
         node->setOrientation(sp.orient);
         node->setScale(sp.scale);

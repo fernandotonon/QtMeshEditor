@@ -47,9 +47,10 @@ public:
 
 private:
     struct SourcePart {
-        std::string      name;    ///< original node/entity name.
-        Ogre::MeshPtr    mesh;    ///< original mesh (resident for undo).
-        Ogre::Vector3    pos = Ogre::Vector3::ZERO;
+        std::string      name;       ///< original node/entity name.
+        std::string      parentName; ///< original parent group node (empty == root).
+        Ogre::MeshPtr    mesh;       ///< original mesh (resident for undo).
+        Ogre::Vector3    pos = Ogre::Vector3::ZERO;    ///< LOCAL TRS (relative to parent).
         Ogre::Quaternion orient = Ogre::Quaternion::IDENTITY;
         Ogre::Vector3    scale = Ogre::Vector3::UNIT_SCALE;
     };

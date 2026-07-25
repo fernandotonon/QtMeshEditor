@@ -63,11 +63,15 @@ private:
     };
     std::vector<PartCache> mParts;
 
-    // Source node transform captured at explode time (undo restores the fused
-    // node with it, and each part starts here + its offset).
+    // Source node LOCAL transform captured at explode time (undo restores the
+    // fused node with it; each part starts here + its offset). Parts are
+    // reparented under the SAME parent as the source, so local TRS is correct.
     Ogre::Vector3    mSrcPos = Ogre::Vector3::ZERO;
     Ogre::Quaternion mSrcOrient = Ogre::Quaternion::IDENTITY;
     Ogre::Vector3    mSrcScale = Ogre::Vector3::UNIT_SCALE;
+    // Name of the source node's parent (empty if it was a direct child of the
+    // scene root) so parts and the restored fused node keep the same grouping.
+    std::string      mParentNodeName;
 
     Ogre::MeshPtr mOriginalMesh;          ///< fused mesh, resident for undo.
     std::vector<std::string> mPartNodeNames; ///< current part node names (post-redo).
