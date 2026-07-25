@@ -99,15 +99,13 @@ TEST(BrushAssetLibraryTest, BundledAssetsResolveOnDisk)
     for (const auto& name : BrushAssetLibrary::bundledStampNames()) {
         const std::string path = BrushAssetLibrary::resolvePath(
             name, BrushAssetLibrary::AssetKind::Stamp);
-        if (path.empty())
-            GTEST_SKIP() << "Bundled stamp media not beside test binary";
+        ASSERT_FALSE(path.empty()) << name;
         EXPECT_TRUE(QFile::exists(QString::fromUtf8(path.c_str()))) << name;
     }
     for (const auto& name : BrushAssetLibrary::bundledTilingNames()) {
         const std::string path = BrushAssetLibrary::resolvePath(
             name, BrushAssetLibrary::AssetKind::Tiling);
-        if (path.empty())
-            GTEST_SKIP() << "Bundled tiling media not beside test binary";
+        ASSERT_FALSE(path.empty()) << name;
         EXPECT_TRUE(QFile::exists(QString::fromUtf8(path.c_str()))) << name;
     }
 }

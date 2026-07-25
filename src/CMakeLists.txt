@@ -1007,6 +1007,9 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/media/Main
             $<TARGET_FILE_DIR:UnitTests>/media/Main
         COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/media/paint
+            $<TARGET_FILE_DIR:UnitTests>/media/paint
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/profiles
             $<TARGET_FILE_DIR:UnitTests>/profiles
         COMMENT "Copying RTSS shader resources and platform profiles to test binary directory"
