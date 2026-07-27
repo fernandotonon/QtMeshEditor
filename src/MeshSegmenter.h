@@ -155,6 +155,14 @@ public:
         // scrambles parts on real characters — kept for future refinement. The
         // shipping cleanup is smoothLabelBoundaries + cleanupLabelIslands.
         bool planarRecut = false;
+        // Level the two LEG cuts to a shared horizontal height so an explode is
+        // symmetric — a clean, level hip line instead of the lopsided,
+        // differently-heighted legs the model produces (#863). BODY category
+        // only; scoped strictly to the leg↔torso boundary via levelLimbCut, so
+        // unlike planarRecut it can't scramble other parts. Arms are excluded on
+        // purpose — they attach along a VERTICAL seam where a horizontal level
+        // is meaningless. Default ON; gated by `cleanupIslands` (same switch).
+        bool levelLimbCuts = true;
     };
 
     struct Result {
@@ -274,6 +282,25 @@ public:
     static int smoothLabelBoundaries(std::vector<int>& faceLabels,
                                      const uint32_t* indices, int indexCount,
                                      int iterations = 3, int minAgree = 2);
+
+    // Level a mirror-pair limb cut to a single SHARED horizontal height (#863).
+    // The ONNX body model cuts the two legs (and two arms) at slightly different
+    // up-axis heights, so an explode looks lopsided — one leg longer, a ragged
+    // hip line — unlike the clean symmetric arms. This scopes STRICTLY to the
+    // one limb-pair↔`shared` boundary (e.g. LeftLeg/RightLeg ↔ Torso): it finds
+    // the shared cut height `h` (the median up-axis value of the boundary faces
+    // pooled across BOTH limbs — so left and right agree), then reassigns ONLY
+    // faces currently labelled a limb or `shared` whose centroid crosses `h`
+    // within a thin band: below `h` in a limb's lateral column → that limb,
+    // above `h` → `shared`. Arms/head and every non-participating label are
+    // untouched (this is why it's safe where the generic planarBoundaryRecut was
+    // not). `up`=0/1/2 world up axis. Pure-data; needs `positions`; edits
+    // `faceLabels`, returns faces relabelled. Runs after smoothing/island passes.
+    static int levelLimbCut(std::vector<int>& faceLabels,
+                            const float* positions, int vertexCount,
+                            const uint32_t* indices, int indexCount,
+                            int limbLeft, int limbRight, int shared, int up,
+                            float bandFraction = 0.10f);
 
     // Recut adjacent part boundaries with a straight, knife-like PLANE (#863).
     // Local tooth-shaving (smoothLabelBoundaries) can't flatten a whole seam;

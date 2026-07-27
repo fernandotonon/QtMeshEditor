@@ -542,3 +542,50 @@ TEST(MeshSegmenter, SmoothBoundaryLeavesStraightSeamAlone)
     EXPECT_EQ(flipped, 0);
     EXPECT_EQ(faces, before);
 }
+
+// ---- levelLimbCut (#863 symmetric level leg cut) --------------------------
+
+TEST(MeshSegmenter, LevelLimbCutEqualisesLegHeights)
+{
+    // Two "legs" (labels 5,6) below a torso (2), but cut at DIFFERENT heights:
+    // a 4×6 grid, up = Y. Rows 0-1 = legs (left x<3 →5, right x>=3 →6), rows
+    // 2-5 = torso, EXCEPT the right leg pokes one row higher on its side than
+    // the left. levelLimbCut should pull both to a shared height.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(6, 6, pos, idx);   // 6×6 quads, verts at integer coords
+    const int W=6;
+    std::vector<int> faces((int)idx.size()/3, 2);   // torso default
+    for (int y=0;y<6;++y)
+        for (int x=0;x<6;++x){
+            const int q=y*W+x;
+            int lab=2;
+            if (x<3 && y<2) lab=5;            // left leg: rows 0-1
+            else if (x>=3 && y<3) lab=6;      // right leg: rows 0-2 (one higher!)
+            faces[q*2]=lab; faces[q*2+1]=lab;
+        }
+    // Baseline: right leg reaches y up to ~3, left only ~2 (asymmetric).
+    const int changed = MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
+                                         idx.data(), (int)idx.size(),
+                                         5, 6, 2, /*up=*/1);
+    EXPECT_GT(changed, 0);
+    // After leveling, both legs' top rows should agree — count leg faces per side
+    // and assert the left/right leg counts are now close (within 20%).
+    int nL=0,nR=0; for(int l:faces){ if(l==5)++nL; else if(l==6)++nR; }
+    ASSERT_GT(nL,0); ASSERT_GT(nR,0);
+    const double ratio = double(std::min(nL,nR))/std::max(nL,nR);
+    EXPECT_GT(ratio, 0.75);
+}
+
+TEST(MeshSegmenter, LevelLimbCutNoOpWhenPartMissing)
+{
+    // Only one leg present → nothing to level, returns 0, labels unchanged.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(6, 6, pos, idx);
+    std::vector<int> faces((int)idx.size()/3, 2);
+    for (int y=0;y<2;++y) for(int x=0;x<3;++x){ const int q=y*6+x; faces[q*2]=5; faces[q*2+1]=5; }
+    auto before=faces;
+    const int changed = MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
+                                         idx.data(), (int)idx.size(), 5, 6, 2, 1);
+    EXPECT_EQ(changed, 0);
+    EXPECT_EQ(faces, before);
+}

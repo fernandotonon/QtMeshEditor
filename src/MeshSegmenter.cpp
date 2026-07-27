@@ -490,7 +490,10 @@ int MeshSegmenter::smoothLabelBoundaries(std::vector<int>& faceLabels,
 }
 
 namespace {
-struct Vec3 { float x = 0, y = 0, z = 0; };
+struct Vec3 {
+    float x = 0, y = 0, z = 0;
+    float comp(int a) const { return a == 0 ? x : (a == 1 ? y : z); }
+};
 inline Vec3 faceCentroid(const float* pos, const uint32_t* idx, int f)
 {
     Vec3 c;
@@ -660,6 +663,86 @@ int MeshSegmenter::planarBoundaryRecut(std::vector<int>& faceLabels,
             const int want = (sd < 0.0f) ? A : B;
             if (want != lf) { faceLabels[f] = want; ++relabelled; }
         }
+    }
+    return relabelled;
+}
+
+int MeshSegmenter::levelLimbCut(std::vector<int>& faceLabels,
+                                const float* positions, int vertexCount,
+                                const uint32_t* indices, int indexCount,
+                                int limbLeft, int limbRight, int shared, int up,
+                                float bandFraction)
+{
+    const int faceCount = static_cast<int>(faceLabels.size());
+    if (faceCount <= 0 || !positions || vertexCount <= 0 ||
+        !indices || indexCount < faceCount * 3)
+        return 0;
+    up = std::clamp(up, 0, 2);
+    const int lat = (up == 0) ? 2 : 0; // a lateral axis distinct from up
+
+    // Need both limbs and the shared part actually present, or there's no cut.
+    int nL = 0, nR = 0, nS = 0;
+    for (int l : faceLabels) {
+        if (l == limbLeft) ++nL; else if (l == limbRight) ++nR; else if (l == shared) ++nS;
+    }
+    if (nL == 0 || nR == 0 || nS == 0)
+        return 0;
+
+    // Up-axis extent for the band width + the lateral mid (which-limb split).
+    float upMin = 1e30f, upMax = -1e30f, latMin = 1e30f, latMax = -1e30f;
+    for (int v = 0; v < vertexCount; ++v) {
+        const float u = positions[v * 3 + up], a = positions[v * 3 + lat];
+        upMin = std::min(upMin, u); upMax = std::max(upMax, u);
+        latMin = std::min(latMin, a); latMax = std::max(latMax, a);
+    }
+    const float upSpan = upMax - upMin;
+    if (!(upSpan > 0.0f))
+        return 0;
+    const float latMid = 0.5f * (latMin + latMax);
+    const float band = bandFraction * upSpan;
+
+    const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
+    std::vector<Vec3> centroid(faceCount);
+    for (int f = 0; f < faceCount; ++f)
+        centroid[f] = faceCentroid(positions, indices, f);
+
+    // Shared cut height h = median up-value of the boundary faces (limb faces
+    // adjacent to `shared` and vice versa), pooled across BOTH limbs so the two
+    // legs cut level. Median resists the ragged fringe outliers a mean chases.
+    std::vector<float> boundaryUp;
+    for (int f = 0; f < faceCount; ++f) {
+        const int lf = faceLabels[f];
+        const bool isLimb = (lf == limbLeft || lf == limbRight);
+        if (!isLimb && lf != shared) continue;
+        for (int nb : adj[f]) {
+            const int ln = faceLabels[nb];
+            const bool seam = (isLimb && ln == shared) ||
+                              (lf == shared && (ln == limbLeft || ln == limbRight));
+            if (seam) { boundaryUp.push_back(centroid[f].comp(up)); break; }
+        }
+    }
+    if (boundaryUp.size() < 6)
+        return 0; // not enough seam to trust a level
+    std::sort(boundaryUp.begin(), boundaryUp.end());
+    const float h = boundaryUp[boundaryUp.size() / 2];
+
+    // Reassign only limb/shared faces whose centroid is within `band` of h:
+    // below h → the limb on that lateral side; above h → shared.
+    int relabelled = 0;
+    for (int f = 0; f < faceCount; ++f) {
+        const int lf = faceLabels[f];
+        const bool isLimb = (lf == limbLeft || lf == limbRight);
+        if (!isLimb && lf != shared) continue;
+        const float fu = centroid[f].comp(up);
+        if (std::fabs(fu - h) > band) continue;
+        int want;
+        if (fu < h) {
+            const float fl = centroid[f].comp(lat);
+            want = (fl >= latMid) ? limbRight : limbLeft; // matches classify() sign
+        } else {
+            want = shared;
+        }
+        if (want != lf) { faceLabels[f] = want; ++relabelled; }
     }
     return relabelled;
 }
@@ -924,6 +1007,18 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
         int changed = 0;
         changed += smoothLabelBoundaries(r.faceLabels, indices, indexCount,
                                          opts.boundarySmoothIterations);
+        // Level the mirror-limb cuts (legs/arms) to a shared horizontal line so
+        // an explode is symmetric — BODY only, scoped to the limb↔torso seam.
+        // LEGS only: they attach to the torso along a ~horizontal hip seam, so a
+        // shared up-axis cut level makes both legs symmetric. Arms attach along a
+        // VERTICAL (lateral) seam — a horizontal level there is meaningless and
+        // collapses them into the torso — so arms are deliberately excluded.
+        if (opts.levelLimbCuts && cat == Category::Body) {
+            changed += levelLimbCut(r.faceLabels, positions, vertexCount,
+                                    indices, indexCount,
+                                    (int)Part::LeftLeg, (int)Part::RightLeg,
+                                    (int)Part::Torso, opts.upAxis);
+        }
         // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
         if (opts.planarRecut)
             changed += planarBoundaryRecut(r.faceLabels, positions, vertexCount,
@@ -1258,6 +1353,16 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
             int changed = 0;
             changed += smoothLabelBoundaries(r.faceLabels, indices, indexCount,
                                              opts.boundarySmoothIterations);
+            // Level the mirror-limb cuts (legs/arms) to a shared horizontal line
+            // so an explode is symmetric — BODY only, scoped to the limb↔torso
+            // seam (fixes the model's lopsided, differently-heighted legs).
+            // LEGS only (see the geometric path for why arms are excluded).
+            if (opts.levelLimbCuts && cat == Category::Body) {
+                changed += levelLimbCut(r.faceLabels, positions, vertexCount,
+                                        indices, indexCount,
+                                        (int)Part::LeftLeg, (int)Part::RightLeg,
+                                        (int)Part::Torso, opts.upAxis);
+            }
             // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
             if (opts.planarRecut)
                 changed += planarBoundaryRecut(r.faceLabels, positions, vertexCount,
