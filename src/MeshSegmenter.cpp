@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
+#include <tuple>
 #include <numeric>
 #include <unordered_map>
 
@@ -688,62 +690,130 @@ int MeshSegmenter::levelLimbCut(std::vector<int>& faceLabels,
     if (nL == 0 || nR == 0 || nS == 0)
         return 0;
 
-    // Up-axis extent for the band width + the lateral mid (which-limb split).
-    float upMin = 1e30f, upMax = -1e30f, latMin = 1e30f, latMax = -1e30f;
-    for (int v = 0; v < vertexCount; ++v) {
-        const float u = positions[v * 3 + up], a = positions[v * 3 + lat];
-        upMin = std::min(upMin, u); upMax = std::max(upMax, u);
-        latMin = std::min(latMin, a); latMax = std::max(latMax, a);
-    }
-    const float upSpan = upMax - upMin;
-    if (!(upSpan > 0.0f))
-        return 0;
-    const float latMid = 0.5f * (latMin + latMax);
-    const float band = bandFraction * upSpan;
-
+    (void)bandFraction; // (legacy horizontal-band knob; unused by the mirror path)
     const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
     std::vector<Vec3> centroid(faceCount);
     for (int f = 0; f < faceCount; ++f)
         centroid[f] = faceCentroid(positions, indices, f);
 
-    // Shared cut height h = median up-value of the boundary faces (limb faces
-    // adjacent to `shared` and vice versa), pooled across BOTH limbs so the two
-    // legs cut level. Median resists the ragged fringe outliers a mean chases.
-    std::vector<float> boundaryUp;
+    // MIRROR-SYMMETRISE the two limbs' cut (legs) rather than forcing a flat
+    // horizontal waistline. The model's per-leg boundary has a natural DIAGONAL
+    // shape (like the arms) — the only real defect is that the LEFT and RIGHT
+    // boundaries disagree, so an explode looks lopsided. We reflect the labelling
+    // across the SAGITTAL plane (the lateral centre of the limb region) and make
+    // each near-seam face agree with its mirror — preserving the diagonal cut,
+    // making the two legs symmetric, and (because reflection maps a foot to the
+    // OPPOSITE foot's place with the limb labels swapped) keeping each foot with
+    // its own leg. Horizontal height is never used, so the torso skirt bottom is
+    // not dragged down (the user's two regressions with the flat cut).
+
+    // Sagittal centre = lateral mean of the two limbs' vertices (not the whole
+    // mesh, so an extended arm doesn't skew it).
+    double latSum = 0; long latN = 0;
+    for (int f = 0; f < faceCount; ++f) {
+        const int lf = faceLabels[f];
+        if (lf == limbLeft || lf == limbRight) { latSum += centroid[f].comp(lat); ++latN; }
+    }
+    if (latN == 0) return 0;
+    const float latCentre = float(latSum / latN);
+
+    // Which limb sits on the +lat side (derive it; don't assume).
+    double latLSum = 0, latRSum = 0; long nLf = 0, nRf = 0;
+    for (int f = 0; f < faceCount; ++f) {
+        const int lf = faceLabels[f];
+        if (lf == limbLeft)  { latLSum += centroid[f].comp(lat); ++nLf; }
+        else if (lf == limbRight) { latRSum += centroid[f].comp(lat); ++nRf; }
+    }
+    if (nLf == 0 || nRf == 0) return 0;
+    const bool rightIsPositive = (latRSum / nRf) >= (latLSum / nLf);
+    auto limbOnSide = [&](bool positive) { return (positive == rightIsPositive) ? limbRight : limbLeft; };
+
+    // Only mirror-fix faces NEAR the limb↔torso seam (bounded flood from seam
+    // faces), so distant geometry (a raised foot, bent knee) is never touched.
+    std::vector<int> seamFaces;
     for (int f = 0; f < faceCount; ++f) {
         const int lf = faceLabels[f];
         const bool isLimb = (lf == limbLeft || lf == limbRight);
         if (!isLimb && lf != shared) continue;
         for (int nb : adj[f]) {
             const int ln = faceLabels[nb];
-            const bool seam = (isLimb && ln == shared) ||
-                              (lf == shared && (ln == limbLeft || ln == limbRight));
-            if (seam) { boundaryUp.push_back(centroid[f].comp(up)); break; }
+            if ((isLimb && ln == shared) ||
+                (lf == shared && (ln == limbLeft || ln == limbRight))) { seamFaces.push_back(f); break; }
         }
     }
-    if (boundaryUp.size() < 6)
-        return 0; // not enough seam to trust a level
-    std::sort(boundaryUp.begin(), boundaryUp.end());
-    const float h = boundaryUp[boundaryUp.size() / 2];
+    if (seamFaces.size() < 6) return 0;
+    const int maxHops = 8;
+    std::vector<int> hop(faceCount, -1);
+    std::vector<int> frontier = seamFaces;
+    for (int s : seamFaces) hop[s] = 0;
+    for (int d = 0; d < maxHops && !frontier.empty(); ++d) {
+        std::vector<int> next;
+        for (int f : frontier)
+            for (int nb : adj[f])
+                if (hop[nb] == -1) { hop[nb] = d + 1; next.push_back(nb); }
+        frontier.swap(next);
+    }
 
-    // Reassign only limb/shared faces whose centroid is within `band` of h:
-    // below h → the limb on that lateral side; above h → shared.
+    // Spatial hash of face centroids for nearest-mirror lookup (grid keyed by
+    // rounded position; search the 27 neighbouring cells).
+    float bmin[3] = {1e30f,1e30f,1e30f}, bmax[3] = {-1e30f,-1e30f,-1e30f};
+    for (int f = 0; f < faceCount; ++f)
+        for (int a = 0; a < 3; ++a) { bmin[a]=std::min(bmin[a],centroid[f].comp(a)); bmax[a]=std::max(bmax[a],centroid[f].comp(a)); }
+    float diag = 0; for (int a=0;a<3;++a) diag += (bmax[a]-bmin[a])*(bmax[a]-bmin[a]); diag = std::sqrt(diag);
+    const float cell = std::max(1e-6f, diag * 0.02f);
+    auto key = [&](float x,float y,float z){ return std::make_tuple(int(std::floor(x/cell)),int(std::floor(y/cell)),int(std::floor(z/cell))); };
+    std::map<std::tuple<int,int,int>, std::vector<int>> grid;
+    for (int f = 0; f < faceCount; ++f) {
+        const Vec3& c = centroid[f];
+        grid[key(c.comp(0),c.comp(1),c.comp(2))].push_back(f);
+    }
+    auto nearestFace = [&](float x,float y,float z)->int{
+        int best=-1; float bd=1e30f; auto[kx,ky,kz]=key(x,y,z);
+        for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy)for(int dz=-1;dz<=1;++dz){
+            auto it=grid.find(std::make_tuple(kx+dx,ky+dy,kz+dz)); if(it==grid.end())continue;
+            for(int f:it->second){const Vec3&c=centroid[f];
+                float d=(c.comp(0)-x)*(c.comp(0)-x)+(c.comp(1)-y)*(c.comp(1)-y)+(c.comp(2)-z)*(c.comp(2)-z);
+                if(d<bd){bd=d;best=f;}}}
+        return best;
+    };
+
+    // For each near-seam candidate face, look at its mirror. If the mirror is a
+    // limb but this face is torso (or vice versa), adopt the mirrored decision —
+    // mapped to THIS side's limb label. Take the UNION of "is a limb" across the
+    // mirror pair so both legs get the more-inclusive (symmetric) boundary; a
+    // face becomes torso only if BOTH it and its mirror are torso.
+    std::vector<int> out = faceLabels;
     int relabelled = 0;
     for (int f = 0; f < faceCount; ++f) {
+        if (hop[f] < 0) continue;
         const int lf = faceLabels[f];
         const bool isLimb = (lf == limbLeft || lf == limbRight);
         if (!isLimb && lf != shared) continue;
-        const float fu = centroid[f].comp(up);
-        if (std::fabs(fu - h) > band) continue;
-        int want;
-        if (fu < h) {
-            const float fl = centroid[f].comp(lat);
-            want = (fl >= latMid) ? limbRight : limbLeft; // matches classify() sign
+        const Vec3& c = centroid[f];
+        // reflect lateral about the sagittal centre
+        float mx=c.comp(0), my=c.comp(1), mz=c.comp(2);
+        const float ml = 2.0f*latCentre - c.comp(lat);
+        if (lat==0) mx=ml; else if (lat==1) my=ml; else mz=ml;
+        const int mf = nearestFace(mx,my,mz);
+        if (mf < 0) continue;
+        const int lm = faceLabels[mf];
+        const bool mirrorIsLimb = (lm == limbLeft || lm == limbRight);
+        // decide the symmetric label for THIS face by its lateral side
+        const bool positive = (c.comp(lat) >= latCentre);
+        const int sideLimb = limbOnSide(positive);
+        int want = lf;
+        if (isLimb && mirrorIsLimb) {
+            want = sideLimb;              // both agree it's a limb → this side's limb
+        } else if (isLimb && !mirrorIsLimb) {
+            want = sideLimb;              // union: keep as limb (mirror will follow)
+        } else if (!isLimb && mirrorIsLimb) {
+            want = sideLimb;              // union: torso here but limb across → make limb
         } else {
-            want = shared;
+            want = shared;               // both torso
         }
-        if (want != lf) { faceLabels[f] = want; ++relabelled; }
+        if (want != lf) { out[f] = want; ++relabelled; }
     }
+    faceLabels.swap(out);
     return relabelled;
 }
 

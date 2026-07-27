@@ -543,37 +543,41 @@ TEST(MeshSegmenter, SmoothBoundaryLeavesStraightSeamAlone)
     EXPECT_EQ(faces, before);
 }
 
-// ---- levelLimbCut (#863 symmetric level leg cut) --------------------------
+// ---- levelLimbCut (#863 mirror-symmetric leg cut) -------------------------
 
-TEST(MeshSegmenter, LevelLimbCutEqualisesLegHeights)
+TEST(MeshSegmenter, LevelLimbCutSymmetrisesLegsAndKeepsSides)
 {
-    // Two "legs" (labels 5,6) below a torso (2), but cut at DIFFERENT heights:
-    // a 4×6 grid, up = Y. Rows 0-1 = legs (left x<3 →5, right x>=3 →6), rows
-    // 2-5 = torso, EXCEPT the right leg pokes one row higher on its side than
-    // the left. levelLimbCut should pull both to a shared height.
+    // 6×6 grid, up=Y, lateral=X. Left leg (5) at x<3, right leg (6) at x>=3,
+    // torso (2) above — but ASYMMETRIC: the right leg pokes one row higher than
+    // the left. Mirror-symmetrise should equalise the two legs AND keep each leg
+    // on its own lateral side (no foot-swap: label 5 stays on x<3, 6 on x>=3).
     std::vector<float> pos; std::vector<uint32_t> idx;
-    quadGrid(6, 6, pos, idx);   // 6×6 quads, verts at integer coords
+    quadGrid(6, 6, pos, idx);
     const int W=6;
     std::vector<int> faces((int)idx.size()/3, 2);   // torso default
     for (int y=0;y<6;++y)
         for (int x=0;x<6;++x){
-            const int q=y*W+x;
-            int lab=2;
+            const int q=y*W+x; int lab=2;
             if (x<3 && y<2) lab=5;            // left leg: rows 0-1
             else if (x>=3 && y<3) lab=6;      // right leg: rows 0-2 (one higher!)
             faces[q*2]=lab; faces[q*2+1]=lab;
         }
-    // Baseline: right leg reaches y up to ~3, left only ~2 (asymmetric).
     const int changed = MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
                                          idx.data(), (int)idx.size(),
                                          5, 6, 2, /*up=*/1);
     EXPECT_GT(changed, 0);
-    // After leveling, both legs' top rows should agree — count leg faces per side
-    // and assert the left/right leg counts are now close (within 20%).
+    // Symmetric leg sizes now (within 20%).
     int nL=0,nR=0; for(int l:faces){ if(l==5)++nL; else if(l==6)++nR; }
     ASSERT_GT(nL,0); ASSERT_GT(nR,0);
-    const double ratio = double(std::min(nL,nR))/std::max(nL,nR);
-    EXPECT_GT(ratio, 0.75);
+    EXPECT_GT(double(std::min(nL,nR))/std::max(nL,nR), 0.75);
+    // No foot-swap: every label-5 quad stays on the left (x<3), every label-6 on
+    // the right (x>=3). (quad q at (q%W, q/W); its two faces are 2q, 2q+1.)
+    for (int q=0;q<W*6;++q){ const int x=q%W;
+        for (int fi : {q*2, q*2+1}) {
+            if (faces[fi]==5) EXPECT_LT(x,3) << "left-leg label on right side (swap!)";
+            if (faces[fi]==6) EXPECT_GE(x,3) << "right-leg label on left side (swap!)";
+        }
+    }
 }
 
 TEST(MeshSegmenter, LevelLimbCutNoOpWhenPartMissing)

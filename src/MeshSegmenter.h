@@ -283,19 +283,25 @@ public:
                                      const uint32_t* indices, int indexCount,
                                      int iterations = 3, int minAgree = 2);
 
-    // Level a mirror-pair limb cut to a single SHARED horizontal height (#863).
-    // The ONNX body model cuts the two legs (and two arms) at slightly different
-    // up-axis heights, so an explode looks lopsided — one leg longer, a ragged
-    // hip line — unlike the clean symmetric arms. This scopes STRICTLY to the
-    // one limb-pair↔`shared` boundary (e.g. LeftLeg/RightLeg ↔ Torso): it finds
-    // the shared cut height `h` (the median up-axis value of the boundary faces
-    // pooled across BOTH limbs — so left and right agree), then reassigns ONLY
-    // faces currently labelled a limb or `shared` whose centroid crosses `h`
-    // within a thin band: below `h` in a limb's lateral column → that limb,
-    // above `h` → `shared`. Arms/head and every non-participating label are
-    // untouched (this is why it's safe where the generic planarBoundaryRecut was
-    // not). `up`=0/1/2 world up axis. Pure-data; needs `positions`; edits
-    // `faceLabels`, returns faces relabelled. Runs after smoothing/island passes.
+    // MIRROR-SYMMETRISE a mirror-pair limb cut (legs) across the sagittal plane
+    // (#863). The ONNX body model gives each leg a reasonable DIAGONAL boundary
+    // (like the arms) but the LEFT and RIGHT boundaries disagree, so an explode
+    // looks lopsided. Rather than forcing a flat horizontal waistline (which
+    // dragged the torso skirt into the legs and swapped feet), this reflects the
+    // labelling across the limb region's lateral centre and makes each near-seam
+    // face agree with its mirror — preserving the natural diagonal cut, making
+    // the two legs symmetric, and keeping each foot with its own leg (reflection
+    // maps a foot to the opposite foot with the limb labels swapped). Union rule:
+    // a face is a limb if it OR its mirror is → the more-inclusive symmetric
+    // boundary; torso only if both are. Scoped to faces within a few edge-hops
+    // of the limb↔`shared` seam, so distant geometry (a raised foot, bent knee)
+    // is untouched. `limbLeft/limbRight`↔`shared` (e.g. LeftLeg/RightLeg↔Torso);
+    // arms are NOT passed here (vertical seam — mirroring across sagittal is
+    // fine for them too but they're already symmetric). `up`=0/1/2 world up axis;
+    // lateral is derived from it. `bandFraction` is a legacy no-op (kept for ABI/
+    // call-site stability). Pure-data; needs `positions`; edits `faceLabels`,
+    // returns faces relabelled. Runs right AFTER smoothLabelBoundaries and BEFORE
+    // cleanupLabelIslands (the island pass mops up any tiny stray it leaves).
     static int levelLimbCut(std::vector<int>& faceLabels,
                             const float* positions, int vertexCount,
                             const uint32_t* indices, int indexCount,
