@@ -149,6 +149,8 @@ PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 BrushEngine.cpp
+BrushFootprint.cpp
+BrushAssetLibrary.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
@@ -1004,6 +1006,9 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/media/Main
             $<TARGET_FILE_DIR:UnitTests>/media/Main
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/media/paint
+            $<TARGET_FILE_DIR:UnitTests>/media/paint
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/profiles
             $<TARGET_FILE_DIR:UnitTests>/profiles

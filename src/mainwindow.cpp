@@ -1,3 +1,4 @@
+#include <memory>
 #include <QMessageBox>
 #include <QDir>
 #include <QFileDialog>
@@ -31,6 +32,7 @@
 #include <QJSEngine>
 #include <QFileInfo>
 #include <QEvent>
+#include "BrushFootprint.h"
 #include "SentryReporter.h"
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
@@ -162,6 +164,11 @@
 #include <QColorDialog>
 #include <QSignalBlocker>
 #include <QGridLayout>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QAbstractSlider>
 #include <QToolBar>
 #include <QAction>
 #include <QPlainTextEdit>
@@ -255,6 +262,278 @@ QString primaryCloudAssetPath()
     }
     return {};
 }
+
+QPixmap pixmapFromDataUri(const QString& uri)
+{
+    const int comma = uri.indexOf(QLatin1Char(','));
+    if (comma < 0)
+        return {};
+    QPixmap pm;
+    pm.loadFromData(QByteArray::fromBase64(uri.mid(comma + 1).toLatin1()), "PNG");
+    return pm;
+}
+
+class PaintAssetDropFilter : public QObject {
+public:
+    explicit PaintAssetDropFilter(TexturePaintController* tpc, QObject* parent = nullptr)
+        : QObject(parent)
+        , m_tpc(tpc)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        Q_UNUSED(watched);
+        if (event->type() == QEvent::DragEnter) {
+            auto* e = static_cast<QDragEnterEvent*>(event);
+            if (e->mimeData()->hasUrls()) {
+                e->acceptProposedAction();
+                return true;
+            }
+        } else if (event->type() == QEvent::Drop) {
+            auto* e = static_cast<QDropEvent*>(event);
+            for (const QUrl& url : e->mimeData()->urls()) {
+                if (!url.isLocalFile())
+                    continue;
+                m_tpc->importStampAsset(url.toLocalFile());
+            }
+            e->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    TexturePaintController* m_tpc = nullptr;
+};
+
+class StampLibraryDialog : public QDialog {
+public:
+    StampLibraryDialog(TexturePaintController* tpc, QWidget* parent)
+        : QDialog(parent)
+        , m_tpc(tpc)
+    {
+        setWindowTitle(tr("Stamp library"));
+        setMinimumSize(380, 340);
+        auto* lay = new QVBoxLayout(this);
+        lay->addWidget(new QLabel(
+            tr("Choose a stamp brush. Drop PNG files here or use Import."), this));
+
+        m_scroll = new QScrollArea(this);
+        m_scroll->setWidgetResizable(true);
+        m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_host = new QWidget(m_scroll);
+        m_grid = new QGridLayout(m_host);
+        m_grid->setContentsMargins(0, 0, 0, 0);
+        m_grid->setSpacing(6);
+        m_scroll->setWidget(m_host);
+        lay->addWidget(m_scroll, 1);
+
+        m_group = new QButtonGroup(this);
+        m_group->setExclusive(true);
+
+        auto* btnRow = new QHBoxLayout();
+        m_importBtn = new QPushButton(tr("Import…"), this);
+        m_renameBtn = new QPushButton(tr("Rename…"), this);
+        m_deleteBtn = new QPushButton(tr("Delete"), this);
+        btnRow->addWidget(m_importBtn);
+        btnRow->addWidget(m_renameBtn);
+        btnRow->addWidget(m_deleteBtn);
+        lay->addLayout(btnRow);
+
+        auto* closeRow = new QHBoxLayout();
+        closeRow->addStretch();
+        auto* doneBtn = new QPushButton(tr("Done"), this);
+        closeRow->addWidget(doneBtn);
+        lay->addLayout(closeRow);
+
+        connect(doneBtn, &QPushButton::clicked, this, &QDialog::accept);
+        connect(m_importBtn, &QPushButton::clicked, this, [this]() { importStamp(); });
+        connect(m_renameBtn, &QPushButton::clicked, this, [this]() { renameStamp(); });
+        connect(m_deleteBtn, &QPushButton::clicked, this, [this]() { deleteStamp(); });
+        connect(m_tpc, &TexturePaintController::stampChanged, this, [this]() { onStampChanged(); });
+
+        setAcceptDrops(true);
+        auto* dropFilter = new PaintAssetDropFilter(m_tpc, this);
+        installEventFilter(dropFilter);
+
+        m_catalog = m_tpc->stampNames();
+        rebuildGrid();
+    }
+
+private:
+    void onStampChanged()
+    {
+        const QStringList names = m_tpc->stampNames();
+        if (names != m_catalog) {
+            m_catalog = names;
+            rebuildGrid();
+        } else {
+            updateSelection();
+        }
+    }
+
+    void clearGrid()
+    {
+        while (QLayoutItem* item = m_grid->takeAt(0)) {
+            if (QWidget* w = item->widget()) {
+                if (auto* btn = qobject_cast<QAbstractButton*>(w))
+                    m_group->removeButton(btn);
+                delete w;
+            }
+            delete item;
+        }
+    }
+
+    void rebuildGrid()
+    {
+        clearGrid();
+        const QString active = m_tpc->activeStampName();
+        int col = 0;
+        int row = 0;
+        constexpr int kCols = 6;
+        const QString tileStyle = QStringLiteral(
+            "QToolButton { border: 1px solid palette(mid); border-radius: 4px; padding: 2px; }"
+            "QToolButton:checked { border: 2px solid palette(highlight);"
+            " background-color: palette(highlight); }"
+            "QToolButton:hover:!checked { border-color: palette(highlight); }");
+        for (const QString& name : m_catalog) {
+            auto* btn = new QToolButton(m_host);
+            btn->setFixedSize(48, 48);
+            btn->setToolTip(name);
+            btn->setCheckable(true);
+            btn->setAutoRaise(false);
+            btn->setStyleSheet(tileStyle);
+            const QPixmap pm = pixmapFromDataUri(m_tpc->stampThumbnailUri(name));
+            if (!pm.isNull())
+                btn->setIcon(QIcon(pm));
+            btn->setIconSize(QSize(44, 44));
+            btn->setChecked(QString::compare(name, active, Qt::CaseInsensitive) == 0);
+            m_group->addButton(btn);
+            connect(btn, &QToolButton::clicked, this, [this, name]() {
+                QTimer::singleShot(0, this, [this, name]() {
+                    m_tpc->setActiveStampName(name);
+                });
+            });
+            m_grid->addWidget(btn, row, col);
+            if (++col >= kCols) {
+                col = 0;
+                ++row;
+            }
+        }
+        updateManageButtons();
+    }
+
+    void updateSelection()
+    {
+        const QString active = m_tpc->activeStampName();
+        QSignalBlocker block(m_group);
+        for (QAbstractButton* btn : m_group->buttons()) {
+            btn->setChecked(QString::compare(btn->toolTip(), active, Qt::CaseInsensitive) == 0);
+        }
+        updateManageButtons();
+    }
+
+    void updateManageButtons()
+    {
+        const bool custom = !m_tpc->isBundledStamp(m_tpc->activeStampName());
+        m_deleteBtn->setEnabled(custom);
+        m_renameBtn->setEnabled(custom);
+    }
+
+    void importStamp()
+    {
+        QFileDialog dlg(this, tr("Import Stamp"));
+        dlg.setFileMode(QFileDialog::ExistingFile);
+        dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
+        dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        const QStringList files = dlg.selectedFiles();
+        if (!files.isEmpty()) {
+            SentryReporter::addBreadcrumb("file.import",
+                QStringLiteral("paint stamp import %1").arg(files.first()));
+            m_tpc->importStampAsset(files.first());
+        }
+    }
+
+    void renameStamp()
+    {
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, tr("Rename Stamp"), tr("New name:"), QLineEdit::Normal,
+            m_tpc->activeStampName(), &ok);
+        if (ok && !name.trimmed().isEmpty())
+            m_tpc->renameCustomStamp(m_tpc->activeStampName(), name.trimmed());
+    }
+
+    void deleteStamp()
+    {
+        const QString name = m_tpc->activeStampName();
+        if (QMessageBox::question(
+                this, tr("Delete Stamp"),
+                tr("Permanently delete custom stamp \"%1\"?").arg(name))
+            != QMessageBox::Yes)
+            return;
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("paint stamp delete %1").arg(name));
+        m_tpc->deleteCustomStamp(name);
+    }
+
+    TexturePaintController* m_tpc = nullptr;
+    QStringList m_catalog;
+    QScrollArea* m_scroll = nullptr;
+    QWidget* m_host = nullptr;
+    QGridLayout* m_grid = nullptr;
+    QButtonGroup* m_group = nullptr;
+    QPushButton* m_importBtn = nullptr;
+    QPushButton* m_renameBtn = nullptr;
+    QPushButton* m_deleteBtn = nullptr;
+};
+
+/// QMenu closes on the first mouse-release inside embedded widgets unless we
+/// opt out — without this, every toggle/slider click dismisses the brush portal.
+void applyEmbeddedMenuWidgetHints(QWidget* widget)
+{
+    if (!widget)
+        return;
+    widget->setAttribute(Qt::WA_NoMouseReplay);
+    if (!qobject_cast<QAbstractSlider*>(widget) && !qobject_cast<QComboBox*>(widget))
+        widget->setFocusPolicy(Qt::NoFocus);
+    for (QWidget* child : widget->findChildren<QWidget*>())
+        applyEmbeddedMenuWidgetHints(child);
+}
+
+class PaintMenuKeepOpenFilter : public QObject {
+public:
+    PaintMenuKeepOpenFilter(QMenu* menu, QWidget* panel, QObject* parent = nullptr)
+        : QObject(parent)
+        , m_menu(menu)
+        , m_panel(panel)
+    {
+        menu->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched != m_menu || event->type() != QEvent::MouseButtonRelease)
+            return false;
+        const QPoint global = static_cast<QMouseEvent*>(event)->globalPosition().toPoint();
+        QWidget* at = QApplication::widgetAt(global);
+        while (at) {
+            if (at == m_panel || m_panel->isAncestorOf(at))
+                return true;
+            at = at->parentWidget();
+        }
+        return false;
+    }
+
+private:
+    QMenu* m_menu = nullptr;
+    QWidget* m_panel = nullptr;
+};
 
 } // namespace
 
@@ -1834,6 +2113,7 @@ void MainWindow::initToolBar()
     paintLay->setSpacing(8);
 
     auto* emPaint = EditModeController::instance();
+    auto* tpcPaint = TexturePaintController::instance();
 
     // (Color selection deliberately removed from the brush popup —
     // the FG/BG swatch widget on the main toolbar is now the single
@@ -1935,11 +2215,10 @@ void MainWindow::initToolBar()
 
     addSectionSeparator();
 
-    // Brush shape: Round vs Square. QButtonGroup keeps exclusivity
-    // scoped to this pair — do NOT use setAutoExclusive on siblings
-    // that share paintSettings as parent (Qt treats them as one group).
+    // Soft round vs hard square edge — only applies to Round/Square footprints.
     auto* shapeRow = new QHBoxLayout();
-    shapeRow->addWidget(new QLabel(tr("Shape:"), paintSettings));
+    auto* shapeLabel = new QLabel(tr("Edge:"), paintSettings);
+    shapeRow->addWidget(shapeLabel);
     auto* shapeRound = new QPushButton(tr("Round"), paintSettings);
     auto* shapeSquare = new QPushButton(tr("Square"), paintSettings);
     shapeRound->setCheckable(true);
@@ -1952,12 +2231,17 @@ void MainWindow::initToolBar()
     shapeGroup->setExclusive(true);
     shapeGroup->addButton(shapeRound);
     shapeGroup->addButton(shapeSquare);
-    auto syncShape = [shapeRound, shapeSquare, emPaint]() {
+    auto syncShape = [shapeRound, shapeSquare, shapeLabel, emPaint, tpcPaint]() {
         const bool square = emPaint->vertexPaintShape() == EditModeController::ShapeSquare;
         QSignalBlocker br(shapeRound);
         QSignalBlocker bs(shapeSquare);
         shapeRound->setChecked(!square);
         shapeSquare->setChecked(square);
+        const int ft = tpcPaint->footprintType();
+        const bool classicFootprint = ft == 0 || ft == 1;
+        shapeLabel->setVisible(classicFootprint);
+        shapeRound->setVisible(classicFootprint);
+        shapeSquare->setVisible(classicFootprint);
     };
     syncShape();
     connect(shapeRound, &QPushButton::clicked, this, [emPaint]() {
@@ -1967,6 +2251,7 @@ void MainWindow::initToolBar()
         emPaint->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncShape);
+    connect(tpcPaint, &TexturePaintController::stampChanged, this, syncShape);
     shapeRow->addWidget(shapeRound);
     shapeRow->addWidget(shapeSquare);
     shapeRow->addStretch();
@@ -1977,11 +2262,12 @@ void MainWindow::initToolBar()
     // Paint v2 Slice A (#544) — colour source + gradient ramp controls.
     // Lives in the brush portal (not the inspector) so brush settings stay
     // one click away from the paint tool button.
-    auto* tpcPaint = TexturePaintController::instance();
     auto* colorRow = new QHBoxLayout();
     colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
     auto* srcSolid = new QPushButton(tr("Solid"), paintSettings);
     auto* srcGradient = new QPushButton(tr("Gradient"), paintSettings);
+    srcSolid->setToolTip(tr("Single foreground colour"));
+    srcGradient->setToolTip(tr("Gradient ramp tints the brush (works with all dab shapes)"));
     srcSolid->setCheckable(true);
     srcGradient->setCheckable(true);
     srcSolid->setFixedHeight(22);
@@ -2056,18 +2342,11 @@ void MainWindow::initToolBar()
     paintLay->addWidget(gradientBox);
 
     auto refreshRampPreview = [rampPreview, tpcPaint]() {
-        const QString uri = tpcPaint->rampPreviewDataUri();
-        const int comma = uri.indexOf(QLatin1Char(','));
-        if (comma < 0) {
+        const QPixmap pm = pixmapFromDataUri(tpcPaint->rampPreviewDataUri());
+        if (pm.isNull())
             rampPreview->clear();
-            return;
-        }
-        const QByteArray png = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
-        QPixmap pm;
-        if (pm.loadFromData(png, "PNG"))
-            rampPreview->setPixmap(pm);
         else
-            rampPreview->clear();
+            rampPreview->setPixmap(pm);
     };
 
     auto syncGradientUi = [srcSolid, srcGradient, gradientBox, modeLinear, modeRadial,
@@ -2167,6 +2446,361 @@ void MainWindow::initToolBar()
     });
     connect(tpcPaint, &TexturePaintController::gradientChanged, this, syncGradientUi);
 
+    addSectionSeparator();
+
+    // Paint v2 Slice B (#545) — stamp / tiling footprint controls.
+    auto* footprintBox = new QWidget(paintSettings);
+    auto* footLay = new QVBoxLayout(footprintBox);
+    footLay->setContentsMargins(0, 0, 0, 0);
+    footLay->setSpacing(6);
+
+    auto* footRow = new QHBoxLayout();
+    footRow->addWidget(new QLabel(tr("Dab shape:"), footprintBox));
+    auto* footRound = new QPushButton(tr("Round"), footprintBox);
+    auto* footSquare = new QPushButton(tr("Square"), footprintBox);
+    auto* footStamp = new QPushButton(tr("Stamp"), footprintBox);
+    auto* footTiling = new QPushButton(tr("Tiling"), footprintBox);
+    for (auto* b : {footRound, footSquare, footStamp, footTiling}) {
+        b->setCheckable(true);
+        b->setFixedHeight(22);
+        b->setStyleSheet(paintToggleStyle);
+        footRow->addWidget(b);
+    }
+    auto* footGroup = new QButtonGroup(footprintBox);
+    footGroup->setExclusive(true);
+    footGroup->addButton(footRound);
+    footGroup->addButton(footSquare);
+    footGroup->addButton(footStamp);
+    footGroup->addButton(footTiling);
+    footLay->addLayout(footRow);
+
+    auto* footprintHint = new QLabel(footprintBox);
+    footprintHint->setWordWrap(true);
+    footprintHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+    footLay->addWidget(footprintHint);
+
+    auto* stampPickBtn = new QPushButton(footprintBox);
+    stampPickBtn->setFixedHeight(56);
+    stampPickBtn->setIconSize(QSize(48, 48));
+    stampPickBtn->setToolTip(tr("Open stamp library"));
+    stampPickBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { text-align: left; padding: 4px 8px; border: 1px solid palette(mid);"
+        " border-radius: 4px; }"
+        "QPushButton:hover { border-color: palette(highlight); }"));
+    footLay->addWidget(stampPickBtn);
+
+    auto* tilingRow = new QHBoxLayout();
+    auto* tilingRowLabel = new QLabel(tr("Tiling:"), footprintBox);
+    tilingRow->addWidget(tilingRowLabel);
+    auto* tilingCombo = new QComboBox(footprintBox);
+    tilingRow->addWidget(tilingCombo, 1);
+    auto* importTilingBtn = new QPushButton(tr("Import…"), footprintBox);
+    tilingRow->addWidget(importTilingBtn);
+    footLay->addLayout(tilingRow);
+
+    auto* spacingSlider = new QSlider(Qt::Horizontal, footprintBox);
+    spacingSlider->setRange(5, 200);
+    auto* spacingLabel = new QLabel(footprintBox);
+    footLay->addWidget(spacingLabel);
+    footLay->addWidget(spacingSlider);
+
+    auto* scatterSlider = new QSlider(Qt::Horizontal, footprintBox);
+    scatterSlider->setRange(0, 100);
+    auto* scatterLabel = new QLabel(footprintBox);
+    footLay->addWidget(scatterLabel);
+    footLay->addWidget(scatterSlider);
+
+    auto* rotRow = new QHBoxLayout();
+    auto* rotLabel = new QLabel(tr("Rotation:"), footprintBox);
+    rotRow->addWidget(rotLabel);
+    auto* rotCombo = new QComboBox(footprintBox);
+    rotCombo->addItems({tr("None"), tr("Fixed"), tr("Stroke"), tr("Random")});
+    rotRow->addWidget(rotCombo, 1);
+    footLay->addLayout(rotRow);
+
+    auto* sizeJitterSlider = new QSlider(Qt::Horizontal, footprintBox);
+    sizeJitterSlider->setRange(0, 100);
+    auto* sizeJitterLabel = new QLabel(footprintBox);
+    footLay->addWidget(sizeJitterLabel);
+    footLay->addWidget(sizeJitterSlider);
+
+    auto* opacityJitterSlider = new QSlider(Qt::Horizontal, footprintBox);
+    opacityJitterSlider->setRange(0, 100);
+    auto* opacityJitterLabel = new QLabel(footprintBox);
+    footLay->addWidget(opacityJitterLabel);
+    footLay->addWidget(opacityJitterSlider);
+
+    auto* tilingScaleSlider = new QSlider(Qt::Horizontal, footprintBox);
+    tilingScaleSlider->setRange(10, 400);
+    auto* tilingScaleLabel = new QLabel(footprintBox);
+    footLay->addWidget(tilingScaleLabel);
+    footLay->addWidget(tilingScaleSlider);
+
+    auto* tilingRotSlider = new QSlider(Qt::Horizontal, footprintBox);
+    tilingRotSlider->setRange(0, 360);
+    auto* tilingRotLabel = new QLabel(footprintBox);
+    footLay->addWidget(tilingRotLabel);
+    footLay->addWidget(tilingRotSlider);
+
+    auto* tilingOffsetUSlider = new QSlider(Qt::Horizontal, footprintBox);
+    tilingOffsetUSlider->setRange(-100, 100);
+    auto* tilingOffsetULabel = new QLabel(footprintBox);
+    footLay->addWidget(tilingOffsetULabel);
+    footLay->addWidget(tilingOffsetUSlider);
+
+    auto* tilingOffsetVSlider = new QSlider(Qt::Horizontal, footprintBox);
+    tilingOffsetVSlider->setRange(-100, 100);
+    auto* tilingOffsetVLabel = new QLabel(footprintBox);
+    footLay->addWidget(tilingOffsetVLabel);
+    footLay->addWidget(tilingOffsetVSlider);
+
+    paintLay->addWidget(footprintBox);
+
+    auto refreshStampPicker = [stampPickBtn, tpcPaint]() {
+        const QString name = tpcPaint->activeStampName();
+        const QPixmap pm = pixmapFromDataUri(tpcPaint->activeStampPreviewUri());
+        stampPickBtn->setIcon(pm.isNull() ? QIcon() : QIcon(pm));
+        stampPickBtn->setText(name.isEmpty() ? tr("Choose stamp…") : name);
+    };
+
+    struct FootprintAssetUiState {
+        int footprintType = -1;
+        QString activeStamp;
+        QString activeTiling;
+        QStringList tilingNames;
+    };
+    auto footprintAssetState = std::make_shared<FootprintAssetUiState>();
+
+    auto syncFootprintAssets = [tilingCombo, tpcPaint, refreshStampPicker, footprintAssetState]() {
+        const int ft = tpcPaint->footprintType();
+        const QString stamp = tpcPaint->activeStampName();
+        const QString tiling = tpcPaint->activeTilingName();
+        const QStringList names = tpcPaint->tilingNames();
+        const bool assetsChanged = ft != footprintAssetState->footprintType
+            || stamp != footprintAssetState->activeStamp
+            || tiling != footprintAssetState->activeTiling
+            || names != footprintAssetState->tilingNames;
+        if (!assetsChanged)
+            return;
+        *footprintAssetState = {ft, stamp, tiling, names};
+
+        {
+            QSignalBlocker bt(tilingCombo);
+            bool rebuild = tilingCombo->count() != names.size();
+            if (!rebuild) {
+                for (int i = 0; i < names.size(); ++i) {
+                    if (tilingCombo->itemText(i) != names[i]) {
+                        rebuild = true;
+                        break;
+                    }
+                }
+            }
+            if (rebuild) {
+                tilingCombo->clear();
+                tilingCombo->addItems(names);
+            }
+            const int idx = tilingCombo->findText(tiling);
+            if (idx >= 0)
+                tilingCombo->setCurrentIndex(idx);
+        }
+        refreshStampPicker();
+    };
+
+    auto syncFootprintUi = [footRound, footSquare, footStamp, footTiling, footprintHint,
+                            stampPickBtn, tilingRowLabel, tilingCombo, importTilingBtn,
+                            spacingSlider, spacingLabel, scatterSlider, scatterLabel, rotLabel,
+                            rotCombo, sizeJitterSlider, sizeJitterLabel, opacityJitterSlider,
+                            opacityJitterLabel, tilingScaleSlider, tilingScaleLabel,
+                            tilingRotSlider, tilingRotLabel, tilingOffsetUSlider,
+                            tilingOffsetULabel, tilingOffsetVSlider, tilingOffsetVLabel,
+                            tpcPaint, syncFootprintAssets]() {
+        using FT = BrushFootprint::FootprintType;
+        const int ft = tpcPaint->footprintType();
+        {
+            QSignalBlocker b1(footRound);
+            QSignalBlocker b2(footSquare);
+            QSignalBlocker b3(footStamp);
+            QSignalBlocker b4(footTiling);
+            footRound->setChecked(ft == static_cast<int>(FT::Round));
+            footSquare->setChecked(ft == static_cast<int>(FT::Square));
+            footStamp->setChecked(ft == static_cast<int>(FT::StampImage));
+            footTiling->setChecked(ft == static_cast<int>(FT::TilingSource));
+        }
+        const bool stampMode = ft == static_cast<int>(FT::StampImage);
+        const bool tilingMode = ft == static_cast<int>(FT::TilingSource);
+        if (stampMode) {
+            footprintHint->setText(tr(
+                "Image stamp: click the stamp below to choose a brush image. "
+                "Color → Solid or Gradient tints each stamp."));
+        } else if (tilingMode) {
+            footprintHint->setText(tr(
+                "Tiling texture: pick wood/brick/etc. below. "
+                "Solid or Gradient color multiplies with the tile."));
+        } else {
+            footprintHint->setText(tr(
+                "Classic round/square dab. Use Color → Solid or Gradient for fill."));
+        }
+
+        stampPickBtn->setVisible(stampMode);
+        spacingLabel->setVisible(stampMode);
+        spacingSlider->setVisible(stampMode);
+        scatterLabel->setVisible(stampMode);
+        scatterSlider->setVisible(stampMode);
+        rotLabel->setVisible(stampMode);
+        rotCombo->setVisible(stampMode);
+        sizeJitterLabel->setVisible(stampMode);
+        sizeJitterSlider->setVisible(stampMode);
+        opacityJitterLabel->setVisible(stampMode);
+        opacityJitterSlider->setVisible(stampMode);
+        tilingRowLabel->setVisible(tilingMode);
+        tilingCombo->setVisible(tilingMode);
+        importTilingBtn->setVisible(tilingMode);
+        tilingScaleLabel->setVisible(tilingMode);
+        tilingScaleSlider->setVisible(tilingMode);
+        tilingRotLabel->setVisible(tilingMode);
+        tilingRotSlider->setVisible(tilingMode);
+        tilingOffsetULabel->setVisible(tilingMode);
+        tilingOffsetUSlider->setVisible(tilingMode);
+        tilingOffsetVLabel->setVisible(tilingMode);
+        tilingOffsetVSlider->setVisible(tilingMode);
+
+        stampPickBtn->setEnabled(stampMode);
+        spacingSlider->setEnabled(stampMode);
+        scatterSlider->setEnabled(stampMode);
+        rotCombo->setEnabled(stampMode);
+        sizeJitterSlider->setEnabled(stampMode);
+        opacityJitterSlider->setEnabled(stampMode);
+        tilingCombo->setEnabled(tilingMode);
+        tilingScaleSlider->setEnabled(tilingMode);
+        tilingRotSlider->setEnabled(tilingMode);
+        tilingOffsetUSlider->setEnabled(tilingMode);
+        tilingOffsetVSlider->setEnabled(tilingMode);
+
+        {
+            QSignalBlocker bsp(spacingSlider);
+            QSignalBlocker bsc(scatterSlider);
+            QSignalBlocker bro(rotCombo);
+            QSignalBlocker bsj(sizeJitterSlider);
+            QSignalBlocker boj(opacityJitterSlider);
+            QSignalBlocker bts(tilingScaleSlider);
+            QSignalBlocker btr(tilingRotSlider);
+            QSignalBlocker btu(tilingOffsetUSlider);
+            QSignalBlocker btv(tilingOffsetVSlider);
+            spacingSlider->setValue(qBound(5, static_cast<int>(qRound(
+                tpcPaint->stampSpacing() * 100.0)), 200));
+            scatterSlider->setValue(qBound(0, static_cast<int>(qRound(
+                tpcPaint->stampScatter() * 100.0)), 100));
+            rotCombo->setCurrentIndex(qBound(0, tpcPaint->stampRotation(), 3));
+            sizeJitterSlider->setValue(qBound(0, static_cast<int>(qRound(
+                tpcPaint->stampSizeJitter() * 100.0)), 100));
+            opacityJitterSlider->setValue(qBound(0, static_cast<int>(qRound(
+                tpcPaint->stampOpacityJitter() * 100.0)), 100));
+            tilingScaleSlider->setValue(qBound(10, static_cast<int>(qRound(
+                tpcPaint->tilingScale() * 100.0)), 400));
+            tilingRotSlider->setValue(qBound(0, static_cast<int>(qRound(
+                tpcPaint->tilingRotation())), 360));
+            tilingOffsetUSlider->setValue(qBound(-100, static_cast<int>(qRound(
+                tpcPaint->tilingOffsetU() * 100.0)), 100));
+            tilingOffsetVSlider->setValue(qBound(-100, static_cast<int>(qRound(
+                tpcPaint->tilingOffsetV() * 100.0)), 100));
+        }
+        spacingLabel->setText(QObject::tr("Spacing: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->stampSpacing() * 100.0))));
+        scatterLabel->setText(QObject::tr("Scatter: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->stampScatter() * 100.0))));
+        sizeJitterLabel->setText(QObject::tr("Size jitter: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->stampSizeJitter() * 100.0))));
+        opacityJitterLabel->setText(QObject::tr("Opacity jitter: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->stampOpacityJitter() * 100.0))));
+        tilingScaleLabel->setText(QObject::tr("Tile scale: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->tilingScale() * 100.0))));
+        tilingRotLabel->setText(QObject::tr("Tile rotation: %1°")
+            .arg(static_cast<int>(qRound(tpcPaint->tilingRotation()))));
+        tilingOffsetULabel->setText(QObject::tr("Tile offset U: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetU() * 100.0))));
+        tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%")
+            .arg(static_cast<int>(qRound(tpcPaint->tilingOffsetV() * 100.0))));
+        syncFootprintAssets();
+    };
+    syncFootprintUi();
+
+    connect(footRound, &QPushButton::clicked, this, [tpcPaint]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=round"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::Round));
+    });
+    connect(footSquare, &QPushButton::clicked, this, [tpcPaint]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=square"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::Square));
+    });
+    connect(footStamp, &QPushButton::clicked, this, [tpcPaint]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=stamp"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::StampImage));
+    });
+    connect(footTiling, &QPushButton::clicked, this, [tpcPaint]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint footprint=tiling"));
+        tpcPaint->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::TilingSource));
+    });
+    connect(stampPickBtn, &QPushButton::clicked, this, [this, tpcPaint, vertexPaintMenu]() {
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("paint stamp library open"));
+        vertexPaintMenu->close();
+        StampLibraryDialog dlg(tpcPaint, this);
+        dlg.exec();
+    });
+    connect(tilingCombo, QOverload<int>::of(&QComboBox::activated), this,
+            [tpcPaint, tilingCombo](int idx) {
+                if (idx >= 0)
+                    tpcPaint->setActiveTilingName(tilingCombo->itemText(idx));
+            });
+    connect(importTilingBtn, &QPushButton::clicked, this, [this, tpcPaint]() {
+        QFileDialog dlg(this, tr("Import Tiling"));
+        dlg.setFileMode(QFileDialog::ExistingFile);
+        dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
+        dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        const QStringList files = dlg.selectedFiles();
+        if (files.isEmpty())
+            return;
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("paint tiling import %1").arg(files.first()));
+        tpcPaint->importTilingAsset(files.first());
+    });
+    connect(spacingSlider, &QSlider::valueChanged, this, [tpcPaint, spacingLabel](int v) {
+        tpcPaint->setStampSpacing(v / 100.0);
+        spacingLabel->setText(QObject::tr("Spacing: %1%").arg(v));
+    });
+    connect(scatterSlider, &QSlider::valueChanged, this, [tpcPaint, scatterLabel](int v) {
+        tpcPaint->setStampScatter(v / 100.0);
+        scatterLabel->setText(QObject::tr("Scatter: %1%").arg(v));
+    });
+    connect(rotCombo, QOverload<int>::of(&QComboBox::activated), this,
+            [tpcPaint](int idx) { tpcPaint->setStampRotation(idx); });
+    connect(sizeJitterSlider, &QSlider::valueChanged, this, [tpcPaint, sizeJitterLabel](int v) {
+        tpcPaint->setStampSizeJitter(v / 100.0);
+        sizeJitterLabel->setText(QObject::tr("Size jitter: %1%").arg(v));
+    });
+    connect(opacityJitterSlider, &QSlider::valueChanged, this, [tpcPaint, opacityJitterLabel](int v) {
+        tpcPaint->setStampOpacityJitter(v / 100.0);
+        opacityJitterLabel->setText(QObject::tr("Opacity jitter: %1%").arg(v));
+    });
+    connect(tilingScaleSlider, &QSlider::valueChanged, this, [tpcPaint, tilingScaleLabel](int v) {
+        tpcPaint->setTilingScale(v / 100.0);
+        tilingScaleLabel->setText(QObject::tr("Tile scale: %1%").arg(v));
+    });
+    connect(tilingRotSlider, &QSlider::valueChanged, this, [tpcPaint, tilingRotLabel](int v) {
+        tpcPaint->setTilingRotation(static_cast<double>(v));
+        tilingRotLabel->setText(QObject::tr("Tile rotation: %1°").arg(v));
+    });
+    connect(tilingOffsetUSlider, &QSlider::valueChanged, this, [tpcPaint, tilingOffsetULabel](int v) {
+        tpcPaint->setTilingOffsetU(v / 100.0);
+        tilingOffsetULabel->setText(QObject::tr("Tile offset U: %1%").arg(v));
+    });
+    connect(tilingOffsetVSlider, &QSlider::valueChanged, this, [tpcPaint, tilingOffsetVLabel](int v) {
+        tpcPaint->setTilingOffsetV(v / 100.0);
+        tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%").arg(v));
+    });
+    connect(tpcPaint, &TexturePaintController::stampChanged, this, syncFootprintUi);
+
     paintSettings->setMinimumWidth(280);
     paintSettings->adjustSize();
 
@@ -2179,21 +2813,24 @@ void MainWindow::initToolBar()
     paintPortal->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     paintPortal->setFrameShape(QFrame::NoFrame);
     paintPortal->setMinimumWidth(296);
-    paintPortal->setMinimumHeight(420);
-    paintPortal->setMaximumHeight(640);
+    paintPortal->setMinimumHeight(520);
+    paintPortal->setMaximumHeight(720);
 
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintPortal);
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
+    applyEmbeddedMenuWidgetHints(paintPortal);
+    new PaintMenuKeepOpenFilter(vertexPaintMenu, paintPortal, vertexPaintMenu);
 
     connect(vertexPaintMenu, &QMenu::aboutToShow, this,
-            [paintSettings, paintPortal, syncRad, syncStr, syncFalloff, syncShape, syncGradientUi]() {
+            [paintSettings, paintPortal, syncRad, syncStr, syncFalloff, syncShape, syncGradientUi, syncFootprintUi]() {
         syncRad();
         syncStr();
         syncFalloff();
         syncShape();
         syncGradientUi();
+        syncFootprintUi();
         paintSettings->adjustSize();
         paintPortal->updateGeometry();
     });

@@ -27,6 +27,7 @@
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QSettings>
+#include <QSet>
 #include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
@@ -377,6 +378,51 @@ TexturePaintController::TexturePaintController(QObject* parent)
         if (m_gradientMode < GradientLinear || m_gradientMode > GradientAngular)
             m_gradientMode = GradientLinear;
         reloadActiveRamp();
+    }
+
+    {
+        QSettings s;
+        {
+            auto t = static_cast<BrushFootprint::FootprintType>(
+                s.value(AppSettingsKeys::paintFootprintType(), 0).toInt());
+            if (t < BrushFootprint::FootprintType::Round
+                || t > BrushFootprint::FootprintType::TilingSource)
+                t = BrushFootprint::FootprintType::Round;
+            m_footprintType = t;
+        }
+        m_activeStampName = s.value(AppSettingsKeys::paintActiveStampName(),
+                                    QStringLiteral("Soft Circle")).toString();
+        m_activeTilingName = s.value(AppSettingsKeys::paintActiveTilingName(),
+                                     QStringLiteral("Wood")).toString();
+        m_stampSettings.spacing = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampSpacing(), 0.35).toDouble(), 0.05, 2.0));
+        m_stampSettings.scatter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampScatter(), 0.0).toDouble(), 0.0, 1.0));
+        m_stampSettings.sizeJitter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampSizeJitter(), 0.0).toDouble(), 0.0, 1.0));
+        m_stampSettings.opacityJitter = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintStampOpacityJitter(), 0.0).toDouble(), 0.0, 1.0));
+        {
+            auto r = static_cast<BrushFootprint::StampRotation>(
+                s.value(AppSettingsKeys::paintStampRotation(), 0).toInt());
+            if (r < BrushFootprint::StampRotation::None
+                || r > BrushFootprint::StampRotation::RandomJitter)
+                r = BrushFootprint::StampRotation::None;
+            m_stampSettings.rotation = r;
+        }
+        m_stampSettings.fixedAngleDeg = static_cast<float>(
+            s.value(AppSettingsKeys::paintStampFixedAngle(), 0.0).toDouble());
+        m_tilingSettings.scale = static_cast<float>(std::max(
+            s.value(AppSettingsKeys::paintTilingScale(), 1.0).toDouble(), 0.01));
+        m_tilingSettings.rotationDeg = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingRotation(), 0.0).toDouble(), 0.0, 360.0));
+        m_tilingSettings.offsetU = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingOffsetU(), 0.0).toDouble(), -1.0, 1.0));
+        m_tilingSettings.offsetV = static_cast<float>(std::clamp(
+            s.value(AppSettingsKeys::paintTilingOffsetV(), 0.0).toDouble(), -1.0, 1.0));
+        reloadStampImage();
+        reloadTilingImage();
+        refreshStampPreviewUris();
     }
 
     // Refresh the texture slot list whenever the selection changes —
@@ -927,6 +973,440 @@ void TexturePaintController::closeRampEditor()
     }
 }
 
+// --- Paint v2 Slice B (#545) — textured / stamp brushes ---
+
+void TexturePaintController::setFootprintType(int type)
+{
+    auto t = static_cast<BrushFootprint::FootprintType>(type);
+    if (t < BrushFootprint::FootprintType::Round
+        || t > BrushFootprint::FootprintType::TilingSource)
+        t = BrushFootprint::FootprintType::Round;
+    if (t == m_footprintType)
+        return;
+    m_footprintType = t;
+    QSettings().setValue(AppSettingsKeys::paintFootprintType(), static_cast<int>(t));
+    SentryReporter::addBreadcrumb(
+        "paint.brush.stamp",
+        QStringLiteral("footprint=%1 stamp=%2 tiling=%3")
+            .arg(static_cast<int>(t))
+            .arg(m_activeStampName)
+            .arg(m_activeTilingName));
+    emit stampChanged();
+}
+
+void TexturePaintController::setActiveStampName(const QString& name)
+{
+    if (name == m_activeStampName)
+        return;
+    m_activeStampName = name;
+    QSettings().setValue(AppSettingsKeys::paintActiveStampName(), m_activeStampName);
+    reloadStampImage();
+    m_stampCache = {};
+    m_stampCachePixelSize = 0;
+    refreshStampPreviewUris();
+    SentryReporter::addBreadcrumb(
+        "paint.brush.stamp",
+        QStringLiteral("stamp=%1 mode=stamp").arg(m_activeStampName));
+    emit stampChanged();
+}
+
+void TexturePaintController::setActiveTilingName(const QString& name)
+{
+    if (name == m_activeTilingName)
+        return;
+    m_activeTilingName = name;
+    QSettings().setValue(AppSettingsKeys::paintActiveTilingName(), m_activeTilingName);
+    reloadTilingImage();
+    refreshStampPreviewUris();
+    SentryReporter::addBreadcrumb(
+        "paint.brush.stamp",
+        QStringLiteral("tiling=%1 mode=tiling").arg(m_activeTilingName));
+    emit stampChanged();
+}
+
+QStringList TexturePaintController::stampNames() const
+{
+    QStringList names;
+    QSet<QString> seen;
+    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Stamp)) {
+        const QString name = QString::fromStdString(a.name);
+        const QString key = name.toLower();
+        if (seen.contains(key))
+            continue;
+        seen.insert(key);
+        names << name;
+    }
+    return names;
+}
+
+QStringList TexturePaintController::tilingNames() const
+{
+    QStringList names;
+    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Tiling))
+        names << QString::fromStdString(a.name);
+    return names;
+}
+
+void TexturePaintController::setStampSpacing(double v)
+{
+    const double clamped = std::clamp(v, 0.05, 2.0);
+    m_stampSettings.spacing = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampSpacing(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setStampScatter(double v)
+{
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.scatter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampScatter(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setStampSizeJitter(double v)
+{
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.sizeJitter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampSizeJitter(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setStampOpacityJitter(double v)
+{
+    const double clamped = std::clamp(v, 0.0, 1.0);
+    m_stampSettings.opacityJitter = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintStampOpacityJitter(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setStampRotation(int mode)
+{
+    auto r = static_cast<BrushFootprint::StampRotation>(mode);
+    if (r < BrushFootprint::StampRotation::None || r > BrushFootprint::StampRotation::RandomJitter)
+        r = BrushFootprint::StampRotation::None;
+    m_stampSettings.rotation = r;
+    QSettings().setValue(AppSettingsKeys::paintStampRotation(), mode);
+    emit stampChanged();
+}
+
+void TexturePaintController::setStampFixedAngle(double deg)
+{
+    m_stampSettings.fixedAngleDeg = static_cast<float>(deg);
+    QSettings().setValue(AppSettingsKeys::paintStampFixedAngle(), deg);
+    emit stampChanged();
+}
+
+void TexturePaintController::setTilingScale(double v)
+{
+    const double clamped = std::max(v, 0.01);
+    m_tilingSettings.scale = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingScale(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setTilingRotation(double deg)
+{
+    const double clamped = std::clamp(deg, 0.0, 360.0);
+    m_tilingSettings.rotationDeg = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingRotation(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setTilingOffsetU(double v)
+{
+    const double clamped = std::clamp(v, -1.0, 1.0);
+    m_tilingSettings.offsetU = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingOffsetU(), clamped);
+    emit stampChanged();
+}
+
+void TexturePaintController::setTilingOffsetV(double v)
+{
+    const double clamped = std::clamp(v, -1.0, 1.0);
+    m_tilingSettings.offsetV = static_cast<float>(clamped);
+    QSettings().setValue(AppSettingsKeys::paintTilingOffsetV(), clamped);
+    emit stampChanged();
+}
+
+QString TexturePaintController::importStampAsset(const QString& filePath)
+{
+    const std::string stored = BrushAssetLibrary::importAsset(
+        filePath.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
+    if (stored.empty())
+        return {};
+    const QString importedName = QString::fromUtf8(
+        BrushAssetLibrary::safeFileStem(
+            QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName().toStdString())
+            .c_str());
+    setActiveStampName(importedName);
+    return QString::fromStdString(stored);
+}
+
+QString TexturePaintController::importTilingAsset(const QString& filePath)
+{
+    const std::string stored = BrushAssetLibrary::importAsset(
+        filePath.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
+    if (stored.empty())
+        return {};
+    const QString importedName = QString::fromUtf8(
+        BrushAssetLibrary::safeFileStem(
+            QFileInfo(QString::fromUtf8(stored.c_str())).completeBaseName().toStdString())
+            .c_str());
+    setActiveTilingName(importedName);
+    return QString::fromStdString(stored);
+}
+
+bool TexturePaintController::deleteCustomStamp(const QString& name)
+{
+    if (!BrushAssetLibrary::deleteCustom(name.toStdString(), BrushAssetLibrary::AssetKind::Stamp))
+        return false;
+    if (m_activeStampName == name)
+        setActiveStampName(QStringLiteral("Soft Circle"));
+    else
+        emit stampChanged();
+    return true;
+}
+
+bool TexturePaintController::deleteCustomTiling(const QString& name)
+{
+    if (!BrushAssetLibrary::deleteCustom(name.toStdString(), BrushAssetLibrary::AssetKind::Tiling))
+        return false;
+    if (m_activeTilingName == name)
+        setActiveTilingName(QStringLiteral("Wood"));
+    else
+        emit stampChanged();
+    return true;
+}
+
+bool TexturePaintController::renameCustomStamp(const QString& oldName, const QString& newName)
+{
+    if (oldName.trimmed().isEmpty() || newName.trimmed().isEmpty())
+        return false;
+    if (!BrushAssetLibrary::renameCustom(oldName.toStdString(), newName.toStdString(),
+                                         BrushAssetLibrary::AssetKind::Stamp))
+        return false;
+    if (m_activeStampName == oldName)
+        setActiveStampName(newName.trimmed());
+    else
+        emit stampChanged();
+    return true;
+}
+
+bool TexturePaintController::renameCustomTiling(const QString& oldName, const QString& newName)
+{
+    if (oldName.trimmed().isEmpty() || newName.trimmed().isEmpty())
+        return false;
+    if (!BrushAssetLibrary::renameCustom(oldName.toStdString(), newName.toStdString(),
+                                         BrushAssetLibrary::AssetKind::Tiling))
+        return false;
+    if (m_activeTilingName == oldName)
+        setActiveTilingName(newName.trimmed());
+    else
+        emit stampChanged();
+    return true;
+}
+
+bool TexturePaintController::isBundledStamp(const QString& name) const
+{
+    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Stamp)) {
+        if (QString::compare(QString::fromStdString(a.name), name, Qt::CaseInsensitive) == 0)
+            return a.bundled;
+    }
+    return true;
+}
+
+bool TexturePaintController::isBundledTiling(const QString& name) const
+{
+    for (const auto& a : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Tiling)) {
+        if (QString::compare(QString::fromStdString(a.name), name, Qt::CaseInsensitive) == 0)
+            return a.bundled;
+    }
+    return true;
+}
+
+QString TexturePaintController::stampThumbnailUri(const QString& name) const
+{
+    const std::string path = BrushAssetLibrary::resolvePath(
+        name.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
+    if (path.empty())
+        return {};
+    return QString::fromStdString(BrushAssetLibrary::thumbnailDataUri(path));
+}
+
+QString TexturePaintController::tilingThumbnailUri(const QString& name) const
+{
+    const std::string path = BrushAssetLibrary::resolvePath(
+        name.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
+    if (path.empty())
+        return {};
+    return QString::fromStdString(BrushAssetLibrary::thumbnailDataUri(path));
+}
+
+void TexturePaintController::reloadStampImage()
+{
+    const std::string path = BrushAssetLibrary::resolvePath(
+        m_activeStampName.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
+    m_stampImage = BrushAssetLibrary::loadImage(path);
+}
+
+void TexturePaintController::reloadTilingImage()
+{
+    const std::string path = BrushAssetLibrary::resolvePath(
+        m_activeTilingName.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
+    m_tilingImage = BrushAssetLibrary::loadImage(path);
+}
+
+void TexturePaintController::rebuildStampCache(float radiusUv)
+{
+    if (m_buffer.width() <= 0 || m_stampImage.empty())
+        return;
+    const int px = std::clamp(
+        static_cast<int>(std::lround(radiusUv * static_cast<float>(m_buffer.width()) * 2.0f)),
+        8, 256);
+    if (px == m_stampCachePixelSize && !m_stampCache.empty())
+        return;
+    m_stampCache = BrushFootprint::rasterizeStamp(m_stampImage, px);
+    m_stampCachePixelSize = px;
+}
+
+void TexturePaintController::refreshStampPreviewUris()
+{
+    const std::string stampPath = BrushAssetLibrary::resolvePath(
+        m_activeStampName.toStdString(), BrushAssetLibrary::AssetKind::Stamp);
+    const std::string tilingPath = BrushAssetLibrary::resolvePath(
+        m_activeTilingName.toStdString(), BrushAssetLibrary::AssetKind::Tiling);
+    m_stampPreviewUri = stampPath.empty()
+        ? QString()
+        : QString::fromStdString(BrushAssetLibrary::thumbnailDataUri(stampPath));
+    m_tilingPreviewUri = tilingPath.empty()
+        ? QString()
+        : QString::fromStdString(BrushAssetLibrary::thumbnailDataUri(tilingPath));
+}
+
+float TexturePaintController::strokeDirectionRad() const
+{
+    if (m_strokeDirSmoothed.squaredLength() < 1e-12f)
+        return 0.0f;
+    return std::atan2(m_strokeDirSmoothed.y, m_strokeDirSmoothed.x);
+}
+
+TexturePaintBuffer::BrushShape TexturePaintController::currentBrushShape() const
+{
+    if (m_footprintType == BrushFootprint::FootprintType::Square) {
+        return TexturePaintBuffer::BrushShape::Square;
+    }
+    auto* em = EditModeController::instance();
+    if (em && em->vertexPaintShape() == EditModeController::ShapeSquare)
+        return TexturePaintBuffer::BrushShape::Square;
+    return TexturePaintBuffer::BrushShape::Round;
+}
+
+TexturePaintBuffer::ColorAtFn TexturePaintController::buildBrushColorAtFn(float strokeT) const
+{
+    const QColor c = texturePaintColor();
+    const Ogre::ColourValue solid(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+    if (m_colorSource != ColorGradient) {
+        return [solid](float, float) { return solid; };
+    }
+    const GradientRamp::Ramp* ramp = resolveActiveRamp();
+    if (!ramp || !ramp->isValid()) {
+        return [solid](float, float) { return solid; };
+    }
+    BrushEngine::SampleParams params;
+    params.source = BrushEngine::ColorSource::Gradient;
+    params.solid = {solid.r, solid.g, solid.b, solid.a};
+    params.ramp = ramp;
+    params.mode = static_cast<BrushEngine::GradientMode>(m_gradientMode);
+    params.strokeT = strokeT;
+    params.phaseJitter = m_strokePhaseJitter;
+    if (m_gradientMode == GradientLinear)
+        params.phaseJitter = 0.0f;
+    const BrushEngine::SampleParams paramsCopy = params;
+    return [paramsCopy](float dx, float dy) {
+        BrushEngine::SampleParams local = paramsCopy;
+        local.dx = dx;
+        local.dy = dy;
+        const auto s = BrushEngine::sampleColor(local);
+        return Ogre::ColourValue(s.r, s.g, s.b, s.a);
+    };
+}
+
+bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, float radiusUv,
+                                                     float strength)
+{
+    noteStrokeSample(uv, m_strokeJustBegan);
+    m_strokeJustBegan = false;
+    const float falloff = static_cast<float>(texturePaintFalloff());
+    const TexturePaintBuffer::BrushShape shape = currentBrushShape();
+    const float wavelength = std::max(radiusUv * 4.0f, 0.05f);
+    const float strokeT = BrushEngine::linearStrokeT(
+        m_strokePathLength, wavelength, m_strokePhaseJitter);
+    const auto colorAt = buildBrushColorAtFn(strokeT);
+
+    if (m_footprintType == BrushFootprint::FootprintType::TilingSource) {
+        if (m_tilingImage.empty())
+            return false;
+        const Ogre::Vector2 center = uv;
+        const float radiusCopy = radiusUv;
+        const BrushFootprint::ImageRgba& tilingRef = m_tilingImage;
+        const BrushFootprint::TilingSettings& settingsRef = m_tilingSettings;
+        return m_buffer.paintBrush(
+                   uv, radiusUv,
+                   [colorAt, center, radiusCopy, &tilingRef, &settingsRef](float dx, float dy) {
+                       float tu = 0.0f;
+                       float tv = 0.0f;
+                       BrushFootprint::brushOffsetToUv(
+                           center.x, center.y, radiusCopy, dx, dy, tu, tv);
+                       const auto tile = BrushFootprint::sampleTiling(
+                           tilingRef, tu, tv, settingsRef);
+                       const Ogre::ColourValue brush = colorAt(dx, dy);
+                       return Ogre::ColourValue(
+                           tile.r * brush.r,
+                           tile.g * brush.g,
+                           tile.b * brush.b,
+                           tile.a * brush.a);
+                   },
+                   strength, falloff, shape, true)
+            > 0;
+    }
+
+    if (m_footprintType == BrushFootprint::FootprintType::StampImage) {
+        if (m_stampImage.empty())
+            return false;
+        rebuildStampCache(radiusUv);
+        auto* rng = QRandomGenerator::global();
+        const float r0 = static_cast<float>(rng->generateDouble());
+        const float r1 = static_cast<float>(rng->generateDouble());
+        const float r2 = static_cast<float>(rng->generateDouble());
+        const float r3 = static_cast<float>(rng->generateDouble());
+        float scatterU = 0.0f;
+        float scatterV = 0.0f;
+        BrushFootprint::applyScatter(radiusUv, m_stampSettings.scatter, r0, r1, scatterU, scatterV);
+        const Ogre::Vector2 stampUv(uv.x + scatterU, uv.y + scatterV);
+        const float stampRadius = BrushFootprint::jitteredRadius(
+            radiusUv, m_stampSettings.sizeJitter, r2);
+        const float stampStrength = BrushFootprint::jitteredStrength(
+            strength, m_stampSettings.opacityJitter, r3);
+        const float angle = BrushFootprint::stampRotationRad(
+            m_stampSettings, strokeDirectionRad(), static_cast<float>(rng->generateDouble()));
+        return m_buffer.paintStamp(
+                   stampUv, stampRadius, m_stampCache, angle, colorAt, stampStrength)
+            > 0;
+    }
+
+    if (m_colorSource != ColorGradient) {
+        const QColor qc = texturePaintColor();
+        const Ogre::ColourValue paint(qc.redF(), qc.greenF(), qc.blueF(), qc.alphaF());
+        return m_buffer.paintBrush(uv, radiusUv, paint, strength, falloff, shape) > 0;
+    }
+
+    if (m_gradientMode == GradientLinear) {
+        const auto sampled = colorAt(0.0f, 0.0f);
+        return m_buffer.paintBrush(uv, radiusUv, sampled, strength, falloff, shape) > 0;
+    }
+    return m_buffer.paintBrush(uv, radiusUv, colorAt, strength, falloff, shape) > 0;
+}
+
 void TexturePaintController::setPaintTarget(int target)
 {
     PaintTarget t = static_cast<PaintTarget>(target);
@@ -1025,13 +1505,34 @@ bool TexturePaintController::paintBrushAlongSegment(const Ogre::Vector2& from,
     if (dist < 1e-6f)
         return applyBrushAtUV(to);
 
-    // Space dabs so stamps overlap — fast cursor moves won't leave gaps
-    // when mouse events arrive slower than the stroke speed.
     const float radius = brushRadiusUV();
-    const float spacing = std::max(radius * 0.35f, 0.002f);
+    float spacing = std::max(radius * 0.35f, 0.002f);
+    if (m_footprintType == BrushFootprint::FootprintType::StampImage) {
+        spacing = BrushFootprint::stampSpacingUv(radius, m_stampSettings.spacing);
+        const float pathBase = m_strokePathLength;
+        const float projectedLen = pathBase + dist;
+        if (projectedLen - m_lastStampDabPathLength < spacing) {
+            noteStrokeSample(to, false);
+            return false;
+        }
+        bool changed = false;
+        float dabPath = m_lastStampDabPathLength + spacing;
+        int dabCount = 0;
+        while (dabPath <= projectedLen + 1e-6f && dabCount < 8) {
+            const float t = std::clamp(
+                (dabPath - pathBase) / std::max(dist, 1e-6f), 0.0f, 1.0f);
+            const Ogre::Vector2 pt(from.x + delta.x * t, from.y + delta.y * t);
+            if (applyBrushAtUV(pt))
+                changed = true;
+            dabPath += spacing;
+            ++dabCount;
+        }
+        m_lastStampDabPathLength = dabPath - spacing;
+        noteStrokeSample(to, false);
+        return changed;
+    }
+
     int steps = std::max(1, static_cast<int>(std::ceil(dist / spacing)));
-    // Cap work per mouse event — segment interpolation can otherwise
-    // fire dozens of full brush stamps when the cursor jumps in UV space.
     steps = std::min(steps, 8);
 
     bool changed = false;
@@ -2354,6 +2855,7 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
     m_wandStartScreenPos = screenPos;
     m_strokeHavePrevUV = false;
     m_strokePathLength = 0.0f;
+    m_lastStampDabPathLength = 0.0f;
     m_strokeDirSmoothed = Ogre::Vector2::ZERO;
     m_strokeHaveHitScreen = false;
     m_strokeUvPerScreenX = 0.0f;
@@ -2368,6 +2870,15 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
             QStringLiteral("mode=%1 ramp=%2")
                 .arg(static_cast<int>(m_gradientMode))
                 .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
+    }
+    if (m_footprintType == BrushFootprint::FootprintType::StampImage
+        || m_footprintType == BrushFootprint::FootprintType::TilingSource) {
+        SentryReporter::addBreadcrumb(
+            "paint.brush.stamp",
+            QStringLiteral("footprint=%1 stamp=%2 tiling=%3")
+                .arg(static_cast<int>(m_footprintType))
+                .arg(m_activeStampName)
+                .arg(m_activeTilingName));
     }
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Paint stroke begin (target=%1 tool=%2 radius=%3 strength=%4 color=%5)")
@@ -2409,52 +2920,8 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
             : TexturePaintBuffer::BrushShape::Round;
 
     switch (m_tool) {
-    case ToolPaint: {
-        const QColor c = texturePaintColor();
-        const Ogre::ColourValue solid(c.redF(), c.greenF(), c.blueF(), c.alphaF());
-        if (m_colorSource != ColorGradient) {
-            return m_buffer.paintBrush(uv, radius, solid, strength, falloff, shape) > 0;
-        }
-
-        // Paint v2 Slice A — gradient colour source via BrushEngine.
-        noteStrokeSample(uv, m_strokeJustBegan);
-        m_strokeJustBegan = false;
-        const GradientRamp::Ramp* ramp = resolveActiveRamp();
-        if (!ramp || !ramp->isValid()) {
-            return m_buffer.paintBrush(uv, radius, solid, strength, falloff, shape) > 0;
-        }
-        // Wavelength ≈ 4× brush radius so one full ramp covers a short stroke.
-        const float wavelength = std::max(radius * 4.0f, 0.05f);
-        const float strokeT = BrushEngine::linearStrokeT(
-            m_strokePathLength, wavelength, m_strokePhaseJitter);
-        BrushEngine::SampleParams params;
-        params.source = BrushEngine::ColorSource::Gradient;
-        params.solid = {solid.r, solid.g, solid.b, solid.a};
-        params.ramp = ramp;
-        params.mode = static_cast<BrushEngine::GradientMode>(m_gradientMode);
-        params.strokeT = strokeT;
-        params.phaseJitter = m_strokePhaseJitter;
-        // Linear: whole stamp shares strokeT (phase already in strokeT).
-        // Radial/Angular: per-pixel + per-stroke phase jitter.
-        if (m_gradientMode == GradientLinear) {
-            params.phaseJitter = 0.0f; // already folded into strokeT
-            const auto sampled = BrushEngine::sampleColor(params);
-            const Ogre::ColourValue paint(sampled.r, sampled.g, sampled.b, sampled.a);
-            return m_buffer.paintBrush(uv, radius, paint, strength, falloff, shape) > 0;
-        }
-        const BrushEngine::SampleParams paramsCopy = params;
-        return m_buffer.paintBrush(
-                   uv, radius,
-                   [paramsCopy](float dx, float dy) {
-                       BrushEngine::SampleParams local = paramsCopy;
-                       local.dx = dx;
-                       local.dy = dy;
-                       const auto s = BrushEngine::sampleColor(local);
-                       return Ogre::ColourValue(s.r, s.g, s.b, s.a);
-                   },
-                   strength, falloff, shape)
-            > 0;
-    }
+    case ToolPaint:
+        return paintColorFootprintAtUV(uv, radius, strength);
     case ToolErase: {
         // Erase = paint with the user-chosen background color. The BG
         // color is part of the FG/BG color pair (Photoshop / GIMP /
