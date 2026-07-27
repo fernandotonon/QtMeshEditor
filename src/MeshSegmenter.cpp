@@ -707,17 +707,11 @@ int MeshSegmenter::levelLimbCut(std::vector<int>& faceLabels,
     // its own leg. Horizontal height is never used, so the torso skirt bottom is
     // not dragged down (the user's two regressions with the flat cut).
 
-    // Sagittal centre = lateral mean of the two limbs' vertices (not the whole
-    // mesh, so an extended arm doesn't skew it).
-    double latSum = 0; long latN = 0;
-    for (int f = 0; f < faceCount; ++f) {
-        const int lf = faceLabels[f];
-        if (lf == limbLeft || lf == limbRight) { latSum += centroid[f].comp(lat); ++latN; }
-    }
-    if (latN == 0) return 0;
-    const float latCentre = float(latSum / latN);
-
-    // Which limb sits on the +lat side (derive it; don't assume).
+    // Per-limb lateral means (count-INDEPENDENT). The sagittal centre is the
+    // MIDPOINT of the two, NOT a mean over all limb faces — a face-count-weighted
+    // mean would let the leg with more faces pull the midline toward itself
+    // (exactly the asymmetry this pass fixes), flipping near-crotch faces to the
+    // wrong leg (CodeRabbit). Also derive which limb is on the +lat side.
     double latLSum = 0, latRSum = 0; long nLf = 0, nRf = 0;
     for (int f = 0; f < faceCount; ++f) {
         const int lf = faceLabels[f];
@@ -725,7 +719,9 @@ int MeshSegmenter::levelLimbCut(std::vector<int>& faceLabels,
         else if (lf == limbRight) { latRSum += centroid[f].comp(lat); ++nRf; }
     }
     if (nLf == 0 || nRf == 0) return 0;
-    const bool rightIsPositive = (latRSum / nRf) >= (latLSum / nLf);
+    const double latLMean = latLSum / nLf, latRMean = latRSum / nRf;
+    const float latCentre = float(0.5 * (latLMean + latRMean));
+    const bool rightIsPositive = (latRMean >= latLMean);
     auto limbOnSide = [&](bool positive) { return (positive == rightIsPositive) ? limbRight : limbLeft; };
 
     // Only mirror-fix faces NEAR the limb↔torso seam (bounded flood from seam
