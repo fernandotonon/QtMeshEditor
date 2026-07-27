@@ -10359,6 +10359,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     bool splitParts = false;   // PartOps #861/#864
     bool jsonOutput = false;
     bool noModel = false;
+    bool noIslandCleanup = false;  // #863: raw labels, skip the split-cleanup pass
     int upAxis = 1;   // +Y default
     MeshSegmenter::Category category = MeshSegmenter::Category::Auto;
 
@@ -10367,6 +10368,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "segment" || arg == "--cli") continue;
         if (arg == "--json")     { jsonOutput = true; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--no-island-cleanup") { noIslandCleanup = true; continue; }
         if (arg == "--split-parts") { splitParts = true; continue; }
         if (arg == "--write-labels") {
             if (i + 1 >= argc) {
@@ -10427,6 +10429,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
                  "[--category auto|body|vegetation|vehicle|building] "
+                 "[--no-island-cleanup] "
                  "[--dump-training-data <out.json>] [--write-labels <out.json>] "
                  "[--split-parts -o <out.glb>]" << Qt::endl;
         return 2;
@@ -10539,6 +10542,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     opts.upAxis = upAxis;
     opts.forceFallback = noModel;
     opts.category = category;
+    opts.cleanupIslands = !noIslandCleanup;   // #863 opt-out
     // Auto → run the category classifier (first-use download); an explicit
     // --category skips it. --no-model keeps everything offline (Auto → body).
     if (!noModel)

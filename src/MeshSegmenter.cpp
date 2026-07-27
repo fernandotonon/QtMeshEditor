@@ -678,27 +678,29 @@ int MeshSegmenter::cleanupLabelIslands(std::vector<int>& faceLabels,
     // Iterate: reabsorbing one island can shrink a neighbour below threshold or
     // merge two islands. Bounded pass count guards against oscillation.
     for (int pass = 0; pass < 8; ++pass) {
-        // 1) Per-label total face counts (for the fraction gate + "largest").
+        // 1) Per-label total face counts (for the fraction gate).
         std::unordered_map<int, int> labelTotal;
         for (int l : faceLabels)
             ++labelTotal[l];
 
-        // 2) Connected face-islands where adjacency requires the SAME label.
+        // 2) Connected face-islands (same-label edge-adjacency), building the
+        //    id→faces membership ONCE so later steps never rescan all faces per
+        //    island (keeps the pass O(F+E), not O(F·islands) — the fragmented
+        //    case Codex flagged). islandLabel/Size parallel islandFaces.
         std::vector<int> islandOf(faceCount, -1);
-        std::vector<int> islandLabel;   // label per island id
-        std::vector<int> islandSize;    // face count per island id
+        std::vector<int> islandLabel;
+        std::vector<std::vector<int>> islandFaces;
         for (int f = 0; f < faceCount; ++f) {
             if (islandOf[f] != -1) continue;
             const int id = static_cast<int>(islandLabel.size());
             const int lbl = faceLabels[f];
             islandLabel.push_back(lbl);
-            int sz = 0;
-            // BFS over same-label neighbours.
+            islandFaces.emplace_back();
             std::vector<int> stack{ f };
             islandOf[f] = id;
             while (!stack.empty()) {
                 const int cur = stack.back(); stack.pop_back();
-                ++sz;
+                islandFaces[id].push_back(cur);
                 for (int nb : adj[cur]) {
                     if (islandOf[nb] == -1 && faceLabels[nb] == lbl) {
                         islandOf[nb] = id;
@@ -706,52 +708,56 @@ int MeshSegmenter::cleanupLabelIslands(std::vector<int>& faceLabels,
                     }
                 }
             }
-            islandSize.push_back(sz);
         }
+        const int islandCount = static_cast<int>(islandLabel.size());
 
-        // 3) The largest island per label is protected (never reabsorbed).
+        // 3) A label's LARGEST island is its main body and is ALWAYS protected,
+        //    regardless of size — so a legitimately small part (flower, chimney,
+        //    window, a low-poly limb) with only one island is never absorbed
+        //    (Codex P1). Only NON-largest islands are reabsorption candidates.
         std::unordered_map<int, int> largestIslandForLabel; // label → island id
-        for (int id = 0; id < static_cast<int>(islandSize.size()); ++id) {
+        for (int id = 0; id < islandCount; ++id) {
             const int lbl = islandLabel[id];
             auto it = largestIslandForLabel.find(lbl);
-            if (it == largestIslandForLabel.end() || islandSize[id] > islandSize[it->second])
+            if (it == largestIslandForLabel.end() ||
+                islandFaces[id].size() > islandFaces[it->second].size())
                 largestIslandForLabel[lbl] = id;
         }
 
-        // 4) For each stray island, pick the majority boundary-neighbour label
-        //    (the surrounding part) and relabel every face in the island.
+        // 4) Reabsorb each stray (small, non-largest) island into the majority
+        //    boundary-neighbour part.
         int relabelledThisPass = 0;
-        for (int id = 0; id < static_cast<int>(islandSize.size()); ++id) {
+        for (int id = 0; id < islandCount; ++id) {
             const int lbl = islandLabel[id];
+            if (largestIslandForLabel[lbl] == id)
+                continue; // the part's main body — always kept
+            const int sz = static_cast<int>(islandFaces[id].size());
             const int total = labelTotal[lbl];
-            // Protect a label's largest island ONLY when the label is a real
-            // part (its total exceeds the stray size floor). A label whose
-            // ENTIRE presence is tiny (a mislabelled fragment that's the only
-            // island of its label) gets no protection — otherwise the "keep
-            // largest" rule would shield exactly the stray we want to remove.
-            if (largestIslandForLabel[lbl] == id && total >= minFaces)
-                continue;
-            const bool strayBySize = islandSize[id] < minFaces;
-            const bool strayByFrac = total <= 0 ||
-                static_cast<float>(islandSize[id]) < maxFraction * static_cast<float>(total) ||
-                total < minFaces; // whole-label-tiny is always a candidate
-            if (!(strayBySize && strayByFrac))
-                continue;
+            // A non-largest island is a stray if it's small by EITHER measure:
+            // below the absolute face floor (a junction sliver) OR a tiny
+            // fraction of its label (a fleck off a big part). OR — not AND — so
+            // a 2-face sliver off a modest 50-face part still counts (2 is below
+            // the 32 floor even though it's not below 2% of 50). A genuinely
+            // LARGE secondary island (>= minFaces AND a real fraction) survives,
+            // preserving legitimately multi-island parts (two ears, symmetric
+            // pairs sharing a label).
+            const bool strayBySize = sz < minFaces;
+            const bool strayByFrac = total > 0 &&
+                static_cast<float>(sz) < maxFraction * static_cast<float>(total);
+            if (!(strayBySize || strayByFrac))
+                continue; // a large secondary island (real multi-part) survives
 
-            // Majority label among faces adjacent across the island boundary.
+            // Majority label among faces adjacent across the island boundary
+            // (scans only THIS island's faces via the precomputed membership).
             std::unordered_map<int, int> votes;
-            for (int f = 0; f < faceCount; ++f) {
-                if (islandOf[f] != id) continue;
-                for (int nb : adj[f]) {
-                    if (islandOf[nb] != id) // a boundary neighbour
+            for (int f : islandFaces[id])
+                for (int nb : adj[f])
+                    if (islandOf[nb] != id)
                         ++votes[faceLabels[nb]];
-                }
-            }
             if (votes.empty())
                 continue; // fully isolated island (no boundary) — leave it.
             int bestLabel = lbl, bestVotes = -1;
             for (const auto& kv : votes) {
-                // Break ties toward the lower label for determinism.
                 if (kv.second > bestVotes ||
                     (kv.second == bestVotes && kv.first < bestLabel)) {
                     bestVotes = kv.second;
@@ -760,11 +766,9 @@ int MeshSegmenter::cleanupLabelIslands(std::vector<int>& faceLabels,
             }
             if (bestLabel == lbl)
                 continue;
-            for (int f = 0; f < faceCount; ++f) {
-                if (islandOf[f] == id) {
-                    faceLabels[f] = bestLabel;
-                    ++relabelledThisPass;
-                }
+            for (int f : islandFaces[id]) {
+                faceLabels[f] = bestLabel;
+                ++relabelledThisPass;
             }
         }
 

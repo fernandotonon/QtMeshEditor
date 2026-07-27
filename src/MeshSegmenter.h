@@ -129,12 +129,12 @@ public:
         // itself treats a still-Auto value as Body).
         Category category = Category::Auto;
 
-        // Floating-face cleanup: after labelling, reabsorb small disconnected
-        // face-islands (a few mislabelled faces near a junction that form their
-        // own tiny island within a part) into the surrounding part. Without it,
-        // splitting leaves stray fragments floating next to the real part — bad
-        // for 3D printing especially (#863). Default ON; opt out via CLI
-        // --no-island-cleanup / MCP no_cleanup for raw model output.
+        // Split-cleanup master switch (#863). When ON (default), after labelling
+        // the boundaries are de-fringed (smoothLabelBoundaries) and small
+        // disconnected junction islands are reabsorbed (cleanupLabelIslands) so a
+        // split doesn't leave ragged seams or stray floating fragments — bad for
+        // 3D printing especially. Opt out for raw model labels via CLI
+        // --no-island-cleanup / MCP no_cleanup.
         bool cleanupIslands = true;
         // An island is a stray candidate only if it has FEWER than this many
         // faces AND (see islandMaxFraction). A part's single LARGEST island is

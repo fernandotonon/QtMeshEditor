@@ -401,21 +401,28 @@ void quadGrid(int W, int H, std::vector<float>& pos, std::vector<uint32_t>& idx)
 
 TEST(MeshSegmenter, CleanupReabsorbsStrayIsland)
 {
-    // 8×8 grid = 128 faces. Label everything 1 (torso) except a single quad's
-    // two faces near the middle labelled 5 — a stray 2-face island surrounded
-    // entirely by label 1. Cleanup must reabsorb it into 1.
+    // 8×8 grid = 128 faces. Label 5 owns a large left block (its main body) AND
+    // a stray 2-face island in label-1 territory near the middle — the real
+    // "mislabelled junction sliver" case: the stray takes a label that also has
+    // a bigger body elsewhere, so it's a NON-largest island of 5 and gets
+    // reabsorbed into the surrounding label 1. The big block of 5 survives.
     std::vector<float> pos; std::vector<uint32_t> idx;
     quadGrid(8, 8, pos, idx);
     const int faceCount = (int)idx.size() / 3;
     std::vector<int> faces(faceCount, 1);
-    // middle quad q at (4,4): faces 2*(4*8+4) and +1.
-    const int q = 4 * 8 + 4;
-    faces[q * 2] = 5;
-    faces[q * 2 + 1] = 5;
+    for (int y = 0; y < 8; ++y)          // left 3 columns → label 5 (main body)
+        for (int x = 0; x < 3; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 5; faces[q * 2 + 1] = 5;
+        }
+    const int stray = 4 * 8 + 5;         // isolated quad deep in label-1 area → 5
+    faces[stray * 2] = 5; faces[stray * 2 + 1] = 5;
 
     const int relabelled = MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
-    EXPECT_EQ(relabelled, 2);
-    for (int l : faces) EXPECT_EQ(l, 1);   // island gone
+    EXPECT_EQ(relabelled, 2);            // only the 2 stray faces flipped
+    EXPECT_EQ(faces[stray * 2], 1);      // stray reabsorbed into surrounding 1
+    EXPECT_EQ(faces[stray * 2 + 1], 1);
+    // The main body of 5 is untouched.
+    EXPECT_EQ(faces[(0 * 8 + 0) * 2], 5);
 }
 
 TEST(MeshSegmenter, CleanupKeepsLargestIslandPerLabel)
@@ -454,21 +461,46 @@ TEST(MeshSegmenter, CleanupDisabledIsNoOp)
 
 TEST(MeshSegmenter, CleanupReconcilesVertexLabels)
 {
-    // After reabsorbing a face island, vertexLabelsFromFaces must pull the
-    // island's interior verts to the surrounding label too.
+    // After reabsorbing a stray face-island, vertexLabelsFromFaces must pull the
+    // island's verts to the surrounding label too. Uses the reabsorbable case
+    // (label 5 has a big body left + a stray in label-1 territory).
     std::vector<float> pos; std::vector<uint32_t> idx;
     quadGrid(8, 8, pos, idx);
     const int faceCount = (int)idx.size() / 3;
     const int vc = (int)pos.size() / 3;
     std::vector<int> faces(faceCount, 1);
-    const int q = 4 * 8 + 4;
-    faces[q * 2] = 5; faces[q * 2 + 1] = 5;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 3; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 5; faces[q * 2 + 1] = 5;
+        }
+    const int stray = 4 * 8 + 5;
+    faces[stray * 2] = 5; faces[stray * 2 + 1] = 5;
 
     MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
     std::vector<int> verts(vc, 1);
-    // Pretend the interior vert had picked up 5; reconcile from cleaned faces.
     MS::vertexLabelsFromFaces(verts, faces, idx.data(), (int)idx.size());
-    for (int l : verts) EXPECT_EQ(l, 1);
+    // The stray quad's own verts are now 1 (its faces were reabsorbed).
+    const int cols = 9; // 8 quads + 1
+    auto vid = [cols](int x, int y) { return y * cols + x; };
+    EXPECT_EQ(verts[vid(6, 5)], 1);   // interior vert of the stray quad (5,4)
+}
+
+TEST(MeshSegmenter, CleanupKeepsSmallLegitimatePart)
+{
+    // A legitimately SMALL part (below minFaces) that is a single island must
+    // NOT be absorbed — it's its label's largest (only) island (Codex P1: small
+    // flowers/chimneys/windows/low-poly limbs). Grid mostly 1, with a compact
+    // 3×3-quad block of label 9 (18 faces < minFaces=32) fully inside part 1.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    std::vector<int> faces((int)idx.size() / 3, 1);
+    for (int y = 2; y < 5; ++y)
+        for (int x = 2; x < 5; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 9; faces[q * 2 + 1] = 9;
+        }
+    const int relabelled = MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
+    EXPECT_EQ(relabelled, 0);          // small part preserved
+    EXPECT_EQ(faces[(3 * 8 + 3) * 2], 9);
 }
 
 // ---- smoothLabelBoundaries (#863 ragged-seam / leg-fringe fix) ------------

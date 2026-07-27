@@ -4563,6 +4563,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 
         MeshSegmenter::Options opts;
         opts.forceFallback = noModel;
+        opts.cleanupIslands = !args.value("no_cleanup").toBool(false);  // #863 opt-out
         const QString upAxisStr = args.value("up_axis").toString().toLower();
         if (!upAxisStr.isEmpty()) {
             if (upAxisStr == "x") opts.upAxis = 0;
@@ -9011,6 +9012,7 @@ QJsonArray MCPServer::buildToolsList()
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
         props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation."}};
+        props["no_cleanup"] = QJsonObject{{"type", "boolean"}, {"description", "Return RAW model labels: skip the split-cleanup pass (#863) that de-fringes ragged part seams and reabsorbs small disconnected junction islands. Default false (cleanup ON)."}};
         appendTool(
             "segment_mesh",
             "AI mesh part segmentation (#410/#818): predict a semantic part label "
