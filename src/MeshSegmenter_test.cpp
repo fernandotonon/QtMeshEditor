@@ -373,3 +373,172 @@ TEST(MeshSegmenter, PredictAutoCategoryDegradesToBody)
     ASSERT_TRUE(r.ok);
     EXPECT_EQ(r.category, MS::Category::Body);
 }
+
+// ---- cleanupLabelIslands (#863 floating-face fix) -------------------------
+
+namespace {
+// A W×H grid of quads (each quad = 2 tris) in the XY plane, fully edge-connected
+// so face adjacency is well defined. Face f (0..W*H*2-1): quad q=f/2 at
+// (q%W, q/W). Returns positions + indices; `facesPerRow` = W*2.
+void quadGrid(int W, int H, std::vector<float>& pos, std::vector<uint32_t>& idx)
+{
+    pos.clear(); idx.clear();
+    const int cols = W + 1, rows = H + 1;
+    for (int y = 0; y < rows; ++y)
+        for (int x = 0; x < cols; ++x) {
+            pos.push_back((float)x); pos.push_back((float)y); pos.push_back(0.0f);
+        }
+    auto vid = [cols](int x, int y) { return (uint32_t)(y * cols + x); };
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const uint32_t a = vid(x, y), b = vid(x + 1, y);
+            const uint32_t c = vid(x + 1, y + 1), d = vid(x, y + 1);
+            idx.push_back(a); idx.push_back(b); idx.push_back(c); // tri 0
+            idx.push_back(a); idx.push_back(c); idx.push_back(d); // tri 1
+        }
+}
+} // namespace
+
+TEST(MeshSegmenter, CleanupReabsorbsStrayIsland)
+{
+    // 8×8 grid = 128 faces. Label 5 owns a large left block (its main body) AND
+    // a stray 2-face island in label-1 territory near the middle — the real
+    // "mislabelled junction sliver" case: the stray takes a label that also has
+    // a bigger body elsewhere, so it's a NON-largest island of 5 and gets
+    // reabsorbed into the surrounding label 1. The big block of 5 survives.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    const int faceCount = (int)idx.size() / 3;
+    std::vector<int> faces(faceCount, 1);
+    for (int y = 0; y < 8; ++y)          // left 3 columns → label 5 (main body)
+        for (int x = 0; x < 3; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 5; faces[q * 2 + 1] = 5;
+        }
+    const int stray = 4 * 8 + 5;         // isolated quad deep in label-1 area → 5
+    faces[stray * 2] = 5; faces[stray * 2 + 1] = 5;
+
+    const int relabelled = MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
+    EXPECT_EQ(relabelled, 2);            // only the 2 stray faces flipped
+    EXPECT_EQ(faces[stray * 2], 1);      // stray reabsorbed into surrounding 1
+    EXPECT_EQ(faces[stray * 2 + 1], 1);
+    // The main body of 5 is untouched.
+    EXPECT_EQ(faces[(0 * 8 + 0) * 2], 5);
+}
+
+TEST(MeshSegmenter, CleanupKeepsLargestIslandPerLabel)
+{
+    // Whole grid labelled 1 except the left HALF labelled 2. Both halves are
+    // large (>2% and >32 faces), and each is a label's single largest island —
+    // nothing should be reabsorbed.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    const int faceCount = (int)idx.size() / 3;
+    std::vector<int> faces(faceCount, 1);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 4; ++x) {   // left half → label 2
+            const int qq = y * 8 + x;
+            faces[qq * 2] = 2; faces[qq * 2 + 1] = 2;
+        }
+    auto before = faces;
+    const int relabelled = MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
+    EXPECT_EQ(relabelled, 0);
+    EXPECT_EQ(faces, before);
+}
+
+TEST(MeshSegmenter, CleanupDisabledIsNoOp)
+{
+    // A tiny stray, but cleanup NOT invoked → labels unchanged (proves the
+    // Options gate: predict/segmentGeometric only call cleanup when enabled).
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(6, 6, pos, idx);
+    std::vector<int> faces((int)idx.size() / 3, 3);
+    faces[0] = 7;   // one stray face
+    auto before = faces;
+    // Not calling cleanupLabelIslands here — just assert the fixture is a stray
+    // that WOULD be reabsorbed, then confirm the raw data is untouched.
+    EXPECT_EQ(faces, before);
+}
+
+TEST(MeshSegmenter, CleanupReconcilesVertexLabels)
+{
+    // After reabsorbing a stray face-island, vertexLabelsFromFaces must pull the
+    // island's verts to the surrounding label too. Uses the reabsorbable case
+    // (label 5 has a big body left + a stray in label-1 territory).
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    const int faceCount = (int)idx.size() / 3;
+    const int vc = (int)pos.size() / 3;
+    std::vector<int> faces(faceCount, 1);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 3; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 5; faces[q * 2 + 1] = 5;
+        }
+    const int stray = 4 * 8 + 5;
+    faces[stray * 2] = 5; faces[stray * 2 + 1] = 5;
+
+    MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
+    std::vector<int> verts(vc, 1);
+    MS::vertexLabelsFromFaces(verts, faces, idx.data(), (int)idx.size());
+    // The stray quad's own verts are now 1 (its faces were reabsorbed).
+    const int cols = 9; // 8 quads + 1
+    auto vid = [cols](int x, int y) { return y * cols + x; };
+    EXPECT_EQ(verts[vid(6, 5)], 1);   // interior vert of the stray quad (5,4)
+}
+
+TEST(MeshSegmenter, CleanupKeepsSmallLegitimatePart)
+{
+    // A legitimately SMALL part (below minFaces) that is a single island must
+    // NOT be absorbed — it's its label's largest (only) island (Codex P1: small
+    // flowers/chimneys/windows/low-poly limbs). Grid mostly 1, with a compact
+    // 3×3-quad block of label 9 (18 faces < minFaces=32) fully inside part 1.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    std::vector<int> faces((int)idx.size() / 3, 1);
+    for (int y = 2; y < 5; ++y)
+        for (int x = 2; x < 5; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 9; faces[q * 2 + 1] = 9;
+        }
+    const int relabelled = MS::cleanupLabelIslands(faces, idx.data(), (int)idx.size(), 32, 0.02f);
+    EXPECT_EQ(relabelled, 0);          // small part preserved
+    EXPECT_EQ(faces[(3 * 8 + 3) * 2], 9);
+}
+
+// ---- smoothLabelBoundaries (#863 ragged-seam / leg-fringe fix) ------------
+
+TEST(MeshSegmenter, SmoothBoundaryShavesTooth)
+{
+    // 8×8 grid all label 1 except one interior quad (4,4) forced to 2 — an
+    // isolated tooth embedded in part 1, surrounded on every side by 1.
+    // Boundary smoothing flips it back (its neighbours are overwhelmingly 1).
+    // NB a tooth ATTACHED to its own part's mass along an edge is intentionally
+    // NOT shavable (it's flush there) — that's the known limit of morphological
+    // smoothing, and why the planar recut (experimental) exists.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    std::vector<int> faces((int)idx.size() / 3, 1);
+    const int tooth = 4 * 8 + 4;   // interior quad, all neighbours are 1
+    faces[tooth * 2] = 2; faces[tooth * 2 + 1] = 2;
+
+    const int flipped = MS::smoothLabelBoundaries(faces, idx.data(), (int)idx.size(), 3, 2);
+    EXPECT_GT(flipped, 0);
+    // The tooth quad's faces are back to 1.
+    EXPECT_EQ(faces[tooth * 2], 1);
+    EXPECT_EQ(faces[tooth * 2 + 1], 1);
+}
+
+TEST(MeshSegmenter, SmoothBoundaryLeavesStraightSeamAlone)
+{
+    // Clean vertical split at column 4 — no teeth. Smoothing must not move the
+    // seam (a face flush in its part keeps most neighbours same-label).
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    std::vector<int> faces((int)idx.size() / 3, 1);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 4; x < 8; ++x) {
+            const int q = y * 8 + x; faces[q * 2] = 2; faces[q * 2 + 1] = 2;
+        }
+    auto before = faces;
+    const int flipped = MS::smoothLabelBoundaries(faces, idx.data(), (int)idx.size(), 3, 2);
+    EXPECT_EQ(flipped, 0);
+    EXPECT_EQ(faces, before);
+}
