@@ -400,6 +400,412 @@ std::vector<int> MeshSegmenter::facesFromVertexLabels(const std::vector<int>& ve
     return faces;
 }
 
+namespace {
+// Build face-to-face adjacency over shared EDGES. Two faces are neighbours iff
+// they share an edge (an unordered vertex-index pair). Returns adjacency as a
+// vector<vector<int>> indexed by face id. O(F) with a hash map over edges.
+std::vector<std::vector<int>> buildFaceAdjacency(const uint32_t* indices, int faceCount)
+{
+    std::vector<std::vector<int>> adj(std::max(0, faceCount));
+    // edge key (min,max) → first face that used it; on the second, link them.
+    std::unordered_map<uint64_t, int> edgeToFace;
+    edgeToFace.reserve(static_cast<size_t>(faceCount) * 3);
+    auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
+        const uint64_t lo = std::min(a, b), hi = std::max(a, b);
+        return (lo << 32) | hi;
+    };
+    for (int f = 0; f < faceCount; ++f) {
+        const uint32_t v0 = indices[f * 3 + 0];
+        const uint32_t v1 = indices[f * 3 + 1];
+        const uint32_t v2 = indices[f * 3 + 2];
+        const uint64_t keys[3] = { edgeKey(v0, v1), edgeKey(v1, v2), edgeKey(v2, v0) };
+        for (uint64_t k : keys) {
+            auto it = edgeToFace.find(k);
+            if (it == edgeToFace.end()) {
+                edgeToFace.emplace(k, f);
+            } else if (it->second != f) {
+                // Link both directions (an edge shared by >2 faces links each
+                // to the first-seen — acceptable for the cleanup's purposes).
+                adj[f].push_back(it->second);
+                adj[it->second].push_back(f);
+            }
+        }
+    }
+    return adj;
+}
+} // namespace
+
+int MeshSegmenter::smoothLabelBoundaries(std::vector<int>& faceLabels,
+                                         const uint32_t* indices, int indexCount,
+                                         int iterations, int minAgree)
+{
+    const int faceCount = static_cast<int>(faceLabels.size());
+    if (faceCount <= 0 || !indices || indexCount < faceCount * 3 || iterations <= 0)
+        return 0;
+    if (minAgree < 2) minAgree = 2;
+
+    const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
+    int totalFlipped = 0;
+
+    for (int it = 0; it < iterations; ++it) {
+        // Compute every flip against the SAME snapshot so the pass is order-
+        // independent (a face and its neighbour can't ping-pong within a pass).
+        const std::vector<int> snapshot = faceLabels;
+        int flippedThisPass = 0;
+        for (int f = 0; f < faceCount; ++f) {
+            const int self = snapshot[f];
+            // Tally neighbour labels.
+            std::unordered_map<int, int> votes;
+            int selfNeighbours = 0;
+            for (int nb : adj[f]) {
+                const int nl = snapshot[nb];
+                ++votes[nl];
+                if (nl == self) ++selfNeighbours;
+            }
+            if (votes.empty())
+                continue;
+            // Best OTHER label among neighbours.
+            int bestLabel = self, bestVotes = 0;
+            for (const auto& kv : votes) {
+                if (kv.first == self) continue;
+                if (kv.second > bestVotes ||
+                    (kv.second == bestVotes && kv.first < bestLabel)) {
+                    bestVotes = kv.second;
+                    bestLabel = kv.first;
+                }
+            }
+            // Flip only when a different label holds a strict majority of the
+            // face's edge-neighbours AND outnumbers the face's own label there —
+            // i.e. this face is a tooth poking into `bestLabel`'s territory.
+            if (bestLabel != self && bestVotes >= minAgree && bestVotes > selfNeighbours) {
+                faceLabels[f] = bestLabel;
+                ++flippedThisPass;
+            }
+        }
+        totalFlipped += flippedThisPass;
+        if (flippedThisPass == 0)
+            break; // seam is straight
+    }
+    return totalFlipped;
+}
+
+namespace {
+struct Vec3 { float x = 0, y = 0, z = 0; };
+inline Vec3 faceCentroid(const float* pos, const uint32_t* idx, int f)
+{
+    Vec3 c;
+    for (int k = 0; k < 3; ++k) {
+        const int v = static_cast<int>(idx[f * 3 + k]);
+        c.x += pos[v * 3 + 0]; c.y += pos[v * 3 + 1]; c.z += pos[v * 3 + 2];
+    }
+    c.x /= 3.0f; c.y /= 3.0f; c.z /= 3.0f;
+    return c;
+}
+// Canonical mirror pair for symmetry coupling: returns the paired part label,
+// or -1 if the label has no left/right mirror.
+int mirrorPartLabel(int label)
+{
+    using P = MeshSegmenter::Part;
+    switch (static_cast<P>(label)) {
+        case P::LeftArm:  return static_cast<int>(P::RightArm);
+        case P::RightArm: return static_cast<int>(P::LeftArm);
+        case P::LeftLeg:  return static_cast<int>(P::RightLeg);
+        case P::RightLeg: return static_cast<int>(P::LeftLeg);
+        default:          return -1;
+    }
+}
+} // namespace
+
+int MeshSegmenter::planarBoundaryRecut(std::vector<int>& faceLabels,
+                                       const float* positions, int vertexCount,
+                                       const uint32_t* indices, int indexCount,
+                                       float axisSnapDeg, float bandFraction)
+{
+    const int faceCount = static_cast<int>(faceLabels.size());
+    if (faceCount <= 0 || !positions || vertexCount <= 0 ||
+        !indices || indexCount < faceCount * 3)
+        return 0;
+
+    // Mesh diagonal for the band width.
+    float mn[3] = { 1e30f, 1e30f, 1e30f }, mx[3] = { -1e30f, -1e30f, -1e30f };
+    for (int v = 0; v < vertexCount; ++v)
+        for (int a = 0; a < 3; ++a) {
+            const float p = positions[v * 3 + a];
+            mn[a] = std::min(mn[a], p); mx[a] = std::max(mx[a], p);
+        }
+    const float diag = std::sqrt((mx[0]-mn[0])*(mx[0]-mn[0]) +
+                                 (mx[1]-mn[1])*(mx[1]-mn[1]) +
+                                 (mx[2]-mn[2])*(mx[2]-mn[2]));
+    if (!(diag > 0.0f))
+        return 0;
+    const float band = bandFraction * diag;
+
+    const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
+
+    // Precompute face centroids.
+    std::vector<Vec3> centroid(faceCount);
+    for (int f = 0; f < faceCount; ++f)
+        centroid[f] = faceCentroid(positions, indices, f);
+
+    // Enumerate adjacent label pairs (unordered, ordered so a<b).
+    auto pairKey = [](int a, int b) -> uint64_t {
+        const uint32_t lo = std::min(a, b), hi = std::max(a, b);
+        return (static_cast<uint64_t>(lo) << 32) | hi;
+    };
+    std::unordered_map<uint64_t, std::pair<int,int>> pairs; // key → (labelA,labelB)
+    for (int f = 0; f < faceCount; ++f)
+        for (int nb : adj[f]) {
+            const int la = faceLabels[f], lb = faceLabels[nb];
+            if (la != lb)
+                pairs[pairKey(la, lb)] = { std::min(la,lb), std::max(la,lb) };
+        }
+    if (pairs.empty())
+        return 0;
+
+    const float cosSnap = std::cos(axisSnapDeg * 3.14159265358979f / 180.0f);
+
+    // A fitted cut plane for one label pair.
+    struct Plane { Vec3 n; float d = 0; int axis = -1; bool ok = false; };
+    std::unordered_map<uint64_t, Plane> planeFor;
+
+    for (const auto& kv : pairs) {
+        const int A = kv.second.first, B = kv.second.second;
+        // Boundary faces: faces of A adjacent to B (and vice versa).
+        Vec3 cA, cB; int nA = 0, nB = 0;
+        std::vector<int> boundary;
+        for (int f = 0; f < faceCount; ++f) {
+            const int lf = faceLabels[f];
+            if (lf != A && lf != B) continue;
+            bool onSeam = false;
+            for (int nb : adj[f]) {
+                const int ln = faceLabels[nb];
+                if ((lf == A && ln == B) || (lf == B && ln == A)) { onSeam = true; break; }
+            }
+            if (!onSeam) continue;
+            boundary.push_back(f);
+            if (lf == A) { cA.x += centroid[f].x; cA.y += centroid[f].y; cA.z += centroid[f].z; ++nA; }
+            else         { cB.x += centroid[f].x; cB.y += centroid[f].y; cB.z += centroid[f].z; ++nB; }
+        }
+        if (nA == 0 || nB == 0 || boundary.size() < 6)
+            continue; // too little seam to fit a plane
+        cA.x /= nA; cA.y /= nA; cA.z /= nA;
+        cB.x /= nB; cB.y /= nB; cB.z /= nB;
+
+        // Normal = A→B direction (points from A into B).
+        Vec3 n{ cB.x - cA.x, cB.y - cA.y, cB.z - cA.z };
+        float len = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+        if (!(len > 1e-6f))
+            continue;
+        n.x /= len; n.y /= len; n.z /= len;
+
+        // Axis-snap when near a world axis.
+        int snapAxis = -1;
+        const float comp[3] = { std::fabs(n.x), std::fabs(n.y), std::fabs(n.z) };
+        for (int a = 0; a < 3; ++a) {
+            if (comp[a] >= cosSnap) {
+                const float sign = ((a==0?n.x:a==1?n.y:n.z) >= 0) ? 1.0f : -1.0f;
+                n = { 0, 0, 0 };
+                (a==0 ? n.x : a==1 ? n.y : n.z) = sign;
+                snapAxis = a;
+                break;
+            }
+        }
+
+        // Plane offset d = n·(midpoint of the two boundary centroids).
+        Vec3 mid{ (cA.x+cB.x)*0.5f, (cA.y+cB.y)*0.5f, (cA.z+cB.z)*0.5f };
+        const float d = n.x*mid.x + n.y*mid.y + n.z*mid.z;
+        planeFor[kv.first] = Plane{ n, d, snapAxis, true };
+    }
+
+    // Symmetry coupling: mirror-paired parts sharing a boundary with the SAME
+    // third part (e.g. LeftLeg-Torso and RightLeg-Torso) should cut at the same
+    // offset along a shared snapped axis. Average their `d` when the snap axis
+    // matches (mirror is across a different axis, so the cut height agrees).
+    for (auto& kvA : planeFor) {
+        const int a0 = static_cast<int>(kvA.first >> 32);
+        const int a1 = static_cast<int>(kvA.first & 0xffffffff);
+        // Identify the limb label (the one with a mirror) and the shared part.
+        int limb = mirrorPartLabel(a0) >= 0 ? a0 : (mirrorPartLabel(a1) >= 0 ? a1 : -1);
+        if (limb < 0 || !kvA.second.ok || kvA.second.axis < 0) continue;
+        const int shared = (limb == a0) ? a1 : a0;
+        const int mirror = mirrorPartLabel(limb);
+        const uint64_t mirrorKey = (static_cast<uint64_t>(std::min(mirror, shared)) << 32)
+                                   | static_cast<uint32_t>(std::max(mirror, shared));
+        auto it = planeFor.find(mirrorKey);
+        if (it == planeFor.end() || !it->second.ok) continue;
+        if (it->second.axis != kvA.second.axis) continue;
+        // Average the offsets so both limbs cut level. (Both planes' normals are
+        // the same snapped axis; signs may differ, so compare |d| along axis.)
+        const float avg = 0.5f * (kvA.second.d + it->second.d);
+        kvA.second.d = avg;
+        it->second.d = avg;
+    }
+
+    // Reassign band faces by side of the plane. For each pair, a face currently
+    // A or B within `band` of the seam midpoint plane flips to A if it's on the
+    // A side (n·c < d), else B.
+    int relabelled = 0;
+    for (const auto& kv : pairs) {
+        auto pit = planeFor.find(kv.first);
+        if (pit == planeFor.end() || !pit->second.ok) continue;
+        const int A = kv.second.first, B = kv.second.second;
+        const Plane& pl = pit->second;
+        for (int f = 0; f < faceCount; ++f) {
+            const int lf = faceLabels[f];
+            if (lf != A && lf != B) continue;
+            const Vec3& c = centroid[f];
+            const float sd = pl.n.x*c.x + pl.n.y*c.y + pl.n.z*c.z - pl.d; // signed dist
+            if (std::fabs(sd) > band) continue; // outside the seam band
+            // n points A→B: negative side = A, positive = B.
+            const int want = (sd < 0.0f) ? A : B;
+            if (want != lf) { faceLabels[f] = want; ++relabelled; }
+        }
+    }
+    return relabelled;
+}
+
+int MeshSegmenter::cleanupLabelIslands(std::vector<int>& faceLabels,
+                                       const uint32_t* indices, int indexCount,
+                                       int minFaces, float maxFraction)
+{
+    const int faceCount = static_cast<int>(faceLabels.size());
+    if (faceCount <= 0 || !indices || indexCount < faceCount * 3 || minFaces <= 0)
+        return 0;
+
+    const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
+    int totalRelabelled = 0;
+
+    // Iterate: reabsorbing one island can shrink a neighbour below threshold or
+    // merge two islands. Bounded pass count guards against oscillation.
+    for (int pass = 0; pass < 8; ++pass) {
+        // 1) Per-label total face counts (for the fraction gate + "largest").
+        std::unordered_map<int, int> labelTotal;
+        for (int l : faceLabels)
+            ++labelTotal[l];
+
+        // 2) Connected face-islands where adjacency requires the SAME label.
+        std::vector<int> islandOf(faceCount, -1);
+        std::vector<int> islandLabel;   // label per island id
+        std::vector<int> islandSize;    // face count per island id
+        for (int f = 0; f < faceCount; ++f) {
+            if (islandOf[f] != -1) continue;
+            const int id = static_cast<int>(islandLabel.size());
+            const int lbl = faceLabels[f];
+            islandLabel.push_back(lbl);
+            int sz = 0;
+            // BFS over same-label neighbours.
+            std::vector<int> stack{ f };
+            islandOf[f] = id;
+            while (!stack.empty()) {
+                const int cur = stack.back(); stack.pop_back();
+                ++sz;
+                for (int nb : adj[cur]) {
+                    if (islandOf[nb] == -1 && faceLabels[nb] == lbl) {
+                        islandOf[nb] = id;
+                        stack.push_back(nb);
+                    }
+                }
+            }
+            islandSize.push_back(sz);
+        }
+
+        // 3) The largest island per label is protected (never reabsorbed).
+        std::unordered_map<int, int> largestIslandForLabel; // label → island id
+        for (int id = 0; id < static_cast<int>(islandSize.size()); ++id) {
+            const int lbl = islandLabel[id];
+            auto it = largestIslandForLabel.find(lbl);
+            if (it == largestIslandForLabel.end() || islandSize[id] > islandSize[it->second])
+                largestIslandForLabel[lbl] = id;
+        }
+
+        // 4) For each stray island, pick the majority boundary-neighbour label
+        //    (the surrounding part) and relabel every face in the island.
+        int relabelledThisPass = 0;
+        for (int id = 0; id < static_cast<int>(islandSize.size()); ++id) {
+            const int lbl = islandLabel[id];
+            const int total = labelTotal[lbl];
+            // Protect a label's largest island ONLY when the label is a real
+            // part (its total exceeds the stray size floor). A label whose
+            // ENTIRE presence is tiny (a mislabelled fragment that's the only
+            // island of its label) gets no protection — otherwise the "keep
+            // largest" rule would shield exactly the stray we want to remove.
+            if (largestIslandForLabel[lbl] == id && total >= minFaces)
+                continue;
+            const bool strayBySize = islandSize[id] < minFaces;
+            const bool strayByFrac = total <= 0 ||
+                static_cast<float>(islandSize[id]) < maxFraction * static_cast<float>(total) ||
+                total < minFaces; // whole-label-tiny is always a candidate
+            if (!(strayBySize && strayByFrac))
+                continue;
+
+            // Majority label among faces adjacent across the island boundary.
+            std::unordered_map<int, int> votes;
+            for (int f = 0; f < faceCount; ++f) {
+                if (islandOf[f] != id) continue;
+                for (int nb : adj[f]) {
+                    if (islandOf[nb] != id) // a boundary neighbour
+                        ++votes[faceLabels[nb]];
+                }
+            }
+            if (votes.empty())
+                continue; // fully isolated island (no boundary) — leave it.
+            int bestLabel = lbl, bestVotes = -1;
+            for (const auto& kv : votes) {
+                // Break ties toward the lower label for determinism.
+                if (kv.second > bestVotes ||
+                    (kv.second == bestVotes && kv.first < bestLabel)) {
+                    bestVotes = kv.second;
+                    bestLabel = kv.first;
+                }
+            }
+            if (bestLabel == lbl)
+                continue;
+            for (int f = 0; f < faceCount; ++f) {
+                if (islandOf[f] == id) {
+                    faceLabels[f] = bestLabel;
+                    ++relabelledThisPass;
+                }
+            }
+        }
+
+        totalRelabelled += relabelledThisPass;
+        if (relabelledThisPass == 0)
+            break; // stable
+    }
+    return totalRelabelled;
+}
+
+void MeshSegmenter::vertexLabelsFromFaces(std::vector<int>& vertexLabels,
+                                          const std::vector<int>& faceLabels,
+                                          const uint32_t* indices, int indexCount)
+{
+    const int vc = static_cast<int>(vertexLabels.size());
+    if (vc <= 0 || indexCount < 3)
+        return;
+    const int faceCount = static_cast<int>(faceLabels.size());
+    // Per-vertex label votes from the faces referencing it.
+    std::vector<std::unordered_map<int, int>> votes(vc);
+    for (int f = 0; f < faceCount && f * 3 + 2 < indexCount; ++f) {
+        const int lbl = faceLabels[f];
+        for (int k = 0; k < 3; ++k) {
+            const int v = static_cast<int>(indices[f * 3 + k]);
+            if (v >= 0 && v < vc)
+                ++votes[v][lbl];
+        }
+    }
+    for (int v = 0; v < vc; ++v) {
+        if (votes[v].empty()) continue; // unreferenced vertex keeps its label
+        int best = vertexLabels[v], bestVotes = -1;
+        for (const auto& kv : votes[v]) {
+            if (kv.second > bestVotes || (kv.second == bestVotes && kv.first < best)) {
+                bestVotes = kv.second;
+                best = kv.first;
+            }
+        }
+        vertexLabels[v] = best;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Geometric fallback
 // ---------------------------------------------------------------------------
@@ -507,6 +913,23 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
         applyBoneHints(r.vertexLabels, boneProximity);
 
     r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
+    // Clean the part boundaries for a printable split (#863): straighten ragged
+    // seams (leg/torso fringe) then reabsorb stray junction islands; reconcile
+    // vertex labels only if the faces actually changed.
+    if (opts.cleanupIslands) {
+        int changed = 0;
+        changed += smoothLabelBoundaries(r.faceLabels, indices, indexCount,
+                                         opts.boundarySmoothIterations);
+        // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
+        if (opts.planarRecut)
+            changed += planarBoundaryRecut(r.faceLabels, positions, vertexCount,
+                                           indices, indexCount);
+        // Island pass last: recut/smoothing can leave a tiny stray to reabsorb.
+        changed += cleanupLabelIslands(r.faceLabels, indices, indexCount,
+                                       opts.islandMinFaces, opts.islandMaxFraction);
+        if (changed > 0)
+            vertexLabelsFromFaces(r.vertexLabels, r.faceLabels, indices, indexCount);
+    }
     r.ok = true;
     r.usedModel = false;
     r.category = cat;
@@ -824,6 +1247,23 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         if (cat == Category::Body)
             applyBoneHints(r.vertexLabels, boneProximity);
         r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
+        // Clean the part boundaries for a printable split (#863): straighten
+        // ragged seams (leg/torso fringe) then reabsorb stray junction islands;
+        // reconcile vertex labels only if the faces actually changed.
+        if (opts.cleanupIslands) {
+            int changed = 0;
+            changed += smoothLabelBoundaries(r.faceLabels, indices, indexCount,
+                                             opts.boundarySmoothIterations);
+            // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
+            if (opts.planarRecut)
+                changed += planarBoundaryRecut(r.faceLabels, positions, vertexCount,
+                                               indices, indexCount);
+            // Island pass last: recut/smoothing can leave a tiny stray.
+            changed += cleanupLabelIslands(r.faceLabels, indices, indexCount,
+                                           opts.islandMinFaces, opts.islandMaxFraction);
+            if (changed > 0)
+                vertexLabelsFromFaces(r.vertexLabels, r.faceLabels, indices, indexCount);
+        }
         r.ok = true;
         r.usedModel = true;
         r.category = cat;
