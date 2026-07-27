@@ -332,6 +332,12 @@ SubMeshOps::JoinResult SubMeshOps::joinParts(const std::vector<JoinPart>& parts)
         Ogre::Matrix3 linear;
         M.extract3x3Matrix(linear);
         Ogre::Matrix3 normalMat = linear.Inverse().Transpose();
+        // A negative-determinant (orientation-reversing) transform — e.g. a
+        // negative scale on one axis — mirrors positions but leaves the
+        // triangle index order and tangent handedness unchanged, which would
+        // flip the effective winding and back-face-cull the joined part. Detect
+        // it and reverse winding + flip tangent handedness (w) to compensate.
+        const bool mirrored = linear.Determinant() < 0.0f;
 
         for (const EditableSubMesh& src : part.subMeshes) {
             auto mit = byMaterial.find(src.materialName);
@@ -355,15 +361,26 @@ SubMeshOps::JoinResult SubMeshOps::joinParts(const std::vector<JoinPart>& parts)
                 if (v.hasTangent) {
                     Ogre::Vector3 t3(sv.tangent.x, sv.tangent.y, sv.tangent.z);
                     t3 = (linear * t3).normalisedCopy();
-                    v.tangent = Ogre::Vector4(t3.x, t3.y, t3.z, sv.tangent.w);
+                    // Flip handedness (w) under a mirror so normal mapping stays
+                    // correct against the reversed winding.
+                    const float w = mirrored ? -sv.tangent.w : sv.tangent.w;
+                    v.tangent = Ogre::Vector4(t3.x, t3.y, t3.z, w);
                 }
                 dst.vertices.push_back(v);
             }
             for (const EditableTriangle& t : src.triangles) {
                 EditableTriangle nt;
-                nt.indices[0] = t.indices[0] + base;
-                nt.indices[1] = t.indices[1] + base;
-                nt.indices[2] = t.indices[2] + base;
+                if (mirrored) {
+                    // Reverse winding (swap the last two corners) so front faces
+                    // stay front-facing after the position mirror.
+                    nt.indices[0] = t.indices[0] + base;
+                    nt.indices[1] = t.indices[2] + base;
+                    nt.indices[2] = t.indices[1] + base;
+                } else {
+                    nt.indices[0] = t.indices[0] + base;
+                    nt.indices[1] = t.indices[1] + base;
+                    nt.indices[2] = t.indices[2] + base;
+                }
                 dst.triangles.push_back(nt);
             }
         }

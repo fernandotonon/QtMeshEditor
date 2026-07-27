@@ -245,6 +245,99 @@ TEST(SubMeshOpsTest, JoinBakesTransformIntoPositions)
     EXPECT_EQ(r.subMeshes[0].triangles[1].indices[0], 3u);
 }
 
+TEST(SubMeshOpsTest, JoinBakesRotationIntoPositionsAndNormals)
+{
+    // One tri with an up (+Y) normal, rotated 90° about +X: +Y should map to
+    // +Z for both the position vector and the normal (Slice C #862 "moving
+    // exploded parts and joining back bakes transforms correctly").
+    EditableSubMesh a;
+    a.materialName = "Mat";
+    a.vertices = {vtx(0, 0, 0), vtx(0, 1, 0), vtx(1, 0, 0)};
+    addTri(a, 0, 1, 2);
+
+    // 90° about X: rotates (0,1,0) → (0,0,1).
+    Ogre::Quaternion q(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
+    Ogre::Matrix4 M(q);
+
+    SubMeshOps::JoinPart pa;
+    pa.subMeshes = {a};
+    pa.transform = M;
+
+    auto r = SubMeshOps::joinParts({pa});
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.subMeshes.size(), 1u);
+    ASSERT_EQ(r.subMeshes[0].vertices.size(), 3u);
+    // vertex 1 was (0,1,0) → (0,0,1).
+    const auto& p1 = r.subMeshes[0].vertices[1].position;
+    EXPECT_NEAR(p1.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(p1.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(p1.z, 1.0f, 1e-5f);
+    // The +Y normal rotated to +Z too (inverse-transpose == rotation here).
+    const auto& n0 = r.subMeshes[0].vertices[0].normal;
+    EXPECT_NEAR(n0.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(n0.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(n0.z, 1.0f, 1e-5f);
+}
+
+TEST(SubMeshOpsTest, JoinReversesWindingUnderMirrorTransform)
+{
+    // A negative-X-scale transform (determinant < 0) mirrors positions; join
+    // must reverse triangle winding + flip tangent handedness so the part
+    // doesn't render back-facing / with inverted normal mapping.
+    EditableSubMesh a;
+    a.materialName = "Mat";
+    a.vertices = {vtx(0, 0, 0), vtx(1, 0, 0), vtx(0, 0, 1)};
+    a.vertices[0].hasTangent = true; a.vertices[0].tangent = Ogre::Vector4(1, 0, 0, 1);
+    addTri(a, 0, 1, 2);
+
+    Ogre::Matrix4 mirror = Ogre::Matrix4::IDENTITY;
+    mirror[0][0] = -1.0f; // flip X
+
+    SubMeshOps::JoinPart pa;
+    pa.subMeshes = {a};
+    pa.transform = mirror;
+
+    auto r = SubMeshOps::joinParts({pa});
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.subMeshes.size(), 1u);
+    // Winding reversed: last two corners swapped (0,1,2 → 0,2,1).
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[0], 0u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[1], 2u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[2], 1u);
+    // Tangent handedness flipped (+1 → −1).
+    EXPECT_FLOAT_EQ(r.subMeshes[0].vertices[0].tangent.w, -1.0f);
+}
+
+TEST(SubMeshOpsTest, JoinKeepsWindingUnderNonMirrorTransform)
+{
+    // A plain rotation (determinant +1) must NOT reverse winding.
+    EditableSubMesh a;
+    a.materialName = "Mat";
+    a.vertices = {vtx(0, 0, 0), vtx(1, 0, 0), vtx(0, 0, 1)};
+    addTri(a, 0, 1, 2);
+    Ogre::Matrix4 rot(Ogre::Quaternion(Ogre::Degree(45), Ogre::Vector3::UNIT_Y));
+
+    SubMeshOps::JoinPart pa; pa.subMeshes = {a}; pa.transform = rot;
+    auto r = SubMeshOps::joinParts({pa});
+    ASSERT_TRUE(r.ok);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[0], 0u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[1], 1u);
+    EXPECT_EQ(r.subMeshes[0].triangles[0].indices[2], 2u);
+}
+
+TEST(SubMeshOpsTest, JoinRejectsFewerThanExpectedIsCallerConcern)
+{
+    // joinParts itself accepts a single part (used by the explode-then-rejoin
+    // one-part edge case); the >=2 guard lives in the scene adapter. A single
+    // identity part round-trips unchanged.
+    EditableSubMesh a; a.materialName = "M";
+    a.vertices = {vtx(0,0,0), vtx(1,0,0), vtx(0,0,1)}; addTri(a,0,1,2);
+    auto r = SubMeshOps::joinParts({{{a}, Ogre::Matrix4::IDENTITY}});
+    ASSERT_TRUE(r.ok);
+    EXPECT_EQ(r.subMeshes.size(), 1u);
+    EXPECT_EQ(r.subMeshes[0].vertices.size(), 3u);
+}
+
 TEST(SubMeshOpsTest, JoinKeepsDistinctMaterialsSeparate)
 {
     EditableSubMesh a; a.materialName = "A"; a.vertices = {vtx(0,0,0), vtx(1,0,0), vtx(0,0,1)}; addTri(a,0,1,2);

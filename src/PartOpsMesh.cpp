@@ -3,6 +3,7 @@
 #include "EditableMesh.h"
 
 #include <OgreEntity.h>
+#include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <OgreException.h>
 
@@ -18,7 +19,26 @@ bool PartOpsMesh::readSubMeshes(Ogre::Entity* entity,
     if (!em.loadFromEntity(entity))
         return false;
     outSubMeshes = em.subMeshes();
-    return !outSubMeshes.empty();
+    if (outSubMeshes.empty())
+        return false;
+
+    // EditableMesh reads the SubMesh's base material name, but a material
+    // assigned at runtime via Material Mode lives on the Entity's SubEntity
+    // (ApplyMaterialCommand mutates the SubEntity, not the SubMesh). Prefer the
+    // effective SubEntity material so split/explode/join keep what the user
+    // sees — otherwise join would coalesce visibly-distinct parts and rebuild
+    // with stale bindings. SubEntity order matches SubMesh (== editable submesh)
+    // order, so the mapping is positional.
+    const unsigned short n = entity->getNumSubEntities();
+    for (unsigned short i = 0; i < n && i < outSubMeshes.size(); ++i) {
+        Ogre::SubEntity* se = entity->getSubEntity(i);
+        if (!se)
+            continue;
+        const std::string effective = se->getMaterialName();
+        if (!effective.empty())
+            outSubMeshes[i].materialName = effective;
+    }
+    return true;
 }
 
 Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMeshes,

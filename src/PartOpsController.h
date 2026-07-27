@@ -28,6 +28,8 @@ class PartOpsController : public QObject
     QML_SINGLETON
 
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
+    Q_PROPERTY(bool canExplode READ canExplode NOTIFY selectionChanged)
+    Q_PROPERTY(bool canJoin READ canJoin NOTIFY selectionChanged)
 
 public:
     static PartOpsController* instance();
@@ -36,6 +38,13 @@ public:
 
     /** True when exactly one mesh entity is selected (the split target). */
     bool hasSelection() const;
+
+    /** True when exactly one multi-submesh mesh entity is selected (an explode
+     *  target — a single-submesh mesh has nothing to explode). */
+    bool canExplode() const;
+
+    /** True when two or more mesh entities are selected (a join target). */
+    bool canJoin() const;
 
     /** Split the selected mesh into per-part submeshes (undoable).
      *  @param upAxis    "x"|"y"|"z" (default "y") — forwarded to segmentation.
@@ -47,9 +56,22 @@ public:
                                             const QString& category = QStringLiteral("auto"),
                                             bool noModel = false);
 
+    /** Explode the selected multi-submesh mesh into one scene node per part
+     *  (undoable). Each part is pushed outward by `distance` × the assembly
+     *  diagonal. Emits explodeFinished(status, isError). No-op (error) without
+     *  a single multi-submesh selection. */
+    Q_INVOKABLE void explodeSelected(double distance = 0.5);
+
+    /** Join the selected part entities (2+) back into one fused mesh, baking
+     *  their world transforms into vertices (undoable). Emits
+     *  joinFinished(status, isError). No-op (error) with fewer than 2 selected. */
+    Q_INVOKABLE void joinSelected();
+
 signals:
     void selectionChanged();
     void splitFinished(const QString& status, bool isError);
+    void explodeFinished(const QString& status, bool isError);
+    void joinFinished(const QString& status, bool isError);
 
 private:
     PartOpsController();
