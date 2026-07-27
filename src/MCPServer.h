@@ -143,6 +143,11 @@ private:
     /// target/selected mesh. Errors gracefully when no model is loaded.
     QJsonObject toolDescribeMaterial(const QJsonObject &args);
     QJsonObject toolLoadMesh(const QJsonObject &args);
+    /// Select every user scene node and frame the active viewport camera on the
+    /// aggregate bounds, so a headless take_screenshot after load_mesh actually
+    /// shows the mesh (frameSelection() no-ops on an empty selection). No-op
+    /// when no MainWindow/viewport (headless --mcp without GUI).
+    void frameSceneInActiveViewport();
     QJsonObject toolGetMeshInfo(const QJsonObject &args);
     QJsonObject toolTransformMesh(const QJsonObject &args);
     QJsonObject toolTransformSubMesh(const QJsonObject &args);

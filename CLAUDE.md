@@ -339,6 +339,7 @@ The animation pipeline started skeleton-only; the #517 epic broadens it. Slices 
 - Launch modes: `--mcp` (headless), `--with-mcp` (GUI + MCP).
 - stdout is redirected to stderr to isolate MCP JSON-RPC from Ogre/Qt debug output; original stdout fd saved for MCP responses.
 - HTTP API uses QTcpServer with deferred tool execution (QTimer::singleShot) to avoid re-entrant crashes from Ogre event processing.
+- **`take_screenshot` captures via an Ogre RTT, NOT `QWidget::grab()`** — Ogre renders straight to the native window surface (`WA_PaintOnScreen`) so `grab()` returns a black buffer. The tool renders the active viewport's `SpaceCamera` camera into an offscreen `PF_BYTE_RGBA` render target (RTSS `MSN_SHADERGEN` scheme + a temporary ambient boost & directional key light so imported materials aren't black, restored after) and reads it back to PNG. `load_mesh` calls `frameSceneInActiveViewport()` (select every user node → `frameSelection()`) so a headless `load_mesh`→`take_screenshot` actually frames + shows the mesh. This makes autonomous visual QA (load → optionally explode via `transform_submesh` → screenshot) work without a GUI operator.
 
 ### CLI Pipeline
 
