@@ -2929,8 +2929,11 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
     OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
     if (!ogreWidget)
         ogreWidget = m_mainWindow->findChild<OgreWidget*>();
-    if (!ogreWidget || !ogreWidget->getSpaceCamera() ||
-        !ogreWidget->getSpaceCamera()->getCamera()) {
+    if (!ogreWidget) {
+        // Keep the established error string (an existing test asserts it).
+        return makeErrorResult("Error: OgreWidget not found");
+    }
+    if (!ogreWidget->getSpaceCamera() || !ogreWidget->getSpaceCamera()->getCamera()) {
         return makeErrorResult("Error: No active viewport camera");
     }
     Ogre::Camera* cam = ogreWidget->getSpaceCamera()->getCamera();
