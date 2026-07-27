@@ -593,3 +593,38 @@ TEST(MeshSegmenter, LevelLimbCutNoOpWhenPartMissing)
     EXPECT_EQ(changed, 0);
     EXPECT_EQ(faces, before);
 }
+
+// ---- cleanLimbSeam (#863 thin horizontal-ring leg cut) --------------------
+
+TEST(MeshSegmenter, CleanLimbSeamThinsWanderingBoundary)
+{
+    // 8×8 grid, up=Y. Torso (2) on top, one leg (5) at the bottom, but with a
+    // RAGGED boundary: the leg pokes up to different heights per column (a
+    // zigzag band spanning rows 2..4). cleanLimbSeam should collapse it to a
+    // single-height ring — after it, no column's leg should reach above the
+    // median cut row, so the boundary is ~1 row thick instead of 3.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(8, 8, pos, idx);
+    const int W=8;
+    std::vector<int> faces((int)idx.size()/3, 2);   // torso
+    // leg = 5 at the bottom; its top edge zigzags between rows 2,3,4 by column.
+    for (int x=0;x<8;++x){
+        const int top = 2 + (x % 3);   // 2,3,4,2,3,4,...
+        for (int y=0;y<top;++y){ const int q=y*W+x; faces[q*2]=5; faces[q*2+1]=5; }
+    }
+    // pass a dummy second limb (6, absent) — the per-limb loop skips it.
+    const int changed = MS::cleanLimbSeam(faces, pos.data(), (int)pos.size()/3,
+                                          idx.data(), (int)idx.size(),
+                                          5, 6, 2, /*up=*/1);
+    EXPECT_GT(changed, 0);
+    // Measure new boundary thickness: rows that contain BOTH a leg and torso quad.
+    int lo=99, hi=-1;
+    for (int y=0;y<8;++y){
+        bool hasLeg=false, hasTorso=false;
+        for (int x=0;x<8;++x){ const int q=y*W+x; int l=faces[q*2];
+            if(l==5)hasLeg=true; else if(l==2)hasTorso=true; }
+        if (hasLeg && hasTorso){ lo=std::min(lo,y); hi=std::max(hi,y); }
+    }
+    // Before: boundary rows span 2..4 (3 rows). After a ring cut: <= 2 rows.
+    EXPECT_LE(hi-lo, 1) << "boundary still spans " << (hi-lo+1) << " rows";
+}

@@ -308,6 +308,30 @@ public:
                             int limbLeft, int limbRight, int shared, int up,
                             float bandFraction = 0.10f);
 
+    // Collapse a wandering limb↔shared label boundary into a THIN, level ring —
+    // a "knife cut" at the LABEL level (#863). The body model's leg↔torso seam
+    // wanders across a wide band (~8.6% of body height on Hip Hop Dancing) so a
+    // split tears/looks broken. A leg attaches around a roughly HORIZONTAL hip
+    // ring, so a cut at one up-axis HEIGHT is the genuinely clean cut (slicing a
+    // cylinder); a tilted plane would graze the rounded hip and stay thick.
+    // For EACH limb (`limbLeft`, then `limbRight`) this gathers that limb's seam
+    // band (limb + adjacent `shared` faces within a few edge-hops of the
+    // limb↔shared boundary — a bounded flood, so the CENTRED torso skirt, not in
+    // the flood, is never pulled down and each foot stays with its own leg), sets
+    // the cut height `h` = MEDIAN up-value of that limb's seam faces (median
+    // resists the wandering outliers a mean chases), and reassigns every band
+    // face by side of `h`: below → the limb, at/above → `shared`. Scoped to ONE
+    // limb-pair↔shared boundary (arms/head untouched — why it's safe where the
+    // whole-mesh planarBoundaryRecut scrambled). Label-only, no new geometry
+    // (true triangle slicing / Boolean cutting is out of #859 scope). Runs AFTER
+    // levelLimbCut (needs the symmetric labels) and before the island pass.
+    // `up`=0/1/2 world up axis. Pure-data; needs `positions`; edits `faceLabels`,
+    // returns relabelled.
+    static int cleanLimbSeam(std::vector<int>& faceLabels,
+                             const float* positions, int vertexCount,
+                             const uint32_t* indices, int indexCount,
+                             int limbLeft, int limbRight, int shared, int up);
+
     // Recut adjacent part boundaries with a straight, knife-like PLANE (#863).
     // Local tooth-shaving (smoothLabelBoundaries) can't flatten a whole seam;
     // this fits a separating plane through each adjacent label-pair's boundary
