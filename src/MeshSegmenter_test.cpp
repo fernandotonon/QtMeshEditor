@@ -545,37 +545,55 @@ TEST(MeshSegmenter, SmoothBoundaryLeavesStraightSeamAlone)
 
 // ---- levelLimbCut (#863 mirror-symmetric leg cut) -------------------------
 
-TEST(MeshSegmenter, LevelLimbCutNeverSwapsLegSides)
+TEST(MeshSegmenter, LevelLimbCutDividerIsCountIndependent)
 {
-    // 8×8 grid, up=Y, lateral=X, sagittal centre at x=4. Left leg (5) x<4, right
-    // leg (6) x>=4, both bottom 3 rows, torso above. The mirror pass's detailed
-    // reassignment is geometry-dependent (nearest-mirror-face over a real 3D hip
-    // — validated on the real Hip Hop model in the PR, ratio 1.00, feet correct);
-    // here we lock the pass's INVARIANTS on a symmetric input: it must not crash,
-    // and must NEVER move a leg label to the wrong lateral side (no foot-swap),
-    // regardless of what the (count-independent midpoint) divider computes.
+    // Regression for the count-weighted-divider bug (CodeRabbit): the left leg is
+    // deliberately much WIDER (many more faces) than the right, so a face-count-
+    // weighted mean over all leg faces pulls the sagittal divider well to the
+    // LEFT of the true midline — whereas the correct midpoint-of-per-limb-means
+    // stays centred. 10-wide grid: left leg (5) x0-6 (7 cols), right leg (6) x7-9
+    // (3 cols), bottom 3 rows; torso (2) above.
+    //   per-limb means:  left ≈ 3.0, right ≈ 8.0  → midpoint ≈ 5.5 (correct)
+    //   count-weighted mean over all leg faces ≈ 4.6 (biased left)
+    // Knock a right-leg column (x=6.. no, x within the right leg near the middle)
+    // to torso; its mirror across the CORRECT plane (5.5) is left-leg, so the
+    // union rule restores it — and it must come back as the RIGHT leg (6). With
+    // the biased divider (~4.6) that same face sits on the +side and could be
+    // mislabelled, so this fixture distinguishes the two implementations.
+    const int W=10, H=10;
     std::vector<float> pos; std::vector<uint32_t> idx;
-    quadGrid(8, 8, pos, idx);
-    const int W=8;
+    quadGrid(W, H, pos, idx);
     std::vector<int> faces((int)idx.size()/3, 2);   // torso default
-    for (int y=0;y<8;++y)
-        for (int x=0;x<8;++x){
+    for (int y=0;y<H;++y)
+        for (int x=0;x<W;++x){
             const int q=y*W+x; int lab=2;
-            if (y<3) lab = (x<4) ? 5 : 6;     // left leg x0-3, right leg x4-7
+            if (y<3) lab = (x<7) ? 5 : 6;     // left leg x0-6 (wide), right x7-9
             faces[q*2]=lab; faces[q*2+1]=lab;
         }
-    // Make the right leg asymmetric (one column shorter) so the pass has work to
-    // consider — but we assert side-correctness, not a specific reassignment.
+    // Torso notch in the right leg's inner column (x=7), rows 1-2: its mirror
+    // across x=5.5 is x≈4 (left-leg) → union rule should restore x=7 to RIGHT leg.
     for (int y=1;y<3;++y){ const int q=y*W+7; faces[q*2]=2; faces[q*2+1]=2; }
 
     ASSERT_NO_FATAL_FAILURE(MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
                                              idx.data(), (int)idx.size(),
                                              5, 6, 2, /*up=*/1));
-    // No foot-swap: every label-5 quad stays on the left (x<4), 6 on the right.
-    for (int q=0;q<W*8;++q){ const int x=q%W;
+    // The restored inner-right column (x=7) must be RIGHT leg (6), never LEFT
+    // (5). This is the discriminating check: the correct midpoint divider (≈5.5)
+    // puts x=7 firmly on the right, but a count-weighted divider (pulled toward
+    // the wide left leg, ≈4.6) would sit LEFT of x=7 too, so nothing distinguishes
+    // it there — what distinguishes them is that NO right-leg face ever lands on
+    // the far LEFT (x < 5, deep in the wide left leg), which a badly-biased
+    // divider's reflection could produce.
+    for (int y=1;y<3;++y){ const int q=y*W+7;
+        for (int fi : {q*2, q*2+1})
+            EXPECT_NE(faces[fi], 5) << "inner-right column flipped to LEFT leg";
+    }
+    // No gross swap across the true midline (x=5.5): a left-leg label never lands
+    // deep in right territory (x>=7) and vice versa.
+    for (int q=0;q<W*H;++q){ const int x=q%W;
         for (int fi : {q*2, q*2+1}) {
-            if (faces[fi]==5) EXPECT_LT(x,4) << "left-leg label on right side (swap!)";
-            if (faces[fi]==6) EXPECT_GE(x,4) << "right-leg label on left side (swap!)";
+            if (faces[fi]==5) EXPECT_LT(x,7) << "left-leg label deep on the right (swap)";
+            if (faces[fi]==6) EXPECT_GT(x,4) << "right-leg label deep on the left (swap)";
         }
     }
 }

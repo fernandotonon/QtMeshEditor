@@ -1604,16 +1604,17 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     }
     try {
         mainWindow->importMeshs(QStringList{path});
-        // Frame the camera on what was just loaded so a subsequent
-        // take_screenshot actually shows the mesh (headless MCP has no user to
-        // frame it manually). frameSelection() early-returns on an empty
-        // selection, so select every user scene node first, then frame.
-        frameSceneInActiveViewport();
-        return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
     }
+    // Frame the camera on what was just loaded so a subsequent take_screenshot
+    // shows the mesh (headless MCP has no user to frame it manually). Done
+    // OUTSIDE the import try + swallowing its own errors, so a framing failure
+    // never masks a SUCCESSFUL import (CodeRabbit). It also restores the prior
+    // selection, so it doesn't disrupt an interactive --with-mcp session.
+    frameSceneInActiveViewport();
+    return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
 }
 
 void MCPServer::frameSceneInActiveViewport()
@@ -1623,26 +1624,37 @@ void MCPServer::frameSceneInActiveViewport()
     if (!mgr || !sel)
         return;
 
-    // Select every user scene node (the ones carrying loaded entities) so the
-    // aggregate AABB covers the whole scene. Preserve nothing — a fresh load is
-    // the intended target. clearList() drops refs without touching objects.
-    sel->clearList();
-    bool any = false;
-    for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
-        if (node && node->numAttachedObjects() > 0) {
-            sel->append(node);
-            any = true;
-        }
-    }
-    if (!any)
-        return;
-
     auto* top = TransformOperator::getSingleton();
     OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
     if (!ogreWidget && m_mainWindow)
         ogreWidget = m_mainWindow->findChild<OgreWidget*>();
-    if (ogreWidget && ogreWidget->getSpaceCamera())
-        ogreWidget->getSpaceCamera()->frameSelection();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return;
+
+    // Snapshot the current node selection so we can restore it — framing needs a
+    // selection (frameSelection() no-ops on empty) but must not clobber what an
+    // interactive user had selected (CodeRabbit).
+    const QList<Ogre::SceneNode*> prevSelection = sel->getNodesSelectionList();
+
+    try {
+        sel->clearList();
+        bool any = false;
+        for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+            if (node && node->numAttachedObjects() > 0) {
+                sel->append(node);
+                any = true;
+            }
+        }
+        if (any)
+            ogreWidget->getSpaceCamera()->frameSelection();
+    } catch (const Ogre::Exception&) {
+        // best-effort framing; fall through to restore selection.
+    }
+
+    // Restore the prior selection (empty list == deselect, matching before).
+    sel->clearList();
+    for (Ogre::SceneNode* node : prevSelection)
+        if (node) sel->append(node);
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
@@ -2949,7 +2961,27 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
     width = std::clamp(width, 16, 4096);
     height = std::clamp(height, 16, 4096);
 
+    // State touched during the capture that MUST be restored on EVERY exit path
+    // (success OR exception) so a throw can't leak a temp light / boosted ambient
+    // / altered camera aspect / leftover RTT into the live scene (CodeRabbit).
+    Ogre::SceneManager* sm = cam->getSceneManager();
+    const Ogre::ColourValue savedAmbient = sm ? sm->getAmbientLight()
+                                              : Ogre::ColourValue::Black;
+    const Ogre::Real prevAspect = cam->getAspectRatio();
+    Ogre::Light* capLight = nullptr;
+    Ogre::SceneNode* capLightNode = nullptr;
     Ogre::TexturePtr rtt;
+    auto cleanup = [&]() {
+        cam->setAspectRatio(prevAspect);
+        if (sm) {
+            sm->setAmbientLight(savedAmbient);
+            if (capLightNode) { capLightNode->detachAllObjects();
+                sm->getRootSceneNode()->removeAndDestroyChild(capLightNode); capLightNode = nullptr; }
+            if (capLight) { sm->destroyLight(capLight); capLight = nullptr; }
+        }
+        if (rtt) { Ogre::TextureManager::getSingleton().remove(rtt); rtt.reset(); }
+    };
+
     try {
         const std::string rttName = "MCPScreenshotRTT";
         if (auto existing = Ogre::TextureManager::getSingleton().getByName(rttName))
@@ -2964,13 +2996,8 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
 
         // The RTT sees the live scene, which may render dark without adequate
         // lighting (imported FBX materials come back black otherwise). Bump
-        // ambient + add a temporary directional key light for the capture, then
-        // restore — same recipe as the isometric renderer.
-        Ogre::SceneManager* sm = cam->getSceneManager();
-        Ogre::ColourValue savedAmbient = sm ? sm->getAmbientLight()
-                                            : Ogre::ColourValue::Black;
-        Ogre::Light* capLight = nullptr;
-        Ogre::SceneNode* capLightNode = nullptr;
+        // ambient + add a temporary directional key light for the capture
+        // (restored by cleanup()) — same recipe as the isometric renderer.
         if (sm) {
             sm->setAmbientLight(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
             capLight = sm->createLight();
@@ -2991,8 +3018,6 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
         // viewport and the isometric/turntable capture path.
         vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
         vp->setShadowsEnabled(true);
-        // Preserve the viewport's aspect on the camera for this render.
-        const Ogre::Real prevAspect = cam->getAspectRatio();
         cam->setAspectRatio(static_cast<Ogre::Real>(width) / static_cast<Ogre::Real>(height));
         target->update();
 
@@ -3002,22 +3027,16 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
                           Ogre::PF_BYTE_RGBA, image.bits());
         target->copyContentsToMemory(Ogre::Box(0, 0, width, height), pb,
                                      Ogre::RenderTarget::FB_AUTO);
-        cam->setAspectRatio(prevAspect);
-        // Restore lighting.
-        if (sm) {
-            sm->setAmbientLight(savedAmbient);
-            if (capLightNode) { capLightNode->detachAllObjects(); sm->getRootSceneNode()->removeAndDestroyChild(capLightNode); }
-            if (capLight) sm->destroyLight(capLight);
-        }
-        Ogre::TextureManager::getSingleton().remove(rtt);
+        cleanup();
 
         if (!image.save(path))
             return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("mcp screenshot %1x%2 -> %3").arg(width).arg(height).arg(path));
         return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
             .arg(path).arg(width).arg(height));
     } catch (const Ogre::Exception& e) {
-        if (rtt)
-            Ogre::TextureManager::getSingleton().remove(rtt);
+        cleanup();
         return makeErrorResult(QStringLiteral("Error capturing screenshot: %1")
             .arg(QString::fromStdString(e.getDescription())));
     }
