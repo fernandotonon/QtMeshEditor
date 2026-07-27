@@ -817,86 +817,6 @@ int MeshSegmenter::levelLimbCut(std::vector<int>& faceLabels,
     return relabelled;
 }
 
-int MeshSegmenter::cleanLimbSeam(std::vector<int>& faceLabels,
-                                 const float* positions, int vertexCount,
-                                 const uint32_t* indices, int indexCount,
-                                 int limbLeft, int limbRight, int shared, int up)
-{
-    const int faceCount = static_cast<int>(faceLabels.size());
-    if (faceCount <= 0 || !positions || vertexCount <= 0 ||
-        !indices || indexCount < faceCount * 3)
-        return 0;
-
-    const std::vector<std::vector<int>> adj = buildFaceAdjacency(indices, faceCount);
-    std::vector<Vec3> centroid(faceCount);
-    for (int f = 0; f < faceCount; ++f)
-        centroid[f] = faceCentroid(positions, indices, f);
-
-    int totalRelabelled = 0;
-    // Process each leg independently so its cut follows that leg's own hip
-    // height (the two legs' seams can sit at slightly different levels).
-    for (int limb : { limbLeft, limbRight }) {
-        // Seam faces: a `limb` face adjacent to `shared`, or a `shared` face
-        // adjacent to THIS `limb`. From these, flood a small band on both sides.
-        std::vector<int> seam;
-        for (int f = 0; f < faceCount; ++f) {
-            const int lf = faceLabels[f];
-            if (lf != limb && lf != shared) continue;
-            for (int nb : adj[f]) {
-                const int ln = faceLabels[nb];
-                if ((lf == limb && ln == shared) || (lf == shared && ln == limb)) {
-                    seam.push_back(f); break;
-                }
-            }
-        }
-        if (seam.size() < 6) continue;
-
-        // Band = faces within a few hops of the seam, limited to `limb`/`shared`.
-        const int maxHops = 6;
-        std::vector<int> hop(faceCount, -1);
-        std::vector<int> frontier = seam;
-        for (int s : seam) hop[s] = 0;
-        for (int d = 0; d < maxHops && !frontier.empty(); ++d) {
-            std::vector<int> next;
-            for (int f : frontier)
-                for (int nb : adj[f]) {
-                    const int ln = faceLabels[nb];
-                    if (hop[nb] == -1 && (ln == limb || ln == shared)) {
-                        hop[nb] = d + 1; next.push_back(nb);
-                    }
-                }
-            frontier.swap(next);
-        }
-
-        // A leg attaches to the torso around a roughly HORIZONTAL hip ring, so a
-        // cut at a single up-axis height is the genuinely clean cut (like slicing
-        // a cylinder) — a tilted plane would graze the rounded hip and leave a
-        // thick band. Cut height h = MEDIAN up-value of THIS leg's seam faces
-        // (median resists the wandering-band outliers that made a mean tilt).
-        const int upc = std::clamp(up, 0, 2);
-        std::vector<float> seamUp;
-        seamUp.reserve(seam.size());
-        for (int f : seam) seamUp.push_back(centroid[f].comp(upc));
-        std::sort(seamUp.begin(), seamUp.end());
-        const float h = seamUp[seamUp.size() / 2];
-
-        // Reassign every BAND face (flooded from THIS leg's seam, so it's this
-        // leg's own geometry — the foot stays with its leg and the centred torso
-        // skirt, which isn't in the flood, is never pulled down) strictly by
-        // side of h: below h → this limb, at/above h → shared. Collapses the
-        // wandering band onto a thin horizontal ring.
-        for (int f = 0; f < faceCount; ++f) {
-            if (hop[f] < 0) continue;
-            const int lf = faceLabels[f];
-            if (lf != limb && lf != shared) continue;
-            const float fu = centroid[f].comp(upc);
-            const int want = (fu >= h) ? shared : limb;
-            if (want != lf) { faceLabels[f] = want; ++totalRelabelled; }
-        }
-    }
-    return totalRelabelled;
-}
-
 int MeshSegmenter::cleanupLabelIslands(std::vector<int>& faceLabels,
                                        const uint32_t* indices, int indexCount,
                                        int minFaces, float maxFraction)
@@ -1168,11 +1088,6 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
                                     indices, indexCount,
                                     (int)Part::LeftLeg, (int)Part::RightLeg,
                                     (int)Part::Torso, opts.upAxis);
-            // Straighten the wandering leg↔torso band into a thin diagonal cut.
-            changed += cleanLimbSeam(r.faceLabels, positions, vertexCount,
-                                     indices, indexCount,
-                                     (int)Part::LeftLeg, (int)Part::RightLeg,
-                                     (int)Part::Torso, opts.upAxis);
         }
         // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
         if (opts.planarRecut)
@@ -1517,11 +1432,6 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
                                         indices, indexCount,
                                         (int)Part::LeftLeg, (int)Part::RightLeg,
                                         (int)Part::Torso, opts.upAxis);
-                // Straighten the wandering leg↔torso band into a thin diagonal cut.
-                changed += cleanLimbSeam(r.faceLabels, positions, vertexCount,
-                                         indices, indexCount,
-                                         (int)Part::LeftLeg, (int)Part::RightLeg,
-                                         (int)Part::Torso, opts.upAxis);
             }
             // Planar recut for a knife-straight seam (torso/leg fringe, level legs).
             if (opts.planarRecut)
