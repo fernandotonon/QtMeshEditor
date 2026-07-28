@@ -465,15 +465,61 @@ TEST(SubMeshOpsTest, PreparePrintPegsAddsMaleAndSocket)
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     EXPECT_EQ(r.peggedBoundaries, 1);
     EXPECT_GT(r.totalPegs, 0);
-    ASSERT_EQ(r.subMeshes.size(), 2u);
-    // Each part gained connector geometry (more verts than it started with).
-    EXPECT_GT(r.subMeshes[0].vertices.size(), aVerts0);
-    EXPECT_GT(r.subMeshes[1].vertices.size(), bVerts0);
+    (void)aVerts0;
+    // The two input parts stay first; the male peg + socket collar are appended
+    // as their own coloured connector submeshes (green/red).
+    ASSERT_EQ(r.subMeshes.size(), 4u);
+    ASSERT_EQ(r.partNames.size(), 4u);
+    EXPECT_EQ(r.subMeshes[2].materialName, "connector_male");
+    EXPECT_EQ(r.subMeshes[3].materialName, "connector_socket");
+    EXPECT_EQ(r.partNames[2].toStdString(), "connector_male");
+    EXPECT_EQ(r.partNames[3].toStdString(), "connector_socket");
+    EXPECT_FALSE(r.subMeshes[2].triangles.empty()); // male peg has geometry
+    EXPECT_FALSE(r.subMeshes[3].triangles.empty()); // socket collar has geometry
+    // Part B (the female side) had a real socket cavity cut into it, so its
+    // vertex count changed from the boolean.
+    EXPECT_NE(r.subMeshes[1].vertices.size(), bVerts0);
     // The boundary report is populated with both part names.
     ASSERT_EQ(r.boundaries.size(), 1u);
     EXPECT_TRUE(r.boundaries[0].pegged);
     EXPECT_EQ(r.boundaries[0].nameA.toStdString(), "torso");
     EXPECT_EQ(r.boundaries[0].nameB.toStdString(), "left_leg");
+}
+
+TEST(SubMeshOpsTest, PreparePrintPegsConnectorsInheritBoneWeights)
+{
+    // A SKINNED two-part input: every part vertex is weighted to a bone. The
+    // connector submeshes (peg + collar) start weightless, so preparePrintPegs
+    // must inherit the nearest part vertex's weights or they'd collapse to the
+    // skeleton origin under animation.
+    EditableSubMesh a, b;
+    twoPartsWithSeam(a, b);
+    for (auto* part : {&a, &b}) {
+        const unsigned short bone = (part == &a) ? 3 : 7;
+        for (auto& v : part->vertices) {
+            EditableBoneAssignment ba; ba.boneIndex = bone; ba.weight = 1.0f;
+            v.boneAssignments.push_back(ba);
+        }
+    }
+    SubMeshOps::PegOptions opts;
+    opts.pegRadius = 0.4f; opts.pegDepth = 1.0f; opts.maxPegsPerBoundary = 3;
+    auto r = SubMeshOps::preparePrintPegs({a, b}, opts, {"torso", "left_leg"});
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.subMeshes.size(), 4u);
+    // Every connector vertex (male=idx 2, socket collar=idx 3) is now weighted.
+    for (size_t s : {size_t(2), size_t(3)}) {
+        ASSERT_FALSE(r.subMeshes[s].vertices.empty());
+        for (const auto& v : r.subMeshes[s].vertices)
+            EXPECT_FALSE(v.boneAssignments.empty())
+                << "connector submesh " << s << " has a weightless vertex";
+    }
+    // Male peg inherits part A's bone (3); collar inherits part B's bone (7).
+    EXPECT_EQ(r.subMeshes[2].vertices[0].boneAssignments[0].boneIndex, 3);
+    EXPECT_EQ(r.subMeshes[3].vertices[0].boneAssignments[0].boneIndex, 7);
+    // The socket CAVITY cut into part B keeps part B's weights too (Manifold
+    // carry-over via nearest-source): no weightless vertex in part B.
+    for (const auto& v : r.subMeshes[1].vertices)
+        EXPECT_FALSE(v.boneAssignments.empty()) << "socket-cut part B vertex lost weights";
 }
 
 TEST(SubMeshOpsTest, PreparePrintPegsRejectsTinyBoundary)

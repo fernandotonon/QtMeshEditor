@@ -32,6 +32,10 @@
 #include "TestHelpers.h"
 #include "MeshSegmenter.h"
 #include "EditableMesh.h"
+#include "commands/AddPrintPegsCommand.h"
+
+#include <OgreEntity.h>
+#include <OgreSceneNode.h>
 
 #include <cmath>
 #include <set>
@@ -227,6 +231,77 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
         }
         EXPECT_TRUE(known) << "unexpected submesh name: " << kv.first;
     }
+}
+
+// AddPrintPegsCommand GL round-trip (#863): on a real SPLIT entity in the scene,
+// redo() swaps in a pegged mesh (adding the green/red connector submeshes) and
+// undo() restores the exact pre-peg mesh. Exercises the command's successful
+// redo/undo path — not just the error branches in AddPrintPegsCommand_test.cpp.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, AddPrintPegsCommandRedoUndoRoundTrip)
+{
+    const QString fixture = riggedFixture();
+    if (fixture.isEmpty())
+        GTEST_SKIP() << "rigged fixture not present; peg round-trip needs a multi-part mesh";
+
+    // 1) Split the rigged fixture into per-part submeshes → FBX.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outFbx = QDir(tmp.path()).filePath("split_for_pegs.fbx");
+    clearScene();
+    {
+        const QByteArray in = fixture.toUtf8();
+        const QByteArray out = outFbx.toUtf8();
+        SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model",
+                        "--split-parts", "-o", out.constData()});
+        ASSERT_EQ(0, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+    }
+    ASSERT_TRUE(QFile::exists(outFbx));
+
+    // 2) Reimport the split mesh so a live multi-submesh entity is in the scene.
+    clearScene();
+    MeshImporterExporter::importer({QFileInfo(outFbx).absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    ASSERT_FALSE(entities.isEmpty());
+    Ogre::Entity* e = entities.first();
+    ASSERT_NE(e, nullptr);
+    const std::string entityName = e->getName();
+    const unsigned short subMeshesBefore = e->getMesh()->getNumSubMeshes();
+    ASSERT_GT(subMeshesBefore, 1u) << "peg command needs a multi-part mesh";
+
+    // 3) redo(): build + swap in the pegged mesh.
+    SubMeshOps::PegOptions opts;   // defaults; auto-fits the boundary
+    AddPrintPegsCommand cmd(entityName, opts);
+    cmd.redo();
+    ASSERT_TRUE(cmd.ok()) << cmd.error().toStdString();
+
+    Ogre::Entity* pegged = nullptr;
+    for (Ogre::Entity* cand : Manager::getSingleton()->getEntities())
+        if (cand && cand->getMovableType() == "Entity" && cand->getName() == entityName)
+            pegged = cand;
+    ASSERT_NE(pegged, nullptr) << "pegged entity not found after redo";
+    if (cmd.peggedBoundaries() > 0) {
+        // The male + socket connector submeshes were appended (2 extra parts).
+        EXPECT_GT(pegged->getMesh()->getNumSubMeshes(), subMeshesBefore)
+            << "pegging should append connector submeshes";
+        EXPECT_GT(cmd.totalPegs(), 0);
+        // At least one submesh carries a connector material.
+        bool hasConnector = false;
+        for (unsigned short i = 0; i < pegged->getNumSubEntities(); ++i) {
+            const std::string m = pegged->getSubEntity(i)->getMaterialName();
+            if (m == "connector_male" || m == "connector_socket") { hasConnector = true; break; }
+        }
+        EXPECT_TRUE(hasConnector) << "no connector_male/connector_socket submesh after pegging";
+    }
+
+    // 4) undo(): the pre-peg mesh (same submesh count) is restored.
+    cmd.undo();
+    Ogre::Entity* restored = nullptr;
+    for (Ogre::Entity* cand : Manager::getSingleton()->getEntities())
+        if (cand && cand->getMovableType() == "Entity" && cand->getName() == entityName)
+            restored = cand;
+    ASSERT_NE(restored, nullptr) << "entity missing after undo";
+    EXPECT_EQ(restored->getMesh()->getNumSubMeshes(), subMeshesBefore)
+        << "undo must restore the exact pre-peg submesh count";
 }
 
 // --split-parts without -o is a usage error (exit 2), no Ogre load required.

@@ -6,8 +6,37 @@
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <OgreException.h>
+#include <OgreMaterialManager.h>
+#include <OgreMaterial.h>
+#include <OgreTechnique.h>
+#include <OgrePass.h>
 
 #include <memory>
+
+namespace {
+// Create (once) a solid-coloured, self-lit material so the print connectors are
+// unmistakable: green = male peg, red = female socket collar. Idempotent.
+void ensureConnectorMaterial(const std::string& name, const Ogre::ColourValue& c)
+{
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    if (mm.resourceExists(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+        return;
+    Ogre::MaterialPtr mat = mm.create(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    pass->setDiffuse(c);
+    pass->setAmbient(c);
+    pass->setSelfIllumination(c * 0.6f); // glow a bit so it reads even unlit
+    pass->setSpecular(Ogre::ColourValue(0.2f, 0.2f, 0.2f, 1.0f));
+    pass->setShininess(16.0f);
+    mat->compile();
+}
+
+void ensureConnectorMaterials()
+{
+    ensureConnectorMaterial("connector_male", Ogre::ColourValue(0.15f, 0.80f, 0.20f, 1.0f));
+    ensureConnectorMaterial("connector_socket", Ogre::ColourValue(0.85f, 0.15f, 0.15f, 1.0f));
+}
+} // namespace
 
 bool PartOpsMesh::readSubMeshes(Ogre::Entity* entity,
                                 std::vector<EditableSubMesh>& outSubMeshes)
@@ -48,6 +77,9 @@ Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMesh
 {
     if (subMeshes.empty())
         return Ogre::MeshPtr();
+    // Print connectors reference the green/red connector_* materials — make sure
+    // they exist (a no-op when the mesh has none).
+    ensureConnectorMaterials();
     // EditableMesh::createNewMesh is the canonical build-a-fresh-mesh path
     // (createSubMesh per part + buildSubMeshBuffers + normals + bounds). We
     // borrow it by seeding an EditableMesh's submesh vector directly.

@@ -562,6 +562,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         Qt::QuickWidgets
         Qt::QuickControls2
         meshoptimizer
+        manifold
         xatlas
         qtmesh_sodium
         qtmesh_updater

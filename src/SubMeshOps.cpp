@@ -7,6 +7,8 @@
 #include <map>
 #include <unordered_map>
 
+#include <manifold/manifold.h>
+
 namespace {
 
 // A vertex key that survives cross-submesh comparison for boundary welding:
@@ -708,7 +710,7 @@ int SubMeshOps::buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions&
 
 namespace {
 // Append `src`'s vertices + triangles onto `dst` (offsetting the indices by
-// dst's current vertex count). Used to merge a peg/socket cylinder into a part.
+// dst's current vertex count). Used to merge a peg cylinder into a part.
 void appendGeometry(EditableSubMesh& dst, const EditableSubMesh& src)
 {
     const unsigned int base = static_cast<unsigned int>(dst.vertices.size());
@@ -721,6 +723,229 @@ void appendGeometry(EditableSubMesh& dst, const EditableSubMesh& src)
         dst.triangles.push_back(nt);
     }
 }
+
+// Give every vertex in `sub` that lacks bone weights the bone assignments of its
+// nearest vertex in `source` — so connector geometry (peg / socket collar) on a
+// SKINNED part rigidly follows the part it attaches to instead of collapsing to
+// the skeleton origin (a vertex with no weights binds to bone 0 at weight 0).
+// No-op when the source part has no weights (static mesh).
+void inheritNearestBoneWeights(EditableSubMesh& sub, const EditableSubMesh& source)
+{
+    bool sourceSkinned = false;
+    for (const EditableVertex& v : source.vertices)
+        if (!v.boneAssignments.empty()) { sourceSkinned = true; break; }
+    if (!sourceSkinned || source.vertices.empty())
+        return;
+    for (EditableVertex& v : sub.vertices) {
+        if (!v.boneAssignments.empty())
+            continue;
+        const EditableVertex* best = nullptr;
+        float bestD = std::numeric_limits<float>::max();
+        for (const EditableVertex& sv : source.vertices) {
+            if (sv.boneAssignments.empty())
+                continue;
+            const float d = sv.position.squaredDistance(v.position);
+            if (d < bestD) { bestD = d; best = &sv; }
+        }
+        if (best)
+            v.boneAssignments = best->boneAssignments;
+    }
+}
+
+// Append a short, thick RING (annular collar) at a socket mouth to `sub`,
+// centered at `center`, in the plane normal to `axis`. Inner radius = `r`
+// (the socket bore), outer = 1.35·r, thickness `t` along +axis. Purely a
+// visible red marker for the female side; renders as a flat washer.
+void appendSocketCollar(EditableSubMesh& sub, const Ogre::Vector3& center,
+                        const Ogre::Vector3& axis, float r, int segments)
+{
+    const Ogre::Vector3 n = axis.normalisedCopy();
+    const float rOuter = r * 1.35f;
+    const float t = r * 0.12f;  // shallow washer thickness
+    Ogre::Vector3 up = std::fabs(n.y) < 0.9f ? Ogre::Vector3::UNIT_Y : Ogre::Vector3::UNIT_X;
+    Ogre::Vector3 u = n.crossProduct(up).normalisedCopy();
+    Ogre::Vector3 w = n.crossProduct(u).normalisedCopy();
+    const Ogre::Vector3 front = center + n * (t * 0.5f);
+    const Ogre::Vector3 back = center - n * (t * 0.5f);
+
+    auto addVert = [&](const Ogre::Vector3& p, const Ogre::Vector3& nrm) {
+        EditableVertex v; v.position = p; v.normal = nrm; v.hasNormal = true;
+        sub.vertices.push_back(v);
+        return static_cast<unsigned int>(sub.vertices.size() - 1);
+    };
+    auto addTri = [&](unsigned int a, unsigned int b, unsigned int c) {
+        EditableTriangle tri; tri.indices[0] = a; tri.indices[1] = b; tri.indices[2] = c;
+        sub.triangles.push_back(tri);
+    };
+    std::vector<unsigned int> fi(segments), fo(segments), bi(segments), bo(segments);
+    for (int i = 0; i < segments; ++i) {
+        const float a = 2.0f * Ogre::Math::PI * float(i) / float(segments);
+        const Ogre::Vector3 rad = (u * std::cos(a) + w * std::sin(a));
+        fi[i] = addVert(front + rad * r, n);
+        fo[i] = addVert(front + rad * rOuter, n);
+        bi[i] = addVert(back + rad * r, -n);
+        bo[i] = addVert(back + rad * rOuter, -n);
+    }
+    for (int i = 0; i < segments; ++i) {
+        const int j = (i + 1) % segments;
+        // front face (facing +n)
+        addTri(fi[i], fo[i], fo[j]); addTri(fi[i], fo[j], fi[j]);
+        // back face (facing -n)
+        addTri(bi[i], bo[j], bo[i]); addTri(bi[i], bi[j], bo[j]);
+        // outer wall
+        addTri(fo[i], bo[i], bo[j]); addTri(fo[i], bo[j], fo[j]);
+        // inner wall
+        addTri(fi[i], bi[j], bi[i]); addTri(fi[i], fi[j], bi[j]);
+    }
+}
+
+// Reproduce the exact peg-ring centers that buildAlignmentPegs() places, so the
+// SOCKET boolean cutters line up 1:1 with the male pegs. `made` is the peg count
+// buildAlignmentPegs actually produced (it clamps a too-small boundary to 1).
+std::vector<Ogre::Vector3> pegRingCenters(const SubMeshOps::BoundaryPlane& plane,
+                                          const SubMeshOps::PegOptions& opts, int made)
+{
+    std::vector<Ogre::Vector3> centers;
+    if (made <= 0)
+        return centers;
+    const float placeRadius = plane.radius * 0.5f;
+    Ogre::Vector3 up = std::fabs(plane.normal.y) < 0.9f ? Ogre::Vector3::UNIT_Y
+                                                        : Ogre::Vector3::UNIT_X;
+    Ogre::Vector3 u = plane.normal.crossProduct(up).normalisedCopy();
+    Ogre::Vector3 w = plane.normal.crossProduct(u).normalisedCopy();
+    for (int i = 0; i < made; ++i) {
+        Ogre::Vector3 center = plane.center;
+        if (made > 1) {
+            const float a = 2.0f * Ogre::Math::PI * float(i) / float(made);
+            center += (u * std::cos(a) + w * std::sin(a)) * placeRadius;
+        }
+        centers.push_back(center);
+    }
+    return centers;
+}
+
+// Convert an EditableSubMesh's triangle soup into a Manifold solid. Position-only
+// (Manifold does its own vertex welding by geometric position), which is all the
+// boolean needs — attributes are re-derived after by nearest-source lookup.
+manifold::Manifold toManifold(const EditableSubMesh& sub)
+{
+    manifold::MeshGL m;
+    m.numProp = 3;
+    m.vertProperties.reserve(sub.vertices.size() * 3);
+    for (const EditableVertex& v : sub.vertices) {
+        m.vertProperties.push_back(v.position.x);
+        m.vertProperties.push_back(v.position.y);
+        m.vertProperties.push_back(v.position.z);
+    }
+    m.triVerts.reserve(sub.triangles.size() * 3);
+    for (const EditableTriangle& t : sub.triangles) {
+        m.triVerts.push_back(t.indices[0]);
+        m.triVerts.push_back(t.indices[1]);
+        m.triVerts.push_back(t.indices[2]);
+    }
+    return manifold::Manifold(m);
+}
+
+// Rebuild an EditableSubMesh from a Manifold result, re-deriving per-vertex
+// attributes (normal/uv/colour/bone weights) from the ORIGINAL sub by nearest
+// source vertex — so verts the boolean left untouched keep their exact data and
+// newly-created socket-wall verts inherit their closest neighbour's attributes.
+void fromManifold(const manifold::Manifold& man, const EditableSubMesh& original,
+                  EditableSubMesh& out)
+{
+    manifold::MeshGL result = man.GetMeshGL();
+    out.vertices.clear();
+    out.triangles.clear();
+    out.vertices.reserve(result.NumVert());
+
+    // Brute-force nearest source vertex (part vertex counts are small — a few
+    // thousand at most — and this runs once per socket cut).
+    auto nearestSource = [&](const Ogre::Vector3& p) -> const EditableVertex* {
+        const EditableVertex* best = nullptr;
+        float bestD = std::numeric_limits<float>::max();
+        for (const EditableVertex& sv : original.vertices) {
+            const float d = sv.position.squaredDistance(p);
+            if (d < bestD) { bestD = d; best = &sv; }
+        }
+        return best;
+    };
+
+    const uint32_t stride = result.numProp;
+    for (uint32_t i = 0; i < result.NumVert(); ++i) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(result.vertProperties[i * stride + 0],
+                                   result.vertProperties[i * stride + 1],
+                                   result.vertProperties[i * stride + 2]);
+        if (const EditableVertex* src = nearestSource(v.position)) {
+            EditableVertex copy = *src;
+            copy.position = v.position; // keep the boolean's exact position
+            out.vertices.push_back(copy);
+        } else {
+            out.vertices.push_back(v);
+        }
+    }
+    for (size_t i = 0; i + 2 < result.triVerts.size(); i += 3) {
+        EditableTriangle t;
+        t.indices[0] = result.triVerts[i + 0];
+        t.indices[1] = result.triVerts[i + 1];
+        t.indices[2] = result.triVerts[i + 2];
+        out.triangles.push_back(t);
+    }
+    out.materialName = original.materialName;
+}
+
+// Cut real cylindrical socket cavities into `part` — one per peg center — via a
+// robust mesh boolean. Each cutter is a cylinder of radius `r`, length `depth`,
+// axis `-axis` (into the part), starting slightly proud of the seam so it fully
+// overlaps the solid. Falls back to leaving `part` untouched if the boolean
+// throws (degenerate input) — the male peg still guides assembly.
+void subtractSockets(EditableSubMesh& part, const std::vector<Ogre::Vector3>& centers,
+                     const Ogre::Vector3& axis, float r, float depth, int segments)
+{
+    if (centers.empty() || part.triangles.empty())
+        return;
+    try {
+        manifold::Manifold solid = toManifold(part);
+        if (solid.IsEmpty())
+            return;
+        const Ogre::Vector3 unit = axis.normalisedCopy();
+        // Manifold::Cylinder is built along +Z from the origin; rotate/translate
+        // each cutter so its +Z maps to -unit (into the part) starting proud of
+        // the seam. We approximate the transform with Manifold's own helpers by
+        // building the cylinder then applying a 4x4.
+        for (const Ogre::Vector3& c : centers) {
+            // A cylinder from the origin along +Z, height `depth`, radius r.
+            manifold::Manifold cutter =
+                manifold::Manifold::Cylinder(depth, r, r, segments, false);
+            // Orient +Z -> -unit. Build a rotation matrix from basis vectors.
+            const Ogre::Vector3 zdir = -unit;
+            Ogre::Vector3 upv = std::fabs(zdir.y) < 0.9f ? Ogre::Vector3::UNIT_Y
+                                                         : Ogre::Vector3::UNIT_X;
+            Ogre::Vector3 xdir = upv.crossProduct(zdir).normalisedCopy();
+            Ogre::Vector3 ydir = zdir.crossProduct(xdir).normalisedCopy();
+            // Cutter starts barely proud of the seam (along +unit) so it fully
+            // spans into the part along -unit.
+            const Ogre::Vector3 base = c + unit * 0.001f;
+            // Column-major 3x4 affine for Manifold::Transform (mat3x4).
+            manifold::mat3x4 tf;
+            tf[0] = manifold::vec3(xdir.x, xdir.y, xdir.z);
+            tf[1] = manifold::vec3(ydir.x, ydir.y, ydir.z);
+            tf[2] = manifold::vec3(zdir.x, zdir.y, zdir.z);
+            tf[3] = manifold::vec3(base.x, base.y, base.z);
+            cutter = cutter.Transform(tf);
+            solid = solid - cutter;
+        }
+        if (solid.IsEmpty())
+            return;
+        EditableSubMesh cut;
+        fromManifold(solid, part, cut);
+        if (!cut.triangles.empty())
+            part = std::move(cut);
+    } catch (const std::exception&) {
+        // Boolean failed on degenerate input — leave the part unchanged.
+    }
+}
+
 } // namespace
 
 SubMeshOps::PrintPrepResult
@@ -735,6 +960,15 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
     out.subMeshes = subMeshes;   // start from the parts; merge pegs in below.
     out.partNames = partNames;
     out.partNames.resize(subMeshes.size());
+
+    // Male pegs and socket-mouth collars are collected into two dedicated
+    // submeshes so they render in distinct colours (green male / red female) —
+    // the connector materials carry those colours (PartOpsMesh binds them). The
+    // real socket CAVITY is still cut into the mating part via the boolean below;
+    // the red collar is just a visible mouth indicator.
+    EditableSubMesh malePegs, socketCollars;
+    malePegs.materialName = "connector_male";
+    socketCollars.materialName = "connector_socket";
 
     // Close each part's OPEN cut face first (a split leaves it hollow) so every
     // part is a watertight printable solid and the pegs attach to a real
@@ -758,12 +992,27 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
             rec.partA = a; rec.partB = b;
             rec.nameA = nameOf(a); rec.nameB = nameOf(b);
 
-            const BoundaryPlane plane = estimateBoundaryPlane({ subMeshes[a] }, { subMeshes[b] });
+            BoundaryPlane plane = estimateBoundaryPlane({ subMeshes[a] }, { subMeshes[b] });
             if (!plane.stable) {
                 rec.reason = plane.reason.isEmpty()
                     ? QStringLiteral("no stable shared boundary") : plane.reason;
                 out.boundaries.push_back(rec);
                 continue;
+            }
+            // The best-fit normal's SIGN is arbitrary (an eigenvector), but the
+            // male peg extrudes along +normal — so orient it from the MALE part
+            // (A) toward the FEMALE part (B), using their body centroids, or the
+            // peg would protrude into the wrong part (CodeRabbit/Codex).
+            {
+                Ogre::Vector3 cA = Ogre::Vector3::ZERO, cB = Ogre::Vector3::ZERO;
+                size_t na = 0, nb = 0;
+                for (const auto& sm : { subMeshes[a] }) for (const auto& v : sm.vertices) { cA += v.position; ++na; }
+                for (const auto& sm : { subMeshes[b] }) for (const auto& v : sm.vertices) { cB += v.position; ++nb; }
+                if (na && nb) {
+                    cA /= float(na); cB /= float(nb);
+                    if (plane.normal.dotProduct(cB - cA) < 0.0f)
+                        plane.normal = -plane.normal;
+                }
             }
 
             // Adapt the peg size to THIS boundary so it always fits, regardless
@@ -782,22 +1031,55 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
                 boundaryOpts.clearance *= scale;
             }
 
-            EditableSubMesh male, socket;
-            const int made = buildAlignmentPegs(plane, boundaryOpts, male, socket);
+            EditableSubMesh male, socketUnused;
+            const int made = buildAlignmentPegs(plane, boundaryOpts, male, socketUnused);
             if (made <= 0) {
                 rec.reason = QStringLiteral("boundary too small for a peg");
                 out.boundaries.push_back(rec);
                 continue;
             }
-            // Merge the male peg into partA and the socket into partB.
-            appendGeometry(out.subMeshes[a], male);
-            appendGeometry(out.subMeshes[b], socket);
+            // Collect the male peg into the shared GREEN connector submesh
+            // (protruding along +normal, toward B) so it renders distinctly. On a
+            // skinned mesh the peg inherits part A's nearest bone weights so it
+            // moves with that part instead of collapsing to the skeleton origin.
+            inheritNearestBoneWeights(male, subMeshes[a]);
+            appendGeometry(malePegs, male);
+            // Cut a real cylindrical SOCKET CAVITY into partB for each peg via a
+            // robust mesh boolean (Manifold), so the male peg actually inserts —
+            // not a solid cylinder added as fake geometry. The socket is the peg
+            // + clearance, sunk slightly behind the seam so it fully overlaps B.
+            const std::vector<Ogre::Vector3> pegCenters =
+                pegRingCenters(plane, boundaryOpts, made);
+            const float socketR = boundaryOpts.pegRadius + boundaryOpts.clearance;
+            subtractSockets(out.subMeshes[b], pegCenters, plane.normal, socketR,
+                            boundaryOpts.pegDepth + boundaryOpts.clearance,
+                            boundaryOpts.radialSegments);
+            // A shallow RED collar ring at each socket mouth marks the female
+            // side visually (the cavity itself is a hole and can't be coloured).
+            // Built into a temp so it can inherit part B's bone weights.
+            EditableSubMesh collars;
+            for (const Ogre::Vector3& pc : pegCenters)
+                appendSocketCollar(collars, pc, plane.normal, socketR,
+                                   boundaryOpts.radialSegments);
+            inheritNearestBoneWeights(collars, subMeshes[b]);
+            appendGeometry(socketCollars, collars);
             rec.pegged = true;
             rec.pegCount = made;
             out.boundaries.push_back(rec);
             ++out.peggedBoundaries;
             out.totalPegs += made;
         }
+    }
+
+    // Append the two connector submeshes (if any pegs were placed) so they get
+    // their own material bindings + Scene-tree rows.
+    if (!malePegs.triangles.empty()) {
+        out.subMeshes.push_back(std::move(malePegs));
+        out.partNames.push_back(QStringLiteral("connector_male"));
+    }
+    if (!socketCollars.triangles.empty()) {
+        out.subMeshes.push_back(std::move(socketCollars));
+        out.partNames.push_back(QStringLiteral("connector_socket"));
     }
 
     out.ok = true;

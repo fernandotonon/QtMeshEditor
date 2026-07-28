@@ -10439,7 +10439,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     QFileInfo fi(inputPath);
     if (!fi.exists()) { err() << "Error: file not found: " << inputPath << Qt::endl; return 1; }
     if (splitParts && outputPath.isEmpty()) {
-        err() << "Error: --split-parts requires -o <output mesh>." << Qt::endl;
+        err() << "Error: " << (printPegs ? "--print-pegs" : "--split-parts")
+              << " requires -o <output mesh>." << Qt::endl;
         return 2;
     }
     if (!initOgreHeadless()) return 1;
