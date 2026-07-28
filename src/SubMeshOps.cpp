@@ -307,6 +307,15 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         return result;
     }
 
+    // Close each part's OPEN cut face so every part is a watertight solid — a
+    // split just separates geometry and leaves the seam hollow, so an exploded
+    // part would show a see-through hole where it was cut from its neighbour.
+    // On by default (opts.capParts); print-prep re-caps harmlessly (idempotent
+    // once closed).
+    if (opts.capParts)
+        for (auto& part : result.subMeshes)
+            capOpenBoundaries(part);
+
     result.duplicatedBoundaryVertices = duplicated;
     result.createdSubMeshes = static_cast<int>(result.subMeshes.size());
     result.ok = true;
@@ -508,7 +517,23 @@ int SubMeshOps::capOpenBoundaries(EditableSubMesh& sub)
         c /= static_cast<float>(loopVerts.size());
         EditableVertex centre = sub.vertices[loopVerts[0]];
         centre.position = c;
-        centre.hasNormal = false; // recomputed after (or by createNewMesh)
+        // Give the centre vertex the cap's averaged geometric normal so it shades
+        // correctly even when the mesh is built with recomputeNormals=false (the
+        // split path preserves authored normals) — otherwise the cap centre is
+        // normal-less and renders black. Cap face (centre,b,a) normal =
+        // (b-c)×(a-c).
+        Ogre::Vector3 capN = Ogre::Vector3::ZERO;
+        for (const auto& e : edges) {
+            const Ogre::Vector3& pb = sub.vertices[e.second].position;
+            const Ogre::Vector3& pa = sub.vertices[e.first].position;
+            capN += (pb - c).crossProduct(pa - c);
+        }
+        if (capN.squaredLength() > 1e-12f) {
+            centre.normal = capN.normalisedCopy();
+            centre.hasNormal = true;
+        } else {
+            centre.hasNormal = false;
+        }
         const unsigned int cIdx = static_cast<unsigned int>(sub.vertices.size());
         sub.vertices.push_back(centre);
 
@@ -602,9 +627,37 @@ SubMeshOps::estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
     const double lnMax = std::max(1e-12, static_cast<double>(eigval[largest]));
     const double flatness = lnMin / lnMax;
 
-    plane.center = c;
-    plane.normal = eigvec[smallest].normalisedCopy();
-    // In-plane radius: RMS distance to centroid projected off the normal.
+    plane.center = c;   // seam-vertex centroid — the true joint cross-section centre
+
+    // Flatness gate uses the covariance best-fit plane (a genuine seam is a thin
+    // disc: smallest eigenvalue << largest).
+    if (flatness > 0.15) {
+        plane.reason = QStringLiteral("boundary not planar enough (flatness %1)")
+                           .arg(flatness, 0, 'g', 3);
+        return plane;
+    }
+
+    // Peg AXIS = the direction the two parts separate = normalize(centroidB −
+    // centroidA), NOT the covariance eigenvector. For an organic joint whose cut
+    // ring isn't a flat disc (a diagonal shoulder/hip seam), the smallest
+    // eigenvector can point sideways along the surface, which placed the peg on
+    // the outer face. The part-to-part axis is always the correct insertion
+    // direction. Fall back to the eigenvector normal only if the two part
+    // centroids coincide (degenerate).
+    Ogre::Vector3 cA = Ogre::Vector3::ZERO, cB = Ogre::Vector3::ZERO;
+    size_t na = 0, nb = 0;
+    for (const auto& sm : partA) for (const auto& v : sm.vertices) { cA += v.position; ++na; }
+    for (const auto& sm : partB) for (const auto& v : sm.vertices) { cB += v.position; ++nb; }
+    Ogre::Vector3 axis = eigvec[smallest].normalisedCopy();
+    if (na && nb) {
+        cA /= float(na); cB /= float(nb);
+        const Ogre::Vector3 partAxis = cB - cA;
+        if (partAxis.squaredLength() > 1e-12f)
+            axis = partAxis.normalisedCopy();
+    }
+    plane.normal = axis;
+
+    // In-plane radius: RMS distance to centroid projected off the (part) axis.
     double r2 = 0.0;
     for (const auto& p : pts) {
         Ogre::Vector3 d = p - c;
@@ -613,11 +666,6 @@ SubMeshOps::estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
     }
     plane.radius = std::sqrt(r2 / static_cast<double>(pts.size()));
 
-    if (flatness > 0.15) {
-        plane.reason = QStringLiteral("boundary not planar enough (flatness %1)")
-                           .arg(flatness, 0, 'g', 3);
-        return plane;
-    }
     if (!(plane.radius > 0.0f)) {
         plane.reason = QStringLiteral("degenerate boundary radius");
         return plane;

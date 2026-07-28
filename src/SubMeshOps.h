@@ -73,6 +73,14 @@ public:
          *  preserving the source material. The Ogre adapter creates the
          *  materials; the core only records the intended name. */
         bool assignPartMaterials = false;
+        /** Close each part's OPEN cut face (the seam left hollow by the split)
+         *  with a triangle fan so every part is a watertight solid — otherwise
+         *  an exploded part shows a see-through hole where it was cut from its
+         *  neighbour. Default OFF so the pure-split algorithm keeps exact vertex/
+         *  triangle counts (unit tests, downstream callers that re-cap
+         *  themselves); the user-facing split (SplitMeshCommand) and explode/
+         *  print-prep turn it ON. */
+        bool capParts = false;
     };
 
     struct SplitResult {

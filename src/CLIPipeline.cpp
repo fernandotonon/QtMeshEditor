@@ -10640,6 +10640,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (splitParts) {
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         SubMeshOps::SplitOptions sopts; // default "Body" prefix, preserve material
+        sopts.capParts = true;          // watertight parts (close the cut face, #863)
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts, fi.completeBaseName().toStdString());
         if (!so.ok) {

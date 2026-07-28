@@ -136,6 +136,10 @@ void SplitMeshCommand::redo()
         SubMeshOps::SplitOptions sopts;
         if (!mNamePrefix.isEmpty())
             sopts.namePrefix = mNamePrefix;
+        // Close each part's open cut face so the user-facing parts are watertight
+        // solids — an exploded part otherwise shows a see-through hole where it
+        // was cut from its neighbour (#863).
+        sopts.capParts = true;
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts,
