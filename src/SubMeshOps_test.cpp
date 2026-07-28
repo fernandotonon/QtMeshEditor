@@ -8,6 +8,8 @@
 #include "MeshSegmenter.h"
 
 #include <cmath>
+#include <map>
+#include <utility>
 
 namespace {
 
@@ -592,4 +594,44 @@ TEST(SubMeshOpsTest, CapOpenBoundariesNoOpWhenClosed)
     const size_t before = s.triangles.size();
     EXPECT_EQ(SubMeshOps::capOpenBoundaries(s), 0);
     EXPECT_EQ(s.triangles.size(), before);
+}
+
+// Count directed boundary edges (a→b with no b→a) — 0 means watertight.
+static size_t boundaryEdgeCount(const EditableSubMesh& s)
+{
+    std::map<std::pair<unsigned,unsigned>,int> d;
+    for (const auto& t : s.triangles) {
+        d[{t.indices[0],t.indices[1]}]++;
+        d[{t.indices[1],t.indices[2]}]++;
+        d[{t.indices[2],t.indices[0]}]++;
+    }
+    size_t open = 0;
+    for (const auto& kv : d)
+        if (!d.count({kv.first.second, kv.first.first})) open += 1;
+    return open;
+}
+
+TEST(SubMeshOpsTest, CapOpenBoundariesClosesBothEndsOfATube)
+{
+    // An open tube (a ring extruded along Y, NO end caps): TWO separate boundary
+    // loops. The old single-successor walk capped only one; the multi-successor
+    // walk must close BOTH → 0 boundary edges after, watertight.
+    EditableSubMesh s; s.materialName = "Tube";
+    const int seg = 8;
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
+    for (int i = 0; i < seg; ++i) {
+        const float a = 2.0f*float(M_PI)*float(i)/float(seg);
+        s.vertices.push_back(V(std::cos(a), 0.f, std::sin(a)));  // bottom ring
+        s.vertices.push_back(V(std::cos(a), 2.f, std::sin(a)));  // top ring
+    }
+    for (int i = 0; i < seg; ++i) {
+        const int j = (i+1)%seg;
+        const unsigned b0=2*i, t0=2*i+1, b1=2*j, t1=2*j+1;
+        addTri(s, b0, b1, t1);
+        addTri(s, b0, t1, t0);
+    }
+    ASSERT_GT(boundaryEdgeCount(s), 0u);          // open at both ends
+    const int caps = SubMeshOps::capOpenBoundaries(s);
+    EXPECT_EQ(caps, 2) << "both tube ends must be capped";
+    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "tube must be watertight after capping";
 }

@@ -443,68 +443,86 @@ int SubMeshOps::capOpenBoundaries(EditableSubMesh& sub)
         dirCount[key(t.indices[1], t.indices[2])]++;
         dirCount[key(t.indices[2], t.indices[0])]++;
     }
-    // A directed edge a→b is a boundary edge when b→a is absent. Build the
-    // successor map next[a] = b over boundary edges to walk the loops.
-    std::unordered_map<unsigned int, unsigned int> next;
+    // A directed edge a→b is a boundary edge when b→a is absent. A rim vertex can
+    // have MORE than one outgoing boundary edge (a figure-eight / pinched cut, or
+    // two separate rim loops touching a shared vertex — common at shoulders/hips),
+    // so keep a LIST of successors per vertex and CONSUME them as we walk. A
+    // single-successor map silently drops the extra edges and leaves those loops
+    // uncapped (the "gap not closed on all joints" bug).
+    std::unordered_map<unsigned int, std::vector<unsigned int>> succ;
+    size_t boundaryEdges = 0;
     for (const auto& kv : dirCount) {
         const unsigned int a = static_cast<unsigned int>(kv.first >> 32);
         const unsigned int b = static_cast<unsigned int>(kv.first & 0xffffffff);
-        if (dirCount.find(key(b, a)) == dirCount.end())
-            next[a] = b;   // boundary edge a→b (the interior is to its left)
+        if (dirCount.find(key(b, a)) == dirCount.end()) {
+            succ[a].push_back(b);   // boundary edge a→b (interior on its left)
+            ++boundaryEdges;
+        }
     }
-    if (next.empty())
+    if (boundaryEdges == 0)
         return 0; // already closed
 
-    // Part centroid — used to orient each cap OUTWARD.
-    Ogre::Vector3 partC = Ogre::Vector3::ZERO;
-    for (const auto& v : sub.vertices) partC += v.position;
-    partC /= static_cast<float>(sub.vertices.size());
-
-    // 2) Walk each boundary loop from an unvisited start, following next[].
+    // 2) Walk each boundary loop by consuming edges from `succ`. Every boundary
+    //    edge is used exactly once, so ALL rim loops get capped — not just the
+    //    first one reachable from each vertex.
+    auto popSucc = [&](unsigned int a, bool& ok) -> unsigned int {
+        auto it = succ.find(a);
+        if (it == succ.end() || it->second.empty()) { ok = false; return 0; }
+        unsigned int b = it->second.back();
+        it->second.pop_back();
+        if (it->second.empty()) succ.erase(it);
+        ok = true;
+        return b;
+    };
     int caps = 0;
-    std::unordered_map<unsigned int, bool> visited;
-    for (const auto& seed : next) {
-        const unsigned int start = seed.first;
-        if (visited.count(start))
-            continue;
-        std::vector<unsigned int> loop;
+    size_t consumed = 0;
+    while (consumed < boundaryEdges) {
+        // Find any vertex that still has an unused outgoing boundary edge.
+        unsigned int start = 0; bool found = false;
+        for (const auto& kv : succ) { if (!kv.second.empty()) { start = kv.first; found = true; break; } }
+        if (!found)
+            break;
+        // Record the actual DIRECTED boundary edges (a→b) we consume, in order.
+        std::vector<std::pair<unsigned int, unsigned int>> edges;
+        std::vector<unsigned int> loopVerts;
         unsigned int cur = start;
-        while (next.count(cur) && !visited.count(cur)) {
-            visited[cur] = true;
-            loop.push_back(cur);
-            cur = next[cur];
-            if (cur == start) break;   // closed
+        // Follow successors, consuming each edge, until we return to start or hit
+        // a vertex with no remaining successor (open chain — still fan it).
+        for (;;) {
+            bool ok = false;
+            unsigned int nxt = popSucc(cur, ok);
+            if (!ok) break;
+            ++consumed;
+            edges.emplace_back(cur, nxt);
+            loopVerts.push_back(cur);
+            cur = nxt;
+            if (cur == start) break;   // closed loop
         }
-        if (loop.size() < 3)
+        if (edges.size() < 3)
             continue;
 
         // 3) Centroid-fan fill. New centre vertex copies a rim vertex's
         //    attributes (material/uv space) with the averaged position.
         Ogre::Vector3 c = Ogre::Vector3::ZERO;
-        for (unsigned int vi : loop) c += sub.vertices[vi].position;
-        c /= static_cast<float>(loop.size());
-        EditableVertex centre = sub.vertices[loop[0]];
+        for (unsigned int vi : loopVerts) c += sub.vertices[vi].position;
+        c /= static_cast<float>(loopVerts.size());
+        EditableVertex centre = sub.vertices[loopVerts[0]];
         centre.position = c;
         centre.hasNormal = false; // recomputed after (or by createNewMesh)
         const unsigned int cIdx = static_cast<unsigned int>(sub.vertices.size());
         sub.vertices.push_back(centre);
 
-        // Winding: the boundary edge a→b has the part interior on its LEFT, so a
-        // fan triangle (centre, a, b) faces the SAME way as the missing cap. Test
-        // one triangle's normal against the outward direction (centre→partC) and
-        // flip all if it points inward.
-        const unsigned int a0 = loop[0], b0 = loop[1];
-        const Ogre::Vector3 n0 = (sub.vertices[a0].position - c)
-            .crossProduct(sub.vertices[b0].position - c);
-        const bool flip = n0.dotProduct(c - partC) < 0.0f; // want normal away from partC
-        const size_t nEdges = loop.size();
-        for (size_t i = 0; i < nEdges; ++i) {
-            const unsigned int a = loop[i];
-            const unsigned int b = loop[(i + 1) % nEdges];
+        // Winding — the ONLY watertight choice: a boundary edge a→b has the part
+        // interior on its LEFT, so the cap triangle must contain the REVERSE edge
+        // b→a to cancel it. Emit (centre, b, a) for every consumed edge. This is
+        // exact for any loop shape and both ends of a tube, unlike a global
+        // centroid-normal heuristic (which flips the wrong end and left the rim
+        // open — the "gap not closed on all joints" bug).
+        for (const auto& e : edges) {
             EditableTriangle t;
             t.indices[0] = cIdx;
-            t.indices[1] = flip ? b : a;
-            t.indices[2] = flip ? a : b;
+            t.indices[1] = e.second; // b
+            t.indices[2] = e.first;  // a
             sub.triangles.push_back(t);
         }
         ++caps;
