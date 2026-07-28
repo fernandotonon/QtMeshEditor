@@ -6572,6 +6572,15 @@ Rectangle {
                 }
             }
 
+            // Close each part's open cut face so exploded parts are watertight
+            // solids (#863) — useful before 3D printing.
+            property bool capBoundaries: false
+            InspectorCheckBox {
+                text: "Cap open boundaries (watertight)"
+                checked: partOpsEjContent.capBoundaries
+                onCheckedChanged: partOpsEjContent.capBoundaries = checked
+            }
+
             // --- Explode button ---
             Rectangle {
                 id: partOpsExplodeBtn
@@ -6603,7 +6612,8 @@ Rectangle {
                     onClicked: {
                         partOpsEjFeedback.color = PropertiesPanelController.textColor
                         partOpsEjFeedback.text = "Exploding…"
-                        PartOpsController.explodeSelected(partOpsEjContent.explodeDistance)
+                        PartOpsController.explodeSelected(partOpsEjContent.explodeDistance,
+                                                          partOpsEjContent.capBoundaries)
                     }
                 }
             }

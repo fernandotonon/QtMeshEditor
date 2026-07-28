@@ -502,3 +502,49 @@ TEST(SubMeshOpsTest, PreparePrintPegsNeedsTwoParts)
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());
 }
+
+// ---- capOpenBoundaries (#863 close split cut face) ------------------------
+
+TEST(SubMeshOpsTest, CapOpenBoundaryClosesHole)
+{
+    // An open-topped box: 8 cube corners, all 5 side+bottom faces, TOP missing.
+    // The top rim (verts 4,5,6,7 at y=1) is one open boundary loop of 4 edges.
+    // capOpenBoundaries should fill it → 1 cap, +1 centre vert, +4 triangles.
+    EditableSubMesh s;
+    s.materialName = "Box";
+    // bottom (y=0): 0,1,2,3   top (y=1): 4,5,6,7
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
+    s.vertices = { V(0,0,0),V(1,0,0),V(1,0,1),V(0,0,1),
+                   V(0,1,0),V(1,1,0),V(1,1,1),V(0,1,1) };
+    auto Q = [&](unsigned a,unsigned b,unsigned c,unsigned d){ addTri(s,a,b,c); addTri(s,a,c,d); };
+    Q(0,1,2,3);   // bottom
+    Q(0,4,5,1);   // front
+    Q(1,5,6,2);   // right
+    Q(2,6,7,3);   // back
+    Q(3,7,4,0);   // left
+    // NO top → verts 4,5,6,7 form the open rim.
+
+    const size_t triBefore = s.triangles.size();
+    const size_t vBefore = s.vertices.size();
+    const int caps = SubMeshOps::capOpenBoundaries(s);
+    EXPECT_EQ(caps, 1);
+    EXPECT_EQ(s.vertices.size(), vBefore + 1);          // one centroid vertex
+    EXPECT_EQ(s.triangles.size(), triBefore + 4);       // one tri per rim edge
+    // The new centre vertex sits at the rim centroid (0.5,1,0.5).
+    const auto& cv = s.vertices.back();
+    EXPECT_NEAR(cv.position.x, 0.5f, 1e-4f);
+    EXPECT_NEAR(cv.position.y, 1.0f, 1e-4f);
+    EXPECT_NEAR(cv.position.z, 0.5f, 1e-4f);
+}
+
+TEST(SubMeshOpsTest, CapOpenBoundariesNoOpWhenClosed)
+{
+    // A closed tetrahedron: every edge is shared by two faces → no boundary.
+    EditableSubMesh s; s.materialName = "Tet";
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
+    s.vertices = { V(0,0,0), V(1,0,0), V(0,1,0), V(0,0,1) };
+    addTri(s,0,2,1); addTri(s,0,1,3); addTri(s,0,3,2); addTri(s,1,2,3);
+    const size_t before = s.triangles.size();
+    EXPECT_EQ(SubMeshOps::capOpenBoundaries(s), 0);
+    EXPECT_EQ(s.triangles.size(), before);
+}

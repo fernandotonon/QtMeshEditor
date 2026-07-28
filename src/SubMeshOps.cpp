@@ -421,6 +421,100 @@ SubMeshOps::explodeOffsets(const std::vector<Ogre::Vector3>& partCentroids,
     return offsets;
 }
 
+int SubMeshOps::capOpenBoundaries(EditableSubMesh& sub)
+{
+    const size_t triCount = sub.triangles.size();
+    if (triCount == 0 || sub.vertices.empty())
+        return 0;
+
+    // 1) Boundary edges = directed edges whose REVERSE is not also present. In a
+    //    closed manifold every edge appears once in each direction; an open cut
+    //    face leaves its rim edges with no opposite. Key by the ordered vertex
+    //    pair so we can find the unmatched ones, and remember the directed edge
+    //    (a→b) so the cap can be wound consistently with the source triangles.
+    auto key = [](unsigned int a, unsigned int b) -> uint64_t {
+        return (static_cast<uint64_t>(a) << 32) | b;
+    };
+    std::unordered_map<uint64_t, int> dirCount; // directed edge → count
+    for (const EditableTriangle& t : sub.triangles) {
+        dirCount[key(t.indices[0], t.indices[1])]++;
+        dirCount[key(t.indices[1], t.indices[2])]++;
+        dirCount[key(t.indices[2], t.indices[0])]++;
+    }
+    // A directed edge a→b is a boundary edge when b→a is absent. Build the
+    // successor map next[a] = b over boundary edges to walk the loops.
+    std::unordered_map<unsigned int, unsigned int> next;
+    for (const auto& kv : dirCount) {
+        const unsigned int a = static_cast<unsigned int>(kv.first >> 32);
+        const unsigned int b = static_cast<unsigned int>(kv.first & 0xffffffff);
+        if (dirCount.find(key(b, a)) == dirCount.end())
+            next[a] = b;   // boundary edge a→b (the interior is to its left)
+    }
+    if (next.empty())
+        return 0; // already closed
+
+    // Part centroid — used to orient each cap OUTWARD.
+    Ogre::Vector3 partC = Ogre::Vector3::ZERO;
+    for (const auto& v : sub.vertices) partC += v.position;
+    partC /= static_cast<float>(sub.vertices.size());
+
+    // 2) Walk each boundary loop from an unvisited start, following next[].
+    int caps = 0;
+    std::unordered_map<unsigned int, bool> visited;
+    for (const auto& seed : next) {
+        const unsigned int start = seed.first;
+        if (visited.count(start))
+            continue;
+        std::vector<unsigned int> loop;
+        unsigned int cur = start;
+        while (next.count(cur) && !visited.count(cur)) {
+            visited[cur] = true;
+            loop.push_back(cur);
+            cur = next[cur];
+            if (cur == start) break;   // closed
+        }
+        if (loop.size() < 3)
+            continue;
+
+        // 3) Centroid-fan fill. New centre vertex copies a rim vertex's
+        //    attributes (material/uv space) with the averaged position.
+        Ogre::Vector3 c = Ogre::Vector3::ZERO;
+        for (unsigned int vi : loop) c += sub.vertices[vi].position;
+        c /= static_cast<float>(loop.size());
+        EditableVertex centre = sub.vertices[loop[0]];
+        centre.position = c;
+        centre.hasNormal = false; // recomputed after (or by createNewMesh)
+        const unsigned int cIdx = static_cast<unsigned int>(sub.vertices.size());
+        sub.vertices.push_back(centre);
+
+        // Winding: the boundary edge a→b has the part interior on its LEFT, so a
+        // fan triangle (centre, a, b) faces the SAME way as the missing cap. Test
+        // one triangle's normal against the outward direction (centre→partC) and
+        // flip all if it points inward.
+        const unsigned int a0 = loop[0], b0 = loop[1];
+        const Ogre::Vector3 n0 = (sub.vertices[a0].position - c)
+            .crossProduct(sub.vertices[b0].position - c);
+        const bool flip = n0.dotProduct(c - partC) < 0.0f; // want normal away from partC
+        const size_t nEdges = loop.size();
+        for (size_t i = 0; i < nEdges; ++i) {
+            const unsigned int a = loop[i];
+            const unsigned int b = loop[(i + 1) % nEdges];
+            EditableTriangle t;
+            t.indices[0] = cIdx;
+            t.indices[1] = flip ? b : a;
+            t.indices[2] = flip ? a : b;
+            sub.triangles.push_back(t);
+        }
+        ++caps;
+    }
+
+    // Cap triangles were appended; drop any stale n-gon `faces` binding so the
+    // triangle list is authoritative downstream (buildSubMeshBuffers rebuilds).
+    if (caps > 0)
+        sub.faces.clear();
+    return caps;
+}
+
 SubMeshOps::BoundaryPlane
 SubMeshOps::estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
                                   const std::vector<EditableSubMesh>& partB, float weldTol)
@@ -641,6 +735,13 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
     out.subMeshes = subMeshes;   // start from the parts; merge pegs in below.
     out.partNames = partNames;
     out.partNames.resize(subMeshes.size());
+
+    // Close each part's OPEN cut face first (a split leaves it hollow) so every
+    // part is a watertight printable solid and the pegs attach to a real
+    // surface. Boundary planes are still estimated from the ORIGINAL (uncapped)
+    // submeshes below, so the coincident-seam detection is unaffected by the cap.
+    for (auto& part : out.subMeshes)
+        out.cappedParts += (capOpenBoundaries(part) > 0) ? 1 : 0;
     auto nameOf = [&](int i) -> QString {
         return (i >= 0 && i < static_cast<int>(out.partNames.size()) && !out.partNames[i].isEmpty())
                    ? out.partNames[i] : QStringLiteral("part%1").arg(i);

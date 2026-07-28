@@ -60,7 +60,7 @@ public:
      *  (undoable). Each part is pushed outward by `distance` × the assembly
      *  diagonal. Emits explodeFinished(status, isError). No-op (error) without
      *  a single multi-submesh selection. */
-    Q_INVOKABLE void explodeSelected(double distance = 0.5);
+    Q_INVOKABLE void explodeSelected(double distance = 0.5, bool capBoundaries = false);
 
     /** Join the selected part entities (2+) back into one fused mesh, baking
      *  their world transforms into vertices (undoable). Emits

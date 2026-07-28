@@ -33,10 +33,11 @@ void reparentAndSetLocal(Manager* mgr, Ogre::SceneNode* node,
 } // namespace
 
 ExplodePartsCommand::ExplodePartsCommand(std::string entityName, float distance,
-                                         QUndoCommand* parent)
+                                         bool capBoundaries, QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
     , mDistance(distance)
+    , mCapBoundaries(capBoundaries)
 {
     setText(QStringLiteral("Explode into Parts"));
 }
@@ -89,7 +90,8 @@ void ExplodePartsCommand::buildOnce()
         mParentNodeName = parent->getName();
 
     PartOpsScene::ExplodeResult r =
-        PartOpsScene::explodeEntity(entity, mDistance, mEntityName + std::string("_part"));
+        PartOpsScene::explodeEntity(entity, mDistance, mEntityName + std::string("_part"),
+                                    mCapBoundaries);
     if (!r.ok) {
         mError = r.error.isEmpty() ? QStringLiteral("explode failed") : r.error;
         return;

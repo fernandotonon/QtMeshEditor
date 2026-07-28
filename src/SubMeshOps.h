@@ -157,6 +157,22 @@ public:
                                                       float distance);
 
     // -------------------------------------------------------------------------
+    // Boundary capping (#863) — close the open cut face of a split part
+    // -------------------------------------------------------------------------
+
+    /** Cap the OPEN boundary of a split part so it becomes a watertight solid
+     *  (a split leaves the cut face as a hole — bad for 3D printing, and a peg
+     *  needs a solid face to attach to). Finds every boundary edge (an edge used
+     *  by exactly ONE triangle), chains them into closed loops, and fills each
+     *  loop with a CENTROID FAN: one new vertex at the loop's centroid + a
+     *  triangle per boundary edge, wound so the cap faces OUTWARD (away from the
+     *  part's centroid). Copies a representative boundary vertex's attributes
+     *  onto the new centroid verts so the cap shares the part's material/uv
+     *  space. Edits `sub` in place; returns the number of caps (loops) filled.
+     *  Deterministic; pure-data. Skips loops shorter than 3 edges. */
+    static int capOpenBoundaries(EditableSubMesh& sub);
+
+    // -------------------------------------------------------------------------
     // Print-split alignment pegs (Slice D #863)
     // -------------------------------------------------------------------------
 
@@ -218,6 +234,7 @@ public:
         std::vector<PegBoundary> boundaries; ///< every pair considered (diag).
         int peggedBoundaries = 0;
         int totalPegs = 0;
+        int cappedParts = 0;   ///< parts whose open cut face was closed.
     };
 
     /** Prepare a split mesh for 3D printing (Slice D #863). For EVERY pair of
