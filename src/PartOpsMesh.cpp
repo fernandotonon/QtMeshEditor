@@ -1,6 +1,7 @@
 #include "PartOpsMesh.h"
 
 #include "EditableMesh.h"
+#include "SentryReporter.h"
 
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -233,5 +234,13 @@ PartOpsMesh::addPrintPegsToEntity(Ogre::Entity* entity, const SubMeshOps::PegOpt
     out.partNames = std::move(prep.partNames);
     out.peggedBoundaries = prep.peggedBoundaries;
     out.totalPegs = prep.totalPegs;
+
+    // Telemetry for the operation itself so EVERY caller (CLI/MCP/command) gets a
+    // breadcrumb, not just the undo command's redo() (CodeRabbit).
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.print_pegs"),
+                                  QStringLiteral("boundaries=%1 pegs=%2 capped=%3 warnings=%4")
+                                      .arg(out.peggedBoundaries).arg(out.totalPegs)
+                                      .arg(prep.cappedParts)
+                                      .arg(static_cast<int>(out.warnings.size())));
     return out;
 }
