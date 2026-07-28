@@ -961,14 +961,10 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
     out.partNames = partNames;
     out.partNames.resize(subMeshes.size());
 
-    // Male pegs and socket-mouth collars are collected into two dedicated
-    // submeshes so they render in distinct colours (green male / red female) —
-    // the connector materials carry those colours (PartOpsMesh binds them). The
-    // real socket CAVITY is still cut into the mating part via the boolean below;
-    // the red collar is just a visible mouth indicator.
-    EditableSubMesh malePegs, socketCollars;
-    malePegs.materialName = "connector_male";
-    socketCollars.materialName = "connector_socket";
+    // Each connector is merged directly INTO the part it belongs to (male peg →
+    // its source part, female socket cavity + collar → the mating part) so every
+    // part stays ONE self-contained printable mesh in its own material — no
+    // separate connector submeshes.
 
     // Close each part's OPEN cut face first (a split leaves it hollow) so every
     // part is a watertight printable solid and the pegs attach to a real
@@ -1038,12 +1034,13 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
                 out.boundaries.push_back(rec);
                 continue;
             }
-            // Collect the male peg into the shared GREEN connector submesh
-            // (protruding along +normal, toward B) so it renders distinctly. On a
-            // skinned mesh the peg inherits part A's nearest bone weights so it
-            // moves with that part instead of collapsing to the skeleton origin.
+            // Merge the male peg directly INTO its source part (A) so each part
+            // is one self-contained printable object that carries its own peg —
+            // it renders in the part's own material, not a separate connector
+            // submesh. On a skinned mesh the peg inherits part A's nearest bone
+            // weights so it moves with that part (not the skeleton origin).
             inheritNearestBoneWeights(male, subMeshes[a]);
-            appendGeometry(malePegs, male);
+            appendGeometry(out.subMeshes[a], male);
             // Cut a real cylindrical SOCKET CAVITY into partB for each peg via a
             // robust mesh boolean (Manifold), so the male peg actually inserts —
             // not a solid cylinder added as fake geometry. The socket is the peg
@@ -1054,32 +1051,21 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
             subtractSockets(out.subMeshes[b], pegCenters, plane.normal, socketR,
                             boundaryOpts.pegDepth + boundaryOpts.clearance,
                             boundaryOpts.radialSegments);
-            // A shallow RED collar ring at each socket mouth marks the female
-            // side visually (the cavity itself is a hole and can't be coloured).
-            // Built into a temp so it can inherit part B's bone weights.
+            // A shallow collar ring at each socket mouth (a raised lip around the
+            // bore). Merged INTO part B so the female side is one solid too;
+            // inherits part B's bone weights. Built into a temp first for that.
             EditableSubMesh collars;
             for (const Ogre::Vector3& pc : pegCenters)
                 appendSocketCollar(collars, pc, plane.normal, socketR,
                                    boundaryOpts.radialSegments);
             inheritNearestBoneWeights(collars, subMeshes[b]);
-            appendGeometry(socketCollars, collars);
+            appendGeometry(out.subMeshes[b], collars);
             rec.pegged = true;
             rec.pegCount = made;
             out.boundaries.push_back(rec);
             ++out.peggedBoundaries;
             out.totalPegs += made;
         }
-    }
-
-    // Append the two connector submeshes (if any pegs were placed) so they get
-    // their own material bindings + Scene-tree rows.
-    if (!malePegs.triangles.empty()) {
-        out.subMeshes.push_back(std::move(malePegs));
-        out.partNames.push_back(QStringLiteral("connector_male"));
-    }
-    if (!socketCollars.triangles.empty()) {
-        out.subMeshes.push_back(std::move(socketCollars));
-        out.partNames.push_back(QStringLiteral("connector_socket"));
     }
 
     out.ok = true;

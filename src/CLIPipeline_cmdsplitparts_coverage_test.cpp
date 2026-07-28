@@ -267,6 +267,12 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, AddPrintPegsCommandRedoUndoRoundTri
     const std::string entityName = e->getName();
     const unsigned short subMeshesBefore = e->getMesh()->getNumSubMeshes();
     ASSERT_GT(subMeshesBefore, 1u) << "peg command needs a multi-part mesh";
+    size_t vertsBefore = 0;
+    {
+        EditableMesh em;
+        if (em.loadFromEntity(e))
+            for (const auto& sm : em.subMeshes()) vertsBefore += sm.vertices.size();
+    }
 
     // 3) redo(): build + swap in the pegged mesh.
     SubMeshOps::PegOptions opts;   // defaults; auto-fits the boundary
@@ -280,17 +286,22 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, AddPrintPegsCommandRedoUndoRoundTri
             pegged = cand;
     ASSERT_NE(pegged, nullptr) << "pegged entity not found after redo";
     if (cmd.peggedBoundaries() > 0) {
-        // The male + socket connector submeshes were appended (2 extra parts).
-        EXPECT_GT(pegged->getMesh()->getNumSubMeshes(), subMeshesBefore)
-            << "pegging should append connector submeshes";
+        // Connectors are merged INTO their parts, so the submesh count is
+        // UNCHANGED (no separate connector submeshes) — the pegs live inside the
+        // existing part submeshes, which gain geometry.
+        EXPECT_EQ(pegged->getMesh()->getNumSubMeshes(), subMeshesBefore)
+            << "pegging must not change the part/submesh count";
         EXPECT_GT(cmd.totalPegs(), 0);
-        // At least one submesh carries a connector material.
-        bool hasConnector = false;
-        for (unsigned short i = 0; i < pegged->getNumSubEntities(); ++i) {
-            const std::string m = pegged->getSubEntity(i)->getMaterialName();
-            if (m == "connector_male" || m == "connector_socket") { hasConnector = true; break; }
-        }
-        EXPECT_TRUE(hasConnector) << "no connector_male/connector_socket submesh after pegging";
+        // The pegged mesh has MORE vertices than the pre-peg mesh (peg + collar +
+        // socket-cavity geometry merged into the parts).
+        auto vertsOf = [](Ogre::Entity* e) {
+            EditableMesh em; size_t n = 0;
+            if (em.loadFromEntity(e))
+                for (const auto& sm : em.subMeshes()) n += sm.vertices.size();
+            return n;
+        };
+        EXPECT_GT(vertsOf(pegged), vertsBefore)
+            << "merged pegs/collars/cavities should add vertices to the parts";
     }
 
     // 4) undo(): the pre-peg mesh (same submesh count) is restored.
