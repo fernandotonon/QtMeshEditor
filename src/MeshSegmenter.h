@@ -155,6 +155,14 @@ public:
         // scrambles parts on real characters — kept for future refinement. The
         // shipping cleanup is smoothLabelBoundaries + cleanupLabelIslands.
         bool planarRecut = false;
+        // Level the two LEG cuts to a shared horizontal height so an explode is
+        // symmetric — a clean, level hip line instead of the lopsided,
+        // differently-heighted legs the model produces (#863). BODY category
+        // only; scoped strictly to the leg↔torso boundary via levelLimbCut, so
+        // unlike planarRecut it can't scramble other parts. Arms are excluded on
+        // purpose — they attach along a VERTICAL seam where a horizontal level
+        // is meaningless. Default ON; gated by `cleanupIslands` (same switch).
+        bool levelLimbCuts = true;
     };
 
     struct Result {
@@ -274,6 +282,31 @@ public:
     static int smoothLabelBoundaries(std::vector<int>& faceLabels,
                                      const uint32_t* indices, int indexCount,
                                      int iterations = 3, int minAgree = 2);
+
+    // MIRROR-SYMMETRISE a mirror-pair limb cut (legs) across the sagittal plane
+    // (#863). The ONNX body model gives each leg a reasonable DIAGONAL boundary
+    // (like the arms) but the LEFT and RIGHT boundaries disagree, so an explode
+    // looks lopsided. Rather than forcing a flat horizontal waistline (which
+    // dragged the torso skirt into the legs and swapped feet), this reflects the
+    // labelling across the limb region's lateral centre and makes each near-seam
+    // face agree with its mirror — preserving the natural diagonal cut, making
+    // the two legs symmetric, and keeping each foot with its own leg (reflection
+    // maps a foot to the opposite foot with the limb labels swapped). Union rule:
+    // a face is a limb if it OR its mirror is → the more-inclusive symmetric
+    // boundary; torso only if both are. Scoped to faces within a few edge-hops
+    // of the limb↔`shared` seam, so distant geometry (a raised foot, bent knee)
+    // is untouched. `limbLeft/limbRight`↔`shared` (e.g. LeftLeg/RightLeg↔Torso);
+    // arms are NOT passed here (vertical seam — mirroring across sagittal is
+    // fine for them too but they're already symmetric). `up`=0/1/2 world up axis;
+    // lateral is derived from it. `bandFraction` is a legacy no-op (kept for ABI/
+    // call-site stability). Pure-data; needs `positions`; edits `faceLabels`,
+    // returns faces relabelled. Runs right AFTER smoothLabelBoundaries and BEFORE
+    // cleanupLabelIslands (the island pass mops up any tiny stray it leaves).
+    static int levelLimbCut(std::vector<int>& faceLabels,
+                            const float* positions, int vertexCount,
+                            const uint32_t* indices, int indexCount,
+                            int limbLeft, int limbRight, int shared, int up,
+                            float bandFraction = 0.10f);
 
     // Recut adjacent part boundaries with a straight, knife-like PLANE (#863).
     // Local tooth-shaving (smoothLabelBoundaries) can't flatten a whole seam;

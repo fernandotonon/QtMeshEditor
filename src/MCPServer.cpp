@@ -108,6 +108,13 @@
 #include <optional>
 #include <OgreException.h>
 #include <OgreLight.h>
+#include <OgreTextureManager.h>
+#include <OgreHardwarePixelBuffer.h>
+#include <OgreRenderTexture.h>
+#include <OgreViewport.h>
+#include <OgreCamera.h>
+#include "OgreRenderTargetUtil.h"
+#include "SpaceCamera.h"
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
 #include <OgreTechnique.h>
@@ -1597,11 +1604,57 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     }
     try {
         mainWindow->importMeshs(QStringList{path});
-        return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
     }
+    // Frame the camera on what was just loaded so a subsequent take_screenshot
+    // shows the mesh (headless MCP has no user to frame it manually). Done
+    // OUTSIDE the import try + swallowing its own errors, so a framing failure
+    // never masks a SUCCESSFUL import (CodeRabbit). It also restores the prior
+    // selection, so it doesn't disrupt an interactive --with-mcp session.
+    frameSceneInActiveViewport();
+    return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
+}
+
+void MCPServer::frameSceneInActiveViewport()
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!mgr || !sel)
+        return;
+
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return;
+
+    // Snapshot the current node selection so we can restore it — framing needs a
+    // selection (frameSelection() no-ops on empty) but must not clobber what an
+    // interactive user had selected (CodeRabbit).
+    const QList<Ogre::SceneNode*> prevSelection = sel->getNodesSelectionList();
+
+    try {
+        sel->clearList();
+        bool any = false;
+        for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+            if (node && node->numAttachedObjects() > 0) {
+                sel->append(node);
+                any = true;
+            }
+        }
+        if (any)
+            ogreWidget->getSpaceCamera()->frameSelection();
+    } catch (const Ogre::Exception&) {
+        // best-effort framing; fall through to restore selection.
+    }
+
+    // Restore the prior selection (empty list == deselect, matching before).
+    sel->clearList();
+    for (Ogre::SceneNode* node : prevSelection)
+        if (node) sel->append(node);
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
@@ -2884,22 +2937,109 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
         return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
 
-    OgreWidget* ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    if (!ogreWidget)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
     if (!ogreWidget) {
+        // Keep the established error string (an existing test asserts it).
         return makeErrorResult("Error: OgreWidget not found");
     }
-
-    QPixmap pixmap = ogreWidget->grab();
-    if (pixmap.isNull()) {
-        return makeErrorResult("Error: Failed to capture screenshot");
+    if (!ogreWidget->getSpaceCamera() || !ogreWidget->getSpaceCamera()->getCamera()) {
+        return makeErrorResult("Error: No active viewport camera");
     }
+    Ogre::Camera* cam = ogreWidget->getSpaceCamera()->getCamera();
 
-    if (!pixmap.save(path)) {
-        return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
+    // Ogre renders straight to the native window surface (WA_PaintOnScreen), so
+    // QWidget::grab() returns an empty/black buffer. Capture the ACTUAL viewport
+    // camera into an offscreen RTT and read that back — the same path the
+    // isometric/turntable renderers use. Size follows the widget (or args).
+    int width = args.contains("width") ? args["width"].toInt()
+                                       : std::max(16, ogreWidget->width());
+    int height = args.contains("height") ? args["height"].toInt()
+                                         : std::max(16, ogreWidget->height());
+    width = std::clamp(width, 16, 4096);
+    height = std::clamp(height, 16, 4096);
+
+    // State touched during the capture that MUST be restored on EVERY exit path
+    // (success OR exception) so a throw can't leak a temp light / boosted ambient
+    // / altered camera aspect / leftover RTT into the live scene (CodeRabbit).
+    Ogre::SceneManager* sm = cam->getSceneManager();
+    const Ogre::ColourValue savedAmbient = sm ? sm->getAmbientLight()
+                                              : Ogre::ColourValue::Black;
+    const Ogre::Real prevAspect = cam->getAspectRatio();
+    Ogre::Light* capLight = nullptr;
+    Ogre::SceneNode* capLightNode = nullptr;
+    Ogre::TexturePtr rtt;
+    auto cleanup = [&]() {
+        cam->setAspectRatio(prevAspect);
+        if (sm) {
+            sm->setAmbientLight(savedAmbient);
+            if (capLightNode) { capLightNode->detachAllObjects();
+                sm->getRootSceneNode()->removeAndDestroyChild(capLightNode); capLightNode = nullptr; }
+            if (capLight) { sm->destroyLight(capLight); capLight = nullptr; }
+        }
+        if (rtt) { Ogre::TextureManager::getSingleton().remove(rtt); rtt.reset(); }
+    };
+
+    try {
+        const std::string rttName = "MCPScreenshotRTT";
+        if (auto existing = Ogre::TextureManager::getSingleton().getByName(rttName))
+            Ogre::TextureManager::getSingleton().remove(existing);
+        rtt = Ogre::TextureManager::getSingleton().createManual(
+            rttName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, static_cast<Ogre::uint32>(width),
+            static_cast<Ogre::uint32>(height), 0, Ogre::PF_BYTE_RGBA,
+            Ogre::TU_RENDERTARGET);
+        Ogre::RenderTarget* target = rtt->getBuffer()->getRenderTarget();
+        OgreRenderTargetUtil::configureOffscreenRenderTarget(target);
+
+        // The RTT sees the live scene, which may render dark without adequate
+        // lighting (imported FBX materials come back black otherwise). Bump
+        // ambient + add a temporary directional key light for the capture
+        // (restored by cleanup()) — same recipe as the isometric renderer.
+        if (sm) {
+            sm->setAmbientLight(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
+            capLight = sm->createLight();
+            capLight->setType(Ogre::Light::LT_DIRECTIONAL);
+            capLight->setDiffuseColour(Ogre::ColourValue(0.9f, 0.9f, 0.9f));
+            capLightNode = sm->getRootSceneNode()->createChildSceneNode();
+            capLightNode->attachObject(capLight);
+            capLightNode->setDirection(Ogre::Vector3(-0.3f, -0.5f, -0.8f).normalisedCopy(),
+                                       Ogre::Node::TS_WORLD);
+        }
+
+        Ogre::Viewport* vp = target->addViewport(cam);
+        vp->setClearEveryFrame(true);
+        vp->setBackgroundColour(Ogre::ColourValue(0.16f, 0.16f, 0.16f));
+        vp->setOverlaysEnabled(false);
+        // Use the RTSS shadergen scheme + shadows so materials render lit (else
+        // everything comes back an unlit black silhouette), matching the live
+        // viewport and the isometric/turntable capture path.
+        vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
+        vp->setShadowsEnabled(true);
+        cam->setAspectRatio(static_cast<Ogre::Real>(width) / static_cast<Ogre::Real>(height));
+        target->update();
+
+        QImage image(width, height, QImage::Format_RGBA8888);
+        Ogre::PixelBox pb(static_cast<Ogre::uint32>(width),
+                          static_cast<Ogre::uint32>(height), 1,
+                          Ogre::PF_BYTE_RGBA, image.bits());
+        target->copyContentsToMemory(Ogre::Box(0, 0, width, height), pb,
+                                     Ogre::RenderTarget::FB_AUTO);
+        cleanup();
+
+        if (!image.save(path))
+            return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("mcp screenshot %1x%2 -> %3").arg(width).arg(height).arg(path));
+        return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
+            .arg(path).arg(width).arg(height));
+    } catch (const Ogre::Exception& e) {
+        cleanup();
+        return makeErrorResult(QStringLiteral("Error capturing screenshot: %1")
+            .arg(QString::fromStdString(e.getDescription())));
     }
-
-    return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
-        .arg(path).arg(pixmap.width()).arg(pixmap.height()));
 }
 
 QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)

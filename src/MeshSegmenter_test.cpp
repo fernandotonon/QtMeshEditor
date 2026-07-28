@@ -542,3 +542,72 @@ TEST(MeshSegmenter, SmoothBoundaryLeavesStraightSeamAlone)
     EXPECT_EQ(flipped, 0);
     EXPECT_EQ(faces, before);
 }
+
+// ---- levelLimbCut (#863 mirror-symmetric leg cut) -------------------------
+
+TEST(MeshSegmenter, LevelLimbCutDividerIsCountIndependent)
+{
+    // Regression for the count-weighted-divider bug (CodeRabbit): the left leg is
+    // deliberately much WIDER (many more faces) than the right, so a face-count-
+    // weighted mean over all leg faces pulls the sagittal divider well to the
+    // LEFT of the true midline — whereas the correct midpoint-of-per-limb-means
+    // stays centred. 10-wide grid: left leg (5) x0-6 (7 cols), right leg (6) x7-9
+    // (3 cols), bottom 3 rows; torso (2) above.
+    //   per-limb means:  left ≈ 3.0, right ≈ 8.0  → midpoint ≈ 5.5 (correct)
+    //   count-weighted mean over all leg faces ≈ 4.6 (biased left)
+    // Knock a right-leg column (x=6.. no, x within the right leg near the middle)
+    // to torso; its mirror across the CORRECT plane (5.5) is left-leg, so the
+    // union rule restores it — and it must come back as the RIGHT leg (6). With
+    // the biased divider (~4.6) that same face sits on the +side and could be
+    // mislabelled, so this fixture distinguishes the two implementations.
+    const int W=10, H=10;
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(W, H, pos, idx);
+    std::vector<int> faces((int)idx.size()/3, 2);   // torso default
+    for (int y=0;y<H;++y)
+        for (int x=0;x<W;++x){
+            const int q=y*W+x; int lab=2;
+            if (y<3) lab = (x<7) ? 5 : 6;     // left leg x0-6 (wide), right x7-9
+            faces[q*2]=lab; faces[q*2+1]=lab;
+        }
+    // Torso notch in the right leg's inner column (x=7), rows 1-2: its mirror
+    // across x=5.5 is x≈4 (left-leg) → union rule should restore x=7 to RIGHT leg.
+    for (int y=1;y<3;++y){ const int q=y*W+7; faces[q*2]=2; faces[q*2+1]=2; }
+
+    ASSERT_NO_FATAL_FAILURE(MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
+                                             idx.data(), (int)idx.size(),
+                                             5, 6, 2, /*up=*/1));
+    // The restored inner-right column (x=7) must be RIGHT leg (6), never LEFT
+    // (5). This is the discriminating check: the correct midpoint divider (≈5.5)
+    // puts x=7 firmly on the right, but a count-weighted divider (pulled toward
+    // the wide left leg, ≈4.6) would sit LEFT of x=7 too, so nothing distinguishes
+    // it there — what distinguishes them is that NO right-leg face ever lands on
+    // the far LEFT (x < 5, deep in the wide left leg), which a badly-biased
+    // divider's reflection could produce.
+    for (int y=1;y<3;++y){ const int q=y*W+7;
+        for (int fi : {q*2, q*2+1})
+            EXPECT_NE(faces[fi], 5) << "inner-right column flipped to LEFT leg";
+    }
+    // No gross swap across the true midline (x=5.5): a left-leg label never lands
+    // deep in right territory (x>=7) and vice versa.
+    for (int q=0;q<W*H;++q){ const int x=q%W;
+        for (int fi : {q*2, q*2+1}) {
+            if (faces[fi]==5) EXPECT_LT(x,7) << "left-leg label deep on the right (swap)";
+            if (faces[fi]==6) EXPECT_GT(x,4) << "right-leg label deep on the left (swap)";
+        }
+    }
+}
+
+TEST(MeshSegmenter, LevelLimbCutNoOpWhenPartMissing)
+{
+    // Only one leg present → nothing to level, returns 0, labels unchanged.
+    std::vector<float> pos; std::vector<uint32_t> idx;
+    quadGrid(6, 6, pos, idx);
+    std::vector<int> faces((int)idx.size()/3, 2);
+    for (int y=0;y<2;++y) for(int x=0;x<3;++x){ const int q=y*6+x; faces[q*2]=5; faces[q*2+1]=5; }
+    auto before=faces;
+    const int changed = MS::levelLimbCut(faces, pos.data(), (int)pos.size()/3,
+                                         idx.data(), (int)idx.size(), 5, 6, 2, 1);
+    EXPECT_EQ(changed, 0);
+    EXPECT_EQ(faces, before);
+}
