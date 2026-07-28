@@ -45,7 +45,8 @@ bool PartOpsMesh::readSubMeshes(Ogre::Entity* entity,
 Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMeshes,
                                      const std::string& baseName,
                                      const QString& skeletonName,
-                                     const std::vector<QString>& subMeshNames)
+                                     const std::vector<QString>& subMeshNames,
+                                     bool recomputeNormals)
 {
     if (subMeshes.empty())
         return Ogre::MeshPtr();
@@ -54,10 +55,13 @@ Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMesh
     // borrow it by seeding an EditableMesh's submesh vector directly.
     EditableMesh em;
     em.subMeshes() = subMeshes;
-    // recomputeNormals=false: SubMeshOps copied the source normals (incl.
-    // authored / hard-edge normals) verbatim, so recomputing would change the
-    // shading the split is meant to preserve (#859 review).
-    Ogre::MeshPtr mesh = em.createNewMesh(baseName, /*recomputeNormals=*/false);
+    // A plain SPLIT keeps recomputeNormals=false so the source normals (incl.
+    // authored / hard-edge normals) survive verbatim (#859 review). The PEG path
+    // passes true: the Manifold boolean + cap fans introduce new faces whose
+    // nearest-source normals point the wrong way for a concave cavity wall
+    // (dark/black shading — the "holes look wrong" symptom), so recomputing
+    // gives the connectors correct outward normals.
+    Ogre::MeshPtr mesh = em.createNewMesh(baseName, recomputeNormals);
     if (!mesh)
         return mesh;
 
@@ -191,7 +195,11 @@ PartOpsMesh::addPrintPegsToEntity(Ogre::Entity* entity, const SubMeshOps::PegOpt
     QString skelName;
     if (entity->getMesh()->hasSkeleton())
         skelName = QString::fromStdString(entity->getMesh()->getSkeletonName());
-    Ogre::MeshPtr mesh = buildMesh(prep.subMeshes, baseName, skelName, prep.partNames);
+    // recomputeNormals=true: the peg/socket/cap geometry needs correct outward
+    // normals (nearest-source copy from the boolean gives concave-wall verts an
+    // outward normal → dark shading).
+    Ogre::MeshPtr mesh = buildMesh(prep.subMeshes, baseName, skelName, prep.partNames,
+                                   /*recomputeNormals=*/true);
     if (!mesh) {
         out.error = QStringLiteral("failed to build pegged mesh");
         return out;

@@ -1032,17 +1032,56 @@ SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
             // Adapt the peg size to THIS boundary so it always fits, regardless
             // of the model's unit scale (the issue's fixed radius=1.5 is 80% of a
             // unit-normalised character's diagonal — a giant blob). A peg radius
-            // is capped at 35% of the boundary ring radius, and the socket
+            // is capped at 30% of the boundary ring radius, and the socket
             // clearance / peg depth scale down with it (keeping their ratios to
             // the user's request). The user's values are treated as an UPPER
             // bound — a big model with a big boundary keeps them as-is.
             PegOptions boundaryOpts = opts;
-            const float maxPegR = 0.35f * plane.radius;
+            const float maxPegR = 0.30f * plane.radius;
             if (maxPegR > 1e-4f && boundaryOpts.pegRadius > maxPegR) {
                 const float scale = maxPegR / boundaryOpts.pegRadius;
                 boundaryOpts.pegRadius = maxPegR;
                 boundaryOpts.pegDepth *= scale;
                 boundaryOpts.clearance *= scale;
+            }
+
+            // Bound the socket DEPTH so it never punches through the thinner of
+            // the two mating parts. Measure each part's extent ALONG the peg axis
+            // and cap depth at 35% of the smaller — otherwise a deep default peg
+            // (pegDepth=4) bores clean through a thin torso/limb, showing as a
+            // dark tunnel. The socket sinks pegDepth+clearance, so bound on that.
+            {
+                auto extentAlong = [&](int idx) {
+                    float mn = 1e30f, mx = -1e30f;
+                    for (const auto& v : subMeshes[idx].vertices) {
+                        const float d = v.position.dotProduct(plane.normal);
+                        mn = std::min(mn, d); mx = std::max(mx, d);
+                    }
+                    return (mx > mn) ? (mx - mn) : 0.0f;
+                };
+                const float thin = std::min(extentAlong(a), extentAlong(b));
+                if (thin > 1e-4f) {
+                    const float maxSink = 0.35f * thin;      // socket total sink
+                    const float sink = boundaryOpts.pegDepth + boundaryOpts.clearance;
+                    if (sink > maxSink) {
+                        const float ds = maxSink / sink;
+                        boundaryOpts.pegDepth *= ds;
+                        boundaryOpts.clearance *= ds;
+                    }
+                }
+            }
+
+            // Keep the peg count modest — a single centered peg unless the
+            // boundary ring is clearly big enough for a spaced pair/trio (each
+            // extra peg is another pit in the part). This avoids the torso
+            // sprouting three large sockets around one joint.
+            {
+                const float ringToPeg = boundaryOpts.pegRadius > 1e-5f
+                    ? plane.radius / boundaryOpts.pegRadius : 0.0f;
+                if (ringToPeg < 6.0f) boundaryOpts.maxPegsPerBoundary =
+                    std::min(boundaryOpts.maxPegsPerBoundary, 1);
+                else if (ringToPeg < 10.0f) boundaryOpts.maxPegsPerBoundary =
+                    std::min(boundaryOpts.maxPegsPerBoundary, 2);
             }
 
             EditableSubMesh male, socketUnused;
