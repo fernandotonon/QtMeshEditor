@@ -95,6 +95,7 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/SplitMeshCommand.cpp
+commands/AddPrintPegsCommand.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp

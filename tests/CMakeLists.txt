@@ -192,6 +192,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AddPrintPegsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ExplodePartsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/JoinPartsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonBoneCommands.cpp

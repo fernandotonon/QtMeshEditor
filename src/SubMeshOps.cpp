@@ -611,3 +611,96 @@ int SubMeshOps::buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions&
     }
     return made;
 }
+
+namespace {
+// Append `src`'s vertices + triangles onto `dst` (offsetting the indices by
+// dst's current vertex count). Used to merge a peg/socket cylinder into a part.
+void appendGeometry(EditableSubMesh& dst, const EditableSubMesh& src)
+{
+    const unsigned int base = static_cast<unsigned int>(dst.vertices.size());
+    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
+    for (const EditableTriangle& t : src.triangles) {
+        EditableTriangle nt;
+        nt.indices[0] = t.indices[0] + base;
+        nt.indices[1] = t.indices[1] + base;
+        nt.indices[2] = t.indices[2] + base;
+        dst.triangles.push_back(nt);
+    }
+}
+} // namespace
+
+SubMeshOps::PrintPrepResult
+SubMeshOps::preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
+                             const PegOptions& opts, const std::vector<QString>& partNames)
+{
+    PrintPrepResult out;
+    if (subMeshes.size() < 2) {
+        out.error = QStringLiteral("need at least two parts to add alignment pegs");
+        return out;
+    }
+    out.subMeshes = subMeshes;   // start from the parts; merge pegs in below.
+    out.partNames = partNames;
+    out.partNames.resize(subMeshes.size());
+    auto nameOf = [&](int i) -> QString {
+        return (i >= 0 && i < static_cast<int>(out.partNames.size()) && !out.partNames[i].isEmpty())
+                   ? out.partNames[i] : QStringLiteral("part%1").arg(i);
+    };
+
+    // For every unordered pair of parts, estimate the shared boundary; where it
+    // is stable, build a male peg (→ partA) + socket (→ partB) and merge each
+    // into its part as extra geometry. `estimateBoundaryPlane` works on submesh
+    // VECTORS, so wrap each part in a one-element vector.
+    const int n = static_cast<int>(subMeshes.size());
+    for (int a = 0; a < n; ++a) {
+        for (int b = a + 1; b < n; ++b) {
+            PegBoundary rec;
+            rec.partA = a; rec.partB = b;
+            rec.nameA = nameOf(a); rec.nameB = nameOf(b);
+
+            const BoundaryPlane plane = estimateBoundaryPlane({ subMeshes[a] }, { subMeshes[b] });
+            if (!plane.stable) {
+                rec.reason = plane.reason.isEmpty()
+                    ? QStringLiteral("no stable shared boundary") : plane.reason;
+                out.boundaries.push_back(rec);
+                continue;
+            }
+
+            // Adapt the peg size to THIS boundary so it always fits, regardless
+            // of the model's unit scale (the issue's fixed radius=1.5 is 80% of a
+            // unit-normalised character's diagonal — a giant blob). A peg radius
+            // is capped at 35% of the boundary ring radius, and the socket
+            // clearance / peg depth scale down with it (keeping their ratios to
+            // the user's request). The user's values are treated as an UPPER
+            // bound — a big model with a big boundary keeps them as-is.
+            PegOptions boundaryOpts = opts;
+            const float maxPegR = 0.35f * plane.radius;
+            if (maxPegR > 1e-4f && boundaryOpts.pegRadius > maxPegR) {
+                const float scale = maxPegR / boundaryOpts.pegRadius;
+                boundaryOpts.pegRadius = maxPegR;
+                boundaryOpts.pegDepth *= scale;
+                boundaryOpts.clearance *= scale;
+            }
+
+            EditableSubMesh male, socket;
+            const int made = buildAlignmentPegs(plane, boundaryOpts, male, socket);
+            if (made <= 0) {
+                rec.reason = QStringLiteral("boundary too small for a peg");
+                out.boundaries.push_back(rec);
+                continue;
+            }
+            // Merge the male peg into partA and the socket into partB.
+            appendGeometry(out.subMeshes[a], male);
+            appendGeometry(out.subMeshes[b], socket);
+            rec.pegged = true;
+            rec.pegCount = made;
+            out.boundaries.push_back(rec);
+            ++out.peggedBoundaries;
+            out.totalPegs += made;
+        }
+    }
+
+    out.ok = true;
+    if (out.peggedBoundaries == 0)
+        out.error = QStringLiteral("no stable boundary found — no pegs added");
+    return out;
+}

@@ -197,6 +197,42 @@ public:
      *  number of pegs generated (0 when the plane is unstable). Pure geometry. */
     static int buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions& opts,
                                   EditableSubMesh& outMale, EditableSubMesh& outSocket);
+
+    /** One boundary the print-prep pass considered. */
+    struct PegBoundary {
+        int partA = -1;            ///< index into the input submeshes.
+        int partB = -1;
+        QString nameA, nameB;      ///< the parts' display names (for messages).
+        bool pegged = false;       ///< true when pegs were placed.
+        int pegCount = 0;
+        QString reason;            ///< why skipped (when !pegged).
+    };
+
+    struct PrintPrepResult {
+        bool ok = false;
+        QString error;
+        /** The new submesh layout: the input parts, each with its male peg OR
+         *  socket merged in as extra geometry, plus any parts unchanged. */
+        std::vector<EditableSubMesh> subMeshes;
+        std::vector<QString> partNames;   ///< parallel to subMeshes.
+        std::vector<PegBoundary> boundaries; ///< every pair considered (diag).
+        int peggedBoundaries = 0;
+        int totalPegs = 0;
+    };
+
+    /** Prepare a split mesh for 3D printing (Slice D #863). For EVERY pair of
+     *  input submeshes that share a STABLE planar boundary (the seam a split
+     *  left — coincident verts across the pair, via `estimateBoundaryPlane`),
+     *  generate matching cylindrical pegs: the MALE peg is merged into `partA`
+     *  and the female SOCKET-cutter into `partB` (each as extra geometry with a
+     *  `connector_male`/`connector_socket` material), so each part carries its
+     *  own connector and stays one printable object. Tiny / non-planar
+     *  boundaries are skipped with a per-pair `reason` (never fails the whole
+     *  op). `partNames` (optional, parallel to `subMeshes`) is used for the
+     *  boundary report + connector naming. Deterministic; pure-data. */
+    static PrintPrepResult preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
+                                            const PegOptions& opts,
+                                            const std::vector<QString>& partNames = {});
 };
 
 #endif // SUBMESHOPS_H

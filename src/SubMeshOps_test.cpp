@@ -430,3 +430,75 @@ TEST(SubMeshOpsTest, AlignmentPegsSkippedOnUnstablePlane)
     EXPECT_EQ(SubMeshOps::buildAlignmentPegs(plane, opts, male, socket), 0);
     EXPECT_TRUE(male.triangles.empty());
 }
+
+// ---- preparePrintPegs (Slice D #863) --------------------------------------
+
+namespace {
+// Two parts sharing a stable planar seam at x=0 (16 coincident verts on a 4×4
+// grid so the boundary radius is comfortably > peg radius). A extends to -x,
+// B to +x. Each part has one triangle so it's a valid submesh.
+void twoPartsWithSeam(EditableSubMesh& a, EditableSubMesh& b)
+{
+    a = EditableSubMesh(); b = EditableSubMesh();
+    a.materialName = "Body"; b.materialName = "Body";
+    for (int y = 0; y < 4; ++y)
+        for (int z = 0; z < 4; ++z) {
+            a.vertices.push_back(vtx(0, float(y), float(z)));
+            b.vertices.push_back(vtx(0, float(y), float(z)));
+        }
+    a.vertices.push_back(vtx(-2, 1.5f, 1.5f));
+    b.vertices.push_back(vtx(2, 1.5f, 1.5f));
+    addTri(a, 0, 1, 2);
+    addTri(b, 0, 1, 2);
+}
+} // namespace
+
+TEST(SubMeshOpsTest, PreparePrintPegsAddsMaleAndSocket)
+{
+    EditableSubMesh a, b;
+    twoPartsWithSeam(a, b);
+    const size_t aVerts0 = a.vertices.size(), bVerts0 = b.vertices.size();
+
+    SubMeshOps::PegOptions opts;
+    opts.pegRadius = 0.4f; opts.pegDepth = 1.0f; opts.maxPegsPerBoundary = 3;
+    auto r = SubMeshOps::preparePrintPegs({a, b}, opts, {"torso", "left_leg"});
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.peggedBoundaries, 1);
+    EXPECT_GT(r.totalPegs, 0);
+    ASSERT_EQ(r.subMeshes.size(), 2u);
+    // Each part gained connector geometry (more verts than it started with).
+    EXPECT_GT(r.subMeshes[0].vertices.size(), aVerts0);
+    EXPECT_GT(r.subMeshes[1].vertices.size(), bVerts0);
+    // The boundary report is populated with both part names.
+    ASSERT_EQ(r.boundaries.size(), 1u);
+    EXPECT_TRUE(r.boundaries[0].pegged);
+    EXPECT_EQ(r.boundaries[0].nameA.toStdString(), "torso");
+    EXPECT_EQ(r.boundaries[0].nameB.toStdString(), "left_leg");
+}
+
+TEST(SubMeshOpsTest, PreparePrintPegsRejectsTinyBoundary)
+{
+    // Two parts that do NOT share enough coincident verts (< 8) → no stable
+    // boundary → no pegs, but the op succeeds with a per-pair reason.
+    EditableSubMesh a, b;
+    a.materialName = "Body"; b.materialName = "Body";
+    a.vertices = {vtx(0,0,0), vtx(0,1,0), vtx(-1,0,0)};
+    b.vertices = {vtx(5,0,0), vtx(5,1,0), vtx(6,0,0)}; // far away, no shared seam
+    addTri(a,0,1,2); addTri(b,0,1,2);
+
+    auto r = SubMeshOps::preparePrintPegs({a, b}, SubMeshOps::PegOptions{});
+    EXPECT_TRUE(r.ok);                 // never fails the whole op
+    EXPECT_EQ(r.peggedBoundaries, 0);
+    ASSERT_EQ(r.boundaries.size(), 1u);
+    EXPECT_FALSE(r.boundaries[0].pegged);
+    EXPECT_FALSE(r.boundaries[0].reason.isEmpty());
+    EXPECT_FALSE(r.error.isEmpty());   // "no stable boundary found"
+}
+
+TEST(SubMeshOpsTest, PreparePrintPegsNeedsTwoParts)
+{
+    EditableSubMesh a; a.vertices = {vtx(0,0,0), vtx(1,0,0), vtx(0,1,0)}; addTri(a,0,1,2);
+    auto r = SubMeshOps::preparePrintPegs({a}, SubMeshOps::PegOptions{});
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(r.error.isEmpty());
+}

@@ -67,11 +67,21 @@ public:
      *  joinFinished(status, isError). No-op (error) with fewer than 2 selected. */
     Q_INVOKABLE void joinSelected();
 
+    /** Prepare the selected split mesh for 3D printing by adding cylindrical
+     *  alignment pegs at every stable part boundary (undoable, #863). Reuses the
+     *  same `canExplode` gate (one multi-submesh mesh). Emits
+     *  printPrepFinished(status, isError). */
+    Q_INVOKABLE void preparePrintSplit(double clearance = 0.20,
+                                       double pegRadius = 1.50,
+                                       double pegDepth = 4.00,
+                                       int maxPegsPerBoundary = 3);
+
 signals:
     void selectionChanged();
     void splitFinished(const QString& status, bool isError);
     void explodeFinished(const QString& status, bool isError);
     void joinFinished(const QString& status, bool isError);
+    void printPrepFinished(const QString& status, bool isError);
 
 private:
     PartOpsController();

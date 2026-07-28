@@ -146,3 +146,60 @@ PartOpsMesh::splitEntity(Ogre::Entity* entity,
     out.duplicatedBoundaryVertices = split.duplicatedBoundaryVertices;
     return out;
 }
+
+PartOpsMesh::PrintPrepOutcome
+PartOpsMesh::addPrintPegsToEntity(Ogre::Entity* entity, const SubMeshOps::PegOptions& opts,
+                                  const std::string& baseName)
+{
+    PrintPrepOutcome out;
+    if (!entity || !entity->getMesh()) {
+        out.error = QStringLiteral("no entity");
+        return out;
+    }
+    if (entity->getMesh()->getNumSubMeshes() < 2) {
+        out.error = QStringLiteral("mesh has a single part — split it into parts first");
+        return out;
+    }
+    std::vector<EditableSubMesh> src;
+    if (!readSubMeshes(entity, src)) {
+        out.error = QStringLiteral("could not read mesh geometry from entity");
+        return out;
+    }
+
+    // Recover per-part names from the mesh's submesh name map (a prior split
+    // named them head/torso/…), else positional. Used for the connector naming
+    // + boundary report.
+    const auto& nameMap = entity->getMesh()->getSubMeshNameMap();
+    std::vector<QString> names(src.size());
+    for (const auto& kv : nameMap)
+        if (kv.second < names.size())
+            names[kv.second] = QString::fromStdString(kv.first);
+    for (size_t i = 0; i < names.size(); ++i)
+        if (names[i].isEmpty())
+            names[i] = QStringLiteral("part%1").arg(i);
+
+    SubMeshOps::PrintPrepResult prep = SubMeshOps::preparePrintPegs(src, opts, names);
+    if (!prep.ok && prep.subMeshes.empty()) {
+        out.error = prep.error;
+        return out;
+    }
+    for (const auto& b : prep.boundaries)
+        if (!b.pegged)
+            out.warnings.push_back(QStringLiteral("%1↔%2: %3").arg(b.nameA, b.nameB, b.reason));
+
+    QString skelName;
+    if (entity->getMesh()->hasSkeleton())
+        skelName = QString::fromStdString(entity->getMesh()->getSkeletonName());
+    Ogre::MeshPtr mesh = buildMesh(prep.subMeshes, baseName, skelName, prep.partNames);
+    if (!mesh) {
+        out.error = QStringLiteral("failed to build pegged mesh");
+        return out;
+    }
+
+    out.ok = true;   // the op ran; peggedBoundaries==0 means no safe boundary.
+    out.mesh = mesh;
+    out.partNames = std::move(prep.partNames);
+    out.peggedBoundaries = prep.peggedBoundaries;
+    out.totalPegs = prep.totalPegs;
+    return out;
+}

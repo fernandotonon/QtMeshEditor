@@ -75,6 +75,30 @@ public:
                                     const std::vector<SubMeshOps::FaceGroup>& groups,
                                     const SubMeshOps::SplitOptions& opts,
                                     const std::string& baseName);
+
+    struct PrintPrepOutcome {
+        bool ok = false;
+        QString error;
+        Ogre::MeshPtr mesh;              ///< the pegged mesh (parts + connectors).
+        std::vector<QString> partNames;  ///< one per submesh (unchanged part names).
+        int peggedBoundaries = 0;
+        int totalPegs = 0;
+        std::vector<QString> warnings;   ///< per-boundary skip reasons.
+    };
+
+    /** Prepare an already-SPLIT entity (one submesh per part) for 3D printing by
+     *  adding alignment pegs (Slice D #863): read its submeshes + their part
+     *  names, run `SubMeshOps::preparePrintPegs`, and build a new mesh whose
+     *  parts each carry their male-peg / female-socket connector geometry. The
+     *  part names round-trip (each submesh keeps its name); connector geometry is
+     *  merged INTO the parts (not new submeshes), so the part count is unchanged
+     *  and each part stays one printable object. Preserves the source skeleton
+     *  (a skinned character's parts stay riggable). Does NOT touch the live
+     *  entity — the caller exports the returned mesh or swaps it via an undo
+     *  command. Fails (`ok=false`) on a single-submesh mesh (nothing to peg). */
+    static PrintPrepOutcome addPrintPegsToEntity(Ogre::Entity* entity,
+                                                 const SubMeshOps::PegOptions& opts,
+                                                 const std::string& baseName);
 };
 
 #endif // PARTOPSMESH_H
