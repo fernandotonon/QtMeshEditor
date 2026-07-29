@@ -40,6 +40,7 @@
 #include <QUrl>
 #include <QVariantMap>
 #include <QWidget>
+#include <QMessageBox>
 #include <QtMath>
 
 #include <OgreCamera.h>
@@ -68,12 +69,12 @@ TexturePaintController* TexturePaintController::s_instance = nullptr;
 
 namespace {
 
-/// Undo command for one texture-paint stroke. Snapshots the buffer
-/// before/after and restores via memcpy into the Ogre texture.
+/// Undo command for one texture-paint stroke on a single layer.
 class TexturePaintStrokeCommand : public QUndoCommand
 {
 public:
     TexturePaintStrokeCommand(TexturePaintController* controller,
+                              int layerIndex,
                               std::vector<uint8_t> before,
                               std::vector<uint8_t> after,
                               int width,
@@ -81,6 +82,7 @@ public:
                               QString textureName)
         : QUndoCommand(QStringLiteral("Texture paint"))
         , m_controller(controller)
+        , m_layerIndex(layerIndex)
         , m_before(std::move(before))
         , m_after(std::move(after))
         , m_width(width)
@@ -104,18 +106,51 @@ private:
     {
         if (!m_controller) return;
         if (m_controller->currentTextureName() != m_textureName) return;
-        const auto& buf = m_controller->buffer();
-        if (buf.width() != m_width || buf.height() != m_height) return;
-        m_controller->applyPixelSnapshot(pixels);
+        m_controller->applyLayerPixelSnapshot(m_layerIndex, pixels);
     }
 
     TexturePaintController* m_controller = nullptr;
+    int m_layerIndex = 0;
     std::vector<uint8_t> m_before;
     std::vector<uint8_t> m_after;
     int m_width = 0;
     int m_height = 0;
     QString m_textureName;
-    bool m_skipFirstRedo = true; // command is pushed *after* the stroke applied
+    bool m_skipFirstRedo = true;
+};
+
+/// Undo command for structural layer-stack changes (#546).
+class PaintLayerOpCommand : public QUndoCommand
+{
+public:
+    PaintLayerOpCommand(TexturePaintController* controller,
+                        QString label,
+                        PaintLayerStack::Snapshot before,
+                        PaintLayerStack::Snapshot after)
+        : QUndoCommand(std::move(label))
+        , m_controller(controller)
+        , m_before(std::move(before))
+        , m_after(std::move(after))
+    {}
+
+    void undo() override { apply(m_before); }
+    void redo() override
+    {
+        if (m_skipFirstRedo) { m_skipFirstRedo = false; return; }
+        apply(m_after);
+    }
+
+private:
+    void apply(const PaintLayerStack::Snapshot& snap)
+    {
+        if (!m_controller) return;
+        m_controller->applyLayerStackSnapshot(snap);
+    }
+
+    TexturePaintController* m_controller = nullptr;
+    PaintLayerStack::Snapshot m_before;
+    PaintLayerStack::Snapshot m_after;
+    bool m_skipFirstRedo = true;
 };
 
 /// Undo command for a one-shot selection-mask action (fill FG / fill BG
@@ -127,6 +162,7 @@ class TexturePaintMaskActionCommand : public QUndoCommand
 {
 public:
     TexturePaintMaskActionCommand(TexturePaintController* controller,
+                                  int layerIndex,
                                   std::vector<uint8_t> before,
                                   std::vector<uint8_t> after,
                                   int width,
@@ -135,6 +171,7 @@ public:
                                   QString label)
         : QUndoCommand(label)
         , m_controller(controller)
+        , m_layerIndex(layerIndex)
         , m_before(std::move(before))
         , m_after(std::move(after))
         , m_width(width)
@@ -154,12 +191,11 @@ private:
     {
         if (!m_controller) return;
         if (m_controller->currentTextureName() != m_textureName) return;
-        const auto& buf = m_controller->buffer();
-        if (buf.width() != m_width || buf.height() != m_height) return;
-        m_controller->applyPixelSnapshot(pixels);
+        m_controller->applyLayerPixelSnapshot(m_layerIndex, pixels);
     }
 
     TexturePaintController* m_controller = nullptr;
+    int m_layerIndex = 0;
     std::vector<uint8_t> m_before;
     std::vector<uint8_t> m_after;
     int m_width = 0;
@@ -256,6 +292,25 @@ bool canWriteOriginalTextureInPlace(const Ogre::TexturePtr& tex,
 }
 
 /// Pixel payload copied on a worker thread, consumed on the main thread.
+namespace {
+
+void copyBufferRect(const TexturePaintBuffer& src, TexturePaintBuffer& dst,
+                    const TexturePaintBuffer::DirtyRect& rect)
+{
+    const int W = src.width();
+    if (W <= 0 || rect.empty()) return;
+    auto& dstData = dst.data();
+    const auto& srcData = src.data();
+    for (int row = rect.y0; row < rect.y1; ++row) {
+        const size_t off = (static_cast<size_t>(row) * static_cast<size_t>(W)
+                            + static_cast<size_t>(rect.x0)) * 4u;
+        const size_t bytes = static_cast<size_t>(rect.width()) * 4u;
+        std::memcpy(dstData.data() + off, srcData.data() + off, bytes);
+    }
+}
+
+} // namespace
+
 struct GpuUploadPacket {
     std::vector<uint8_t> rgba;
     int x0 = 0;
@@ -268,6 +323,8 @@ struct GpuUploadPacket {
 };
 
 constexpr int kPaintUploadTilePx = 64;
+constexpr int kStrokeDirectUploadMaxPx = 512 * 512;
+constexpr int kStrokeTilesPerTick = 8;
 
 // CPU-side sources first — same order as MaterialEditorQML::previewUrlFromOgreTexture.
 // GPU readback (convertToImage / blitToMemory) is unreliable for imported FBX textures.
@@ -1350,7 +1407,7 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
         const float radiusCopy = radiusUv;
         const BrushFootprint::ImageRgba& tilingRef = m_tilingImage;
         const BrushFootprint::TilingSettings& settingsRef = m_tilingSettings;
-        return m_buffer.paintBrush(
+        return activePaintBuffer().paintBrush(
                    uv, radiusUv,
                    [colorAt, center, radiusCopy, &tilingRef, &settingsRef](float dx, float dy) {
                        float tu = 0.0f;
@@ -1389,7 +1446,7 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
             strength, m_stampSettings.opacityJitter, r3);
         const float angle = BrushFootprint::stampRotationRad(
             m_stampSettings, strokeDirectionRad(), static_cast<float>(rng->generateDouble()));
-        return m_buffer.paintStamp(
+        return activePaintBuffer().paintStamp(
                    stampUv, stampRadius, m_stampCache, angle, colorAt, stampStrength)
             > 0;
     }
@@ -1397,14 +1454,14 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
     if (m_colorSource != ColorGradient) {
         const QColor qc = texturePaintColor();
         const Ogre::ColourValue paint(qc.redF(), qc.greenF(), qc.blueF(), qc.alphaF());
-        return m_buffer.paintBrush(uv, radiusUv, paint, strength, falloff, shape) > 0;
+        return activePaintBuffer().paintBrush(uv, radiusUv, paint, strength, falloff, shape) > 0;
     }
 
     if (m_gradientMode == GradientLinear) {
         const auto sampled = colorAt(0.0f, 0.0f);
-        return m_buffer.paintBrush(uv, radiusUv, sampled, strength, falloff, shape) > 0;
+        return activePaintBuffer().paintBrush(uv, radiusUv, sampled, strength, falloff, shape) > 0;
     }
-    return m_buffer.paintBrush(uv, radiusUv, colorAt, strength, falloff, shape) > 0;
+    return activePaintBuffer().paintBrush(uv, radiusUv, colorAt, strength, falloff, shape) > 0;
 }
 
 void TexturePaintController::setPaintTarget(int target)
@@ -1908,9 +1965,15 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     m_mask.resize(m_buffer.width(), m_buffer.height());
     m_maskOverlayUri.clear();
 
+    // Paint v2 Slice C (#546): wrap the flat texture in a layer stack.
+    m_layerStack.initFromFlatBuffer(m_buffer);
+    recomposeComposite(/*fullBuffer=*/true);
+    m_layerStrokeBaseline = snapshotActiveLayerPixels();
+
     refreshPreviewUri();
     if (m_uvOverlayVisible) refreshUvOverlay();
     emit sessionChanged();
+    emit layersChanged();
     emit smartSelectChanged();
     return true;
 }
@@ -2061,14 +2124,67 @@ void TexturePaintController::scheduleRebindToPaintTexture(Ogre::Entity* entity)
     });
 }
 
-void TexturePaintController::flushDirtyToOgre()
+void TexturePaintController::recomposePaintBufferIfNeeded()
+{
+    if (m_layerStack.layerCount() > 0 && !m_layerStack.layerDirtyUnion().empty())
+        recomposeComposite(/*fullBuffer=*/false);
+}
+
+void TexturePaintController::scheduleThrottledLiveGpuFlush()
 {
     if (m_buffer.dirtyRect().empty()) return;
 
-    if (m_strokeActive) {
-        scheduleStrokeGpuFlush();
+    if (!m_strokeLiveUploadStarted) {
+        m_strokeLiveUploadStarted = true;
+        QTimer::singleShot(0, this, [this]() { flushLiveStrokeToGpu(); });
         return;
     }
+
+    if (m_strokeGpuFlushScheduled) {
+        m_strokeGpuFlushPending = true;
+        return;
+    }
+    m_strokeGpuFlushScheduled = true;
+    QTimer::singleShot(16, this, [this]() {
+        m_strokeGpuFlushScheduled = false;
+        flushLiveStrokeToGpu();
+        if (m_strokeGpuFlushPending) {
+            m_strokeGpuFlushPending = false;
+            scheduleThrottledLiveGpuFlush();
+        }
+    });
+}
+
+void TexturePaintController::flushLiveStrokeToGpu()
+{
+    const auto dirty = m_buffer.dirtyRect();
+    if (dirty.empty()) return;
+
+    if (m_paintMeshEntity && m_ogreTexture && m_boundSlots.empty())
+        rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
+
+    if (blitBufferRectToOgreTexture(dirty.x0, dirty.y0, dirty.x1, dirty.y1))
+        m_buffer.clearDirty();
+}
+
+void TexturePaintController::flushDirtyToOgre()
+{
+    recomposePaintBufferIfNeeded();
+    if (m_buffer.dirtyRect().empty()) return;
+
+    if (m_strokeActive) {
+        schedulePreviewRefresh();
+        // Preview-panel strokes are low-frequency — upload immediately so
+        // the 2D thumbnail and 3D mesh stay in lockstep. Viewport drags
+        // stay throttled (~60 Hz) to avoid flooding the GL driver.
+        if (m_strokeFromUvPreview)
+            flushLiveStrokeToGpu();
+        else
+            scheduleThrottledLiveGpuFlush();
+        return;
+    }
+
+    schedulePreviewRefresh();
 
     const int debounceMs = 33;
     if (m_gpuFlushScheduled) return;
@@ -2080,6 +2196,15 @@ void TexturePaintController::flushDirtyToOgre()
     });
 }
 
+void TexturePaintController::cancelInFlightGpuUpload()
+{
+    if (!m_tiledUploadRunning && m_tiledUploadQueue.empty())
+        return;
+    m_tiledUploadRunning = false;
+    m_tiledUploadQueue.clear();
+    m_tiledUploadIndex = 0;
+}
+
 void TexturePaintController::scheduleStrokeGpuFlush()
 {
     if (m_buffer.dirtyRect().empty()) return;
@@ -2087,11 +2212,15 @@ void TexturePaintController::scheduleStrokeGpuFlush()
     auto kickUpload = [this]() {
         if (m_buffer.dirtyRect().empty()) return;
         if (m_tiledUploadRunning) {
-            m_strokeGpuFlushPending = true;
-            return;
+            if (m_activeUploadGeneration != m_gpuUploadGeneration) {
+                cancelInFlightGpuUpload();
+            } else {
+                m_strokeGpuFlushPending = true;
+                return;
+            }
         }
         m_strokeGpuFlushPending = false;
-        startTiledGpuUpload(m_strokeEndAfterUpload);
+        startTiledGpuUpload(/*finishingStroke=*/false);
     };
 
     // First dab in a stroke: upload on the next event-loop tick so colour
@@ -2102,9 +2231,12 @@ void TexturePaintController::scheduleStrokeGpuFlush()
         return;
     }
 
-    if (m_strokeGpuFlushScheduled) return;
+    if (m_strokeGpuFlushScheduled) {
+        m_strokeGpuFlushPending = true;
+        return;
+    }
     m_strokeGpuFlushScheduled = true;
-    QTimer::singleShot(16, this, [this, kickUpload]() {
+    QTimer::singleShot(8, this, [this, kickUpload]() {
         m_strokeGpuFlushScheduled = false;
         kickUpload();
     });
@@ -2163,14 +2295,33 @@ bool TexturePaintController::blitBufferRectToOgreTexture(int x0, int y0, int x1,
 
 void TexturePaintController::startTiledGpuUpload(bool finishingStroke)
 {
+    if (m_tiledUploadRunning) {
+        if (m_activeUploadGeneration != m_gpuUploadGeneration)
+            cancelInFlightGpuUpload();
+        else
+            return;
+    }
+
     const auto dirty = m_buffer.dirtyRect();
     if (dirty.empty()) {
-        if (finishingStroke)
-            finishStrokeAfterGpuUpload();
+        m_uploadFinishingStroke = false;
         return;
     }
 
-    m_strokeEndAfterUpload = finishingStroke;
+    m_uploadFinishingStroke = finishingStroke;
+    m_activeUploadGeneration = m_gpuUploadGeneration;
+    m_uploadEpochSnapshot = m_bufferDirtyEpoch;
+
+    const int dirtyPx = dirty.width() * dirty.height();
+    if (m_strokeActive && dirtyPx <= kStrokeDirectUploadMaxPx) {
+        if (blitBufferRectToOgreTexture(dirty.x0, dirty.y0, dirty.x1, dirty.y1)
+            && m_bufferDirtyEpoch == m_uploadEpochSnapshot) {
+            m_buffer.clearDirty();
+        }
+        onTiledUploadPassComplete();
+        return;
+    }
+
     m_uploadPassDirty = dirty;
     m_tiledUploadQueue.clear();
     for (int ty = dirty.y0; ty < dirty.y1; ty += kPaintUploadTilePx) {
@@ -2185,11 +2336,8 @@ void TexturePaintController::startTiledGpuUpload(bool finishingStroke)
     }
     m_tiledUploadIndex = 0;
     m_tiledUploadRunning = !m_tiledUploadQueue.empty();
-    if (!m_tiledUploadRunning) {
-        if (finishingStroke)
-            finishStrokeAfterGpuUpload();
+    if (!m_tiledUploadRunning)
         return;
-    }
     if (gpuUploadTargetTexture() == m_ogreTexture && m_paintMeshEntity && m_boundSlots.empty()
         && m_ogreTexture) {
         rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
@@ -2200,13 +2348,37 @@ void TexturePaintController::startTiledGpuUpload(bool finishingStroke)
 void TexturePaintController::processNextTiledUploadTile()
 {
     if (!m_tiledUploadRunning) return;
+    if (m_activeUploadGeneration != m_gpuUploadGeneration) {
+        m_tiledUploadRunning = false;
+        m_tiledUploadQueue.clear();
+        m_tiledUploadIndex = 0;
+        return;
+    }
     if (m_tiledUploadIndex >= static_cast<int>(m_tiledUploadQueue.size())) {
         onTiledUploadPassComplete();
         return;
     }
-    const UploadTile& t = m_tiledUploadQueue[static_cast<size_t>(m_tiledUploadIndex++)];
-    blitBufferRectToOgreTexture(t.x0, t.y0, t.x1, t.y1);
-    QTimer::singleShot(1, this, [this]() { processNextTiledUploadTile(); });
+
+    const bool fastUpload = m_strokeActive || m_uploadFinishingStroke;
+    const int batch = fastUpload ? kStrokeTilesPerTick : 1;
+    for (int b = 0; b < batch && m_tiledUploadIndex < static_cast<int>(m_tiledUploadQueue.size());
+         ++b) {
+        const UploadTile& t = m_tiledUploadQueue[static_cast<size_t>(m_tiledUploadIndex++)];
+        blitBufferRectToOgreTexture(t.x0, t.y0, t.x1, t.y1);
+    }
+
+    if (m_tiledUploadIndex >= static_cast<int>(m_tiledUploadQueue.size())) {
+        onTiledUploadPassComplete();
+        return;
+    }
+
+    const int delayMs = fastUpload ? 0 : 1;
+    const uint64_t uploadGen = m_activeUploadGeneration;
+    QTimer::singleShot(delayMs, this, [this, uploadGen]() {
+        if (!m_tiledUploadRunning || uploadGen != m_activeUploadGeneration)
+            return;
+        processNextTiledUploadTile();
+    });
 }
 
 void TexturePaintController::onTiledUploadPassComplete()
@@ -2215,75 +2387,82 @@ void TexturePaintController::onTiledUploadPassComplete()
     m_tiledUploadQueue.clear();
     m_tiledUploadIndex = 0;
 
-    const auto now = m_buffer.dirtyRect();
-    const bool dirtyGrewDuringPass =
-        !now.empty()
-        && (now.x0 < m_uploadPassDirty.x0 || now.y0 < m_uploadPassDirty.y0
-            || now.x1 > m_uploadPassDirty.x1 || now.y1 > m_uploadPassDirty.y1);
-    if (dirtyGrewDuringPass) {
-        startTiledGpuUpload(m_strokeEndAfterUpload);
+    if (m_activeUploadGeneration != m_gpuUploadGeneration) {
+        if (m_strokeActive && !m_buffer.dirtyRect().empty())
+            scheduleStrokeGpuFlush();
+        else if (m_strokeGpuFlushPending && !m_buffer.dirtyRect().empty())
+            scheduleStrokeGpuFlush();
+        schedulePreviewRefresh();
+        return;
+    }
+
+    if (m_bufferDirtyEpoch != m_uploadEpochSnapshot) {
+        startTiledGpuUpload(m_uploadFinishingStroke);
         return;
     }
 
     m_buffer.clearDirty();
-
-    if (!m_buffer.dirtyRect().empty()) {
-        startTiledGpuUpload(m_strokeEndAfterUpload);
-        return;
-    }
-
-    if (m_strokeEndAfterUpload) {
-        m_strokeEndAfterUpload = false;
-        finishStrokeAfterGpuUpload();
-        return;
-    }
+    m_uploadFinishingStroke = false;
 
     if (m_strokeGpuFlushPending && m_strokeActive && !m_buffer.dirtyRect().empty()) {
         m_strokeGpuFlushPending = false;
         scheduleStrokeGpuFlush();
     }
 
-    if (!m_strokeActive && !m_previewRefreshScheduled) {
-        m_previewRefreshScheduled = true;
-        QTimer::singleShot(60, this, [this]() {
-            m_previewRefreshScheduled = false;
-            refreshPreviewUri();
-        });
-    }
+    schedulePreviewRefresh();
 }
 
-void TexturePaintController::finishStrokeAfterGpuUpload()
+void TexturePaintController::commitStrokeUndo(std::vector<uint8_t> prePixels, int layerIndex)
 {
-    // Undo snapshot + preview refresh can copy a full 4K buffer — defer so
-    // mouse-release returns immediately after the last GPU tile.
-    QTimer::singleShot(0, this, [this]() { finishStrokeAfterGpuUploadDeferred(); });
+    if (prePixels.empty()) return;
+
+    auto after = snapshotActiveLayerPixels();
+    UndoManager::getSingleton()->push(
+        new TexturePaintStrokeCommand(
+            this,
+            layerIndex,
+            std::move(prePixels),
+            std::move(after),
+            activePaintBuffer().width(),
+            activePaintBuffer().height(),
+            m_textureName));
+    m_layerStrokeBaseline = snapshotActiveLayerPixels();
 }
 
-void TexturePaintController::ensureStrokePreSnapshot()
+void TexturePaintController::resetStrokePaintState()
 {
-    if (m_target != TargetTexture) return;
-    if (!m_strokePreSnapshot.empty()) return;
-    m_strokePreSnapshot = snapshotPixels();
+    m_strokeJustBegan = true;
+    m_smudgeHavePrev = false;
+    m_strokeLiveUploadStarted = false;
+    m_strokeGpuFlushPending = false;
+    m_strokeGpuFlushScheduled = false;
+    m_uploadFinishingStroke = false;
+    m_wandStrokeActive = false;
+    m_strokeHavePrevUV = false;
+    m_strokePathLength = 0.0f;
+    m_lastStampDabPathLength = 0.0f;
+    m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+    m_strokeHaveHitScreen = false;
+    m_strokeUvPerScreenX = 0.0f;
+    m_strokeUvPerScreenY = 0.0f;
+    m_strokeMadeChanges = false;
+    m_strokePhaseJitter = (m_rampJitter > 0.0)
+        ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
+        : 0.0f;
 }
 
-void TexturePaintController::finishStrokeAfterGpuUploadDeferred()
+void TexturePaintController::scheduleEmbeddedTextureCacheUpdate()
 {
-    refreshPreviewUri();
-    auto after = snapshotPixels();
-    if (after == m_strokePreSnapshot) {
-        m_strokePreSnapshot.clear();
-        SentryReporter::addBreadcrumb("ui.action", "Texture paint stroke end (no changes)");
-        return;
-    }
-    auto* cmd = new TexturePaintStrokeCommand(
-        this,
-        std::move(m_strokePreSnapshot),
-        std::move(after),
-        m_buffer.width(), m_buffer.height(),
-        m_textureName);
-    UndoManager::getSingleton()->push(cmd);
-    SentryReporter::addBreadcrumb("ui.action", "Texture paint stroke end (committed)");
-    QTimer::singleShot(0, this, [this]() { updateEmbeddedTextureCache(); });
+    if (m_embeddedCacheUpdateScheduled) return;
+    m_embeddedCacheUpdateScheduled = true;
+    QTimer::singleShot(300, this, [this]() {
+        m_embeddedCacheUpdateScheduled = false;
+        if (m_strokeActive) {
+            scheduleEmbeddedTextureCacheUpdate();
+            return;
+        }
+        updateEmbeddedTextureCache();
+    });
 }
 
 bool TexturePaintController::localPointFromHitCache(const Ogre::Vector2& uv,
@@ -2318,34 +2497,6 @@ bool TexturePaintController::localPointFromHitCache(const Ogre::Vector2& uv,
     else n = Ogre::Vector3::UNIT_Y;
     outNormal = n;
     return true;
-}
-
-void TexturePaintController::onRenderFrame()
-{
-}
-
-void TexturePaintController::scheduleStrokeUpdate(OgreWidget* widget, const QPoint& screenPos)
-{
-    m_pendingStrokeWidget = widget;
-    m_pendingStrokePos = screenPos;
-    if (m_strokeUpdateScheduled) return;
-    m_strokeUpdateScheduled = true;
-    QTimer::singleShot(0, this, [this]() {
-        m_strokeUpdateScheduled = false;
-        processPendingStrokeUpdate();
-    });
-}
-
-void TexturePaintController::scheduleStrokeUpdateUV(double u, double v)
-{
-    m_pendingStrokeU = u;
-    m_pendingStrokeV = v;
-    if (m_strokeUpdateUVScheduled) return;
-    m_strokeUpdateUVScheduled = true;
-    QTimer::singleShot(0, this, [this]() {
-        m_strokeUpdateUVScheduled = false;
-        processPendingStrokeUpdateUV();
-    });
 }
 
 bool TexturePaintController::hitTestUVForStroke(const QPoint& screenPos,
@@ -2438,12 +2589,6 @@ void TexturePaintController::processPendingStrokeUpdate()
     if (!hitTestUVForStroke(screenPos, widget, uv))
         return;
 
-    ensureStrokePreSnapshot();
-
-    Ogre::Vector3 localPos, localNormal;
-    if (findMeshPointForUV(uv, localPos, localNormal))
-        drawHoverRingAt(localPos, localNormal);
-
     bool changed = false;
     const bool canSegment =
         m_strokeHavePrevUV
@@ -2455,13 +2600,14 @@ void TexturePaintController::processPendingStrokeUpdate()
     else
         changed = applyBrushAtUV(uv);
 
-    if (canSegment || (m_tool != ToolPaint || m_colorSource != ColorGradient)) {
+    if (changed) {
         m_strokePrevUV = uv;
         m_strokeHavePrevUV = true;
-    }
-
-    if (changed)
+        m_strokeMadeChanges = true;
+        if (m_layerStack.layerCount() <= 0)
+            ++m_bufferDirtyEpoch;
         flushDirtyToOgre();
+    }
 }
 
 void TexturePaintController::processPendingStrokeUpdateUV()
@@ -2484,8 +2630,6 @@ void TexturePaintController::processPendingStrokeUpdateUV()
         return;
     }
 
-    ensureStrokePreSnapshot();
-
     bool changed = false;
     const bool canSegment =
         m_strokeHavePrevUV
@@ -2497,13 +2641,14 @@ void TexturePaintController::processPendingStrokeUpdateUV()
     else
         changed = applyBrushAtUV(uv);
 
-    if (canSegment || (m_tool != ToolPaint || m_colorSource != ColorGradient)) {
+    if (changed) {
         m_strokePrevUV = uv;
         m_strokeHavePrevUV = true;
-    }
-
-    if (changed)
+        m_strokeMadeChanges = true;
+        if (m_layerStack.layerCount() <= 0)
+            ++m_bufferDirtyEpoch;
         flushDirtyToOgre();
+    }
 }
 
 void TexturePaintController::doFlushDirtyToOgre(bool immediate)
@@ -2576,13 +2721,7 @@ void TexturePaintController::doFlushDirtyToOgre(bool immediate)
                                 .arg(m_originalTexture->getHeight()));
                     }
                     m_buffer.clearDirty();
-                    if (!m_strokeActive && !m_previewRefreshScheduled) {
-                        m_previewRefreshScheduled = true;
-                        QTimer::singleShot(60, this, [this]() {
-                            m_previewRefreshScheduled = false;
-                            refreshPreviewUri();
-                        });
-                    }
+                    schedulePreviewRefresh();
                     return;
                 }
             }
@@ -2661,13 +2800,7 @@ void TexturePaintController::doFlushDirtyToOgre(bool immediate)
                 QStringLiteral("Texture paint: blit failed — %1")
                     .arg(QString::fromStdString(e.getDescription())));
         }
-        if (!m_strokeActive && !m_previewRefreshScheduled) {
-            m_previewRefreshScheduled = true;
-            QTimer::singleShot(60, this, [this]() {
-                m_previewRefreshScheduled = false;
-                refreshPreviewUri();
-            });
-        }
+        schedulePreviewRefresh();
     };
 
     if (immediate) {
@@ -2844,26 +2977,16 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
             }
         }
     }
+    if (m_tiledUploadRunning)
+        cancelInFlightGpuUpload();
+    ++m_gpuUploadGeneration;
+    ++m_strokeUndoGeneration;
     m_strokeActive = true;
-    m_strokeJustBegan = true;
-    m_smudgeHavePrev = false;
+    m_strokeFromUvPreview = false;
     m_strokePreSnapshot.clear();
-    m_strokeLiveUploadStarted = false;
-    m_strokeGpuFlushPending = false;
-    m_strokeGpuFlushScheduled = false;
-    m_wandStrokeActive = false;
+    resetStrokePaintState();
     m_wandStartScreenPos = screenPos;
-    m_strokeHavePrevUV = false;
-    m_strokePathLength = 0.0f;
-    m_lastStampDabPathLength = 0.0f;
-    m_strokeDirSmoothed = Ogre::Vector2::ZERO;
-    m_strokeHaveHitScreen = false;
-    m_strokeUvPerScreenX = 0.0f;
-    m_strokeUvPerScreenY = 0.0f;
     m_hitCache.valid = false;
-    m_strokePhaseJitter = (m_rampJitter > 0.0)
-        ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
-        : 0.0f;
     if (m_colorSource == ColorGradient) {
         SentryReporter::addBreadcrumb(
             "paint.brush.gradient",
@@ -2887,6 +3010,11 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
             .arg(texturePaintRadius(), 0, 'f', 3)
             .arg(texturePaintStrength(), 0, 'f', 3)
             .arg(texturePaintColor().name(QColor::HexRgb)));
+    if (m_target == TargetTexture) {
+        if (m_layerStrokeBaseline.empty())
+            m_layerStrokeBaseline = snapshotActiveLayerPixels();
+        m_strokePreSnapshot = std::move(m_layerStrokeBaseline);
+    }
     if (m_target == TargetTexture && m_paintMeshEntity && m_ogreTexture
         && m_boundSlots.empty()) {
         rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
@@ -2900,12 +3028,16 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
 void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_strokeActive || !m_paintEnabled) return;
-    scheduleStrokeUpdate(widget, screenPos);
+    m_pendingStrokeWidget = widget;
+    m_pendingStrokePos = screenPos;
+    processPendingStrokeUpdate();
 }
 
 bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
 {
     if (m_buffer.width() <= 0) return false;
+    if (m_layerStack.layerCount() > 0 && m_layerStack.activeLayer().locked)
+        return false;
     const float radius = brushRadiusUV();
     const float strength = static_cast<float>(texturePaintStrength());
     const float falloff = static_cast<float>(texturePaintFalloff());
@@ -2935,7 +3067,7 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
             static_cast<float>(bg.greenF()),
             static_cast<float>(bg.blueF()),
             static_cast<float>(bg.alphaF()));
-        return m_buffer.paintBrush(uv, radius, eraseTo, strength, falloff, shape) > 0;
+        return activePaintBuffer().paintBrush(uv, radius, eraseTo, strength, falloff, shape) > 0;
     }
     case ToolFill: {
         // Fill is a single-stamp operation — apply once per stroke
@@ -2993,14 +3125,14 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
                 int sx = 0, sy = 0;
                 m_buffer.uvToPixel(sampleUV, sx, sy);
                 const auto src = m_buffer.pixel(sx, sy);
-                const auto dst = m_buffer.pixel(x, y);
+                const auto dst = activePaintBuffer().pixel(x, y);
                 if (src.a <= 0.0f) continue;
                 const Ogre::ColourValue blended(
                     dst.r + (src.r - dst.r) * blend,
                     dst.g + (src.g - dst.g) * blend,
                     dst.b + (src.b - dst.b) * blend,
                     dst.a + (src.a - dst.a) * blend);
-                m_buffer.setPixel(x, y, blended);
+                activePaintBuffer().setPixel(x, y, blended);
                 changed = true;
                 touchedX0 = std::min(touchedX0, x);
                 touchedY0 = std::min(touchedY0, y);
@@ -3038,10 +3170,10 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
 bool TexturePaintController::floodFillAtUV(const Ogre::Vector2& uv)
 {
     int sx = 0, sy = 0;
-    m_buffer.uvToPixel(uv, sx, sy);
+    activePaintBuffer().uvToPixel(uv, sx, sy);
     const QColor c = texturePaintColor();
     const Ogre::ColourValue fill(c.redF(), c.greenF(), c.blueF(), c.alphaF());
-    return m_buffer.floodFill(sx, sy, fill) > 0;
+    return activePaintBuffer().floodFill(sx, sy, fill) > 0;
 }
 
 void TexturePaintController::pickColorAtUV(const Ogre::Vector2& uv)
@@ -3059,22 +3191,12 @@ void TexturePaintController::endStroke()
 {
     if (!m_strokeActive) return;
 
-    // Drain any coalesced move still queued on the event loop.
-    if (m_strokeUpdateScheduled) {
-        m_strokeUpdateScheduled = false;
-        processPendingStrokeUpdate();
-    }
-    if (m_strokeUpdateUVScheduled) {
-        m_strokeUpdateUVScheduled = false;
-        processPendingStrokeUpdateUV();
-    }
-
-    m_strokeActive = false;
     // Wand-drag stroke never dirties pixels, so the post-snapshot
     // diff below would be a no-op; just clear the wand flags and bail.
     if (m_wandStrokeActive) {
         m_wandStrokeActive = false;
         m_strokePreSnapshot.clear();
+        m_strokeActive = false;
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Wand stroke end (final tolerance=%1)")
                 .arg(m_smartSelectTolerance, 0, 'f', 3));
@@ -3082,21 +3204,39 @@ void TexturePaintController::endStroke()
     }
     if (m_target == TargetVertex) {
         m_strokePreSnapshot.clear();
+        m_strokeActive = false;
         SentryReporter::addBreadcrumb("ui.action", "Vertex paint stroke end");
         return;
     }
 
-    m_strokeEndAfterUpload = true;
-    if (m_tiledUploadRunning) {
-        SentryReporter::addBreadcrumb("ui.action",
-            "Texture paint stroke end (waiting for tiled GPU upload)");
-        return;
+    m_strokeActive = false;
+
+    recomposePaintBufferIfNeeded();
+    flushLiveStrokeToGpu();
+    m_buffer.clearDirty();
+    m_previewRefreshScheduled = false;
+    refreshPreviewUri();
+    if (m_layerStack.layerCount() > 0) {
+        ++m_layerPreviewVersion;
+        emit layersChanged();
     }
-    if (!m_buffer.dirtyRect().empty()) {
-        startTiledGpuUpload(/*finishingStroke=*/true);
-        return;
-    }
-    finishStrokeAfterGpuUpload();
+
+    std::vector<uint8_t> undoPre = std::move(m_strokePreSnapshot);
+    const int undoLayer =
+        m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
+    const bool strokeMadeChanges = m_strokeMadeChanges;
+    m_strokeFromUvPreview = false;
+    m_strokePreSnapshot.clear();
+    const uint64_t undoGen = m_strokeUndoGeneration;
+    QTimer::singleShot(0, this, [this, undoGen, undoLayer, strokeMadeChanges,
+                                 pre = std::move(undoPre)]() mutable {
+        if (undoGen != m_strokeUndoGeneration) return;
+        if (strokeMadeChanges)
+            commitStrokeUndo(std::move(pre), undoLayer);
+        else
+            m_layerStrokeBaseline = std::move(pre);
+        scheduleEmbeddedTextureCacheUpdate();
+    });
 }
 
 void TexturePaintController::updateEmbeddedTextureCache()
@@ -3137,6 +3277,8 @@ bool TexturePaintController::loadPaintBuffer(const QString& path)
 {
     if (path.isEmpty()) return false;
     if (!m_buffer.load(path.toStdString())) return false;
+    m_layerStack.initFromFlatBuffer(m_buffer);
+    recomposeComposite(/*fullBuffer=*/true);
     auto* entity = activeEntity();
     if (entity) {
         QFileInfo fi(path);
@@ -3152,6 +3294,7 @@ bool TexturePaintController::loadPaintBuffer(const QString& path)
     // with the loaded image's pixels.
     refreshPreviewUri();
     emit sessionChanged();
+    emit layersChanged();
     return true;
 }
 
@@ -3330,10 +3473,40 @@ void TexturePaintController::applyPixelSnapshot(const std::vector<uint8_t>& pixe
     std::memcpy(m_buffer.data().data(), pixels.data(), pixels.size());
     m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
     flushDirtyToOgre();
-    // Undo / redo replaces the buffer entirely — the cache that
-    // backs exports needs to follow, otherwise FBX export sees the
-    // pixels from BEFORE the last mutation.
     updateEmbeddedTextureCache();
+}
+
+void TexturePaintController::applyLayerPixelSnapshot(int layerIndex,
+                                                     const std::vector<uint8_t>& pixels)
+{
+    if (m_layerStack.layerCount() <= 0) {
+        applyPixelSnapshot(pixels);
+        return;
+    }
+    if (layerIndex < 0 || layerIndex >= m_layerStack.layerCount()) return;
+    auto& layerBuf = m_layerStack.layer(layerIndex).buffer;
+    if (pixels.size() != layerBuf.data().size()) return;
+    std::memcpy(layerBuf.data().data(), pixels.data(), pixels.size());
+    layerBuf.markDirty(0, 0, layerBuf.width(), layerBuf.height());
+    m_layerStrokeBaseline.clear();
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    updateEmbeddedTextureCache();
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::applyLayerStackSnapshot(const PaintLayerStack::Snapshot& snap)
+{
+    m_layerStack.restore(snap);
+    m_layerStrokeBaseline.clear();
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    updateEmbeddedTextureCache();
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
 }
 
 void TexturePaintController::closeSession()
@@ -3398,6 +3571,8 @@ void TexturePaintController::closeSession()
     }
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
+    m_layerStack = PaintLayerStack();
+    m_layerPreviewVersion = 0;
     m_buffer = TexturePaintBuffer();
     m_textureName.clear();
     m_originalTexture.reset();
@@ -3410,9 +3585,15 @@ void TexturePaintController::closeSession()
     m_strokeGpuFlushScheduled = false;
     m_tiledUploadRunning = false;
     m_tiledUploadQueue.clear();
-    m_strokeEndAfterUpload = false;
-    m_sessionEntity = nullptr;
+    m_uploadFinishingStroke = false;
+    m_gpuUploadGeneration = 0;
+    m_activeUploadGeneration = 0;
+    m_bufferDirtyEpoch = 0;
+    m_uploadEpochSnapshot = 0;
+    m_strokeUndoGeneration = 0;
+    m_layerStrokeBaseline.clear();
     m_strokePreSnapshot.clear();
+    m_sessionEntity = nullptr;
     if (!m_uvOverlayUri.isEmpty()) {
         m_uvOverlayUri.clear();
         emit uvOverlayChanged();
@@ -3441,24 +3622,18 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
     if (!hasActiveSession())
         if (!ensurePaintableTexture(1024)) return false;
     GamificationManager::noteFeature(QStringLiteral("texture_paint"));
+    if (m_tiledUploadRunning)
+        cancelInFlightGpuUpload();
+    ++m_gpuUploadGeneration;
+    ++m_strokeUndoGeneration;
     m_strokeActive = true;
-    m_strokeJustBegan = true;
-    m_smudgeHavePrev = false;
+    m_strokeFromUvPreview = true;
     m_strokePreSnapshot.clear();
-    m_strokeLiveUploadStarted = false;
-    m_strokeGpuFlushPending = false;
-    m_strokeGpuFlushScheduled = false;
-    m_wandStrokeActive = false;
+    resetStrokePaintState();
     // Re-use the screen-pos field to stash press UV (u in pixel-ish
     // units). updateStrokeUV reads the delta from the current u.
     m_wandStartScreenPos = QPoint(static_cast<int>(u * 10000.0), 0);
-    m_strokeHavePrevUV = false;
-    m_strokePathLength = 0.0f;
-    m_strokeDirSmoothed = Ogre::Vector2::ZERO;
-    m_strokeHaveHitScreen = false;
-    m_strokePhaseJitter = (m_rampJitter > 0.0)
-        ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
-        : 0.0f;
+    m_pendingStrokeWidget = nullptr;
     if (m_colorSource == ColorGradient) {
         SentryReporter::addBreadcrumb(
             "paint.brush.gradient",
@@ -3467,6 +3642,9 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
                 .arg(m_useFgBgRamp ? QStringLiteral("FG/BG") : m_activeRampName));
     }
     emit hoveredUVChanged(u, v);
+    if (m_layerStrokeBaseline.empty())
+        m_layerStrokeBaseline = snapshotActiveLayerPixels();
+    m_strokePreSnapshot = std::move(m_layerStrokeBaseline);
     m_pendingStrokeU = u;
     m_pendingStrokeV = v;
     processPendingStrokeUpdateUV();
@@ -3476,7 +3654,9 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
 void TexturePaintController::updateStrokeUV(double u, double v)
 {
     if (!m_strokeActive || !m_paintEnabled) return;
-    scheduleStrokeUpdateUV(u, v);
+    m_pendingStrokeU = u;
+    m_pendingStrokeV = v;
+    processPendingStrokeUpdateUV();
 }
 
 void TexturePaintController::endStrokeUV()
@@ -3639,6 +3819,25 @@ void TexturePaintController::refreshPreviewUri()
     }
     ++m_fullResVersion;
     emit fullResPreviewChanged();
+}
+
+void TexturePaintController::schedulePreviewRefresh()
+{
+    if (m_previewRefreshScheduled) return;
+    m_previewRefreshScheduled = true;
+    const int delayMs = m_strokeActive
+        ? (m_strokeFromUvPreview ? 16 : 33)
+        : 60;
+    QTimer::singleShot(delayMs, this, [this]() {
+        m_previewRefreshScheduled = false;
+        refreshPreviewUri();
+        // Rebuilding the layer list thumbnails is expensive — skip while
+        // the brush is down; endStroke emits layersChanged once on release.
+        if (m_layerStack.layerCount() > 0 && !m_strokeActive) {
+            ++m_layerPreviewVersion;
+            emit layersChanged();
+        }
+    });
 }
 
 QString TexturePaintController::fullResPreviewUrl() const
@@ -4062,20 +4261,22 @@ int applyToMaskedPixels(TexturePaintBuffer& buf, const PaintSelectionMask& mask,
 int TexturePaintController::fillMaskWithFG()
 {
     if (!hasActiveSession() || !hasSelectionMask()) return 0;
-    auto before = m_buffer.data();
+    auto& layerBuf = activePaintBuffer();
+    auto before = layerBuf.data();
     const QColor c = texturePaintColor();
     const uint8_t fr = static_cast<uint8_t>(std::lround(c.redF()   * 255.0));
     const uint8_t fg = static_cast<uint8_t>(std::lround(c.greenF() * 255.0));
     const uint8_t fb = static_cast<uint8_t>(std::lround(c.blueF()  * 255.0));
     const uint8_t fa = static_cast<uint8_t>(std::lround(c.alphaF() * 255.0));
-    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+    const int affected = applyToMaskedPixels(layerBuf, m_mask,
         [&](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
             r = fr; g = fg; b = fb; a = fa;
         });
     if (affected <= 0) return 0;
+    const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
-        this, std::move(before), m_buffer.data(),
-        m_buffer.width(), m_buffer.height(), m_textureName,
+        this, layerIdx, std::move(before), layerBuf.data(),
+        layerBuf.width(), layerBuf.height(), m_textureName,
         QStringLiteral("Fill selection (FG)")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: filled %1 px with FG %2")
@@ -4088,20 +4289,22 @@ int TexturePaintController::fillMaskWithFG()
 int TexturePaintController::fillMaskWithBG()
 {
     if (!hasActiveSession() || !hasSelectionMask()) return 0;
-    auto before = m_buffer.data();
+    auto& layerBuf = activePaintBuffer();
+    auto before = layerBuf.data();
     const QColor c = bgPaintColor();
     const uint8_t fr = static_cast<uint8_t>(std::lround(c.redF()   * 255.0));
     const uint8_t fg = static_cast<uint8_t>(std::lround(c.greenF() * 255.0));
     const uint8_t fb = static_cast<uint8_t>(std::lround(c.blueF()  * 255.0));
     const uint8_t fa = static_cast<uint8_t>(std::lround(c.alphaF() * 255.0));
-    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+    const int affected = applyToMaskedPixels(layerBuf, m_mask,
         [&](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
             r = fr; g = fg; b = fb; a = fa;
         });
     if (affected <= 0) return 0;
+    const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
-        this, std::move(before), m_buffer.data(),
-        m_buffer.width(), m_buffer.height(), m_textureName,
+        this, layerIdx, std::move(before), layerBuf.data(),
+        layerBuf.width(), layerBuf.height(), m_textureName,
         QStringLiteral("Fill selection (BG)")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: filled %1 px with BG %2")
@@ -4114,15 +4317,17 @@ int TexturePaintController::fillMaskWithBG()
 int TexturePaintController::deleteMaskPixels()
 {
     if (!hasActiveSession() || !hasSelectionMask()) return 0;
-    auto before = m_buffer.data();
-    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+    auto& layerBuf = activePaintBuffer();
+    auto before = layerBuf.data();
+    const int affected = applyToMaskedPixels(layerBuf, m_mask,
         [](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
             r = 0; g = 0; b = 0; a = 0;
         });
     if (affected <= 0) return 0;
+    const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
-        this, std::move(before), m_buffer.data(),
-        m_buffer.width(), m_buffer.height(), m_textureName,
+        this, layerIdx, std::move(before), layerBuf.data(),
+        layerBuf.width(), layerBuf.height(), m_textureName,
         QStringLiteral("Delete selection")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: deleted %1 px").arg(affected));
@@ -4459,4 +4664,402 @@ void TexturePaintController::destroyMeshMaskOverlay()
         try { Ogre::TextureManager::getSingleton().remove(m_maskOverlayTex); } catch (...) {}
         m_maskOverlayTex.reset();
     }
+}
+
+TexturePaintBuffer& TexturePaintController::activePaintBuffer()
+{
+    if (m_layerStack.layerCount() > 0)
+        return m_layerStack.activeLayer().buffer;
+    return m_buffer;
+}
+
+const TexturePaintBuffer& TexturePaintController::activePaintBuffer() const
+{
+    if (m_layerStack.layerCount() > 0)
+        return m_layerStack.activeLayer().buffer;
+    return m_buffer;
+}
+
+void TexturePaintController::recomposeComposite(bool fullBuffer)
+{
+    if (m_layerStack.layerCount() <= 0) return;
+
+    const int w = m_layerStack.width();
+    const int h = m_layerStack.height();
+    if (w <= 0 || h <= 0) return;
+    if (m_buffer.width() != w || m_buffer.height() != h)
+        m_buffer.resize(w, h);
+
+    TexturePaintBuffer::DirtyRect dirty = fullBuffer
+        ? TexturePaintBuffer::DirtyRect{0, 0, w, h}
+        : m_layerStack.layerDirtyUnion();
+    if (dirty.empty()) return;
+
+    if (m_layerStack.layerCount() == 1 && !fullBuffer) {
+        copyBufferRect(m_layerStack.layer(0).buffer, m_buffer, dirty);
+    } else if (fullBuffer) {
+        std::vector<uint8_t> pixels;
+        m_layerStack.compositeTo(pixels);
+        if (pixels.empty()) return;
+        std::memcpy(m_buffer.data().data(), pixels.data(), pixels.size());
+    } else {
+        m_layerStack.compositeRegionTo(m_buffer.data().data(),
+                                       dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+    }
+
+    m_buffer.markDirty(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+    ++m_bufferDirtyEpoch;
+    for (int i = 0; i < m_layerStack.layerCount(); ++i)
+        m_layerStack.layer(i).buffer.clearDirty();
+}
+
+std::vector<uint8_t> TexturePaintController::snapshotActiveLayerPixels() const
+{
+    return activePaintBuffer().data();
+}
+
+void TexturePaintController::pushLayerOpUndo(const QString& label,
+                                             PaintLayerStack::Snapshot before,
+                                             PaintLayerStack::Snapshot after)
+{
+    UndoManager::getSingleton()->push(
+        new PaintLayerOpCommand(this, label, std::move(before), std::move(after)));
+}
+
+int TexturePaintController::layerCount() const
+{
+    return m_layerStack.layerCount();
+}
+
+int TexturePaintController::activeLayerIndex() const
+{
+    return m_layerStack.activeIndex();
+}
+
+void TexturePaintController::setActiveLayerIndex(int index)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    if (m_layerStack.activeIndex() == index) return;
+    m_layerStack.setActiveIndex(index);
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+}
+
+QVariantList TexturePaintController::paintLayers() const
+{
+    QVariantList out;
+    for (int i = 0; i < m_layerStack.layerCount(); ++i) {
+        const auto& L = m_layerStack.layer(i);
+        QVariantMap row;
+        row.insert(QStringLiteral("index"), i);
+        row.insert(QStringLiteral("name"), L.name);
+        row.insert(QStringLiteral("type"), static_cast<int>(L.type));
+        row.insert(QStringLiteral("blendMode"), static_cast<int>(L.blendMode));
+        row.insert(QStringLiteral("opacity"), static_cast<double>(L.opacity));
+        row.insert(QStringLiteral("visible"), L.visible);
+        row.insert(QStringLiteral("locked"), L.locked);
+        row.insert(QStringLiteral("active"), i == m_layerStack.activeIndex());
+        row.insert(QStringLiteral("solo"), m_layerStack.soloIndex() == i);
+        row.insert(QStringLiteral("thumbnailUrl"), layerPreviewUrl(i));
+        out.append(row);
+    }
+    return out;
+}
+
+QStringList TexturePaintController::blendModeNames() const
+{
+    return {
+        QStringLiteral("Normal"),
+        QStringLiteral("Multiply"),
+        QStringLiteral("Screen"),
+        QStringLiteral("Overlay"),
+        QStringLiteral("Add"),
+        QStringLiteral("Subtract"),
+        QStringLiteral("Soft Light"),
+        QStringLiteral("Hue"),
+    };
+}
+
+int TexturePaintController::addPaintLayer(const QString& name)
+{
+    if (!hasActiveSession()) return -1;
+    const auto before = m_layerStack.snapshot();
+    const int idx = m_layerStack.addEmpty(name);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Add layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.add"),
+        QStringLiteral("Added layer '%1'").arg(m_layerStack.layer(idx).name));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+    return idx;
+}
+
+void TexturePaintController::deletePaintLayer(int index)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    if (m_layerStack.layerCount() <= 1) return;
+    const auto before = m_layerStack.snapshot();
+    const QString removed = m_layerStack.layer(index).name;
+    m_layerStack.removeLayer(index);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Delete layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.delete"),
+        QStringLiteral("Deleted layer '%1'").arg(removed));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+int TexturePaintController::duplicatePaintLayer(int index)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return -1;
+    const auto before = m_layerStack.snapshot();
+    const int idx = m_layerStack.duplicateLayer(index);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Duplicate layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.duplicate"),
+        QStringLiteral("Duplicated layer '%1'").arg(m_layerStack.layer(idx).name));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+    return idx;
+}
+
+void TexturePaintController::movePaintLayerUp(int index)
+{
+    if (index <= 0 || index >= m_layerStack.layerCount()) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.moveLayer(index, index - 1);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer up"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::movePaintLayerDown(int index)
+{
+    if (index < 0 || index >= m_layerStack.layerCount() - 1) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.moveLayer(index, index + 1);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer down"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::renamePaintLayer(int index, const QString& name)
+{
+    if (index < 0 || index >= m_layerStack.layerCount() || name.isEmpty()) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.renameLayer(index, name);
+    pushLayerOpUndo(QStringLiteral("Rename layer"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.rename"),
+        QStringLiteral("Renamed layer to '%1'").arg(name));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+}
+
+void TexturePaintController::mergePaintLayerDown(int index)
+{
+    if (index <= 0 || index >= m_layerStack.layerCount()) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.mergeDown(index);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Merge down"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.merge"),
+        QStringLiteral("Merged layer down at index %1").arg(index));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::flattenPaintLayers()
+{
+    if (m_layerStack.layerCount() <= 1) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.flattenAll();
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Flatten layers"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.flatten"), QStringLiteral("Flattened layer stack"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::setPaintLayerVisible(int index, bool visible)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    if (m_layerStack.layer(index).visible == visible) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.setVisible(index, visible);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Layer visibility"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.visibility"),
+        visible ? QStringLiteral("Show layer") : QStringLiteral("Hide layer"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::setPaintLayerLocked(int index, bool locked)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    if (m_layerStack.layer(index).locked == locked) return;
+    m_layerStack.setLocked(index, locked);
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.lock"),
+        locked ? QStringLiteral("Locked layer") : QStringLiteral("Unlocked layer"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+}
+
+void TexturePaintController::setPaintLayerOpacity(int index, double opacity)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.setOpacity(index, static_cast<float>(opacity));
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Layer opacity"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"),
+        QStringLiteral("Opacity=%1").arg(opacity, 0, 'f', 2));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    const auto before = m_layerStack.snapshot();
+    m_layerStack.setBlendMode(index, static_cast<PaintLayerBlend::Mode>(mode));
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Layer blend mode"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.blend"),
+        PaintLayerBlend::modeName(static_cast<PaintLayerBlend::Mode>(mode)));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+void TexturePaintController::setPaintLayerSolo(int index, bool solo)
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return;
+    const auto before = m_layerStack.snapshot();
+    if (solo)
+        m_layerStack.setSolo(index, true);
+    else
+        m_layerStack.clearSolo();
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QStringLiteral("Layer solo"), before, m_layerStack.snapshot());
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.solo"),
+        solo ? QStringLiteral("Solo on") : QStringLiteral("Solo off"));
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+}
+
+QString TexturePaintController::layerPreviewUrl(int index) const
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return {};
+    return QStringLiteral("image://paintbuffer/layer/%1?v=%2")
+        .arg(index)
+        .arg(m_layerPreviewVersion);
+}
+
+QImage TexturePaintController::snapshotLayerImage(int index) const
+{
+    if (index < 0 || index >= m_layerStack.layerCount()) return {};
+    const auto& buf = m_layerStack.layer(index).buffer;
+    if (buf.width() <= 0 || buf.height() <= 0) return {};
+    QImage view(const_cast<uchar*>(buf.data().data()),
+                buf.width(), buf.height(),
+                buf.width() * 4, QImage::Format_RGBA8888);
+    return view.copy();
+}
+
+bool TexturePaintController::confirmFlattenLayersForExport(QWidget* parent) const
+{
+    if (layerCount() <= 1 || !hasActiveSession() || !m_sessionEntity)
+        return true;
+
+    const auto* sel = SelectionSet::getSingleton();
+    if (!sel) return true;
+
+    auto exportsPaintSession = [this](const Ogre::Entity* entity) {
+        return entity && entity == m_sessionEntity;
+    };
+
+    bool includesPaintSession = false;
+    if (sel->hasEntities()) {
+        for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+            if (exportsPaintSession(entity)) {
+                includesPaintSession = true;
+                break;
+            }
+        }
+    } else if (sel->hasNodes()) {
+        auto* sceneMgr = Manager::getSingletonPtr()
+                             ? Manager::getSingleton()->getSceneMgr()
+                             : nullptr;
+        if (sceneMgr) {
+            for (Ogre::SceneNode* node : sel->getNodesSelectionList()) {
+                if (!sceneMgr->hasEntity(node->getName())) continue;
+                if (exportsPaintSession(sceneMgr->getEntity(node->getName()))) {
+                    includesPaintSession = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!includesPaintSession)
+        return true;
+
+    if (!parent)
+        return true;
+
+    const QString msg = tr(
+        "This mesh has %1 texture paint layers.\n\n"
+        "FBX, glTF, OBJ, and other export formats store a single flat "
+        "texture — the merged composite of all visible layers will be "
+        "written. Separate layer data is not preserved in the exported file.\n\n"
+        "Continue export?")
+                            .arg(layerCount());
+
+    return QMessageBox::warning(parent, tr("Flatten Texture Layers?"), msg,
+                                QMessageBox::Ok | QMessageBox::Cancel,
+                                QMessageBox::Ok)
+           == QMessageBox::Ok;
+}
+
+void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
+{
+    if (!entity || entity != m_sessionEntity || !hasActiveSession())
+        return;
+    if (m_layerStack.layerCount() > 0)
+        recomposeComposite(/*fullBuffer=*/true);
+    if (!m_buffer.dirtyRect().empty() || m_layerStack.layerCount() > 0) {
+        m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
+        flushDirtyToOgre();
+    }
+    updateEmbeddedTextureCache();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("paint.layer.export"),
+        QStringLiteral("Flushed %1-layer composite before export")
+            .arg(m_layerStack.layerCount()));
 }
