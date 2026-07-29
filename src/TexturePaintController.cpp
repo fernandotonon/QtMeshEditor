@@ -125,10 +125,12 @@ class PaintLayerOpCommand : public QUndoCommand
 public:
     PaintLayerOpCommand(TexturePaintController* controller,
                         QString label,
+                        QString textureName,
                         PaintLayerStack::Snapshot before,
                         PaintLayerStack::Snapshot after)
         : QUndoCommand(std::move(label))
         , m_controller(controller)
+        , m_textureName(std::move(textureName))
         , m_before(std::move(before))
         , m_after(std::move(after))
     {}
@@ -144,10 +146,12 @@ private:
     void apply(const PaintLayerStack::Snapshot& snap)
     {
         if (!m_controller) return;
+        if (m_controller->currentTextureName() != m_textureName) return;
         m_controller->applyLayerStackSnapshot(snap);
     }
 
     TexturePaintController* m_controller = nullptr;
+    QString m_textureName;
     PaintLayerStack::Snapshot m_before;
     PaintLayerStack::Snapshot m_after;
     bool m_skipFirstRedo = true;
@@ -2155,16 +2159,17 @@ void TexturePaintController::scheduleThrottledLiveGpuFlush()
     });
 }
 
-void TexturePaintController::flushLiveStrokeToGpu()
+bool TexturePaintController::flushLiveStrokeToGpu()
 {
     const auto dirty = m_buffer.dirtyRect();
-    if (dirty.empty()) return;
+    if (dirty.empty()) return true;
 
     if (m_paintMeshEntity && m_ogreTexture && m_boundSlots.empty())
         rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
 
     if (blitBufferRectToOgreTexture(dirty.x0, dirty.y0, dirty.x1, dirty.y1))
         m_buffer.clearDirty();
+    return m_buffer.dirtyRect().empty();
 }
 
 void TexturePaintController::flushDirtyToOgre()
@@ -2449,6 +2454,11 @@ void TexturePaintController::resetStrokePaintState()
     m_strokePhaseJitter = (m_rampJitter > 0.0)
         ? static_cast<float>(QRandomGenerator::global()->generateDouble() * m_rampJitter)
         : 0.0f;
+}
+
+void TexturePaintController::invalidateLayerStrokeBaseline()
+{
+    m_layerStrokeBaseline.clear();
 }
 
 void TexturePaintController::scheduleEmbeddedTextureCacheUpdate()
@@ -3212,8 +3222,10 @@ void TexturePaintController::endStroke()
     m_strokeActive = false;
 
     recomposePaintBufferIfNeeded();
-    flushLiveStrokeToGpu();
-    m_buffer.clearDirty();
+    if (!flushLiveStrokeToGpu())
+        doFlushDirtyToOgre(/*immediate=*/true);
+    if (m_buffer.dirtyRect().empty())
+        m_buffer.clearDirty();
     m_previewRefreshScheduled = false;
     refreshPreviewUri();
     if (m_layerStack.layerCount() > 0) {
@@ -4696,7 +4708,18 @@ void TexturePaintController::recomposeComposite(bool fullBuffer)
     if (dirty.empty()) return;
 
     if (m_layerStack.layerCount() == 1 && !fullBuffer) {
-        copyBufferRect(m_layerStack.layer(0).buffer, m_buffer, dirty);
+        const auto& L = m_layerStack.layer(0);
+        const bool trivialLayer =
+            L.visible
+            && L.opacity >= 1.f - 1e-4f
+            && L.blendMode == PaintLayerBlend::Mode::Normal
+            && L.maskAlpha.empty()
+            && !L.locked;
+        if (trivialLayer)
+            copyBufferRect(L.buffer, m_buffer, dirty);
+        else
+            m_layerStack.compositeRegionTo(m_buffer.data().data(),
+                                           dirty.x0, dirty.y0, dirty.x1, dirty.y1);
     } else if (fullBuffer) {
         std::vector<uint8_t> pixels;
         m_layerStack.compositeTo(pixels);
@@ -4723,7 +4746,8 @@ void TexturePaintController::pushLayerOpUndo(const QString& label,
                                              PaintLayerStack::Snapshot after)
 {
     UndoManager::getSingleton()->push(
-        new PaintLayerOpCommand(this, label, std::move(before), std::move(after)));
+        new PaintLayerOpCommand(this, label, m_textureName,
+                                std::move(before), std::move(after)));
 }
 
 int TexturePaintController::layerCount() const
@@ -4741,6 +4765,7 @@ void TexturePaintController::setActiveLayerIndex(int index)
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.activeIndex() == index) return;
     m_layerStack.setActiveIndex(index);
+    invalidateLayerStrokeBaseline();
     ++m_layerPreviewVersion;
     emit layersChanged();
 }
@@ -4788,6 +4813,7 @@ int TexturePaintController::addPaintLayer(const QString& name)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Add layer"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.add"),
         QStringLiteral("Added layer '%1'").arg(m_layerStack.layer(idx).name));
     ++m_layerPreviewVersion;
@@ -4806,6 +4832,7 @@ void TexturePaintController::deletePaintLayer(int index)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Delete layer"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.delete"),
         QStringLiteral("Deleted layer '%1'").arg(removed));
     ++m_layerPreviewVersion;
@@ -4821,6 +4848,7 @@ int TexturePaintController::duplicatePaintLayer(int index)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Duplicate layer"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.duplicate"),
         QStringLiteral("Duplicated layer '%1'").arg(m_layerStack.layer(idx).name));
     ++m_layerPreviewVersion;
@@ -4837,6 +4865,7 @@ void TexturePaintController::movePaintLayerUp(int index)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer up"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4851,6 +4880,7 @@ void TexturePaintController::movePaintLayerDown(int index)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer down"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4877,6 +4907,7 @@ void TexturePaintController::mergePaintLayerDown(int index)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Merge down"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.merge"),
         QStringLiteral("Merged layer down at index %1").arg(index));
     ++m_layerPreviewVersion;
@@ -4892,6 +4923,7 @@ void TexturePaintController::flattenPaintLayers()
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Flatten layers"), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
     SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.flatten"), QStringLiteral("Flattened layer stack"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4928,16 +4960,37 @@ void TexturePaintController::setPaintLayerLocked(int index, bool locked)
 void TexturePaintController::setPaintLayerOpacity(int index, double opacity)
 {
     if (index < 0 || index >= m_layerStack.layerCount()) return;
-    const auto before = m_layerStack.snapshot();
+    PaintLayerStack::Snapshot before;
+    if (!m_layerOpacityDragging)
+        before = m_layerStack.snapshot();
     m_layerStack.setOpacity(index, static_cast<float>(opacity));
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
-    pushLayerOpUndo(QStringLiteral("Layer opacity"), before, m_layerStack.snapshot());
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"),
-        QStringLiteral("Opacity=%1").arg(opacity, 0, 'f', 2));
+    if (!m_layerOpacityDragging) {
+        pushLayerOpUndo(QStringLiteral("Layer opacity"), before, m_layerStack.snapshot());
+        SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"),
+            QStringLiteral("Opacity=%1").arg(opacity, 0, 'f', 2));
+    }
     ++m_layerPreviewVersion;
     emit layersChanged();
     emit fullResPreviewChanged();
+}
+
+void TexturePaintController::beginPaintLayerOpacityDrag()
+{
+    if (!hasActiveSession() || m_layerStack.layerCount() <= 0) return;
+    m_layerOpacityDragBefore = m_layerStack.snapshot();
+    m_layerOpacityDragging = true;
+}
+
+void TexturePaintController::endPaintLayerOpacityDrag()
+{
+    if (!m_layerOpacityDragging) return;
+    m_layerOpacityDragging = false;
+    const auto after = m_layerStack.snapshot();
+    pushLayerOpUndo(QStringLiteral("Layer opacity"), m_layerOpacityDragBefore, after);
+    m_layerOpacityDragBefore = {};
+    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"), QStringLiteral("Opacity drag"));
 }
 
 void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
@@ -5053,10 +5106,9 @@ void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
         return;
     if (m_layerStack.layerCount() > 0)
         recomposeComposite(/*fullBuffer=*/true);
-    if (!m_buffer.dirtyRect().empty() || m_layerStack.layerCount() > 0) {
+    if (m_buffer.width() > 0 && m_buffer.height() > 0)
         m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
-        flushDirtyToOgre();
-    }
+    doFlushDirtyToOgre(/*immediate=*/true);
     updateEmbeddedTextureCache();
     SentryReporter::addBreadcrumb(
         QStringLiteral("paint.layer.export"),

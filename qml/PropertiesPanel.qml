@@ -4814,7 +4814,7 @@ Rectangle {
                             }
 
                             Text {
-                                width: Math.max(40, layerList.width - 108)
+                                width: Math.max(40, layerList.width - 130)
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: modelData.name
                                 color: PropertiesPanelController.textColor
@@ -4860,6 +4860,25 @@ Rectangle {
                                                    modelData.index, !modelData.solo)
                                 }
                             }
+
+                            // Lock toggle
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.locked
+                                    ? "#804040" : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.locked ? "\u{1F512}" : "\u{1F513}"
+                                    font.pixelSize: 8
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerLocked(
+                                                   modelData.index, !modelData.locked)
+                                }
+                            }
                         }
 
                         MouseArea {
@@ -4888,11 +4907,13 @@ Rectangle {
                         from: 0; to: 1; stepSize: 0.01
                         property bool updating: false
                         value: layersCol.activeLayer ? layersCol.activeLayer.opacity : 1
+                        onPressed: TexturePaintController.beginPaintLayerOpacityDrag()
                         onMoved: {
                             if (!layersCol.activeLayer) return
                             TexturePaintController.setPaintLayerOpacity(
                                 texPaintCol.activeLayerIndex, value)
                         }
+                        onReleased: TexturePaintController.endPaintLayerOpacityDrag()
                         Connections {
                             target: TexturePaintController
                             function onLayersChanged() {

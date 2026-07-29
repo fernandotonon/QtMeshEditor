@@ -158,17 +158,21 @@ int PaintLayerStack::addFromBuffer(const TexturePaintBuffer& src,
 
 int PaintLayerStack::duplicateLayer(int index)
 {
+    if (index < 0 || index >= layerCount()) return m_activeIndex;
     const Layer& src = layer(index);
     Layer copy = src;
     copy.name = allocateLayerName();
     copy.locked = false;
     m_layers.insert(m_layers.begin() + index + 1, std::move(copy));
+    if (m_soloIndex >= 0 && m_soloIndex > index)
+        ++m_soloIndex;
     m_activeIndex = index + 1;
     return m_activeIndex;
 }
 
 void PaintLayerStack::removeLayer(int index)
 {
+    if (index < 0 || index >= layerCount()) return;
     if (layerCount() <= 1) return; // keep at least one layer
     m_layers.erase(m_layers.begin() + index);
     if (m_soloIndex == index) m_soloIndex = -1;
@@ -209,9 +213,9 @@ void PaintLayerStack::mergeDown(int index)
     std::vector<uint8_t> composite;
     std::vector<PaintLayerBlend::LayerInput> inputs(2);
     inputs[0] = {lower.buffer.data().data(), lower.maskAlpha.empty() ? nullptr : lower.maskAlpha.data(),
-                 lower.blendMode, lower.opacity, lower.visible};
+                 lower.blendMode, lower.opacity, true};
     inputs[1] = {upper.buffer.data().data(), upper.maskAlpha.empty() ? nullptr : upper.maskAlpha.data(),
-                 upper.blendMode, upper.opacity, upper.visible};
+                 upper.blendMode, upper.opacity, true};
     PaintLayerBlend::compositeLayers(lower.buffer.width(), lower.buffer.height(), inputs, composite);
     std::memcpy(lower.buffer.data().data(), composite.data(), composite.size());
     lower.buffer.markDirty(0, 0, lower.buffer.width(), lower.buffer.height());

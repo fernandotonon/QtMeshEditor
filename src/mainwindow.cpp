@@ -5556,15 +5556,6 @@ void MainWindow::on_actionExport_Selected_triggered()
     if (wasRendering) m_pTimer->stop();
     AnimationControlController::instance()->suspendPollTimer();
 
-    if (auto* tpc = TexturePaintController::instance()) {
-        if (!tpc->confirmFlattenLayersForExport(this)) {
-            AnimationControlController::instance()->resumePollTimer();
-            if (wasRendering) m_pTimer->start();
-            SentryReporter::finishTransaction(txn);
-            return;
-        }
-    }
-
     try {
         const auto* sel = SelectionSet::getSingleton();
 

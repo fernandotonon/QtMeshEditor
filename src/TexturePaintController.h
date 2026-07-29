@@ -318,6 +318,8 @@ public:
     Q_INVOKABLE void setPaintLayerVisible(int index, bool visible);
     Q_INVOKABLE void setPaintLayerLocked(int index, bool locked);
     Q_INVOKABLE void setPaintLayerOpacity(int index, double opacity);
+    Q_INVOKABLE void beginPaintLayerOpacityDrag();
+    Q_INVOKABLE void endPaintLayerOpacityDrag();
     Q_INVOKABLE void setPaintLayerBlendMode(int index, int mode);
     Q_INVOKABLE void setPaintLayerSolo(int index, bool solo);
     Q_INVOKABLE QString layerPreviewUrl(int index) const;
@@ -630,7 +632,7 @@ private:
     /// At most ~60 GPU blits/sec while the brush is down (CPU paint is immediate).
     void scheduleThrottledLiveGpuFlush();
     /// Synchronous GPU blit of the current dirty rect during live strokes.
-    void flushLiveStrokeToGpu();
+    bool flushLiveStrokeToGpu();
     /// Rebuild composite CPU buffer from dirty layers (no GPU).
     void recomposePaintBufferIfNeeded();
     /// Stop an in-progress tiled upload (e.g. prior stroke still draining).
@@ -645,6 +647,7 @@ private:
     /// Shared per-stroke reset — must stay in sync for viewport + UV preview paths.
     void resetStrokePaintState();
     void scheduleEmbeddedTextureCacheUpdate();
+    void invalidateLayerStrokeBaseline();
     /// 3D brush ring during strokes — uses the cached hit triangle only.
     bool localPointFromHitCache(const Ogre::Vector2& uv,
                                 Ogre::Vector3& outLocal,
@@ -777,6 +780,8 @@ private:
     bool m_strokeFromUvPreview = false;
     bool m_strokeMadeChanges = false;
     bool m_embeddedCacheUpdateScheduled = false;
+    bool m_layerOpacityDragging = false;
+    PaintLayerStack::Snapshot m_layerOpacityDragBefore;
     /// Layer pixels at the end of the last stroke — O(1) handoff as the next pre-image.
     std::vector<uint8_t> m_layerStrokeBaseline;
     std::vector<uint8_t> m_strokePreSnapshot; // for undo

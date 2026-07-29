@@ -94,7 +94,6 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "EditModeController.h"
 #include "TexturePaintController.h"
-#include "TexturePaintController.h"
 #include <OgreMaterialManager.h>
 #include <OgreRTShaderSystem.h>
 #include <OgreDataStream.h>

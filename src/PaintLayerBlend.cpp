@@ -119,7 +119,7 @@ Rgba normalComposite(const Rgba& dst, const Rgba& src, float alpha)
         src.r * a + dst.r * (1.f - a),
         src.g * a + dst.g * (1.f - a),
         src.b * a + dst.b * (1.f - a),
-        src.a * a + dst.a * (1.f - a),
+        a + dst.a * (1.f - a),
     };
 }
 
@@ -273,10 +273,25 @@ void compositeLayersRegion(int width, int height,
     y1 = std::clamp(y1, 0, height);
     if (x1 <= x0 || y1 <= y0) return;
 
+    bool anyVisible = false;
+    for (const auto& layer : layers) {
+        if (layer.visible && layer.rgba) {
+            anyVisible = true;
+            break;
+        }
+    }
+
     for (int y = y0; y < y1; ++y) {
         for (int x = x0; x < x1; ++x) {
             const size_t i = static_cast<size_t>(y) * static_cast<size_t>(width)
                              + static_cast<size_t>(x);
+            if (!anyVisible) {
+                inOut[i * 4u + 0] = 255;
+                inOut[i * 4u + 1] = 255;
+                inOut[i * 4u + 2] = 255;
+                inOut[i * 4u + 3] = 255;
+                continue;
+            }
             const Rgba acc = compositePixelAt(i, layers);
             rgbaToBytes(acc, inOut[i * 4u + 0], inOut[i * 4u + 1], inOut[i * 4u + 2],
                         inOut[i * 4u + 3]);
