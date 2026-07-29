@@ -143,7 +143,6 @@
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
 #include "commands/SplitMeshCommand.h"
-#include "commands/AddPrintPegsCommand.h"
 #include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
@@ -680,7 +679,6 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("split_mesh_by_segments"), &MCPServer::toolSplitMeshBySegments},
-        {QStringLiteral("prepare_print_split"), &MCPServer::toolPreparePrintSplit},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
@@ -776,7 +774,6 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
         QStringLiteral("split_mesh_by_segments"),
-        QStringLiteral("prepare_print_split"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
@@ -853,7 +850,6 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
             {QStringLiteral("split_mesh_by_segments"), QStringLiteral("ai_assist")},
-            {QStringLiteral("prepare_print_split"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
@@ -4889,60 +4885,6 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         QJsonArray names;
         for (const QString& n : cmd->partNames()) names.append(n);
         o["partNames"] = names;
-        return makeSuccessResult(
-            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error: %1").arg(e.what()));
-    }
-}
-
-QJsonObject MCPServer::toolPreparePrintSplit(const QJsonObject &args)
-{
-    // PartOps print-prep (#859/#863): add alignment pegs to an already-split
-    // entity, via the SAME undoable AddPrintPegsCommand the GUI button uses.
-    try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) return makeErrorResult("Error: Manager not available");
-
-        const QString entityName = args["entity_name"].toString();
-        Ogre::Entity* entity = nullptr;
-        for (auto* ent : mgr->getEntities()) {
-            if (!ent || ent->getMovableType() != "Entity") continue;
-            if (entityName.isEmpty()
-                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
-        }
-        if (!entity)
-            return makeErrorResult(entityName.isEmpty()
-                ? QString("Error: No mesh entity found")
-                : QString("Error: Entity '%1' not found").arg(entityName));
-        if (!entity->getMesh() || entity->getMesh()->getNumSubMeshes() < 2)
-            return makeErrorResult("Error: entity has a single part — split it into parts first");
-
-        SubMeshOps::PegOptions opts;
-        if (args.contains("clearance")) opts.clearance = static_cast<float>(args["clearance"].toDouble());
-        if (args.contains("peg_radius")) opts.pegRadius = static_cast<float>(args["peg_radius"].toDouble());
-        if (args.contains("peg_depth")) opts.pegDepth = static_cast<float>(args["peg_depth"].toDouble());
-        if (args.contains("max_pegs_per_boundary")) opts.maxPegsPerBoundary = args["max_pegs_per_boundary"].toInt();
-
-        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.print_pegs"),
-                                      QStringLiteral("MCP prepare_print_split"));
-
-        const QString entityNameOut = QString::fromStdString(entity->getName());
-        auto* cmd = new AddPrintPegsCommand(entity->getName(), opts);
-        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
-        if (!cmd->ok())
-            return makeErrorResult(cmd->error().isEmpty()
-                ? QString("Error: print prep failed") : ("Error: " + cmd->error()));
-
-        QJsonObject o;
-        o["entity"] = entityNameOut;
-        o["peggedBoundaries"] = cmd->peggedBoundaries();
-        o["totalPegs"] = cmd->totalPegs();
-        QJsonArray warn;
-        for (const QString& w : cmd->warnings()) warn.append(w);
-        o["warnings"] = warn;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
@@ -9244,28 +9186,6 @@ QJsonArray MCPServer::buildToolsList()
             "Undoable (same command as the GUI 'Split into Parts' button). Returns "
             "the created submesh count + part names. FBX export keeps the submesh "
             "boundaries; glTF coalesces same-material parts.",
-            props
-        );
-    }
-
-    // prepare_print_split (#859/#863): add 3D-print alignment pegs.
-    {
-        QJsonObject props;
-        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Already-SPLIT entity to prep (>= 2 submeshes). Empty → the first mesh entity."}};
-        props["clearance"] = QJsonObject{{"type", "number"}, {"description", "Socket radius = peg radius + clearance (model units). Default 0.20."}};
-        props["peg_radius"] = QJsonObject{{"type", "number"}, {"description", "Male peg radius (model units). Default 1.50."}};
-        props["peg_depth"] = QJsonObject{{"type", "number"}, {"description", "How far the peg protrudes / socket sinks. Default 4.00."}};
-        props["max_pegs_per_boundary"] = QJsonObject{{"type", "integer"}, {"description", "Max pegs per part boundary. Default 3."}};
-        appendTool(
-            "prepare_print_split",
-            "PartOps print-prep (#859/#863): add matching cylindrical alignment pegs "
-            "at every STABLE part boundary of an already-split mesh so the parts snap "
-            "together for 3D printing. The male peg is merged into one part and the "
-            "female socket into the other (as connector_male/connector_socket "
-            "geometry), so each part stays one printable object. Tiny/non-planar "
-            "boundaries are skipped with a warning (never fails). Undoable (same "
-            "command as the GUI 'Prepare Split for 3D Print' button). Returns the "
-            "pegged-boundary count, total pegs, and per-boundary skip warnings.",
             props
         );
     }

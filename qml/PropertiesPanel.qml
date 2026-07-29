@@ -6654,82 +6654,6 @@ Rectangle {
                 }
             }
 
-            // --- 3D print prep: add alignment pegs (#863) ---
-            Rectangle {
-                width: parent ? parent.width - 16 : 200
-                height: 1
-                color: PropertiesPanelController.borderColor
-                opacity: 0.5
-            }
-            Text {
-                width: parent.width - 16
-                wrapMode: Text.WordWrap
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11
-                text: "Add cylindrical alignment pegs at every part boundary so "
-                    + "the printed parts snap together. Undoable."
-            }
-            // Peg radius slider (fraction; the actual peg auto-fits the boundary).
-            property real pegRadius: 1.5
-            property real pegClearance: 0.2
-            Row {
-                spacing: 6
-                Text {
-                    text: "Peg size:"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Slider {
-                    id: pegRadiusSlider
-                    width: 110
-                    from: 0.2; to: 5.0; stepSize: 0.1
-                    value: partOpsEjContent.pegRadius
-                    onValueChanged: partOpsEjContent.pegRadius = value
-                }
-                Text {
-                    text: partOpsEjContent.pegRadius.toFixed(1)
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            Rectangle {
-                id: partOpsPrintBtn
-                property bool clickEnabled: PartOpsController.canExplode
-                width: Math.min(parent ? parent.width - 16 : 200,
-                                partOpsPrintBtnLabel.implicitWidth + 20)
-                height: 26
-                radius: 3
-                opacity: clickEnabled ? 1.0 : 0.45
-                color: partOpsPrintBtnMa.containsMouse && clickEnabled
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                Text {
-                    id: partOpsPrintBtnLabel
-                    anchors.centerIn: parent
-                    text: "Prepare for 3D Print"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: partOpsPrintBtnMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: partOpsPrintBtn.clickEnabled
-                    cursorShape: partOpsPrintBtn.clickEnabled
-                        ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: {
-                        partOpsEjFeedback.color = PropertiesPanelController.textColor
-                        partOpsEjFeedback.text = "Adding pegs…"
-                        PartOpsController.preparePrintSplit(
-                            partOpsEjContent.pegClearance, partOpsEjContent.pegRadius, 4.0, 3)
-                    }
-                }
-            }
-
             Text {
                 id: partOpsEjFeedback
                 width: parent.width - 16
@@ -6746,10 +6670,6 @@ Rectangle {
                     partOpsEjFeedback.text = status
                 }
                 function onJoinFinished(status, isError) {
-                    partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
-                    partOpsEjFeedback.text = status
-                }
-                function onPrintPrepFinished(status, isError) {
                     partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
                     partOpsEjFeedback.text = status
                 }

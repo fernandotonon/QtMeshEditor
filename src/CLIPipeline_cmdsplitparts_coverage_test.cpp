@@ -32,7 +32,6 @@
 #include "TestHelpers.h"
 #include "MeshSegmenter.h"
 #include "EditableMesh.h"
-#include "commands/AddPrintPegsCommand.h"
 
 #include <OgreEntity.h>
 #include <OgreSceneNode.h>
@@ -164,9 +163,13 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     EXPECT_GT(e->getMesh()->getNumSubMeshes(), 1u)
         << "split should produce multiple part submeshes";
 
-    // Triangle count preserved (boundary duplication adds verts, not tris).
+    // The original geometry is preserved; the split ALSO caps each part's open
+    // cut face into a watertight solid (capParts=true on the user-facing path),
+    // which adds a fan of cap triangles — so the count is >= the source, not
+    // exactly equal. Boundary vertex duplication itself adds verts, not tris.
     MeshInfo info = CLIPipeline::extractMeshInfo(e, "parts.fbx");
-    EXPECT_EQ(static_cast<int>(info.triangles), srcTris);
+    EXPECT_GE(static_cast<int>(info.triangles), srcTris)
+        << "split must preserve the source geometry (plus watertight caps)";
 
     // Skinned fixture retains its skeleton + bone assignments (#861 criterion).
     EXPECT_TRUE(e->getMesh()->hasSkeleton())
@@ -231,88 +234,6 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
         }
         EXPECT_TRUE(known) << "unexpected submesh name: " << kv.first;
     }
-}
-
-// AddPrintPegsCommand GL round-trip (#863): on a real SPLIT entity in the scene,
-// redo() swaps in a pegged mesh (adding the green/red connector submeshes) and
-// undo() restores the exact pre-peg mesh. Exercises the command's successful
-// redo/undo path — not just the error branches in AddPrintPegsCommand_test.cpp.
-TEST_F(CLIPipelineCmdSplitPartsCoverageTest, AddPrintPegsCommandRedoUndoRoundTrip)
-{
-    const QString fixture = riggedFixture();
-    if (fixture.isEmpty())
-        GTEST_SKIP() << "rigged fixture not present; peg round-trip needs a multi-part mesh";
-
-    // 1) Split the rigged fixture into per-part submeshes → FBX.
-    QTemporaryDir tmp;
-    ASSERT_TRUE(tmp.isValid());
-    const QString outFbx = QDir(tmp.path()).filePath("split_for_pegs.fbx");
-    clearScene();
-    {
-        const QByteArray in = fixture.toUtf8();
-        const QByteArray out = outFbx.toUtf8();
-        SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model",
-                        "--split-parts", "-o", out.constData()});
-        ASSERT_EQ(0, CLIPipeline::cmdSegment(args.argc(), args.argv()));
-    }
-    ASSERT_TRUE(QFile::exists(outFbx));
-
-    // 2) Reimport the split mesh so a live multi-submesh entity is in the scene.
-    clearScene();
-    MeshImporterExporter::importer({QFileInfo(outFbx).absoluteFilePath()});
-    auto& entities = Manager::getSingleton()->getEntities();
-    ASSERT_FALSE(entities.isEmpty());
-    Ogre::Entity* e = entities.first();
-    ASSERT_NE(e, nullptr);
-    const std::string entityName = e->getName();
-    const unsigned short subMeshesBefore = e->getMesh()->getNumSubMeshes();
-    ASSERT_GT(subMeshesBefore, 1u) << "peg command needs a multi-part mesh";
-    size_t vertsBefore = 0;
-    {
-        EditableMesh em;
-        if (em.loadFromEntity(e))
-            for (const auto& sm : em.subMeshes()) vertsBefore += sm.vertices.size();
-    }
-
-    // 3) redo(): build + swap in the pegged mesh.
-    SubMeshOps::PegOptions opts;   // defaults; auto-fits the boundary
-    AddPrintPegsCommand cmd(entityName, opts);
-    cmd.redo();
-    ASSERT_TRUE(cmd.ok()) << cmd.error().toStdString();
-
-    Ogre::Entity* pegged = nullptr;
-    for (Ogre::Entity* cand : Manager::getSingleton()->getEntities())
-        if (cand && cand->getMovableType() == "Entity" && cand->getName() == entityName)
-            pegged = cand;
-    ASSERT_NE(pegged, nullptr) << "pegged entity not found after redo";
-    if (cmd.peggedBoundaries() > 0) {
-        // Connectors are merged INTO their parts, so the submesh count is
-        // UNCHANGED (no separate connector submeshes) — the pegs live inside the
-        // existing part submeshes, which gain geometry.
-        EXPECT_EQ(pegged->getMesh()->getNumSubMeshes(), subMeshesBefore)
-            << "pegging must not change the part/submesh count";
-        EXPECT_GT(cmd.totalPegs(), 0);
-        // The pegged mesh has MORE vertices than the pre-peg mesh (peg + collar +
-        // socket-cavity geometry merged into the parts).
-        auto vertsOf = [](Ogre::Entity* e) {
-            EditableMesh em; size_t n = 0;
-            if (em.loadFromEntity(e))
-                for (const auto& sm : em.subMeshes()) n += sm.vertices.size();
-            return n;
-        };
-        EXPECT_GT(vertsOf(pegged), vertsBefore)
-            << "merged pegs/collars/cavities should add vertices to the parts";
-    }
-
-    // 4) undo(): the pre-peg mesh (same submesh count) is restored.
-    cmd.undo();
-    Ogre::Entity* restored = nullptr;
-    for (Ogre::Entity* cand : Manager::getSingleton()->getEntities())
-        if (cand && cand->getMovableType() == "Entity" && cand->getName() == entityName)
-            restored = cand;
-    ASSERT_NE(restored, nullptr) << "entity missing after undo";
-    EXPECT_EQ(restored->getMesh()->getNumSubMeshes(), subMeshesBefore)
-        << "undo must restore the exact pre-peg submesh count";
 }
 
 // --split-parts without -o is a usage error (exit 2), no Ogre load required.

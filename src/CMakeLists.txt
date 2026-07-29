@@ -95,7 +95,6 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/SplitMeshCommand.cpp
-commands/AddPrintPegsCommand.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp
@@ -704,7 +703,6 @@ Qt::Quick
 Qt::QuickWidgets
 Qt::QuickControls2
 meshoptimizer
-manifold
 xatlas
 qtmesh_sodium
 )
@@ -893,7 +891,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer manifold xatlas qtmesh_sodium qtmesh_updater)
+    meshoptimizer xatlas qtmesh_sodium qtmesh_updater)
 
     if(stb_SOURCE_DIR)
         target_include_directories(UnitTests PRIVATE ${stb_SOURCE_DIR})

@@ -1,7 +1,6 @@
 #include "PartOpsMesh.h"
 
 #include "EditableMesh.h"
-#include "SentryReporter.h"
 
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -56,11 +55,7 @@ Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMesh
     EditableMesh em;
     em.subMeshes() = subMeshes;
     // A plain SPLIT keeps recomputeNormals=false so the source normals (incl.
-    // authored / hard-edge normals) survive verbatim (#859 review). The PEG path
-    // passes true: the Manifold boolean + cap fans introduce new faces whose
-    // nearest-source normals point the wrong way for a concave cavity wall
-    // (dark/black shading — the "holes look wrong" symptom), so recomputing
-    // gives the connectors correct outward normals.
+    // authored / hard-edge normals) survive verbatim (#859 review).
     Ogre::MeshPtr mesh = em.createNewMesh(baseName, recomputeNormals);
     if (!mesh)
         return mesh;
@@ -149,74 +144,5 @@ PartOpsMesh::splitEntity(Ogre::Entity* entity,
     out.partNames = std::move(split.partNames);
     out.createdSubMeshes = split.createdSubMeshes;
     out.duplicatedBoundaryVertices = split.duplicatedBoundaryVertices;
-    return out;
-}
-
-PartOpsMesh::PrintPrepOutcome
-PartOpsMesh::addPrintPegsToEntity(Ogre::Entity* entity, const SubMeshOps::PegOptions& opts,
-                                  const std::string& baseName)
-{
-    PrintPrepOutcome out;
-    if (!entity || !entity->getMesh()) {
-        out.error = QStringLiteral("no entity");
-        return out;
-    }
-    if (entity->getMesh()->getNumSubMeshes() < 2) {
-        out.error = QStringLiteral("mesh has a single part — split it into parts first");
-        return out;
-    }
-    std::vector<EditableSubMesh> src;
-    if (!readSubMeshes(entity, src)) {
-        out.error = QStringLiteral("could not read mesh geometry from entity");
-        return out;
-    }
-
-    // Recover per-part names from the mesh's submesh name map (a prior split
-    // named them head/torso/…), else positional. Used for the connector naming
-    // + boundary report.
-    const auto& nameMap = entity->getMesh()->getSubMeshNameMap();
-    std::vector<QString> names(src.size());
-    for (const auto& kv : nameMap)
-        if (kv.second < names.size())
-            names[kv.second] = QString::fromStdString(kv.first);
-    for (size_t i = 0; i < names.size(); ++i)
-        if (names[i].isEmpty())
-            names[i] = QStringLiteral("part%1").arg(i);
-
-    SubMeshOps::PrintPrepResult prep = SubMeshOps::preparePrintPegs(src, opts, names);
-    if (!prep.ok && prep.subMeshes.empty()) {
-        out.error = prep.error;
-        return out;
-    }
-    for (const auto& b : prep.boundaries)
-        if (!b.pegged)
-            out.warnings.push_back(QStringLiteral("%1↔%2: %3").arg(b.nameA, b.nameB, b.reason));
-
-    QString skelName;
-    if (entity->getMesh()->hasSkeleton())
-        skelName = QString::fromStdString(entity->getMesh()->getSkeletonName());
-    // recomputeNormals=true: the peg/socket/cap geometry needs correct outward
-    // normals (nearest-source copy from the boolean gives concave-wall verts an
-    // outward normal → dark shading).
-    Ogre::MeshPtr mesh = buildMesh(prep.subMeshes, baseName, skelName, prep.partNames,
-                                   /*recomputeNormals=*/true);
-    if (!mesh) {
-        out.error = QStringLiteral("failed to build pegged mesh");
-        return out;
-    }
-
-    out.ok = true;   // the op ran; peggedBoundaries==0 means no safe boundary.
-    out.mesh = mesh;
-    out.partNames = std::move(prep.partNames);
-    out.peggedBoundaries = prep.peggedBoundaries;
-    out.totalPegs = prep.totalPegs;
-
-    // Telemetry for the operation itself so EVERY caller (CLI/MCP/command) gets a
-    // breadcrumb, not just the undo command's redo() (CodeRabbit).
-    SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.print_pegs"),
-                                  QStringLiteral("boundaries=%1 pegs=%2 capped=%3 warnings=%4")
-                                      .arg(out.peggedBoundaries).arg(out.totalPegs)
-                                      .arg(prep.cappedParts)
-                                      .arg(static_cast<int>(out.warnings.size())));
     return out;
 }

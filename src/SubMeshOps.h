@@ -14,7 +14,7 @@
  *
  * PartOps turns AI mesh segmentation (`MeshSegmenter`) into real authoring
  * operations: split a fused mesh into per-part submeshes, explode those into
- * separate scene nodes, join them back, and add 3D-print alignment pegs.
+ * separate scene nodes, and join them back.
  *
  * Everything here operates on `std::vector<EditableSubMesh>` — the same
  * attribute-complete editable representation `EditableMesh` loads from an
@@ -179,85 +179,6 @@ public:
      *  space. Edits `sub` in place; returns the number of caps (loops) filled.
      *  Deterministic; pure-data. Skips loops shorter than 3 edges. */
     static int capOpenBoundaries(EditableSubMesh& sub);
-
-    // -------------------------------------------------------------------------
-    // Print-split alignment pegs (Slice D #863)
-    // -------------------------------------------------------------------------
-
-    struct PegOptions {
-        float clearance = 0.20f;   ///< socket radius = pegRadius + clearance.
-        float pegRadius = 1.50f;   ///< model units.
-        float pegDepth = 4.00f;    ///< how far the peg protrudes / socket sinks.
-        int maxPegsPerBoundary = 3;
-        int radialSegments = 16;   ///< cylinder tessellation.
-    };
-
-    /** A boundary plane estimated between two parts: the shared/coincident
-     *  vertices' centroid + best-fit normal (via covariance). `stable` is
-     *  false when the boundary is too small or too noisy to place pegs. */
-    struct BoundaryPlane {
-        Ogre::Vector3 center = Ogre::Vector3::ZERO;
-        Ogre::Vector3 normal = Ogre::Vector3::UNIT_Y;
-        float radius = 0.0f;       ///< extent of the boundary ring in-plane.
-        bool stable = false;
-        QString reason;            ///< why unstable (when !stable).
-    };
-
-    /** Estimate the boundary plane between two parts from vertices that are
-     *  coincident (within `weldTol`) across the two submesh sets — the seam
-     *  left by a split. Needs >= 8 coincident points and a covariance whose
-     *  smallest eigenvalue is well-separated (a real plane, not a blob) to be
-     *  `stable`. Pure-data. */
-    static BoundaryPlane estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
-                                               const std::vector<EditableSubMesh>& partB,
-                                               float weldTol = 1e-4f);
-
-    /** Build matching male-peg (added to `outMale`) and female-socket-cutter
-     *  (added to `outSocket`) cylinder submeshes on the given boundary plane.
-     *  Pegs are placed on a ring inside the boundary radius, up to
-     *  `maxPegsPerBoundary`. The socket cutter is the peg + clearance; the
-     *  adapter decides whether to boolean-subtract or just group it (this MVP
-     *  emits it as a named submesh — no boolean, per epic scope). Returns the
-     *  number of pegs generated (0 when the plane is unstable). Pure geometry. */
-    static int buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions& opts,
-                                  EditableSubMesh& outMale, EditableSubMesh& outSocket);
-
-    /** One boundary the print-prep pass considered. */
-    struct PegBoundary {
-        int partA = -1;            ///< index into the input submeshes.
-        int partB = -1;
-        QString nameA, nameB;      ///< the parts' display names (for messages).
-        bool pegged = false;       ///< true when pegs were placed.
-        int pegCount = 0;
-        QString reason;            ///< why skipped (when !pegged).
-    };
-
-    struct PrintPrepResult {
-        bool ok = false;
-        QString error;
-        /** The new submesh layout: the input parts, each with its male peg OR
-         *  socket merged in as extra geometry, plus any parts unchanged. */
-        std::vector<EditableSubMesh> subMeshes;
-        std::vector<QString> partNames;   ///< parallel to subMeshes.
-        std::vector<PegBoundary> boundaries; ///< every pair considered (diag).
-        int peggedBoundaries = 0;
-        int totalPegs = 0;
-        int cappedParts = 0;   ///< parts whose open cut face was closed.
-    };
-
-    /** Prepare a split mesh for 3D printing (Slice D #863). For EVERY pair of
-     *  input submeshes that share a STABLE planar boundary (the seam a split
-     *  left — coincident verts across the pair, via `estimateBoundaryPlane`),
-     *  generate matching cylindrical pegs: the MALE peg is merged into `partA`
-     *  and the female SOCKET-cutter into `partB` (each as extra geometry with a
-     *  `connector_male`/`connector_socket` material), so each part carries its
-     *  own connector and stays one printable object. Tiny / non-planar
-     *  boundaries are skipped with a per-pair `reason` (never fails the whole
-     *  op). `partNames` (optional, parallel to `subMeshes`) is used for the
-     *  boundary report + connector naming. Deterministic; pure-data. */
-    static PrintPrepResult preparePrintPegs(const std::vector<EditableSubMesh>& subMeshes,
-                                            const PegOptions& opts,
-                                            const std::vector<QString>& partNames = {});
 };
 
 #endif // SUBMESHOPS_H

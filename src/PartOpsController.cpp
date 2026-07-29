@@ -6,7 +6,6 @@
 #include "commands/SplitMeshCommand.h"
 #include "commands/ExplodePartsCommand.h"
 #include "commands/JoinPartsCommand.h"
-#include "commands/AddPrintPegsCommand.h"
 
 #include <OgreEntity.h>
 #include <OgreMesh.h>
@@ -179,47 +178,4 @@ void PartOpsController::joinSelected()
     }
     emit joinFinished(tr("Joined %1 parts into one mesh (%2 submeshes).")
                           .arg(partCount).arg(cmd->createdSubMeshes()), false);
-}
-
-void PartOpsController::preparePrintSplit(double clearance, double pegRadius,
-                                          double pegDepth, int maxPegsPerBoundary)
-{
-    const auto* sel = SelectionSet::getSingleton();
-    if (!sel) {
-        emit printPrepFinished(tr("No selection."), true);
-        return;
-    }
-    const QList<Ogre::Entity*> entities = sel->getResolvedEntities();
-    if (entities.size() != 1 || !entities.first() || !entities.first()->getMesh()) {
-        emit printPrepFinished(tr("Select a single split mesh."), true);
-        return;
-    }
-    if (entities.first()->getMesh()->getNumSubMeshes() < 2) {
-        emit printPrepFinished(tr("Mesh has a single part — split it into parts first."), true);
-        return;
-    }
-
-    SubMeshOps::PegOptions opts;
-    opts.clearance = static_cast<float>(clearance);
-    opts.pegRadius = static_cast<float>(pegRadius);
-    opts.pegDepth = static_cast<float>(pegDepth);
-    opts.maxPegsPerBoundary = maxPegsPerBoundary;
-
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("prepare_print_split"));
-    const std::string entName = entities.first()->getName();
-    auto* cmd = new AddPrintPegsCommand(entName, opts);
-    UndoManager::getSingleton()->push(cmd);
-
-    if (!cmd->ok()) {
-        emit printPrepFinished(cmd->error().isEmpty() ? tr("Print prep failed.") : cmd->error(), true);
-        return;
-    }
-    if (cmd->peggedBoundaries() == 0) {
-        emit printPrepFinished(
-            tr("No stable part boundary found — no pegs added. Try adjusting the peg size."), true);
-        return;
-    }
-    emit printPrepFinished(
-        tr("Added %1 pegs across %2 boundaries.").arg(cmd->totalPegs()).arg(cmd->peggedBoundaries()),
-        false);
 }

@@ -426,30 +426,6 @@ endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 
 ##############################################################
-#  Manifold — robust mesh boolean (CSG). MIT. Used to cut real
-#  female SOCKET cavities for the 3D-print alignment pegs
-#  (PartOps #863). Configured lean: no exports/tests/parallel/
-#  cross-section/embind — just the core boolean library.
-##############################################################
-set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_EXPORT OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_PAR OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_CROSS_SECTION OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_EXCEPTIONS ON CACHE BOOL "" FORCE)
-set(MANIFOLD_DEBUG OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_CBIND OFF CACHE BOOL "" FORCE)
-set(MANIFOLD_JSBIND OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    manifold
-    GIT_REPOSITORY https://github.com/elalish/manifold.git
-    GIT_TAG v3.0.1
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(manifold)
-message(STATUS "manifold enabled (mesh boolean — print-peg sockets)")
-
-##############################################################
 #  stb — Radiance .hdr decode for HDR environment maps (#467).
 ##############################################################
 FetchContent_Declare(

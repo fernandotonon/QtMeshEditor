@@ -10357,7 +10357,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     QString writeLabelsPath;   // PartOps #864: dump face/vertex labels to JSON
     QString outputPath;        // PartOps #864: --split-parts output mesh
     bool splitParts = false;   // PartOps #861/#864
-    bool printPegs = false;    // PartOps #863: add alignment pegs after --split-parts
     bool jsonOutput = false;
     bool noModel = false;
     bool noIslandCleanup = false;  // #863: raw labels, skip the split-cleanup pass
@@ -10371,7 +10370,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--no-island-cleanup") { noIslandCleanup = true; continue; }
         if (arg == "--split-parts") { splitParts = true; continue; }
-        if (arg == "--print-pegs") { splitParts = true; printPegs = true; continue; }
         if (arg == "--write-labels") {
             if (i + 1 >= argc) {
                 err() << "Error: --write-labels requires an output path." << Qt::endl;
@@ -10433,14 +10431,13 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                  "[--category auto|body|vegetation|vehicle|building] "
                  "[--no-island-cleanup] "
                  "[--dump-training-data <out.json>] [--write-labels <out.json>] "
-                 "[--split-parts | --print-pegs -o <out.glb>]" << Qt::endl;
+                 "[--split-parts -o <out.glb>]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
     if (!fi.exists()) { err() << "Error: file not found: " << inputPath << Qt::endl; return 1; }
     if (splitParts && outputPath.isEmpty()) {
-        err() << "Error: " << (printPegs ? "--print-pegs" : "--split-parts")
-              << " requires -o <output mesh>." << Qt::endl;
+        err() << "Error: --split-parts requires -o <output mesh>." << Qt::endl;
         return 2;
     }
     if (!initOgreHeadless()) return 1;
@@ -10640,7 +10637,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (splitParts) {
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         SubMeshOps::SplitOptions sopts; // default "Body" prefix, preserve material
-        sopts.capParts = true;          // watertight parts (close the cut face, #863)
+        sopts.capParts = true;          // watertight parts (close the cut face)
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts, fi.completeBaseName().toStdString());
         if (!so.ok) {
@@ -10654,36 +10651,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (!splitEnt) {
             err() << "Error: could not build scene node for split mesh." << Qt::endl;
             return 1;
-        }
-
-        // #863: optionally add 3D-print alignment pegs at every stable part
-        // boundary, then export the pegged mesh instead.
-        int peggedBoundaries = 0, totalPegs = 0;
-        QStringList pegWarnings;
-        if (printPegs) {
-            SubMeshOps::PegOptions popts; // issue defaults (clearance .20, r 1.5, …)
-            PartOpsMesh::PrintPrepOutcome po = PartOpsMesh::addPrintPegsToEntity(
-                splitEnt, popts, fi.completeBaseName().toStdString() + "_pegged");
-            if (!po.ok) {
-                err() << "Error: print-peg prep failed — "
-                      << (po.error.isEmpty() ? QStringLiteral("unknown") : po.error) << Qt::endl;
-                return 1;
-            }
-            for (const QString& w : po.warnings) pegWarnings << w;
-            peggedBoundaries = po.peggedBoundaries;
-            totalPegs = po.totalPegs;
-            if (peggedBoundaries > 0) {
-                // Swap the pegged mesh onto the node for export.
-                node->detachObject(splitEnt);
-                mgr->getSceneMgr()->destroyEntity(splitEnt);
-                splitEnt = mgr->createEntity(node, po.mesh);
-                if (!splitEnt) {
-                    err() << "Error: could not build node for pegged mesh." << Qt::endl;
-                    return 1;
-                }
-            } else {
-                err() << "Warning: no stable part boundary — exporting without pegs." << Qt::endl;
-            }
         }
 
         const QString fmt = formatForExtension(outputPath);
@@ -10705,13 +10672,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
             QJsonArray pn;
             for (const QString& n : so.partNames) pn.append(n);
             root["partNames"] = pn;
-            if (printPegs) {
-                root["peggedBoundaries"] = peggedBoundaries;
-                root["totalPegs"] = totalPegs;
-                QJsonArray warn;
-                for (const QString& w : pegWarnings) warn.append(w);
-                root["pegWarnings"] = warn;
-            }
             cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
         } else {
             cliWrite(QString("Split %1 into %2 part submeshes → %3\n")
@@ -10719,9 +10679,6 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                          .arg(QFileInfo(outputPath).fileName()));
             for (const QString& n : so.partNames)
                 cliWrite(QString("  %1\n").arg(n));
-            if (printPegs)
-                cliWrite(QString("Added %1 alignment pegs across %2 part boundaries.\n")
-                             .arg(totalPegs).arg(peggedBoundaries));
         }
         return 0; // split path produces its own output; skip the label dump below
     }
