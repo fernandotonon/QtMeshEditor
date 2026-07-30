@@ -225,3 +225,58 @@ TEST(PaintLayerStackTest, LayerMaskHidesStrokeRegion)
     EXPECT_LT(hidden.r, 0.1f);
     EXPECT_GT(shown.r, 0.9f);
 }
+
+TEST(PaintLayerStackTest, DuplicateAdjustsSoloIndex)
+{
+    PaintLayerStack stack;
+    TexturePaintBuffer flat(2, 2);
+    flat.clear(Ogre::ColourValue::White);
+    flat.clearDirty();
+    stack.initFromFlatBuffer(flat);
+    stack.addEmpty(QStringLiteral("L2"));
+    stack.setSolo(1, true);
+    EXPECT_EQ(stack.soloIndex(), 1);
+
+    stack.duplicateLayer(0);
+    EXPECT_EQ(stack.soloIndex(), 2);
+    EXPECT_EQ(stack.activeIndex(), 1);
+}
+
+TEST(PaintLayerStackTest, RemoveLayerRejectsInvalidIndex)
+{
+    PaintLayerStack stack;
+    TexturePaintBuffer flat(2, 2);
+    flat.clear(Ogre::ColourValue::White);
+    flat.clearDirty();
+    stack.initFromFlatBuffer(flat);
+    stack.addEmpty(QStringLiteral("L2"));
+    stack.removeLayer(-1);
+    stack.removeLayer(99);
+    EXPECT_EQ(stack.layerCount(), 2);
+}
+
+TEST(PaintLayerStackTest, AllHiddenCompositeMatchesRegion)
+{
+    PaintLayerStack stack;
+    TexturePaintBuffer flat(4, 4);
+    flat.clear(Ogre::ColourValue::White);
+    flat.clearDirty();
+    stack.initFromFlatBuffer(flat);
+    stack.addEmpty(QStringLiteral("L2"));
+    stack.setVisible(0, false);
+    stack.setVisible(1, false);
+
+    std::vector<uint8_t> full;
+    stack.compositeTo(full);
+    const auto fullPx = px(full, 4, 0, 0);
+    EXPECT_NEAR(fullPx.r, 1.f, 0.02f);
+    EXPECT_NEAR(fullPx.a, 1.f, 0.02f);
+
+    std::vector<uint8_t> region(4 * 4 * 4, 0);
+    stack.compositeRegionTo(region.data(), 0, 0, 2, 2);
+    const auto regionPx = px(region, 4, 0, 0);
+    EXPECT_NEAR(regionPx.r, fullPx.r, 0.001f);
+    EXPECT_NEAR(regionPx.g, fullPx.g, 0.001f);
+    EXPECT_NEAR(regionPx.b, fullPx.b, 0.001f);
+    EXPECT_NEAR(regionPx.a, fullPx.a, 0.001f);
+}

@@ -94,10 +94,26 @@ QString PaintLayerStack::allocateLayerName() const
 
 void PaintLayerStack::resizeAll(int width, int height)
 {
+    const int oldW = this->width();
+    const int oldH = this->height();
     for (auto& L : m_layers) {
-        L.buffer.resize(width, height);
-        if (!L.maskAlpha.empty())
+        if (!L.maskAlpha.empty() && oldW > 0 && oldH > 0) {
+            std::vector<uint8_t> oldMask = std::move(L.maskAlpha);
+            L.buffer.resize(width, height);
             L.maskAlpha.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 255);
+            const int copyW = std::min(oldW, width);
+            const int copyH = std::min(oldH, height);
+            for (int y = 0; y < copyH; ++y) {
+                for (int x = 0; x < copyW; ++x) {
+                    L.maskAlpha[static_cast<size_t>(y) * static_cast<size_t>(width)
+                                + static_cast<size_t>(x)]
+                        = oldMask[static_cast<size_t>(y) * static_cast<size_t>(oldW)
+                                  + static_cast<size_t>(x)];
+                }
+            }
+        } else {
+            L.buffer.resize(width, height);
+        }
     }
 }
 

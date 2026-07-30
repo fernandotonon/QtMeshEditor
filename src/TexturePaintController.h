@@ -326,7 +326,7 @@ public:
     /// If the current selection includes a multi-layer paint session, ask
     /// whether to continue (export stores the flattened composite only).
     /// Returns false when the user cancels.
-    Q_INVOKABLE bool confirmFlattenLayersForExport(QWidget* parent) const;
+    bool confirmFlattenLayersForExport(QWidget* parent) const;
     /// Recompose visible layers and push the composite into the live texture
     /// + embedded cache so mesh export sees painted pixels.
     void flushPaintTextureForExport(Ogre::Entity* entity);
@@ -781,6 +781,7 @@ private:
     bool m_strokeMadeChanges = false;
     bool m_embeddedCacheUpdateScheduled = false;
     bool m_layerOpacityDragging = false;
+    bool m_layerOpacityDragChanged = false;
     PaintLayerStack::Snapshot m_layerOpacityDragBefore;
     /// Layer pixels at the end of the last stroke — O(1) handoff as the next pre-image.
     std::vector<uint8_t> m_layerStrokeBaseline;

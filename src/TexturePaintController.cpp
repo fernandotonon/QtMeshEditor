@@ -4793,16 +4793,11 @@ QVariantList TexturePaintController::paintLayers() const
 
 QStringList TexturePaintController::blendModeNames() const
 {
-    return {
-        QStringLiteral("Normal"),
-        QStringLiteral("Multiply"),
-        QStringLiteral("Screen"),
-        QStringLiteral("Overlay"),
-        QStringLiteral("Add"),
-        QStringLiteral("Subtract"),
-        QStringLiteral("Soft Light"),
-        QStringLiteral("Hue"),
-    };
+    QStringList names;
+    for (int m = 0; m <= static_cast<int>(PaintLayerBlend::Mode::Hue); ++m)
+        names << QString::fromLatin1(
+            PaintLayerBlend::modeName(static_cast<PaintLayerBlend::Mode>(m)));
+    return names;
 }
 
 int TexturePaintController::addPaintLayer(const QString& name)
@@ -4814,7 +4809,7 @@ int TexturePaintController::addPaintLayer(const QString& name)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Add layer"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.add"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Added layer '%1'").arg(m_layerStack.layer(idx).name));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4833,7 +4828,7 @@ void TexturePaintController::deletePaintLayer(int index)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Delete layer"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.delete"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Deleted layer '%1'").arg(removed));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4849,7 +4844,7 @@ int TexturePaintController::duplicatePaintLayer(int index)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Duplicate layer"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.duplicate"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Duplicated layer '%1'").arg(m_layerStack.layer(idx).name));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4866,7 +4861,7 @@ void TexturePaintController::movePaintLayerUp(int index)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer up"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Moved layer up"));
     ++m_layerPreviewVersion;
     emit layersChanged();
     emit fullResPreviewChanged();
@@ -4881,7 +4876,7 @@ void TexturePaintController::movePaintLayerDown(int index)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Move layer"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.reorder"), QStringLiteral("Moved layer down"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Moved layer down"));
     ++m_layerPreviewVersion;
     emit layersChanged();
     emit fullResPreviewChanged();
@@ -4893,7 +4888,7 @@ void TexturePaintController::renamePaintLayer(int index, const QString& name)
     const auto before = m_layerStack.snapshot();
     m_layerStack.renameLayer(index, name);
     pushLayerOpUndo(QStringLiteral("Rename layer"), before, m_layerStack.snapshot());
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.rename"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Renamed layer to '%1'").arg(name));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4908,7 +4903,7 @@ void TexturePaintController::mergePaintLayerDown(int index)
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Merge down"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.merge"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Merged layer down at index %1").arg(index));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4924,7 +4919,7 @@ void TexturePaintController::flattenPaintLayers()
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Flatten layers"), before, m_layerStack.snapshot());
     invalidateLayerStrokeBaseline();
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.flatten"), QStringLiteral("Flattened layer stack"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Flattened layer stack"));
     ++m_layerPreviewVersion;
     emit layersChanged();
     emit fullResPreviewChanged();
@@ -4939,7 +4934,7 @@ void TexturePaintController::setPaintLayerVisible(int index, bool visible)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Layer visibility"), before, m_layerStack.snapshot());
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.visibility"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         visible ? QStringLiteral("Show layer") : QStringLiteral("Hide layer"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4951,7 +4946,7 @@ void TexturePaintController::setPaintLayerLocked(int index, bool locked)
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.layer(index).locked == locked) return;
     m_layerStack.setLocked(index, locked);
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.lock"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         locked ? QStringLiteral("Locked layer") : QStringLiteral("Unlocked layer"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4960,16 +4955,22 @@ void TexturePaintController::setPaintLayerLocked(int index, bool locked)
 void TexturePaintController::setPaintLayerOpacity(int index, double opacity)
 {
     if (index < 0 || index >= m_layerStack.layerCount()) return;
+    const float clamped = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+    if (std::abs(m_layerStack.layer(index).opacity - clamped) < 1e-5f)
+        return;
+
     PaintLayerStack::Snapshot before;
     if (!m_layerOpacityDragging)
         before = m_layerStack.snapshot();
-    m_layerStack.setOpacity(index, static_cast<float>(opacity));
+    m_layerStack.setOpacity(index, clamped);
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
-    if (!m_layerOpacityDragging) {
+    if (m_layerOpacityDragging) {
+        m_layerOpacityDragChanged = true;
+    } else {
         pushLayerOpUndo(QStringLiteral("Layer opacity"), before, m_layerStack.snapshot());
-        SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"),
-            QStringLiteral("Opacity=%1").arg(opacity, 0, 'f', 2));
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+            QStringLiteral("Opacity=%1").arg(clamped, 0, 'f', 2));
     }
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -4981,16 +4982,20 @@ void TexturePaintController::beginPaintLayerOpacityDrag()
     if (!hasActiveSession() || m_layerStack.layerCount() <= 0) return;
     m_layerOpacityDragBefore = m_layerStack.snapshot();
     m_layerOpacityDragging = true;
+    m_layerOpacityDragChanged = false;
 }
 
 void TexturePaintController::endPaintLayerOpacityDrag()
 {
     if (!m_layerOpacityDragging) return;
     m_layerOpacityDragging = false;
-    const auto after = m_layerStack.snapshot();
-    pushLayerOpUndo(QStringLiteral("Layer opacity"), m_layerOpacityDragBefore, after);
+    if (m_layerOpacityDragChanged) {
+        const auto after = m_layerStack.snapshot();
+        pushLayerOpUndo(QStringLiteral("Layer opacity"), m_layerOpacityDragBefore, after);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Opacity drag"));
+    }
     m_layerOpacityDragBefore = {};
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.opacity"), QStringLiteral("Opacity drag"));
+    m_layerOpacityDragChanged = false;
 }
 
 void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
@@ -5001,7 +5006,7 @@ void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Layer blend mode"), before, m_layerStack.snapshot());
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.blend"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         PaintLayerBlend::modeName(static_cast<PaintLayerBlend::Mode>(mode)));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -5019,7 +5024,7 @@ void TexturePaintController::setPaintLayerSolo(int index, bool solo)
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
     pushLayerOpUndo(QStringLiteral("Layer solo"), before, m_layerStack.snapshot());
-    SentryReporter::addBreadcrumb(QStringLiteral("paint.layer.solo"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         solo ? QStringLiteral("Solo on") : QStringLiteral("Solo off"));
     ++m_layerPreviewVersion;
     emit layersChanged();
@@ -5094,10 +5099,15 @@ bool TexturePaintController::confirmFlattenLayersForExport(QWidget* parent) cons
         "Continue export?")
                             .arg(layerCount());
 
-    return QMessageBox::warning(parent, tr("Flatten Texture Layers?"), msg,
+    const auto choice = QMessageBox::warning(parent, tr("Flatten Texture Layers?"), msg,
                                 QMessageBox::Ok | QMessageBox::Cancel,
-                                QMessageBox::Ok)
-           == QMessageBox::Ok;
+                                QMessageBox::Ok);
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ui.action"),
+        choice == QMessageBox::Ok
+            ? QStringLiteral("Export flatten layers confirmed (%1 layers)").arg(layerCount())
+            : QStringLiteral("Export flatten layers cancelled (%1 layers)").arg(layerCount()));
+    return choice == QMessageBox::Ok;
 }
 
 void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
@@ -5111,7 +5121,7 @@ void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
     doFlushDirtyToOgre(/*immediate=*/true);
     updateEmbeddedTextureCache();
     SentryReporter::addBreadcrumb(
-        QStringLiteral("paint.layer.export"),
+        QStringLiteral("file.export"),
         QStringLiteral("Flushed %1-layer composite before export")
             .arg(m_layerStack.layerCount()));
 }

@@ -123,6 +123,36 @@ Rgba normalComposite(const Rgba& dst, const Rgba& src, float alpha)
     };
 }
 
+Rgba compositePixelAt(size_t pixelIndex,
+                      const std::vector<LayerInput>& layers)
+{
+    Rgba acc{1.f, 1.f, 1.f, 1.f};
+    bool haveAcc = false;
+
+    for (const auto& layer : layers) {
+        if (!layer.visible || !layer.rgba) continue;
+        const size_t off = pixelIndex * 4u;
+        const uint8_t* px = layer.rgba + off;
+        const uint8_t mask = layer.maskAlpha ? layer.maskAlpha[pixelIndex] : 255;
+        Rgba src = rgbaFromBytes(px[0], px[1], px[2], px[3]);
+
+        if (!haveAcc) {
+            const float a = clamp01(src.a * clamp01(layer.opacity) * byteToF(mask));
+            if (a <= kEps)
+                continue;
+            acc = {src.r, src.g, src.b, a};
+            haveAcc = true;
+            continue;
+        }
+
+        acc = blendPixel(acc, src, layer.blendMode, layer.opacity, mask);
+    }
+
+    if (!haveAcc)
+        return {0.f, 0.f, 0.f, 0.f};
+    return acc;
+}
+
 } // namespace
 
 const char* modeName(Mode mode)
@@ -191,36 +221,6 @@ Rgba blendPixel(const Rgba& dst, const Rgba& src, Mode mode, float opacity, uint
     Rgba out = blended;
     out.a = effectiveAlpha;
     return normalComposite(dst, out, effectiveAlpha);
-}
-
-Rgba compositePixelAt(size_t pixelIndex,
-                      const std::vector<LayerInput>& layers)
-{
-    Rgba acc{1.f, 1.f, 1.f, 1.f};
-    bool haveAcc = false;
-
-    for (const auto& layer : layers) {
-        if (!layer.visible || !layer.rgba) continue;
-        const size_t off = pixelIndex * 4u;
-        const uint8_t* px = layer.rgba + off;
-        const uint8_t mask = layer.maskAlpha ? layer.maskAlpha[pixelIndex] : 255;
-        Rgba src = rgbaFromBytes(px[0], px[1], px[2], px[3]);
-
-        if (!haveAcc) {
-            const float a = clamp01(src.a * clamp01(layer.opacity) * byteToF(mask));
-            if (a <= kEps)
-                continue;
-            acc = {src.r, src.g, src.b, a};
-            haveAcc = true;
-            continue;
-        }
-
-        acc = blendPixel(acc, src, layer.blendMode, layer.opacity, mask);
-    }
-
-    if (!haveAcc)
-        return {0.f, 0.f, 0.f, 0.f};
-    return acc;
 }
 
 void compositeLayers(int width, int height,
