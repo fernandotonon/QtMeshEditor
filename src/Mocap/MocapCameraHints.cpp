@@ -21,8 +21,10 @@ QString snapConnectHint()
         return {};
     return QCoreApplication::translate(
         "MocapCameraHints",
-        "\n\nIf you installed via Snap, connect the camera interface:\n"
-        "  snap connect qtmesheditor:camera");
+        "\n\nIf you installed via Snap, connect the camera and audio-record "
+        "interfaces (Qt uses PipeWire for webcams on modern Linux):\n"
+        "  snap connect qtmesheditor:camera\n"
+        "  snap connect qtmesheditor:audio-record");
 }
 
 QString permissionDeniedMessage()
@@ -37,9 +39,10 @@ QString permissionDeniedMessage()
     if (runningAsSnap()) {
         return QCoreApplication::translate(
             "MocapCameraHints",
-            "Camera access was not granted. Connect the camera interface, then "
-            "click Preview again:\n"
-            "  snap connect qtmesheditor:camera");
+            "Camera access was not granted. Connect the camera and audio-record "
+            "interfaces, then click Preview again:\n"
+            "  snap connect qtmesheditor:camera\n"
+            "  snap connect qtmesheditor:audio-record");
     }
     return QCoreApplication::translate(
         "MocapCameraHints",

@@ -929,6 +929,16 @@ jobs:
               done
             fi
 
+            # PipeWire client — Qt 6 Multimedia dlopen()s libpipewire-0.3 for camera
+            # enumeration on modern Linux (not via the FFmpeg plugin). Without it
+            # QMediaDevices::videoInputs() is empty and mocap shows "no camera".
+            for lib in libpipewire-0.3.so.0; do
+              src="/usr/lib/x86_64-linux-gnu/${lib}"
+              if [ -e "$src" ]; then
+                cp -L "$src" ./pack-deb/usr/lib/qtmesheditor/
+              fi
+            done
+
             dpkg-deb --build --root-owner-group pack-deb
             mv pack-deb.deb qtmesheditor_amd64.deb
     
