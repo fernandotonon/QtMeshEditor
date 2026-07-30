@@ -102,20 +102,16 @@ permission and exercises the identical pipeline.
 
 The Snap is strictly confined, so webcam access needs two things:
 
-1. **Connect the camera and audio-record interfaces** (one-time, not
-   auto-connected on install). Qt 6 uses **PipeWire** for webcam enumeration on
-   modern Linux — the Snap needs both the `camera` plug (device access) and
-   `audio-record` (PipeWire client socket):
+1. **Connect the camera interface** (one-time, not auto-connected on install):
 
    ```bash
    snap connect qtmesheditor:camera
-   snap connect qtmesheditor:audio-record
    ```
 
 2. **Use a build that bundles PipeWire + the Qt Multimedia FFmpeg backend**
    (3.25.1+). If startup logs show
    `Couldn't load pipewire-0.3 library`, the build is too old — upgrade. The
-   Performance Capture panel suggests the `snap connect` commands when no cameras
+   Performance Capture panel suggests the `snap connect` command when no cameras
    appear or permission is denied.
 
 On desktop Linux outside Snap, allow camera access via your desktop portal /

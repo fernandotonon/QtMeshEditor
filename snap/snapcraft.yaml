@@ -57,8 +57,6 @@ apps:
       - network
       - removable-media
       - camera
-      # PipeWire client socket (camera enumeration on modern Linux desktops).
-      - audio-record
     environment:
       LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
       QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH

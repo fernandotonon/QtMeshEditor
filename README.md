@@ -30,7 +30,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.25.1**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.25.2**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 
@@ -48,10 +48,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.25.1
+        uses: fernandotonon/QtMeshEditor@3.25.2
         with:
           command: scan
-          image-tag: "3.25.1"
+          image-tag: "3.25.2"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -76,37 +76,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.25.1
+- uses: fernandotonon/QtMeshEditor@3.25.2
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.25.1"
+    image-tag: "3.25.2"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.25.1
+- uses: fernandotonon/QtMeshEditor@3.25.2
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.25.1"
+    image-tag: "3.25.2"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.25.1
+- uses: fernandotonon/QtMeshEditor@3.25.2
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.25.1"
+    image-tag: "3.25.2"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.25.1
+- uses: fernandotonon/QtMeshEditor@3.25.2
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.25.1"
+    image-tag: "3.25.2"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh:latest scan ./assets --fail-on error
