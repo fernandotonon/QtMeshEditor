@@ -916,6 +916,11 @@ jobs:
                     ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/ 2>/dev/null || true
             fi
 
+            # Qt FFmpeg stub shims — libffmpegmediaplugin.so depends on these; when
+            # they are absent the FFmpeg backend fails to load and
+            # QMediaDevices::videoInputs() returns empty ("no camera available").
+            cp -L "$QT_DIR/lib/libQt6FFmpegStub-"*.so* ./pack-deb/usr/lib/qtmesheditor/ 2>/dev/null || true
+
             # Bundle FFmpeg libs required by libffmpegmediaplugin.so so confined
             # Snap / minimal .deb installs can open webcams and video files.
             FFMPEG_PLUGIN="./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/libffmpegmediaplugin.so"
@@ -927,16 +932,23 @@ jobs:
                     ;;
                 esac
               done
+              if ldd "$FFMPEG_PLUGIN" | grep -q 'not found'; then
+                echo "ERROR: libffmpegmediaplugin.so has unresolved deps:" >&2
+                ldd "$FFMPEG_PLUGIN" | grep 'not found' >&2
+                exit 1
+              fi
             fi
 
             # PipeWire client — Qt 6 Multimedia dlopen()s libpipewire-0.3 for camera
-            # enumeration on modern Linux (not via the FFmpeg plugin). Without it
-            # QMediaDevices::videoInputs() is empty and mocap shows "no camera".
+            # enumeration on modern Linux (not via the FFmpeg plugin).
+            sudo apt-get install -y libpipewire-0.3-0t64
             for lib in libpipewire-0.3.so.0; do
               src="/usr/lib/x86_64-linux-gnu/${lib}"
-              if [ -e "$src" ]; then
-                cp -L "$src" ./pack-deb/usr/lib/qtmesheditor/
+              if [ ! -e "$src" ]; then
+                echo "ERROR: missing ${src} (needed for webcam enumeration)" >&2
+                exit 1
               fi
+              cp -L "$src" ./pack-deb/usr/lib/qtmesheditor/
             done
 
             dpkg-deb --build --root-owner-group pack-deb

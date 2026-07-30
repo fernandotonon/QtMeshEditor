@@ -108,11 +108,13 @@ The Snap is strictly confined, so webcam access needs two things:
    snap connect qtmesheditor:camera
    ```
 
-2. **Use a build that bundles PipeWire + the Qt Multimedia FFmpeg backend**
-   (3.25.1+). If startup logs show
-   `Couldn't load pipewire-0.3 library`, the build is too old — upgrade. The
-   Performance Capture panel suggests the `snap connect` command when no cameras
-   appear or permission is denied.
+2. **Use a build that bundles PipeWire, Qt FFmpeg stubs, and the Multimedia
+   FFmpeg plugin** (3.25.3+). If startup logs show
+   `Couldn't load pipewire-0.3 library`, PipeWire is missing. If you see
+   `No QtMultimedia backends found`, the Qt FFmpeg stub libraries
+   (`libQt6FFmpegStub-*`) were not packaged — upgrade. The Performance Capture
+   panel suggests the `snap connect` command when no cameras appear or
+   permission is denied.
 
 On desktop Linux outside Snap, allow camera access via your desktop portal /
 privacy settings when prompted.
