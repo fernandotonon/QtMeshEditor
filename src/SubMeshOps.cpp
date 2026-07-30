@@ -276,6 +276,13 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         return result;
     }
 
+    // Give each part real WALL VOLUME first (thin-shell assets) so a cut shows a
+    // solid wall cross-section instead of the hollow interior. Done BEFORE
+    // capping so the cap closes the (now thicker) rim.
+    if (opts.solidifyParts)
+        for (auto& part : result.subMeshes)
+            solidify(part, opts.solidifyThickness);
+
     // Close each part's OPEN cut face so every part is a watertight solid — a
     // split just separates geometry and leaves the seam hollow, so an exploded
     // part would show a see-through hole where it was cut from its neighbour.
@@ -527,4 +534,102 @@ int SubMeshOps::capOpenBoundaries(EditableSubMesh& sub)
     if (caps > 0)
         sub.faces.clear();
     return caps;
+}
+
+int SubMeshOps::solidify(EditableSubMesh& sub, float thickness)
+{
+    const unsigned int outerN = static_cast<unsigned int>(sub.vertices.size());
+    if (outerN == 0 || sub.triangles.empty())
+        return 0;
+
+    // 1) Area-weighted vertex normals (use existing when the whole mesh has
+    //    them; otherwise compute so the inward offset direction is sane).
+    std::vector<Ogre::Vector3> vn(outerN, Ogre::Vector3::ZERO);
+    bool haveAll = true;
+    for (unsigned int i = 0; i < outerN; ++i) {
+        if (sub.vertices[i].hasNormal && sub.vertices[i].normal.squaredLength() > 1e-12f)
+            vn[i] = sub.vertices[i].normal.normalisedCopy();
+        else
+            haveAll = false;
+    }
+    if (!haveAll) {
+        std::fill(vn.begin(), vn.end(), Ogre::Vector3::ZERO);
+        for (const EditableTriangle& t : sub.triangles) {
+            const Ogre::Vector3& p0 = sub.vertices[t.indices[0]].position;
+            const Ogre::Vector3& p1 = sub.vertices[t.indices[1]].position;
+            const Ogre::Vector3& p2 = sub.vertices[t.indices[2]].position;
+            const Ogre::Vector3 fn = (p1 - p0).crossProduct(p2 - p0); // area-weighted (unnormalised)
+            for (int k = 0; k < 3; ++k) vn[t.indices[k]] += fn;
+        }
+        for (auto& n : vn) { if (n.squaredLength() > 1e-12f) n.normalise(); }
+    }
+
+    // 2) Auto thickness = ~1.5% of the AABB diagonal when not specified.
+    if (!(thickness > 0.0f)) {
+        Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+        for (const auto& v : sub.vertices) { mn.makeFloor(v.position); mx.makeCeil(v.position); }
+        const float diag = (mx - mn).length();
+        thickness = (diag > 1e-6f) ? diag * 0.015f : 0.01f;
+    }
+
+    // 3) Inner shell: duplicate every vertex pushed inward by `thickness` along
+    //    -normal. Attributes carry over; normal flips inward.
+    sub.vertices.reserve(outerN * 2);
+    for (unsigned int i = 0; i < outerN; ++i) {
+        EditableVertex inner = sub.vertices[i];
+        inner.position = sub.vertices[i].position - vn[i] * thickness;
+        inner.normal = -vn[i];
+        inner.hasNormal = true;
+        sub.vertices.push_back(inner);
+    }
+    const unsigned int innerBase = outerN; // inner index = outer index + innerBase
+
+    // 4) Inner-shell triangles with REVERSED winding (faces inward, so the slab
+    //    reads solid from inside the wall).
+    const size_t outerTriCount = sub.triangles.size();
+    for (size_t i = 0; i < outerTriCount; ++i) {
+        const EditableTriangle& t = sub.triangles[i];
+        EditableTriangle it;
+        it.indices[0] = t.indices[0] + innerBase;
+        it.indices[1] = t.indices[2] + innerBase; // swap 1<->2 to reverse winding
+        it.indices[2] = t.indices[1] + innerBase;
+        sub.triangles.push_back(it);
+    }
+
+    // 5) Stitch a wall between every OPEN boundary edge (outer a→b, interior on
+    //    its LEFT) and its inner counterpart, closing the slab along the rim.
+    //    Wall quad (outer a, outer b, inner b, inner a) → two triangles wound so
+    //    the wall faces OUTWARD (consistent with the outer surface).
+    auto k64 = [](unsigned int a, unsigned int b) -> uint64_t {
+        return (static_cast<uint64_t>(a) << 32) | b;
+    };
+    std::unordered_map<uint64_t, int> dir;
+    for (size_t i = 0; i < outerTriCount; ++i) {
+        const EditableTriangle& t = sub.triangles[i];
+        dir[k64(t.indices[0], t.indices[1])]++;
+        dir[k64(t.indices[1], t.indices[2])]++;
+        dir[k64(t.indices[2], t.indices[0])]++;
+    }
+    int walls = 0;
+    for (const auto& kv : dir) {
+        const unsigned int a = static_cast<unsigned int>(kv.first >> 32);
+        const unsigned int b = static_cast<unsigned int>(kv.first & 0xffffffff);
+        if (dir.find(k64(b, a)) != dir.end())
+            continue; // interior edge, shared by two tris — not a boundary
+        const unsigned int ai = a + innerBase, bi = b + innerBase;
+        // The wall must CANCEL the dangling edges so the slab is watertight: the
+        // outer surface has boundary edge a→b (needs b→a), and the reverse-wound
+        // inner shell has boundary edge ai→bi (needs bi→ai). The quad loop
+        // b→a→ai→bi→b supplies both. Triangulate (b,a,ai) + (b,ai,bi).
+        EditableTriangle t1, t2;
+        t1.indices[0] = b;  t1.indices[1] = a;  t1.indices[2] = ai;
+        t2.indices[0] = b;  t2.indices[1] = ai; t2.indices[2] = bi;
+        sub.triangles.push_back(t1);
+        sub.triangles.push_back(t2);
+        ++walls;
+    }
+
+    // Triangle list is now canonical; drop any stale n-gon binding.
+    sub.faces.clear();
+    return walls;
 }

@@ -6435,6 +6435,16 @@ Rectangle {
                 checked: true
             }
 
+            // Thin-shell game assets are single-sided surfaces with no wall
+            // thickness, so an exploded part exposes its hollow interior at the
+            // cut. "Solidify" gives each part real wall volume first. Default OFF
+            // (adds geometry; only meaningful for thin shells).
+            InspectorCheckBox {
+                id: partOpsSolidifyCheck
+                text: "Solidify thin shells"
+                checked: false
+            }
+
             // Inspector-styled button (same Rectangle+MouseArea idiom as the
             // in-file InspectorButton, inlined because that component is scoped
             // to another section's tree, not this top-level Component).
@@ -6472,7 +6482,8 @@ Rectangle {
                         PartOpsController.splitSelectedIntoParts(
                             "y",
                             partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
-                            !partOpsAiCheck.checked)
+                            !partOpsAiCheck.checked,
+                            partOpsSolidifyCheck.checked)
                     }
                 }
             }

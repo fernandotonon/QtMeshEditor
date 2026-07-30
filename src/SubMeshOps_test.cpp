@@ -451,3 +451,42 @@ TEST(SubMeshOpsTest, CapOpenBoundariesClosesBothEndsOfATube)
     EXPECT_EQ(caps, 2) << "both tube ends must be capped";
     EXPECT_EQ(boundaryEdgeCount(s), 0u) << "tube must be watertight after capping";
 }
+
+// ---- solidify (#863 follow-up: give a thin shell real wall volume) ---------
+
+TEST(SubMeshOpsTest, SolidifyClosesAnOpenFlatQuadIntoASlab)
+{
+    // A single flat quad (2 tris, open on all 4 edges) — a zero-thickness shell.
+    // Solidify must add an inner shell + a wall around the rim so the result is
+    // a closed watertight slab (0 welded open edges), doubling the verts and
+    // adding inner + wall triangles.
+    EditableSubMesh s; s.materialName = "Shell";
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); v.normal=Ogre::Vector3(0,1,0); v.hasNormal=true; return v; };
+    s.vertices = { V(0,0,0), V(1,0,0), V(1,0,1), V(0,0,1) };
+    addTri(s,0,1,2); addTri(s,0,2,3);
+    ASSERT_GT(boundaryEdgeCount(s), 0u);              // open shell
+    const size_t v0=s.vertices.size(), t0=s.triangles.size();
+    const int walls = SubMeshOps::solidify(s, 0.1f);
+    EXPECT_EQ(walls, 4) << "a quad rim has 4 boundary edges → 4 wall quads";
+    EXPECT_EQ(s.vertices.size(), v0*2) << "inner shell duplicates every vertex";
+    // outer tris + inner tris (=outer) + 2 tris per wall quad
+    EXPECT_EQ(s.triangles.size(), t0*2 + 4u*2u);
+    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "solidified slab must be watertight";
+    // The inner shell sits one thickness below the outer along -normal (y).
+    float miny=1e9f, maxy=-1e9f;
+    for (const auto& v : s.vertices){ miny=std::min(miny,v.position.y); maxy=std::max(maxy,v.position.y); }
+    EXPECT_NEAR(maxy-miny, 0.1f, 1e-4f) << "slab thickness == requested";
+}
+
+TEST(SubMeshOpsTest, SolidifyAutoThicknessAndNoOpOnEmpty)
+{
+    EditableSubMesh empty;
+    EXPECT_EQ(SubMeshOps::solidify(empty), 0);         // nothing to do
+    // Auto thickness (<=0) picks a positive value from the AABB.
+    EditableSubMesh s; s.materialName="S";
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); v.normal=Ogre::Vector3(0,1,0); v.hasNormal=true; return v; };
+    s.vertices = { V(0,0,0), V(2,0,0), V(2,0,2), V(0,0,2) };
+    addTri(s,0,1,2); addTri(s,0,2,3);
+    EXPECT_EQ(SubMeshOps::solidify(s, /*auto=*/0.0f), 4);
+    EXPECT_EQ(boundaryEdgeCount(s), 0u);               // watertight
+}

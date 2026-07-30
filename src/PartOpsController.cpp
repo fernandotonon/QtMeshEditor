@@ -74,7 +74,7 @@ bool PartOpsController::canJoin() const
 }
 
 void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QString& category,
-                                               bool noModel)
+                                               bool noModel, bool solidify)  // NOLINT
 {
     const auto* sel = SelectionSet::getSingleton();
     if (!sel) {
@@ -99,7 +99,7 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
     // push() runs redo() synchronously (AutoRigController pattern); read the
     // result back. A failed split leaves a harmless no-op on the undo stack.
     auto* cmd = new SplitMeshCommand(entName, axis, category, noModel,
-                                     QStringLiteral("Body"));
+                                     QStringLiteral("Body"), solidify);
     UndoManager::getSingleton()->push(cmd);
 
     if (!cmd->ok()) {

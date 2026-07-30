@@ -15,13 +15,15 @@
 #include <cstdint>
 
 SplitMeshCommand::SplitMeshCommand(std::string entityName, int upAxis, QString category,
-                                   bool noModel, QString namePrefix, QUndoCommand* parent)
+                                   bool noModel, QString namePrefix, bool solidify,
+                                   QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
     , mUpAxis(upAxis)
     , mCategory(std::move(category))
     , mNoModel(noModel)
     , mNamePrefix(std::move(namePrefix))
+    , mSolidify(solidify)
 {
     setText(QStringLiteral("Split Mesh into Parts"));
 }
@@ -140,6 +142,9 @@ void SplitMeshCommand::redo()
         // solids — an exploded part otherwise shows a see-through hole where it
         // was cut from its neighbour (#863).
         sopts.capParts = true;
+        // Optionally give thin-shell parts real wall volume so a cut exposes a
+        // solid wall instead of the hollow interior (#863 follow-up).
+        sopts.solidifyParts = mSolidify;
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts,

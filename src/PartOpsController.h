@@ -54,7 +54,8 @@ public:
      *  selected mesh. */
     Q_INVOKABLE void splitSelectedIntoParts(const QString& upAxis = QStringLiteral("y"),
                                             const QString& category = QStringLiteral("auto"),
-                                            bool noModel = false);
+                                            bool noModel = false,
+                                            bool solidify = false);
 
     /** Explode the selected multi-submesh mesh into one scene node per part
      *  (undoable). Each part is pushed outward by `distance` × the assembly

@@ -81,6 +81,13 @@ public:
          *  themselves); the user-facing split (SplitMeshCommand) and explode/
          *  print-prep turn it ON. */
         bool capParts = false;
+        /** Give each part real WALL VOLUME (`solidify`) before capping — for
+         *  thin-shell game assets (single-sided surfaces) an exploded part
+         *  otherwise exposes its hollow interior at the cut. Default OFF (adds
+         *  geometry + only meaningful for thin shells). `solidifyThickness` is in
+         *  model units; <= 0 = auto (~1.5% of the part AABB diagonal). */
+        bool solidifyParts = false;
+        float solidifyThickness = 0.0f;
     };
 
     struct SplitResult {
@@ -179,6 +186,26 @@ public:
      *  space. Edits `sub` in place; returns the number of caps (loops) filled.
      *  Deterministic; pure-data. Skips loops shorter than 3 edges. */
     static int capOpenBoundaries(EditableSubMesh& sub);
+
+    // Solidify / shell-thickening (#863 follow-up) ----------------------------
+
+    /** Give a THIN SHELL real wall volume ("Solidify" modifier). Game character
+     *  assets are usually single-sided display shells with no thickness, so when
+     *  a part is split and exploded the cut exposes the hollow interior (you see
+     *  the inner backface through the opening). This offsets an INNER copy of the
+     *  surface inward by `thickness` along the (area-weighted) vertex normals,
+     *  reverses its winding, and stitches a wall between every OPEN boundary edge
+     *  and its inner counterpart — turning the shell into a closed slab of the
+     *  given thickness. A mesh with no open boundaries (already closed) just
+     *  gains an inner shell (a hollow-walled solid — ideal for printing).
+     *
+     *  `thickness` is in model units; pass <= 0 to auto-pick ~1.5% of the mesh
+     *  AABB diagonal. Existing vertex normals are used when present, else
+     *  computed. Attributes (uv/colour/tangent/bone-assignments) are copied onto
+     *  the inner + wall verts from their outer source. Edits `sub` in place;
+     *  returns the number of wall quads stitched (0 = mesh was already closed).
+     *  Deterministic; pure-data. */
+    static int solidify(EditableSubMesh& sub, float thickness = 0.0f);
 };
 
 #endif // SUBMESHOPS_H

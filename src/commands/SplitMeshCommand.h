@@ -39,12 +39,14 @@ public:
      *  @param upAxis       0=X,1=Y,2=Z — forwarded to segmentation.
      *  @param category     MeshSegmenter category id ("auto"/"body"/…).
      *  @param noModel      force the offline geometric/rig-prior segmentation.
-     *  @param namePrefix   submesh name prefix ("Body" → "Body.head" material). */
+     *  @param namePrefix   submesh name prefix ("Body" → "Body.head" material).
+     *  @param solidify     give each part real wall volume (thin-shell assets). */
     SplitMeshCommand(std::string entityName,
                      int upAxis,
                      QString category,
                      bool noModel,
                      QString namePrefix,
+                     bool solidify = false,
                      QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -65,6 +67,7 @@ private:
     QString     mCategory;
     bool        mNoModel = false;
     QString     mNamePrefix;
+    bool        mSolidify = false;
 
     Ogre::SceneNode* mReselectNode = nullptr; ///< transient: node to reselect after a swap.
     Ogre::MeshPtr mOriginalMesh; ///< kept resident so undo can restore it.
