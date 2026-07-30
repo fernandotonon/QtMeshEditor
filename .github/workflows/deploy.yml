@@ -2715,12 +2715,34 @@ jobs:
     - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
       id: build
 
-    - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
+    # Snap Store allows only one revision in manual review at a time. When a
+    # prior upload is still queued, publish fails until it is rejected in
+    # https://dashboard.snapcraft.io/ — retry with backoff for transient cases.
+    - name: Publish to Snap Store
       env:
         SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_TOKEN }}
-      with:
-        snap: ${{ steps.build.outputs.snap }}
-        release: stable
+      run: |
+        SNAP="${{ steps.build.outputs.snap }}"
+        for attempt in 1 2 3 4 5 6; do
+          echo "::group::Snap publish attempt ${attempt}/6 (${SNAP})"
+          set +e
+          snapcraft upload "$SNAP" --release stable 2>&1 | tee /tmp/snap-upload.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -q 'Waiting for previous upload' /tmp/snap-upload.log; then
+            echo "::warning::Snap Store review queue blocked this upload."
+            echo "::warning::Open https://dashboard.snapcraft.io/, find qtmesheditor uploads still 'In review', and click 'Reject and remove from review queue' for stale ones."
+            echo "::warning::Then re-run the failed snap-publish job from GitHub Actions."
+          fi
+          if [ "$attempt" -lt 6 ]; then
+            sleep $((attempt * 60))
+          fi
+        done
+        exit 1
 
 ####################################################################
 # Docker Image Publish (after Linux .deb is built)
