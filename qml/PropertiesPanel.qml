@@ -4415,6 +4415,9 @@ Rectangle {
             property bool hasMask: TexturePaintController.hasSelectionMask
             property int maskCount: TexturePaintController.selectedPixelCount
             property real smartTolerance: TexturePaintController.smartSelectTolerance
+            property int layerCount: TexturePaintController.layerCount
+            property int activeLayerIndex: TexturePaintController.activeLayerIndex
+            property var paintLayers: TexturePaintController.paintLayers
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4450,6 +4453,11 @@ Rectangle {
                     texPaintCol.hasMask = TexturePaintController.hasSelectionMask
                     texPaintCol.maskCount = TexturePaintController.selectedPixelCount
                     texPaintCol.smartTolerance = TexturePaintController.smartSelectTolerance
+                }
+                function onLayersChanged() {
+                    texPaintCol.layerCount = TexturePaintController.layerCount
+                    texPaintCol.activeLayerIndex = TexturePaintController.activeLayerIndex
+                    texPaintCol.paintLayers = TexturePaintController.paintLayers
                 }
             }
 
@@ -4697,6 +4705,270 @@ Rectangle {
                 font.pixelSize: 10
                 opacity: texPaintCol.hasSession ? 1.0 : 0.7
                 wrapMode: Text.Wrap
+            }
+
+            // ---- Layers (Paint v2 Slice C #546) ----
+            Column {
+                id: layersCol
+                spacing: 6
+                width: parent.width - 16
+                visible: texPaintCol.hasSession && texPaintCol.paintTarget === 0
+
+                property var activeLayer: {
+                    const layers = texPaintCol.paintLayers || []
+                    return (layers.length > texPaintCol.activeLayerIndex)
+                        ? layers[texPaintCol.activeLayerIndex] : null
+                }
+
+                Text {
+                    text: "Layers"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+
+                // Toolbar — same action-string pattern as the smart-select row.
+                Row {
+                    spacing: 3
+                    width: parent.width
+                    Repeater {
+                        model: [
+                            { label: "+",     action: "add",      hint: "Add layer" },
+                            { label: "Dup",   action: "dup",      hint: "Duplicate" },
+                            { label: "\u2191", action: "up",      hint: "Move up" },
+                            { label: "\u2193", action: "down",    hint: "Move down" },
+                            { label: "Mrg",   action: "merge",   hint: "Merge down" },
+                            { label: "Flat",  action: "flatten", hint: "Flatten all" },
+                            { label: "\u2715", action: "delete",  hint: "Delete layer" }
+                        ]
+                        Rectangle {
+                            width: 34; height: 22; radius: 3
+                            property bool btnEnabled: modelData.action !== "delete"
+                                || texPaintCol.layerCount > 1
+                            opacity: btnEnabled ? 1.0 : 0.35
+                            color: btnEnabled && layerBtnMa.containsMouse
+                                ? Qt.lighter(PropertiesPanelController.panelColor, 1.4)
+                                : PropertiesPanelController.headerColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: layerBtnMa
+                                anchors.fill: parent
+                                hoverEnabled: btnEnabled
+                                enabled: btnEnabled
+                                cursorShape: btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                ToolTip.text: !btnEnabled && modelData.action === "delete"
+                                    ? "Cannot delete the last layer"
+                                    : modelData.hint
+                                ToolTip.visible: containsMouse
+                                ToolTip.delay: 400
+                                onClicked: {
+                                    const idx = texPaintCol.activeLayerIndex
+                                    switch (modelData.action) {
+                                    case "add":     TexturePaintController.addPaintLayer(""); break
+                                    case "dup":     TexturePaintController.duplicatePaintLayer(idx); break
+                                    case "up":      TexturePaintController.movePaintLayerUp(idx); break
+                                    case "down":    TexturePaintController.movePaintLayerDown(idx); break
+                                    case "merge":   TexturePaintController.mergePaintLayerDown(idx); break
+                                    case "flatten": TexturePaintController.flattenPaintLayers(); break
+                                    case "delete":  TexturePaintController.deletePaintLayer(idx); break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ListView {
+                    id: layerList
+                    width: parent.width
+                    height: Math.min(130, Math.max(36, count * 36))
+                    clip: true
+                    spacing: 2
+                    model: texPaintCol.paintLayers
+
+                    delegate: Rectangle {
+                        width: layerList.width
+                        height: 34
+                        radius: 3
+                        color: modelData.active
+                            ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                            : (layerRowMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.3)
+                                                        : PropertiesPanelController.headerColor)
+                        border.color: modelData.active ? PropertiesPanelController.highlightColor
+                                                       : PropertiesPanelController.borderColor
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            spacing: 4
+
+                            Image {
+                                width: 28; height: 28
+                                source: modelData.thumbnailUrl
+                                fillMode: Image.PreserveAspectFit
+                                smooth: false
+                                cache: false
+                            }
+
+                            Text {
+                                width: Math.max(40, layerList.width - 130)
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
+
+                            // Visible toggle (eye)
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.visible
+                                    ? PropertiesPanelController.highlightColor
+                                    : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.visible ? "\u2713" : ""
+                                    color: "white"; font.pixelSize: 9
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerVisible(
+                                                   modelData.index, !modelData.visible)
+                                }
+                            }
+
+                            // Solo toggle
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.solo ? "#806622" : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "S"
+                                    color: modelData.solo ? "#ffcc00" : PropertiesPanelController.textColor
+                                    font.pixelSize: 8; font.bold: true
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerSolo(
+                                                   modelData.index, !modelData.solo)
+                                }
+                            }
+
+                            // Lock toggle
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.locked
+                                    ? "#804040" : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.locked ? "L" : ""
+                                    color: modelData.locked ? "#ffcccc" : PropertiesPanelController.textColor
+                                    font.pixelSize: 8; font.bold: true
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerLocked(
+                                                   modelData.index, !modelData.locked)
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: layerRowMa
+                            anchors.fill: parent
+                            z: -1
+                            hoverEnabled: true
+                            onClicked: TexturePaintController.activeLayerIndex = modelData.index
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    Text {
+                        text: "Opacity"
+                        width: 52
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        id: layerOpacitySlider
+                        width: 120
+                        from: 0; to: 1; stepSize: 0.01
+                        property bool updating: false
+                        value: layersCol.activeLayer ? layersCol.activeLayer.opacity : 1
+                        onPressedChanged: {
+                            if (pressed)
+                                TexturePaintController.beginPaintLayerOpacityDrag()
+                            else
+                                TexturePaintController.endPaintLayerOpacityDrag()
+                        }
+                        onMoved: {
+                            if (!layersCol.activeLayer) return
+                            TexturePaintController.setPaintLayerOpacity(
+                                texPaintCol.activeLayerIndex, value)
+                        }
+                        Connections {
+                            target: TexturePaintController
+                            function onLayersChanged() {
+                                if (!layersCol.activeLayer) return
+                                layerOpacitySlider.updating = true
+                                layerOpacitySlider.value = layersCol.activeLayer.opacity
+                                layerOpacitySlider.updating = false
+                            }
+                        }
+                    }
+                    Text {
+                        text: layersCol.activeLayer
+                              ? Math.round(layersCol.activeLayer.opacity * 100) + "%" : "100%"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    Text {
+                        text: "Blend"
+                        width: 52
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    ThemedComboBox {
+                        id: layerBlendCombo
+                        width: Math.max(120, layersCol.width - 58)
+                        model: TexturePaintController.blendModeNames
+                        currentIndex: layersCol.activeLayer ? layersCol.activeLayer.blendMode : 0
+                        onActivated: function(index) {
+                            TexturePaintController.setPaintLayerBlendMode(
+                                texPaintCol.activeLayerIndex, index)
+                        }
+                        Connections {
+                            target: TexturePaintController
+                            function onLayersChanged() {
+                                if (!layersCol.activeLayer) return
+                                layerBlendCombo.currentIndex = layersCol.activeLayer.blendMode
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- 2D preview / paint surface ----

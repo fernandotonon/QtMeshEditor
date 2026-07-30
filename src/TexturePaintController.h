@@ -7,6 +7,7 @@
 #include "BrushAssetLibrary.h"
 #include "BrushFootprint.h"
 #include "GradientRamp.h"
+#include "PaintLayerStack.h"
 
 #include <QColor>
 #include <QObject>
@@ -22,6 +23,7 @@
 #include <OgreVector.h>
 
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 class EditableMesh;
@@ -292,6 +294,44 @@ public:
     Q_INVOKABLE QString tilingThumbnailUri(const QString& name) const;
     /// @}
 
+    /// @name Paint v2 Slice C — layer stack (#546)
+    /// @{
+    Q_PROPERTY(int layerCount READ layerCount NOTIFY layersChanged)
+    Q_PROPERTY(int activeLayerIndex READ activeLayerIndex WRITE setActiveLayerIndex NOTIFY layersChanged)
+    Q_PROPERTY(QVariantList paintLayers READ paintLayers NOTIFY layersChanged)
+    Q_PROPERTY(QStringList blendModeNames READ blendModeNames CONSTANT)
+
+    int layerCount() const;
+    int activeLayerIndex() const;
+    void setActiveLayerIndex(int index);
+    QVariantList paintLayers() const;
+    QStringList blendModeNames() const;
+
+    Q_INVOKABLE int addPaintLayer(const QString& name = QString());
+    Q_INVOKABLE void deletePaintLayer(int index);
+    Q_INVOKABLE int duplicatePaintLayer(int index);
+    Q_INVOKABLE void movePaintLayerUp(int index);
+    Q_INVOKABLE void movePaintLayerDown(int index);
+    Q_INVOKABLE void renamePaintLayer(int index, const QString& name);
+    Q_INVOKABLE void mergePaintLayerDown(int index);
+    Q_INVOKABLE void flattenPaintLayers();
+    Q_INVOKABLE void setPaintLayerVisible(int index, bool visible);
+    Q_INVOKABLE void setPaintLayerLocked(int index, bool locked);
+    Q_INVOKABLE void setPaintLayerOpacity(int index, double opacity);
+    Q_INVOKABLE void beginPaintLayerOpacityDrag();
+    Q_INVOKABLE void endPaintLayerOpacityDrag();
+    Q_INVOKABLE void setPaintLayerBlendMode(int index, int mode);
+    Q_INVOKABLE void setPaintLayerSolo(int index, bool solo);
+    Q_INVOKABLE QString layerPreviewUrl(int index) const;
+    /// If the current selection includes a multi-layer paint session, ask
+    /// whether to continue (export stores the flattened composite only).
+    /// Returns false when the user cancels.
+    bool confirmFlattenLayersForExport(QWidget* parent) const;
+    /// Recompose visible layers and push the composite into the live texture
+    /// + embedded cache so mesh export sees painted pixels.
+    void flushPaintTextureForExport(Ogre::Entity* entity);
+    /// @}
+
     /// @name Paint target (texture or vertex colors)
     /// @{
     int paintTarget() const { return static_cast<int>(m_target); }
@@ -315,6 +355,8 @@ public:
     /// `paintbuffer` QQuickImageProvider to hand QML a fresh copy
     /// on every request (no PNG encode, no base64).
     QImage snapshotBufferImage() const;
+    /// Snapshot one layer's pixel buffer (for layer thumbnails).
+    QImage snapshotLayerImage(int index) const;
 
     /// PNG data URI of the UV wireframe (white triangles on transparent
     /// background) at the current texture resolution. Lets the QML
@@ -349,8 +391,6 @@ public:
     bool beginStroke(OgreWidget* widget, const QPoint& screenPos);
     void updateStroke(OgreWidget* widget, const QPoint& screenPos);
     void endStroke();
-    /// @deprecated Stroke GPU sync is deferred to stroke end / live-preview timer.
-    void onRenderFrame();
     /// @}
 
     /**
@@ -496,10 +536,12 @@ public:
     const TexturePaintBuffer& buffer() const { return m_buffer; }
     TexturePaintBuffer& mutableBuffer() { return m_buffer; }
 
-    /// Internal: replace the buffer pixel data and re-upload to the
-    /// live Ogre texture. Used by the undo command. Width/height must
-    /// match the current buffer.
+    /// Internal: replace the composite buffer and re-upload. Legacy undo path.
     void applyPixelSnapshot(const std::vector<uint8_t>& pixels);
+    /// Undo/redo: restore one layer's pixels then recompose.
+    void applyLayerPixelSnapshot(int layerIndex, const std::vector<uint8_t>& pixels);
+    /// Undo/redo: restore full layer stack state.
+    void applyLayerStackSnapshot(const PaintLayerStack::Snapshot& snap);
 
 signals:
     void texturePaintChanged();
@@ -515,6 +557,7 @@ signals:
     void gradientChanged();
     void rampEditorChanged();
     void stampChanged();
+    void layersChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -550,10 +593,7 @@ private:
     /// to skip full mesh raycasts on most mouse-move events.
     bool hitTestUVForStroke(const QPoint& screenPos, OgreWidget* widget,
                             Ogre::Vector2& outUV);
-    /// Coalesce rapid mouse-move events into one paint step per tick.
-    void scheduleStrokeUpdate(OgreWidget* widget, const QPoint& screenPos);
     void processPendingStrokeUpdate();
-    void scheduleStrokeUpdateUV(double u, double v);
     void processPendingStrokeUpdateUV();
 
     /// Same hit-test but returns the local-space position and normal
@@ -589,15 +629,25 @@ private:
     /// Upload one dirty rect as 64×64 tiles, one tile per event-loop
     /// tick, so GL blits never stall the UI for long.
     void scheduleStrokeGpuFlush();
+    /// At most ~60 GPU blits/sec while the brush is down (CPU paint is immediate).
+    void scheduleThrottledLiveGpuFlush();
+    /// Synchronous GPU blit of the current dirty rect during live strokes.
+    bool flushLiveStrokeToGpu();
+    /// Rebuild composite CPU buffer from dirty layers (no GPU).
+    void recomposePaintBufferIfNeeded();
+    /// Stop an in-progress tiled upload (e.g. prior stroke still draining).
+    void cancelInFlightGpuUpload();
     void startTiledGpuUpload(bool finishingStroke);
     void processNextTiledUploadTile();
     void onTiledUploadPassComplete();
     /// Texture the viewport samples — original (in-place) or manual paint tex.
     Ogre::TexturePtr gpuUploadTargetTexture() const;
     bool blitBufferRectToOgreTexture(int x0, int y0, int x1, int y1);
-    void finishStrokeAfterGpuUpload();
-    void finishStrokeAfterGpuUploadDeferred();
-    void ensureStrokePreSnapshot();
+    void commitStrokeUndo(std::vector<uint8_t> prePixels, int layerIndex);
+    /// Shared per-stroke reset — must stay in sync for viewport + UV preview paths.
+    void resetStrokePaintState();
+    void scheduleEmbeddedTextureCacheUpdate();
+    void invalidateLayerStrokeBaseline();
     /// 3D brush ring during strokes — uses the cached hit triangle only.
     bool localPointFromHitCache(const Ogre::Vector2& uv,
                                 Ogre::Vector3& outLocal,
@@ -609,6 +659,8 @@ private:
     /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
     /// previewChanged when the URI actually changed.
     void refreshPreviewUri();
+    /// Debounced Inspector / editor-window preview refresh (reads CPU buffer).
+    void schedulePreviewRefresh();
 
     /// Regenerate `m_uvOverlayUri` by drawing every UV-mapped triangle
     /// outline at the current texture resolution into a transparent PNG.
@@ -645,6 +697,17 @@ private:
     void rebuildStampCache(float radiusUv);
     void refreshStampPreviewUris();
 
+    /// CPU buffer the brush paints into (active layer).
+    TexturePaintBuffer& activePaintBuffer();
+    const TexturePaintBuffer& activePaintBuffer() const;
+    /// Rebuild `m_buffer` from visible layers and mark dirty.
+    /// @p fullBuffer forces a full-stack composite (layer add/delete/undo).
+    void recomposeComposite(bool fullBuffer = false);
+    void pushLayerOpUndo(const QString& label,
+                         PaintLayerStack::Snapshot before,
+                         PaintLayerStack::Snapshot after);
+    std::vector<uint8_t> snapshotActiveLayerPixels() const;
+
     /// Draw the hover ring on the mesh at a given local position +
     /// normal. Shared between viewport-driven and panel-driven hover.
     void drawHoverRingAt(const Ogre::Vector3& localPos,
@@ -657,7 +720,10 @@ private:
     void pickColorAtUV(const Ogre::Vector2& uv);
 
     bool m_paintEnabled = false;
+    /// Composite display buffer uploaded to the GPU.
     TexturePaintBuffer m_buffer;
+    PaintLayerStack m_layerStack;
+    quint64 m_layerPreviewVersion = 0;
     QString m_textureName;
     Ogre::TexturePtr m_ogreTexture;
     /// The original texture we're painting into. We blit our dirty
@@ -687,13 +753,18 @@ private:
     std::vector<UploadTile> m_tiledUploadQueue;
     int m_tiledUploadIndex = 0;
     bool m_tiledUploadRunning = false;
-    bool m_strokeEndAfterUpload = false;
+    /// Whether the current tiled upload pass is the final flush before idle.
+    bool m_uploadFinishingStroke = false;
+    /// Incremented on every new stroke and whenever pixels change — stale
+    /// uploads from a prior stroke must not clearDirty() or finish undo.
+    uint64_t m_gpuUploadGeneration = 0;
+    uint64_t m_activeUploadGeneration = 0;
+    uint64_t m_bufferDirtyEpoch = 0;
+    uint64_t m_uploadEpochSnapshot = 0;
     TexturePaintBuffer::DirtyRect m_uploadPassDirty;
-    /// Batches hundreds of mouse-move events into one paint/upload step.
-    bool m_strokeUpdateScheduled = false;
+    uint64_t m_strokeUndoGeneration = 0;
     OgreWidget* m_pendingStrokeWidget = nullptr;
     QPoint m_pendingStrokePos;
-    bool m_strokeUpdateUVScheduled = false;
     double m_pendingStrokeU = 0.0;
     double m_pendingStrokeV = 0.0;
     /// Screen→UV gradient for cheap extrapolation between raycasts.
@@ -706,6 +777,14 @@ private:
 
     bool m_strokeActive = false;
     bool m_strokeJustBegan = false; ///< Fill/picker tools fire only once per stroke.
+    bool m_strokeFromUvPreview = false;
+    bool m_strokeMadeChanges = false;
+    bool m_embeddedCacheUpdateScheduled = false;
+    bool m_layerOpacityDragging = false;
+    bool m_layerOpacityDragChanged = false;
+    PaintLayerStack::Snapshot m_layerOpacityDragBefore;
+    /// Layer pixels at the end of the last stroke — O(1) handoff as the next pre-image.
+    std::vector<uint8_t> m_layerStrokeBaseline;
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
     PaintTarget m_target = TargetVertex;

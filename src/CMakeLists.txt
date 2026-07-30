@@ -148,6 +148,8 @@ MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
+PaintLayerBlend.cpp
+PaintLayerStack.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 BrushEngine.cpp
@@ -367,6 +369,8 @@ MultiViewTextureBaker.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
+PaintLayerBlend.h
+PaintLayerStack.h
 PaintSelectionMask.h
 GradientRamp.h
 BrushEngine.h
