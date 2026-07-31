@@ -368,11 +368,28 @@ TEST(SubMeshOpsTest, ExplodeOffsetsPushOutwardFromCenter)
 
 // ---- capOpenBoundaries (#863 close split cut face) ------------------------
 
+// Count directed boundary edges (a→b with no b→a) — 0 means watertight.
+static size_t boundaryEdgeCount(const EditableSubMesh& s)
+{
+    std::map<std::pair<unsigned,unsigned>,int> d;
+    for (const auto& t : s.triangles) {
+        d[{t.indices[0],t.indices[1]}]++;
+        d[{t.indices[1],t.indices[2]}]++;
+        d[{t.indices[2],t.indices[0]}]++;
+    }
+    size_t open = 0;
+    for (const auto& kv : d)
+        if (!d.count({kv.first.second, kv.first.first})) open += 1;
+    return open;
+}
+
 TEST(SubMeshOpsTest, CapOpenBoundaryClosesHole)
 {
     // An open-topped box: 8 cube corners, all 5 side+bottom faces, TOP missing.
     // The top rim (verts 4,5,6,7 at y=1) is one open boundary loop of 4 edges.
-    // capOpenBoundaries should fill it → 1 cap, +1 centre vert, +4 triangles.
+    // capOpenBoundaries fills it with a RECESSED cap (a shallow inward rim so a
+    // thin-shell cut reads as a solid edge): the rim is sealed watertight, the
+    // cap sinks INWARD (below the y=1 rim), and geometry is added.
     EditableSubMesh s;
     s.materialName = "Box";
     // bottom (y=0): 0,1,2,3   top (y=1): 4,5,6,7
@@ -389,15 +406,19 @@ TEST(SubMeshOpsTest, CapOpenBoundaryClosesHole)
 
     const size_t triBefore = s.triangles.size();
     const size_t vBefore = s.vertices.size();
+    ASSERT_GT(boundaryEdgeCount(s), 0u);                 // open before
     const int caps = SubMeshOps::capOpenBoundaries(s);
     EXPECT_EQ(caps, 1);
-    EXPECT_EQ(s.vertices.size(), vBefore + 1);          // one centroid vertex
-    EXPECT_EQ(s.triangles.size(), triBefore + 4);       // one tri per rim edge
-    // The new centre vertex sits at the rim centroid (0.5,1,0.5).
-    const auto& cv = s.vertices.back();
-    EXPECT_NEAR(cv.position.x, 0.5f, 1e-4f);
-    EXPECT_NEAR(cv.position.y, 1.0f, 1e-4f);
-    EXPECT_NEAR(cv.position.z, 0.5f, 1e-4f);
+    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "cap must seal the rim watertight";
+    EXPECT_GT(s.vertices.size(), vBefore);               // inner ring + centre added
+    EXPECT_GT(s.triangles.size(), triBefore);            // wall band + floor fan
+    // The recessed cap sinks INWARD: at least one new vertex sits below y=1
+    // (the rim). The interior is toward -Y (centroid at y=0.5), so the inward
+    // cap normal is -Y and the floor/inner-ring verts are at y < 1.
+    float minY = 1e9f;
+    for (size_t i = vBefore; i < s.vertices.size(); ++i)
+        minY = std::min(minY, s.vertices[i].position.y);
+    EXPECT_LT(minY, 1.0f) << "cap should be recessed inward, not flush with the rim";
 }
 
 TEST(SubMeshOpsTest, CapOpenBoundariesNoOpWhenClosed)
@@ -410,21 +431,6 @@ TEST(SubMeshOpsTest, CapOpenBoundariesNoOpWhenClosed)
     const size_t before = s.triangles.size();
     EXPECT_EQ(SubMeshOps::capOpenBoundaries(s), 0);
     EXPECT_EQ(s.triangles.size(), before);
-}
-
-// Count directed boundary edges (a→b with no b→a) — 0 means watertight.
-static size_t boundaryEdgeCount(const EditableSubMesh& s)
-{
-    std::map<std::pair<unsigned,unsigned>,int> d;
-    for (const auto& t : s.triangles) {
-        d[{t.indices[0],t.indices[1]}]++;
-        d[{t.indices[1],t.indices[2]}]++;
-        d[{t.indices[2],t.indices[0]}]++;
-    }
-    size_t open = 0;
-    for (const auto& kv : d)
-        if (!d.count({kv.first.second, kv.first.first})) open += 1;
-    return open;
 }
 
 TEST(SubMeshOpsTest, CapOpenBoundariesClosesBothEndsOfATube)

@@ -486,45 +486,90 @@ int SubMeshOps::capOpenBoundaries(EditableSubMesh& sub)
         if (edges.size() < 3)
             continue;
 
-        // 3) Centroid-fan fill. New centre vertex copies a rim vertex's
-        //    attributes (material/uv space) with the averaged position.
+        // 3) Cap the loop. Rather than a single FLAT fan flush with the rim
+        //    (which on a thin shell reads as a see-through hole because there's
+        //    no visible depth), build a RECESSED cap with a shallow inward RIM:
+        //      • an inner ring = each rim vertex pushed INWARD (along the cap
+        //        normal, into the part) by a small depth AND contracted toward
+        //        the loop centroid, so the lip has visible thickness;
+        //      • a wall band between the rim and the inner ring (the solid lip);
+        //      • a centroid fan filling the inner ring (the recessed floor).
+        //    This makes the cut read as a solid edge without solidifying the
+        //    whole part. Watertightness is preserved: the wall's outer edge
+        //    reverses the rim edge (b→a), and the inner ring is fully fanned.
         Ogre::Vector3 c = Ogre::Vector3::ZERO;
         for (unsigned int vi : loopVerts) c += sub.vertices[vi].position;
         c /= static_cast<float>(loopVerts.size());
-        EditableVertex centre = sub.vertices[loopVerts[0]];
-        centre.position = c;
-        // Give the centre vertex the cap's averaged geometric normal so it shades
-        // correctly even when the mesh is built with recomputeNormals=false (the
-        // split path preserves authored normals) — otherwise the cap centre is
-        // normal-less and renders black. Cap face (centre,b,a) normal =
-        // (b-c)×(a-c).
+
+        // Cap normal (average of the flat fan faces) = the inward push direction.
         Ogre::Vector3 capN = Ogre::Vector3::ZERO;
         for (const auto& e : edges) {
             const Ogre::Vector3& pb = sub.vertices[e.second].position;
             const Ogre::Vector3& pa = sub.vertices[e.first].position;
             capN += (pb - c).crossProduct(pa - c);
         }
-        if (capN.squaredLength() > 1e-12f) {
-            centre.normal = capN.normalisedCopy();
-            centre.hasNormal = true;
-        } else {
-            centre.hasNormal = false;
-        }
+        const bool haveN = capN.squaredLength() > 1e-12f;
+        if (haveN) capN.normalise();
+
+        // Loop radius → rim depth (how far the lip sinks) = 20% of the radius,
+        // capped so it never exceeds the loop size.
+        float r2 = 0.0f;
+        for (unsigned int vi : loopVerts)
+            r2 = std::max(r2, sub.vertices[vi].position.squaredDistance(c));
+        const float radius = std::sqrt(r2);
+        const float depth = (haveN && radius > 1e-6f) ? radius * 0.20f : 0.0f;
+
+        // The centre vertex (recessed cap floor centre), sunk one depth inward.
+        EditableVertex centre = sub.vertices[loopVerts[0]];
+        centre.position = c - capN * depth;
+        if (haveN) { centre.normal = capN; centre.hasNormal = true; }
+        else       { centre.hasNormal = false; }
         const unsigned int cIdx = static_cast<unsigned int>(sub.vertices.size());
         sub.vertices.push_back(centre);
 
-        // Winding — the ONLY watertight choice: a boundary edge a→b has the part
-        // interior on its LEFT, so the cap triangle must contain the REVERSE edge
-        // b→a to cancel it. Emit (centre, b, a) for every consumed edge. This is
-        // exact for any loop shape and both ends of a tube, unlike a global
-        // centroid-normal heuristic (which flips the wrong end and left the rim
-        // open — the "gap not closed on all joints" bug).
+        if (depth <= 0.0f) {
+            // Degenerate loop (no normal / zero radius) → plain flat fan.
+            for (const auto& e : edges) {
+                EditableTriangle t;
+                t.indices[0] = cIdx; t.indices[1] = e.second; t.indices[2] = e.first;
+                sub.triangles.push_back(t);
+            }
+            ++caps;
+            continue;
+        }
+
+        // Inner-ring vertex per rim vertex: sunk inward by `depth` and contracted
+        // 15% toward the centroid so the lip is visibly beveled. Map rim index →
+        // its inner-ring index.
+        std::unordered_map<unsigned int, unsigned int> innerOf;
+        for (unsigned int vi : loopVerts) {
+            if (innerOf.count(vi)) continue;
+            EditableVertex iv = sub.vertices[vi];
+            const Ogre::Vector3 p = sub.vertices[vi].position;
+            iv.position = (p + (c - p) * 0.15f) - capN * depth;
+            iv.normal = capN; iv.hasNormal = true;
+            innerOf[vi] = static_cast<unsigned int>(sub.vertices.size());
+            sub.vertices.push_back(iv);
+        }
+
+        // Wall band (rim edge a→b → its inner ai/bi). To cancel the rim edge a→b
+        // the wall must contain b→a; loop b→a→ai→bi supplies it → (b,a,ai)+(b,ai,bi).
         for (const auto& e : edges) {
-            EditableTriangle t;
-            t.indices[0] = cIdx;
-            t.indices[1] = e.second; // b
-            t.indices[2] = e.first;  // a
-            sub.triangles.push_back(t);
+            const unsigned int a = e.first, b = e.second;
+            const unsigned int ai = innerOf[a], bi = innerOf[b];
+            EditableTriangle w1, w2;
+            w1.indices[0] = b; w1.indices[1] = a;  w1.indices[2] = ai;
+            w2.indices[0] = b; w2.indices[1] = ai; w2.indices[2] = bi;
+            sub.triangles.push_back(w1);
+            sub.triangles.push_back(w2);
+        }
+        // Recessed floor: fan the INNER ring to the sunk centre. Inner edge is
+        // ai→bi (same direction as the rim), so the floor face is (centre, bi, ai).
+        for (const auto& e : edges) {
+            const unsigned int ai = innerOf[e.first], bi = innerOf[e.second];
+            EditableTriangle f;
+            f.indices[0] = cIdx; f.indices[1] = bi; f.indices[2] = ai;
+            sub.triangles.push_back(f);
         }
         ++caps;
     }
