@@ -26,7 +26,7 @@ Ogre::Vector3 subMeshCentroid(const EditableSubMesh& sub)
 
 PartOpsScene::ExplodeResult
 PartOpsScene::explodeEntity(Ogre::Entity* entity, float distance,
-                           const std::string& baseName, bool capBoundaries)
+                           const std::string& baseName)
 {
     ExplodeResult out;
     if (!entity || !entity->getMesh()) {
@@ -43,13 +43,6 @@ PartOpsScene::explodeEntity(Ogre::Entity* entity, float distance,
         out.error = QStringLiteral("mesh has a single part — split it first");
         return out;
     }
-
-    // Optionally close each part's open cut face so an exploded part is a
-    // watertight solid (#863). Done on the read-out copies before per-part mesh
-    // build; centroids/bounds below are computed from the (capped) copies.
-    if (capBoundaries)
-        for (auto& s : subs)
-            SubMeshOps::capOpenBoundaries(s);
 
     QString skelName;
     if (entity->getMesh()->hasSkeleton())

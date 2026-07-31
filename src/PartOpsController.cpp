@@ -111,7 +111,7 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
     emit splitFinished(tr("Split into %1 part submeshes.").arg(cmd->createdSubMeshes()), false);
 }
 
-void PartOpsController::explodeSelected(double distance, bool capBoundaries)
+void PartOpsController::explodeSelected(double distance)
 {
     const auto* sel = SelectionSet::getSingleton();
     if (!sel) {
@@ -130,7 +130,7 @@ void PartOpsController::explodeSelected(double distance, bool capBoundaries)
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("explode_parts"));
     const std::string entName = entities.first()->getName();
-    auto* cmd = new ExplodePartsCommand(entName, static_cast<float>(distance), capBoundaries);
+    auto* cmd = new ExplodePartsCommand(entName, static_cast<float>(distance));
     UndoManager::getSingleton()->push(cmd);
 
     if (!cmd->ok()) {

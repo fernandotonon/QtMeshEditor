@@ -37,10 +37,8 @@ class ExplodePartsCommand : public QUndoCommand
 {
 public:
     /** @param entityName  the fused entity to explode (== its node name).
-     *  @param distance     explode offset multiplier (× assembly diagonal).
-     *  @param capBoundaries close each part's open cut face (#863). */
+     *  @param distance     explode offset multiplier (× assembly diagonal). */
     ExplodePartsCommand(std::string entityName, float distance,
-                        bool capBoundaries = false,
                         QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -58,7 +56,6 @@ private:
 
     std::string mEntityName;
     float       mDistance = 0.5f;
-    bool        mCapBoundaries = false;
 
     struct PartCache {
         Ogre::MeshPtr mesh;   ///< single-submesh part mesh (resident for redo).

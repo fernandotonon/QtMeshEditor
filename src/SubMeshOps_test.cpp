@@ -366,7 +366,7 @@ TEST(SubMeshOpsTest, ExplodeOffsetsPushOutwardFromCenter)
     EXPECT_NEAR(offs[1].length(), 1.0f, 1e-5f);
 }
 
-// ---- capOpenBoundaries (#863 close split cut face) ------------------------
+// ---- solidify watertightness helper --------------------------------------
 
 // Count directed boundary edges (a→b with no b→a) — 0 means watertight.
 static size_t boundaryEdgeCount(const EditableSubMesh& s)
@@ -381,81 +381,6 @@ static size_t boundaryEdgeCount(const EditableSubMesh& s)
     for (const auto& kv : d)
         if (!d.count({kv.first.second, kv.first.first})) open += 1;
     return open;
-}
-
-TEST(SubMeshOpsTest, CapOpenBoundaryClosesHole)
-{
-    // An open-topped box: 8 cube corners, all 5 side+bottom faces, TOP missing.
-    // The top rim (verts 4,5,6,7 at y=1) is one open boundary loop of 4 edges.
-    // capOpenBoundaries fills it with a RECESSED cap (a shallow inward rim so a
-    // thin-shell cut reads as a solid edge): the rim is sealed watertight, the
-    // cap sinks INWARD (below the y=1 rim), and geometry is added.
-    EditableSubMesh s;
-    s.materialName = "Box";
-    // bottom (y=0): 0,1,2,3   top (y=1): 4,5,6,7
-    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
-    s.vertices = { V(0,0,0),V(1,0,0),V(1,0,1),V(0,0,1),
-                   V(0,1,0),V(1,1,0),V(1,1,1),V(0,1,1) };
-    auto Q = [&](unsigned a,unsigned b,unsigned c,unsigned d){ addTri(s,a,b,c); addTri(s,a,c,d); };
-    Q(0,1,2,3);   // bottom
-    Q(0,4,5,1);   // front
-    Q(1,5,6,2);   // right
-    Q(2,6,7,3);   // back
-    Q(3,7,4,0);   // left
-    // NO top → verts 4,5,6,7 form the open rim.
-
-    const size_t triBefore = s.triangles.size();
-    const size_t vBefore = s.vertices.size();
-    ASSERT_GT(boundaryEdgeCount(s), 0u);                 // open before
-    const int caps = SubMeshOps::capOpenBoundaries(s);
-    EXPECT_EQ(caps, 1);
-    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "cap must seal the rim watertight";
-    EXPECT_GT(s.vertices.size(), vBefore);               // inner ring + centre added
-    EXPECT_GT(s.triangles.size(), triBefore);            // wall band + floor fan
-    // The recessed cap sinks INWARD: at least one new vertex sits below y=1
-    // (the rim). The interior is toward -Y (centroid at y=0.5), so the inward
-    // cap normal is -Y and the floor/inner-ring verts are at y < 1.
-    float minY = 1e9f;
-    for (size_t i = vBefore; i < s.vertices.size(); ++i)
-        minY = std::min(minY, s.vertices[i].position.y);
-    EXPECT_LT(minY, 1.0f) << "cap should be recessed inward, not flush with the rim";
-}
-
-TEST(SubMeshOpsTest, CapOpenBoundariesNoOpWhenClosed)
-{
-    // A closed tetrahedron: every edge is shared by two faces → no boundary.
-    EditableSubMesh s; s.materialName = "Tet";
-    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
-    s.vertices = { V(0,0,0), V(1,0,0), V(0,1,0), V(0,0,1) };
-    addTri(s,0,2,1); addTri(s,0,1,3); addTri(s,0,3,2); addTri(s,1,2,3);
-    const size_t before = s.triangles.size();
-    EXPECT_EQ(SubMeshOps::capOpenBoundaries(s), 0);
-    EXPECT_EQ(s.triangles.size(), before);
-}
-
-TEST(SubMeshOpsTest, CapOpenBoundariesClosesBothEndsOfATube)
-{
-    // An open tube (a ring extruded along Y, NO end caps): TWO separate boundary
-    // loops. The old single-successor walk capped only one; the multi-successor
-    // walk must close BOTH → 0 boundary edges after, watertight.
-    EditableSubMesh s; s.materialName = "Tube";
-    const int seg = 8;
-    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); return v; };
-    for (int i = 0; i < seg; ++i) {
-        const float a = 2.0f*float(M_PI)*float(i)/float(seg);
-        s.vertices.push_back(V(std::cos(a), 0.f, std::sin(a)));  // bottom ring
-        s.vertices.push_back(V(std::cos(a), 2.f, std::sin(a)));  // top ring
-    }
-    for (int i = 0; i < seg; ++i) {
-        const int j = (i+1)%seg;
-        const unsigned b0=2*i, t0=2*i+1, b1=2*j, t1=2*j+1;
-        addTri(s, b0, b1, t1);
-        addTri(s, b0, t1, t0);
-    }
-    ASSERT_GT(boundaryEdgeCount(s), 0u);          // open at both ends
-    const int caps = SubMeshOps::capOpenBoundaries(s);
-    EXPECT_EQ(caps, 2) << "both tube ends must be capped";
-    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "tube must be watertight after capping";
 }
 
 // ---- solidify (#863 follow-up: give a thin shell real wall volume) ---------

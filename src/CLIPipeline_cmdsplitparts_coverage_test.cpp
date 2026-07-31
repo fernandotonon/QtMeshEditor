@@ -163,13 +163,10 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     EXPECT_GT(e->getMesh()->getNumSubMeshes(), 1u)
         << "split should produce multiple part submeshes";
 
-    // The original geometry is preserved; the split ALSO caps each part's open
-    // cut face into a watertight solid (capParts=true on the user-facing path),
-    // which adds a fan of cap triangles — so the count is >= the source, not
-    // exactly equal. Boundary vertex duplication itself adds verts, not tris.
+    // Triangle count preserved: the split only separates geometry (boundary
+    // vertex duplication adds verts, not tris) — no cap/solidify by default.
     MeshInfo info = CLIPipeline::extractMeshInfo(e, "parts.fbx");
-    EXPECT_GE(static_cast<int>(info.triangles), srcTris)
-        << "split must preserve the source geometry (plus watertight caps)";
+    EXPECT_EQ(static_cast<int>(info.triangles), srcTris);
 
     // Skinned fixture retains its skeleton + bone assignments (#861 criterion).
     EXPECT_TRUE(e->getMesh()->hasSkeleton())

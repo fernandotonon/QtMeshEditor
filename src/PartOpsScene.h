@@ -64,8 +64,7 @@ public:
      *  geometry, or a single-submesh mesh (nothing to explode). */
     static ExplodeResult explodeEntity(Ogre::Entity* entity,
                                         float distance,
-                                        const std::string& baseName,
-                                        bool capBoundaries = false);
+                                        const std::string& baseName);
 
     // -------------------------------------------------------------------------
     // Join: N part entities (with world transforms) -> one fused mesh.

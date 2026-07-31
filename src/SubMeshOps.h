@@ -73,19 +73,12 @@ public:
          *  preserving the source material. The Ogre adapter creates the
          *  materials; the core only records the intended name. */
         bool assignPartMaterials = false;
-        /** Close each part's OPEN cut face (the seam left hollow by the split)
-         *  with a triangle fan so every part is a watertight solid — otherwise
-         *  an exploded part shows a see-through hole where it was cut from its
-         *  neighbour. Default OFF so the pure-split algorithm keeps exact vertex/
-         *  triangle counts (unit tests, downstream callers that re-cap
-         *  themselves); the user-facing split (SplitMeshCommand) and explode/
-         *  print-prep turn it ON. */
-        bool capParts = false;
-        /** Give each part real WALL VOLUME (`solidify`) before capping — for
-         *  thin-shell game assets (single-sided surfaces) an exploded part
-         *  otherwise exposes its hollow interior at the cut. Default OFF (adds
-         *  geometry + only meaningful for thin shells). `solidifyThickness` is in
-         *  model units; <= 0 = auto (~1.5% of the part AABB diagonal). */
+        /** Give each part real WALL VOLUME (`solidify`) — for thin-shell game
+         *  assets (single-sided surfaces) an exploded part otherwise exposes its
+         *  hollow interior at the cut. This also SEALS each part watertight (it
+         *  walls every open boundary). Default OFF (adds geometry + only
+         *  meaningful for thin shells). `solidifyThickness` is in model units;
+         *  <= 0 = auto (~1.5% of the part AABB diagonal). */
         bool solidifyParts = false;
         float solidifyThickness = 0.0f;
     };
@@ -170,22 +163,6 @@ public:
     static std::vector<Ogre::Vector3> explodeOffsets(const std::vector<Ogre::Vector3>& partCentroids,
                                                       const Ogre::AxisAlignedBox& assemblyBounds,
                                                       float distance);
-
-    // -------------------------------------------------------------------------
-    // Boundary capping (#863) — close the open cut face of a split part
-    // -------------------------------------------------------------------------
-
-    /** Cap the OPEN boundary of a split part so it becomes a watertight solid
-     *  (a split leaves the cut face as a hole — bad for 3D printing, and a peg
-     *  needs a solid face to attach to). Finds every boundary edge (an edge used
-     *  by exactly ONE triangle), chains them into closed loops, and fills each
-     *  loop with a CENTROID FAN: one new vertex at the loop's centroid + a
-     *  triangle per boundary edge, wound so the cap faces OUTWARD (away from the
-     *  part's centroid). Copies a representative boundary vertex's attributes
-     *  onto the new centroid verts so the cap shares the part's material/uv
-     *  space. Edits `sub` in place; returns the number of caps (loops) filled.
-     *  Deterministic; pure-data. Skips loops shorter than 3 edges. */
-    static int capOpenBoundaries(EditableSubMesh& sub);
 
     // Solidify / shell-thickening (#863 follow-up) ----------------------------
 

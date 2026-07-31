@@ -138,12 +138,9 @@ void SplitMeshCommand::redo()
         SubMeshOps::SplitOptions sopts;
         if (!mNamePrefix.isEmpty())
             sopts.namePrefix = mNamePrefix;
-        // Close each part's open cut face so the user-facing parts are watertight
-        // solids — an exploded part otherwise shows a see-through hole where it
-        // was cut from its neighbour (#863).
-        sopts.capParts = true;
         // Optionally give thin-shell parts real wall volume so a cut exposes a
-        // solid wall instead of the hollow interior (#863 follow-up).
+        // solid wall instead of the hollow interior — this also seals each part
+        // watertight (#863 follow-up).
         sopts.solidifyParts = mSolidify;
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
