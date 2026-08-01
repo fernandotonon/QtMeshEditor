@@ -170,6 +170,7 @@ Rectangle {
         function onSelectionChanged() {
             root.rows = AnimationControlController.allBoneRows()
             root.morphRows = AnimationControlController.allMorphRows()
+            root.refreshNodeRows()
             root.clearSelection()
             root.expandedBones = {}
         }
@@ -190,16 +191,36 @@ Rectangle {
     // the node band. Rebuild on any of the three signals: activeClip change
     // (Inspector picked a different clip), clipsChanged (create/delete), and
     // keyframesChanged (key added/moved/deleted, incl. via undo/redo).
+    // Show the active node clip's rows only when it animates the CURRENTLY
+    // SELECTED entity (or is being edited) — so the node band appears alongside
+    // this mesh's skeletal/morph bands and doesn't linger when you select a
+    // different, skeletal-only mesh. All three band types are shown together.
     function refreshNodeRows() {
-        root.nodeClip = NodeAnimationManager.activeClip
-        root.nodeRows = NodeAnimationManager.activeClip.length > 0
-                        ? NodeAnimationManager.nodeRows(NodeAnimationManager.activeClip)
-                        : []
+        var clip = NodeAnimationManager.activeClip
+        var sel = AnimationControlController.selectedEntityName
+        var editing = NodeAnimationManager.editingClip
+        var belongs = clip.length > 0
+                      && (clip === editing
+                          || (sel.length > 0
+                              && NodeAnimationManager.animatedNodes(clip).indexOf(sel) >= 0))
+        root.nodeClip = belongs ? clip : ""
+        root.nodeRows = belongs ? NodeAnimationManager.nodeRows(clip) : []
+    }
+    // Rebuild ALL bands when node clips change/select — the dope sheet shows
+    // skeletal + morph + node together, and selecting a node clip must not drop
+    // the mesh's bone/morph rows. allBoneRows/allMorphRows resolve the skeleton
+    // + morph clip from the selected entity, so refreshing them here keeps the
+    // full picture in sync with node-clip activity.
+    function refreshAllBands() {
+        root.rows = AnimationControlController.allBoneRows()
+        root.morphRows = AnimationControlController.allMorphRows()
+        root.refreshNodeRows()
     }
     Connections {
         target: NodeAnimationManager
-        function onActiveClipChanged()   { root.refreshNodeRows() }
-        function onClipsChanged()        { root.refreshNodeRows() }
+        function onActiveClipChanged()   { root.refreshAllBands() }
+        function onClipsChanged()        { root.refreshAllBands() }
+        function onEditingClipChanged()  { root.refreshAllBands() }
         function onKeyframesChanged(clip) {
             if (clip === NodeAnimationManager.activeClip) root.refreshNodeRows()
         }
@@ -475,6 +496,9 @@ Rectangle {
         clip: true
         model: root.rows
         spacing: 1
+        // Show whenever the selected mesh has skeletal tracks — the dope sheet
+        // displays ALL animation types the selection contains (skeletal +
+        // morph + node) together, so users see every clip's keys at once.
         visible: root.rows.length > 0
         // Disabled flicking so Flickable doesn't grab presses meant for
         // diamond MouseAreas / Ctrl+click multi-select. Wheel scrolling is
@@ -938,6 +962,8 @@ Rectangle {
         id: morphBand
         anchors.left: parent.left
         anchors.right: parent.right
+        // Shown whenever the selection has morph targets — the sheet shows all
+        // animation types together (skeletal + morph + node).
         visible: morphRowsRep.count > 0
 
         // When there ARE bone tracks, the band docks to the BOTTOM under them
@@ -946,24 +972,25 @@ Rectangle {
         // header down — otherwise it left an empty gap where the old skeleton
         // message used to sit.
         readonly property bool boneRowsPresent: root.rows.length > 0
-        anchors.top: boneRowsPresent ? undefined : (header.visible ? header.bottom : parent.top)
-        // Dock above the node band when it's showing, else to the bottom.
+        // Dock above the node band when it's showing, else to the bottom. ALWAYS
+        // bottom-anchored, never top-anchored — toggling anchors.top to undefined
+        // doesn't reliably clear in QML (same negative-height bug the node band
+        // hit). Size purely via `height`.
         anchors.bottom: nodeBand.visible ? nodeBand.top : parent.bottom
-        anchors.topMargin: boneRowsPresent ? 0 : 2
 
-        // Cap the band at ~40% of the dope-sheet height so high-count
-        // blendshape rigs (Mixamo characters routinely ship 50+) can't
-        // push the bone tracks off-screen. When the content needs more
-        // room, morphList becomes scrollable internally.
         readonly property int naturalContentHeight:
             morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4
         readonly property int maxBandHeight:
             Math.max(morphHeader.height + root.rowHeight + 6,
                      Math.floor(root.height * 0.4))
-        // Morph-only: fill (top+bottom anchors set height). With bones: capped.
+        // Fill height for the morph-only case (no bone rows): from below the
+        // header to whatever the band is anchored above (node band or bottom).
+        readonly property int fillHeight:
+            (nodeBand.visible ? nodeBand.y : root.height)
+            - (header.visible ? (header.y + header.height) : 0) - 2
         height: !visible ? 0
                 : boneRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
-                : undefined
+                : Math.max(naturalContentHeight, fillHeight)
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1
@@ -1153,23 +1180,31 @@ Rectangle {
         id: nodeBand
         anchors.left: parent.left
         anchors.right: parent.right
+        // ALWAYS bottom-anchored, NEVER top-anchored. Toggling anchors.top to
+        // `undefined` (the previous approach) does not reliably clear the anchor
+        // in QML — the band stayed pinned to the header and grew to fill the
+        // whole sheet, giving rowsView a NEGATIVE height (bug: bone rows
+        // invisible when a node clip existed). Instead we control the band's
+        // size purely with `height`: a fixed content-sized band when other bands
+        // are present, or a taller fill (capped) when the sheet is node-only.
         anchors.bottom: parent.bottom
         visible: nodeRowsRep.count > 0
 
         readonly property bool otherRowsPresent: root.rows.length > 0 || root.morphRows.length > 0
-        anchors.top: otherRowsPresent ? undefined : (header.visible ? header.bottom : parent.top)
-        anchors.topMargin: otherRowsPresent ? 0 : 2
 
-        // Same cap as the morph band so a many-node clip can't shove the
-        // bone/morph rows off-screen; scrolls internally past the cap.
+        // Content-sized height, capped at 40% so a many-node clip can't shove
+        // the bone/morph rows off-screen; scrolls internally past the cap.
         readonly property int naturalContentHeight:
             nodeHeader.height + nodeRowsRep.count * (root.rowHeight + 1) + 4
         readonly property int maxBandHeight:
             Math.max(nodeHeader.height + root.rowHeight + 6,
                      Math.floor(root.height * 0.4))
+        // node-only sheet: fill from just below the header to the bottom.
+        readonly property int fillHeight:
+            root.height - (header.visible ? (header.y + header.height) : 0) - 2
         height: !visible ? 0
                 : otherRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
-                : undefined
+                : Math.max(naturalContentHeight, fillHeight)
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1

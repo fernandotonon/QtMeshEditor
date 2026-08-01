@@ -62,6 +62,21 @@ public:
     QString activeClip() const { return m_activeClip; }
     void setActiveClip(const QString& name);
 
+    /// The clip currently in an EDIT session (authoring), or empty. While a
+    /// clip is being edited its driving AnimationState is forced DISABLED so
+    /// the SceneNode stays free for the gizmo (an enabled state re-drives the
+    /// node every frame and locks it). `beginEdit` opens the session (also
+    /// sets it active); `endEdit` closes it — after which the clip plays via
+    /// the main transport like any other animation. A draft clip (being
+    /// edited) is hidden from the main animation list until endEdit.
+    Q_PROPERTY(QString editingClip READ editingClip NOTIFY editingClipChanged)
+    QString editingClip() const { return m_editingClip; }
+    Q_INVOKABLE void beginEdit(const QString& name);
+    Q_INVOKABLE void endEdit();
+    /// True when `name` is being edited (draft) — used to hide it from the
+    /// main animation list and to gate enable.
+    Q_INVOKABLE bool isEditing(const QString& name) const { return !name.isEmpty() && m_editingClip == name; }
+
     /// Create a named clip with `length` seconds duration. Returns
     /// false if the name already exists on the scene (clip names are
     /// unique within `Ogre::SceneManager`'s animation table).
@@ -191,6 +206,18 @@ signals:
     void keyframesChanged(const QString& clipName);
     /// The active (inspected) clip changed.
     void activeClipChanged();
+    /// The edit-session clip changed (beginEdit / endEdit).
+    void editingClipChanged();
+
+private slots:
+    /// Drop every node-animation track that targets a SceneNode being
+    /// destroyed (Manager::sceneNodeDestroyed), and delete any clip left with
+    /// no tracks. Without this the clip's tracks + AnimationState keep raw
+    /// pointers to the freed node and the frame loop crashes on the next
+    /// _applySceneAnimations (bug: "crashed when I tried to delete a node …
+    /// while it had node animation checked"). Fired BEFORE destruction so the
+    /// node name is still resolvable.
+    void onSceneNodeDestroyed(Ogre::SceneNode* node);
 
 private:
     explicit NodeAnimationManager(QObject* parent = nullptr);
@@ -218,6 +245,9 @@ private:
 
     /// The clip currently being authored/inspected (editor UI state).
     QString m_activeClip;
+
+    /// The clip in an open EDIT session (draft), or empty. See editingClip.
+    QString m_editingClip;
 
     static NodeAnimationManager* s_instance;
 };

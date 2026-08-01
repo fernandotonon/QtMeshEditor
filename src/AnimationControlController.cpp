@@ -2,6 +2,7 @@
 #include "GamificationManager.h"
 #include "PropertiesPanelController.h"
 #include "MorphAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -62,6 +63,18 @@ AnimationControlController::AnimationControlController()
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &AnimationControlController::updateAnimationTree);
+
+    // Adding a morph target calls Entity::_initialise(true) (via
+    // EditableMesh::commitToEntity), which DESTROYS and recreates the entity's
+    // SkeletonInstance — leaving our cached m_selectedSkeleton dangling and
+    // crashing the next bone-list / gizmo access. Rebind it (and refresh the
+    // bone list) whenever the morph set changes so the cache stays valid.
+    connect(MorphAnimationManager::instance(), &MorphAnimationManager::morphTargetsChanged,
+            this, [this]() {
+                if (!m_selectedEntity) return;
+                rebindSelectedSkeleton();
+                refreshBoneList(QString::fromStdString(m_selectedBone));
+            });
 
     connect(qApp, &QApplication::paletteChanged, this, [this]() {
         emit themeChanged();
@@ -140,19 +153,36 @@ void AnimationControlController::updateAnimationTree()
     QString prevEntity = QString::fromStdString(m_selectedEntityName);
     QString prevAnim   = QString::fromStdString(m_selectedAnimation);
 
+    // Node-transform clips (#517) are SceneManager-level and animate a
+    // SceneNode by name. createEntity() names each entity after its parent
+    // SceneNode, so an entity named "Door" owns the node clips whose animated
+    // node is "Door" — list them in that entity's group alongside skeletal /
+    // vertex clips so the main Play button + timeline drive them uniformly.
+    auto* nodeAnimMgr = NodeAnimationManager::instance();
+    const QStringList allNodeClips = nodeAnimMgr ? nodeAnimMgr->listClips() : QStringList();
+
     QVariantList newTree;
     for (Ogre::Entity* entity : SelectionSet::getSingleton()->getResolvedEntities()) {
-        Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-        if (!set) continue;
+        const QString entityName = QString::fromStdString(entity->getName());
 
         QStringList animNames;
-        for (const auto& pair : set->getAnimationStates())
-            animNames << QString::fromStdString(pair.first);
+        if (Ogre::AnimationStateSet* set = entity->getAllAnimationStates()) {
+            for (const auto& pair : set->getAnimationStates())
+                animNames << QString::fromStdString(pair.first);
+        }
+
+        // Append node clips that animate THIS entity's scene node (skip drafts
+        // in an open edit session — they surface after "Done editing").
+        for (const QString& clip : allNodeClips) {
+            if (nodeAnimMgr->isEditing(clip)) continue;
+            if (nodeAnimMgr->animatedNodes(clip).contains(entityName))
+                animNames << clip;
+        }
 
         if (animNames.isEmpty()) continue;
 
         QVariantMap group;
-        group["entity"]     = QString::fromStdString(entity->getName());
+        group["entity"]     = entityName;
         group["animations"] = animNames;
         newTree.append(group);
     }
@@ -201,6 +231,10 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
     m_selectedTick  = -1;
     m_boneNames.clear();
     m_keyframeTicks.clear();
+    // Cleared up front so an empty selection or a switch to a skeletal/vertex
+    // clip always drops the node-clip flag (the dope sheet's band gating binds
+    // to it) — it's re-set below only when the resolved clip is a node clip.
+    m_selectedIsNodeClip = false;
 
     if (entityName.isEmpty() || animName.isEmpty()) {
         emit selectionChanged();
@@ -238,6 +272,17 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
         // so the timeline scrubs (skeleton-only derivation left it at 0).
         m_sliderMaximum = static_cast<int>(
             mesh->getAnimation(m_selectedAnimation)->getLength() * 1000);
+    } else if (auto* nam = NodeAnimationManager::instance();
+               nam && nam->listClips().contains(animName)
+               && nam->animatedNodes(animName).contains(entityName)) {
+        // SceneManager-level node-transform clip (#517). No skeleton/mesh anim;
+        // take the length off the node clip so the timeline scrubs it, and flag
+        // it so setAnimationFrame + playback drive the SceneManager state.
+        m_selectedIsNodeClip = true;
+        m_sliderMaximum = static_cast<int>(nam->clipLength(animName) * 1000);
+        // Point the dope-sheet "Node Transforms" band at this clip so selecting
+        // it in the animation list also shows its keyframes.
+        nam->setActiveClip(animName);
     }
 
     // Reset loop region to span the whole animation whenever a new clip is
@@ -364,9 +409,30 @@ void AnimationControlController::refreshBoneList(const QString& preferSelectBone
 
 Ogre::Bone* AnimationControlController::selectedBonePtr() const
 {
-    if (!m_selectedSkeleton || m_selectedBone.empty()) return nullptr;
-    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return nullptr;
-    return m_selectedSkeleton->getBone(m_selectedBone);
+    if (m_selectedBone.empty()) return nullptr;
+
+    // Re-resolve the skeleton LIVE from a currently-selected entity rather than
+    // trusting the cached m_selectedSkeleton — operations like adding a morph
+    // target call Entity::_initialise(true) (EditableMesh::commitToEntity),
+    // which DESTROYS and recreates the entity's SkeletonInstance, leaving
+    // m_selectedSkeleton dangling. The gizmo update path then called hasBone()
+    // on freed memory and crashed. Cross-check the cached entity is still in the
+    // selection before dereferencing it.
+    Ogre::Skeleton* skel = nullptr;
+    const auto ents = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* e : ents) {
+        if (!e || !e->hasSkeleton()) continue;
+        if (e == m_selectedEntity) { skel = e->getSkeleton(); break; }
+    }
+    // Fall back to the first skinned selection if the cached entity is gone.
+    if (!skel) {
+        for (Ogre::Entity* e : ents) {
+            if (e && e->hasSkeleton()) { skel = e->getSkeleton(); break; }
+        }
+    }
+    if (!skel) return nullptr;
+    if (!skel->hasBone(m_selectedBone)) return nullptr;
+    return skel->getBone(m_selectedBone);
 }
 
 bool AnimationControlController::boneCanTranslate(const Ogre::Bone* bone) const
@@ -591,6 +657,29 @@ double AnimationControlController::advanceTime(double currentTime, double dt) co
 
 void AnimationControlController::setAnimationFrame(int ms)
 {
+    if (m_selectedAnimation.empty()) return;
+
+    // Node-transform clip (#517): scrub the SceneManager-level AnimationState.
+    // It's enabled here so setTimePosition actually poses the node on the next
+    // _applySceneAnimations (the play path enables it too; scrubbing a paused
+    // clip needs it enabled to show the pose). Node clips carry no bone track,
+    // so there is no keyframe-value panel to update — clear and return.
+    if (m_selectedIsNodeClip) {
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+        if (scene && scene->hasAnimationState(m_selectedAnimation)) {
+            auto* nstate = scene->getAnimationState(m_selectedAnimation);
+            nstate->setEnabled(true);
+            nstate->setTimePosition(ms / 1000.0f);
+        }
+        if (m_currentKeyframe) {
+            m_currentKeyframe = nullptr;
+            m_selectedTick = -1;
+            emit currentKeyframeChanged();
+        }
+        return;
+    }
+
     if (!m_selectedEntity || m_selectedAnimation.empty()) return;
     if (!m_selectedEntity->hasAnimationState(m_selectedAnimation)) return;
 
@@ -986,10 +1075,31 @@ QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
 QVariantList AnimationControlController::allBoneRows() const
 {
     QVariantList rows;
-    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return rows;
-    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return rows;
 
-    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    // Resolve the skeleton to show. Normally it's m_selectedSkeleton (set when a
+    // skeletal clip is the selected animation). But the dope sheet shows ALL of
+    // a mesh's animation types together (skeletal + morph + node): when a NODE
+    // clip is selected/edited, no skeletal clip is selected and
+    // m_selectedSkeleton is null — so fall back to the first selected entity's
+    // skeleton so its bones still show alongside the node band. (#517)
+    Ogre::Skeleton* skel = m_selectedSkeleton;
+    if (!skel) {
+        const auto ents = SelectionSet::getSingleton()->getResolvedEntities();
+        for (Ogre::Entity* e : ents) {
+            if (e && e->hasSkeleton()) { skel = e->getSkeleton(); break; }
+        }
+    }
+    if (!skel) return rows;
+
+    // Which skeletal animation to read bone tracks from — the selected one, or
+    // the skeleton's first animation when a node/morph clip is what's selected.
+    std::string animName = m_selectedAnimation;
+    if (animName.empty() || !skel->hasAnimation(animName)) {
+        if (skel->getNumAnimations() == 0) return rows;
+        animName = skel->getAnimation(static_cast<unsigned short>(0))->getName();
+    }
+
+    Ogre::Animation* anim = skel->getAnimation(animName);
     for (const auto& [handle, track] : anim->_getNodeTrackList()) {
         Ogre::Node* node = track->getAssociatedNode();
         if (!node) continue;

@@ -1147,7 +1147,13 @@ void MainWindow::initToolBar()
         m_dopeSheetDock->setObjectName("DopeSheetDock");
         configureBottomToolDock(m_dopeSheetDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_dopeSheetDock);
-        m_dopeSheetDock->hide();
+        // Shown by default (#517 UX): the Dope Sheet is core to the animation
+        // workflow, and the Workspace Panels shortcut group that used to reveal
+        // it was removed. Still toggleable from the View menu. Its QML is
+        // lazy-loaded — the reveal path (revealBottomTool) normally triggers
+        // ensureLazyDockQml, so we must call it here or the dock stays blank.
+        m_dopeSheetDock->show();
+        ensureLazyDockQml(m_dopeSheetDock);
         connect(m_dopeSheetDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Dope Sheet shown" : "Dope Sheet hidden");
@@ -1186,7 +1192,12 @@ void MainWindow::initToolBar()
         // they want via the View menu. tabifyDockWidget runs after both docks
         // exist so we don't open two empty bottom strips.
         if (m_dopeSheetDock) tabifyDockWidget(m_dopeSheetDock, m_curveEditorDock);
-        m_curveEditorDock->hide();
+        // Shown by default (#517 UX), tabbed behind the Dope Sheet. Toggleable
+        // from the View menu. raise() the Dope Sheet so it's the front tab.
+        // Lazy QML must be forced (see the Dope Sheet note above) or blank.
+        m_curveEditorDock->show();
+        ensureLazyDockQml(m_curveEditorDock);
+        if (m_dopeSheetDock) m_dopeSheetDock->raise();
         connect(m_curveEditorDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Curve Editor shown" : "Curve Editor hidden");
@@ -3462,7 +3473,15 @@ void MainWindow::startCloudPackageUpload(QtMeshCloudSession* session,
 }
 
 void MainWindow::setPlaying(bool playing)
-{   isPlaying = playing;    }
+{
+    // Node-transform clips (#517) are SceneManager-level and play from the main
+    // transport. Their "armed to play" state is the AnimationState enabled
+    // flag, controlled solely by the Animations-list Enable checkbox — we must
+    // NOT force it here (doing so fought the checkbox: unchecking appeared to
+    // do nothing). The frame loop advances enabled node states only while
+    // isPlaying; an enabled clip poses its node (locked) — uncheck it to edit.
+    isPlaying = playing;
+}
 
 void MainWindow::createModeSurfaces()
 {
@@ -3776,17 +3795,18 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     const double scaledDt = dt * animCtrl->playbackSpeed();
 
     // Advance SceneManager-level animation states — the NodeAnimationManager's
-    // transform clips (animated props/doors/lights, #517 slice C) live here.
-    // These are driven by their OWN per-clip "Play" toggle (the AnimationState's
-    // enabled flag set from the Inspector's Node Transform Animation section),
-    // NOT the global skeletal Play button — so they must advance regardless of
-    // `isPlaying`. Entity states below are per-mesh and gated on the global
-    // button; node clips are owned by the SceneManager and otherwise never
-    // ticked. Loop is on by default so an enabled node clip plays continuously.
-    if (auto* sm = Manager::getSingleton()->getSceneMgr()) {
-        for (const auto& [key, state] : sm->getAnimationStates()) {
-            if (state && state->getEnabled())
-                state->addTime(static_cast<float>(scaledDt));
+    // transform clips (animated props/doors, #517 slice C) live here. They now
+    // play from the MAIN transport like skeletal/vertex clips: setPlaying()
+    // enables the selected node clip's state on Play and disables all node
+    // states on pause, so gating the advance on `isPlaying` keeps a scrubbed
+    // (paused-but-enabled-for-preview) clip from drifting off its frame. Entity
+    // states are handled in the per-mesh loop below (also isPlaying-gated).
+    if (isPlaying) {
+        if (auto* sm = Manager::getSingleton()->getSceneMgr()) {
+            for (const auto& [key, state] : sm->getAnimationStates()) {
+                if (state && state->getEnabled())
+                    state->addTime(static_cast<float>(scaledDt));
+            }
         }
     }
 

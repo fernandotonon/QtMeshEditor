@@ -72,9 +72,63 @@ void NodeAnimationManager::kill()
 
 NodeAnimationManager::NodeAnimationManager(QObject* parent) : QObject(parent)
 {
+    // Clean up node clips when their target SceneNode is destroyed, so a
+    // deleted node can't leave a dangling track/AnimationState the render
+    // loop would crash on.
+    if (auto* mgr = Manager::getSingletonPtr())
+        connect(mgr, &Manager::sceneNodeDestroyed,
+                this, &NodeAnimationManager::onSceneNodeDestroyed);
 }
 
 NodeAnimationManager::~NodeAnimationManager() = default;
+
+void NodeAnimationManager::onSceneNodeDestroyed(Ogre::SceneNode* node)
+{
+    assertMainThread();
+    if (!node) return;
+    auto* mgr = Manager::getSingletonPtr();
+    auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!scene) return;
+    const QString nodeName = QString::fromStdString(node->getName());
+
+    // Walk every SceneManager animation; drop tracks whose associated node is
+    // the one being destroyed, then delete any clip left with no node tracks.
+    std::vector<std::string> clipsToDelete;
+    for (unsigned short ai = 0; ai < scene->getNumAnimations(); ++ai) {
+        Ogre::Animation* anim = scene->getAnimation(ai);
+        if (!anim) continue;
+        // Collect handles targeting this node first (can't erase while iterating).
+        std::vector<unsigned short> handles;
+        const auto& tracks = anim->_getNodeTrackList();
+        for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+            Ogre::NodeAnimationTrack* t = it->second;
+            if (t && t->getAssociatedNode() == node)
+                handles.push_back(it->first);
+        }
+        if (handles.empty()) continue;
+        // Disable the driving state before mutating tracks so nothing applies
+        // mid-teardown.
+        if (scene->hasAnimationState(anim->getName())) {
+            if (auto* st = scene->getAnimationState(anim->getName()))
+                st->setEnabled(false);
+        }
+        for (unsigned short h : handles)
+            anim->destroyNodeTrack(h);
+        // Forget the handle cache for this (clip, node) pair.
+        forgetTrackHandle(QString::fromStdString(anim->getName()), nodeName);
+        if (anim->getNumNodeTracks() == 0)
+            clipsToDelete.push_back(anim->getName());
+    }
+
+    for (const auto& n : clipsToDelete)
+        deleteClip(QString::fromStdString(n));
+
+    if (!clipsToDelete.empty() || !nodeName.isEmpty()) {
+        // Refresh listeners (dope sheet / inspector) — a clip may have vanished
+        // or lost its only track.
+        emit clipsChanged();
+    }
+}
 
 unsigned short NodeAnimationManager::trackHandleForNode(const QString& clipName,
                                                         const QString& nodeName)
@@ -247,6 +301,9 @@ bool NodeAnimationManager::setClipEnabled(const QString& name, bool enabled)
     if (!scene->hasAnimationState(sn)) return false;
     auto* state = scene->getAnimationState(sn);
     if (!state) return false;
+    // Never enable a clip that's in an open edit session — the node must stay
+    // free for the gizmo. (Disabling is always allowed.)
+    if (enabled && m_editingClip == name) return false;
     state->setEnabled(enabled);
     if (enabled) state->setTimePosition(0.0f);
     return true;
@@ -330,6 +387,32 @@ void NodeAnimationManager::setActiveClip(const QString& name)
     if (m_activeClip == name) return;
     m_activeClip = name;
     emit activeClipChanged();
+}
+
+void NodeAnimationManager::beginEdit(const QString& name)
+{
+    assertMainThread();
+    if (name.isEmpty()) return;
+    // Force the clip's state DISABLED so the node is free for the gizmo while
+    // authoring (an enabled state re-drives the node every frame).
+    setClipEnabled(name, false);
+    setActiveClip(name);
+    if (m_editingClip != name) {
+        m_editingClip = name;
+        emit editingClipChanged();
+    }
+    // The set of listed clips changes (a draft is hidden from the main list).
+    emit clipsChanged();
+}
+
+void NodeAnimationManager::endEdit()
+{
+    assertMainThread();
+    if (m_editingClip.isEmpty()) return;
+    m_editingClip.clear();
+    emit editingClipChanged();
+    // The committed clip now appears in the main animation list.
+    emit clipsChanged();
 }
 
 namespace {

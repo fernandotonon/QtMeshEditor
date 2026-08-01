@@ -8,6 +8,7 @@
 #include "GlobalDefinitions.h"
 
 #include "TransformOperator.h"
+#include "NodeAnimationManager.h"
 #include "LightManager.h"
 #include "LightVisualizer.h"
 #include "LightsController.h"
@@ -1744,6 +1745,20 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         Ogre::Entity* ent = AnimationControlController::instance()->selectedEntity();
         if (!ent || !ent->getParentSceneNode()) return;
 
+        // Node-transform animation (#517): while a node clip is being edited,
+        // the Rotate tool must rotate the SCENE NODE, not a bone pose. In
+        // Animation Mode the rotate gizmo normally drives the selected bone
+        // (line below), which visibly turns the mesh via the skeleton while
+        // leaving node->getOrientation() at identity — so "Key selected node"
+        // captured no rotation. Redirect the world rotation onto the node.
+        if (!NodeAnimationManager::instance()->editingClip().isEmpty()) {
+            ent->getParentSceneNode()->rotate(worldRot, Ogre::Node::TS_WORLD);
+            ent->getParentSceneNode()->needUpdate(true);
+            mStartPoint = point;
+            updateGizmoPosition();
+            return;
+        }
+
         // Map world rotation into bone-local space by composing with
         // the entity world + parent-bone derived orientations.
         Ogre::Quaternion entWorldOri = ent->getParentSceneNode()->_getDerivedOrientation();
@@ -2502,6 +2517,24 @@ void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientati
 
 void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
 {
+    // Node-transform animation (#517): while a node clip is being edited, ALL
+    // rotation must land on the SceneNode (not baked into mesh vertices /
+    // skeleton), so "Key selected node" captures it and playback drives it.
+    // This runs before the normal hasNodes/hasEntities split so no dispatch
+    // path can bypass it (rigged meshes select as entities and would otherwise
+    // vertex-bake the rotation, leaving the node at identity).
+    if (!NodeAnimationManager::instance()->editingClip().isEmpty()) {
+        bool routed = false;
+        for (Ogre::SceneNode* node : SelectionSet::getSingleton()->getNodesSelectionList()) {
+            if (node) { node->rotate(rotation, Ogre::Node::TS_WORLD); routed = true; }
+        }
+        for (Ogre::Entity* ent : SelectionSet::getSingleton()->getEntitiesSelectionList()) {
+            if (Ogre::SceneNode* sn = ent ? ent->getParentSceneNode() : nullptr) {
+                sn->rotate(rotation, Ogre::Node::TS_WORLD); routed = true;
+            }
+        }
+        if (routed) { updateGizmoPosition(); return; }
+    }
     if(SelectionSet::getSingleton()->hasNodes())
     {
         Ogre::Vector3 translation;
@@ -2517,6 +2550,16 @@ void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
     }
     else if(SelectionSet::getSingleton()->hasEntities())
     {
+        // Node-transform animation (#517) edit session override: the editor
+        // normally BAKES a mesh rotation into vertices + skeleton
+        // (MeshTransform::rotateMesh), leaving the SceneNode at identity — so
+        // "Key selected node" (which reads node->getOrientation()) captured no
+        // rotation. While a node-anim clip is being edited, rotate the entity's
+        // SCENE NODE instead, so the rotation lives where node-anim keys it and
+        // playback drives it. Translate/scale already go to the node via the
+        // hasNodes() branch; this closes the rotation gap for rigged meshes
+        // that select as entities.
+
         // Convert quaternion to Euler for rotation tracking (used by spinboxes)
         Ogre::Euler euler;
         euler.fromQuaternion(rotation);

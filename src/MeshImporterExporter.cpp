@@ -1110,6 +1110,12 @@ static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::strin
     return anim;
 }
 
+// Forward decl — defined below (scene-export section). Emits aiAnimations for
+// the SceneManager-level NodeAnimationManager clips (#517 C5) that target the
+// given node names.
+static std::vector<aiAnimation*> buildNodeClipAnimations(
+    const std::set<std::string, std::less<>>& exportedNodeNames);
+
 // Build an aiScene directly from an Ogre Entity, bypassing the XML round-trip
 static aiScene* buildAiScene(const Ogre::Entity* entity)
 {
@@ -1226,6 +1232,17 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     {
         for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
             animations.push_back(buildAiAnimation(skeleton->getAnimation(ai)));
+    }
+
+    // Node-transform clips (#517 C5): the single-entity export path
+    // (Export Selected) must also carry node animation, or it drops. The
+    // entity is named after its scene node, so export clips targeting that
+    // node. Root node is named after the entity, matching the channel target.
+    {
+        std::set<std::string, std::less<>> nodeNames;
+        nodeNames.insert(std::string(entity->getName()));
+        auto nodeAnims = buildNodeClipAnimations(nodeNames);
+        animations.insert(animations.end(), nodeAnims.begin(), nodeAnims.end());
     }
 
     // NOTE: morph-target SHAPES export fine (via aiMesh::mAnimMeshes above),

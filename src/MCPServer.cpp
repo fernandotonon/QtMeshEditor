@@ -3149,6 +3149,29 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
     if (entityName.isEmpty() || animName.isEmpty())
         return makeErrorResult("Error: 'entity' and 'animation' are required");
 
+    // Node-transform clip (#517): SceneManager-level, not an entity state.
+    // Scrub the node clip's own AnimationState (enabling it so setTimePosition
+    // poses the node). The entity name equals the animated scene-node name.
+    if (auto* nam = NodeAnimationManager::instance();
+        nam && nam->listClips().contains(animName)
+        && nam->animatedNodes(animName).contains(entityName)) {
+        if (!args["time"].isDouble())
+            return makeErrorResult("Error: 'time' must be a number for node clips");
+        const double t = args["time"].toDouble();
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+        if (!scene || !scene->hasAnimationState(animName.toStdString()))
+            return makeErrorResult("Error: node clip state missing");
+        auto* nstate = scene->getAnimationState(animName.toStdString());
+        nstate->setEnabled(true);
+        nstate->setTimePosition(static_cast<float>(t));
+        // Keep the controller's selection + slider in sync so the GUI reflects it.
+        AnimationControlController::instance()->selectAnimation(entityName, animName);
+        AnimationControlController::instance()->setSliderValue(static_cast<int>(t * 1000));
+        QJsonObject c; c["ok"] = true; c["animation"] = animName; c["time"] = t; c["node_clip"] = true;
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(c).toJson(QJsonDocument::Indented)));
+    }
+
     try {
         Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));

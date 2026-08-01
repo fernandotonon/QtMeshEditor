@@ -14,6 +14,7 @@
 #include "CurveEditModel.h"
 #include "EditModeController.h"
 #include "MorphAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "SentryReporter.h"
 
 #include <QSet>
@@ -1054,13 +1055,20 @@ QVariantList PropertiesPanelController::animationData() const
 {
     QVariantList result;
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+
+    // Node-transform clips (#517) are SceneManager-level and animate a scene
+    // node by name; createEntity() names each entity after its scene node, so
+    // clips whose animated node == the entity name belong in that entity's
+    // group alongside skeletal / vertex clips.
+    auto* nodeAnimMgr = NodeAnimationManager::instance();
+    const QStringList allNodeClips = nodeAnimMgr ? nodeAnimMgr->listClips() : QStringList();
+
     for (Ogre::Entity* ent : entities)
     {
-        auto* states = ent->getAllAnimationStates();
-        if (!states || states->getAnimationStates().empty()) continue;
+        const QString entityName = QString::fromStdString(ent->getName());
 
         QVariantMap entityGroup;
-        entityGroup["entity"] = QString::fromStdString(ent->getName());
+        entityGroup["entity"] = entityName;
         entityGroup["hasSkeleton"] = ent->hasSkeleton();
         entityGroup["showSkeleton"] = mAnimationWidget ? mAnimationWidget->isSkeletonDebugActive(ent) : false;
         entityGroup["showWeights"] = mAnimationWidget ? mAnimationWidget->isBoneWeightsShown(ent) : false;
@@ -1076,18 +1084,45 @@ QVariantList PropertiesPanelController::animationData() const
             morphNames.insert(n);
 
         QVariantList anims;
-        for (const auto& [key, state] : states->getAnimationStates())
+        if (auto* states = ent->getAllAnimationStates())
         {
-            const QString name = QString::fromStdString(key);
-            if (morphNames.contains(name)) continue;   // blend shape, not a clip
-            QVariantMap anim;
-            anim["name"] = name;
-            anim["enabled"] = state->getEnabled();
-            anim["loop"] = state->getLoop();
-            anim["length"] = state->getLength();
-            anims.append(anim);
+            for (const auto& [key, state] : states->getAnimationStates())
+            {
+                const QString name = QString::fromStdString(key);
+                if (morphNames.contains(name)) continue;   // blend shape, not a clip
+                QVariantMap anim;
+                anim["name"] = name;
+                anim["enabled"] = state->getEnabled();
+                anim["loop"] = state->getLoop();
+                anim["length"] = state->getLength();
+                anim["nodeClip"] = false;
+                anims.append(anim);
+            }
         }
-        // Skip an entity that only had morph targets — its group would be empty.
+
+        // Append node-transform clips that animate this entity's scene node.
+        if (nodeAnimMgr)
+        {
+            auto* mgr = Manager::getSingletonPtr();
+            auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+            for (const QString& clip : allNodeClips)
+            {
+                if (!nodeAnimMgr->animatedNodes(clip).contains(entityName)) continue;
+                if (nodeAnimMgr->isEditing(clip)) continue;  // draft — hidden until "Done editing"
+                QVariantMap anim;
+                anim["name"] = clip;
+                anim["length"] = nodeAnimMgr->clipLength(clip);
+                bool enabled = false;
+                if (scene && scene->hasAnimationState(clip.toStdString()))
+                    enabled = scene->getAnimationState(clip.toStdString())->getEnabled();
+                anim["enabled"] = enabled;
+                anim["loop"] = true;
+                anim["nodeClip"] = true;   // lets the QML tag / route it
+                anims.append(anim);
+            }
+        }
+
+        // Skip an entity with no real clips (only morph targets / nothing).
         if (anims.isEmpty()) continue;
         entityGroup["animations"] = anims;
         result.append(entityGroup);
@@ -1097,6 +1132,18 @@ QVariantList PropertiesPanelController::animationData() const
 
 void PropertiesPanelController::toggleAnimationEnabled(const QString& entityName, const QString& animName, bool enabled)
 {
+    // Node-transform clip (#517): SceneManager-level. The checkbox maps
+    // directly to the clip's AnimationState enabled flag — enabled plays via
+    // the transport, disabled frees the node. No selectAnimation side-effect
+    // (that caused the checkbox to appear stuck). Refused while editing.
+    if (auto* nam = NodeAnimationManager::instance();
+        nam && nam->listClips().contains(animName)
+        && nam->animatedNodes(animName).contains(entityName)) {
+        nam->setClipEnabled(animName, enabled);
+        emit animationStateChanged();
+        return;
+    }
+
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     for (Ogre::Entity* ent : entities)
     {
@@ -1274,6 +1321,15 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
 
 bool PropertiesPanelController::deleteAnimation(const QString& entityName, const QString& animName)
 {
+    // Node-transform clip (#517): delete via NodeAnimationManager.
+    if (auto* nam = NodeAnimationManager::instance();
+        nam && nam->listClips().contains(animName)
+        && nam->animatedNodes(animName).contains(entityName)) {
+        const bool ok = nam->deleteClip(animName);
+        if (ok) { emit animationStateChanged(); }
+        return ok;
+    }
+
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     for (Ogre::Entity* ent : entities)
     {

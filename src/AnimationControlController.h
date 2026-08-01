@@ -61,6 +61,7 @@ class AnimationControlController : public QObject
     Q_PROPERTY(bool hasPrevKeyframe   READ hasPrevKeyframe   NOTIFY keyframeTicksChanged)
     Q_PROPERTY(bool hasNextKeyframe   READ hasNextKeyframe   NOTIFY keyframeTicksChanged)
     Q_PROPERTY(bool hasAnimation      READ hasAnimation      NOTIFY selectionChanged)
+    Q_PROPERTY(bool selectedIsNodeClip READ selectedIsNodeClip NOTIFY selectionChanged)
 
     // Keyframe values (T/R/S for the closest keyframe to current time)
     Q_PROPERTY(double kfTransX READ kfTransX NOTIFY currentKeyframeChanged)
@@ -159,6 +160,8 @@ public:
     bool hasPrevKeyframe()   const;
     bool hasNextKeyframe()   const;
     bool hasAnimation()      const { return !m_selectedAnimation.empty(); }
+    /// True when the selected clip is a SceneManager node-transform clip (#517).
+    bool selectedIsNodeClip() const { return m_selectedIsNodeClip; }
 
     // Keyframe values
     double kfTransX() const { return m_kfTransX; }
@@ -458,6 +461,13 @@ private:
     double m_loopEnd          = 0.0;
     bool   m_loopRegionActive = false;
     bool   m_autoKey          = false;
+
+    /// True when the selected animation is a SceneManager-level node-transform
+    /// clip (#517) rather than a skeletal/mesh clip on m_selectedEntity. Node
+    /// clips live on Manager::getSceneMgr(), keyed by clip name == the anim
+    /// name, and animate the SceneNode whose name == m_selectedEntityName.
+    /// Set in selectAnimation; consulted by setAnimationFrame + the play path.
+    bool   m_selectedIsNodeClip = false;
 };
 
 #endif // ANIMATIONCONTROLCONTROLLER_H
