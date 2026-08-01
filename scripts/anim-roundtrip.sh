@@ -51,20 +51,26 @@ PY
 }
 
 echo "===== BUILD SCENE (skeletal + morph + node) ====="
-# Load the face mesh (has morph targets Shape_0/1) — add a node clip to it.
-R=$(call load_mesh "$(printf '{"path":"%s"}' "$FACE")"); note "$(echo "$R"|ctext)"
+# Prefer the RIGGED body (real skeleton) so we test node+skeleton coexistence.
+# It has no morph targets, so morph checks are skipped for it. If you want a
+# combined asset, set QTMESH_RT_MESH to one with skeleton+morph.
+BASE_MESH="${QTMESH_RT_MESH:-$BODY}"
+HAS_MORPH=0
+case "$BASE_MESH" in *out_face*) HAS_MORPH=1;; esac
+R=$(call load_mesh "$(printf '{"path":"%s"}' "$BASE_MESH")"); note "$(echo "$R"|ctext)"
 sleep 2
-# Node clip on the face's node (entity name == node name). Read the node name:
 SI=$(call get_scene_info '{}' | ctext)
-NODE=$(echo "$SI" | grep -oE 'out_face[A-Za-z0-9_]*' | head -1)
-[ -z "$NODE" ] && NODE="out_face"
-note "node=$NODE"
+NODE=$(echo "$SI" | grep -oE 'out_(body|face)[A-Za-z0-9_]*' | head -1)
+[ -z "$NODE" ] && NODE="out_body"
+note "node=$NODE has_morph=$HAS_MORPH"
 call add_node_animation_clip '{"name":"Spin","length":2.0}' >/dev/null
 call set_node_keyframe "$(printf '{"clip":"Spin","node":"%s","time":0.0,"translate":[0,0,0]}' "$NODE")" >/dev/null
 call set_node_keyframe "$(printf '{"clip":"Spin","node":"%s","time":2.0,"translate":[5,0,0]}' "$NODE")" >/dev/null
-# Morph weight animation over time:
-call set_morph_weight_keyframe '{"target":"Shape_0","time":0.0,"weight":0.0}' >/dev/null
-call set_morph_weight_keyframe '{"target":"Shape_0","time":1.0,"weight":1.0}' >/dev/null
+# Morph weight animation over time (only when the base mesh has blend shapes).
+if [ "$HAS_MORPH" = "1" ]; then
+  call set_morph_weight_keyframe '{"target":"Shape_0","time":0.0,"weight":0.0}' >/dev/null
+  call set_morph_weight_keyframe '{"target":"Shape_0","time":1.0,"weight":1.0}' >/dev/null
+fi
 
 for FMT in glb fbx mesh; do
   case $FMT in
@@ -93,7 +99,9 @@ for FMT in glb fbx mesh; do
   note "morph: $(echo "$MO"|tr '\n' ' '|cut -c1-80)"
 
   has "$FMT: skeletal anim survives" "Animation:" "$SK"
-  has "$FMT: morph targets survive" "Shape_" "$MO"
+  if [ "$HAS_MORPH" = "1" ]; then
+    has "$FMT: morph targets survive" "Shape_" "$MO"
+  fi
   # Node anim expected for ALL formats now.
   has "$FMT: node anim survives" "\"count\": 1" "$NA"
 
