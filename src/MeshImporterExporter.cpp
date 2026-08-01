@@ -4557,7 +4557,17 @@ static aiScene* buildSceneAiScene()
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
+            // Morph-target SHAPES (blend shapes). The single-entity buildAiScene
+            // attaches these; the SCENE path (save_scene / glb) did NOT, so
+            // exported scenes dropped every blend shape and morph animation had
+            // no targets to drive (bug: "morph carried the T-pose"). Attach
+            // before compaction, then remap the target vertex arrays like the
+            // single-entity path.
+            const unsigned int preCompactCount = aiM->mNumVertices;
+            attachMorphTargetsToAiMesh(aiM, mesh, subMesh, si);
+
             const std::vector<unsigned int> remap = compactAiMesh(aiM);
+            remapAiMeshMorphTargets(aiM, remap, preCompactCount);
 
             std::vector<std::vector<unsigned int>> ngonFaces;
             if (meshOwnerNode
@@ -4682,6 +4692,21 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         }
 
         delete scene;
+
+        // Assimp's glTF2 exporter drops morph-target WEIGHT animation channels
+        // (it only emits node TRS). The single-entity exporter() path patches
+        // them back in via injectMorphWeightAnimations; do the same for the
+        // SCENE path so morph-weight clips (Inspector / MCP set_morph_weight_
+        // keyframe) survive save_scene now that the shapes export too. No-op
+        // when an entity has no weight clips.
+        for (const auto& [snPair, entityPair] : entities)
+        {
+            (void)snPair;
+            if (entityPair && entityPair->getMesh() && entityPair->getMesh()->getPoseCount() > 0)
+                injectMorphWeightAnimations(file.filePath(), entityPair,
+                                            /*isBinary=*/formatId == "glb2");
+        }
+
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
         // (same strategy as FBX export) so user-added lights always round-trip.
         if (!SceneLightsIO::writeLightsSidecar(_uri))
