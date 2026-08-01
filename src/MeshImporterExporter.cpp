@@ -82,6 +82,7 @@ THE SOFTWARE.
 // see the last line before SIGSEGV. Remove once fixed.
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
+#include "NodeAnimationManager.h"
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
@@ -2320,6 +2321,126 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
     }
 }
 
+// Reconstruct NodeAnimationManager clips (#517) from a freshly-imported
+// aiScene. On export, node-transform animation is written as aiAnimations whose
+// aiNodeAnim channels target the mesh's scene NODE (not a bone). The skeletal
+// AnimationProcessor deliberately skips those channels (Skeleton::hasBone
+// returns false), so without this they were lost — or, on a skeleton-less mesh,
+// mis-imported as a bogus skeletal clip. Here we walk the aiScene's animations,
+// pick channels whose target node name matches the just-created SceneNode AND
+// is NOT a bone on the mesh's skeleton, and rebuild them as node clips so they
+// show in the animation list + dope-sheet node band and drive the SceneNode.
+//
+// The node was auto-scaled by `nodeScale` (sub-unit mesh fix). A node clip
+// animates the node's OWN local transform; its translation lives in PARENT
+// space and is unaffected by the node's own scale, so translations are taken
+// verbatim (no *nodeScale) — the previous "100x off" report came from the
+// channel being dropped/misrouted, not a scale factor here.
+static void reconstructNodeClipsFromFile(const QString& filePath,
+                                         Ogre::SceneNode* sn,
+                                         const Ogre::Entity* en)
+{
+    if (filePath.isEmpty() || !sn || !en) return;
+    auto* nam = NodeAnimationManager::instance();
+    if (!nam) return;
+
+    // Independent, no-process read purely to recover node-transform channels
+    // (the main import path's aiScene is out of scope here). Keep flags minimal
+    // so we don't mutate the animation data — we only need mAnimations.
+    Assimp::Importer aimp;
+    const aiScene* aiscene = aimp.ReadFile(filePath.toStdString(), 0);
+    if (!aiscene || aiscene->mNumAnimations == 0) return;
+
+    const std::string nodeName = sn->getName();
+    Ogre::Skeleton* skel =
+        (en->getMesh() && en->getMesh()->getSkeleton())
+            ? en->getMesh()->getSkeleton().get() : nullptr;
+
+    for (unsigned int a = 0; a < aiscene->mNumAnimations; ++a) {
+        const aiAnimation* anim = aiscene->mAnimations[a];
+        if (!anim) continue;
+        const double ticksPerSec =
+            (anim->mTicksPerSecond > 0.0) ? anim->mTicksPerSecond : 1.0;
+
+        // Gather channels targeting THIS scene node that are not bones.
+        std::vector<const aiNodeAnim*> nodeChannels;
+        for (unsigned int c = 0; c < anim->mNumChannels; ++c) {
+            const aiNodeAnim* ch = anim->mChannels[c];
+            if (!ch) continue;
+            const std::string chName = ch->mNodeName.C_Str();
+            if (chName != nodeName) continue;
+            if (skel && skel->hasBone(chName)) continue;  // belongs to the skeleton
+            nodeChannels.push_back(ch);
+        }
+        if (nodeChannels.empty()) continue;
+
+        // Clip name: the aiAnimation name, made unique on the scene.
+        std::string clipName = anim->mName.C_Str();
+        if (clipName.empty()) clipName = "NodeClip";
+        std::string unique = clipName;
+        int suffix = 1;
+        auto* scene = Manager::getSingletonPtr() ? Manager::getSingletonPtr()->getSceneMgr() : nullptr;
+        while (scene && scene->hasAnimation(unique))
+            unique = clipName + "_" + std::to_string(suffix++);
+
+        const double lengthSec = (anim->mDuration > 0.0)
+            ? anim->mDuration / ticksPerSec : 0.0;
+        if (lengthSec <= 0.0) continue;
+        if (!nam->createClip(QString::fromStdString(unique), lengthSec)) continue;
+
+        for (const aiNodeAnim* ch : nodeChannels) {
+            // Collect the union of key times across P/R/S, then sample each.
+            std::set<double> times;
+            for (unsigned int k = 0; k < ch->mNumPositionKeys; ++k)
+                times.insert(ch->mPositionKeys[k].mTime / ticksPerSec);
+            for (unsigned int k = 0; k < ch->mNumRotationKeys; ++k)
+                times.insert(ch->mRotationKeys[k].mTime / ticksPerSec);
+            for (unsigned int k = 0; k < ch->mNumScalingKeys; ++k)
+                times.insert(ch->mScalingKeys[k].mTime / ticksPerSec);
+
+            auto sampleVec = [](const aiVectorKey* keys, unsigned int n,
+                                double t, double tps, const Ogre::Vector3& def) {
+                if (n == 0) return def;
+                // nearest key (clips are exported per-key, no interpolation gaps)
+                double best = 1e30; Ogre::Vector3 out = def;
+                for (unsigned int k = 0; k < n; ++k) {
+                    const double kt = keys[k].mTime / tps;
+                    const double d = std::abs(kt - t);
+                    if (d < best) { best = d; out = Ogre::Vector3(
+                        keys[k].mValue.x, keys[k].mValue.y, keys[k].mValue.z); }
+                }
+                return out;
+            };
+            auto sampleQuat = [](const aiQuatKey* keys, unsigned int n,
+                                 double t, double tps) {
+                if (n == 0) return Ogre::Quaternion::IDENTITY;
+                double best = 1e30; Ogre::Quaternion out = Ogre::Quaternion::IDENTITY;
+                for (unsigned int k = 0; k < n; ++k) {
+                    const double kt = keys[k].mTime / tps;
+                    const double d = std::abs(kt - t);
+                    if (d < best) { best = d; out = Ogre::Quaternion(
+                        keys[k].mValue.w, keys[k].mValue.x,
+                        keys[k].mValue.y, keys[k].mValue.z); }
+                }
+                out.normalise();
+                return out;
+            };
+
+            for (double t : times) {
+                const Ogre::Vector3 pos = sampleVec(ch->mPositionKeys,
+                    ch->mNumPositionKeys, t, ticksPerSec, Ogre::Vector3::ZERO);
+                const Ogre::Quaternion rot = sampleQuat(ch->mRotationKeys,
+                    ch->mNumRotationKeys, t, ticksPerSec);
+                const Ogre::Vector3 scl = sampleVec(ch->mScalingKeys,
+                    ch->mNumScalingKeys, t, ticksPerSec, Ogre::Vector3(1, 1, 1));
+                nam->addKeyframe(QString::fromStdString(unique),
+                                 QString::fromStdString(nodeName),
+                                 t, pos, rot, scl);
+            }
+        }
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -2893,6 +3014,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         " was inside the near-clip plane)");
                 }
             }
+
+            // Recover node-transform animation clips (#517) that the skeletal
+            // import path drops (channels target the scene node, not a bone).
+            reconstructNodeClipsFromFile(file.filePath(), sn, en);
 
             configureCamera(en);
         }
