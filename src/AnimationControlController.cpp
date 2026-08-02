@@ -1133,6 +1133,15 @@ QVariantList AnimationControlController::allMorphRows() const
     const Ogre::PoseList& poseList = mesh->getPoseList();
     if (poseList.empty()) return rows;
 
+    // A morph target that spans multiple submeshes has ONE pose per submesh
+    // handle, all sharing the same NAME (e.g. a face split across 11 submeshes
+    // yields 11 "jawOpen" poses — see MorphAnimationManager::morphTargetsFor).
+    // The UI + every by-name op treat a target as its name, so list each name
+    // ONCE — otherwise the dope sheet shows a duplicate row per submesh and
+    // keyframing (which keys the whole named target) appeared to hit only the
+    // first row. Coalesce here the same way morphTargetsFor does.
+    QSet<QString> seenPoseNames;
+
     // Each pose has a matching `Ogre::Animation` (see MeshProcessor:
     // import-time one-animation-per-pose pattern). Read the keyframe
     // times off the animation's VAT_POSE track; in A1 every animation
@@ -1141,6 +1150,9 @@ QVariantList AnimationControlController::allMorphRows() const
         if (!pose) continue;
         const Ogre::String poseName = pose->getName();
         if (poseName.empty()) continue;
+        const QString qPoseName = QString::fromStdString(poseName);
+        if (seenPoseNames.contains(qPoseName)) continue;  // coalesce same-named poses
+        seenPoseNames.insert(qPoseName);
 
         QVariantList keyTimes;
         const unsigned short handle = pose->getTarget();

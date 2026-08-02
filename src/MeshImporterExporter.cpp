@@ -2336,20 +2336,13 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
 // space and is unaffected by the node's own scale, so translations are taken
 // verbatim (no *nodeScale) — the previous "100x off" report came from the
 // channel being dropped/misrouted, not a scale factor here.
-static void reconstructNodeClipsFromFile(const QString& filePath,
-                                         Ogre::SceneNode* sn,
-                                         const Ogre::Entity* en)
+static void reconstructNodeClipsFromAiScene(const aiScene* aiscene,
+                                            Ogre::SceneNode* sn,
+                                            const Ogre::Entity* en)
 {
-    if (filePath.isEmpty() || !sn || !en) return;
+    if (!aiscene || !sn || !en || aiscene->mNumAnimations == 0) return;
     auto* nam = NodeAnimationManager::instance();
     if (!nam) return;
-
-    // Independent, no-process read purely to recover node-transform channels
-    // (the main import path's aiScene is out of scope here). Keep flags minimal
-    // so we don't mutate the animation data — we only need mAnimations.
-    Assimp::Importer aimp;
-    const aiScene* aiscene = aimp.ReadFile(filePath.toStdString(), 0);
-    if (!aiscene || aiscene->mNumAnimations == 0) return;
 
     const std::string nodeName = sn->getName();
     Ogre::Skeleton* skel =
@@ -2439,6 +2432,19 @@ static void reconstructNodeClipsFromFile(const QString& filePath,
             }
         }
     }
+}
+
+// File-reading wrapper: the plain-import path (importer()) doesn't retain the
+// aiScene, so do an independent no-process Assimp read purely to recover the
+// node-transform channels, then delegate to the core above.
+static void reconstructNodeClipsFromFile(const QString& filePath,
+                                         Ogre::SceneNode* sn,
+                                         const Ogre::Entity* en)
+{
+    if (filePath.isEmpty() || !sn || !en) return;
+    Assimp::Importer aimp;
+    const aiScene* aiscene = aimp.ReadFile(filePath.toStdString(), 0);
+    reconstructNodeClipsFromAiScene(aiscene, sn, en);
 }
 
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
@@ -5248,7 +5254,13 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             sn->setOrientation(orient);
             sn->setScale(scale);
 
-            manager->createEntity(sn, ogreMesh);
+            Ogre::Entity* nodeEnt = manager->createEntity(sn, ogreMesh);
+
+            // Recover node-transform animation clips (#517) for THIS node from
+            // the aiScene we already have. Open Scene (sceneImporter) is a
+            // separate path from plain Import (importer) — without this, node
+            // anim was dropped on the File > Save Scene / Open Scene round-trip.
+            reconstructNodeClipsFromAiScene(scene, sn, nodeEnt);
         }
 
         if (!SceneLightsIO::importLightsSidecar(_uri, true))
