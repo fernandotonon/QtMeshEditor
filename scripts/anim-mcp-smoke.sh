@@ -164,6 +164,6 @@ if [ "$FAIL" -gt 0 ]; then printf 'FAILED: %s\n' "${fails[@]}"; fi
 if kill -0 $APP_PID 2>/dev/null; then echo "APP STILL ALIVE (no crash)"; else echo "FAIL: APP CRASHED"; FAIL=$((FAIL+1)); fi
 grep -iE "SIGSEGV|SIGABRT|terminate called|ASSERT|assertMainThread" "$LOG" | head -5
 
-kill $APP_PID 2>/dev/null; sleep 1; kill -9 $APP_PID 2>/dev/null
+kill -9 $APP_PID 2>/dev/null; pkill -9 -f "QtMeshEditor" 2>/dev/null
 rm -f /tmp/anim_mcp_roundtrip.scene.glb
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
