@@ -52,6 +52,7 @@
 #include "MeshSegmenter.h"
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
+#include "PartOpsScene.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -10357,6 +10358,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     QString writeLabelsPath;   // PartOps #864: dump face/vertex labels to JSON
     QString outputPath;        // PartOps #864: --split-parts output mesh
     bool splitParts = false;   // PartOps #861/#864
+    bool explodeParts = false; // PartOps #864: split then explode into N nodes
+    float explodeDistance = 0.15f; // PartOps #864
     bool solidify = false;     // #863 follow-up: give thin-shell parts wall volume
     bool jsonOutput = false;
     bool noModel = false;
@@ -10371,6 +10374,20 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--no-island-cleanup") { noIslandCleanup = true; continue; }
         if (arg == "--split-parts") { splitParts = true; continue; }
+        if (arg == "--explode-parts") { explodeParts = true; continue; }
+        if (arg == "--explode-distance") {
+            if (i + 1 >= argc) {
+                err() << "Error: --explode-distance requires a value." << Qt::endl;
+                return 2;
+            }
+            bool okv = false;
+            explodeDistance = QString::fromLocal8Bit(argv[++i]).toFloat(&okv);
+            if (!okv || explodeDistance < 0.0f) {
+                err() << "Error: --explode-distance must be a non-negative number." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--solidify") { solidify = true; continue; }
         if (arg == "--write-labels") {
             if (i + 1 >= argc) {
@@ -10433,7 +10450,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                  "[--category auto|body|vegetation|vehicle|building] "
                  "[--no-island-cleanup] "
                  "[--dump-training-data <out.json>] [--write-labels <out.json>] "
-                 "[--split-parts [--solidify] -o <out.glb>]" << Qt::endl;
+                 "[--split-parts [--solidify] -o <out.glb>] "
+                 "[--explode-parts [--explode-distance <d>] [--solidify] -o <scene.glb>]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -10683,6 +10701,85 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                 cliWrite(QString("  %1\n").arg(n));
         }
         return 0; // split path produces its own output; skip the label dump below
+    }
+
+    // --- PartOps: split then EXPLODE into separate nodes (#864) -------------
+    if (explodeParts) {
+        if (outputPath.isEmpty()) {
+            err() << "Error: --explode-parts requires -o <output scene>." << Qt::endl;
+            return 2;
+        }
+        // 1) Split the source mesh into per-part submeshes (one fused entity).
+        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
+        SubMeshOps::SplitOptions sopts;
+        sopts.solidifyParts = solidify;
+        PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
+            entity, r.faceLabels, groups, sopts, fi.completeBaseName().toStdString());
+        if (!so.ok) {
+            err() << "Error: split failed — "
+                  << (so.error.isEmpty() ? QStringLiteral("unknown") : so.error) << Qt::endl;
+            return 1;
+        }
+        auto* mgr = Manager::getSingletonPtr();
+        Ogre::SceneNode* srcNode = mgr ? mgr->addSceneNode("PartOpsExplodeSrc") : nullptr;
+        Ogre::Entity* splitEnt = (srcNode && mgr) ? mgr->createEntity(srcNode, so.mesh) : nullptr;
+        if (!splitEnt) {
+            err() << "Error: could not build scene node for split mesh." << Qt::endl;
+            return 1;
+        }
+        // 2) Explode: build one single-submesh mesh + outward offset per part.
+        PartOpsScene::ExplodeResult ex =
+            PartOpsScene::explodeEntity(splitEnt, explodeDistance,
+                                        fi.completeBaseName().toStdString() + "_part");
+        if (!ex.ok) {
+            err() << "Error: explode failed — "
+                  << (ex.error.isEmpty() ? QStringLiteral("unknown") : ex.error) << Qt::endl;
+            return 1;
+        }
+        // 3) Remove the fused source node; create one node per part at its
+        //    outward offset. Each entity is named after its node (Manager does
+        //    this), which sceneExporter needs to discover it.
+        mgr->destroyAllAttachedMovableObjects(srcNode);
+        mgr->destroySceneNode(srcNode);
+        QStringList partNodeNames;
+        int idx = 0;
+        for (const PartOpsScene::ExplodePart& p : ex.parts) {
+            Ogre::SceneNode* pn =
+                mgr->addSceneNode(QString("PartOpsExplode_%1_%2").arg(idx++).arg(p.name));
+            if (!pn) continue;
+            pn->setPosition(p.offset);
+            mgr->createEntity(pn, p.mesh);
+            partNodeNames << p.name;
+        }
+        // 4) Export the whole multi-node scene. sceneExporter/sceneImporter is the
+        //    matched pair for multi-entity glTF scenes.
+        const QString outUri = QFileInfo(outputPath).absoluteFilePath();
+        if (MeshImporterExporter::sceneExporter(outUri) != 0) {
+            err() << "Error: scene export failed for " << outputPath << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("mesh.parts.explode"),
+            QStringLiteral("parts=%1 distance=%2")
+                .arg(partNodeNames.size()).arg(explodeDistance));
+        if (jsonOutput) {
+            QJsonObject root;
+            root["mesh"] = fi.fileName();
+            root["output"] = QFileInfo(outputPath).fileName();
+            root["explodedParts"] = static_cast<int>(partNodeNames.size());
+            root["explodeDistance"] = explodeDistance;
+            QJsonArray pn;
+            for (const QString& n : partNodeNames) pn.append(n);
+            root["partNames"] = pn;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
+        } else {
+            cliWrite(QString("Exploded %1 into %2 parts (distance %3) → %4\n")
+                         .arg(fi.fileName()).arg(partNodeNames.size())
+                         .arg(explodeDistance).arg(QFileInfo(outputPath).fileName()));
+            for (const QString& n : partNodeNames)
+                cliWrite(QString("  %1\n").arg(n));
+        }
+        return 0;
     }
 
     if (jsonOutput) {

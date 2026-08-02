@@ -280,6 +280,7 @@ Split View|Skeleton Animation Controls
 - **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
 - **Material editor** — visual editing with AI-assisted generation; PBR + HDR/IBL materials look correct on first import (bundled studio HDRI, ACES tonemap, env intensity/tint per material)
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
+- **AI part segmentation & PartOps** — detect a character's parts (head/torso/arms/legs), then **split** into named submeshes, **explode** into separate scene nodes, **join** them back, or **solidify** thin-shell parts; GUI + `qtmesh segment --split-parts / --explode-parts` + MCP (`split_mesh_by_segments`, `explode_mesh_parts`, `join_mesh_parts`) — see [docs/PART_OPS.md](docs/PART_OPS.md)
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
 - **Performance capture** — video/webcam → facial morph animation (ARKit blendshapes), head pose, and full-body skeletal capture onto humanoid rigs; live preview + record in the editor, `qtmesh mocap` on the CLI (`-DENABLE_MOCAP` builds)
 - **AI chat** — natural language scene editing via local LLMs
