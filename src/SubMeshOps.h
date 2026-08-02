@@ -14,7 +14,7 @@
  *
  * PartOps turns AI mesh segmentation (`MeshSegmenter`) into real authoring
  * operations: split a fused mesh into per-part submeshes, explode those into
- * separate scene nodes, join them back, and add 3D-print alignment pegs.
+ * separate scene nodes, and join them back.
  *
  * Everything here operates on `std::vector<EditableSubMesh>` — the same
  * attribute-complete editable representation `EditableMesh` loads from an
@@ -73,6 +73,14 @@ public:
          *  preserving the source material. The Ogre adapter creates the
          *  materials; the core only records the intended name. */
         bool assignPartMaterials = false;
+        /** Give each part real WALL VOLUME (`solidify`) — for thin-shell game
+         *  assets (single-sided surfaces) an exploded part otherwise exposes its
+         *  hollow interior at the cut. This also SEALS each part watertight (it
+         *  walls every open boundary). Default OFF (adds geometry + only
+         *  meaningful for thin shells). `solidifyThickness` is in model units;
+         *  <= 0 = auto (~1.5% of the part AABB diagonal). */
+        bool solidifyParts = false;
+        float solidifyThickness = 0.0f;
     };
 
     struct SplitResult {
@@ -156,47 +164,25 @@ public:
                                                       const Ogre::AxisAlignedBox& assemblyBounds,
                                                       float distance);
 
-    // -------------------------------------------------------------------------
-    // Print-split alignment pegs (Slice D #863)
-    // -------------------------------------------------------------------------
+    // Solidify / shell-thickening (#863 follow-up) ----------------------------
 
-    struct PegOptions {
-        float clearance = 0.20f;   ///< socket radius = pegRadius + clearance.
-        float pegRadius = 1.50f;   ///< model units.
-        float pegDepth = 4.00f;    ///< how far the peg protrudes / socket sinks.
-        int maxPegsPerBoundary = 3;
-        int radialSegments = 16;   ///< cylinder tessellation.
-    };
-
-    /** A boundary plane estimated between two parts: the shared/coincident
-     *  vertices' centroid + best-fit normal (via covariance). `stable` is
-     *  false when the boundary is too small or too noisy to place pegs. */
-    struct BoundaryPlane {
-        Ogre::Vector3 center = Ogre::Vector3::ZERO;
-        Ogre::Vector3 normal = Ogre::Vector3::UNIT_Y;
-        float radius = 0.0f;       ///< extent of the boundary ring in-plane.
-        bool stable = false;
-        QString reason;            ///< why unstable (when !stable).
-    };
-
-    /** Estimate the boundary plane between two parts from vertices that are
-     *  coincident (within `weldTol`) across the two submesh sets — the seam
-     *  left by a split. Needs >= 8 coincident points and a covariance whose
-     *  smallest eigenvalue is well-separated (a real plane, not a blob) to be
-     *  `stable`. Pure-data. */
-    static BoundaryPlane estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
-                                               const std::vector<EditableSubMesh>& partB,
-                                               float weldTol = 1e-4f);
-
-    /** Build matching male-peg (added to `outMale`) and female-socket-cutter
-     *  (added to `outSocket`) cylinder submeshes on the given boundary plane.
-     *  Pegs are placed on a ring inside the boundary radius, up to
-     *  `maxPegsPerBoundary`. The socket cutter is the peg + clearance; the
-     *  adapter decides whether to boolean-subtract or just group it (this MVP
-     *  emits it as a named submesh — no boolean, per epic scope). Returns the
-     *  number of pegs generated (0 when the plane is unstable). Pure geometry. */
-    static int buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions& opts,
-                                  EditableSubMesh& outMale, EditableSubMesh& outSocket);
+    /** Give a THIN SHELL real wall volume ("Solidify" modifier). Game character
+     *  assets are usually single-sided display shells with no thickness, so when
+     *  a part is split and exploded the cut exposes the hollow interior (you see
+     *  the inner backface through the opening). This offsets an INNER copy of the
+     *  surface inward by `thickness` along the (area-weighted) vertex normals,
+     *  reverses its winding, and stitches a wall between every OPEN boundary edge
+     *  and its inner counterpart — turning the shell into a closed slab of the
+     *  given thickness. A mesh with no open boundaries (already closed) just
+     *  gains an inner shell (a hollow-walled solid — ideal for printing).
+     *
+     *  `thickness` is in model units; pass <= 0 to auto-pick ~1.5% of the mesh
+     *  AABB diagonal. Existing vertex normals are used when present, else
+     *  computed. Attributes (uv/colour/tangent/bone-assignments) are copied onto
+     *  the inner + wall verts from their outer source. Edits `sub` in place;
+     *  returns the number of wall quads stitched (0 = mesh was already closed).
+     *  Deterministic; pure-data. */
+    static int solidify(EditableSubMesh& sub, float thickness = 0.0f);
 };
 
 #endif // SUBMESHOPS_H

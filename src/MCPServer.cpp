@@ -4864,6 +4864,7 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         const QString category = args.value("category").toString().isEmpty()
             ? QStringLiteral("auto") : args.value("category").toString();
         const bool noModel = args.value("no_model").toBool(false);
+        const bool solidify = args.value("solidify").toBool(false);
 
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
                                       QStringLiteral("MCP split_mesh_by_segments"));
@@ -4873,7 +4874,7 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         // after would dereference the freed pointer (CodeRabbit Critical).
         const QString entityNameOut = QString::fromStdString(entity->getName());
         auto* cmd = new SplitMeshCommand(entity->getName(), axis, category, noModel,
-                                         QStringLiteral("Body"));
+                                         QStringLiteral("Body"), solidify);
         UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
         if (!cmd->ok())
             return makeErrorResult(cmd->error().isEmpty()
@@ -9177,6 +9178,7 @@ QJsonArray MCPServer::buildToolsList()
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the offline geometric/rig-prior segmentation (skip the ONNX model). Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for segmentation. Default 'y'."}};
         props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Segmentation category (default 'auto')."}};
+        props["solidify"] = QJsonObject{{"type", "boolean"}, {"description", "Give each part real WALL VOLUME before capping (default false). For thin-shell game assets (single-sided surfaces) an exploded part otherwise exposes its hollow interior at the cut; solidify offsets an inner shell so the cut shows a solid wall. Adds geometry — only meaningful for thin shells."}};
         appendTool(
             "split_mesh_by_segments",
             "PartOps split (#859/#861): segment the selected/named mesh and REPLACE "

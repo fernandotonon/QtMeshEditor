@@ -10357,6 +10357,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     QString writeLabelsPath;   // PartOps #864: dump face/vertex labels to JSON
     QString outputPath;        // PartOps #864: --split-parts output mesh
     bool splitParts = false;   // PartOps #861/#864
+    bool solidify = false;     // #863 follow-up: give thin-shell parts wall volume
     bool jsonOutput = false;
     bool noModel = false;
     bool noIslandCleanup = false;  // #863: raw labels, skip the split-cleanup pass
@@ -10370,6 +10371,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--no-island-cleanup") { noIslandCleanup = true; continue; }
         if (arg == "--split-parts") { splitParts = true; continue; }
+        if (arg == "--solidify") { solidify = true; continue; }
         if (arg == "--write-labels") {
             if (i + 1 >= argc) {
                 err() << "Error: --write-labels requires an output path." << Qt::endl;
@@ -10431,7 +10433,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                  "[--category auto|body|vegetation|vehicle|building] "
                  "[--no-island-cleanup] "
                  "[--dump-training-data <out.json>] [--write-labels <out.json>] "
-                 "[--split-parts -o <out.glb>]" << Qt::endl;
+                 "[--split-parts [--solidify] -o <out.glb>]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -10637,6 +10639,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (splitParts) {
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         SubMeshOps::SplitOptions sopts; // default "Body" prefix, preserve material
+        sopts.solidifyParts = solidify; // --solidify: wall volume for thin shells
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts, fi.completeBaseName().toStdString());
         if (!so.ok) {
@@ -10646,10 +10649,12 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         }
         auto* mgr = Manager::getSingletonPtr();
         Ogre::SceneNode* node = mgr ? mgr->addSceneNode("PartOpsSplit") : nullptr;
-        if (!node || !mgr->createEntity(node, so.mesh)) {
+        Ogre::Entity* splitEnt = (node && mgr) ? mgr->createEntity(node, so.mesh) : nullptr;
+        if (!splitEnt) {
             err() << "Error: could not build scene node for split mesh." << Qt::endl;
             return 1;
         }
+
         const QString fmt = formatForExtension(outputPath);
         if (MeshImporterExporter::exporter(
                 node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {

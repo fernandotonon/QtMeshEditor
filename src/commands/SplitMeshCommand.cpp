@@ -15,13 +15,15 @@
 #include <cstdint>
 
 SplitMeshCommand::SplitMeshCommand(std::string entityName, int upAxis, QString category,
-                                   bool noModel, QString namePrefix, QUndoCommand* parent)
+                                   bool noModel, QString namePrefix, bool solidify,
+                                   QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
     , mUpAxis(upAxis)
     , mCategory(std::move(category))
     , mNoModel(noModel)
     , mNamePrefix(std::move(namePrefix))
+    , mSolidify(solidify)
 {
     setText(QStringLiteral("Split Mesh into Parts"));
 }
@@ -136,6 +138,10 @@ void SplitMeshCommand::redo()
         SubMeshOps::SplitOptions sopts;
         if (!mNamePrefix.isEmpty())
             sopts.namePrefix = mNamePrefix;
+        // Optionally give thin-shell parts real wall volume so a cut exposes a
+        // solid wall instead of the hollow interior — this also seals each part
+        // watertight (#863 follow-up).
+        sopts.solidifyParts = mSolidify;
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts,

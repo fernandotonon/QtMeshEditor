@@ -8,6 +8,8 @@
 #include "MeshSegmenter.h"
 
 #include <cmath>
+#include <map>
+#include <utility>
 
 namespace {
 
@@ -364,69 +366,58 @@ TEST(SubMeshOpsTest, ExplodeOffsetsPushOutwardFromCenter)
     EXPECT_NEAR(offs[1].length(), 1.0f, 1e-5f);
 }
 
-TEST(SubMeshOpsTest, BoundaryPlaneEstimatedFromSharedSeam)
-{
-    // Part A and B share a planar seam at x=0 (the YZ plane): 9 coincident
-    // verts. A extends to -x, B to +x. Estimated normal ≈ ±X.
-    EditableSubMesh a, b;
-    for (int y = 0; y < 3; ++y)
-        for (int z = 0; z < 3; ++z) {
-            a.vertices.push_back(vtx(0, float(y), float(z)));   // seam
-            b.vertices.push_back(vtx(0, float(y), float(z)));   // seam (coincident)
-        }
-    a.vertices.push_back(vtx(-1, 1, 1)); // A body
-    b.vertices.push_back(vtx(1, 1, 1));  // B body
-    // need a triangle so it's a valid submesh (not required by the estimator,
-    // but keeps the fixture honest).
-    addTri(a, 0, 1, 2);
-    addTri(b, 0, 1, 2);
+// ---- solidify watertightness helper --------------------------------------
 
-    auto plane = SubMeshOps::estimateBoundaryPlane({a}, {b});
-    ASSERT_TRUE(plane.stable) << plane.reason.toStdString();
-    EXPECT_NEAR(std::fabs(plane.normal.x), 1.0f, 1e-3f);
-    EXPECT_NEAR(plane.center.x, 0.0f, 1e-4f);
-    EXPECT_GT(plane.radius, 0.0f);
-}
-
-TEST(SubMeshOpsTest, BoundaryPlaneRejectsTinyBoundary)
+// Count directed boundary edges (a→b with no b→a) — 0 means watertight.
+static size_t boundaryEdgeCount(const EditableSubMesh& s)
 {
-    // Only 3 shared verts → below the 8-vertex minimum.
-    EditableSubMesh a, b;
-    for (int i = 0; i < 3; ++i) {
-        a.vertices.push_back(vtx(0, float(i), 0));
-        b.vertices.push_back(vtx(0, float(i), 0));
+    std::map<std::pair<unsigned,unsigned>,int> d;
+    for (const auto& t : s.triangles) {
+        d[{t.indices[0],t.indices[1]}]++;
+        d[{t.indices[1],t.indices[2]}]++;
+        d[{t.indices[2],t.indices[0]}]++;
     }
-    auto plane = SubMeshOps::estimateBoundaryPlane({a}, {b});
-    EXPECT_FALSE(plane.stable);
-    EXPECT_FALSE(plane.reason.isEmpty());
+    size_t open = 0;
+    for (const auto& kv : d)
+        if (!d.count({kv.first.second, kv.first.first})) open += 1;
+    return open;
 }
 
-TEST(SubMeshOpsTest, AlignmentPegsGeneratedOnStablePlane)
-{
-    SubMeshOps::BoundaryPlane plane;
-    plane.center = Ogre::Vector3(0, 0, 0);
-    plane.normal = Ogre::Vector3::UNIT_X;
-    plane.radius = 10.0f;
-    plane.stable = true;
+// ---- solidify (#863 follow-up: give a thin shell real wall volume) ---------
 
-    SubMeshOps::PegOptions opts; // defaults: r=1.5, depth=4, maxPegs=3
-    EditableSubMesh male, socket;
-    int n = SubMeshOps::buildAlignmentPegs(plane, opts, male, socket);
-    EXPECT_EQ(n, 3);
-    EXPECT_FALSE(male.triangles.empty());
-    EXPECT_FALSE(socket.triangles.empty());
-    EXPECT_EQ(male.materialName, "connector_male");
-    EXPECT_EQ(socket.materialName, "connector_socket");
-    // Socket radius > peg radius (clearance) → socket cylinder verts spread wider.
-    // Cheap check: socket has same vertex count structure as male (same segments).
-    EXPECT_EQ(male.vertices.size(), socket.vertices.size());
+TEST(SubMeshOpsTest, SolidifyClosesAnOpenFlatQuadIntoASlab)
+{
+    // A single flat quad (2 tris, open on all 4 edges) — a zero-thickness shell.
+    // Solidify must add an inner shell + a wall around the rim so the result is
+    // a closed watertight slab (0 welded open edges), doubling the verts and
+    // adding inner + wall triangles.
+    EditableSubMesh s; s.materialName = "Shell";
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); v.normal=Ogre::Vector3(0,1,0); v.hasNormal=true; return v; };
+    s.vertices = { V(0,0,0), V(1,0,0), V(1,0,1), V(0,0,1) };
+    addTri(s,0,1,2); addTri(s,0,2,3);
+    ASSERT_GT(boundaryEdgeCount(s), 0u);              // open shell
+    const size_t v0=s.vertices.size(), t0=s.triangles.size();
+    const int walls = SubMeshOps::solidify(s, 0.1f);
+    EXPECT_EQ(walls, 4) << "a quad rim has 4 boundary edges → 4 wall quads";
+    EXPECT_EQ(s.vertices.size(), v0*2) << "inner shell duplicates every vertex";
+    // outer tris + inner tris (=outer) + 2 tris per wall quad
+    EXPECT_EQ(s.triangles.size(), t0*2 + 4u*2u);
+    EXPECT_EQ(boundaryEdgeCount(s), 0u) << "solidified slab must be watertight";
+    // The inner shell sits one thickness below the outer along -normal (y).
+    float miny=1e9f, maxy=-1e9f;
+    for (const auto& v : s.vertices){ miny=std::min(miny,v.position.y); maxy=std::max(maxy,v.position.y); }
+    EXPECT_NEAR(maxy-miny, 0.1f, 1e-4f) << "slab thickness == requested";
 }
 
-TEST(SubMeshOpsTest, AlignmentPegsSkippedOnUnstablePlane)
+TEST(SubMeshOpsTest, SolidifyAutoThicknessAndNoOpOnEmpty)
 {
-    SubMeshOps::BoundaryPlane plane; // stable=false by default
-    SubMeshOps::PegOptions opts;
-    EditableSubMesh male, socket;
-    EXPECT_EQ(SubMeshOps::buildAlignmentPegs(plane, opts, male, socket), 0);
-    EXPECT_TRUE(male.triangles.empty());
+    EditableSubMesh empty;
+    EXPECT_EQ(SubMeshOps::solidify(empty), 0);         // nothing to do
+    // Auto thickness (<=0) picks a positive value from the AABB.
+    EditableSubMesh s; s.materialName="S";
+    auto V = [](float x,float y,float z){ EditableVertex v; v.position=Ogre::Vector3(x,y,z); v.normal=Ogre::Vector3(0,1,0); v.hasNormal=true; return v; };
+    s.vertices = { V(0,0,0), V(2,0,0), V(2,0,2), V(0,0,2) };
+    addTri(s,0,1,2); addTri(s,0,2,3);
+    EXPECT_EQ(SubMeshOps::solidify(s, /*auto=*/0.0f), 4);
+    EXPECT_EQ(boundaryEdgeCount(s), 0u);               // watertight
 }

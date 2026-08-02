@@ -25,7 +25,8 @@ Ogre::Vector3 subMeshCentroid(const EditableSubMesh& sub)
 } // namespace
 
 PartOpsScene::ExplodeResult
-PartOpsScene::explodeEntity(Ogre::Entity* entity, float distance, const std::string& baseName)
+PartOpsScene::explodeEntity(Ogre::Entity* entity, float distance,
+                           const std::string& baseName)
 {
     ExplodeResult out;
     if (!entity || !entity->getMesh()) {

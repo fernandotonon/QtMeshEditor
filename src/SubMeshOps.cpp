@@ -7,35 +7,6 @@
 #include <map>
 #include <unordered_map>
 
-namespace {
-
-// A vertex key that survives cross-submesh comparison for boundary welding:
-// quantised position (sufficient for coincident split-seam verts). Position is
-// the only reliable identity across independently-rebuilt part submeshes.
-struct PosKey {
-    int64_t x, y, z;
-    bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; }
-};
-struct PosKeyHash {
-    size_t operator()(const PosKey& k) const
-    {
-        uint64_t h = 1469598103934665603ULL;
-        for (int64_t c : {k.x, k.y, k.z}) {
-            h ^= static_cast<uint64_t>(c);
-            h *= 1099511628211ULL;
-        }
-        return static_cast<size_t>(h);
-    }
-};
-PosKey posKeyOf(const Ogre::Vector3& p, double scale)
-{
-    return PosKey{static_cast<int64_t>(std::llround(double(p.x) * scale)),
-                  static_cast<int64_t>(std::llround(double(p.y) * scale)),
-                  static_cast<int64_t>(std::llround(double(p.z) * scale))};
-}
-
-} // namespace
-
 std::vector<SubMeshOps::FaceGroup>
 SubMeshOps::groupFacesByLabel(const std::vector<int>& faceLabels)
 {
@@ -305,6 +276,13 @@ SubMeshOps::splitByFaceGroups(const std::vector<EditableSubMesh>& subMeshes,
         return result;
     }
 
+    // Give each part real WALL VOLUME (thin-shell assets) so a cut shows a solid
+    // wall cross-section instead of the hollow interior. Solidify also SEALS each
+    // part watertight (it walls every open boundary).
+    if (opts.solidifyParts)
+        for (auto& part : result.subMeshes)
+            solidify(part, opts.solidifyThickness);
+
     result.duplicatedBoundaryVertices = duplicated;
     result.createdSubMeshes = static_cast<int>(result.subMeshes.size());
     result.ok = true;
@@ -421,193 +399,100 @@ SubMeshOps::explodeOffsets(const std::vector<Ogre::Vector3>& partCentroids,
     return offsets;
 }
 
-SubMeshOps::BoundaryPlane
-SubMeshOps::estimateBoundaryPlane(const std::vector<EditableSubMesh>& partA,
-                                  const std::vector<EditableSubMesh>& partB, float weldTol)
+int SubMeshOps::solidify(EditableSubMesh& sub, float thickness)
 {
-    BoundaryPlane plane;
-
-    // Boundary = vertices of A that are coincident (within weldTol) with a
-    // vertex of B — the seam the split duplicated.
-    const double scale = weldTol > 0.0f ? 1.0 / static_cast<double>(weldTol) : 1e4;
-    std::unordered_map<PosKey, int, PosKeyHash> bKeys;
-    for (const auto& sm : partB)
-        for (const auto& v : sm.vertices)
-            bKeys[posKeyOf(v.position, scale)] += 1;
-
-    std::vector<Ogre::Vector3> pts;
-    for (const auto& sm : partA)
-        for (const auto& v : sm.vertices) {
-            if (bKeys.count(posKeyOf(v.position, scale)))
-                pts.push_back(v.position);
-        }
-
-    if (pts.size() < 8) {
-        plane.reason = QStringLiteral("boundary too small (%1 shared verts, need >= 8)")
-                           .arg(pts.size());
-        return plane;
-    }
-
-    // Centroid + covariance -> best-fit plane via smallest-eigenvalue direction.
-    Ogre::Vector3 c = Ogre::Vector3::ZERO;
-    for (const auto& p : pts)
-        c += p;
-    c /= static_cast<float>(pts.size());
-
-    double cov[6] = {0, 0, 0, 0, 0, 0}; // xx xy xz yy yz zz
-    for (const auto& p : pts) {
-        const double dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
-        cov[0] += dx * dx; cov[1] += dx * dy; cov[2] += dx * dz;
-        cov[3] += dy * dy; cov[4] += dy * dz; cov[5] += dz * dz;
-    }
-    const double inv = 1.0 / static_cast<double>(pts.size());
-    for (double& v : cov)
-        v *= inv;
-
-    Ogre::Matrix3 C(cov[0], cov[1], cov[2],
-                    cov[1], cov[3], cov[4],
-                    cov[2], cov[4], cov[5]);
-    Ogre::Vector3 eigvec[3];
-    Ogre::Real eigval[3];
-    C.EigenSolveSymmetric(eigval, eigvec);
-
-    // Smallest eigenvalue → plane normal. Ogre returns ascending eigenvalues.
-    int smallest = 0;
-    for (int i = 1; i < 3; ++i)
-        if (eigval[i] < eigval[smallest])
-            smallest = i;
-    int largest = 0;
-    for (int i = 1; i < 3; ++i)
-        if (eigval[i] > eigval[largest])
-            largest = i;
-
-    // Stability: the boundary must look planar (small normal-direction spread
-    // relative to in-plane spread). If the smallest eigenvalue isn't clearly
-    // separated from the largest, it's a blob, not a seam.
-    const double lnMin = std::max(0.0, static_cast<double>(eigval[smallest]));
-    const double lnMax = std::max(1e-12, static_cast<double>(eigval[largest]));
-    const double flatness = lnMin / lnMax;
-
-    plane.center = c;
-    plane.normal = eigvec[smallest].normalisedCopy();
-    // In-plane radius: RMS distance to centroid projected off the normal.
-    double r2 = 0.0;
-    for (const auto& p : pts) {
-        Ogre::Vector3 d = p - c;
-        Ogre::Vector3 inPlane = d - plane.normal * d.dotProduct(plane.normal);
-        r2 += inPlane.squaredLength();
-    }
-    plane.radius = std::sqrt(r2 / static_cast<double>(pts.size()));
-
-    if (flatness > 0.15) {
-        plane.reason = QStringLiteral("boundary not planar enough (flatness %1)")
-                           .arg(flatness, 0, 'g', 3);
-        return plane;
-    }
-    if (!(plane.radius > 0.0f)) {
-        plane.reason = QStringLiteral("degenerate boundary radius");
-        return plane;
-    }
-    plane.stable = true;
-    return plane;
-}
-
-namespace {
-
-// Append a closed cylinder (both caps) to `sub`, axis = `axis` (unit),
-// centered at `base` and extending `depth` along +axis. Radius `r`,
-// `segments` around. Adds vertices + triangles; leaves faces triangle-only.
-void appendCylinder(EditableSubMesh& sub, const Ogre::Vector3& base,
-                    const Ogre::Vector3& axis, float r, float depth, int segments)
-{
-    // Build an orthonormal frame around the axis.
-    Ogre::Vector3 up = std::fabs(axis.y) < 0.9f ? Ogre::Vector3::UNIT_Y : Ogre::Vector3::UNIT_X;
-    Ogre::Vector3 u = axis.crossProduct(up).normalisedCopy();
-    Ogre::Vector3 w = axis.crossProduct(u).normalisedCopy();
-    const Ogre::Vector3 top = base + axis * depth;
-
-    const unsigned int startV = static_cast<unsigned int>(sub.vertices.size());
-    auto addVert = [&](const Ogre::Vector3& p, const Ogre::Vector3& n) {
-        EditableVertex v;
-        v.position = p;
-        v.normal = n;
-        v.hasNormal = true;
-        sub.vertices.push_back(v);
-        return static_cast<unsigned int>(sub.vertices.size() - 1);
-    };
-    auto addTri = [&](unsigned int a, unsigned int b, unsigned int c) {
-        EditableTriangle t;
-        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
-        sub.triangles.push_back(t);
-    };
-
-    std::vector<unsigned int> ringBase(segments), ringTop(segments);
-    for (int i = 0; i < segments; ++i) {
-        const float a = 2.0f * Ogre::Math::PI * float(i) / float(segments);
-        const Ogre::Vector3 radial = (u * std::cos(a) + w * std::sin(a));
-        ringBase[i] = addVert(base + radial * r, radial);
-        ringTop[i] = addVert(top + radial * r, radial);
-    }
-    for (int i = 0; i < segments; ++i) {
-        const int j = (i + 1) % segments;
-        addTri(ringBase[i], ringBase[j], ringTop[j]);
-        addTri(ringBase[i], ringTop[j], ringTop[i]);
-    }
-    // Caps.
-    const unsigned int cBase = addVert(base, -axis);
-    const unsigned int cTop = addVert(top, axis);
-    for (int i = 0; i < segments; ++i) {
-        const int j = (i + 1) % segments;
-        addTri(cBase, ringBase[j], ringBase[i]);
-        addTri(cTop, ringTop[i], ringTop[j]);
-    }
-    (void)startV;
-}
-
-} // namespace
-
-int SubMeshOps::buildAlignmentPegs(const BoundaryPlane& plane, const PegOptions& opts,
-                                   EditableSubMesh& outMale, EditableSubMesh& outSocket)
-{
-    if (!plane.stable)
-        return 0;
-    if (opts.maxPegsPerBoundary <= 0 || !(opts.pegRadius > 0.0f))
+    const unsigned int outerN = static_cast<unsigned int>(sub.vertices.size());
+    if (outerN == 0 || sub.triangles.empty())
         return 0;
 
-    // How many pegs actually fit inside the boundary ring without overlapping.
-    // Place them on a ring at ~half the boundary radius.
-    const float placeRadius = plane.radius * 0.5f;
-    const float pegR = opts.pegRadius;
-    const float socketR = opts.pegRadius + opts.clearance;
-    int nPegs = opts.maxPegsPerBoundary;
-    if (placeRadius < pegR * 1.5f)
-        nPegs = 1; // boundary too small for a ring; one central peg
-
-    // In-plane frame.
-    Ogre::Vector3 up = std::fabs(plane.normal.y) < 0.9f ? Ogre::Vector3::UNIT_Y
-                                                        : Ogre::Vector3::UNIT_X;
-    Ogre::Vector3 u = plane.normal.crossProduct(up).normalisedCopy();
-    Ogre::Vector3 w = plane.normal.crossProduct(u).normalisedCopy();
-
-    int made = 0;
-    for (int i = 0; i < nPegs; ++i) {
-        Ogre::Vector3 center = plane.center;
-        if (nPegs > 1) {
-            const float a = 2.0f * Ogre::Math::PI * float(i) / float(nPegs);
-            center += (u * std::cos(a) + w * std::sin(a)) * placeRadius;
+    // 1) Area-weighted vertex normals (use existing when the whole mesh has
+    //    them; otherwise compute so the inward offset direction is sane).
+    std::vector<Ogre::Vector3> vn(outerN, Ogre::Vector3::ZERO);
+    bool haveAll = true;
+    for (unsigned int i = 0; i < outerN; ++i) {
+        if (sub.vertices[i].hasNormal && sub.vertices[i].normal.squaredLength() > 1e-12f)
+            vn[i] = sub.vertices[i].normal.normalisedCopy();
+        else
+            haveAll = false;
+    }
+    if (!haveAll) {
+        std::fill(vn.begin(), vn.end(), Ogre::Vector3::ZERO);
+        for (const EditableTriangle& t : sub.triangles) {
+            const Ogre::Vector3& p0 = sub.vertices[t.indices[0]].position;
+            const Ogre::Vector3& p1 = sub.vertices[t.indices[1]].position;
+            const Ogre::Vector3& p2 = sub.vertices[t.indices[2]].position;
+            const Ogre::Vector3 fn = (p1 - p0).crossProduct(p2 - p0); // area-weighted (unnormalised)
+            for (int k = 0; k < 3; ++k) vn[t.indices[k]] += fn;
         }
-        // Male peg protrudes from the boundary along +normal; socket cutter
-        // sinks along the same axis but starts slightly behind the plane so it
-        // fully overlaps the mating solid.
-        appendCylinder(outMale, center, plane.normal, pegR, opts.pegDepth, opts.radialSegments);
-        appendCylinder(outSocket, center - plane.normal * (opts.clearance),
-                       plane.normal, socketR, opts.pegDepth + opts.clearance, opts.radialSegments);
-        ++made;
+        for (auto& n : vn) { if (n.squaredLength() > 1e-12f) n.normalise(); }
     }
 
-    if (made > 0) {
-        outMale.materialName = "connector_male";
-        outSocket.materialName = "connector_socket";
+    // 2) Auto thickness = ~1.5% of the AABB diagonal when not specified.
+    if (!(thickness > 0.0f)) {
+        Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+        for (const auto& v : sub.vertices) { mn.makeFloor(v.position); mx.makeCeil(v.position); }
+        const float diag = (mx - mn).length();
+        thickness = (diag > 1e-6f) ? diag * 0.015f : 0.01f;
     }
-    return made;
+
+    // 3) Inner shell: duplicate every vertex pushed inward by `thickness` along
+    //    -normal. Attributes carry over; normal flips inward.
+    sub.vertices.reserve(outerN * 2);
+    for (unsigned int i = 0; i < outerN; ++i) {
+        EditableVertex inner = sub.vertices[i];
+        inner.position = sub.vertices[i].position - vn[i] * thickness;
+        inner.normal = -vn[i];
+        inner.hasNormal = true;
+        sub.vertices.push_back(inner);
+    }
+    const unsigned int innerBase = outerN; // inner index = outer index + innerBase
+
+    // 4) Inner-shell triangles with REVERSED winding (faces inward, so the slab
+    //    reads solid from inside the wall).
+    const size_t outerTriCount = sub.triangles.size();
+    for (size_t i = 0; i < outerTriCount; ++i) {
+        const EditableTriangle& t = sub.triangles[i];
+        EditableTriangle it;
+        it.indices[0] = t.indices[0] + innerBase;
+        it.indices[1] = t.indices[2] + innerBase; // swap 1<->2 to reverse winding
+        it.indices[2] = t.indices[1] + innerBase;
+        sub.triangles.push_back(it);
+    }
+
+    // 5) Stitch a wall between every OPEN boundary edge (outer a→b, interior on
+    //    its LEFT) and its inner counterpart, closing the slab along the rim.
+    //    Wall quad (outer a, outer b, inner b, inner a) → two triangles wound so
+    //    the wall faces OUTWARD (consistent with the outer surface).
+    auto k64 = [](unsigned int a, unsigned int b) -> uint64_t {
+        return (static_cast<uint64_t>(a) << 32) | b;
+    };
+    std::unordered_map<uint64_t, int> dir;
+    for (size_t i = 0; i < outerTriCount; ++i) {
+        const EditableTriangle& t = sub.triangles[i];
+        dir[k64(t.indices[0], t.indices[1])]++;
+        dir[k64(t.indices[1], t.indices[2])]++;
+        dir[k64(t.indices[2], t.indices[0])]++;
+    }
+    int walls = 0;
+    for (const auto& kv : dir) {
+        const unsigned int a = static_cast<unsigned int>(kv.first >> 32);
+        const unsigned int b = static_cast<unsigned int>(kv.first & 0xffffffff);
+        if (dir.find(k64(b, a)) != dir.end())
+            continue; // interior edge, shared by two tris — not a boundary
+        const unsigned int ai = a + innerBase, bi = b + innerBase;
+        // The wall must CANCEL the dangling edges so the slab is watertight: the
+        // outer surface has boundary edge a→b (needs b→a), and the reverse-wound
+        // inner shell has boundary edge ai→bi (needs bi→ai). The quad loop
+        // b→a→ai→bi→b supplies both. Triangulate (b,a,ai) + (b,ai,bi).
+        EditableTriangle t1, t2;
+        t1.indices[0] = b;  t1.indices[1] = a;  t1.indices[2] = ai;
+        t2.indices[0] = b;  t2.indices[1] = ai; t2.indices[2] = bi;
+        sub.triangles.push_back(t1);
+        sub.triangles.push_back(t2);
+        ++walls;
+    }
+
+    // Triangle list is now canonical; drop any stale n-gon binding.
+    sub.faces.clear();
+    return walls;
 }

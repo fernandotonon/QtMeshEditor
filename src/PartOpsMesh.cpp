@@ -44,7 +44,8 @@ bool PartOpsMesh::readSubMeshes(Ogre::Entity* entity,
 Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMeshes,
                                      const std::string& baseName,
                                      const QString& skeletonName,
-                                     const std::vector<QString>& subMeshNames)
+                                     const std::vector<QString>& subMeshNames,
+                                     bool recomputeNormals)
 {
     if (subMeshes.empty())
         return Ogre::MeshPtr();
@@ -53,10 +54,9 @@ Ogre::MeshPtr PartOpsMesh::buildMesh(const std::vector<EditableSubMesh>& subMesh
     // borrow it by seeding an EditableMesh's submesh vector directly.
     EditableMesh em;
     em.subMeshes() = subMeshes;
-    // recomputeNormals=false: SubMeshOps copied the source normals (incl.
-    // authored / hard-edge normals) verbatim, so recomputing would change the
-    // shading the split is meant to preserve (#859 review).
-    Ogre::MeshPtr mesh = em.createNewMesh(baseName, /*recomputeNormals=*/false);
+    // A plain SPLIT keeps recomputeNormals=false so the source normals (incl.
+    // authored / hard-edge normals) survive verbatim (#859 review).
+    Ogre::MeshPtr mesh = em.createNewMesh(baseName, recomputeNormals);
     if (!mesh)
         return mesh;
 

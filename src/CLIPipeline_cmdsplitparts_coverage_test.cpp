@@ -33,6 +33,9 @@
 #include "MeshSegmenter.h"
 #include "EditableMesh.h"
 
+#include <OgreEntity.h>
+#include <OgreSceneNode.h>
+
 #include <cmath>
 #include <set>
 
@@ -160,7 +163,8 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitRiggedHumanoidPreservesTrisAnd
     EXPECT_GT(e->getMesh()->getNumSubMeshes(), 1u)
         << "split should produce multiple part submeshes";
 
-    // Triangle count preserved (boundary duplication adds verts, not tris).
+    // Triangle count preserved: the split only separates geometry (boundary
+    // vertex duplication adds verts, not tris) — no cap/solidify by default.
     MeshInfo info = CLIPipeline::extractMeshInfo(e, "parts.fbx");
     EXPECT_EQ(static_cast<int>(info.triangles), srcTris);
 
