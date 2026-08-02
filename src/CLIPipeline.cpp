@@ -10460,6 +10460,12 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         err() << "Error: --split-parts requires -o <output mesh>." << Qt::endl;
         return 2;
     }
+    // Fail fast BEFORE the (possibly model-downloading) segmentation, same as
+    // --split-parts above (CodeRabbit).
+    if (explodeParts && outputPath.isEmpty()) {
+        err() << "Error: --explode-parts requires -o <output scene>." << Qt::endl;
+        return 2;
+    }
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
@@ -10705,10 +10711,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
 
     // --- PartOps: split then EXPLODE into separate nodes (#864) -------------
     if (explodeParts) {
-        if (outputPath.isEmpty()) {
-            err() << "Error: --explode-parts requires -o <output scene>." << Qt::endl;
-            return 2;
-        }
+        // (-o was validated up-front, before segmentation.)
         // 1) Split the source mesh into per-part submeshes (one fused entity).
         auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
         SubMeshOps::SplitOptions sopts;
@@ -10736,11 +10739,17 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                   << (ex.error.isEmpty() ? QStringLiteral("unknown") : ex.error) << Qt::endl;
             return 1;
         }
-        // 3) Remove the fused source node; create one node per part at its
-        //    outward offset. Each entity is named after its node (Manager does
-        //    this), which sceneExporter needs to discover it.
+        // 3) Remove BOTH the temporary split node AND the ORIGINAL imported
+        //    source node — sceneExporter walks every entity-bearing node, so
+        //    leaving the original in the scene would overlay an intact un-exploded
+        //    mesh on top of the exploded parts, doubling the geometry (CodeRabbit).
+        Ogre::SceneNode* origNode = entity ? entity->getParentSceneNode() : nullptr;
         mgr->destroyAllAttachedMovableObjects(srcNode);
         mgr->destroySceneNode(srcNode);
+        if (origNode) {
+            mgr->destroyAllAttachedMovableObjects(origNode);
+            mgr->destroySceneNode(origNode);
+        }
         QStringList partNodeNames;
         int idx = 0;
         for (const PartOpsScene::ExplodePart& p : ex.parts) {

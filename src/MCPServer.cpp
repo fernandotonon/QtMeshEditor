@@ -127,6 +127,7 @@
 #include <OgreMesh.h>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <OgreSkeleton.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -856,8 +857,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
             {QStringLiteral("split_mesh_by_segments"), QStringLiteral("ai_assist")},
-            {QStringLiteral("explode_mesh_parts"), QStringLiteral("segmentation")},
-            {QStringLiteral("join_mesh_parts"), QStringLiteral("segmentation")},
+            {QStringLiteral("explode_mesh_parts"), QStringLiteral("ai_assist")},
+            {QStringLiteral("join_mesh_parts"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
@@ -4962,26 +4963,37 @@ QJsonObject MCPServer::toolJoinMeshParts(const QJsonObject &args)
         // every mesh entity in the scene.
         std::vector<std::string> names;
         QString fusedBase;
+        std::set<std::string> seen;   // reject duplicates (CodeRabbit)
+        auto pushName = [&](const std::string& n) {
+            if (seen.insert(n).second) {
+                names.push_back(n);
+                if (fusedBase.isEmpty())
+                    fusedBase = QString::fromStdString(n) + QStringLiteral("_fused");
+            }
+        };
         const QJsonArray requested = args.value("entity_names").toArray();
         if (!requested.isEmpty()) {
+            // Every requested name MUST resolve to a mesh entity — a typo would
+            // otherwise silently join a subset while reporting success. A repeated
+            // name would duplicate that entity's geometry AND break the undo
+            // (JoinPartsCommand can't recreate two same-named source nodes).
             for (const QJsonValue& v : requested) {
                 const QString want = v.toString();
+                Ogre::Entity* found = nullptr;
                 for (auto* ent : mgr->getEntities()) {
                     if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
-                    if (QString::fromStdString(ent->getName()) == want) {
-                        names.push_back(ent->getName());
-                        if (fusedBase.isEmpty())
-                            fusedBase = want + QStringLiteral("_fused");
-                        break;
-                    }
+                    if (QString::fromStdString(ent->getName()) == want) { found = ent; break; }
                 }
+                if (!found)
+                    return makeErrorResult(QString("Error: entity '%1' not found").arg(want));
+                if (seen.count(found->getName()))
+                    return makeErrorResult(QString("Error: entity '%1' listed more than once").arg(want));
+                pushName(found->getName());
             }
         } else {
             for (auto* ent : mgr->getEntities()) {
                 if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
-                names.push_back(ent->getName());
-                if (fusedBase.isEmpty())
-                    fusedBase = QString::fromStdString(ent->getName()) + QStringLiteral("_fused");
+                pushName(ent->getName());
             }
         }
         if (names.size() < 2)
