@@ -222,6 +222,8 @@ private:
     QJsonObject toolPinFeet(const QJsonObject &args);           // #856 foot-contact pin
     QJsonObject toolSegmentMesh(const QJsonObject &args);
     QJsonObject toolSplitMeshBySegments(const QJsonObject &args);
+    QJsonObject toolExplodeMeshParts(const QJsonObject &args);   // #862/#864
+    QJsonObject toolJoinMeshParts(const QJsonObject &args);      // #862/#864
     QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);

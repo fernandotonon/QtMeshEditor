@@ -245,6 +245,92 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, SplitPartsRequiresOutput)
     EXPECT_EQ(2, CLIPipeline::cmdSegment(args.argc(), args.argv()));
 }
 
+// --explode-parts without -o is a usage error (exit 2). #864.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, ExplodePartsRequiresOutput)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString mesh = generatedMesh(tmp);
+    ASSERT_FALSE(mesh.isEmpty());
+    const QByteArray in = mesh.toUtf8();
+    SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model", "--explode-parts"});
+    EXPECT_EQ(2, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+}
+
+// --explode-distance rejects a negative / non-numeric value (exit 2). #864.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, ExplodeDistanceRejectsBadValue)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString mesh = generatedMesh(tmp);
+    ASSERT_FALSE(mesh.isEmpty());
+    const QByteArray in = mesh.toUtf8();
+    SplitArgv args({"qtmesh", "segment", in.constData(), "--no-model",
+                    "--explode-parts", "--explode-distance", "-1", "-o", "/tmp/x.glb"});
+    EXPECT_EQ(2, CLIPipeline::cmdSegment(args.argc(), args.argv()));
+}
+
+// --explode-parts on a rigged humanoid: splits, offsets each part outward, and
+// writes a MULTI-NODE scene glTF. We parse the .glb JSON chunk directly (no
+// reimport — that path merges same-material nodes and pulls in scene lights) and
+// assert the scene has multiple NODES, more than one of which carries a non-zero
+// translation (the outward explode offset). #864.
+TEST_F(CLIPipelineCmdSplitPartsCoverageTest, ExplodeWritesMultiNodeScene)
+{
+    const QString fixture = riggedFixture();
+    if (fixture.isEmpty())
+        GTEST_SKIP() << "rigged fixture not present";
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString explGlb = QDir(tmp.path()).filePath("exploded.glb");
+
+    clearScene();
+    const QByteArray in = fixture.toUtf8();
+    const QByteArray out = explGlb.toUtf8();
+    SplitArgv a({"qtmesh", "segment", in.constData(), "--no-model",
+                 "--explode-parts", "--explode-distance", "0.3", "-o", out.constData()});
+    ASSERT_EQ(0, CLIPipeline::cmdSegment(a.argc(), a.argv()));
+    ASSERT_TRUE(QFile::exists(explGlb));
+
+    // Read the .glb JSON chunk (12-byte header, then [u32 len][u32 type][data];
+    // the first chunk, type 0x4E4F534A "JSON", holds the glTF document).
+    QFile f(explGlb);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    const QByteArray blob = f.readAll();
+    ASSERT_GT(blob.size(), 20);
+    ASSERT_EQ(blob.left(4), QByteArray("glTF"));
+    auto u32 = [&](int off) {
+        return static_cast<quint32>(static_cast<quint8>(blob[off]))
+             | (static_cast<quint32>(static_cast<quint8>(blob[off + 1])) << 8)
+             | (static_cast<quint32>(static_cast<quint8>(blob[off + 2])) << 16)
+             | (static_cast<quint32>(static_cast<quint8>(blob[off + 3])) << 24);
+    };
+    const quint32 chunkLen = u32(12);
+    const quint32 chunkType = u32(16);
+    ASSERT_EQ(chunkType, 0x4E4F534Au) << "first glb chunk must be JSON";
+    const QByteArray jsonBytes = blob.mid(20, static_cast<int>(chunkLen));
+    QJsonParseError perr{};
+    QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
+    ASSERT_EQ(perr.error, QJsonParseError::NoError) << perr.errorString().toStdString();
+    const QJsonObject gltf = doc.object();
+
+    const QJsonArray nodes = gltf.value("nodes").toArray();
+    EXPECT_GT(nodes.size(), 1) << "explode should write more than one scene node";
+
+    // More than one node carries a non-zero translation (the explode offsets).
+    int offsetNodes = 0;
+    for (const QJsonValue& nv : nodes) {
+        const QJsonArray t = nv.toObject().value("translation").toArray();
+        if (t.size() == 3) {
+            const double m = std::abs(t[0].toDouble()) + std::abs(t[1].toDouble())
+                           + std::abs(t[2].toDouble());
+            if (m > 1e-4) ++offsetNodes;
+        }
+    }
+    EXPECT_GT(offsetNodes, 1) << "exploded part nodes should carry outward offsets";
+}
+
 // --write-labels dumps a valid labels JSON with the documented schema + arrays.
 TEST_F(CLIPipelineCmdSplitPartsCoverageTest, WriteLabelsProducesSchemaJson)
 {

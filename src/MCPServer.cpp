@@ -127,6 +127,7 @@
 #include <OgreMesh.h>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <OgreSkeleton.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -143,6 +144,8 @@
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
 #include "commands/SplitMeshCommand.h"
+#include "commands/ExplodePartsCommand.h"
+#include "commands/JoinPartsCommand.h"
 #include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
@@ -679,6 +682,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("split_mesh_by_segments"), &MCPServer::toolSplitMeshBySegments},
+        {QStringLiteral("explode_mesh_parts"), &MCPServer::toolExplodeMeshParts},
+        {QStringLiteral("join_mesh_parts"), &MCPServer::toolJoinMeshParts},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
@@ -774,6 +779,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
         QStringLiteral("split_mesh_by_segments"),
+        QStringLiteral("explode_mesh_parts"),
+        QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
@@ -850,6 +857,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
             {QStringLiteral("split_mesh_by_segments"), QStringLiteral("ai_assist")},
+            {QStringLiteral("explode_mesh_parts"), QStringLiteral("ai_assist")},
+            {QStringLiteral("join_mesh_parts"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
@@ -4886,6 +4895,122 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         QJsonArray names;
         for (const QString& n : cmd->partNames()) names.append(n);
         o["partNames"] = names;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolExplodeMeshParts(const QJsonObject &args)
+{
+    // PartOps explode (#862/#864): split an already-multi-part entity into one
+    // scene node per part, offset outward — via the SAME undoable
+    // ExplodePartsCommand the GUI button uses.
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: No mesh entity found")
+                : QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->getMesh() || entity->getMesh()->getNumSubMeshes() < 2)
+            return makeErrorResult("Error: mesh has a single part — split it into parts first");
+
+        double distance = args.value("distance").toDouble(0.15);
+        if (distance < 0.0) distance = 0.0;
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.explode"),
+                                      QStringLiteral("MCP explode_mesh_parts"));
+        const std::string entName = entity->getName();
+        auto* cmd = new ExplodePartsCommand(entName, static_cast<float>(distance));
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: explode failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["explodedParts"] = cmd->createdParts();
+        o["distance"] = distance;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolJoinMeshParts(const QJsonObject &args)
+{
+    // PartOps join (#862/#864): merge 2+ named part entities (world transforms
+    // baked in) into one fused static mesh — via the undoable JoinPartsCommand.
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        // Resolve the target entities: an explicit "entity_names" array, else
+        // every mesh entity in the scene.
+        std::vector<std::string> names;
+        QString fusedBase;
+        std::set<std::string> seen;   // reject duplicates (CodeRabbit)
+        auto pushName = [&](const std::string& n) {
+            if (seen.insert(n).second) {
+                names.push_back(n);
+                if (fusedBase.isEmpty())
+                    fusedBase = QString::fromStdString(n) + QStringLiteral("_fused");
+            }
+        };
+        const QJsonArray requested = args.value("entity_names").toArray();
+        if (!requested.isEmpty()) {
+            // Every requested name MUST resolve to a mesh entity — a typo would
+            // otherwise silently join a subset while reporting success. A repeated
+            // name would duplicate that entity's geometry AND break the undo
+            // (JoinPartsCommand can't recreate two same-named source nodes).
+            for (const QJsonValue& v : requested) {
+                const QString want = v.toString();
+                Ogre::Entity* found = nullptr;
+                for (auto* ent : mgr->getEntities()) {
+                    if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
+                    if (QString::fromStdString(ent->getName()) == want) { found = ent; break; }
+                }
+                if (!found)
+                    return makeErrorResult(QString("Error: entity '%1' not found").arg(want));
+                if (seen.count(found->getName()))
+                    return makeErrorResult(QString("Error: entity '%1' listed more than once").arg(want));
+                pushName(found->getName());
+            }
+        } else {
+            for (auto* ent : mgr->getEntities()) {
+                if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
+                pushName(ent->getName());
+            }
+        }
+        if (names.size() < 2)
+            return makeErrorResult("Error: need two or more part entities to join");
+
+        const int partCount = static_cast<int>(names.size());
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.join"),
+                                      QStringLiteral("MCP join_mesh_parts"));
+        auto* cmd = new JoinPartsCommand(std::move(names), fusedBase);
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: join failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["joinedParts"] = partCount;
+        o["createdSubMeshes"] = cmd->createdSubMeshes();
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
@@ -9188,6 +9313,37 @@ QJsonArray MCPServer::buildToolsList()
             "Undoable (same command as the GUI 'Split into Parts' button). Returns "
             "the created submesh count + part names. FBX export keeps the submesh "
             "boundaries; glTF coalesces same-material parts.",
+            props
+        );
+    }
+
+    // explode_mesh_parts (#862/#864) — split a multi-part mesh into separate nodes.
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Entity to explode (must already have >=2 part submeshes — split it first). Empty → the first mesh entity."}};
+        props["distance"] = QJsonObject{{"type", "number"}, {"description", "Outward explode offset multiplier (× the assembly diagonal). Default 0.15; 0 = parts coincident."}};
+        appendTool(
+            "explode_mesh_parts",
+            "PartOps explode (#862/#864): split every submesh of an already-multi-part "
+            "entity into its own scene node, offset outward from the assembly centre. "
+            "Preserves materials, and (for a skinned source) the skeleton + bone "
+            "weights. Undoable (same command as the GUI 'Explode Parts' button). "
+            "Returns the exploded part count.",
+            props
+        );
+    }
+
+    // join_mesh_parts (#862/#864) — merge separate part entities into one mesh.
+    {
+        QJsonObject props;
+        props["entity_names"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}}, {"description", "Names of the 2+ part entities to join (world transforms baked in). Omit → join ALL mesh entities in the scene."}};
+        appendTool(
+            "join_mesh_parts",
+            "PartOps join (#862/#864): merge 2+ part entities into ONE fused mesh, "
+            "baking each part's world transform into its geometry. Same-material "
+            "submeshes coalesce. Yields STATIC geometry (skeletons are NOT reconciled "
+            "— a documented join limitation). Undoable (same command as the GUI 'Join "
+            "Parts' button). Returns the joined part count + created submesh count.",
             props
         );
     }

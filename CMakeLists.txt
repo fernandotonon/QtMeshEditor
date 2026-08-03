@@ -431,7 +431,10 @@ message(STATUS "xatlas enabled (auto UV unwrap)")
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+    # Re-pinned 2026-08: the previous pin 31c1ad3745… stopped fetching in CI
+    # ("fatal: unable to read tree" on every platform during the shallow clone).
+    # 2c980bb… is the current upstream master head and clones cleanly.
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(stb)
