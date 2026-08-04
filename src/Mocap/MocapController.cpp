@@ -322,6 +322,7 @@ struct MocapController::Impl {
     };
 
     std::unique_ptr<SkinningFrameListener> skinningListener;
+    bool skinningListenerRegistered = false;
     bool addedSoftwareAnimRequest = false;
 
     Ogre::Entity* entity() const
@@ -336,10 +337,22 @@ struct MocapController::Impl {
 
     void unregisterSkinningListener()
     {
-        if (!skinningListener)
+        if (!skinningListener || !skinningListenerRegistered)
             return;
         Ogre::Root::getSingleton().removeFrameListener(skinningListener.get());
         skinningListener->impl = nullptr;
+        skinningListenerRegistered = false;
+    }
+
+    void registerSkinningListener()
+    {
+        if (!skinningListener)
+            skinningListener = std::make_unique<SkinningFrameListener>();
+        skinningListener->impl = this;
+        if (!skinningListenerRegistered) {
+            Ogre::Root::getSingleton().addFrameListener(skinningListener.get());
+            skinningListenerRegistered = true;
+        }
     }
 };
 
@@ -744,26 +757,28 @@ bool MocapController::beginPreviewWithLiveSource(
                 headBoneDrive ? d->headBone.toStdString() : std::string{};
             for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
                 Ogre::Bone* bone = skel->getBone(i);
-                if (headBoneDrive && bone->getName() == headBoneStd)
-                    continue;
-                BodyManualBoneSnapshot snap;
-                snap.boneName = bone->getName();
-                snap.bindLocal = bone->getOrientation();
-                snap.wasManuallyControlled = bone->isManuallyControlled();
-                d->bodyManualRestore.push_back(std::move(snap));
-                bone->setManuallyControlled(true);
-                const int role = MotionInbetween::canonicalIndexForBone(
-                    QString::fromStdString(bone->getName()));
-                if (role >= 0) {
-                    BodyDriveBone bb;
-                    bb.role = role;
-                    bb.boneName = bone->getName();
-                    bb.bindLocal = bone->getOrientation();
-                    bb.wasManuallyControlled = snap.wasManuallyControlled;
-                    d->bodyBones.push_back(std::move(bb));
+                const bool isHeadBone =
+                    headBoneDrive && bone->getName() == headBoneStd;
+                if (!isHeadBone) {
+                    BodyManualBoneSnapshot snap;
+                    snap.boneName = bone->getName();
+                    snap.bindLocal = bone->getOrientation();
+                    snap.wasManuallyControlled = bone->isManuallyControlled();
+                    d->bodyManualRestore.push_back(std::move(snap));
+                    bone->setManuallyControlled(true);
+                    const int role = MotionInbetween::canonicalIndexForBone(
+                        QString::fromStdString(bone->getName()));
+                    if (role >= 0) {
+                        BodyDriveBone bb;
+                        bb.role = role;
+                        bb.boneName = bone->getName();
+                        bb.bindLocal = bone->getOrientation();
+                        bb.wasManuallyControlled = snap.wasManuallyControlled;
+                        d->bodyBones.push_back(std::move(bb));
+                    }
                 }
-                // Animation tracks still write manually-controlled bones unless
-                // the blend mask is zero (TransformOperator bone-drag pattern).
+                // Zero animation influence on every bone (incl. head) so idle
+                // clips cannot fight manual mocap drive.
                 if (auto* states = entity->getAllAnimationStates()) {
                     const auto nBones = static_cast<size_t>(skel->getNumBones());
                     for (const auto& [animName, st] : states->getAnimationStates()) {
@@ -783,10 +798,7 @@ bool MocapController::beginPreviewWithLiveSource(
         d->bodyBones.clear();
     }
 
-    if (!d->skinningListener)
-        d->skinningListener = std::make_unique<Impl::SkinningFrameListener>();
-    d->skinningListener->impl = d.get();
-    Ogre::Root::getSingleton().addFrameListener(d->skinningListener.get());
+    d->registerSkinningListener();
     if (!d->addedSoftwareAnimRequest) {
         entity->addSoftwareAnimationRequest(true);
         d->addedSoftwareAnimRequest = true;
@@ -1315,9 +1327,8 @@ void MocapController::stopPreview()
     d->bodyRetargeter.reset();
     d->poseDebugOverlay.detach();
 
-    if (d->skinningListener) {
+    if (d->skinningListener)
         d->unregisterSkinningListener();
-    }
 
     restoreEntityState();
 
