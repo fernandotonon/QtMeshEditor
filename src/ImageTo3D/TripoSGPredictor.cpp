@@ -2,6 +2,7 @@
 
 #include "MarchingCubes.h"
 #include "MeshRefine.h"
+#include "OnnxRuntimeSettings.h"
 #include "PbrMapSynth.h"   // toNCHW (image → planar [0,1])
 
 #include <QDir>
@@ -270,20 +271,16 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         //    which is invoked ~2000×/run — the one graph where GPU dispatch
         //    clearly pays and the compile cost is trivial.
         Ort::SessionOptions cpuOnly;
-        cpuOnly.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        OnnxRuntimeSettings::SessionConfig cpuCfg;
+        cpuCfg.appendGpu = false;
+        OnnxRuntimeSettings::configureSessionOptions(cpuOnly, cpuCfg);
         Ort::SessionOptions gpu;
-        gpu.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        OnnxRuntimeSettings::SessionConfig gpuCfg;
+        gpuCfg.coreMlStyle = OnnxRuntimeSettings::CoreMlStyle::MlProgram;
+        OnnxRuntimeSettings::configureSessionOptions(gpu, gpuCfg);
         bool gpuAvailable = false;
 #ifdef __APPLE__
-        try {
-            // Legacy "NeuralNetwork" format maps almost none of these ops —
-            // MLProgram is what actually reaches the M-series GPU/ANE.
-            std::unordered_map<std::string, std::string> coreml;
-            coreml["ModelFormat"]    = "MLProgram";
-            coreml["MLComputeUnits"] = "ALL";
-            gpu.AppendExecutionProvider("CoreML", coreml);
-            gpuAvailable = true;
-        } catch (const Ort::Exception&) {}
+        gpuAvailable = OnnxRuntimeSettings::instance()->preferGpu();
 #endif
         const bool ditOnGpu = gpuAvailable
             && qEnvironmentVariableIntValue("QTMESH_TRIPOSG_COREML_DIT") == 1;

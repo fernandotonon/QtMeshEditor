@@ -11,6 +11,8 @@ Column {
     property bool sectionVisible: true
     default property alias content: contentLoader.sourceComponent
 
+    signal contentReady()
+
     visible: sectionVisible
     width: parent ? parent.width : 200
 
@@ -58,7 +60,25 @@ Column {
     Loader {
         id: contentLoader
         width: parent.width
-        active: root.expanded
+        // Defer activation to the next event-loop turn. Synchronous Loader
+        // startup while a parent component is still finalizing (e.g. expanding
+        // a section during a binding cascade) can SIGSEGV — see PropertiesPanel
+        // Component.onCompleted comment.
+        active: loadActive
         visible: root.expanded
+        property bool loadActive: false
+        onLoaded: root.contentReady()
+    }
+
+    onExpandedChanged: {
+        if (root.expanded)
+            Qt.callLater(function() { contentLoader.loadActive = true })
+        else
+            contentLoader.loadActive = false
+    }
+
+    Component.onCompleted: {
+        if (root.expanded)
+            Qt.callLater(function() { contentLoader.loadActive = true })
     }
 }

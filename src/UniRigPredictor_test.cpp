@@ -451,6 +451,16 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     EXPECT_EQ(rh, 9) << "right (+X) hand index " << rh;
 }
 
+TEST(UniRigPredictor, SampleBudgetScalesForLargeMeshes)
+{
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(1000), 65536);
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(100000), 32768);
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(500000), 16384);
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(1000, 12000), 12000);
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(1000, 1000), 4096);
+    EXPECT_EQ(UniRigPredictor::sampleBudgetForMesh(1000, 999999), 65536);
+}
+
 TEST(UniRigPredictor, EnsureModelBlockingHonoursNoDownloadGuard)
 {
     // With QTMESH_UNIRIG_NO_DOWNLOAD set (and no model on disk) ensureModelBlocking

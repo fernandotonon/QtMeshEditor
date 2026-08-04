@@ -21,6 +21,7 @@
 #include "MaterialEditorQML.h"
 #include "QMLMaterialHighlighter.h"
 #include "LLMManager.h"
+#include "OnnxRuntimeSettings.h"
 #include "AIModelCatalog.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
@@ -33,6 +34,9 @@
 #include "CLIPipeline.h"
 #include "AppConsoleLog.h"
 #include "AppLaunchHandler.h"
+#ifdef ENABLE_MOCAP
+#include "Mocap/MocapCameraHints.h"
+#endif
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
 #include "updater/UpdaterTelemetry.h"
@@ -120,6 +124,7 @@ int main(int argc, char *argv[])
         QCoreApplication::setOrganizationDomain("none");
         QCoreApplication::setApplicationName("QtMeshEditor");
         QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+        OnnxRuntimeSettings::prepareRuntimeEnvironment();
 
         // Initialize Sentry using stored consent (no dialog in headless mode)
         SentryReporter::initialize();
@@ -156,9 +161,17 @@ int main(int argc, char *argv[])
     // initialises, so they belong here, ahead of QApplication.
     qputenv("QSG_RHI_BACKEND", "software");
     qputenv("QT_QUICK_BACKEND", "software");
+#ifdef ENABLE_MOCAP
+    // Before QApplication: Qt Multimedia's FFmpeg backend probes VA-API during
+    // integration init; on some Linux/NVIDIA setups that crashes inside
+    // QMediaDevices::videoInputs() when the Performance Capture panel expands.
+    MocapCameraHints::ensureMultimediaBackendSafe();
+#endif
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
 
     QApplication a(argc, argv);
+
+    OnnxRuntimeSettings::prepareRuntimeEnvironment();
 
     // Capture qDebug/qWarning/etc. from the rest of startup into the in-app console
     // (MainWindow attaches and drains the backlog when its console exists).
@@ -226,6 +239,11 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonType<LLMManager>("MaterialEditorQML", 1, 0, "LLMManager",
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
             return LLMManager::qmlInstance(engine, scriptEngine);
+        });
+
+    qmlRegisterSingletonType<OnnxRuntimeSettings>("MaterialEditorQML", 1, 0, "OnnxRuntimeSettings",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            return OnnxRuntimeSettings::qmlInstance(engine, scriptEngine);
         });
 
     // Register ModelDownloader singleton for QML
