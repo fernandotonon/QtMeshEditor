@@ -4,6 +4,7 @@
 
 #include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
+#include "MocapPoseIkFk.h"
 #include "PoseIKSolver.h"
 
 #include <OgreBone.h>
@@ -16,11 +17,12 @@
 #include <cstdio>
 #include <vector>
 
+#include <QString>
 #include <QtGlobal>
 
 namespace {
 
-using Vec3 = std::array<float, 3>;
+using Vec3 = MocapPoseIkFk::Vec3;
 
 Vec3 sub(const Vec3& a, const Vec3& b)
 {
@@ -47,104 +49,6 @@ float degBetween(const Vec3& a, const Vec3& b)
 Ogre::Quaternion quatFromArray(const std::array<float, 4>& q)
 {
     return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
-}
-
-int effectiveParentRole(int role, uint32_t resolvedMask)
-{
-    int p = MotionInbetween::canonicalParentOf(role);
-    while (p >= 0 && !(resolvedMask & (1u << static_cast<unsigned>(p))))
-        p = MotionInbetween::canonicalParentOf(p);
-    return p;
-}
-
-Ogre::Quaternion localArtic(
-    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>& quats,
-    int role, uint32_t resolvedMask)
-{
-    const int ep = effectiveParentRole(role, resolvedMask);
-    const Ogre::Quaternion oq = quatFromArray(quats[static_cast<size_t>(role)]);
-    if (ep < 0)
-        return oq;
-    const Ogre::Quaternion op = quatFromArray(quats[static_cast<size_t>(ep)]);
-    return op.Inverse() * oq;
-}
-
-void fkPoseIkJoints(
-    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>& quats,
-    uint32_t resolvedMask,
-    const std::array<std::array<float, 3>, PoseIK::kLandmarkCount>& canonLmPts,
-    std::array<Vec3, PoseIK::kCanonicalRoles>& out)
-{
-    out.fill({0.f, 0.f, 0.f});
-    const Vec3 hip = {
-        (canonLmPts[23][0] + canonLmPts[24][0]) * 0.5f,
-        (canonLmPts[23][1] + canonLmPts[24][1]) * 0.5f,
-        (canonLmPts[23][2] + canonLmPts[24][2]) * 0.5f};
-    out[static_cast<size_t>(PoseIK::Hip)] = hip;
-
-    struct BoneSeg {
-        int role;
-        int fromLm;
-        int toLm;
-    };
-    static const BoneSeg segs[] = {
-        {PoseIK::Abdomen, 23, 11}, {PoseIK::Chest, 11, 12},
-        {PoseIK::Neck, 12, 0}, {PoseIK::Head, 0, 8},
-        {PoseIK::RShoulder, 12, 14}, {PoseIK::RElbow, 14, 16},
-        {PoseIK::RHand, 16, 16},
-        {PoseIK::LShoulder, 11, 13}, {PoseIK::LElbow, 13, 15},
-        {PoseIK::LHand, 15, 15},
-        {PoseIK::RHip, 24, 26}, {PoseIK::RKnee, 26, 28},
-        {PoseIK::RFoot, 28, 32},
-        {PoseIK::LHip, 23, 25}, {PoseIK::LKnee, 25, 27},
-        {PoseIK::LFoot, 27, 31},
-    };
-
-    std::array<Vec3, PoseIK::kCanonicalRoles> restOffset{};
-    for (const BoneSeg& s : segs) {
-        Vec3 dir = sub(canonLmPts[static_cast<size_t>(s.toLm)],
-                       canonLmPts[static_cast<size_t>(s.fromLm)]);
-        const float d = len(dir);
-        if (d < 1e-5f)
-            dir = {0.f, 0.12f, 0.f};
-        else
-            dir = norm(dir);
-        restOffset[static_cast<size_t>(s.role)] = {
-            dir[0] * std::max(d, 0.05f),
-            dir[1] * std::max(d, 0.05f),
-            dir[2] * std::max(d, 0.05f)};
-    }
-
-    std::array<Ogre::Quaternion, PoseIK::kCanonicalRoles> worldRot{};
-    worldRot.fill(Ogre::Quaternion::IDENTITY);
-
-    for (int role = 0; role < PoseIK::kCanonicalRoles; ++role) {
-        if (!(resolvedMask & (1u << static_cast<unsigned>(role))))
-            continue;
-        const int parent = MotionInbetween::canonicalParentOf(role);
-        const Ogre::Quaternion local = localArtic(quats, role, resolvedMask);
-        if (parent >= 0 && (resolvedMask & (1u << static_cast<unsigned>(parent)))) {
-            worldRot[static_cast<size_t>(role)] =
-                worldRot[static_cast<size_t>(parent)] * local;
-            const Ogre::Vector3 off(
-                restOffset[static_cast<size_t>(role)][0],
-                restOffset[static_cast<size_t>(role)][1],
-                restOffset[static_cast<size_t>(role)][2]);
-            const Ogre::Vector3 w =
-                worldRot[static_cast<size_t>(parent)] * off;
-            out[static_cast<size_t>(role)] = {
-                out[static_cast<size_t>(parent)][0] + w.x,
-                out[static_cast<size_t>(parent)][1] + w.y,
-                out[static_cast<size_t>(parent)][2] + w.z};
-        } else if (role == PoseIK::Hip) {
-            worldRot[0] = quatFromArray(quats[0]);
-        } else {
-            out[static_cast<size_t>(role)] = {
-                hip[0] + restOffset[static_cast<size_t>(role)][0],
-                hip[1] + restOffset[static_cast<size_t>(role)][1],
-                hip[2] + restOffset[static_cast<size_t>(role)][2]};
-        }
-    }
 }
 
 const char* roleName(int role)
@@ -207,7 +111,7 @@ void logFrame(
     const float scale = (entityH > 1e-3f ? entityH : 1.8f) / skelH;
 
     std::array<Vec3, PoseIK::kCanonicalRoles> fk{};
-    fkPoseIkJoints(body.quats, body.resolvedMask, canon, fk);
+    MocapPoseIkFk::fkPoseIkJoints(body.quats, body.resolvedMask, canon, fk);
 
     skel->_updateTransforms();
 

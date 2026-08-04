@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QLibrary>
 #include <QSettings>
+#include <mutex>
 #include <cstdio>
 #include <thread>
 
@@ -103,11 +104,8 @@ bool cudaProviderLibraryLoads()
 void OnnxRuntimeSettings::prepareRuntimeEnvironment()
 {
 #ifdef QTMESH_ONNX_GPU_BUILD
-    static bool done = false;
-    if (done)
-        return;
-    done = true;
-    prependLdLibraryPath(cudnnSearchPaths());
+    static std::once_flag once;
+    std::call_once(once, []() { prependLdLibraryPath(cudnnSearchPaths()); });
 #endif
 }
 

@@ -1800,12 +1800,11 @@ BodyRetargeter::evaluateFrame(
                 (pi >= 0) ? W[static_cast<size_t>(pi)]
                           : Ogre::Quaternion::IDENTITY;
             const int c = d->boneToCanon[static_cast<size_t>(i)];
-            if (c < 0 || c >= Jc) {
+            if (c < 0 || c >= Jc
+                || (skipRolesMask & (1u << static_cast<unsigned>(c)))) {
                 W[static_cast<size_t>(i)] = Wp * base;
                 continue;
             }
-            if (skipRolesMask & (1u << static_cast<unsigned>(c)))
-                continue;
             Ogre::Quaternion local;
             if (c == 0) {
                 local = base;

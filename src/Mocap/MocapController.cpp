@@ -255,7 +255,9 @@ struct MocapController::Impl {
     Ogre::Quaternion neutral = Ogre::Quaternion::IDENTITY;
     Ogre::Quaternion headBindWorld = Ogre::Quaternion::IDENTITY;
     Ogre::Quaternion headBindLocal = Ogre::Quaternion::IDENTITY;
+    Ogre::Quaternion headRestoreLocal = Ogre::Quaternion::IDENTITY;
     bool headWasManuallyControlled = false;
+    bool savedHeadSnapshot = false;
     QHash<QString, float> savedWeights;          // mesh target -> weight
     QStringList savedEnabledAnimations;
     bool savedSkipAnimStateUpdate = false;
@@ -470,9 +472,12 @@ void MocapController::setShowPoseDebug(bool on)
         return;
     d->showPoseDebug = on;
     if (on && d->state != Idle) {
-        if (Ogre::Entity* entity = d->entity())
-            d->poseDebugOverlay.attach(Manager::getSingleton()->getSceneMgr(),
-                                       entity->getParentSceneNode());
+        if (Ogre::Entity* entity = d->entity()) {
+            auto* mgr = Manager::getSingletonPtr();
+            if (mgr && mgr->getSceneMgr())
+                d->poseDebugOverlay.attach(mgr->getSceneMgr(),
+                                           entity->getParentSceneNode());
+        }
     } else {
         d->poseDebugOverlay.detach();
     }
@@ -739,13 +744,34 @@ bool MocapController::beginPreviewWithLiveSource(
     // PoseIK's head role is coarse and fights the face solve.
     const bool headBoneDrive =
         d->headEnabled && !d->headBone.isEmpty();
+    const std::string headBoneStd =
+        headBoneDrive ? d->headBone.toStdString() : std::string{};
     if (entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        // Snapshot manual-bone state BEFORE reset(true) — reset clears manual
+        // orientations, so post-reset snapshots cannot be restored faithfully.
+        d->bodyManualRestore.clear();
+        d->savedHeadSnapshot = false;
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+            Ogre::Bone* bone = skel->getBone(i);
+            if (headBoneDrive && bone->getName() == headBoneStd) {
+                d->headWasManuallyControlled = bone->isManuallyControlled();
+                d->headRestoreLocal = bone->getOrientation();
+                d->savedHeadSnapshot = true;
+                continue;
+            }
+            if (bodyDrivable) {
+                BodyManualBoneSnapshot snap;
+                snap.boneName = bone->getName();
+                snap.bindLocal = bone->getOrientation();
+                snap.wasManuallyControlled = bone->isManuallyControlled();
+                d->bodyManualRestore.push_back(std::move(snap));
+            }
+        }
         skel->reset(true);
         skel->_updateTransforms();
         if (headBoneDrive) {
-            Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
-            d->headWasManuallyControlled = bone->isManuallyControlled();
+            Ogre::Bone* bone = skel->getBone(headBoneStd);
             d->headBindLocal = bone->getOrientation();
             d->headBindWorld = bone->_getDerivedOrientation();
             bone->setManuallyControlled(true);
@@ -754,7 +780,6 @@ bool MocapController::beginPreviewWithLiveSource(
 
     // body drive setup: BodyRetargeter + manual bone control for live drive.
     d->bodyRetargeter.reset();
-    d->bodyManualRestore.clear();
     d->bodyBones.clear();
     d->bodyAnimMaskRestore.clear();
     if (bodyDrivable && entity->hasSkeleton()) {
@@ -765,19 +790,13 @@ bool MocapController::beginPreviewWithLiveSource(
             d->bodyRetargeter.reset();
             d->bodyBones.clear();
         } else {
-            const std::string headBoneStd =
-                headBoneDrive ? d->headBone.toStdString() : std::string{};
             for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
                 Ogre::Bone* bone = skel->getBone(i);
                 const bool isHeadBone =
                     headBoneDrive && bone->getName() == headBoneStd;
-                if (!isHeadBone) {
-                    BodyManualBoneSnapshot snap;
-                    snap.boneName = bone->getName();
-                    snap.bindLocal = bone->getOrientation();
-                    snap.wasManuallyControlled = bone->isManuallyControlled();
-                    d->bodyManualRestore.push_back(std::move(snap));
+                if (!isHeadBone)
                     bone->setManuallyControlled(true);
+                if (!isHeadBone) {
                     const int role = MotionInbetween::canonicalIndexForBone(
                         QString::fromStdString(bone->getName()));
                     if (role >= 0) {
@@ -785,7 +804,7 @@ bool MocapController::beginPreviewWithLiveSource(
                         bb.role = role;
                         bb.boneName = bone->getName();
                         bb.bindLocal = bone->getOrientation();
-                        bb.wasManuallyControlled = snap.wasManuallyControlled;
+                        bb.wasManuallyControlled = bone->isManuallyControlled();
                         d->bodyBones.push_back(std::move(bb));
                     }
                 }
@@ -1271,10 +1290,11 @@ void MocapController::restoreEntityState()
     }
     if (entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
-        if (!d->headBone.isEmpty()) {
+        if (d->savedHeadSnapshot && !d->headBone.isEmpty()) {
             Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
-            bone->setOrientation(d->headBindLocal);
+            bone->setOrientation(d->headRestoreLocal);
             bone->setManuallyControlled(d->headWasManuallyControlled);
+            d->savedHeadSnapshot = false;
         }
         for (const auto& snap : d->bodyManualRestore) {
             Ogre::Bone* bone = skel->getBone(snap.boneName);

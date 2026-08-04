@@ -711,7 +711,7 @@ Dialog {
 
                         Text {
                             Layout.fillWidth: true
-                            text: "Note: LLM settings take effect when loading a new model. ONNX GPU preference applies immediately."
+                            text: "Note: LLM settings take effect when loading a new model. ONNX GPU preference applies to newly created ONNX sessions."
                             font.pointSize: 9
                             font.italic: true
                             color: Qt.darker(textColor, 1.5)

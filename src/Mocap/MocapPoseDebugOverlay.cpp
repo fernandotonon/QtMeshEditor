@@ -3,6 +3,7 @@
 #include "MocapPoseDebugOverlay.h"
 
 #include "MocapLiveTypes.h"
+#include "MocapPoseIkFk.h"
 #include "../MotionInbetween.h"
 
 #include <Ogre.h>
@@ -64,25 +65,6 @@ Ogre::Quaternion quatFromArray(const std::array<float, 4>& q)
     return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
 }
 
-int effectiveParentRole(int role, uint32_t resolvedMask)
-{
-    int p = MotionInbetween::canonicalParentOf(role);
-    while (p >= 0 && !(resolvedMask & (1u << static_cast<unsigned>(p))))
-        p = MotionInbetween::canonicalParentOf(p);
-    return p;
-}
-
-Ogre::Quaternion localArtic(
-    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>& src,
-    int role, uint32_t resolvedMask)
-{
-    const int ep = effectiveParentRole(role, resolvedMask);
-    if (ep >= 0)
-        return quatFromArray(src[static_cast<size_t>(ep)]).Inverse()
-               * quatFromArray(src[static_cast<size_t>(role)]);
-    return quatFromArray(src[static_cast<size_t>(role)]);
-}
-
 const int kLmEdges[][2] = {
     {0, 1},   {1, 2},   {2, 3},   {3, 7},   {0, 4},   {4, 5},   {5, 6},
     {6, 8},   {9, 10},  {11, 12}, {11, 13}, {13, 15}, {15, 17}, {15, 19},
@@ -100,77 +82,6 @@ float skeletonHeight(const std::array<std::array<float, 3>, PoseIK::kLandmarkCou
     }
     const float h = mx - mn;
     return h > 1e-4f ? h : 1.65f;
-}
-
-void fkPoseIkJoints(
-    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>& quats,
-    uint32_t resolvedMask,
-    const std::array<std::array<float, 3>, PoseIK::kLandmarkCount>& canonLmPts,
-    std::array<Vec3, PoseIK::kCanonicalRoles>& out)
-{
-    out.fill({0.f, 0.f, 0.f});
-    const Vec3 hip = mid(canonLmPts[23], canonLmPts[24]);
-    out[static_cast<size_t>(PoseIK::Hip)] = hip;
-
-    struct BoneSeg {
-        int role;
-        int fromLm;
-        int toLm;
-    };
-    static const BoneSeg segs[] = {
-        {PoseIK::Abdomen, 23, 11},
-        {PoseIK::Chest, 11, 12},
-        {PoseIK::Neck, 12, 0},
-        {PoseIK::Head, 0, 8},
-        {PoseIK::RShoulder, 12, 14},
-        {PoseIK::RElbow, 14, 16},
-        {PoseIK::RHand, 16, 16},
-        {PoseIK::LShoulder, 11, 13},
-        {PoseIK::LElbow, 13, 15},
-        {PoseIK::LHand, 15, 15},
-        {PoseIK::RHip, 24, 26},
-        {PoseIK::RKnee, 26, 28},
-        {PoseIK::RFoot, 28, 32},
-        {PoseIK::LHip, 23, 25},
-        {PoseIK::LKnee, 25, 27},
-        {PoseIK::LFoot, 27, 31},
-    };
-
-    std::array<Vec3, PoseIK::kCanonicalRoles> restOffset{};
-    for (const BoneSeg& s : segs) {
-        Vec3 dir = sub(canonLmPts[static_cast<size_t>(s.toLm)],
-                       canonLmPts[static_cast<size_t>(s.fromLm)]);
-        const float d = len(dir);
-        if (d < 1e-5f)
-            dir = {0.f, 0.12f, 0.f};
-        else
-            dir = mul(dir, 1.f / d);
-        restOffset[static_cast<size_t>(s.role)] = mul(dir, std::max(d, 0.05f));
-    }
-
-    std::array<Ogre::Quaternion, PoseIK::kCanonicalRoles> worldRot{};
-    worldRot.fill(Ogre::Quaternion::IDENTITY);
-
-    for (int role = 0; role < PoseIK::kCanonicalRoles; ++role) {
-        if (!(resolvedMask & (1u << static_cast<unsigned>(role))))
-            continue;
-        const int parent = MotionInbetween::canonicalParentOf(role);
-        const Ogre::Quaternion local = localArtic(quats, role, resolvedMask);
-        if (parent >= 0 && (resolvedMask & (1u << static_cast<unsigned>(parent)))) {
-            worldRot[static_cast<size_t>(role)] =
-                worldRot[static_cast<size_t>(parent)] * local;
-            out[static_cast<size_t>(role)] =
-                add(out[static_cast<size_t>(parent)],
-                    mulVec3(worldRot[static_cast<size_t>(parent)],
-                            restOffset[static_cast<size_t>(role)]));
-        } else if (role == PoseIK::Hip) {
-            worldRot[0] = quatFromArray(quats[0]);
-        } else {
-            worldRot[static_cast<size_t>(role)] = quatFromArray(quats[role]);
-            out[static_cast<size_t>(role)] =
-                add(hip, restOffset[static_cast<size_t>(role)]);
-        }
-    }
 }
 
 void appendLines(Ogre::ManualObject* mo,
@@ -276,7 +187,7 @@ void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeight
         lmLines.emplace_back(canonLm(canon, e[0]), canonLm(canon, e[1]));
 
     std::array<Vec3, PoseIK::kCanonicalRoles> joints{};
-    fkPoseIkJoints(body.quats, body.resolvedMask, canon, joints);
+    MocapPoseIkFk::fkPoseIkJoints(body.quats, body.resolvedMask, canon, joints);
 
     std::vector<std::pair<Vec3, Vec3>> ikLines;
     for (int role = 0; role < PoseIK::kCanonicalRoles; ++role) {
