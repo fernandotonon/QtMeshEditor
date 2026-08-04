@@ -455,6 +455,29 @@ BodyRecordReport bakeRetargeterClip(
         report.error = QStringLiteral("retargeter: not a humanoid rig");
         return report;
     }
+
+    const BodyLiveFrame* neutralFrame = nullptr;
+    for (const auto& frame : frames) {
+        if (!frame.valid)
+            continue;
+        if ((frame.resolvedMask & kTorsoResolvedMask) != kTorsoResolvedMask)
+            continue;
+        neutralFrame = &frame;
+        break;
+    }
+    if (!neutralFrame) {
+        for (const auto& frame : frames) {
+            if (!frame.valid)
+                continue;
+            neutralFrame = &frame;
+            break;
+        }
+    }
+    if (!neutralFrame) {
+        report.error = QStringLiteral("no confident body frames to calibrate");
+        return report;
+    }
+
     if (skel->hasAnimation(clip))
         skel->removeAnimation(clip);
     skel->reset(true);
@@ -462,39 +485,13 @@ BodyRecordReport bakeRetargeterClip(
     for (unsigned short i = 0; i < skel->getNumBones(); ++i)
         bindLocal[i] = skel->getBone(i)->getOrientation();
 
-    bool neutralSet = false;
-    for (const auto& frame : frames) {
-        if (!frame.valid)
-            continue;
-        if ((frame.resolvedMask & kTorsoResolvedMask) != kTorsoResolvedMask)
-            continue;
-        const auto q = frameQuats(frame);
-        if (useLandmarks)
-            rt.setNeutralReference(q, frame.resolvedMask, frame.world.data(),
-                                   frame.visibility.data());
-        else
-            rt.setNeutralReference(q, frame.resolvedMask);
-        neutralSet = true;
-        break;
-    }
-    if (!neutralSet) {
-        for (const auto& frame : frames) {
-            if (!frame.valid)
-                continue;
-            const auto q = frameQuats(frame);
-            if (useLandmarks)
-                rt.setNeutralReference(q, frame.resolvedMask, frame.world.data(),
-                                       frame.visibility.data());
-            else
-                rt.setNeutralReference(q, frame.resolvedMask);
-            neutralSet = true;
-            break;
-        }
-    }
-    if (!neutralSet) {
-        report.error = QStringLiteral("no confident body frames to calibrate");
-        return report;
-    }
+    const auto neutralQuats = frameQuats(*neutralFrame);
+    if (useLandmarks)
+        rt.setNeutralReference(neutralQuats, neutralFrame->resolvedMask,
+                               neutralFrame->world.data(),
+                               neutralFrame->visibility.data());
+    else
+        rt.setNeutralReference(neutralQuats, neutralFrame->resolvedMask);
 
     const double dt = 1.0 / static_cast<double>(fps);
     Ogre::Animation* anim = skel->createAnimation(

@@ -1248,7 +1248,10 @@ void MocapController::stopRecording()
             if (d->headEnabled && !d->headBone.isEmpty())
                 bopts.skipRolesMask =
                     (1u << static_cast<unsigned>(PoseIK::Head));
-            const int fps = 30;
+            const int fps =
+                (d->liveFps >= 5.0)
+                    ? std::max(1, static_cast<int>(std::lround(d->liveFps)))
+                    : 30;
             auto* bcmd = new RecordBodyClipCommand(d->entityName, std::move(valid),
                                                    fps, bopts);
             UndoManager::getSingleton()->push(bcmd);
