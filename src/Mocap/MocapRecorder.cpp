@@ -336,10 +336,10 @@ BodyRecordReport recordBody(
     // existing clip on a retarget failure. The replace is deferred to the
     // moment the take is known good.
 
-    // VALIDATION HARNESS (QTMESH_MOCAP_USE_RETARGETER=1): bake the clip with
-    // the SHARED BodyRetargeter — the EXACT math the LIVE preview runs — so a
-    // rendered clip validates the live path headlessly (the live drive can't
-    // be render-captured directly). Default path stays applyMotionClip.
+    // VALIDATION HARNESS (QTMESH_MOCAP_USE_RETARGETER=1): bake via BodyRetargeter
+    // using quaternion deltas only (no landmark directions) — useful for
+    // headless regression of the fallback retarget path, not the live landmark
+    // drive (use recordBodyLive for that).
     if (qEnvironmentVariableIntValue("QTMESH_MOCAP_USE_RETARGETER")) {
         const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
         BodyRetargeter rt(skel.get(), yaw180);
@@ -417,6 +417,172 @@ BodyRecordReport recordBody(
             .arg(report.framesProcessed)
             .arg(report.rolesResolved)
             .arg(report.tracksWritten));
+    return report;
+}
+
+namespace {
+
+constexpr uint32_t kTorsoResolvedMask =
+    (1u << 0) | (1u << 1) | (1u << 2);  // hip, abdomen, chest
+
+std::array<std::array<float, 4>, 22> frameQuats(const BodyLiveFrame& frame)
+{
+    std::array<std::array<float, 4>, 22> q{};
+    for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
+        q[static_cast<size_t>(r)] = frame.quats[r];
+    return q;
+}
+
+BodyRecordReport bakeRetargeterClip(
+    Ogre::Entity* entity,
+    Ogre::Skeleton* skel,
+    const std::string& clip,
+    int fps,
+    const BodyRecordOptions& options,
+    const std::vector<BodyLiveFrame>& frames,
+    bool useLandmarks,
+    uint32_t skipRolesMask)
+{
+    BodyRecordReport report;
+    report.clipName = options.clipName;
+    report.algorithmUsed = options.algorithmUsed;
+    report.fallbackReason = options.fallbackReason;
+    report.framesProcessed = static_cast<int>(frames.size());
+
+    const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+    BodyRetargeter rt(skel, yaw180);
+    if (!rt.valid()) {
+        report.error = QStringLiteral("retargeter: not a humanoid rig");
+        return report;
+    }
+    if (skel->hasAnimation(clip))
+        skel->removeAnimation(clip);
+    skel->reset(true);
+    std::map<unsigned short, Ogre::Quaternion> bindLocal;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        bindLocal[i] = skel->getBone(i)->getOrientation();
+
+    bool neutralSet = false;
+    for (const auto& frame : frames) {
+        if (!frame.valid)
+            continue;
+        if ((frame.resolvedMask & kTorsoResolvedMask) != kTorsoResolvedMask)
+            continue;
+        const auto q = frameQuats(frame);
+        if (useLandmarks)
+            rt.setNeutralReference(q, frame.resolvedMask, frame.world.data(),
+                                   frame.visibility.data());
+        else
+            rt.setNeutralReference(q, frame.resolvedMask);
+        neutralSet = true;
+        break;
+    }
+    if (!neutralSet) {
+        for (const auto& frame : frames) {
+            if (!frame.valid)
+                continue;
+            const auto q = frameQuats(frame);
+            if (useLandmarks)
+                rt.setNeutralReference(q, frame.resolvedMask, frame.world.data(),
+                                       frame.visibility.data());
+            else
+                rt.setNeutralReference(q, frame.resolvedMask);
+            neutralSet = true;
+            break;
+        }
+    }
+    if (!neutralSet) {
+        report.error = QStringLiteral("no confident body frames to calibrate");
+        return report;
+    }
+
+    const double dt = 1.0 / static_cast<double>(fps);
+    Ogre::Animation* anim = skel->createAnimation(
+        clip, static_cast<Ogre::Real>(dt * (frames.size() - 1)));
+    anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
+    std::map<unsigned short, Ogre::NodeAnimationTrack*> tracks;
+    for (size_t f = 0; f < frames.size(); ++f) {
+        const auto& frame = frames[f];
+        if (!frame.valid)
+            continue;
+        const auto q = frameQuats(frame);
+        const float* world = useLandmarks ? frame.world.data() : nullptr;
+        const float* vis = useLandmarks ? frame.visibility.data() : nullptr;
+        const auto locals = rt.evaluateFrame(q, frame.resolvedMask, skipRolesMask,
+                                             world, vis);
+        for (const auto& [handle, local] : locals) {
+            auto it = tracks.find(handle);
+            if (it == tracks.end())
+                it = tracks.emplace(
+                    handle, anim->createNodeTrack(handle, skel->getBone(handle)))
+                          .first;
+            auto* kf = it->second->createNodeKeyFrame(
+                static_cast<Ogre::Real>(dt * f));
+            kf->setRotation(bindLocal[handle].Inverse() * local);
+        }
+    }
+    report.tracksWritten = static_cast<int>(tracks.size());
+    report.rolesResolved = static_cast<int>(tracks.size());
+    report.clipLength = anim->getLength();
+    entity->refreshAvailableAnimationState();
+    return report;
+}
+
+}  // namespace
+
+BodyRecordReport recordBodyLive(
+    Ogre::Entity* entity,
+    const std::vector<BodyLiveFrame>& frames, int fps,
+    const BodyRecordOptions& options)
+{
+    BodyRecordReport report;
+    report.clipName = options.clipName;
+    report.algorithmUsed = options.algorithmUsed;
+    report.fallbackReason = options.fallbackReason;
+
+    if (!entity) {
+        report.error = QStringLiteral("no entity");
+        return report;
+    }
+    if (!entity->hasSkeleton() || !entity->getMesh()
+        || !entity->getMesh()->getSkeleton()) {
+        report.error = QStringLiteral(
+            "the mesh is not skinned — body capture retargets onto a humanoid "
+            "skeleton (rig one first: qtmesh rig --skeleton humanoid --skin)");
+        return report;
+    }
+
+    std::vector<BodyLiveFrame> valid;
+    valid.reserve(frames.size());
+    for (const auto& frame : frames) {
+        if (frame.valid)
+            valid.push_back(frame);
+    }
+    report.framesProcessed = static_cast<int>(valid.size());
+    if (valid.size() < 2 || fps <= 0) {
+        report.error = QStringLiteral("need at least 2 pose frames");
+        return report;
+    }
+
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    const std::string clip = options.clipName.toStdString();
+    if (skel->hasAnimation(clip) && !options.replaceExisting) {
+        report.error = QStringLiteral(
+            "animation '%1' already exists (pass replace)").arg(options.clipName);
+        return report;
+    }
+
+    report = bakeRetargeterClip(entity, skel.get(), clip, fps, options, valid,
+                                /*useLandmarks=*/true, options.skipRolesMask);
+    if (report.ok()) {
+        SentryReporter::addBreadcrumb(
+            "ai.assist.mocap_body",
+            QStringLiteral("recorded '%1' via BodyRetargeter+landmarks: %2 frames, "
+                           "%3 tracks")
+                .arg(options.clipName)
+                .arg(report.framesProcessed)
+                .arg(report.tracksWritten));
+    }
     return report;
 }
 

@@ -10,10 +10,13 @@
 #include <OgreEntity.h>
 #include <OgreSkeletonInstance.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <vector>
+
+#include <QtGlobal>
 
 namespace {
 

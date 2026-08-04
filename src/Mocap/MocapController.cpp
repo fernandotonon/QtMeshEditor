@@ -142,6 +142,14 @@ struct MocapMetaTypeRegistrar {
 };
 const MocapMetaTypeRegistrar mocapMetaTypeRegistrar;
 
+void unregisterSkinningListener(MocapController::Impl* impl)
+{
+    if (!impl || !impl->skinningListener)
+        return;
+    Ogre::Root::getSingleton().removeFrameListener(impl->skinningListener.get());
+    impl->skinningListener->impl = nullptr;
+}
+
 struct BodyDriveBone {
     int role = -1;
     std::string boneName;
@@ -732,8 +740,12 @@ bool MocapController::beginPreviewWithLiveSource(
             d->bodyRetargeter.reset();
             d->bodyBones.clear();
         } else {
+            const std::string headBoneStd =
+                headBoneDrive ? d->headBone.toStdString() : std::string{};
             for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
                 Ogre::Bone* bone = skel->getBone(i);
+                if (headBoneDrive && bone->getName() == headBoneStd)
+                    continue;
                 BodyManualBoneSnapshot snap;
                 snap.boneName = bone->getName();
                 snap.bindLocal = bone->getOrientation();
@@ -795,6 +807,7 @@ bool MocapController::beginPreviewWithLiveSource(
     QString error;
     if (!d->camera->open(&error)) {
         d->camera.reset();
+        unregisterSkinningListener(d.get());
         restoreEntityState();
         setStatusMessage(error);
         emit errorOccurred(error);
@@ -814,6 +827,7 @@ bool MocapController::beginPreviewWithLiveSource(
         delete d->worker;
         d->worker = nullptr;
         d->camera.reset();
+        unregisterSkinningListener(d.get());
         restoreEntityState();
         setStatusMessage(msg);
         emit errorOccurred(msg);
@@ -1065,7 +1079,9 @@ void MocapController::onSample(const FaceSample& sample,
         d->bodyNeutralReady = d->bodyRetargeter->hasNeutralReference();
 
         const uint32_t skipHead =
-            (d->headEnabled && !d->headBone.isEmpty()) ? (1u << 5) : 0u;
+            (d->headEnabled && !d->headBone.isEmpty())
+                ? (1u << static_cast<unsigned>(PoseIK::Head))
+                : 0u;
         const auto locals = d->bodyRetargeter->evaluateFrame(
             canonQuats, body.resolvedMask, skipHead, body.world.data(),
             body.visibility.data());
@@ -1173,23 +1189,24 @@ void MocapController::stopRecording()
             GamificationManager::Surface::Gui);
     }
 
-    // body clip: convert the buffered live frames to the [frame][22] world-quat
-    // stream recordBody expects (identity for roles unresolved that frame), and
-    // push a SEPARATE undo command so face + body each undo cleanly.
+    // body clip: bake the buffered live frames with landmark-direction retarget
+    // (same BodyRetargeter path as preview) into a separate undo command.
     if (d->bodyRetargeter && d->bodyTake.size() >= 2) {
-        std::vector<std::vector<std::array<float, 4>>> clipQuats;
-        clipQuats.reserve(d->bodyTake.size());
+        std::vector<BodyLiveFrame> valid;
+        valid.reserve(d->bodyTake.size());
         for (const auto& bf : d->bodyTake) {
-            if (!bf.valid)
-                continue;
-            clipQuats.emplace_back(bf.quats.begin(), bf.quats.end());
+            if (bf.valid)
+                valid.push_back(bf);
         }
-        if (clipQuats.size() >= 2) {
+        if (valid.size() >= 2) {
             MocapRecorder::BodyRecordOptions bopts;
             bopts.clipName = d->clipName + QStringLiteral("_Body");
-            bopts.algorithmUsed = QStringLiteral("pose-ik");
+            bopts.algorithmUsed = QStringLiteral("pose-ik-landmarks");
+            if (d->headEnabled && !d->headBone.isEmpty())
+                bopts.skipRolesMask =
+                    (1u << static_cast<unsigned>(PoseIK::Head));
             const int fps = 30;
-            auto* bcmd = new RecordBodyClipCommand(d->entityName, clipQuats,
+            auto* bcmd = new RecordBodyClipCommand(d->entityName, std::move(valid),
                                                    fps, bopts);
             UndoManager::getSingleton()->push(bcmd);
             const auto& br = bcmd->report();
@@ -1299,8 +1316,7 @@ void MocapController::stopPreview()
     d->poseDebugOverlay.detach();
 
     if (d->skinningListener) {
-        Ogre::Root::getSingleton().removeFrameListener(d->skinningListener.get());
-        d->skinningListener->impl = nullptr;
+        unregisterSkinningListener(d.get());
     }
 
     restoreEntityState();

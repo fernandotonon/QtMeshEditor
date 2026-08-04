@@ -195,7 +195,10 @@ void MocapPoseDebugOverlay::ensureMaterial()
         kMatName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
     if (!mat->getNumTechniques())
         mat->createTechnique();
-    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    Ogre::Technique* tech = mat->getTechnique(0);
+    if (!tech->getNumPasses())
+        tech->createPass();
+    Ogre::Pass* pass = tech->getPass(0);
     pass->setLightingEnabled(false);
     pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
     pass->setCullingMode(Ogre::CULL_NONE);

@@ -1791,11 +1791,6 @@ BodyRetargeter::evaluateFrame(
         const Ogre::Quaternion CtInv = tb.Ct.Inverse();
         std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
         for (int i : tb.order) {
-            const int c = d->boneToCanon[static_cast<size_t>(i)];
-            if (c < 0 || c >= Jc)
-                continue;
-            if (skipRolesMask & (1u << static_cast<unsigned>(c)))
-                continue;
             const Ogre::Quaternion base =
                 (d->haveStand[static_cast<size_t>(i)]
                     ? d->standLocal[static_cast<size_t>(i)]
@@ -1804,6 +1799,12 @@ BodyRetargeter::evaluateFrame(
             const Ogre::Quaternion Wp =
                 (pi >= 0) ? W[static_cast<size_t>(pi)]
                           : Ogre::Quaternion::IDENTITY;
+            const int c = d->boneToCanon[static_cast<size_t>(i)];
+            if (c < 0 || c >= Jc
+                || (skipRolesMask & (1u << static_cast<unsigned>(c)))) {
+                W[static_cast<size_t>(i)] = Wp * base;
+                continue;
+            }
             Ogre::Quaternion local;
             if (c == 0) {
                 local = base;

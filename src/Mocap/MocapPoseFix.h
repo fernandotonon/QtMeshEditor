@@ -62,8 +62,9 @@ inline Ogre::Quaternion kPoseToSkeletonYawPi()
     return Ogre::Quaternion(Ogre::Degree(180), Ogre::Vector3::UNIT_Y);
 }
 
-// Humanoid head bones often need camera-frame pitch inverted while yaw is
-// corrected separately for mirrored webcam previews.
+// Humanoid head bones often need camera-frame pitch inverted; for unit
+// quaternions, negating X mirrors rotation about +X (pitch) while leaving
+// yaw (Y) unchanged to first order. Yaw is corrected separately below.
 inline Ogre::Quaternion invertCameraPitchDelta(const Ogre::Quaternion& delta)
 {
     return Ogre::Quaternion(delta.w, -delta.x, delta.y, delta.z);
