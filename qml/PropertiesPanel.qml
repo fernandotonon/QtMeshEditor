@@ -2461,8 +2461,8 @@ Rectangle {
                 font.pixelSize: 9
                 text: "Debug (beside character): cyan = MediaPipe landmarks, "
                       + "yellow = PoseIK 22-bone FK. If cyan matches you but "
-                      + "Mixamo does not, retarget is wrong; if cyan is wrong, "
-                      + "capture or lighting is wrong."
+                      + "the skinned mesh does not, retarget is wrong; if cyan "
+                      + "is wrong, capture or lighting is wrong."
             }
 
             // Video-file source — the path for macOS where the camera is

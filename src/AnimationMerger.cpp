@@ -1574,7 +1574,7 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
             MotionInbetween::canonicalIndexForBone(QString::fromStdString(
                 skel->getBone(static_cast<unsigned short>(i))->getName()));
     // Pose-ik mocap: anatomical name→role only (NO CMU handedness swap — that
-    // swap is for BVH/library clips and mirrors live limb motion on Mixamo).
+    // swap is for BVH/library clips and would mirror live limb motion).
     d->tb = readTargetBindFrame(skel, d->boneToCanon);
 
     d->canonDup.assign(static_cast<size_t>(d->Jc), 0);
@@ -1641,8 +1641,8 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
             d->haveAnyStand = true;
         }
     }
-    // Rig bone rests identity? (Mixamo yes → Mc heuristic valid; UniRig/template
-    // no → skip Mc, use raw delta on the standing pose.)
+    // Rig bone rests identity? (common FBX humanoids → Mc heuristic valid;
+    // UniRig/template no → skip Mc, use raw delta on the standing pose.)
     for (int i = 0; i < d->nBones && d->restsAreIdentity; ++i) {
         Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
         if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,

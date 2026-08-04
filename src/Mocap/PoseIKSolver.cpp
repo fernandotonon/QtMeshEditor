@@ -230,8 +230,8 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
 
     // Canonicalize MediaPipe's frame (+x subject-left, +y down, +z toward camera)
     // into the CMU/canonical rig frame (+Y up, +Z forward, LEFT at +X). Flip Y
-    // and keep Z (subject faces +Z); do NOT negate X — (-x,-y,+z) mirrored L/R
-    // on Mixamo-style rigs whose left bones already sit at +X.
+    // and keep Z (subject faces +Z); do NOT negate X — (-x,-y,+z) would swap
+    // anatomical left/right on rigs whose left bones already sit at +X.
     Vec3 p[kLandmarkCount];
     std::array<std::array<float, 3>, kLandmarkCount> canon{};
     canonicalizeMediaPipeWorld(world, canon);

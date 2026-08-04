@@ -301,7 +301,7 @@ struct MocapController::Impl {
     // AnimationStateSet or manual bones are dirty. Mocap samples arrive on the Qt
     // event loop (~30 Hz) while the render loop runs faster — without a per-frame
     // refresh the mesh stays frozen in bind pose even though Bone::setOrientation
-    // succeeded (Mixamo: debug overlay moves, skin does not).
+    // succeeded (debug overlay can move while skin does not).
     struct SkinningFrameListener : public Ogre::FrameListener {
         Impl* impl = nullptr;
 
@@ -1029,8 +1029,8 @@ void MocapController::onSample(const FaceSample& sample,
         }
     }
 
-    // live drive — body (independent of face confidence). PoseIK quats are
-    // aligned onto Mixamo via BodyRetargeter — same math as applyMotionClip.
+    // live drive — body (independent of face confidence). Landmark directions
+    // retarget onto the selection skeleton via BodyRetargeter.
     if (body.valid && d->bodyRetargeter && d->bodyRetargeter->valid()
         && entity->hasSkeleton()) {
         std::array<std::array<float, 4>, 22> canonQuats{};

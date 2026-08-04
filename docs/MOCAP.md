@@ -57,7 +57,7 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 
 - **Body capture** needs a **humanoid skeleton** resolving at least half of
   the 22 canonical roles (hips/spine/neck/head, both arms, both legs —
-  Mixamo and most generic naming conventions resolve). Unrigged meshes: run
+  standard humanoid bone names resolve). Unrigged meshes: run
   `qtmesh rig --skeleton humanoid --skin` first. The root stays locked to
   the standing pose (v1 accepts some foot slide). Body limbs calibrate on
   the first visible frame too — start preview with arms in a natural rest
@@ -136,7 +136,7 @@ startup (software decode only; fine for live webcam preview).
 - Single person per frame; the highest-scoring detection wins.
 - Head pose is camera-relative — walking around the camera reads as head
   rotation. Keep the camera static. Up/down (pitch) and left/right (yaw) are
-  corrected for Mixamo-style rigs and mirrored webcam previews (body uses
+  corrected for typical humanoid rigs and mirrored webcam previews (body uses
   landmark directions separately; no mirror-L/R toggle).
 - Body retargeting uses MediaPipe landmark directions (same geometry as the
   PoseIK debug overlay) to aim skeleton bones — no mirror-L/R toggle.

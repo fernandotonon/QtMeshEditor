@@ -964,7 +964,7 @@ TEST_F(AnimationMergerTest, ExtractCanonicalClipsRejectsNonHumanoid)
 
 TEST_F(AnimationMergerTest, ExtractCanonicalClipsSamplesWorldFrame)
 {
-    // Minimal humanoid: Mixamo-style names resolve hip/head/lhip/rhip roles.
+    // Minimal humanoid: common bone names resolve hip/head/lhip/rhip roles.
     auto skel = Ogre::SkeletonManager::getSingleton().create(
         "extract_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     auto* hips = skel->createBone("Hips", 0);
@@ -1479,7 +1479,7 @@ TEST_F(AnimationMergerTest, TwistTransportCarriesBoneRoll)
 
 TEST_F(AnimationMergerTest, TwistUnwrapKeepsDampedCollarContinuous)
 {
-    // Rig WITH clavicles (Mixamo "Shoulder" → collar roles 6/10).
+    // Rig WITH clavicles ("Shoulder" bone name → collar roles 6/10).
     auto skelRes = Ogre::SkeletonManager::getSingleton().create(
         "twist_collar_skel",
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
@@ -1578,7 +1578,7 @@ TEST_F(AnimationMergerTest, VerticalDescentLowersRootDescentOnly)
     };
     // A FULL humanoid bone set — applyMotionClip rejects a rig that resolves
     // fewer than ~half of the 22 canonical roles ("not a humanoid rig"), so the
-    // minimal 9-bone skeleton isn't enough. Mixamo-style names map onto the
+    // minimal 9-bone skeleton isn't enough. Standard humanoid names map onto the
     // canonical roles (hip/spine/chest/neck/head, collar/shoulder/elbow/hand,
     // upleg/leg/foot per side).
     // Hips at world Y=1.0; each leg chain reaches down to Y=0 → leg length 1.0.

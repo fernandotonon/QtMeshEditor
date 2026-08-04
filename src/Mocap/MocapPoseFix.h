@@ -62,9 +62,8 @@ inline Ogre::Quaternion kPoseToSkeletonYawPi()
     return Ogre::Quaternion(Ogre::Degree(180), Ogre::Vector3::UNIT_Y);
 }
 
-// Mixamo Head (and similar rigs) often need camera-frame pitch inverted while
-// yaw stays correct. For unit quaternions, negating the X component mirrors
-// rotation about +X (pitch) while leaving yaw (Y) unchanged to first order.
+// Humanoid head bones often need camera-frame pitch inverted while yaw is
+// corrected separately for mirrored webcam previews.
 inline Ogre::Quaternion invertCameraPitchDelta(const Ogre::Quaternion& delta)
 {
     return Ogre::Quaternion(delta.w, -delta.x, delta.y, delta.z);
@@ -77,7 +76,7 @@ inline Ogre::Quaternion invertCameraYawDelta(const Ogre::Quaternion& delta)
 }
 
 // Legacy 180°-yaw bridge for CMU library clips whose bind frame differs.
-// Live PoseIK mocap does NOT use these — PoseIK and Mixamo both face +Z with
+// Live PoseIK mocap does NOT use these — canonical +Z-facing rigs with
 // anatomical L/R bone names; a yaw flip made the body drive backward.
 inline Ogre::Vector3 poseDirectionToSkeleton(const Ogre::Vector3& v)
 {
