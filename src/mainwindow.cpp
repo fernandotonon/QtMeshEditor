@@ -101,6 +101,7 @@
 #include "HDR/HdrViewportController.h"
 #include "HDR/HdrBundledLibrary.h"
 #include "LLMManager.h"
+#include "OnnxRuntimeSettings.h"
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #endif
@@ -5631,6 +5632,13 @@ void MainWindow::on_actionMaterial_Editor_triggered()
                 Q_UNUSED(engine)
                 Q_UNUSED(scriptEngine)
                 return LLMManager::qmlInstance(engine, scriptEngine);
+            });
+
+        qmlRegisterSingletonType<OnnxRuntimeSettings>("MaterialEditorQML", 1, 0, "OnnxRuntimeSettings",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return OnnxRuntimeSettings::qmlInstance(engine, scriptEngine);
             });
 
         // Register ModelDownloader singleton for QML

@@ -15,6 +15,9 @@
 #include <OgreLogManager.h>
 #include "Manager.h"
 #include "TestHelpers.h"
+#ifdef ENABLE_MOCAP
+#include "Mocap/MocapCameraHints.h"
+#endif
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -105,6 +108,10 @@ int main(int argc, char **argv)
         if (!qEnvironmentVariableIsSet(guard))
             qputenv(guard, "1");
     }
+
+#ifdef ENABLE_MOCAP
+    MocapCameraHints::ensureMultimediaBackendSafe();
+#endif
 
     QApplication app(argc, argv);
 

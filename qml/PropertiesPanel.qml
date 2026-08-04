@@ -635,6 +635,14 @@ Rectangle {
 
                 Component.onCompleted: content = performanceCaptureComponent
 
+                // Enumerate cameras only after the deferred Loader has
+                // finished instantiating the device combo (QMediaDevices during
+                // synchronous Loader startup can crash when combined with a
+                // devicesChanged rebinding cascade).
+                onContentReady: Qt.callLater(function() {
+                    MocapController.refreshDevices()
+                })
+
                 // never leave the camera running when the section disappears
                 // (mode change / deselect) — the AutoRig marker-session
                 // precedent.
@@ -2351,9 +2359,11 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: mocapReady
-                    ? "Webcam performance capture: Preview drives the selection's "
-                      + "morph targets, Head bone, and (on a humanoid rig) full "
-                      + "body live; Record writes undoable clips onto the timeline."
+                    ? "Webcam performance capture: Preview drives morph targets, "
+                      + "Head bone, and (on a humanoid rig) body live; Record "
+                      + "writes undoable clips. On start the first frame "
+                      + "calibrates neutral — face the camera with arms relaxed "
+                      + "at your sides. Use Neutral to re-base if you moved."
                     : MocapController.unavailableReason
             }
 
@@ -2400,7 +2410,6 @@ Rectangle {
                     textRole: "description"
                     valueRole: "id"
                     enabled: MocapController.state === 0
-                    Component.onCompleted: MocapController.refreshDevices()
                 }
 
                 Rectangle {
@@ -2433,6 +2442,27 @@ Rectangle {
                         }
                     }
                 }
+            }
+
+            InspectorCheckBox {
+                width: parent.width - 16
+                visible: mocapReady && MocapController.bodyAvailable
+                text: "Show PoseIK debug skeleton"
+                checked: MocapController.showPoseDebug
+                onToggled: MocapController.showPoseDebug = checked
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: mocapReady && MocapController.showPoseDebug
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9
+                text: "Debug (beside character): cyan = MediaPipe landmarks, "
+                      + "yellow = PoseIK 22-bone FK. If cyan matches you but "
+                      + "the skinned mesh does not, retarget is wrong; if cyan "
+                      + "is wrong, capture or lighting is wrong."
             }
 
             // Video-file source — the path for macOS where the camera is
@@ -2471,7 +2501,9 @@ Rectangle {
             }
 
             // camera preview + HUD
+            // live HUD (webcam thumbnail + detection dots)
             Rectangle {
+                id: mocapPreviewHud
                 width: parent.width - 16
                 height: visible ? 140 : 0
                 visible: mocapReady && MocapController.previewDataUrl !== ""
@@ -2516,6 +2548,18 @@ Rectangle {
                            ? "  ● REC " + MocapController.recordingSeconds.toFixed(1) + "s"
                            : "")
                 }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: mocapReady && previewing
+                         && MocapController.bodyEnabled
+                         && MocapController.bodyCalibrationHint !== ""
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.highlightColor
+                font.pixelSize: 10
+                font.italic: true
+                text: MocapController.bodyCalibrationHint
             }
 
             // channel summary

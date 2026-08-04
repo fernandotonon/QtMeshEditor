@@ -6,6 +6,7 @@
 #include "FaceCapGeom.h"
 #include "FaceCapPose.h"
 #include "../ModelDownloader.h"
+#include "../OnnxRuntimeSettings.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -177,14 +178,8 @@ struct FaceCapPredictor::Impl {
     std::unique_ptr<Ort::Session> openSession(const QString& path)
     {
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(2);
-#ifdef Q_OS_MACOS
-        // CoreML EP where it helps; CPU fallback is always registered.
-        try {
-            std::unordered_map<std::string, std::string> opts;
-            so.AppendExecutionProvider("CoreML", opts);
-        } catch (const Ort::Exception&) {}
-#endif
 #ifdef Q_OS_WIN
         const std::wstring wpath = path.toStdWString();
         return std::make_unique<Ort::Session>(env, wpath.c_str(), so);

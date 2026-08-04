@@ -6,6 +6,21 @@
 
 namespace MocapCameraHints {
 
+void ensureMultimediaBackendSafe()
+{
+#ifdef Q_OS_LINUX
+    static bool done = false;
+    if (done)
+        return;
+    done = true;
+    // Empty list disables all FFmpeg hw decode/encode backends (Qt docs).
+    if (!qEnvironmentVariableIsSet("QT_FFMPEG_DECODING_HW_DEVICE_TYPES"))
+        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",");
+    if (!qEnvironmentVariableIsSet("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES"))
+        qputenv("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES", ",");
+#endif
+}
+
 bool runningAsSnap()
 {
 #ifdef Q_OS_LINUX

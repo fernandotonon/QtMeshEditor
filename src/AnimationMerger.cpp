@@ -18,6 +18,10 @@
 #include <vector>
 #include <cmath>
 
+#ifdef ENABLE_MOCAP
+#include "Mocap/PoseIKSolver.h"
+#endif
+
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
 static QMap<QString, int> s_skeletonUpAxis;
@@ -1435,13 +1439,77 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
         if (!placed[static_cast<size_t>(i)]) tb.order.push_back(i);
     return tb;
 }
+
+// HANDEDNESS COMPENSATION (shared by applyMotionClip + BodyRetargeter). Bone
+// names are anatomically correct, but a mesh may face opposite CMU — then the
+// rig's "Left" bones sit on −X while canonical left joints expect +X. Detect
+// from world-X of a left vs right bone pair and swap canonical L/R indices.
+void compensateCanonicalHandedness(Ogre::Skeleton* skel,
+                                   std::vector<int>& boneToCanon)
+{
+    if (!skel) return;
+    skel->reset(true);
+    skel->_updateTransforms();
+    const int nBones = static_cast<int>(boneToCanon.size());
+    auto worldXForCanon = [&](int canon) -> double {
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[static_cast<size_t>(i)] == canon)
+                return skel->getBone(static_cast<unsigned short>(i))
+                    ->_getDerivedPosition().x;
+        return 0.0;
+    };
+    double lx = worldXForCanon(11), rx = worldXForCanon(7);   // arms
+    if (std::abs(lx - rx) < 1e-4) {
+        lx = worldXForCanon(19);
+        rx = worldXForCanon(15);  // legs
+    }
+    if (lx < rx - 1e-5) {
+        static const int kLR[][2] = {{6, 10},  {7, 11},  {8, 12},  {9, 13},
+                                     {14, 18}, {15, 19}, {16, 20}, {17, 21}};
+        auto swapCanon = [&](int& c) {
+            for (auto& p : kLR) {
+                if (c == p[0]) {
+                    c = p[1];
+                    return;
+                }
+                if (c == p[1]) {
+                    c = p[0];
+                    return;
+                }
+            }
+        };
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[static_cast<size_t>(i)] >= 0)
+                swapCanon(boneToCanon[static_cast<size_t>(i)]);
+    }
+}
+
 } // namespace
+
+namespace {
+// Same parent indices applyMotionClip uses for world-frame PoseIK quats.
+constexpr int kParentCanon[22] = {
+    -1, 0, 1, 2, 3, 4,   // hip, abdomen, chest, neck, neck1, head
+     2, 6, 7, 8,          // rcollar, rshoulder, relbow, rhand
+     2, 10, 11, 12,       // lcollar, lshoulder, lelbow, lhand
+     0, 14, 15, 16,       // rbuttock, rhip, rknee, rfoot
+     0, 18, 19, 20 };     // lbuttock, lhip, lknee, lfoot
+
+// PoseIK leaves collar/buttock at identity (unresolved) — walk up to chest/hip
+// for parent-relative articulation, matching MocapPoseDebugOverlay / PoseIK.
+int effectiveParentRole(int role, uint32_t resolvedMask)
+{
+    int p = kParentCanon[role];
+    while (p >= 0 && !(resolvedMask & (1u << static_cast<unsigned>(p))))
+        p = kParentCanon[p];
+    return p;
+}
+}  // namespace
 
 // ── BodyRetargeter — the applyMotionClip direction-match, per single frame ──
 struct BodyRetargeter::Impl {
     TargetBindFrame tb;
     std::vector<int> boneToCanon;   // per bone
-    Ogre::Quaternion CtInv = Ogre::Quaternion::IDENTITY;
     int nBones = 0;
     int Jc = 0;
     // Harvested STANDING pose per bone (the calmest frame of the rig's existing
@@ -1451,18 +1519,53 @@ struct BodyRetargeter::Impl {
     std::vector<Ogre::Quaternion> standLocal;     // per bone
     std::vector<bool> haveStand;                  // per bone
     std::vector<Ogre::Quaternion> Mc, McInv;      // per bone (roll correction)
+    std::vector<int> canonDup;                    // bones sharing a canonical role
     bool restsAreIdentity = true;
     bool haveAnyStand = false;
-    // neutral (first-frame) canonical quats — the reference the per-frame
-    // local-articulation delta is taken against.
+    // neutral (first-frame) canonical WORLD quats — reference for PoseIK alignment.
     std::array<std::array<float, 4>, 22> neutral{};
+    uint32_t neutralResolvedMask = 0;
     bool haveNeutral = false;
+    bool neutralHadTorso = false;
+    bool yaw180 = false;
+#ifdef ENABLE_MOCAP
+    // Landmark direction retarget (live mocap): neutral ref dirs in skeleton
+    // world + per-bone Qbase (bind aligned to neutral), same as applyMotionClip.
+    std::vector<Ogre::Vector3> neutralDref;       // per canonical role
+    std::vector<Ogre::Quaternion> dirQbase;       // per bone
+    bool haveNeutralDir = false;
+#endif
 };
 
-BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
+#ifdef ENABLE_MOCAP
+namespace {
+void collectCanonicalLiveDirections(
+    const float* world33, const float* visibility33, int Jc,
+    std::vector<Ogre::Vector3>& outCanonDir)
+{
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(world33, canon);
+    outCanonDir.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+    for (int c = 0; c < Jc; ++c) {
+        std::array<float, 3> dir{};
+        if (PoseIK::Solver::canonicalLiveDirection(
+                c, canon, visibility33, 0.3f, dir)) {
+            Ogre::Vector3 v(dir[0], dir[1], dir[2]);
+            if (v.squaredLength() > 1e-12f) {
+                v.normalise();
+                outCanonDir[static_cast<size_t>(c)] = v;
+            }
+        }
+    }
+}
+}  // namespace
+#endif
+
+BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
 {
     if (!skel) return;
     d = std::make_shared<Impl>();
+    d->yaw180 = yaw180;
     d->nBones = static_cast<int>(skel->getNumBones());
     d->Jc = MotionInbetween::canonicalJointCount();
     d->boneToCanon.assign(static_cast<size_t>(d->nBones), -1);
@@ -1470,8 +1573,14 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
         d->boneToCanon[static_cast<size_t>(i)] =
             MotionInbetween::canonicalIndexForBone(QString::fromStdString(
                 skel->getBone(static_cast<unsigned short>(i))->getName()));
+    // Pose-ik mocap: anatomical name→role only (NO CMU handedness swap — that
+    // swap is for BVH/library clips and would mirror live limb motion).
     d->tb = readTargetBindFrame(skel, d->boneToCanon);
-    d->CtInv = d->tb.Ct.Inverse();
+
+    d->canonDup.assign(static_cast<size_t>(d->Jc), 0);
+    for (int i = 0; i < d->nBones; ++i)
+        if (d->boneToCanon[static_cast<size_t>(i)] >= 0)
+            ++d->canonDup[static_cast<size_t>(d->boneToCanon[static_cast<size_t>(i)])];
 
     // ── Harvest the STANDING pose (calmest frame of the rig's first authored,
     //    non-generated animation) — the same pose applyMotionClip's legacy
@@ -1532,8 +1641,8 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
             d->haveAnyStand = true;
         }
     }
-    // Rig bone rests identity? (Mixamo yes → Mc heuristic valid; UniRig/template
-    // no → skip Mc, use raw delta on the standing pose.)
+    // Rig bone rests identity? (common FBX humanoids → Mc heuristic valid;
+    // UniRig/template no → skip Mc, use raw delta on the standing pose.)
     for (int i = 0; i < d->nBones && d->restsAreIdentity; ++i) {
         Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
         if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,
@@ -1550,90 +1659,237 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
     m_valid = mapped * 2 >= d->Jc;
 }
 
-std::vector<std::pair<unsigned short, Ogre::Quaternion>>
-BodyRetargeter::evaluateFrame(
-    const std::array<std::array<float, 4>, 22>& canonicalQuats,
-    uint32_t resolvedMask) const
+bool BodyRetargeter::hasNeutralReference() const
 {
-    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
-    if (!m_valid || !d) return out;
+    return m_valid && d && d->haveNeutral;
+}
+
+void BodyRetargeter::setNeutralReference(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask,
+    const float* mediaPipeWorld33,
+    const float* mediaPipeVisibility33)
+{
+    if (!m_valid || !d)
+        return;
     const TargetBindFrame& tb = d->tb;
     const int Jc = d->Jc;
     auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
         -> Ogre::Quaternion {
         const auto& q = src[static_cast<size_t>(joint)];
-        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
     };
-    // First frame becomes the NEUTRAL reference — the clip's "calm" frame, which
-    // is what applyMotionClip's legacy transport takes its per-joint LOCAL
-    // articulation delta and its Mc roll-correction frame against. Composing the
-    // delta onto the harvested STANDING pose (arms at chest) is what makes the
-    // live preview match the Record path.
-    if (!d->haveNeutral) {
-        d->neutral = canonicalQuats;
-        d->haveNeutral = true;
-        // Mc[i] = standWorldOf(bone)⁻¹ · clipQ(neutral, c) — Mixamo-only roll
-        // correction; on non-identity-rest rigs it is left identity.
-        if (d->haveAnyStand && d->restsAreIdentity) {
-            std::vector<Ogre::Quaternion> standW(static_cast<size_t>(d->nBones),
-                                                 Ogre::Quaternion::IDENTITY);
-            for (int i : tb.order) {
-                const int pi = tb.parentIdx[static_cast<size_t>(i)];
-                const Ogre::Quaternion Wp = (pi >= 0)
-                    ? standW[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
-                const Ogre::Quaternion localRot = d->haveStand[static_cast<size_t>(i)]
-                    ? d->standLocal[static_cast<size_t>(i)]
-                    : tb.bindLocal[static_cast<size_t>(i)];
-                standW[static_cast<size_t>(i)] = Wp * localRot;
-            }
+    d->neutral = canonicalQuats;
+    d->neutralResolvedMask = resolvedMask;
+    d->haveNeutral = true;
+    constexpr uint32_t kTorsoMask =
+        (1u << 0) | (1u << 1) | (1u << 2);  // hip, abdomen, chest
+    d->neutralHadTorso = (resolvedMask & kTorsoMask) == kTorsoMask;
+    if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
+        std::vector<Ogre::Quaternion> standW(static_cast<size_t>(d->nBones),
+                                             Ogre::Quaternion::IDENTITY);
+        for (int i : tb.order) {
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            const Ogre::Quaternion Wp = (pi >= 0)
+                ? standW[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
+            const Ogre::Quaternion localRot = d->haveStand[static_cast<size_t>(i)]
+                ? d->standLocal[static_cast<size_t>(i)]
+                : tb.bindLocal[static_cast<size_t>(i)];
+            standW[static_cast<size_t>(i)] = Wp * localRot;
+        }
+        for (int i = 0; i < d->nBones; ++i) {
+            const int c = d->boneToCanon[static_cast<size_t>(i)];
+            if (c <= 0 || c >= Jc)
+                continue;
+            d->Mc[static_cast<size_t>(i)] =
+                standW[static_cast<size_t>(i)].Inverse() * clipQ(d->neutral, c);
+            d->McInv[static_cast<size_t>(i)] =
+                d->Mc[static_cast<size_t>(i)].Inverse();
+        }
+    }
+#ifdef ENABLE_MOCAP
+    d->haveNeutralDir = false;
+    if (mediaPipeWorld33) {
+        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+        std::vector<Ogre::Vector3> neutralCanon(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        collectCanonicalLiveDirections(
+            mediaPipeWorld33, mediaPipeVisibility33, Jc, neutralCanon);
+        d->neutralDref.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        d->dirQbase.assign(static_cast<size_t>(d->nBones),
+                           Ogre::Quaternion::IDENTITY);
+        for (int c = 0; c < Jc; ++c) {
+            const Ogre::Vector3& nc = neutralCanon[static_cast<size_t>(c)];
+            if (nc.squaredLength() < 1e-12f)
+                continue;
+            Ogre::Vector3 ref = CtInv * nc;
+            if (ref.squaredLength() < 1e-12f)
+                continue;
+            ref.normalise();
+            d->neutralDref[static_cast<size_t>(c)] = ref;
+            d->haveNeutralDir = true;
+        }
+        if (d->haveNeutralDir) {
             for (int i = 0; i < d->nBones; ++i) {
                 const int c = d->boneToCanon[static_cast<size_t>(i)];
-                if (c <= 0 || c >= Jc) continue;   // root (c==0) keeps identity Mc
-                d->Mc[static_cast<size_t>(i)] =
-                    standW[static_cast<size_t>(i)].Inverse() * clipQ(d->neutral, c);
-                d->McInv[static_cast<size_t>(i)] = d->Mc[static_cast<size_t>(i)].Inverse();
+                if (c < 0 || c >= Jc || c == 0)
+                    continue;
+                if (d->neutralDref[static_cast<size_t>(c)].squaredLength()
+                    < 1e-12f)
+                    continue;
+                if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                    < 1e-12f)
+                    continue;
+                d->dirQbase[static_cast<size_t>(i)] =
+                    tb.tgtBindDir[static_cast<size_t>(c)].getRotationTo(
+                        d->neutralDref[static_cast<size_t>(c)])
+                    * tb.bindWorld[static_cast<size_t>(i)];
             }
         }
     }
+#endif
+}
+
+std::vector<std::pair<unsigned short, Ogre::Quaternion>>
+BodyRetargeter::evaluateFrame(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask,
+    uint32_t skipRolesMask,
+    const float* mediaPipeWorld33,
+    const float* mediaPipeVisibility33) const
+{
+    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
+    if (!m_valid || !d) return out;
+    const TargetBindFrame& tb = d->tb;
+    const int Jc = d->Jc;
+    const int nBones = d->nBones;
+
+    auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
+        -> Ogre::Quaternion {
+        const auto& q = src[static_cast<size_t>(joint)];
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
+    };
+    // PoseIK emits WORLD quats per role. Collar/buttock stay identity (unresolved)
+    // — skip them and use chest/hip as the parent (same as the debug overlay).
+    auto parentRelativeLocal = [&](const std::array<std::array<float, 4>, 22>& src,
+                                 int role, uint32_t mask) -> Ogre::Quaternion {
+        const int pc = effectiveParentRole(role, mask);
+        if (pc >= 0 && pc < Jc)
+            return clipQ(src, pc).Inverse() * clipQ(src, role);
+        return clipQ(src, role);
+    };
+    const bool haveNeutral = d->haveNeutral;
+
+#ifdef ENABLE_MOCAP
+    // Live mocap: aim bind bones at landmark segment directions (same math as
+    // applyMotionClip direction retarget) — matches the PoseIK debug overlay.
+    if (mediaPipeWorld33 && haveNeutral && d->haveNeutralDir) {
+        std::vector<Ogre::Vector3> liveCanon(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        collectCanonicalLiveDirections(
+            mediaPipeWorld33, mediaPipeVisibility33, Jc, liveCanon);
+        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+        std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
+        for (int i : tb.order) {
+            const Ogre::Quaternion base =
+                (d->haveStand[static_cast<size_t>(i)]
+                    ? d->standLocal[static_cast<size_t>(i)]
+                    : tb.bindLocal[static_cast<size_t>(i)]);
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            const Ogre::Quaternion Wp =
+                (pi >= 0) ? W[static_cast<size_t>(pi)]
+                          : Ogre::Quaternion::IDENTITY;
+            const int c = d->boneToCanon[static_cast<size_t>(i)];
+            if (c < 0 || c >= Jc
+                || (skipRolesMask & (1u << static_cast<unsigned>(c)))) {
+                W[static_cast<size_t>(i)] = Wp * base;
+                continue;
+            }
+            Ogre::Quaternion local;
+            if (c == 0) {
+                local = base;
+                W[static_cast<size_t>(i)] = Wp * local;
+            } else if (liveCanon[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f
+                       && d->neutralDref[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f
+                       && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f) {
+                Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
+                ds.normalise();
+                const Ogre::Quaternion R =
+                    d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
+                const Ogre::Quaternion Wt =
+                    R * d->dirQbase[static_cast<size_t>(i)];
+                local = Wp.Inverse() * Wt;
+                W[static_cast<size_t>(i)] = Wt;
+            } else {
+                local = base;
+                W[static_cast<size_t>(i)] = Wp * local;
+            }
+            out.emplace_back(static_cast<unsigned short>(i), local);
+        }
+        return out;
+    }
+#endif
+    (void)mediaPipeWorld33;
+    (void)mediaPipeVisibility33;
+
     for (int i : tb.order) {
         const int c = d->boneToCanon[static_cast<size_t>(i)];
         if (c < 0 || c >= Jc) continue;
-        const int pc = MotionInbetween::canonicalParentOf(c);
-        // world -> parent-relative LOCAL articulation, current and neutral
-        auto localArtic = [&](const std::array<std::array<float, 4>, 22>& src) {
-            return (pc >= 0 && pc < Jc)
-                ? clipQ(src, pc).Inverse() * clipQ(src, c)
-                : clipQ(src, c);
-        };
-        // base = harvested standing pose local (arms at chest), else bind local.
-        const Ogre::Quaternion base = d->haveStand[static_cast<size_t>(i)]
-            ? d->standLocal[static_cast<size_t>(i)]
-            : tb.bindLocal[static_cast<size_t>(i)];
-        // UNRESOLVED role (e.g. legs of a seated subject) → hold the standing
-        // pose; never drive a bone from a role PoseIK couldn't observe.
+        if (skipRolesMask & (1u << static_cast<unsigned>(c)))
+            continue;
+        const Ogre::Quaternion base =
+            (d->haveStand[static_cast<size_t>(i)]
+                ? d->standLocal[static_cast<size_t>(i)]
+                : tb.bindLocal[static_cast<size_t>(i)]);
         const bool resolved = (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
         if (!resolved) {
             out.emplace_back(static_cast<unsigned short>(i), base);
             continue;
         }
-        if (c == 0) {
-            // Root/hip: MediaPipe/CMU bake the whole-body FACING into the hip.
-            // Locking the root to the standing pose keeps the figure upright
-            // (applying the full hip delta folds the torso forward). A subtle
-            // pelvic sway could be re-added later; upright + stable first.
+        if (c == 0 || !haveNeutral) {
             out.emplace_back(static_cast<unsigned short>(i), base);
             continue;
         }
-        const Ogre::Quaternion cur = localArtic(canonicalQuats);
-        const Ogre::Quaternion ref = localArtic(d->neutral);
-        const Ogre::Quaternion delta = ref.Inverse() * cur;
-        // roll-corrected articulation, composed onto the standing pose.
-        const Ogre::Quaternion artic =
-            d->McInv[static_cast<size_t>(i)] * delta * d->Mc[static_cast<size_t>(i)];
-        const Ogre::Quaternion local = base * artic;
-        out.emplace_back(static_cast<unsigned short>(i), local);
+        // PoseIK alignment: parent-relative delta vs neutral, transported onto
+        // the rig standing pose with the same Mc frame map as applyMotionClip.
+        const Ogre::Quaternion localCur =
+            parentRelativeLocal(canonicalQuats, c, resolvedMask);
+        const Ogre::Quaternion localRef =
+            parentRelativeLocal(d->neutral, c, d->neutralResolvedMask);
+        Ogre::Quaternion delta = localRef.Inverse() * localCur;
+        Ogre::Quaternion artic = delta;
+        if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
+            artic = d->McInv[static_cast<size_t>(i)] * delta
+                    * d->Mc[static_cast<size_t>(i)];
+        } else if (d->yaw180 && !d->haveAnyStand && c > 0) {
+            static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f);
+            artic = kYawPi.Inverse() * delta * kYawPi;
+        }
+        const int dup = std::max(1, d->canonDup[static_cast<size_t>(c)]);
+        if (dup > 1)
+            artic = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                            Ogre::Quaternion::IDENTITY, artic,
+                                            true);
+        out.emplace_back(static_cast<unsigned short>(i), base * artic);
     }
     return out;
+}
+
+void BodyRetargeter::resetLiveNeutral()
+{
+    if (!d)
+        return;
+    d->haveNeutral = false;
+    d->neutralHadTorso = false;
+    d->neutralResolvedMask = 0;
+#ifdef ENABLE_MOCAP
+    d->haveNeutralDir = false;
+    d->neutralDref.clear();
+    d->dirQbase.clear();
+#endif
 }
 
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
@@ -2042,7 +2298,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     const std::vector<std::array<float, 3>>& clipRestDir,
     bool modelClip,
     const std::vector<float>& clipRootY,
-    bool verticalDescent)
+    bool verticalDescent,
+    bool cmuLibraryHandedness)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -2079,34 +2336,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!canonSeen[c]) { canonSeen[c] = 1; ++distinct; }
         }
     }
-    // HANDEDNESS COMPENSATION. The bone NAMES are anatomically correct for the
-    // mesh, but a mesh may face opposite to the CMU data — then the rig's "Left"
-    // bones sit on the −X side while CMU's left canonical joints are at +X. If we
-    // mapped name→canon directly the motion would play MIRRORED. So detect the
-    // rig's handedness from the actual world-X of a left vs right bone and, when
-    // it's opposite CMU's (+X = left), SWAP the canonical L/R indices in the
-    // mapping — labels stay correct, motion stays correct. Uses the upper-arm
-    // pair (canon 11 = left, 7 = right) with a fallback to the leg pair (19/15).
-    {
-        auto worldXForCanon = [&](int canon) -> double {
-            for (int i = 0; i < nBones; ++i)
-                if (boneToCanon[i] == canon)
-                    return skel->getBone(static_cast<unsigned short>(i))->_getDerivedPosition().x;
-            return 0.0;
-        };
-        double lx = worldXForCanon(11), rx = worldXForCanon(7);   // arms
-        if (std::abs(lx - rx) < 1e-4) { lx = worldXForCanon(19); rx = worldXForCanon(15); }  // legs
-        // CMU: left at +X. If the rig's "left" bone is more −X than its "right",
-        // the rig is mirrored vs CMU → swap L/R canonical targets.
-        if (lx < rx - 1e-5) {
-            static const int kLR[][2] = {{6,10},{7,11},{8,12},{9,13},{14,18},{15,19},{16,20},{17,21}};
-            auto swapCanon = [&](int& c) {
-                for (auto& p : kLR) { if (c == p[0]) { c = p[1]; return; } if (c == p[1]) { c = p[0]; return; } }
-            };
-            for (int i = 0; i < nBones; ++i)
-                if (boneToCanon[i] >= 0) swapCanon(boneToCanon[i]);
-        }
-    }
+    if (cmuLibraryHandedness)
+        compensateCanonicalHandedness(skel, boneToCanon);
 
     res.canonicalJoints = distinct;
     // Bones-per-role: rigs segment chains differently (Mixamo has Spine AND

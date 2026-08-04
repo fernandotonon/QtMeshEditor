@@ -7,6 +7,9 @@
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
 #include "Mocap/MocapCLI.h"
+#ifdef ENABLE_MOCAP
+#include "Mocap/MocapCameraHints.h"
+#endif
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
 #include "MotionLibrary.h"
@@ -29,6 +32,7 @@
 #include "VertexCacheOptimizer.h"
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
+#include "OnnxRuntimeSettings.h"
 #include "HDR/HdrBundledLibrary.h"
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrMaterialScript.h"
@@ -1553,10 +1557,15 @@ int CLIPipeline::run(int argc, char* argv[])
     // This also lets us call _exit() after the subcommand returns,
     // skipping QApplication/Ogre static destructor teardown that
     // causes SIGSEGV on macOS (GL context cleanup race).
+#ifdef ENABLE_MOCAP
+    MocapCameraHints::ensureMultimediaBackendSafe();
+#endif
     QApplication a(argc, argv);
     QCoreApplication::setOrganizationName("QtMeshEditor");
     QCoreApplication::setApplicationName("QtMeshEditor");
     QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+    OnnxRuntimeSettings::prepareRuntimeEnvironment();
+    (void)OnnxRuntimeSettings::instance();
 
     // Redirect stdout to stderr so Ogre/Qt debug output doesn't
     // pollute the CLI pipeline output (JSON, info text, etc.)

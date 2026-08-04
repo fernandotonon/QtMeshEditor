@@ -1,6 +1,7 @@
 #include "MotionInbetween.h"
 
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
 #include <QDir>
@@ -428,14 +429,8 @@ MotionInbetween::Result MotionInbetween::predict(
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_inbetween");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) { /* CPU EP fallback */ }
-#endif
 #ifdef _WIN32
         const std::wstring wpath = modelPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);

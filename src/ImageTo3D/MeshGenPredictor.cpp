@@ -5,6 +5,7 @@
 #include "MeshGenBaker.h"     // xatlas unwrap + diffuse texture bake
 #include "PbrMapSynth.h"      // toNCHW (image → planar [0,1])
 #include "BackgroundRemover.h"
+#include "OnnxRuntimeSettings.h"
 #include "TripoSGPredictor.h" // Backend::TripoSG dispatch
 
 #include <QDir>
@@ -271,13 +272,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_triposr");
         Ort::SessionOptions so;
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) {}
-#endif
+        OnnxRuntimeSettings::configureSessionOptions(so);
         Ort::Session encoder = openSession(env, so, encoderModelPath);
         Ort::Session decoder = openSession(env, so, decoderModelPath);
         Ort::AllocatorWithDefaultOptions alloc;

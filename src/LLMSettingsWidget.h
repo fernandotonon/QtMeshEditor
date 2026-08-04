@@ -13,9 +13,11 @@
 #include <QListWidget>
 #include <QGroupBox>
 #include <QTabWidget>
+#include <QCheckBox>
 #include "LLMManager.h"
 #include "AIModelCatalog.h"
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -48,6 +50,7 @@ private slots:
     void onSettingsChanged();
     void onApplySettings();
     void onResetDefaults();
+    void onOnnxPreferGpuToggled(bool checked);
 
 #ifdef ENABLE_STABLE_DIFFUSION
     void onSDLoadModelClicked();
@@ -117,6 +120,8 @@ private:
     QDoubleSpinBox *m_topPSpinBox;
     QSpinBox *m_topKSpinBox;
     QDoubleSpinBox *m_repeatPenaltySpinBox;
+    QCheckBox *m_onnxPreferGpuCheckBox = nullptr;
+    QLabel *m_onnxGpuNoteLabel = nullptr;
     QPushButton *m_applyButton;
     QPushButton *m_resetButton;
 
