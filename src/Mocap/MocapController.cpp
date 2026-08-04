@@ -142,14 +142,6 @@ struct MocapMetaTypeRegistrar {
 };
 const MocapMetaTypeRegistrar mocapMetaTypeRegistrar;
 
-void unregisterSkinningListener(MocapController::Impl* impl)
-{
-    if (!impl || !impl->skinningListener)
-        return;
-    Ogre::Root::getSingleton().removeFrameListener(impl->skinningListener.get());
-    impl->skinningListener->impl = nullptr;
-}
-
 struct BodyDriveBone {
     int role = -1;
     std::string boneName;
@@ -340,6 +332,14 @@ struct MocapController::Impl {
         auto* scene = mgr->getSceneMgr();
         return scene->hasEntity(entityName) ? scene->getEntity(entityName)
                                             : nullptr;
+    }
+
+    void unregisterSkinningListener()
+    {
+        if (!skinningListener)
+            return;
+        Ogre::Root::getSingleton().removeFrameListener(skinningListener.get());
+        skinningListener->impl = nullptr;
     }
 };
 
@@ -807,7 +807,7 @@ bool MocapController::beginPreviewWithLiveSource(
     QString error;
     if (!d->camera->open(&error)) {
         d->camera.reset();
-        unregisterSkinningListener(d.get());
+        d->unregisterSkinningListener();
         restoreEntityState();
         setStatusMessage(error);
         emit errorOccurred(error);
@@ -827,7 +827,7 @@ bool MocapController::beginPreviewWithLiveSource(
         delete d->worker;
         d->worker = nullptr;
         d->camera.reset();
-        unregisterSkinningListener(d.get());
+        d->unregisterSkinningListener();
         restoreEntityState();
         setStatusMessage(msg);
         emit errorOccurred(msg);
@@ -1316,7 +1316,7 @@ void MocapController::stopPreview()
     d->poseDebugOverlay.detach();
 
     if (d->skinningListener) {
-        unregisterSkinningListener(d.get());
+        d->unregisterSkinningListener();
     }
 
     restoreEntityState();
