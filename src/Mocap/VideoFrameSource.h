@@ -108,6 +108,8 @@ private:
 QImage mocapFrameToRgb888(const QImage& image);
 // Decode a QVideoFrame to RGB888 (maps the buffer when toImage() alone fails).
 QImage mocapFrameFromVideoFrame(const QVideoFrame& frame);
+// UVC MJPEG fallback when QVideoFrame::toImage() fails (needs qjpeg plugin).
+QImage mocapFrameFromJpegBytes(const QByteArray& jpeg);
 
 class VideoFrameSource : public QObject {
     Q_OBJECT

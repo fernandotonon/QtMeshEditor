@@ -1564,6 +1564,7 @@ int CLIPipeline::run(int argc, char* argv[])
     QCoreApplication::setApplicationName("QtMeshEditor");
     QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
     OnnxRuntimeSettings::prepareRuntimeEnvironment();
+    (void)OnnxRuntimeSettings::instance();
 
     // Redirect stdout to stderr so Ogre/Qt debug output doesn't
     // pollute the CLI pipeline output (JSON, info text, etc.)

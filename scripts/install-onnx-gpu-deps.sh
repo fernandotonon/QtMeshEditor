@@ -30,6 +30,11 @@ if [[ ! -f "$DEST/nvidia/cudnn/lib/libcudnn.so.9" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$DEST/nvidia/cublas/lib/libcublas.so.12" ]]; then
+    echo "cuBLAS install failed (expected under $DEST/nvidia/cublas/lib)." >&2
+    exit 1
+fi
+
 echo "Done. Rebuild with GPU ONNX Runtime if needed:"
 echo "  cmake . -B build_local -DENABLE_ONNX=ON -DQTMESH_ONNX_GPU=ON"
 echo "  cmake --build build_local --target QtMeshEditor -j4"

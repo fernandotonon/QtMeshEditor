@@ -29,6 +29,7 @@
 #include <OgreSkeletonInstance.h>
 
 #include <memory>
+#include <cmath>
 
 #include <QSettings>
 #include <QBuffer>
@@ -212,6 +213,7 @@ public slots:
                             fr.quats[r] =
                                 roleFilters[r].filter(fr.quats[r], frame.timeSec);
                     body.valid = true;
+                    body.timeSec = frame.timeSec;
                     body.quats = fr.quats;
                     body.resolvedMask = fr.resolvedMask;
                     body.world = ps.world;
@@ -258,6 +260,7 @@ struct MocapController::Impl {
     Ogre::Quaternion headRestoreLocal = Ogre::Quaternion::IDENTITY;
     bool headWasManuallyControlled = false;
     bool savedHeadSnapshot = false;
+    bool mirroredLivePreview = false;
     QHash<QString, float> savedWeights;          // mesh target -> weight
     QStringList savedEnabledAnimations;
     bool savedSkipAnimStateUpdate = false;
@@ -681,6 +684,8 @@ bool MocapController::beginPreviewWithLiveSource(
         return false;
     }
     d->camera = std::move(source);
+    d->mirroredLivePreview =
+        (dynamic_cast<CameraFrameSource*>(d->camera.get()) != nullptr);
 
     // Determine what the selection can be driven with BEFORE downloading any
     // models — a ~30 MB face-model fetch is wasted if the mesh has no ARKit
@@ -1070,9 +1075,9 @@ void MocapController::onSample(const FaceSample& sample,
                 sample.headRotation[1], sample.headRotation[2]);
             Ogre::Quaternion delta = current * d->neutral.Inverse();
             delta = MocapPoseFix::invertCameraPitchDelta(delta);
-            // Webcam preview is mirrored; FaceCap head yaw is opposite the rig
-            // unless corrected. Body uses landmark directions (no L/R swap).
-            delta = MocapPoseFix::invertCameraYawDelta(delta);
+            // Selfie/webcam preview is mirrored; video-file playback is not.
+            if (d->mirroredLivePreview)
+                delta = MocapPoseFix::invertCameraYawDelta(delta);
             const Ogre::Quaternion local =
                 d->headBindWorld.Inverse() * delta * d->headBindWorld;
             Ogre::SkeletonInstance* skel = entity->getSkeleton();

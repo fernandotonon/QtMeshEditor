@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QBuffer>
 #include <QDir>
 #include <QImage>
 #include <QSignalSpy>
@@ -207,6 +208,22 @@ TEST(MocapFrameFromVideoFrame, ConvertsQVideoFrameFromQImage)
     const QImage out = mocapFrameFromVideoFrame(vf);
     EXPECT_FALSE(out.isNull());
     EXPECT_EQ(out.format(), QImage::Format_RGB888);
+}
+
+TEST(MocapFrameFromJpegBytes, DecodesValidJpegPayload)
+{
+    QImage src(8, 8, QImage::Format_RGB888);
+    src.fill(QColor(255, 128, 64));
+    QByteArray jpeg;
+    {
+        QBuffer buf(&jpeg);
+        buf.open(QIODevice::WriteOnly);
+        ASSERT_TRUE(src.save(&buf, "JPEG"));
+    }
+    const QImage out = mocapFrameFromJpegBytes(jpeg);
+    EXPECT_FALSE(out.isNull());
+    EXPECT_EQ(out.format(), QImage::Format_RGB888);
+    EXPECT_EQ(out.size(), src.size());
 }
 
 #endif  // ENABLE_MOCAP

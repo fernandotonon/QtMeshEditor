@@ -125,6 +125,7 @@ int main(int argc, char *argv[])
         QCoreApplication::setApplicationName("QtMeshEditor");
         QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
         OnnxRuntimeSettings::prepareRuntimeEnvironment();
+        (void)OnnxRuntimeSettings::instance();
 
         // Initialize Sentry using stored consent (no dialog in headless mode)
         SentryReporter::initialize();
@@ -172,6 +173,7 @@ int main(int argc, char *argv[])
     QApplication a(argc, argv);
 
     OnnxRuntimeSettings::prepareRuntimeEnvironment();
+    (void)OnnxRuntimeSettings::instance();
 
     // Capture qDebug/qWarning/etc. from the rest of startup into the in-app console
     // (MainWindow attaches and drains the backlog when its console exists).

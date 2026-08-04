@@ -5,8 +5,28 @@
 #include <QCoreApplication>
 #include <QSettings>
 
+namespace {
+struct ScopedEnvUnset {
+    const char* key;
+    QByteArray saved;
+    explicit ScopedEnvUnset(const char* k) : key(k)
+    {
+        saved = qgetenv(key);
+        qunsetenv(key);
+    }
+    ~ScopedEnvUnset()
+    {
+        if (saved.isNull())
+            qunsetenv(key);
+        else
+            qputenv(key, saved);
+    }
+};
+}  // namespace
+
 TEST(OnnxRuntimeSettings, PreferGpuPersists)
 {
+    ScopedEnvUnset guard("QTMESH_ONNX_PREFER_GPU");
     QSettings settings;
     settings.remove("ai/onnxPreferGpu");
 

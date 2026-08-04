@@ -494,10 +494,17 @@ BodyRecordReport bakeRetargeterClip(
         rt.setNeutralReference(neutralQuats, neutralFrame->resolvedMask);
 
     const double dt = 1.0 / static_cast<double>(fps);
+    const double t0 = frames.front().timeSec;
+    const double tLast = frames.back().timeSec;
+    const bool useSampleTimes = (tLast - t0) > 1e-6;
+    const double clipDuration =
+        useSampleTimes ? (tLast - t0)
+                       : dt * static_cast<double>(frames.size() > 1 ? frames.size() - 1 : 0);
     Ogre::Animation* anim = skel->createAnimation(
-        clip, static_cast<Ogre::Real>(dt * (frames.size() - 1)));
+        clip, static_cast<Ogre::Real>(clipDuration));
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
     std::map<unsigned short, Ogre::NodeAnimationTrack*> tracks;
+    size_t frameIndex = 0;
     for (size_t f = 0; f < frames.size(); ++f) {
         const auto& frame = frames[f];
         if (!frame.valid)
@@ -507,6 +514,10 @@ BodyRecordReport bakeRetargeterClip(
         const float* vis = useLandmarks ? frame.visibility.data() : nullptr;
         const auto locals = rt.evaluateFrame(q, frame.resolvedMask, skipRolesMask,
                                              world, vis);
+        const double keyTime =
+            useSampleTimes ? (frame.timeSec - t0)
+                           : dt * static_cast<double>(frameIndex);
+        ++frameIndex;
         for (const auto& [handle, local] : locals) {
             auto it = tracks.find(handle);
             if (it == tracks.end())
@@ -514,7 +525,7 @@ BodyRecordReport bakeRetargeterClip(
                     handle, anim->createNodeTrack(handle, skel->getBone(handle)))
                           .first;
             auto* kf = it->second->createNodeKeyFrame(
-                static_cast<Ogre::Real>(dt * f));
+                static_cast<Ogre::Real>(keyTime));
             kf->setRotation(bindLocal[handle].Inverse() * local);
         }
     }

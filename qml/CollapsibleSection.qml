@@ -70,15 +70,28 @@ Column {
         onLoaded: root.contentReady()
     }
 
+    property int _loadGeneration: 0
+
     onExpandedChanged: {
-        if (root.expanded)
-            Qt.callLater(function() { contentLoader.loadActive = true })
-        else
+        if (root.expanded) {
+            const gen = ++root._loadGeneration
+            Qt.callLater(function() {
+                if (root.expanded && gen === root._loadGeneration)
+                    contentLoader.loadActive = true
+            })
+        } else {
+            ++root._loadGeneration
             contentLoader.loadActive = false
+        }
     }
 
     Component.onCompleted: {
-        if (root.expanded)
-            Qt.callLater(function() { contentLoader.loadActive = true })
+        if (root.expanded) {
+            const gen = ++root._loadGeneration
+            Qt.callLater(function() {
+                if (root.expanded && gen === root._loadGeneration)
+                    contentLoader.loadActive = true
+            })
+        }
     }
 }

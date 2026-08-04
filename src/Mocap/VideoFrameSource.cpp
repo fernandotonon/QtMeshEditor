@@ -32,6 +32,17 @@ QImage mocapFrameToRgb888(const QImage& image)
     return image.convertToFormat(QImage::Format_RGB888);
 }
 
+QImage mocapFrameFromJpegBytes(const QByteArray& jpeg)
+{
+    if (jpeg.isEmpty())
+        return {};
+    QImage img = QImage::fromData(
+        reinterpret_cast<const uchar*>(jpeg.constData()), jpeg.size(), "JPEG");
+    if (img.isNull())
+        return {};
+    return mocapFrameToRgb888(img);
+}
+
 QImage mocapFrameFromVideoFrame(const QVideoFrame& frame)
 {
     if (!frame.isValid())
@@ -45,8 +56,9 @@ QImage mocapFrameFromVideoFrame(const QVideoFrame& frame)
             // needs the qjpeg imageformat plugin (deploy.yml bundles it).
             if (mapped.pixelFormat() == QVideoFrameFormat::Format_Jpeg
                 && mapped.planeCount() >= 1 && mapped.mappedBytes(0) > 0) {
-                img = QImage::fromData(mapped.bits(0), mapped.mappedBytes(0),
-                                       "JPEG");
+                img = mocapFrameFromJpegBytes(QByteArray(
+                    reinterpret_cast<const char*>(mapped.bits(0)),
+                    static_cast<int>(mapped.mappedBytes(0))));
             }
             if (img.isNull())
                 img = mapped.toImage();
