@@ -23,6 +23,7 @@ class QCamera;
 class QElapsedTimer;
 class QMediaCaptureSession;
 class QMediaPlayer;
+class QVideoFrame;
 class QVideoSink;
 
 // One decoded frame. image is guaranteed Format_RGB888.
@@ -105,6 +106,8 @@ private:
 
 // Guarantees Format_RGB888 (the input contract of every mocap predictor).
 QImage mocapFrameToRgb888(const QImage& image);
+// Decode a QVideoFrame to RGB888 (maps the buffer when toImage() alone fails).
+QImage mocapFrameFromVideoFrame(const QVideoFrame& frame);
 
 class VideoFrameSource : public QObject {
     Q_OBJECT
@@ -181,7 +184,7 @@ public:
     double nativeFps() const override { return m_nativeFps; }
 
 private:
-    void handleVideoFrame();
+    void handleVideoFrame(const QVideoFrame& frame);
 
     QString m_path;
     FrameDecimator m_decimator;
@@ -216,7 +219,7 @@ public:
     double nativeFps() const override { return m_nativeFps; }
 
 private:
-    void handleVideoFrame();
+    void handleVideoFrame(const QVideoFrame& frame);
 
     QString m_deviceId;
     std::unique_ptr<QCamera> m_camera;

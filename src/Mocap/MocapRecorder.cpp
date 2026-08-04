@@ -1,6 +1,7 @@
 #ifdef ENABLE_MOCAP
 
 #include "MocapRecorder.h"
+#include "MocapPoseFix.h"
 
 #include "FaceCapCanonicalData.h"
 #include "../AnimationMerger.h"
@@ -176,7 +177,8 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
             toOgre(samples[confident.front()].headRotation);
         auto deltaAt = [&](int i) {
             // rotation that takes the neutral pose to this frame's pose
-            return toOgre(samples[i].headRotation) * neutral.Inverse();
+            return MocapPoseFix::invertCameraPitchDelta(
+                toOgre(samples[i].headRotation) * neutral.Inverse());
         };
         const std::vector<int> keys = selectKeyIndices(
             confident, times, options.gapHoldSeconds, options.headEpsilonRad,
@@ -339,7 +341,8 @@ BodyRecordReport recordBody(
     // rendered clip validates the live path headlessly (the live drive can't
     // be render-captured directly). Default path stays applyMotionClip.
     if (qEnvironmentVariableIntValue("QTMESH_MOCAP_USE_RETARGETER")) {
-        BodyRetargeter rt(skel.get());
+        const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
+        BodyRetargeter rt(skel.get(), yaw180);
         if (!rt.valid()) {
             report.error = QStringLiteral("retargeter: not a humanoid rig");
             return report;
@@ -357,6 +360,8 @@ BodyRecordReport recordBody(
         for (size_t f = 0; f < clipQuats.size(); ++f) {
             std::array<std::array<float, 4>, 22> q{};
             for (int r = 0; r < 22 && r < PoseIK::kCanonicalRoles; ++r) q[r] = clipQuats[f][r];
+            if (f == 0)
+                rt.setNeutralReference(q);
             const auto locals = rt.evaluateFrame(q, 0xFFFFFFFFu);
             for (const auto& [handle, local] : locals) {
                 auto it = tracks.find(handle);
@@ -391,7 +396,9 @@ BodyRecordReport recordBody(
     const auto res = AnimationMerger::applyMotionClip(
         skel.get(), clip, clipQuats, fps,
         /*worldFrame=*/true, /*cmuRestWorld=*/{},
-        /*refineWithModel=*/false, /*refineStride=*/8, yaw180);
+        /*refineWithModel=*/false, /*refineStride=*/8, yaw180,
+        /*clipRestDir=*/{}, /*modelClip=*/false, /*clipRootY=*/{},
+        /*verticalDescent=*/false, /*cmuLibraryHandedness=*/false);
     if (!res.ok) {
         report.error = res.error.isEmpty()
                            ? QStringLiteral("retarget failed")

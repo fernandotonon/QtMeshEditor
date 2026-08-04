@@ -192,6 +192,8 @@ Mocap/PoseIKSolver.cpp
 Mocap/MocapCLI.cpp
 Mocap/MocapController.cpp
 Mocap/MocapCameraHints.cpp
+Mocap/MocapPoseDebugOverlay.cpp
+Mocap/MocapBodyDriveDebug.cpp
 commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp

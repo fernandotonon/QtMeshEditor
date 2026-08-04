@@ -51,14 +51,17 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 
 - **Head pose** needs a bone that resolves as the canonical Head
   (`Head`, `mixamorig:Head`, …). Static meshes get node-TRS keyframes
-  instead. The take's first confident frame calibrates neutral ("look at
-  the camera at the start"); in live mode the `Neutral` button re-bases it.
+  instead. The first confident preview frame is the neutral reference
+  (look at the camera, relaxed face); the **Neutral** button re-bases head
+  and body.
 
 - **Body capture** needs a **humanoid skeleton** resolving at least half of
   the 22 canonical roles (hips/spine/neck/head, both arms, both legs —
   Mixamo and most generic naming conventions resolve). Unrigged meshes: run
   `qtmesh rig --skeleton humanoid --skin` first. The root stays locked to
-  the standing pose (v1 accepts some foot slide).
+  the standing pose (v1 accepts some foot slide). Body limbs calibrate on
+  the first visible frame too — start preview with arms in a natural rest
+  pose (similar to the character's idle) so raised/movement reads correctly.
 
 ## Backends
 
@@ -116,17 +119,31 @@ The Snap is strictly confined, so webcam access needs two things:
    panel suggests the `snap connect` command when no cameras appear or
    permission is denied.
 
+If Preview stays on **“Starting camera…”** for more than a few seconds, the
+camera opened but Qt never decoded frames. On Linux builds this was usually
+(a) missing `libqjpeg` imageformat plugin for MJPEG webcams, or (b) a missing
+FFmpeg stub — both are bundled from 3.25.4 onward. Close other apps using
+the webcam, retry Preview, or use **Load Video…** as a workaround.
+
 On desktop Linux outside Snap, allow camera access via your desktop portal /
-privacy settings when prompted.
+privacy settings when prompted. Qt's FFmpeg backend probes VA-API during camera
+enumeration; on some NVIDIA + X11 setups that probe can crash unless hardware
+decode is disabled — the app sets `QT_FFMPEG_DECODING_HW_DEVICE_TYPES=,` at
+startup (software decode only; fine for live webcam preview).
 
 ## Known limitations (v1)
 
 - Single person per frame; the highest-scoring detection wins.
 - Head pose is camera-relative — walking around the camera reads as head
-  rotation. Keep the camera static.
-- Body root is locked (no root motion); some foot slide is expected.
-- Live mode drives face, head, and (humanoid rig) body; the SAM 3D Body
-  quality backend is offline-only (CLI/MCP), body-live uses pose-ik.
+  rotation. Keep the camera static. Up/down (pitch) is corrected for
+  Mixamo-style rigs.
+- Body retargeting uses MediaPipe landmark directions (same geometry as the
+  PoseIK debug overlay) to aim skeleton bones — no mirror-L/R toggle.
+- Body root is locked (no root motion); some foot slide is expected. Live
+  pose-ik uses anatomical bone names (no CMU L/R swap) and CMU-aligned solver
+  output; recorded body clips use the same path.
+- Live mode drives face, head, and (humanoid rig) body; when Face + Body are
+  both enabled, head rotation always comes from the face graph (not PoseIK).
 - Live camera needs a notarized build on macOS (see above); the CLI/MCP
   video paths work regardless.
 - Video decode is playback-driven (a 60 s video takes 60 s to capture).

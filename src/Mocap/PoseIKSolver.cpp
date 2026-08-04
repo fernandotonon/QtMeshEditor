@@ -94,6 +94,127 @@ bool basisFromPrimary(Vec3 y, Vec3 secondary, Quat& out, Vec3* usedSecondary)
 
 }  // namespace
 
+void Solver::canonicalizeMediaPipeWorld(
+    const float* world33x3,
+    std::array<std::array<float, 3>, kLandmarkCount>& out)
+{
+    for (int i = 0; i < kLandmarkCount; ++i)
+        out[static_cast<size_t>(i)] = {
+            world33x3[i * 3 + 0], -world33x3[i * 3 + 1], world33x3[i * 3 + 2]};
+}
+
+bool Solver::limbSegmentDirection(
+    int role, const std::array<std::array<float, 3>, kLandmarkCount>& p,
+    const float* visibility, float minVisibility, std::array<float, 3>& outDir)
+{
+    struct Segment {
+        Role r;
+        int from, to;
+    };
+    static const Segment segments[] = {
+        {RShoulder, 12, 14}, {RElbow, 14, 16},
+        {LShoulder, 11, 13}, {LElbow, 13, 15},
+        {RHip, 24, 26}, {RKnee, 26, 28}, {RFoot, 28, 32},
+        {LHip, 23, 25}, {LKnee, 25, 27}, {LFoot, 27, 31},
+    };
+    auto visible = [&](int lm) {
+        return !visibility || visibility[lm] >= minVisibility;
+    };
+    for (const Segment& seg : segments) {
+        if (static_cast<int>(seg.r) != role)
+            continue;
+        if (!visible(seg.from) || !visible(seg.to))
+            return false;
+        const Vec3& a = p[static_cast<size_t>(seg.from)];
+        const Vec3& b = p[static_cast<size_t>(seg.to)];
+        Vec3 dir = sub(b, a);
+        if (!normalize(dir))
+            return false;
+        outDir = dir;
+        return true;
+    }
+    return false;
+}
+
+bool Solver::canonicalLiveDirection(
+    int role, const std::array<std::array<float, 3>, kLandmarkCount>& p,
+    const float* visibility, float minVisibility,
+    std::array<float, 3>& outDir)
+{
+    if (limbSegmentDirection(role, p, visibility, minVisibility, outDir))
+        return true;
+
+    auto visible = [&](int lm) {
+        return !visibility || visibility[lm] >= minVisibility;
+    };
+    auto mid = [&](int a, int b) -> Vec3 {
+        return mul(add(p[static_cast<size_t>(a)], p[static_cast<size_t>(b)]), 0.5f);
+    };
+
+    switch (role) {
+    case Hip:
+    case Abdomen:
+    case Chest:
+        if (!visible(LShoulderLm) || !visible(RShoulderLm) || !visible(LHipLm)
+            || !visible(RHipLm))
+            return false;
+        {
+            const Vec3 hipMid = mid(LHipLm, RHipLm);
+            const Vec3 shoulderMid = mid(LShoulderLm, RShoulderLm);
+            Vec3 dir = sub(shoulderMid, hipMid);
+            if (!normalize(dir))
+                return false;
+            outDir = dir;
+            return true;
+        }
+    case Neck:
+    case Neck1:
+        if (!visible(LShoulderLm) || !visible(RShoulderLm) || !visible(Nose))
+            return false;
+        {
+            const Vec3 shoulderMid = mid(LShoulderLm, RShoulderLm);
+            Vec3 dir = sub(p[Nose], shoulderMid);
+            if (!normalize(dir))
+                return false;
+            outDir = dir;
+            return true;
+        }
+    case Head:
+        if (!visible(Nose) || !visible(LEar) || !visible(REar))
+            return false;
+        {
+            const Vec3 earMid = mid(LEar, REar);
+            Vec3 dir = sub(p[Nose], earMid);
+            if (!normalize(dir))
+                return false;
+            outDir = dir;
+            return true;
+        }
+    case RHand:
+        if (!visible(RElbowLm) || !visible(RWrist))
+            return false;
+        {
+            Vec3 dir = sub(p[RWrist], p[RElbowLm]);
+            if (!normalize(dir))
+                return false;
+            outDir = dir;
+            return true;
+        }
+    case LHand:
+        if (!visible(LElbowLm) || !visible(LWrist))
+            return false;
+        {
+            Vec3 dir = sub(p[LWrist], p[LElbowLm]);
+            if (!normalize(dir))
+                return false;
+            outDir = dir;
+            return true;
+        }
+    default:
+        return false;
+    }
+}
+
 void Solver::reset()
 {
     m_hasPrev = false;
@@ -107,15 +228,15 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
     if (m_hasPrev)
         result.quats = m_prevQuats;  // unresolved roles hold their last pose
 
-    // Canonicalize MediaPipe's frame (x = subject-left, y = down, z = toward
-    // camera) into the canonical rig frame: y-UP, subject FACING +Z, right-
-    // handed. The subject faces the camera (MediaPipe -z), but canonical rigs
-    // face +Z, so we must flip the facing: map (x,y,z) -> (-x, -y, +z). This
-    // is a 180° yaw that cancels the constant (0,-1,0,0) hip offset the old
-    // (x,-y,-z) mapping produced (which left the whole body driven backwards).
+    // Canonicalize MediaPipe's frame (+x subject-left, +y down, +z toward camera)
+    // into the CMU/canonical rig frame (+Y up, +Z forward, LEFT at +X). Flip Y
+    // and keep Z (subject faces +Z); do NOT negate X — (-x,-y,+z) mirrored L/R
+    // on Mixamo-style rigs whose left bones already sit at +X.
     Vec3 p[kLandmarkCount];
+    std::array<std::array<float, 3>, kLandmarkCount> canon{};
+    canonicalizeMediaPipeWorld(world, canon);
     for (int i = 0; i < kLandmarkCount; ++i)
-        p[i] = {-world[i * 3 + 0], -world[i * 3 + 1], world[i * 3 + 2]};
+        p[i] = canon[static_cast<size_t>(i)];
 
     auto visible = [&](int lm) {
         return !visibility || visibility[lm] >= minVisibility;

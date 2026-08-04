@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QVideoFrame>
 
 #include <thread>
 #include <vector>
@@ -195,6 +196,17 @@ TEST(MocapFrameToRgb888, ConvertsAndPassesThrough)
 
     const QImage same = mocapFrameToRgb888(converted);
     EXPECT_EQ(same.format(), QImage::Format_RGB888);
+}
+
+TEST(MocapFrameFromVideoFrame, ConvertsQVideoFrameFromQImage)
+{
+    QImage rgb(8, 8, QImage::Format_RGB888);
+    rgb.fill(Qt::blue);
+    const QVideoFrame vf(rgb);
+    ASSERT_TRUE(vf.isValid());
+    const QImage out = mocapFrameFromVideoFrame(vf);
+    EXPECT_FALSE(out.isNull());
+    EXPECT_EQ(out.format(), QImage::Format_RGB888);
 }
 
 #endif  // ENABLE_MOCAP

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Mocap/PoseIKSolver.h"
+#include "Mocap/MocapPoseFix.h"
 
 namespace {
 
@@ -96,6 +97,28 @@ TEST(PoseIKSolver, ElbowBendRecoversNinetyDegrees)
                         f2.quats[PoseIK::LShoulder]), 1e-3);
 }
 
+TEST(PoseIKSolver, LeftArmRaiseDoesNotMoveRightArm)
+{
+    PoseIK::Solver solver;
+    Landmarks pose = tPose();
+    const auto f1 = solver.solveFrame(pose.data());
+    // raise the subject's LEFT arm (MP +x side): lift left wrist in MP space
+    set(pose, 15, 0.18f, -0.75f, 0.f);
+    set(pose, 13, 0.18f, -0.55f, 0.f);
+    const auto f2 = solver.solveFrame(pose.data());
+
+    const double leftDelta = quatAngle(f1.quats[PoseIK::LShoulder],
+                                       f2.quats[PoseIK::LShoulder])
+                           + quatAngle(f1.quats[PoseIK::LElbow],
+                                       f2.quats[PoseIK::LElbow]);
+    const double rightDelta = quatAngle(f1.quats[PoseIK::RShoulder],
+                                        f2.quats[PoseIK::RShoulder])
+                            + quatAngle(f1.quats[PoseIK::RElbow],
+                                        f2.quats[PoseIK::RElbow]);
+    EXPECT_GT(leftDelta, 0.15);
+    EXPECT_LT(rightDelta, 0.05);
+}
+
 TEST(PoseIKSolver, TorsoTwistShowsOnChestNotHips)
 {
     PoseIK::Solver solver;
@@ -169,6 +192,73 @@ TEST(PoseIKSolver, LowVisibilityInvalidatesRoles)
     const auto f = solver.solveFrame(pose.data(), vis.data());
     EXPECT_FALSE(f.resolved(PoseIK::LElbow));   // needs the wrist
     EXPECT_TRUE(f.resolved(PoseIK::LShoulder)); // shoulder->elbow unaffected
+}
+
+TEST(PoseIKSolver, HeadNodChangesHeadRotation)
+{
+    PoseIK::Solver solver;
+    Landmarks pose = tPose();
+    const auto f1 = solver.solveFrame(pose.data());
+    ASSERT_TRUE(f1.resolved(PoseIK::Head));
+
+    // nod down: move nose toward chest (+y in MediaPipe = down)
+    set(pose, 0, 0.f, -0.55f, -0.08f);
+    const auto f2 = solver.solveFrame(pose.data());
+    ASSERT_TRUE(f2.resolved(PoseIK::Head));
+
+    const double nod = quatAngle(f1.quats[PoseIK::Head], f2.quats[PoseIK::Head]);
+    EXPECT_GT(nod, 0.05);
+    // yaw should stay roughly stable when only nodding
+    EXPECT_LT(quatAngle(f1.quats[PoseIK::Hip], f2.quats[PoseIK::Hip]), 0.05);
+}
+
+TEST(PoseIKSolver, LimbSegmentDirectionMatchesRaise)
+{
+    Landmarks pose = tPose();
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(pose.data(), canon);
+    std::array<float, 3> refDir{}, upDir{};
+    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+        PoseIK::LShoulder, canon, nullptr, 0.3f, refDir));
+    // raise left arm: elbow + wrist move up in canonical (+Y)
+    set(pose, 15, 0.18f, -0.75f, 0.f);
+    set(pose, 13, 0.18f, -0.55f, 0.f);
+    PoseIK::Solver::canonicalizeMediaPipeWorld(pose.data(), canon);
+    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+        PoseIK::LShoulder, canon, nullptr, 0.3f, upDir));
+    EXPECT_GT(upDir[1], refDir[1] + 0.2f);
+    std::array<float, 3> rDir{};
+    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+        PoseIK::RShoulder, canon, nullptr, 0.3f, rDir));
+    EXPECT_LT(rDir[1], refDir[1] + 0.05f);  // right arm stayed level
+}
+
+TEST(PoseIKSolver, WebcamMirrorSwapFixesRightArmRaise)
+{
+    PoseIK::Solver solver;
+    Landmarks pose = tPose();
+    const auto f0 = solver.solveFrame(pose.data());
+    // Mirrored webcam: user raises their physical RIGHT arm but MediaPipe tracks
+    // the LEFT landmark chain (positions on the MP +x / subject-left side).
+    set(pose, 15, 0.18f, -0.75f, 0.f);
+    set(pose, 13, 0.18f, -0.55f, 0.f);
+    const auto fWrong = solver.solveFrame(pose.data());
+    const double wrongLeft = quatAngle(f0.quats[PoseIK::LShoulder],
+                                       fWrong.quats[PoseIK::LShoulder]);
+    const double wrongRight = quatAngle(f0.quats[PoseIK::RShoulder],
+                                        fWrong.quats[PoseIK::RShoulder]);
+    EXPECT_GT(wrongLeft, 0.08);
+    EXPECT_GT(wrongLeft, wrongRight);
+
+    Landmarks fixed = tPose();
+    set(fixed, 15, 0.18f, -0.75f, 0.f);
+    set(fixed, 13, 0.18f, -0.55f, 0.f);
+    MocapPoseFix::swapMediaPipeLeftRightLandmarks(fixed.data());
+    const auto fOk = solver.solveFrame(fixed.data());
+    const double fixedRight = quatAngle(f0.quats[PoseIK::RShoulder],
+                                        fOk.quats[PoseIK::RShoulder]);
+    EXPECT_GT(fixedRight, 0.08);
+    EXPECT_GT(fixedRight, wrongRight);
 }
 
 #endif  // ENABLE_MOCAP
