@@ -135,8 +135,9 @@ startup (software decode only; fine for live webcam preview).
 
 - Single person per frame; the highest-scoring detection wins.
 - Head pose is camera-relative — walking around the camera reads as head
-  rotation. Keep the camera static. Up/down (pitch) is corrected for
-  Mixamo-style rigs.
+  rotation. Keep the camera static. Up/down (pitch) and left/right (yaw) are
+  corrected for Mixamo-style rigs and mirrored webcam previews (body uses
+  landmark directions separately; no mirror-L/R toggle).
 - Body retargeting uses MediaPipe landmark directions (same geometry as the
   PoseIK debug overlay) to aim skeleton bones — no mirror-L/R toggle.
 - Body root is locked (no root motion); some foot slide is expected. Live

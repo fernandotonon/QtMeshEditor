@@ -1013,6 +1013,9 @@ void MocapController::onSample(const FaceSample& sample,
                 sample.headRotation[1], sample.headRotation[2]);
             Ogre::Quaternion delta = current * d->neutral.Inverse();
             delta = MocapPoseFix::invertCameraPitchDelta(delta);
+            // Webcam preview is mirrored; FaceCap head yaw is opposite the rig
+            // unless corrected. Body uses landmark directions (no L/R swap).
+            delta = MocapPoseFix::invertCameraYawDelta(delta);
             const Ogre::Quaternion local =
                 d->headBindWorld.Inverse() * delta * d->headBindWorld;
             Ogre::SkeletonInstance* skel = entity->getSkeleton();
