@@ -99,6 +99,7 @@ QStringList MocapController::unmatchedChannels() const { return {}; }
 bool MocapController::headAvailable() const { return false; }
 bool MocapController::bodyAvailable() const { return false; }
 bool MocapController::bodyDetected() const { return false; }
+QString MocapController::bodyCalibrationHint() const { return {}; }
 bool MocapController::faceEnabled() const { return false; }
 void MocapController::setFaceEnabled(bool) {}
 bool MocapController::headEnabled() const { return false; }
@@ -409,6 +410,17 @@ QStringList MocapController::unmatchedChannels() const
 bool MocapController::headAvailable() const { return !d->headBone.isEmpty(); }
 bool MocapController::bodyAvailable() const { return d->bodyRigOk; }
 bool MocapController::bodyDetected() const { return d->bodyDetected; }
+QString MocapController::bodyCalibrationHint() const
+{
+    if (d->state < Previewing || !d->bodyEnabled || !d->bodyRetargeter)
+        return {};
+    if (d->bodyNeutralReady)
+        return {};
+    if (!d->bodyDetected)
+        return tr("Stand in frame so your hips and shoulders are visible…");
+    return tr("Calibrating body drive — face the camera with arms relaxed at "
+              "your sides…");
+}
 bool MocapController::faceEnabled() const { return d->faceEnabled; }
 void MocapController::setFaceEnabled(bool on)
 {

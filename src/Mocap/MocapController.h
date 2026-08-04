@@ -62,6 +62,8 @@ class MocapController : public QObject
     // body: only offerable when the selection is a humanoid rig
     Q_PROPERTY(bool bodyAvailable READ bodyAvailable NOTIFY mappingChanged)
     Q_PROPERTY(bool bodyDetected READ bodyDetected NOTIFY liveStatsChanged)
+    Q_PROPERTY(QString bodyCalibrationHint READ bodyCalibrationHint
+               NOTIFY liveStatsChanged)
     // channel enables (writable from the QML Face/Head/Body checkboxes)
     Q_PROPERTY(bool faceEnabled READ faceEnabled WRITE setFaceEnabled
                NOTIFY channelsChanged)
@@ -99,6 +101,7 @@ public:
     bool headAvailable() const;
     bool bodyAvailable() const;
     bool bodyDetected() const;
+    QString bodyCalibrationHint() const;
     bool faceEnabled() const;
     void setFaceEnabled(bool on);
     bool headEnabled() const;

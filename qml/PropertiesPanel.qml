@@ -2501,7 +2501,9 @@ Rectangle {
             }
 
             // camera preview + HUD
+            // live HUD (webcam thumbnail + detection dots)
             Rectangle {
+                id: mocapPreviewHud
                 width: parent.width - 16
                 height: visible ? 140 : 0
                 visible: mocapReady && MocapController.previewDataUrl !== ""
@@ -2546,6 +2548,18 @@ Rectangle {
                            ? "  ● REC " + MocapController.recordingSeconds.toFixed(1) + "s"
                            : "")
                 }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: mocapReady && previewing
+                         && MocapController.bodyEnabled
+                         && MocapController.bodyCalibrationHint !== ""
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.highlightColor
+                font.pixelSize: 10
+                font.italic: true
+                text: MocapController.bodyCalibrationHint
             }
 
             // channel summary
