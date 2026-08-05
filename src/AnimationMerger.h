@@ -275,6 +275,19 @@ public:
         /// conjugation needed). Slots the source rig doesn't have hold identity;
         /// empty when the rig has no fingers. Size == frames × kFingerSlots.
         std::vector<std::vector<std::array<float, 4>>> fingers;
+        /// #838 finger REST pointing direction (canonical frame) per slot, at
+        /// the clip's reference pose. The per-frame `fingers` dirs are ABSOLUTE
+        /// source directions; a rig's finger rest convention differs from the
+        /// target's, so aiming target-bind→source-absolute over-bends every
+        /// finger by the rest-convention gap (measured 50–130° on an OPEN, static
+        /// hand). With the rest, the retarget transports the RELATIVE bend
+        /// (restDir→frameDir) onto the target bind instead. Size == kFingerSlots
+        /// (or empty for older libraries → falls back to absolute aim).
+        std::vector<std::array<float, 3>> fingerRestDir;
+        /// V2 (schema v4): true when quats/restWorld/restDir are 52-wide
+        /// (fingers folded in as joints 22..51) rather than 22-wide body-only.
+        /// The CLI dump writes schema "qtmesh-motion-library-v4" when set.
+        bool jointCountV2 = false;
     };
 
     /// Finger channel layout: 2 sides × 5 fingers × up to 3 segments = 30.
@@ -402,17 +415,30 @@ public:
     static int applyFingerCurl(
         Ogre::Skeleton* skel, const std::string& animName,
         const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
-        int fps);
+        int fps,
+        /// #838 source finger REST directions (kFingerSlots, canonical frame).
+        /// When present, the retarget transports the RELATIVE bend
+        /// (restDir→frameDir) so a rig's finger rest convention doesn't
+        /// over-bend the target. Empty → legacy absolute aim (older libraries).
+        const std::vector<std::array<float, 3>>& clipFingerRest = {});
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher
     /// the retarget uses, so extraction and application are consistent by
     /// construction. Animations whose rig resolves 0 roles are skipped.
+    /// When `v2` is true, the emitted clip carries the V2 52-joint canonical
+    /// skeleton: joints 0..21 are the body (identical to V1) and joints 22..51
+    /// are the finger joints (world-frame orientation + pointing direction),
+    /// so fingers ride the ordinary joint retarget and can be trained into the
+    /// model. `restWorld`/`restDir`/`quats` are sized 52; the schema is v4. When
+    /// false (default), the V1 22-joint clip + separate `fingers` side-channel
+    /// is produced (unchanged).
     static std::vector<CanonicalClip> extractCanonicalClips(
         Ogre::Entity* entity,
         int fps = 30,
-        const QString& onlyAnimation = {});
+        const QString& onlyAnimation = {},
+        bool v2 = false);
 
     /// True when the entity's mesh appears to FACE −Z (the retarget and the
     /// CMU clips assume +Z): detected from the foot region — toe mass extends
