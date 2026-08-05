@@ -4,6 +4,7 @@
 
 #include "FaceCapGeom.h"
 #include "../ModelDownloader.h"
+#include "../OnnxRuntimeSettings.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -167,13 +168,8 @@ struct PoseCapPredictor::Impl {
     std::unique_ptr<Ort::Session> openSession(const QString& path)
     {
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(2);
-#ifdef Q_OS_MACOS
-        try {
-            std::unordered_map<std::string, std::string> opts;
-            so.AppendExecutionProvider("CoreML", opts);
-        } catch (const Ort::Exception&) {}
-#endif
 #ifdef Q_OS_WIN
         const std::wstring wpath = path.toStdWString();
         return std::make_unique<Ort::Session>(env, wpath.c_str(), so);

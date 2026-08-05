@@ -1,6 +1,7 @@
 #include "MotionGenerator.h"
 
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
 #include <QDir>
@@ -240,13 +241,8 @@ MotionGenerator::Result MotionGenerator::generate(
         // ---- run the ONNX model ----
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_t2m");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> opt;
-            so.AppendExecutionProvider("CoreML", opt);
-        } catch (const Ort::Exception&) { /* CPU fallback */ }
-#endif
 #ifdef _WIN32
         const std::wstring wpath = modelPathArg.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);

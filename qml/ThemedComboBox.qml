@@ -17,7 +17,15 @@ ComboBox {
         leftPadding: 6
         rightPadding: 6
         contentItem: Text {
-            text: modelData
+            text: {
+                if (control.textRole && model && typeof model === "object")
+                    return model[control.textRole] ?? ""
+                if (typeof modelData === "string")
+                    return modelData
+                if (control.textRole && modelData && typeof modelData === "object")
+                    return modelData[control.textRole] ?? ""
+                return modelData !== undefined ? String(modelData) : ""
+            }
             color: ThemeManager.textColor
             font: control.font
             elide: Text.ElideRight

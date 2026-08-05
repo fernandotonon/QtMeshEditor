@@ -10,12 +10,22 @@ PaintBufferImageProvider::PaintBufferImageProvider()
 QImage PaintBufferImageProvider::requestImage(
     const QString& id, QSize* size, const QSize& requestedSize)
 {
-    Q_UNUSED(id);            // We only have one "image" — the live buffer.
-    Q_UNUSED(requestedSize); // QML's sourceSize hint is honoured by Image{}.
+    Q_UNUSED(requestedSize);
 
     auto* tpc = TexturePaintController::instance();
     if (!tpc) return {};
-    QImage img = tpc->snapshotBufferImage();
+
+    QImage img;
+    if (id.startsWith(QStringLiteral("layer/"))) {
+        const QString idxStr = id.mid(6);
+        bool ok = false;
+        const int layerIndex = idxStr.toInt(&ok);
+        if (ok)
+            img = tpc->snapshotLayerImage(layerIndex);
+    } else {
+        img = tpc->snapshotBufferImage();
+    }
+
     if (size) *size = img.size();
     return img;
 }

@@ -1,5 +1,6 @@
 #include "UniRigPredictor.h"
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -559,6 +560,17 @@ bool UniRigPredictor::modelsPresent()
         && QFileInfo::exists(embedModelPath());
 }
 
+int UniRigPredictor::sampleBudgetForMesh(int vertexCount, int requested)
+{
+    if (requested > 0)
+        return std::clamp(requested, 4096, kNumSamples);
+    if (vertexCount <= 50000)
+        return kNumSamples;
+    if (vertexCount <= 200000)
+        return kNumSamples / 2;
+    return kNumSamples / 4;
+}
+
 QString UniRigPredictor::ensureModelBlocking()
 {
 #ifndef ENABLE_ONNX
@@ -826,31 +838,20 @@ UniRigPredictor::Result UniRigPredictor::predict(
         nverts[3*i+2] = static_cast<float>(p[2]);
     }
 
-    // --- (1b) Surface-sample up to kNumSamples points + normals --------------
-    SampledCloud cloud = sampleSurface(nverts, vertexCount, indices, indexCount, kNumSamples);
+    // --- (1b) Surface-sample up to the encoder budget -----------------------
+    const int sampleBudget =
+        sampleBudgetForMesh(vertexCount, opts.numSamples);
+    SampledCloud cloud =
+        sampleSurface(nverts, vertexCount, indices, indexCount, sampleBudget);
     if (cloud.count < 1)
         return failResult(QStringLiteral("UniRig: failed to sample mesh surface."));
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_unirig");
-        Ort::SessionOptions so;
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        // Leave one core for the UI and stop ORT's pool from busy-spinning —
-        // the default (all cores, spin-wait) starves the render loop for the
-        // whole multi-minute decode and the viewport appears frozen.
-        // hardware_concurrency() may legally return 0 — guard before the -1
-        // (0u - 1 underflows to a UINT_MAX-sized thread pool request).
-        const unsigned hc = std::thread::hardware_concurrency();
-        so.SetIntraOpNumThreads(hc > 1 ? static_cast<int>(hc - 1) : 1);
-        so.AddConfigEntry("session.intra_op.allow_spinning", "0");
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) {}
-#endif
+        Ort::AllocatorWithDefaultOptions alloc;
+        Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-        auto openSession = [&](const QString& path) -> Ort::Session {
+        auto openSession = [&](Ort::SessionOptions& so, const QString& path) -> Ort::Session {
 #ifdef _WIN32
             std::wstring wpath = path.toStdWString();
             return Ort::Session(env, wpath.c_str(), so);
@@ -860,29 +861,23 @@ UniRigPredictor::Result UniRigPredictor::predict(
 #endif
         };
 
-        Ort::Session encoder = openSession(encoderModelPath);
-        Ort::Session decoder = openSession(decoderModelPath);
-        Ort::Session embed   = openSession(embedModelPath);
-        Ort::AllocatorWithDefaultOptions alloc;
-        Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-        // embed.onnx: input_ids[1,S] (int64) -> token_embeds[1,S,hidden]. Turns
-        // the seed tokens + each generated token into the inputs_embeds the
-        // decoder consumes (the exported decoder takes embeddings, not ids —
-        // UniRig conditions the LM by prepending the encoder latents as embeds).
-        auto embedTokens = [&](const std::vector<int64_t>& ids) -> std::vector<float> {
-            const int64_t shp[2] = {1, static_cast<int64_t>(ids.size())};
-            Ort::Value in = Ort::Value::CreateTensor<int64_t>(
-                mem, const_cast<int64_t*>(ids.data()), ids.size(), shp, 2);
-            auto inName  = embed.GetInputNameAllocated(0, alloc);
-            auto outName = embed.GetOutputNameAllocated(0, alloc);
-            const char* inN[]  = { inName.get() };
-            const char* outN[] = { outName.get() };
-            auto out = embed.Run(Ort::RunOptions{nullptr}, inN, &in, 1, outN, 1);
-            const float* d = out[0].GetTensorData<float>();
-            const size_t cnt = (size_t)out[0].GetTensorTypeAndShapeInfo().GetElementCount();
-            return std::vector<float>(d, d + cnt);
-        };
+        // The three ONNX files total ~1.4 GB. Open the encoder alone first and
+        // release it before loading the decoder + embed pair — holding all three
+        // at once was enough to OOM on large meshes when SkinTokens also runs.
+        std::vector<float> latents;
+        int64_t numLatents = 0;
+        int64_t hidden = 0;
+        {
+            Ort::SessionOptions encSo;
+            OnnxRuntimeSettings::configureSessionOptions(encSo);
+            Ort::Session encoder = openSession(encSo, encoderModelPath);
+            if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG")) {
+                const auto eps = Ort::GetAvailableProviders();
+                fprintf(stderr, "[unirig] ORT available providers:");
+                for (const auto& ep : eps)
+                    fprintf(stderr, " %s", ep.c_str());
+                fprintf(stderr, "\n");
+            }
 
         // =====================================================================
         // (2) ENCODER: pc[1,N,3] + feats[1,N,3] (normals) → latents prefix.
@@ -943,7 +938,6 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // the encoder graph's trailing nn.Linear). We feed it as the decoder's
         // `inputs_embeds` prefix.
         const float* latentData = nullptr;
-        int64_t numLatents = 0, hidden = 0;
         for (size_t i = 0; i < encOuts.size(); ++i) {
             if (!encOuts[i].IsTensor()) continue;
             auto info = encOuts[i].GetTensorTypeAndShapeInfo();
@@ -961,8 +955,32 @@ UniRigPredictor::Result UniRigPredictor::predict(
                 "UniRig: encoder produced no latent prefix."));
 
         // Own the latent bytes (encOuts is reused/invalidated as we proceed).
-        std::vector<float> latents(
+        latents.assign(
             latentData, latentData + static_cast<size_t>(numLatents) * hidden);
+        } // encoder session released
+
+        Ort::SessionOptions decSo;
+        OnnxRuntimeSettings::configureSessionOptions(decSo);
+        Ort::Session decoder = openSession(decSo, decoderModelPath);
+        Ort::Session embed   = openSession(decSo, embedModelPath);
+
+        // embed.onnx: input_ids[1,S] (int64) -> token_embeds[1,S,hidden]. Turns
+        // the seed tokens + each generated token into the inputs_embeds the
+        // decoder consumes (the exported decoder takes embeddings, not ids —
+        // UniRig conditions the LM by prepending the encoder latents as embeds).
+        auto embedTokens = [&](const std::vector<int64_t>& ids) -> std::vector<float> {
+            const int64_t shp[2] = {1, static_cast<int64_t>(ids.size())};
+            Ort::Value in = Ort::Value::CreateTensor<int64_t>(
+                mem, const_cast<int64_t*>(ids.data()), ids.size(), shp, 2);
+            auto inName  = embed.GetInputNameAllocated(0, alloc);
+            auto outName = embed.GetOutputNameAllocated(0, alloc);
+            const char* inN[]  = { inName.get() };
+            const char* outN[] = { outName.get() };
+            auto out = embed.Run(Ort::RunOptions{nullptr}, inN, &in, 1, outN, 1);
+            const float* d = out[0].GetTensorData<float>();
+            const size_t cnt = (size_t)out[0].GetTensorTypeAndShapeInfo().GetElementCount();
+            return std::vector<float>(d, d + cnt);
+        };
 
         // =====================================================================
         // (3) GREEDY CONSTRAINED AUTOREGRESSIVE DECODE with a manual KV-cache.

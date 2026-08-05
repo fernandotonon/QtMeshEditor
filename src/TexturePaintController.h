@@ -3,6 +3,11 @@
 
 #include "PaintSelectionMask.h"
 #include "TexturePaintBuffer.h"
+#include "BrushEngine.h"
+#include "BrushAssetLibrary.h"
+#include "BrushFootprint.h"
+#include "GradientRamp.h"
+#include "PaintLayerStack.h"
 
 #include <QColor>
 #include <QObject>
@@ -11,12 +16,14 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <OgreTexture.h>
 #include <OgreVector.h>
 
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 class EditableMesh;
@@ -78,6 +85,17 @@ class TexturePaintController : public QObject
     // Brush tool — paint / erase / fill / picker.
     Q_PROPERTY(int brushTool READ brushTool WRITE setBrushTool NOTIFY brushToolChanged)
 
+    // Paint v2 Slice A (#544) — gradient ramp brushes.
+    Q_PROPERTY(int colorSource READ colorSource WRITE setColorSource NOTIFY gradientChanged)
+    Q_PROPERTY(int gradientMode READ gradientMode WRITE setGradientMode NOTIFY gradientChanged)
+    Q_PROPERTY(QString activeRampName READ activeRampName WRITE setActiveRampName NOTIFY gradientChanged)
+    Q_PROPERTY(bool useFgBgRamp READ useFgBgRamp WRITE setUseFgBgRamp NOTIFY gradientChanged)
+    Q_PROPERTY(bool gradientStepped READ gradientStepped WRITE setGradientStepped NOTIFY gradientChanged)
+    Q_PROPERTY(double rampJitter READ rampJitter WRITE setRampJitter NOTIFY gradientChanged)
+    Q_PROPERTY(QStringList rampNames READ rampNames NOTIFY gradientChanged)
+    Q_PROPERTY(QString rampPreviewDataUri READ rampPreviewDataUri NOTIFY gradientChanged)
+    Q_PROPERTY(QVariantList activeRampStops READ activeRampStops NOTIFY gradientChanged)
+
     // Paint target — texture or vertex.
     Q_PROPERTY(int paintTarget READ paintTarget WRITE setPaintTarget NOTIFY paintTargetChanged)
 
@@ -119,6 +137,21 @@ public:
         TargetVertex  = 1,  ///< Paint vertex colors (formerly Edit Mode's vertex paint).
     };
     Q_ENUM(PaintTarget)
+
+    /// Paint v2 Slice A — brush colour source (mirrors BrushEngine::ColorSource).
+    enum ColorSource {
+        ColorSolid = 0,
+        ColorGradient = 1,
+    };
+    Q_ENUM(ColorSource)
+
+    /// Paint v2 Slice A — gradient mapping mode (mirrors BrushEngine::GradientMode).
+    enum GradientMode {
+        GradientLinear = 0,
+        GradientRadial = 1,
+        GradientAngular = 2,
+    };
+    Q_ENUM(GradientMode)
 
     static TexturePaintController* instance();
     static TexturePaintController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
@@ -162,6 +195,143 @@ public:
     void setBrushTool(int tool);
     /// @}
 
+    /// @name Paint v2 Slice A — gradient ramp brushes
+    /// @{
+    int colorSource() const { return static_cast<int>(m_colorSource); }
+    void setColorSource(int source);
+    int gradientMode() const { return static_cast<int>(m_gradientMode); }
+    void setGradientMode(int mode);
+    QString activeRampName() const { return m_activeRampName; }
+    void setActiveRampName(const QString& name);
+    bool useFgBgRamp() const { return m_useFgBgRamp; }
+    void setUseFgBgRamp(bool on);
+    bool gradientStepped() const { return m_gradientStepped; }
+    void setGradientStepped(bool on);
+    double rampJitter() const { return m_rampJitter; }
+    void setRampJitter(double j);
+    QStringList rampNames() const;
+    QString rampPreviewDataUri() const { return m_rampPreviewUri; }
+    QVariantList activeRampStops() const;
+
+    /// Persist the currently-edited stops as a named custom ramp.
+    Q_INVOKABLE bool saveCustomRamp(const QString& name, const QVariantList& stops,
+                                    bool stepped = false);
+    /// Delete a custom ramp by name (bundled presets are not removable).
+    Q_INVOKABLE bool deleteCustomRamp(const QString& name);
+    /// Replace the active ramp's stops in-memory (editor live preview).
+    Q_INVOKABLE void setActiveRampStops(const QVariantList& stops, bool stepped = false);
+    /// Seed a new ramp by sampling N colours along a UV line on the buffer.
+    Q_INVOKABLE bool sampleRampFromTexture(double u0, double v0,
+                                           double u1, double v1,
+                                           int numStops = 5);
+    /// Open the gradient ramp editor window.
+    Q_INVOKABLE void openRampEditor();
+    Q_INVOKABLE void closeRampEditor();
+    Q_PROPERTY(bool rampEditorOpen READ rampEditorOpen NOTIFY rampEditorChanged)
+    bool rampEditorOpen() const { return m_rampEditorWindow != nullptr; }
+    /// @}
+
+    /// @name Paint v2 Slice B — textured / stamp brushes (#545)
+    /// @{
+    Q_PROPERTY(int footprintType READ footprintType WRITE setFootprintType NOTIFY stampChanged)
+    Q_PROPERTY(QString activeStampName READ activeStampName WRITE setActiveStampName NOTIFY stampChanged)
+    Q_PROPERTY(QString activeTilingName READ activeTilingName WRITE setActiveTilingName NOTIFY stampChanged)
+    Q_PROPERTY(QStringList stampNames READ stampNames NOTIFY stampChanged)
+    Q_PROPERTY(QStringList tilingNames READ tilingNames NOTIFY stampChanged)
+    Q_PROPERTY(QString activeStampPreviewUri READ activeStampPreviewUri NOTIFY stampChanged)
+    Q_PROPERTY(QString activeTilingPreviewUri READ activeTilingPreviewUri NOTIFY stampChanged)
+    Q_PROPERTY(double stampSpacing READ stampSpacing WRITE setStampSpacing NOTIFY stampChanged)
+    Q_PROPERTY(double stampScatter READ stampScatter WRITE setStampScatter NOTIFY stampChanged)
+    Q_PROPERTY(double stampSizeJitter READ stampSizeJitter WRITE setStampSizeJitter NOTIFY stampChanged)
+    Q_PROPERTY(double stampOpacityJitter READ stampOpacityJitter WRITE setStampOpacityJitter NOTIFY stampChanged)
+    Q_PROPERTY(int stampRotation READ stampRotation WRITE setStampRotation NOTIFY stampChanged)
+    Q_PROPERTY(double stampFixedAngle READ stampFixedAngle WRITE setStampFixedAngle NOTIFY stampChanged)
+    Q_PROPERTY(double tilingScale READ tilingScale WRITE setTilingScale NOTIFY stampChanged)
+    Q_PROPERTY(double tilingRotation READ tilingRotation WRITE setTilingRotation NOTIFY stampChanged)
+    Q_PROPERTY(double tilingOffsetU READ tilingOffsetU WRITE setTilingOffsetU NOTIFY stampChanged)
+    Q_PROPERTY(double tilingOffsetV READ tilingOffsetV WRITE setTilingOffsetV NOTIFY stampChanged)
+
+    int footprintType() const { return static_cast<int>(m_footprintType); }
+    void setFootprintType(int type);
+    QString activeStampName() const { return m_activeStampName; }
+    void setActiveStampName(const QString& name);
+    QString activeTilingName() const { return m_activeTilingName; }
+    void setActiveTilingName(const QString& name);
+    QStringList stampNames() const;
+    QStringList tilingNames() const;
+    QString activeStampPreviewUri() const { return m_stampPreviewUri; }
+    QString activeTilingPreviewUri() const { return m_tilingPreviewUri; }
+    double stampSpacing() const { return m_stampSettings.spacing; }
+    void setStampSpacing(double v);
+    double stampScatter() const { return m_stampSettings.scatter; }
+    void setStampScatter(double v);
+    double stampSizeJitter() const { return m_stampSettings.sizeJitter; }
+    void setStampSizeJitter(double v);
+    double stampOpacityJitter() const { return m_stampSettings.opacityJitter; }
+    void setStampOpacityJitter(double v);
+    int stampRotation() const { return static_cast<int>(m_stampSettings.rotation); }
+    void setStampRotation(int mode);
+    double stampFixedAngle() const { return m_stampSettings.fixedAngleDeg; }
+    void setStampFixedAngle(double deg);
+    double tilingScale() const { return m_tilingSettings.scale; }
+    void setTilingScale(double v);
+    double tilingRotation() const { return m_tilingSettings.rotationDeg; }
+    void setTilingRotation(double deg);
+    double tilingOffsetU() const { return m_tilingSettings.offsetU; }
+    void setTilingOffsetU(double v);
+    double tilingOffsetV() const { return m_tilingSettings.offsetV; }
+    void setTilingOffsetV(double v);
+
+    Q_INVOKABLE QString importStampAsset(const QString& filePath);
+    Q_INVOKABLE QString importTilingAsset(const QString& filePath);
+    Q_INVOKABLE bool deleteCustomStamp(const QString& name);
+    Q_INVOKABLE bool deleteCustomTiling(const QString& name);
+    Q_INVOKABLE bool renameCustomStamp(const QString& oldName, const QString& newName);
+    Q_INVOKABLE bool renameCustomTiling(const QString& oldName, const QString& newName);
+    Q_INVOKABLE bool isBundledStamp(const QString& name) const;
+    Q_INVOKABLE bool isBundledTiling(const QString& name) const;
+    Q_INVOKABLE QString stampThumbnailUri(const QString& name) const;
+    Q_INVOKABLE QString tilingThumbnailUri(const QString& name) const;
+    /// @}
+
+    /// @name Paint v2 Slice C — layer stack (#546)
+    /// @{
+    Q_PROPERTY(int layerCount READ layerCount NOTIFY layersChanged)
+    Q_PROPERTY(int activeLayerIndex READ activeLayerIndex WRITE setActiveLayerIndex NOTIFY layersChanged)
+    Q_PROPERTY(QVariantList paintLayers READ paintLayers NOTIFY layersChanged)
+    Q_PROPERTY(QStringList blendModeNames READ blendModeNames CONSTANT)
+
+    int layerCount() const;
+    int activeLayerIndex() const;
+    void setActiveLayerIndex(int index);
+    QVariantList paintLayers() const;
+    QStringList blendModeNames() const;
+
+    Q_INVOKABLE int addPaintLayer(const QString& name = QString());
+    Q_INVOKABLE void deletePaintLayer(int index);
+    Q_INVOKABLE int duplicatePaintLayer(int index);
+    Q_INVOKABLE void movePaintLayerUp(int index);
+    Q_INVOKABLE void movePaintLayerDown(int index);
+    Q_INVOKABLE void renamePaintLayer(int index, const QString& name);
+    Q_INVOKABLE void mergePaintLayerDown(int index);
+    Q_INVOKABLE void flattenPaintLayers();
+    Q_INVOKABLE void setPaintLayerVisible(int index, bool visible);
+    Q_INVOKABLE void setPaintLayerLocked(int index, bool locked);
+    Q_INVOKABLE void setPaintLayerOpacity(int index, double opacity);
+    Q_INVOKABLE void beginPaintLayerOpacityDrag();
+    Q_INVOKABLE void endPaintLayerOpacityDrag();
+    Q_INVOKABLE void setPaintLayerBlendMode(int index, int mode);
+    Q_INVOKABLE void setPaintLayerSolo(int index, bool solo);
+    Q_INVOKABLE QString layerPreviewUrl(int index) const;
+    /// If the current selection includes a multi-layer paint session, ask
+    /// whether to continue (export stores the flattened composite only).
+    /// Returns false when the user cancels.
+    bool confirmFlattenLayersForExport(QWidget* parent) const;
+    /// Recompose visible layers and push the composite into the live texture
+    /// + embedded cache so mesh export sees painted pixels.
+    void flushPaintTextureForExport(Ogre::Entity* entity);
+    /// @}
+
     /// @name Paint target (texture or vertex colors)
     /// @{
     int paintTarget() const { return static_cast<int>(m_target); }
@@ -185,6 +355,8 @@ public:
     /// `paintbuffer` QQuickImageProvider to hand QML a fresh copy
     /// on every request (no PNG encode, no base64).
     QImage snapshotBufferImage() const;
+    /// Snapshot one layer's pixel buffer (for layer thumbnails).
+    QImage snapshotLayerImage(int index) const;
 
     /// PNG data URI of the UV wireframe (white triangles on transparent
     /// background) at the current texture resolution. Lets the QML
@@ -364,10 +536,12 @@ public:
     const TexturePaintBuffer& buffer() const { return m_buffer; }
     TexturePaintBuffer& mutableBuffer() { return m_buffer; }
 
-    /// Internal: replace the buffer pixel data and re-upload to the
-    /// live Ogre texture. Used by the undo command. Width/height must
-    /// match the current buffer.
+    /// Internal: replace the composite buffer and re-upload. Legacy undo path.
     void applyPixelSnapshot(const std::vector<uint8_t>& pixels);
+    /// Undo/redo: restore one layer's pixels then recompose.
+    void applyLayerPixelSnapshot(int layerIndex, const std::vector<uint8_t>& pixels);
+    /// Undo/redo: restore full layer stack state.
+    void applyLayerStackSnapshot(const PaintLayerStack::Snapshot& snap);
 
 signals:
     void texturePaintChanged();
@@ -380,6 +554,10 @@ signals:
     void uvOverlayChanged();
     void smartSelectChanged();
     void editorWindowChanged();
+    void gradientChanged();
+    void rampEditorChanged();
+    void stampChanged();
+    void layersChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -406,6 +584,17 @@ private:
     /// recover the barycentric-interpolated UV at the hit point. Returns
     /// false on miss.
     bool hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const;
+    /// Ray-test only the cached triangle (see m_hitCache). Used while
+    /// dragging along a continuous surface patch.
+    bool tryHitTestCachedTriangle(const Ogre::Vector3& localOrigin,
+                                  const Ogre::Vector3& localDir,
+                                  Ogre::Vector2& outUV) const;
+    /// Stroke-only hit test: extrapolates UV from recent screen deltas
+    /// to skip full mesh raycasts on most mouse-move events.
+    bool hitTestUVForStroke(const QPoint& screenPos, OgreWidget* widget,
+                            Ogre::Vector2& outUV);
+    void processPendingStrokeUpdate();
+    void processPendingStrokeUpdateUV();
 
     /// Same hit-test but returns the local-space position and normal
     /// at the hit (for vertex paint, which works in 3D space).
@@ -436,11 +625,42 @@ private:
     /// actual GPU work happens in doFlushDirtyToOgre on a timer.
     void flushDirtyToOgre();
     /// The synchronous GPU upload. Called from the debounce timer.
-    void doFlushDirtyToOgre();
+    void doFlushDirtyToOgre(bool immediate = false);
+    /// Upload one dirty rect as 64×64 tiles, one tile per event-loop
+    /// tick, so GL blits never stall the UI for long.
+    void scheduleStrokeGpuFlush();
+    /// At most ~60 GPU blits/sec while the brush is down (CPU paint is immediate).
+    void scheduleThrottledLiveGpuFlush();
+    /// Synchronous GPU blit of the current dirty rect during live strokes.
+    bool flushLiveStrokeToGpu();
+    /// Rebuild composite CPU buffer from dirty layers (no GPU).
+    void recomposePaintBufferIfNeeded();
+    /// Stop an in-progress tiled upload (e.g. prior stroke still draining).
+    void cancelInFlightGpuUpload();
+    void startTiledGpuUpload(bool finishingStroke);
+    void processNextTiledUploadTile();
+    void onTiledUploadPassComplete();
+    /// Texture the viewport samples — original (in-place) or manual paint tex.
+    Ogre::TexturePtr gpuUploadTargetTexture() const;
+    bool blitBufferRectToOgreTexture(int x0, int y0, int x1, int y1);
+    void commitStrokeUndo(std::vector<uint8_t> prePixels, int layerIndex);
+    /// Shared per-stroke reset — must stay in sync for viewport + UV preview paths.
+    void resetStrokePaintState();
+    void scheduleEmbeddedTextureCacheUpdate();
+    void invalidateLayerStrokeBaseline();
+    /// 3D brush ring during strokes — uses the cached hit triangle only.
+    bool localPointFromHitCache(const Ogre::Vector2& uv,
+                                Ogre::Vector3& outLocal,
+                                Ogre::Vector3& outNormal) const;
+    /// Point the model's diffuse TUSes at `m_ogreTexture` on the next
+    /// event-loop tick (mat compile/reload must not run mid-stroke).
+    void scheduleRebindToPaintTexture(Ogre::Entity* entity);
 
     /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
     /// previewChanged when the URI actually changed.
     void refreshPreviewUri();
+    /// Debounced Inspector / editor-window preview refresh (reads CPU buffer).
+    void schedulePreviewRefresh();
 
     /// Regenerate `m_uvOverlayUri` by drawing every UV-mapped triangle
     /// outline at the current texture resolution into a transparent PNG.
@@ -452,6 +672,41 @@ private:
     /// Apply the brush stamp at a UV coord using the current tool.
     /// Returns true if any pixel changed.
     bool applyBrushAtUV(const Ogre::Vector2& uv);
+
+    /// Brush radius mapped into UV space (matches applyBrushAtUV).
+    float brushRadiusUV() const;
+
+    /// Stamp along a UV segment so fast cursor moves don't leave gaps.
+    /// Returns true if any dab modified pixels.
+    bool paintBrushAlongSegment(const Ogre::Vector2& from, const Ogre::Vector2& to);
+
+    /// Resolve the active GradientRamp (FG/BG quick mode, custom, or bundled).
+    const GradientRamp::Ramp* resolveActiveRamp() const;
+    /// Rebuild `m_activeRamp` / preview URI after name or stop edits.
+    void reloadActiveRamp();
+    void refreshRampPreviewUri();
+    /// Update stroke path-length tracking used by linear gradients.
+    void noteStrokeSample(const Ogre::Vector2& uv, bool isStart);
+    float strokeDirectionRad() const;
+    TexturePaintBuffer::BrushShape currentBrushShape() const;
+    TexturePaintBuffer::ColorAtFn buildBrushColorAtFn(float strokeT) const;
+    bool paintColorFootprintAtUV(const Ogre::Vector2& uv, float radiusUv,
+                                 float strength);
+    void reloadStampImage();
+    void reloadTilingImage();
+    void rebuildStampCache(float radiusUv);
+    void refreshStampPreviewUris();
+
+    /// CPU buffer the brush paints into (active layer).
+    TexturePaintBuffer& activePaintBuffer();
+    const TexturePaintBuffer& activePaintBuffer() const;
+    /// Rebuild `m_buffer` from visible layers and mark dirty.
+    /// @p fullBuffer forces a full-stack composite (layer add/delete/undo).
+    void recomposeComposite(bool fullBuffer = false);
+    void pushLayerOpUndo(const QString& label,
+                         PaintLayerStack::Snapshot before,
+                         PaintLayerStack::Snapshot after);
+    std::vector<uint8_t> snapshotActiveLayerPixels() const;
 
     /// Draw the hover ring on the mesh at a given local position +
     /// normal. Shared between viewport-driven and panel-driven hover.
@@ -465,7 +720,10 @@ private:
     void pickColorAtUV(const Ogre::Vector2& uv);
 
     bool m_paintEnabled = false;
+    /// Composite display buffer uploaded to the GPU.
     TexturePaintBuffer m_buffer;
+    PaintLayerStack m_layerStack;
+    quint64 m_layerPreviewVersion = 0;
     QString m_textureName;
     Ogre::TexturePtr m_ogreTexture;
     /// The original texture we're painting into. We blit our dirty
@@ -476,6 +734,9 @@ private:
     Ogre::TexturePtr m_originalTexture;
     QString m_originalTextureName;
     bool m_useOriginalTexture = false;
+    /// When true, skip in-place blit into `m_originalTexture` and always
+    /// upload to `m_ogreTexture` (rebind required for the viewport).
+    bool m_forceManualPaintTexture = false;
     bool m_loggedInPlaceBlit = false;
     bool m_rebindScheduled = false;
     /// Debounce flag for the GPU upload. We accumulate dirty pixels
@@ -483,13 +744,95 @@ private:
     /// blitting on every mouse-move (which hits 100+ Hz and uploads
     /// 4 MB each time on macOS Metal).
     bool m_gpuFlushScheduled = false;
+    /// Set during an active stroke when CPU pixels changed; consumed
+    /// by scheduleStrokeGpuFlush() for tiled GPU uploads.
+    bool m_strokeGpuFlushScheduled = false;
+    bool m_strokeLiveUploadStarted = false;
+    bool m_strokeGpuFlushPending = false;
+    struct UploadTile { int x0 = 0; int y0 = 0; int x1 = 0; int y1 = 0; };
+    std::vector<UploadTile> m_tiledUploadQueue;
+    int m_tiledUploadIndex = 0;
+    bool m_tiledUploadRunning = false;
+    /// Whether the current tiled upload pass is the final flush before idle.
+    bool m_uploadFinishingStroke = false;
+    /// Incremented on every new stroke and whenever pixels change — stale
+    /// uploads from a prior stroke must not clearDirty() or finish undo.
+    uint64_t m_gpuUploadGeneration = 0;
+    uint64_t m_activeUploadGeneration = 0;
+    uint64_t m_bufferDirtyEpoch = 0;
+    uint64_t m_uploadEpochSnapshot = 0;
+    TexturePaintBuffer::DirtyRect m_uploadPassDirty;
+    uint64_t m_strokeUndoGeneration = 0;
+    OgreWidget* m_pendingStrokeWidget = nullptr;
+    QPoint m_pendingStrokePos;
+    double m_pendingStrokeU = 0.0;
+    double m_pendingStrokeV = 0.0;
+    /// Screen→UV gradient for cheap extrapolation between raycasts.
+    bool m_strokeHaveHitScreen = false;
+    QPoint m_strokeLastHitScreen;
+    Ogre::Vector2 m_strokeLastHitUV = Ogre::Vector2::ZERO;
+    float m_strokeUvPerScreenX = 0.0f;
+    float m_strokeUvPerScreenY = 0.0f;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;
     bool m_strokeJustBegan = false; ///< Fill/picker tools fire only once per stroke.
+    bool m_strokeFromUvPreview = false;
+    bool m_strokeMadeChanges = false;
+    bool m_embeddedCacheUpdateScheduled = false;
+    bool m_layerOpacityDragging = false;
+    bool m_layerOpacityDragChanged = false;
+    PaintLayerStack::Snapshot m_layerOpacityDragBefore;
+    /// Layer pixels at the end of the last stroke — O(1) handoff as the next pre-image.
+    std::vector<uint8_t> m_layerStrokeBaseline;
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
     PaintTarget m_target = TargetVertex;
+
+    // Paint v2 Slice A — gradient ramp state.
+    ColorSource m_colorSource = ColorSolid;
+    GradientMode m_gradientMode = GradientLinear;
+    QString m_activeRampName = QStringLiteral("Sunset");
+    bool m_useFgBgRamp = false;
+    bool m_gradientStepped = false;
+    double m_rampJitter = 0.0; ///< 0..1 max random phase offset per stroke.
+    GradientRamp::Ramp m_activeRamp;
+    QString m_rampPreviewUri;
+    QObject* m_rampEditorWindow = nullptr;
+
+    // Per-stroke path tracking for linear gradients (smoothed length).
+    Ogre::Vector2 m_strokePrevUV = Ogre::Vector2::ZERO;
+    bool m_strokeHavePrevUV = false;
+    float m_strokePathLength = 0.0f;
+    float m_strokePhaseJitter = 0.0f;
+    /// EMA of the stroke direction unit vector — keeps linear sampling
+    /// stable when the cursor turns sharply mid-stroke.
+    Ogre::Vector2 m_strokeDirSmoothed = Ogre::Vector2::ZERO;
+
+    // Paint v2 Slice B — stamp / tiling footprint state.
+    BrushFootprint::FootprintType m_footprintType = BrushFootprint::FootprintType::Round;
+    QString m_activeStampName = QStringLiteral("Soft Circle");
+    QString m_activeTilingName = QStringLiteral("Wood");
+    BrushFootprint::StampSettings m_stampSettings;
+    BrushFootprint::TilingSettings m_tilingSettings;
+    BrushFootprint::ImageRgba m_stampImage;
+    BrushFootprint::ImageRgba m_tilingImage;
+    BrushFootprint::RasterizedStamp m_stampCache;
+    int m_stampCachePixelSize = 0;
+    QString m_stampPreviewUri;
+    QString m_tilingPreviewUri;
+    float m_lastStampDabPathLength = 0.0f;
+
+    /// Last ray-hit triangle for fast stroke tracking (avoids walking
+    /// every triangle on each mouse-move while the cursor stays on the
+    /// same surface patch).
+    struct PaintHitCache {
+        int submesh = -1;
+        int triangle = -1;
+        QPoint screenPos;
+        bool valid = false;
+    };
+    mutable PaintHitCache m_hitCache;
 
     /// Track every TUS we rebound to the paint texture so closeSession()
     /// can restore the originals. We keep the *material name* (not a

@@ -93,6 +93,7 @@ THE SOFTWARE.
 #include "PS1/PS1TIM.h"
 #include "EditableMesh.h"
 #include "EditModeController.h"
+#include "TexturePaintController.h"
 #include <OgreMaterialManager.h>
 #include <OgreRTShaderSystem.h>
 #include <OgreDataStream.h>
@@ -3379,6 +3380,13 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
         return QString();
     }
 
+    if (Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) {
+        if (auto* tpc = TexturePaintController::instance()) {
+            if (!tpc->confirmFlattenLayersForExport(parent))
+                return QString();
+        }
+    }
+
     QString filter = "Ogre Mesh (*.mesh)";
     QString fileName = QFileDialog::getSaveFileName(parent, QObject::tr("Export Mesh"),
                                                     _sn->getName().data(),
@@ -3410,6 +3418,8 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
         const_cast<Ogre::Entity*>(e));
+    if (auto* tpc = TexturePaintController::instance())
+        tpc->flushPaintTextureForExport(const_cast<Ogre::Entity*>(e));
 
     if(_format=="Ogre XML (*.mesh.xml)")
     {

@@ -635,6 +635,14 @@ Rectangle {
 
                 Component.onCompleted: content = performanceCaptureComponent
 
+                // Enumerate cameras only after the deferred Loader has
+                // finished instantiating the device combo (QMediaDevices during
+                // synchronous Loader startup can crash when combined with a
+                // devicesChanged rebinding cascade).
+                onContentReady: Qt.callLater(function() {
+                    MocapController.refreshDevices()
+                })
+
                 // never leave the camera running when the section disappears
                 // (mode change / deselect) — the AutoRig marker-session
                 // precedent.
@@ -847,6 +855,28 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = hdrEnvironmentComponent
+            }
+
+            // ---- Split into Parts (AI segmentation, #859/#861, Object mode) ----
+            CollapsibleSection {
+                title: "Split into Parts (AI)"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    PartOpsController.hasSelection)
+                expanded: false
+
+                Component.onCompleted: content = partOpsSplitComponent
+            }
+
+            // ---- Explode / Join Parts (#859/#862, Object mode) ----
+            CollapsibleSection {
+                title: "Explode / Join Parts"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    PartOpsController.canExplode || PartOpsController.canJoin)
+                expanded: false
+
+                Component.onCompleted: content = partOpsExplodeJoinComponent
             }
 
             // ---- Decimate (single-pass) ----
@@ -2329,9 +2359,11 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: mocapReady
-                    ? "Webcam performance capture: Preview drives the selection's "
-                      + "morph targets, Head bone, and (on a humanoid rig) full "
-                      + "body live; Record writes undoable clips onto the timeline."
+                    ? "Webcam performance capture: Preview drives morph targets, "
+                      + "Head bone, and (on a humanoid rig) body live; Record "
+                      + "writes undoable clips. On start the first frame "
+                      + "calibrates neutral — face the camera with arms relaxed "
+                      + "at your sides. Use Neutral to re-base if you moved."
                     : MocapController.unavailableReason
             }
 
@@ -2378,7 +2410,6 @@ Rectangle {
                     textRole: "description"
                     valueRole: "id"
                     enabled: MocapController.state === 0
-                    Component.onCompleted: MocapController.refreshDevices()
                 }
 
                 Rectangle {
@@ -2411,6 +2442,27 @@ Rectangle {
                         }
                     }
                 }
+            }
+
+            InspectorCheckBox {
+                width: parent.width - 16
+                visible: mocapReady && MocapController.bodyAvailable
+                text: "Show PoseIK debug skeleton"
+                checked: MocapController.showPoseDebug
+                onToggled: MocapController.showPoseDebug = checked
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: mocapReady && MocapController.showPoseDebug
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9
+                text: "Debug (beside character): cyan = MediaPipe landmarks, "
+                      + "yellow = PoseIK 22-bone FK. If cyan matches you but "
+                      + "the skinned mesh does not, retarget is wrong; if cyan "
+                      + "is wrong, capture or lighting is wrong."
             }
 
             // Video-file source — the path for macOS where the camera is
@@ -2449,7 +2501,9 @@ Rectangle {
             }
 
             // camera preview + HUD
+            // live HUD (webcam thumbnail + detection dots)
             Rectangle {
+                id: mocapPreviewHud
                 width: parent.width - 16
                 height: visible ? 140 : 0
                 visible: mocapReady && MocapController.previewDataUrl !== ""
@@ -2494,6 +2548,18 @@ Rectangle {
                            ? "  ● REC " + MocapController.recordingSeconds.toFixed(1) + "s"
                            : "")
                 }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: mocapReady && previewing
+                         && MocapController.bodyEnabled
+                         && MocapController.bodyCalibrationHint !== ""
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.highlightColor
+                font.pixelSize: 10
+                font.italic: true
+                text: MocapController.bodyCalibrationHint
             }
 
             // channel summary
@@ -4393,6 +4459,9 @@ Rectangle {
             property bool hasMask: TexturePaintController.hasSelectionMask
             property int maskCount: TexturePaintController.selectedPixelCount
             property real smartTolerance: TexturePaintController.smartSelectTolerance
+            property int layerCount: TexturePaintController.layerCount
+            property int activeLayerIndex: TexturePaintController.activeLayerIndex
+            property var paintLayers: TexturePaintController.paintLayers
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4428,6 +4497,11 @@ Rectangle {
                     texPaintCol.hasMask = TexturePaintController.hasSelectionMask
                     texPaintCol.maskCount = TexturePaintController.selectedPixelCount
                     texPaintCol.smartTolerance = TexturePaintController.smartSelectTolerance
+                }
+                function onLayersChanged() {
+                    texPaintCol.layerCount = TexturePaintController.layerCount
+                    texPaintCol.activeLayerIndex = TexturePaintController.activeLayerIndex
+                    texPaintCol.paintLayers = TexturePaintController.paintLayers
                 }
             }
 
@@ -4494,6 +4568,8 @@ Rectangle {
             // / Wand) live in the left toolbar \u2014 see mainwindow.cpp
             // \u2014 so the user picks the tool with the same buttons
             // regardless of which target they're painting.
+            // Brush colour source / gradient ramps also live in the
+            // brush portal (paint tool ▾), not here.
 
             // Smart-select panel. Visible whenever there's an active
             // session \u2014 tolerance is always meaningful, and once the
@@ -4673,6 +4749,270 @@ Rectangle {
                 font.pixelSize: 10
                 opacity: texPaintCol.hasSession ? 1.0 : 0.7
                 wrapMode: Text.Wrap
+            }
+
+            // ---- Layers (Paint v2 Slice C #546) ----
+            Column {
+                id: layersCol
+                spacing: 6
+                width: parent.width - 16
+                visible: texPaintCol.hasSession && texPaintCol.paintTarget === 0
+
+                property var activeLayer: {
+                    const layers = texPaintCol.paintLayers || []
+                    return (layers.length > texPaintCol.activeLayerIndex)
+                        ? layers[texPaintCol.activeLayerIndex] : null
+                }
+
+                Text {
+                    text: "Layers"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+
+                // Toolbar — same action-string pattern as the smart-select row.
+                Row {
+                    spacing: 3
+                    width: parent.width
+                    Repeater {
+                        model: [
+                            { label: "+",     action: "add",      hint: "Add layer" },
+                            { label: "Dup",   action: "dup",      hint: "Duplicate" },
+                            { label: "\u2191", action: "up",      hint: "Move up" },
+                            { label: "\u2193", action: "down",    hint: "Move down" },
+                            { label: "Mrg",   action: "merge",   hint: "Merge down" },
+                            { label: "Flat",  action: "flatten", hint: "Flatten all" },
+                            { label: "\u2715", action: "delete",  hint: "Delete layer" }
+                        ]
+                        Rectangle {
+                            width: 34; height: 22; radius: 3
+                            property bool btnEnabled: modelData.action !== "delete"
+                                || texPaintCol.layerCount > 1
+                            opacity: btnEnabled ? 1.0 : 0.35
+                            color: btnEnabled && layerBtnMa.containsMouse
+                                ? Qt.lighter(PropertiesPanelController.panelColor, 1.4)
+                                : PropertiesPanelController.headerColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: layerBtnMa
+                                anchors.fill: parent
+                                hoverEnabled: btnEnabled
+                                enabled: btnEnabled
+                                cursorShape: btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                ToolTip.text: !btnEnabled && modelData.action === "delete"
+                                    ? "Cannot delete the last layer"
+                                    : modelData.hint
+                                ToolTip.visible: containsMouse
+                                ToolTip.delay: 400
+                                onClicked: {
+                                    const idx = texPaintCol.activeLayerIndex
+                                    switch (modelData.action) {
+                                    case "add":     TexturePaintController.addPaintLayer(""); break
+                                    case "dup":     TexturePaintController.duplicatePaintLayer(idx); break
+                                    case "up":      TexturePaintController.movePaintLayerUp(idx); break
+                                    case "down":    TexturePaintController.movePaintLayerDown(idx); break
+                                    case "merge":   TexturePaintController.mergePaintLayerDown(idx); break
+                                    case "flatten": TexturePaintController.flattenPaintLayers(); break
+                                    case "delete":  TexturePaintController.deletePaintLayer(idx); break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ListView {
+                    id: layerList
+                    width: parent.width
+                    height: Math.min(130, Math.max(36, count * 36))
+                    clip: true
+                    spacing: 2
+                    model: texPaintCol.paintLayers
+
+                    delegate: Rectangle {
+                        width: layerList.width
+                        height: 34
+                        radius: 3
+                        color: modelData.active
+                            ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                            : (layerRowMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.3)
+                                                        : PropertiesPanelController.headerColor)
+                        border.color: modelData.active ? PropertiesPanelController.highlightColor
+                                                       : PropertiesPanelController.borderColor
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            spacing: 4
+
+                            Image {
+                                width: 28; height: 28
+                                source: modelData.thumbnailUrl
+                                fillMode: Image.PreserveAspectFit
+                                smooth: false
+                                cache: false
+                            }
+
+                            Text {
+                                width: Math.max(40, layerList.width - 130)
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
+
+                            // Visible toggle (eye)
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.visible
+                                    ? PropertiesPanelController.highlightColor
+                                    : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.visible ? "\u2713" : ""
+                                    color: "white"; font.pixelSize: 9
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerVisible(
+                                                   modelData.index, !modelData.visible)
+                                }
+                            }
+
+                            // Solo toggle
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.solo ? "#806622" : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "S"
+                                    color: modelData.solo ? "#ffcc00" : PropertiesPanelController.textColor
+                                    font.pixelSize: 8; font.bold: true
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerSolo(
+                                                   modelData.index, !modelData.solo)
+                                }
+                            }
+
+                            // Lock toggle
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.locked
+                                    ? "#804040" : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor; border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.locked ? "L" : ""
+                                    color: modelData.locked ? "#ffcccc" : PropertiesPanelController.textColor
+                                    font.pixelSize: 8; font.bold: true
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: TexturePaintController.setPaintLayerLocked(
+                                                   modelData.index, !modelData.locked)
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: layerRowMa
+                            anchors.fill: parent
+                            z: -1
+                            hoverEnabled: true
+                            onClicked: TexturePaintController.activeLayerIndex = modelData.index
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    Text {
+                        text: "Opacity"
+                        width: 52
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        id: layerOpacitySlider
+                        width: 120
+                        from: 0; to: 1; stepSize: 0.01
+                        property bool updating: false
+                        value: layersCol.activeLayer ? layersCol.activeLayer.opacity : 1
+                        onPressedChanged: {
+                            if (pressed)
+                                TexturePaintController.beginPaintLayerOpacityDrag()
+                            else
+                                TexturePaintController.endPaintLayerOpacityDrag()
+                        }
+                        onMoved: {
+                            if (!layersCol.activeLayer) return
+                            TexturePaintController.setPaintLayerOpacity(
+                                texPaintCol.activeLayerIndex, value)
+                        }
+                        Connections {
+                            target: TexturePaintController
+                            function onLayersChanged() {
+                                if (!layersCol.activeLayer) return
+                                layerOpacitySlider.updating = true
+                                layerOpacitySlider.value = layersCol.activeLayer.opacity
+                                layerOpacitySlider.updating = false
+                            }
+                        }
+                    }
+                    Text {
+                        text: layersCol.activeLayer
+                              ? Math.round(layersCol.activeLayer.opacity * 100) + "%" : "100%"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    Text {
+                        text: "Blend"
+                        width: 52
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    ThemedComboBox {
+                        id: layerBlendCombo
+                        width: Math.max(120, layersCol.width - 58)
+                        model: TexturePaintController.blendModeNames
+                        currentIndex: layersCol.activeLayer ? layersCol.activeLayer.blendMode : 0
+                        onActivated: function(index) {
+                            TexturePaintController.setPaintLayerBlendMode(
+                                texPaintCol.activeLayerIndex, index)
+                        }
+                        Connections {
+                            target: TexturePaintController
+                            function onLayersChanged() {
+                                if (!layersCol.activeLayer) return
+                                layerBlendCombo.currentIndex = layersCol.activeLayer.blendMode
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- 2D preview / paint surface ----
@@ -6356,6 +6696,307 @@ Rectangle {
     // Live slider + preview that swaps a temporary LOD into the viewport,
     // mirroring the LOD section's previewLod pattern but for one-shot
     // base-mesh reduction. Apply commits the swap permanently.
+    // PartOps split (#859/#861): segment the selected fused mesh and replace
+    // it with one submesh per detected part (head/torso/…). Undoable (Ctrl+Z
+    // restores the fused mesh). Runs in Object mode; no Edit Mode required.
+    Component {
+        id: partOpsSplitComponent
+
+        Column {
+            id: partOpsSplitContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Category id list, index-aligned with partOpsCategoryCombo.
+            readonly property var partOpsCategories:
+                ["auto", "body", "vegetation", "vehicle", "building"]
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: "Split the selected mesh into named part submeshes "
+                    + "(head, torso, arms, legs). Undoable."
+            }
+
+            Row {
+                spacing: 6
+                Text {
+                    text: "Category:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: partOpsCategoryCombo
+                    width: 140
+                    height: 22
+                    font.pixelSize: 11
+                    model: partOpsSplitContent.partOpsCategories
+                    currentIndex: 0
+                }
+            }
+
+            // Checked = AI-assisted (the ONNX segmentation model, downloaded on
+            // first use). Unchecked = the deterministic geometric / rig-prior
+            // fallback. Both run locally; the model is the only thing that
+            // downloads. Default ON. Uses the inspector's own InspectorCheckBox
+            // so it matches the other panel toggles (not the Material-Editor
+            // Themed* look).
+            InspectorCheckBox {
+                id: partOpsAiCheck
+                text: "AI assisted"
+                checked: true
+            }
+
+            // Thin-shell game assets are single-sided surfaces with no wall
+            // thickness, so an exploded part exposes its hollow interior at the
+            // cut. "Solidify" gives each part real wall volume first. Default OFF
+            // (adds geometry; only meaningful for thin shells).
+            InspectorCheckBox {
+                id: partOpsSolidifyCheck
+                text: "Solidify thin shells"
+                checked: false
+            }
+
+            // Inspector-styled button (same Rectangle+MouseArea idiom as the
+            // in-file InspectorButton, inlined because that component is scoped
+            // to another section's tree, not this top-level Component).
+            Rectangle {
+                id: partOpsSplitBtn
+                property bool clickEnabled: PartOpsController.hasSelection
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsSplitBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsSplitBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsSplitBtnLabel
+                    anchors.centerIn: parent
+                    text: "Split into Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsSplitBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsSplitBtn.clickEnabled
+                    cursorShape: partOpsSplitBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsSplitFeedback.color = PropertiesPanelController.textColor
+                        partOpsSplitFeedback.text = "Splitting…"
+                        // noModel is the inverse of "AI assisted".
+                        PartOpsController.splitSelectedIntoParts(
+                            "y",
+                            partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
+                            !partOpsAiCheck.checked,
+                            partOpsSolidifyCheck.checked)
+                    }
+                }
+            }
+
+            Text {
+                id: partOpsSplitFeedback
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: ""
+            }
+
+            Connections {
+                target: PartOpsController
+                function onSplitFinished(status, isError) {
+                    partOpsSplitFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsSplitFeedback.text = status
+                }
+                function onSelectionChanged() {
+                    partOpsSplitFeedback.text = ""
+                }
+            }
+        }
+    }
+
+    // Explode a multi-submesh mesh (typically one produced by "Split into
+    // Parts") into independent scene nodes for inspection/editing, and join a
+    // multi-selection of part nodes back into one fused mesh (baking their
+    // world transforms into vertices). Both undoable (#859/#862, Object mode).
+    Component {
+        id: partOpsExplodeJoinComponent
+
+        Column {
+            id: partOpsEjContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Explode distance is driven through a LOGARITHMIC slider so the
+            // small values (where inspection usually happens) get most of the
+            // travel and the large ones are coarse. The slider position t is
+            // normalised [0..1]; distance = A·(e^(k·t) − 1) maps t=0→0 and
+            // t=1→10 with fine resolution near 0. k=4 is the curve steepness;
+            // A = 10/(e^k − 1) pins the top of the range to 10.
+            readonly property real explodeLogK: 4.0
+            readonly property real explodeLogMax: 10.0
+            readonly property real explodeLogA:
+                explodeLogMax / (Math.exp(explodeLogK) - 1.0)
+            function explodePosToDist(t) {
+                return explodeLogA * (Math.exp(explodeLogK * t) - 1.0)
+            }
+            function explodeDistToPos(d) {
+                return Math.log(d / explodeLogA + 1.0) / explodeLogK
+            }
+
+            property real explodeDistance: 0.1
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: "Explode the selected multi-part mesh into separate, "
+                    + "movable scene nodes. Select 2+ parts and Join to merge "
+                    + "them back into one mesh. Undoable."
+            }
+
+            // --- Explode distance ---
+            Row {
+                spacing: 6
+                Text {
+                    text: "Explode distance:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: explodeDistSlider
+                    width: 110
+                    // Runs on the normalised log position [0..1]; the content's
+                    // explodePosToDist() converts it to the actual distance.
+                    from: 0.0
+                    to: 1.0
+                    // Seed the handle from the default distance (0.1) and keep
+                    // it in sync if explodeDistance is set programmatically.
+                    value: partOpsEjContent.explodeDistToPos(
+                               partOpsEjContent.explodeDistance)
+                    onMoved: partOpsEjContent.explodeDistance =
+                                 partOpsEjContent.explodePosToDist(value)
+                }
+                Text {
+                    text: partOpsEjContent.explodeDistance.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // --- Explode button ---
+            Rectangle {
+                id: partOpsExplodeBtn
+                property bool clickEnabled: PartOpsController.canExplode
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsExplodeBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsExplodeBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsExplodeBtnLabel
+                    anchors.centerIn: parent
+                    text: "Explode Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsExplodeBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsExplodeBtn.clickEnabled
+                    cursorShape: partOpsExplodeBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsEjFeedback.color = PropertiesPanelController.textColor
+                        partOpsEjFeedback.text = "Exploding…"
+                        PartOpsController.explodeSelected(partOpsEjContent.explodeDistance)
+                    }
+                }
+            }
+
+            // --- Join button ---
+            Rectangle {
+                id: partOpsJoinBtn
+                property bool clickEnabled: PartOpsController.canJoin
+                width: Math.min(parent ? parent.width - 16 : 200,
+                                partOpsJoinBtnLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: partOpsJoinBtnMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: partOpsJoinBtnLabel
+                    anchors.centerIn: parent
+                    text: "Join Parts"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: partOpsJoinBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: partOpsJoinBtn.clickEnabled
+                    cursorShape: partOpsJoinBtn.clickEnabled
+                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        partOpsEjFeedback.color = PropertiesPanelController.textColor
+                        partOpsEjFeedback.text = "Joining…"
+                        PartOpsController.joinSelected()
+                    }
+                }
+            }
+
+            Text {
+                id: partOpsEjFeedback
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                text: ""
+            }
+
+            Connections {
+                target: PartOpsController
+                function onExplodeFinished(status, isError) {
+                    partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsEjFeedback.text = status
+                }
+                function onJoinFinished(status, isError) {
+                    partOpsEjFeedback.color = isError ? "#e06060" : "#60c060"
+                    partOpsEjFeedback.text = status
+                }
+                function onSelectionChanged() {
+                    partOpsEjFeedback.text = ""
+                }
+            }
+        }
+    }
+
     Component {
         id: decimateComponent
 

@@ -783,6 +783,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
@@ -854,7 +855,7 @@ jobs:
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
 
             # Create proper launcher script
-            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
             # Create qtmesh symlink for CLI mode (name starts with "qtmesh" but not "qtmesheditor")
@@ -915,6 +916,49 @@ jobs:
                 cp -R "$QT_DIR/plugins/multimedia/"*.so \
                     ./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/ 2>/dev/null || true
             fi
+
+            # MJPEG webcams deliver Format_Jpeg frames; decoding them via
+            # QImage::fromData("JPEG") requires the qjpeg imageformat plugin.
+            if [ -d "$QT_DIR/plugins/imageformats" ]; then
+                mkdir -p ./pack-deb/usr/lib/qtmesheditor/plugins/imageformats
+                cp -R "$QT_DIR/plugins/imageformats/"*.so \
+                    ./pack-deb/usr/lib/qtmesheditor/plugins/imageformats/ 2>/dev/null || true
+            fi
+
+            # Qt FFmpeg stub shims — libffmpegmediaplugin.so depends on these; when
+            # they are absent the FFmpeg backend fails to load and
+            # QMediaDevices::videoInputs() returns empty ("no camera available").
+            cp -L "$QT_DIR/lib/libQt6FFmpegStub-"*.so* ./pack-deb/usr/lib/qtmesheditor/ 2>/dev/null || true
+
+            # Bundle FFmpeg libs required by libffmpegmediaplugin.so so confined
+            # Snap / minimal .deb installs can open webcams and video files.
+            FFMPEG_PLUGIN="./pack-deb/usr/lib/qtmesheditor/plugins/multimedia/libffmpegmediaplugin.so"
+            if [ -f "$FFMPEG_PLUGIN" ]; then
+              for lib in $(ldd "$FFMPEG_PLUGIN" | awk '/=> \// {print $3}'); do
+                case "$lib" in
+                  */libav*|*/libsw*)
+                    cp -L "$lib" ./pack-deb/usr/lib/qtmesheditor/
+                    ;;
+                esac
+              done
+              if ldd "$FFMPEG_PLUGIN" | grep -q 'not found'; then
+                echo "ERROR: libffmpegmediaplugin.so has unresolved deps:" >&2
+                ldd "$FFMPEG_PLUGIN" | grep 'not found' >&2
+                exit 1
+              fi
+            fi
+
+            # PipeWire client — Qt 6 Multimedia dlopen()s libpipewire-0.3 for camera
+            # enumeration on modern Linux (not via the FFmpeg plugin).
+            sudo apt-get install -y libpipewire-0.3-0t64
+            for lib in libpipewire-0.3.so.0; do
+              src="/usr/lib/x86_64-linux-gnu/${lib}"
+              if [ ! -e "$src" ]; then
+                echo "ERROR: missing ${src} (needed for webcam enumeration)" >&2
+                exit 1
+              fi
+              cp -L "$src" ./pack-deb/usr/lib/qtmesheditor/
+            done
 
             dpkg-deb --build --root-owner-group pack-deb
             mv pack-deb.deb qtmesheditor_amd64.deb
@@ -1016,7 +1060,7 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Install Build Wrapper
-      uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v4
+      uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v6
       env:
         SONAR_HOST_URL: https://sonarcloud.io
 
@@ -1089,6 +1133,7 @@ jobs:
             -DENABLE_SENTRY=OFF \
             -DENABLE_PS1_RIP=ON \
             -DENABLE_ONNX=ON \
+            -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON
 
     - name: Run build-wrapper
@@ -1526,7 +1571,13 @@ jobs:
           ls -la coverage.xml 2>/dev/null || echo "coverage.xml not found"
 
     - name: Run sonar-scanner
-      uses: SonarSource/sonarqube-scan-action@v4
+      # Dependabot PRs run without access to repository secrets, so SONAR_TOKEN
+      # is empty there and the scan fails with a 401 that blocks the PR through
+      # no fault of its own. Skip the scan for Dependabot; the analysis still
+      # runs on branch pushes and same-repo PRs, which is where the quality gate
+      # matters.
+      if: ${{ github.actor != 'dependabot[bot]' }}
+      uses: SonarSource/sonarqube-scan-action@v6
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1903,6 +1954,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
@@ -2686,12 +2738,34 @@ jobs:
     - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
       id: build
 
-    - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
+    # Snap Store allows only one revision in manual review at a time. When a
+    # prior upload is still queued, publish fails until it is rejected in
+    # https://dashboard.snapcraft.io/ — retry with backoff for transient cases.
+    - name: Publish to Snap Store
       env:
         SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_TOKEN }}
-      with:
-        snap: ${{ steps.build.outputs.snap }}
-        release: stable
+      run: |
+        SNAP="${{ steps.build.outputs.snap }}"
+        for attempt in 1 2 3 4 5 6; do
+          echo "::group::Snap publish attempt ${attempt}/6 (${SNAP})"
+          set +e
+          snapcraft upload "$SNAP" --release stable 2>&1 | tee /tmp/snap-upload.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "::endgroup::"
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -q 'Waiting for previous upload' /tmp/snap-upload.log; then
+            echo "::warning::Snap Store review queue blocked this upload."
+            echo "::warning::Open https://dashboard.snapcraft.io/, find qtmesheditor uploads still 'In review', and click 'Reject and remove from review queue' for stale ones."
+            echo "::warning::Then re-run the failed snap-publish job from GitHub Actions."
+          fi
+          if [ "$attempt" -lt 6 ]; then
+            sleep $((attempt * 60))
+          fi
+        done
+        exit 1
 
 ####################################################################
 # Docker Image Publish (after Linux .deb is built)

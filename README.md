@@ -1,5 +1,5 @@
 
-# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
+# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor 
 
 Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D assets with GUI + CLI + CI/CD support.
 
@@ -15,14 +15,9 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
 #### QtMesh Cloud Badges
-[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
-[![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.dev)
-[![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-animations.svg)](https://qtmesh.dev)
-[![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-skeletons.svg)](https://qtmesh.dev)
-[![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-materials.svg)](https://qtmesh.dev)
+Badges|Certificate
+-|-
+[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev) [![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev) [![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev) [![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.dev) [![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.dev) [![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-animations.svg)](https://qtmesh.dev) [![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-skeletons.svg)](https://qtmesh.dev) [![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-materials.svg)](https://qtmesh.dev)|[![qtmesh certified](https://api.qtmesh.dev/v1/u/fernandotonon/p/qtmesheditor/badges/qtmesh-certified.svg)](https://api.qtmesh.dev/fernandotonon/qtmesheditor/verify)
 
 ---
 
@@ -35,7 +30,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.23.1**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.26.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 
@@ -53,10 +48,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.23.1
+        uses: fernandotonon/QtMeshEditor@3.26.0
         with:
           command: scan
-          image-tag: "3.23.1"
+          image-tag: "3.26.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -81,37 +76,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.23.1
+- uses: fernandotonon/QtMeshEditor@3.26.0
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.23.1"
+    image-tag: "3.26.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.23.1
+- uses: fernandotonon/QtMeshEditor@3.26.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.23.1"
+    image-tag: "3.26.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.23.1
+- uses: fernandotonon/QtMeshEditor@3.26.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.23.1"
+    image-tag: "3.26.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.23.1
+- uses: fernandotonon/QtMeshEditor@3.26.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.23.1"
+    image-tag: "3.26.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh:latest scan ./assets --fail-on error
@@ -285,6 +280,7 @@ Split View|Skeleton Animation Controls
 - **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
 - **Material editor** — visual editing with AI-assisted generation; PBR + HDR/IBL materials look correct on first import (bundled studio HDRI, ACES tonemap, env intensity/tint per material)
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
+- **AI part segmentation & PartOps** — detect a character's parts (head/torso/arms/legs), then **split** into named submeshes, **explode** into separate scene nodes, **join** them back, or **solidify** thin-shell parts; GUI + `qtmesh segment --split-parts / --explode-parts` + MCP (`split_mesh_by_segments`, `explode_mesh_parts`, `join_mesh_parts`) — see [docs/PART_OPS.md](docs/PART_OPS.md)
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
 - **Performance capture** — video/webcam → facial morph animation (ARKit blendshapes), head pose, and full-body skeletal capture onto humanoid rigs; live preview + record in the editor, `qtmesh mocap` on the CLI (`-DENABLE_MOCAP` builds)
 - **AI chat** — natural language scene editing via local LLMs

@@ -1,11 +1,14 @@
 #ifndef TEXTUREPAINTBUFFER_H
 #define TEXTUREPAINTBUFFER_H
 
+#include "BrushFootprint.h"
+
 #include <OgreColourValue.h>
 #include <OgreVector.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -106,6 +109,48 @@ public:
                    float strength = 1.0f,
                    float falloff = 0.5f,
                    BrushShape shape = BrushShape::Round);
+
+    /**
+     * @brief Paint a brush stamp with a per-pixel colour callback.
+     *
+     * `colorAt(dx, dy)` receives normalised brush-space offsets (−1..1)
+     * from the stamp centre. Used by gradient radial / angular modes
+     * (Paint v2 Slice A / #544) so each texel can sample a different
+     * ramp position without a separate code path for solid stamps.
+     */
+    using ColorAtFn = std::function<Ogre::ColourValue(float dx, float dy)>;
+    int paintBrush(const Ogre::Vector2& uv,
+                   float radiusUV,
+                   const ColorAtFn& colorAt,
+                   float strength = 1.0f,
+                   float falloff = 0.5f,
+                   BrushShape shape = BrushShape::Round,
+                   bool multiplyBlendByColorAlpha = false);
+
+    /**
+     * @brief Paint a rotated stamp alpha mask at UV coordinate.
+     *
+     * `stamp` is a pre-rasterised square alpha grid. `colorAt(dx,dy)` supplies
+     * the brush colour (solid or gradient). Final blend weight is
+     * strength * stampAlpha * color.a.
+     */
+    int paintStamp(const Ogre::Vector2& uv,
+                   float radiusUV,
+                   const BrushFootprint::RasterizedStamp& stamp,
+                   float angleRad,
+                   const ColorAtFn& colorAt,
+                   float strength = 1.0f);
+
+    /**
+     * @brief Paint a round/square dab sampling a tileable source in UV space.
+     */
+    int paintTilingBrush(const Ogre::Vector2& uv,
+                         float radiusUV,
+                         const BrushFootprint::ImageRgba& tiling,
+                         const BrushFootprint::TilingSettings& settings,
+                         float strength = 1.0f,
+                         float falloff = 0.5f,
+                         BrushShape shape = BrushShape::Round);
 
     /**
      * @brief Save the buffer to disk as a PNG/JPEG/TGA/BMP/etc.

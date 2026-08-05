@@ -108,6 +108,13 @@
 #include <optional>
 #include <OgreException.h>
 #include <OgreLight.h>
+#include <OgreTextureManager.h>
+#include <OgreHardwarePixelBuffer.h>
+#include <OgreRenderTexture.h>
+#include <OgreViewport.h>
+#include <OgreCamera.h>
+#include "OgreRenderTargetUtil.h"
+#include "SpaceCamera.h"
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
 #include <OgreTechnique.h>
@@ -120,6 +127,7 @@
 #include <OgreMesh.h>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <OgreSkeleton.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -133,6 +141,11 @@
 #include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
+#include "SubMeshOps.h"
+#include "PartOpsMesh.h"
+#include "commands/SplitMeshCommand.h"
+#include "commands/ExplodePartsCommand.h"
+#include "commands/JoinPartsCommand.h"
 #include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
@@ -668,6 +681,9 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("adjust_arm_space"), &MCPServer::toolAdjustArmSpace},
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
+        {QStringLiteral("split_mesh_by_segments"), &MCPServer::toolSplitMeshBySegments},
+        {QStringLiteral("explode_mesh_parts"), &MCPServer::toolExplodeMeshParts},
+        {QStringLiteral("join_mesh_parts"), &MCPServer::toolJoinMeshParts},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
@@ -762,6 +778,9 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("split_mesh_by_segments"),
+        QStringLiteral("explode_mesh_parts"),
+        QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
@@ -837,6 +856,9 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
             {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
+            {QStringLiteral("split_mesh_by_segments"), QStringLiteral("ai_assist")},
+            {QStringLiteral("explode_mesh_parts"), QStringLiteral("ai_assist")},
+            {QStringLiteral("join_mesh_parts"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
@@ -1591,11 +1613,57 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     }
     try {
         mainWindow->importMeshs(QStringList{path});
-        return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
     }
+    // Frame the camera on what was just loaded so a subsequent take_screenshot
+    // shows the mesh (headless MCP has no user to frame it manually). Done
+    // OUTSIDE the import try + swallowing its own errors, so a framing failure
+    // never masks a SUCCESSFUL import (CodeRabbit). It also restores the prior
+    // selection, so it doesn't disrupt an interactive --with-mcp session.
+    frameSceneInActiveViewport();
+    return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
+}
+
+void MCPServer::frameSceneInActiveViewport()
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!mgr || !sel)
+        return;
+
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return;
+
+    // Snapshot the current node selection so we can restore it — framing needs a
+    // selection (frameSelection() no-ops on empty) but must not clobber what an
+    // interactive user had selected (CodeRabbit).
+    const QList<Ogre::SceneNode*> prevSelection = sel->getNodesSelectionList();
+
+    try {
+        sel->clearList();
+        bool any = false;
+        for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+            if (node && node->numAttachedObjects() > 0) {
+                sel->append(node);
+                any = true;
+            }
+        }
+        if (any)
+            ogreWidget->getSpaceCamera()->frameSelection();
+    } catch (const Ogre::Exception&) {
+        // best-effort framing; fall through to restore selection.
+    }
+
+    // Restore the prior selection (empty list == deselect, matching before).
+    sel->clearList();
+    for (Ogre::SceneNode* node : prevSelection)
+        if (node) sel->append(node);
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
@@ -2878,22 +2946,109 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
         return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
 
-    OgreWidget* ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    if (!ogreWidget)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
     if (!ogreWidget) {
+        // Keep the established error string (an existing test asserts it).
         return makeErrorResult("Error: OgreWidget not found");
     }
-
-    QPixmap pixmap = ogreWidget->grab();
-    if (pixmap.isNull()) {
-        return makeErrorResult("Error: Failed to capture screenshot");
+    if (!ogreWidget->getSpaceCamera() || !ogreWidget->getSpaceCamera()->getCamera()) {
+        return makeErrorResult("Error: No active viewport camera");
     }
+    Ogre::Camera* cam = ogreWidget->getSpaceCamera()->getCamera();
 
-    if (!pixmap.save(path)) {
-        return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
+    // Ogre renders straight to the native window surface (WA_PaintOnScreen), so
+    // QWidget::grab() returns an empty/black buffer. Capture the ACTUAL viewport
+    // camera into an offscreen RTT and read that back — the same path the
+    // isometric/turntable renderers use. Size follows the widget (or args).
+    int width = args.contains("width") ? args["width"].toInt()
+                                       : std::max(16, ogreWidget->width());
+    int height = args.contains("height") ? args["height"].toInt()
+                                         : std::max(16, ogreWidget->height());
+    width = std::clamp(width, 16, 4096);
+    height = std::clamp(height, 16, 4096);
+
+    // State touched during the capture that MUST be restored on EVERY exit path
+    // (success OR exception) so a throw can't leak a temp light / boosted ambient
+    // / altered camera aspect / leftover RTT into the live scene (CodeRabbit).
+    Ogre::SceneManager* sm = cam->getSceneManager();
+    const Ogre::ColourValue savedAmbient = sm ? sm->getAmbientLight()
+                                              : Ogre::ColourValue::Black;
+    const Ogre::Real prevAspect = cam->getAspectRatio();
+    Ogre::Light* capLight = nullptr;
+    Ogre::SceneNode* capLightNode = nullptr;
+    Ogre::TexturePtr rtt;
+    auto cleanup = [&]() {
+        cam->setAspectRatio(prevAspect);
+        if (sm) {
+            sm->setAmbientLight(savedAmbient);
+            if (capLightNode) { capLightNode->detachAllObjects();
+                sm->getRootSceneNode()->removeAndDestroyChild(capLightNode); capLightNode = nullptr; }
+            if (capLight) { sm->destroyLight(capLight); capLight = nullptr; }
+        }
+        if (rtt) { Ogre::TextureManager::getSingleton().remove(rtt); rtt.reset(); }
+    };
+
+    try {
+        const std::string rttName = "MCPScreenshotRTT";
+        if (auto existing = Ogre::TextureManager::getSingleton().getByName(rttName))
+            Ogre::TextureManager::getSingleton().remove(existing);
+        rtt = Ogre::TextureManager::getSingleton().createManual(
+            rttName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, static_cast<Ogre::uint32>(width),
+            static_cast<Ogre::uint32>(height), 0, Ogre::PF_BYTE_RGBA,
+            Ogre::TU_RENDERTARGET);
+        Ogre::RenderTarget* target = rtt->getBuffer()->getRenderTarget();
+        OgreRenderTargetUtil::configureOffscreenRenderTarget(target);
+
+        // The RTT sees the live scene, which may render dark without adequate
+        // lighting (imported FBX materials come back black otherwise). Bump
+        // ambient + add a temporary directional key light for the capture
+        // (restored by cleanup()) — same recipe as the isometric renderer.
+        if (sm) {
+            sm->setAmbientLight(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
+            capLight = sm->createLight();
+            capLight->setType(Ogre::Light::LT_DIRECTIONAL);
+            capLight->setDiffuseColour(Ogre::ColourValue(0.9f, 0.9f, 0.9f));
+            capLightNode = sm->getRootSceneNode()->createChildSceneNode();
+            capLightNode->attachObject(capLight);
+            capLightNode->setDirection(Ogre::Vector3(-0.3f, -0.5f, -0.8f).normalisedCopy(),
+                                       Ogre::Node::TS_WORLD);
+        }
+
+        Ogre::Viewport* vp = target->addViewport(cam);
+        vp->setClearEveryFrame(true);
+        vp->setBackgroundColour(Ogre::ColourValue(0.16f, 0.16f, 0.16f));
+        vp->setOverlaysEnabled(false);
+        // Use the RTSS shadergen scheme + shadows so materials render lit (else
+        // everything comes back an unlit black silhouette), matching the live
+        // viewport and the isometric/turntable capture path.
+        vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
+        vp->setShadowsEnabled(true);
+        cam->setAspectRatio(static_cast<Ogre::Real>(width) / static_cast<Ogre::Real>(height));
+        target->update();
+
+        QImage image(width, height, QImage::Format_RGBA8888);
+        Ogre::PixelBox pb(static_cast<Ogre::uint32>(width),
+                          static_cast<Ogre::uint32>(height), 1,
+                          Ogre::PF_BYTE_RGBA, image.bits());
+        target->copyContentsToMemory(Ogre::Box(0, 0, width, height), pb,
+                                     Ogre::RenderTarget::FB_AUTO);
+        cleanup();
+
+        if (!image.save(path))
+            return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("mcp screenshot %1x%2 -> %3").arg(width).arg(height).arg(path));
+        return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
+            .arg(path).arg(width).arg(height));
+    } catch (const Ogre::Exception& e) {
+        cleanup();
+        return makeErrorResult(QStringLiteral("Error capturing screenshot: %1")
+            .arg(QString::fromStdString(e.getDescription())));
     }
-
-    return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
-        .arg(path).arg(pixmap.width()).arg(pixmap.height()));
 }
 
 QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
@@ -4563,6 +4718,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 
         MeshSegmenter::Options opts;
         opts.forceFallback = noModel;
+        opts.cleanupIslands = !args.value("no_cleanup").toBool(false);  // #863 opt-out
         const QString upAxisStr = args.value("up_axis").toString().toLower();
         if (!upAxisStr.isEmpty()) {
             if (upAxisStr == "x") opts.upAxis = 0;
@@ -4685,6 +4841,184 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
+{
+    // PartOps split (#859/#861/#864): segment the selected/named entity and
+    // replace it with one submesh per detected part, via the SAME undoable
+    // SplitMeshCommand the GUI button uses (so Ctrl+Z / undo works identically).
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: No mesh entity found")
+                : QString("Error: Entity '%1' not found").arg(entityName));
+
+        int axis = 1;
+        const QString upAxisStr = args.value("up_axis").toString().toLower();
+        if (upAxisStr == "x") axis = 0;
+        else if (upAxisStr == "z") axis = 2;
+        else if (!upAxisStr.isEmpty() && upAxisStr != "y")
+            return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
+
+        const QString category = args.value("category").toString().isEmpty()
+            ? QStringLiteral("auto") : args.value("category").toString();
+        const bool noModel = args.value("no_model").toBool(false);
+        const bool solidify = args.value("solidify").toBool(false);
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
+                                      QStringLiteral("MCP split_mesh_by_segments"));
+
+        // Capture the entity NAME before push(): push runs redo() synchronously,
+        // which destroys this Ogre::Entity (mesh swap). Reading entity->getName()
+        // after would dereference the freed pointer (CodeRabbit Critical).
+        const QString entityNameOut = QString::fromStdString(entity->getName());
+        auto* cmd = new SplitMeshCommand(entity->getName(), axis, category, noModel,
+                                         QStringLiteral("Body"), solidify);
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: split failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["entity"] = entityNameOut;
+        o["createdSubMeshes"] = cmd->createdSubMeshes();
+        QJsonArray names;
+        for (const QString& n : cmd->partNames()) names.append(n);
+        o["partNames"] = names;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolExplodeMeshParts(const QJsonObject &args)
+{
+    // PartOps explode (#862/#864): split an already-multi-part entity into one
+    // scene node per part, offset outward — via the SAME undoable
+    // ExplodePartsCommand the GUI button uses.
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: No mesh entity found")
+                : QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->getMesh() || entity->getMesh()->getNumSubMeshes() < 2)
+            return makeErrorResult("Error: mesh has a single part — split it into parts first");
+
+        double distance = args.value("distance").toDouble(0.15);
+        if (distance < 0.0) distance = 0.0;
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.explode"),
+                                      QStringLiteral("MCP explode_mesh_parts"));
+        const std::string entName = entity->getName();
+        auto* cmd = new ExplodePartsCommand(entName, static_cast<float>(distance));
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: explode failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["explodedParts"] = cmd->createdParts();
+        o["distance"] = distance;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolJoinMeshParts(const QJsonObject &args)
+{
+    // PartOps join (#862/#864): merge 2+ named part entities (world transforms
+    // baked in) into one fused static mesh — via the undoable JoinPartsCommand.
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        // Resolve the target entities: an explicit "entity_names" array, else
+        // every mesh entity in the scene.
+        std::vector<std::string> names;
+        QString fusedBase;
+        std::set<std::string> seen;   // reject duplicates (CodeRabbit)
+        auto pushName = [&](const std::string& n) {
+            if (seen.insert(n).second) {
+                names.push_back(n);
+                if (fusedBase.isEmpty())
+                    fusedBase = QString::fromStdString(n) + QStringLiteral("_fused");
+            }
+        };
+        const QJsonArray requested = args.value("entity_names").toArray();
+        if (!requested.isEmpty()) {
+            // Every requested name MUST resolve to a mesh entity — a typo would
+            // otherwise silently join a subset while reporting success. A repeated
+            // name would duplicate that entity's geometry AND break the undo
+            // (JoinPartsCommand can't recreate two same-named source nodes).
+            for (const QJsonValue& v : requested) {
+                const QString want = v.toString();
+                Ogre::Entity* found = nullptr;
+                for (auto* ent : mgr->getEntities()) {
+                    if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
+                    if (QString::fromStdString(ent->getName()) == want) { found = ent; break; }
+                }
+                if (!found)
+                    return makeErrorResult(QString("Error: entity '%1' not found").arg(want));
+                if (seen.count(found->getName()))
+                    return makeErrorResult(QString("Error: entity '%1' listed more than once").arg(want));
+                pushName(found->getName());
+            }
+        } else {
+            for (auto* ent : mgr->getEntities()) {
+                if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
+                pushName(ent->getName());
+            }
+        }
+        if (names.size() < 2)
+            return makeErrorResult("Error: need two or more part entities to join");
+
+        const int partCount = static_cast<int>(names.size());
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.join"),
+                                      QStringLiteral("MCP join_mesh_parts"));
+        auto* cmd = new JoinPartsCommand(std::move(names), fusedBase);
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok())
+            return makeErrorResult(cmd->error().isEmpty()
+                ? QString("Error: join failed") : ("Error: " + cmd->error()));
+
+        QJsonObject o;
+        o["joinedParts"] = partCount;
+        o["createdSubMeshes"] = cmd->createdSubMeshes();
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
     } catch (std::exception& e) {
@@ -8950,6 +9284,7 @@ QJsonArray MCPServer::buildToolsList()
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
         props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation."}};
+        props["no_cleanup"] = QJsonObject{{"type", "boolean"}, {"description", "Return RAW model labels: skip the split-cleanup pass (#863) that de-fringes ragged part seams and reabsorbs small disconnected junction islands. Default false (cleanup ON)."}};
         appendTool(
             "segment_mesh",
             "AI mesh part segmentation (#410/#818): predict a semantic part label "
@@ -8963,6 +9298,58 @@ QJsonArray MCPServer::buildToolsList()
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
             "which path ran.",
+            props
+        );
+    }
+
+    // split_mesh_by_segments (#859/#861): PartOps split into per-part submeshes.
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Entity to split. Empty → the first mesh entity in the scene."}};
+        props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the offline geometric/rig-prior segmentation (skip the ONNX model). Default false."}};
+        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for segmentation. Default 'y'."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Segmentation category (default 'auto')."}};
+        props["solidify"] = QJsonObject{{"type", "boolean"}, {"description", "Give each part real WALL VOLUME before capping (default false). For thin-shell game assets (single-sided surfaces) an exploded part otherwise exposes its hollow interior at the cut; solidify offsets an inner shell so the cut shows a solid wall. Adds geometry — only meaningful for thin shells."}};
+        appendTool(
+            "split_mesh_by_segments",
+            "PartOps split (#859/#861): segment the selected/named mesh and REPLACE "
+            "it with one named submesh per detected part (head/torso/left_arm/…). "
+            "Boundary vertices are duplicated so parts are independent; normals, "
+            "UVs, colours, tangents, the skeleton and bone weights are preserved. "
+            "Undoable (same command as the GUI 'Split into Parts' button). Returns "
+            "the created submesh count + part names. FBX export keeps the submesh "
+            "boundaries; glTF coalesces same-material parts.",
+            props
+        );
+    }
+
+    // explode_mesh_parts (#862/#864) — split a multi-part mesh into separate nodes.
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Entity to explode (must already have >=2 part submeshes — split it first). Empty → the first mesh entity."}};
+        props["distance"] = QJsonObject{{"type", "number"}, {"description", "Outward explode offset multiplier (× the assembly diagonal). Default 0.15; 0 = parts coincident."}};
+        appendTool(
+            "explode_mesh_parts",
+            "PartOps explode (#862/#864): split every submesh of an already-multi-part "
+            "entity into its own scene node, offset outward from the assembly centre. "
+            "Preserves materials, and (for a skinned source) the skeleton + bone "
+            "weights. Undoable (same command as the GUI 'Explode Parts' button). "
+            "Returns the exploded part count.",
+            props
+        );
+    }
+
+    // join_mesh_parts (#862/#864) — merge separate part entities into one mesh.
+    {
+        QJsonObject props;
+        props["entity_names"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}}, {"description", "Names of the 2+ part entities to join (world transforms baked in). Omit → join ALL mesh entities in the scene."}};
+        appendTool(
+            "join_mesh_parts",
+            "PartOps join (#862/#864): merge 2+ part entities into ONE fused mesh, "
+            "baking each part's world transform into its geometry. Same-material "
+            "submeshes coalesce. Yields STATIC geometry (skeletons are NOT reconciled "
+            "— a documented join limitation). Undoable (same command as the GUI 'Join "
+            "Parts' button). Returns the joined part count + created submesh count.",
             props
         );
     }

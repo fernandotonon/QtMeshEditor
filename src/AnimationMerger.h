@@ -7,24 +7,24 @@
 #include <array>
 #include <vector>
 
-// Stateful per-frame body retargeter — the SAME legacy-transport math
-// applyMotionClip bakes into a clip, exposed for LIVE drive (mocap preview)
-// so the live path and the recorded clip can never diverge. Construct once
-// from the target skeleton (captures the bind frame, torso frame Ct, per-role
-// bind directions, and the rig's harvested STANDING pose from the calmest
-// frame of its first authored animation), then call evaluateFrame() per pose.
+// Stateful per-frame body retargeter for live mocap and clip baking. Construct
+// once from the target skeleton (bind frame, torso Ct, per-role bind directions,
+// harvested STANDING pose). evaluateFrame() per pose.
 //
-// Input: 22 canonical-role WORLD quaternions (x,y,z,w) from PoseIK — the same
-// array recordBody feeds applyMotionClip. Each joint's parent-relative LOCAL
-// articulation delta (vs the FIRST frame, cached as the neutral reference on
-// the first call) is composed onto the standing pose, with the Mixamo roll
-// correction Mc: local = standLocal · (Mc⁻¹ · delta · Mc). The root/hip is
-// locked to standing (facing is baked into the hip); unresolved roles hold
-// standing. Output: per-bone ABSOLUTE LOCAL orientation for
-// Bone::setOrientation() (Ogre node keyframes are absolute, not deltas).
+// Live mocap (mediaPipeWorld33 passed): landmark-direction matching — the same
+// per-frame aim math applyMotionClip uses for direction retarget. MediaPipe
+// landmarks are canonicalized and each bone is aimed at its live segment
+// direction relative to the neutral calibration frame. This matches the PoseIK
+// debug overlay geometry without a mirror-L/R swap.
+//
+// Clip bake / tests (no landmarks): parent-relative PoseIK quaternion delta vs
+// neutral, composed onto standing with Mc roll correction.
 class BodyRetargeter {
 public:
-    explicit BodyRetargeter(Ogre::Skeleton* skel);
+    // yaw180: pass detectBackwardFacing(entity) for rigs with no harvested
+    // standing animation — conjugates limb deltas 180° about +Y (same bridge
+    // applyMotionClip uses for -Z-facing meshes).
+    explicit BodyRetargeter(Ogre::Skeleton* skel, bool yaw180 = false);
     bool valid() const { return m_valid; }
     // resolvedMask bit i set => canonical role i is tracked this frame; roles
     // not set hold the standing pose. Returns {boneHandle -> local quat}.
@@ -33,7 +33,22 @@ public:
     // use only (the mocap live/bake paths); call frames in order.
     std::vector<std::pair<unsigned short, Ogre::Quaternion>>
     evaluateFrame(const std::array<std::array<float, 4>, 22>& canonicalQuats,
-                  uint32_t resolvedMask) const;
+                  uint32_t resolvedMask,
+                  uint32_t skipRolesMask = 0,
+                  const float* mediaPipeWorld33 = nullptr,
+                  const float* mediaPipeVisibility33 = nullptr) const;
+    // Live mocap: capture the reference pose and precompute direction anchors.
+    // When mediaPipeWorld33 is supplied, neutral landmark directions + Qbase
+    // are stored for the direction-matching path. Until set, evaluateFrame()
+    // holds the standing pose.
+    void setNeutralReference(
+        const std::array<std::array<float, 4>, 22>& canonicalQuats,
+        uint32_t resolvedMask = 0xFFFFFFFFu,
+        const float* mediaPipeWorld33 = nullptr,
+        const float* mediaPipeVisibility33 = nullptr);
+    bool hasNeutralReference() const;
+    // Forget the neutral reference so the next setNeutralReference() re-calibrates.
+    void resetLiveNeutral();
 private:
     struct Impl;
     std::shared_ptr<Impl> d;   // shared_ptr so the class stays copyable/movable
@@ -230,7 +245,11 @@ public:
         // crouches instead of running in place. Locomotion clips pass empty /
         // false to keep the root flat.
         const std::vector<float>& clipRootY = {},
-        bool verticalDescent = false);
+        bool verticalDescent = false,
+        // CMU BVH / motion-library clips store LEFT at +X; Ogre rigs with LEFT
+        // at −X need L/R bone-index swap. Pose-ik mocap already labels L/R
+        // anatomically — leave this false for qtmesh mocap / live drive.
+        bool cmuLibraryHandedness = true);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,

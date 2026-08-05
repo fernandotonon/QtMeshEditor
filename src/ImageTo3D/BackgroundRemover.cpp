@@ -10,6 +10,7 @@
 
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 #include <QEventLoop>
 #include <QSettings>
 #include <QTimer>
@@ -132,13 +133,7 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_rembg");
         Ort::SessionOptions so;
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) {}
-#endif
+        OnnxRuntimeSettings::configureSessionOptions(so);
 #ifdef _WIN32
         Ort::Session session(env, modelPath.toStdWString().c_str(), so);
 #else

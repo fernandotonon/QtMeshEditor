@@ -162,4 +162,23 @@ TEST(FaceCapPose, HeadPoseRecoversYaw)
     EXPECT_LT(quatAngle(res.rotation, q), 1e-3);
 }
 
+TEST(FaceCapPose, HeadPoseRecoversPitch)
+{
+    // rotate the canonical model 20 degrees about +X (nod down), project to
+    // the image frame (y,z flip), expect the same rotation back
+    const Quat q = axisAngle(1.f, 0.f, 0.f, static_cast<float>(M_PI) / 9.f);
+    std::vector<float> landmarks(FaceCap::kCanonicalVertexCount * 3);
+    for (int i = 0; i < FaceCap::kCanonicalVertexCount; ++i) {
+        float r[3];
+        rotate(q, &FaceCap::kCanonicalFaceModel[i * 3], r);
+        landmarks[i * 3 + 0] = r[0];
+        landmarks[i * 3 + 1] = -r[1];
+        landmarks[i * 3 + 2] = -r[2];
+    }
+    const auto res = FaceCapPose::solveHeadPose(
+        landmarks.data(), FaceCap::kCanonicalVertexCount);
+    ASSERT_TRUE(res.ok);
+    EXPECT_LT(quatAngle(res.rotation, q), 1e-3);
+}
+
 #endif  // ENABLE_MOCAP

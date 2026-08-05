@@ -26,6 +26,7 @@
 
 #include "FaceCapMapper.h"
 #include "FaceCapPredictor.h"
+#include "MocapLiveTypes.h"
 
 #include <QString>
 #include <QStringList>
@@ -80,6 +81,7 @@ struct BodyRecordOptions {
     bool replaceExisting = true;
     QString algorithmUsed = QStringLiteral("pose-ik");  // for the report
     QString fallbackReason;                             // why not sam3dbody
+    uint32_t skipRolesMask = 0;  // e.g. Head role when head bone is driven separately
 };
 
 struct BodyRecordReport {
@@ -103,6 +105,13 @@ struct BodyRecordReport {
 BodyRecordReport recordBody(
     Ogre::Entity* entity,
     const std::vector<std::vector<std::array<float, 4>>>& clipQuats, int fps,
+    const BodyRecordOptions& options = {});
+
+// Same retarget path as the live preview: BodyRetargeter + landmark directions.
+// `frames` must be time-ascending BodyLiveFrame samples (world + visibility kept).
+BodyRecordReport recordBodyLive(
+    Ogre::Entity* entity,
+    const std::vector<BodyLiveFrame>& frames, int fps,
     const BodyRecordOptions& options = {});
 
 // Head-bone resolution (exposed for the GUI gate + tests): the first bone of
