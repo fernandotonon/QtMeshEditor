@@ -1,4 +1,5 @@
 #include "TextureUpscaler.h"
+#include "OnnxRuntimeSettings.h"
 #include "PbrMapSynth.h"   // reuse toNCHW / nchwToRgb
 
 #include <QtGlobal>
@@ -148,20 +149,10 @@ Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opt
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_upscale");
         Ort::SessionOptions so;
-        // Real-ESRGAN is CPU-heavy; use all cores for intra-op parallelism
-        // (was pinned to 1, which made large textures take hours). Leave one
-        // core free so the UI/host stays responsive. ONNX Runtime treats 0 as
-        // "let ORT decide", but we cap explicitly for predictability.
+        OnnxRuntimeSettings::configureSessionOptions(so);
         const unsigned hw = std::thread::hardware_concurrency();
         const int threads = (hw > 1) ? static_cast<int>(hw - 1) : 1;
         so.SetIntraOpNumThreads(threads);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coreml;
-            so.AppendExecutionProvider("CoreML", coreml);
-        } catch (const Ort::Exception&) {}
-#endif
 #ifdef _WIN32
         std::wstring wp = modelPath.toStdWString();
         Ort::Session session(env, wp.c_str(), so);

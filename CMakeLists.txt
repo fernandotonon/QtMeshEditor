@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 3.25.3 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 3.26.0 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -303,6 +303,10 @@ option(ENABLE_ONNX "Enable AI PBR map synthesis via ONNX Runtime" OFF)
 if(ENABLE_ONNX)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OnnxRuntime.cmake)
     add_definitions(-DENABLE_ONNX)
+    if(QTMESH_ONNX_GPU)
+        add_definitions(-DQTMESH_ONNX_GPU_BUILD)
+        message(STATUS "ONNX Runtime GPU package enabled (CUDA EP on Linux x64 when cuDNN 9 is installed)")
+    endif()
     message(STATUS "AI PBR map synthesis enabled with ONNX Runtime")
 endif()
 ##############################################################

@@ -624,6 +624,42 @@ Dialog {
 
                         GroupBox {
                             Layout.fillWidth: true
+                            title: "ONNX Models"
+                            visible: OnnxRuntimeSettings.onnxAvailable
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                spacing: 8
+
+                                CheckBox {
+                                    id: onnxGpuCheckBox
+                                    text: "Prefer GPU for ONNX models (when available)"
+                                    checked: OnnxRuntimeSettings.preferGpu
+                                    onCheckedChanged: OnnxRuntimeSettings.preferGpu = checked
+
+                                    contentItem: Text {
+                                        text: onnxGpuCheckBox.text
+                                        color: textColor
+                                        leftPadding: onnxGpuCheckBox.indicator.width + onnxGpuCheckBox.spacing
+                                        verticalAlignment: Text.AlignVCenter
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: OnnxRuntimeSettings.gpuProviderNote
+                                    font.pointSize: 9
+                                    color: OnnxRuntimeSettings.gpuProviderReady ? "#2e7d32"
+                                          : (OnnxRuntimeSettings.preferGpu ? "#e65100" : Qt.darker(textColor, 1.3))
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            Layout.fillWidth: true
                             title: "Models Directory"
 
                             RowLayout {
@@ -675,7 +711,7 @@ Dialog {
 
                         Text {
                             Layout.fillWidth: true
-                            text: "Note: Settings changes will take effect when loading a new model."
+                            text: "Note: LLM settings take effect when loading a new model. ONNX GPU preference applies to newly created ONNX sessions."
                             font.pointSize: 9
                             font.italic: true
                             color: Qt.darker(textColor, 1.5)

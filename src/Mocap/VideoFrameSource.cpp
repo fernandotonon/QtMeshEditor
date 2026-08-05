@@ -8,11 +8,13 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QMediaCaptureSession>
+#include <QCameraFormat>
 #include <QMediaDevices>
 #include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QUrl>
 #include <QVideoFrame>
+#include <QVideoFrameFormat>
 #include <QVideoSink>
 
 namespace {
@@ -29,6 +31,76 @@ QImage mocapFrameToRgb888(const QImage& image)
         return image;
     return image.convertToFormat(QImage::Format_RGB888);
 }
+
+QImage mocapFrameFromJpegBytes(const QByteArray& jpeg)
+{
+    if (jpeg.isEmpty())
+        return {};
+    QImage img = QImage::fromData(
+        reinterpret_cast<const uchar*>(jpeg.constData()), jpeg.size(), "JPEG");
+    if (img.isNull())
+        return {};
+    return mocapFrameToRgb888(img);
+}
+
+QImage mocapFrameFromVideoFrame(const QVideoFrame& frame)
+{
+    if (!frame.isValid())
+        return {};
+    QImage img = frame.toImage();
+    if (img.isNull()) {
+        QVideoFrame mapped(frame);
+        if (mapped.map(QVideoFrame::ReadOnly)) {
+            // UVC webcams often deliver Format_Jpeg (MJPEG). Qt's bundled FFmpeg
+            // path can fail toImage() on confined Linux builds; QImage::fromData
+            // needs the qjpeg imageformat plugin (deploy.yml bundles it).
+            if (mapped.pixelFormat() == QVideoFrameFormat::Format_Jpeg
+                && mapped.planeCount() >= 1 && mapped.mappedBytes(0) > 0) {
+                img = mocapFrameFromJpegBytes(QByteArray(
+                    reinterpret_cast<const char*>(mapped.bits(0)),
+                    static_cast<int>(mapped.mappedBytes(0))));
+            }
+            if (img.isNull())
+                img = mapped.toImage();
+            mapped.unmap();
+        }
+    }
+    if (img.isNull())
+        return {};
+    return mocapFrameToRgb888(img);
+}
+
+namespace {
+
+// USB webcams often default to 1080p; a lighter format starts streaming faster
+// and is more reliable under Snap/PipeWire + the FFmpeg backend.
+QCameraFormat pickCameraFormat(const QCameraDevice& device)
+{
+    const auto formats = device.videoFormats();
+    if (formats.isEmpty())
+        return {};
+    auto score = [](const QCameraFormat& f) {
+        const int w = f.resolution().width();
+        const int h = f.resolution().height();
+        const int pixels = w * h;
+        int diff = qAbs(pixels - 640 * 480);
+        if (w == 1280 && h == 720)
+            diff = qMin(diff, 200000);
+        return diff;
+    };
+    QCameraFormat best = formats.first();
+    int bestScore = score(best);
+    for (const QCameraFormat& f : formats) {
+        const int s = score(f);
+        if (s < bestScore) {
+            best = f;
+            bestScore = s;
+        }
+    }
+    return best;
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // ImageSequenceFrameSource
@@ -164,9 +236,8 @@ void FileFrameSource::stop()
         m_player->stop();
 }
 
-void FileFrameSource::handleVideoFrame()
+void FileFrameSource::handleVideoFrame(const QVideoFrame& vf)
 {
-    const QVideoFrame vf = m_sink->videoFrame();
     if (!vf.isValid())
         return;
     const qint64 index = m_frameIndex++;
@@ -177,7 +248,7 @@ void FileFrameSource::handleVideoFrame()
     if (!m_decimator.shouldEmit(t))
         return;
     MocapFrame frame;
-    frame.image = mocapFrameToRgb888(vf.toImage());
+    frame.image = mocapFrameFromVideoFrame(vf);
     frame.timeSec = t;
     frame.frameIndex = index;
     if (!frame.image.isNull())
@@ -190,10 +261,15 @@ void FileFrameSource::handleVideoFrame()
 
 QList<CameraFrameSource::DeviceInfo> CameraFrameSource::availableDevices()
 {
+    MocapCameraHints::ensureMultimediaBackendSafe();
     QList<DeviceInfo> out;
     const auto devices = QMediaDevices::videoInputs();
-    for (const QCameraDevice& d : devices)
+    for (const QCameraDevice& d : devices) {
+        // Skip metadata-only nodes (e.g. /dev/video1 on dual-node UVC cams).
+        if (d.videoFormats().isEmpty())
+            continue;
         out.append({QString::fromUtf8(d.id()), d.description()});
+    }
     return out;
 }
 
@@ -218,6 +294,7 @@ CameraFrameSource::~CameraFrameSource()
 
 bool CameraFrameSource::open(QString* error)
 {
+    MocapCameraHints::ensureMultimediaBackendSafe();
     QCameraDevice device;
     const auto devices = QMediaDevices::videoInputs();
     if (m_deviceId.isEmpty()) {
@@ -248,9 +325,15 @@ bool CameraFrameSource::open(QString* error)
     m_session->setVideoSink(m_sink.get());
     m_clock = std::make_unique<QElapsedTimer>();
 
-    const auto formats = device.videoFormats();
-    if (!formats.isEmpty())
-        m_nativeFps = formats.first().maxFrameRate();
+    const QCameraFormat format = pickCameraFormat(device);
+    if (!format.isNull()) {
+        m_camera->setCameraFormat(format);
+        m_nativeFps = format.maxFrameRate();
+    } else {
+        const auto formats = device.videoFormats();
+        if (!formats.isEmpty())
+            m_nativeFps = formats.first().maxFrameRate();
+    }
 
     connect(m_sink.get(), &QVideoSink::videoFrameChanged, this,
             &CameraFrameSource::handleVideoFrame);
@@ -283,13 +366,12 @@ void CameraFrameSource::stop()
         m_camera->stop();
 }
 
-void CameraFrameSource::handleVideoFrame()
+void CameraFrameSource::handleVideoFrame(const QVideoFrame& vf)
 {
-    const QVideoFrame vf = m_sink->videoFrame();
     if (!vf.isValid())
         return;
     MocapFrame frame;
-    frame.image = mocapFrameToRgb888(vf.toImage());
+    frame.image = mocapFrameFromVideoFrame(vf);
     if (frame.image.isNull())
         return;
     frame.timeSec = m_clock->isValid() ? m_clock->elapsed() / 1e3 : 0.0;

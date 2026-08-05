@@ -79,7 +79,7 @@ void LLMSettingsWidget::setupUI()
     setupAIModelCatalogTab(aiModelsTab);
 
     m_tabWidget->addTab(modelsTab, "LLM Models");
-    m_tabWidget->addTab(settingsTab, "LLM Settings");
+    m_tabWidget->addTab(settingsTab, "Settings");
     m_tabWidget->addTab(downloadTab, "LLM Download");
     m_tabWidget->addTab(aiModelsTab, "QtMeshEditor Models");
 
@@ -222,6 +222,25 @@ void LLMSettingsWidget::setupSettingsTab(QWidget *parent)
 
     layout->addWidget(inferenceGroup);
 
+    if (OnnxRuntimeSettings::instance()->onnxAvailable()) {
+        QGroupBox *onnxGroup = new QGroupBox("ONNX Models", parent);
+        QVBoxLayout *onnxLayout = new QVBoxLayout(onnxGroup);
+
+        m_onnxPreferGpuCheckBox =
+            new QCheckBox("Prefer GPU for ONNX models (when available)", onnxGroup);
+        m_onnxPreferGpuCheckBox->setToolTip(
+            "UniRig, SkinTokens, PBR synthesis, image-to-3D, and other ONNX "
+            "features. Takes effect on the next run (no Apply needed).");
+        onnxLayout->addWidget(m_onnxPreferGpuCheckBox);
+
+        m_onnxGpuNoteLabel = new QLabel(onnxGroup);
+        m_onnxGpuNoteLabel->setWordWrap(true);
+        m_onnxGpuNoteLabel->setStyleSheet("color: gray; font-size: 11px;");
+        onnxLayout->addWidget(m_onnxGpuNoteLabel);
+
+        layout->addWidget(onnxGroup);
+    }
+
     // Hardware settings
     QGroupBox *hardwareGroup = new QGroupBox("Hardware Settings", parent);
     QFormLayout *hwFormLayout = new QFormLayout(hardwareGroup);
@@ -266,6 +285,10 @@ void LLMSettingsWidget::setupSettingsTab(QWidget *parent)
     connect(m_topPSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &LLMSettingsWidget::onSettingsChanged);
     connect(m_topKSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &LLMSettingsWidget::onSettingsChanged);
     connect(m_repeatPenaltySpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &LLMSettingsWidget::onSettingsChanged);
+    if (m_onnxPreferGpuCheckBox) {
+        connect(m_onnxPreferGpuCheckBox, &QCheckBox::toggled,
+                this, &LLMSettingsWidget::onOnnxPreferGpuToggled);
+    }
 }
 
 void LLMSettingsWidget::setupDownloadTab(QWidget *parent)
@@ -435,6 +458,17 @@ void LLMSettingsWidget::loadCurrentSettings()
     m_topPSpinBox->setValue(static_cast<double>(settings.topP));
     m_topKSpinBox->setValue(settings.topK);
     m_repeatPenaltySpinBox->setValue(static_cast<double>(settings.repeatPenalty));
+
+    if (m_onnxPreferGpuCheckBox) {
+        OnnxRuntimeSettings* ort = OnnxRuntimeSettings::instance();
+        ort->refreshGpuProviderStatus();
+        ort->loadSettings();
+        m_onnxPreferGpuCheckBox->blockSignals(true);
+        m_onnxPreferGpuCheckBox->setChecked(ort->preferGpu());
+        m_onnxPreferGpuCheckBox->blockSignals(false);
+        if (m_onnxGpuNoteLabel)
+            m_onnxGpuNoteLabel->setText(ort->gpuProviderNote());
+    }
 
     m_applyButton->setEnabled(false);
 }
@@ -649,10 +683,22 @@ void LLMSettingsWidget::onApplySettings()
     settings.repeatPenalty = static_cast<float>(m_repeatPenaltySpinBox->value());
 
     LLMManager::instance()->setSettings(settings);
+
     m_applyButton->setEnabled(false);
 
     QMessageBox::information(this, "Settings Applied",
-                             "Settings have been saved. They will take effect on the next model load.");
+                             "LLM settings have been saved. They will take effect on the next model load.");
+}
+
+void LLMSettingsWidget::onOnnxPreferGpuToggled(bool checked)
+{
+    OnnxRuntimeSettings* ort = OnnxRuntimeSettings::instance();
+    ort->setPreferGpu(checked);
+    if (m_onnxGpuNoteLabel)
+        m_onnxGpuNoteLabel->setText(ort->gpuProviderNote());
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("AI settings: ONNX prefer GPU %1").arg(checked ? "on" : "off"));
 }
 
 void LLMSettingsWidget::onResetDefaults()
@@ -666,6 +712,13 @@ void LLMSettingsWidget::onResetDefaults()
     m_topPSpinBox->setValue(static_cast<double>(defaults.topP));
     m_topKSpinBox->setValue(defaults.topK);
     m_repeatPenaltySpinBox->setValue(static_cast<double>(defaults.repeatPenalty));
+
+    if (m_onnxPreferGpuCheckBox) {
+        m_onnxPreferGpuCheckBox->blockSignals(true);
+        m_onnxPreferGpuCheckBox->setChecked(OnnxRuntimeSettings::defaultPreferGpu());
+        m_onnxPreferGpuCheckBox->blockSignals(false);
+        onOnnxPreferGpuToggled(m_onnxPreferGpuCheckBox->isChecked());
+    }
 
     m_applyButton->setEnabled(true);
 }

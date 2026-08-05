@@ -70,6 +70,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/OnnxRuntimeSettings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.cpp
@@ -105,6 +106,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseIKSolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapPoseDebugOverlay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapBodyDriveDebug.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RecordMocapClipCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp

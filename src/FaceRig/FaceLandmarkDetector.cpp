@@ -2,6 +2,7 @@
 
 #include "ArkitTemplate.h"        // reuse its model dir + base-url convention
 #include "../ModelDownloader.h"
+#include "../OnnxRuntimeSettings.h"
 #include "../SentryReporter.h"
 
 #include <QDir>
@@ -149,13 +150,7 @@ bool FaceLandmarkDetector::load(const QString& path)
         d->env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING,
                                             "qtmesh_facelmk");
         Ort::SessionOptions so;
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#if defined(__APPLE__)
-        try {
-            std::unordered_map<std::string, std::string> coreml;
-            so.AppendExecutionProvider("CoreML", coreml);
-        } catch (...) { /* CPU fallback */ }
-#endif
+        OnnxRuntimeSettings::configureSessionOptions(so);
 #ifdef _WIN32
         const std::wstring wp = p.toStdWString();
         d->session = std::make_unique<Ort::Session>(*d->env, wp.c_str(), so);

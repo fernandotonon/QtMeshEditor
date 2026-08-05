@@ -1,6 +1,7 @@
 #include "MeshSegmenter.h"
 
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
 #include <QDir>
@@ -1314,12 +1315,8 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
 
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_segment");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try { std::unordered_map<std::string,std::string> c; so.AppendExecutionProvider("CoreML", c); }
-        catch (const Ort::Exception&) {}
-#endif
 #ifdef _WIN32
         const std::wstring wpath = modelPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);
@@ -1469,12 +1466,8 @@ MeshSegmenter::Category MeshSegmenter::classifyCategory(const float* positions,
 
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_segment_cls");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try { std::unordered_map<std::string,std::string> c; so.AppendExecutionProvider("CoreML", c); }
-        catch (const Ort::Exception&) {}
-#endif
 #ifdef _WIN32
         const std::wstring wpath = classifierPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);
