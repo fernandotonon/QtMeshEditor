@@ -2779,6 +2779,11 @@ int AnimationMerger::applyFingerCurl(
 {
     if (!skel || !skel->hasAnimation(animName) || clipFingers.empty())
         return 0;
+    // Rows are indexed with kFingerSlots offsets below — reject any clip whose
+    // rows aren't exactly that wide (parse enforces it, but extraction paths
+    // and direct callers also feed this).
+    for (const auto& row : clipFingers)
+        if (static_cast<int>(row.size()) != kFingerSlots) return 0;
     if (fps <= 0) fps = 30;
     (void)clipFingerRest;   // superseded by the clip-mean rest computed below;
                             // kept in the signature for the stored-rest path.

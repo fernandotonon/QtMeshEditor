@@ -218,12 +218,16 @@ REVIEW_DROP = [
 
 
 def _excluded(title, anim):
-    """True if this (asset, animation) is dropped by license or review rules."""
+    """Return a drop reason string, or None when the (asset, animation) is
+    kept. License rules (Mixamo) and the manual review drop-list."""
     hay = f"{title} {anim}".lower()
     if any(m in hay for m in MIXAMO_MARKERS):
         return "mixamo (license: Adobe ToS, not redistributable)"
     for t, a in REVIEW_DROP:
-        if t.lower() in title.lower() and (not a or a.lower() in anim.lower()):
+        # Word-boundary match on the title: a short token like "KAI" must not
+        # also drop "Samurai Kaiju" / "KAIROS".
+        if (re.search(rf"\b{re.escape(t)}\b", title, re.IGNORECASE)
+                and (not a or a.lower() in anim.lower())):
             return f"review drop-list ({t}{'/' + a if a else ''})"
     return None
 
@@ -347,12 +351,10 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         thigh_axes = [(r, axis(r)) for r in (RHIP, LHIP)]
         thigh_axes = [(r, a) for r, a in thigh_axes if a is not None]
         spine_up, thigh_down, ns, nt = 0.0, 0.0, 0, 0
-        spine_up_min = 1.0                       # worst (lowest) frame
         for f in range(0, len(quats), 3):
             if a_spine is not None:
                 su = qrot(quats[f][spine_role], a_spine)[1]
                 spine_up += su; ns += 1
-                spine_up_min = min(spine_up_min, su)
             if thigh_axes:
                 thigh_down += sum(-qrot(quats[f][r], a)[1]
                                   for r, a in thigh_axes) / len(thigh_axes)
@@ -372,13 +374,13 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             if spine_bind is not None and spine_bind[1] < 0.4:
                 return 0.0, (f"non-biped torso (bind spine-up "
                              f"{spine_bind[1]:.2f})")
-            # ANIMATED uprightness gates REMOVED (#838): a humanoid rig may
-            # LEAN, crouch, recline, throw its head back, or go to the ground
-            # as legitimate motion — the old spine-up / mid-clip-topple /
-            # thigh-down gates wrongly rejected (and their scoring skewed) those
-            # clips. We now keep any clip on a biped rest skeleton regardless of
-            # the animated torso pitch. Uprightness no longer factors into the
-            # quality score; use the measured up-terms only as a soft signal.
+            # ANIMATED uprightness HARD GATES removed (#838): a humanoid rig
+            # may LEAN, crouch, recline, throw its head back, or go to the
+            # ground as legitimate motion — the old spine-up / mid-clip-topple /
+            # thigh-down gates wrongly REJECTED those clips. Any clip on a
+            # biped rest skeleton is kept regardless of animated torso pitch;
+            # the measured up-terms survive only as the soft `upness` score
+            # term below (weighted into q, never a drop by itself).
             if ns or nt:
                 up_terms = [max(0.0, v) for v in (spine_up, thigh_down)
                             if v is not None]
@@ -680,9 +682,8 @@ def main():
                         if rest_dir:
                             clip["restDir"] = rest_dir
                         # #838 vertical descent: carry the per-frame hip Y
-                        # offset, sliced to the SAME active window as the quats
-                        # and re-based so frame 0 of the window reads ~0 (the
-                        # retarget deltas the descent against its start frame).
+                        # offset, sliced to the SAME active window as the
+                        # quats (NOT re-based — see below).
                         ry = c.get("rootY")
                         if ry and len(ry) == len(q):
                             # rootY is a crouch DEPTH vs the rig's BIND-pose

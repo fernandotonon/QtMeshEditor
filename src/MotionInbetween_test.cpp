@@ -317,6 +317,28 @@ TEST(MotionInbetween, CanonicalV2BoneMatcher)
     EXPECT_EQ(MIB::canonicalIndexForBoneV2("some_prop"), -1);
 }
 
+TEST(MotionInbetween, FingerMatcherRejectsMidWordHits)
+{
+    // Finger words hiding inside NON-finger bone names must not map onto
+    // finger slots: "ring" in spring/jiggle bones (common in VRM/MMD rigs),
+    // "index" in helper bones. V1 drops these; V2 must too.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("SpringBone_L_01"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("String_R"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("EarRing"), -1);
+    // Legitimate finger namings keep resolving across conventions:
+    // separator-boundary, fused hand context, fused side word, Rigify.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("L_Ring2"),
+              MIB::fingerJointIndexV2(1, 3, 1));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:LeftHandRing1"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("LeftRing1"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("f_ring.01.L"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("Ring_L"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+}
+
 TEST(MotionInbetween, BoneMatcherCmuNames)
 {
     // The exact CMU canonical names must map to themselves.

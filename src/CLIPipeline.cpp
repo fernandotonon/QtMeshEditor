@@ -2182,16 +2182,25 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
+            std::vector<std::vector<std::array<float, 4>>> retimedFingers;
             const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            // The V1 finger side-channel must retime WITH the body, or
+            // applyFingerCurl writes finger keys at the source duration while
+            // the body plays the retimed one.
+            const bool hadFingers =
+                static_cast<int>(clipFingers.size()) == clip.frames;
             if (hadY) retimedY.resize(want);
+            if (hadFingers) retimedFingers.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
                 const int si = std::min(clip.frames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
+                if (hadFingers) retimedFingers[f] = clipFingers[si];
             }
             quats.swap(retimed);
             if (hadY) clipRootY.swap(retimedY);
+            if (hadFingers) clipFingers.swap(retimedFingers);
         }
     }
 
@@ -2729,8 +2738,12 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             co["restDir"] = dirs;
             QJsonArray ca; ca.append(co); r2["clips"] = ca;
             QFile of(dumpCanonicalPath);
-            if (of.open(QIODevice::WriteOnly | QIODevice::Truncate))
-                of.write(QJsonDocument(r2).toJson(QJsonDocument::Compact));
+            if (!of.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                err() << "Error: cannot write parity dump to "
+                      << dumpCanonicalPath << Qt::endl;
+                return 1;
+            }
+            of.write(QJsonDocument(r2).toJson(QJsonDocument::Compact));
             cliWrite(QString("in-process parity dump → %1\n")
                          .arg(dumpCanonicalPath));
             return 0;

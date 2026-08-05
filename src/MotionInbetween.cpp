@@ -295,13 +295,38 @@ MotionInbetween::FingerRole MotionInbetween::fingerRoleForBone(
     else if (n.startsWith('l')) r.side = 1;
     else if (n.startsWith('r')) r.side = 0;
 
+    // Separator-PRESERVING variant for boundary checks: `n` strips '_'/' '/…,
+    // so in `n` a finger word is always letter-preceded ("lefthandring1") and
+    // a plain substring test can't tell "L_Ring2" from "SpringBone_L_01".
+    QString nsep = boneName.toLower();
+    {
+        const int c2 = nsep.lastIndexOf(':');
+        if (c2 >= 0) nsep = nsep.mid(c2 + 1);
+    }
+
     // Named (Mixamo) convention: Thumb/Index/Middle/Ring/Pinky + trailing seg.
+    // Guard against substring hits on NON-finger bones ("ring" in
+    // "SpringBone_L_01"/"EarRing", "index" in "IndexHelper"): accept only when
+    // the word starts at a boundary in the separator-preserving name (start or
+    // non-letter before it), or when the name carries hand context (Mixamo
+    // "LeftHandRing1" fuses the words with no separator).
     static const char* kNamed[5] =
         {"thumb", "index", "middle", "ring", "pinky"};
+    const bool handContext = n.contains("hand");
     for (int fi = 0; fi < 5; ++fi) {
         const QString key = QLatin1String(kNamed[fi]);
         const int at = n.indexOf(key);
         if (at < 0) continue;
+        if (!handContext) {
+            // A fused side word directly before it is also fine ("LeftRing1").
+            const bool sideFused =
+                (at >= 4 && n.mid(at - 4, 4) == QLatin1String("left")) ||
+                (at >= 5 && n.mid(at - 5, 5) == QLatin1String("right"));
+            const int atSep = nsep.indexOf(key);
+            if (!sideFused &&
+                (atSep < 0 || (atSep > 0 && nsep.at(atSep - 1).isLetter())))
+                continue;   // mid-word hit (spring/string/earring) — not a finger
+        }
         r.finger = fi;
         // segment = trailing number after the finger word (1-based → 0-based).
         const QString tail = n.mid(at + key.size());

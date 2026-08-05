@@ -277,17 +277,21 @@ Window {
         dialog.busyIndex = idx
         pickStatus.isError = false
         pickStatus.text = "Applying " + name + "…"
-        // variantIndex forces this exact clip (template path, no random pick).
-        // Pass the picker's own descent checkbox (#838) as the last arg.
-        var r = AnimationControlController.generateMotion("", 0.0, false, 0.0, true, idx,
-                                                          pickDescentChk.checked)
-        dialog.busyIndex = -1
-        if (r && r.ok) {
-            pickStatus.text = "Applied: " + name
-            dialog.applied(r.animation || "", r.entity || "")
-        } else {
-            pickStatus.isError = true
-            pickStatus.text = (r && r.error) ? r.error : "Failed to apply."
-        }
+        // generateMotion runs synchronously on the GUI thread — defer it one
+        // event-loop turn so the busy status above actually paints first.
+        Qt.callLater(function() {
+            // variantIndex forces this exact clip (template path, no random
+            // pick). The picker's own descent checkbox (#838) is the last arg.
+            var r = AnimationControlController.generateMotion("", 0.0, false, 0.0, true, idx,
+                                                              pickDescentChk.checked)
+            dialog.busyIndex = -1
+            if (r && r.ok) {
+                pickStatus.text = "Applied: " + name
+                dialog.applied(r.animation || "", r.entity || "")
+            } else {
+                pickStatus.isError = true
+                pickStatus.text = (r && r.error) ? r.error : "Failed to apply."
+            }
+        })
     }
 }

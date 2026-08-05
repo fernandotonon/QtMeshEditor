@@ -313,7 +313,8 @@ public:
     static constexpr int kFingerSegs = 3;
     static constexpr int kFingerSlots = 2 * 5 * kFingerSegs;   // 30
     static int fingerSlot(int side, int finger, int segment) {
-        if (side < 0 || finger < 0 || segment < 0 || segment >= kFingerSegs)
+        if (side < 0 || side > 1 || finger < 0 || finger > 4 ||
+            segment < 0 || segment >= kFingerSegs)
             return -1;
         return (side * 5 + finger) * kFingerSegs + segment;
     }
@@ -436,9 +437,10 @@ public:
         const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
         int fps,
         /// #838 source finger REST directions (kFingerSlots, canonical frame).
-        /// When present, the retarget transports the RELATIVE bend
-        /// (restDir→frameDir) so a rig's finger rest convention doesn't
-        /// over-bend the target. Empty → legacy absolute aim (older libraries).
+        /// Currently UNUSED: the implementation derives the rest from the
+        /// clip's own mean pose (more robust across rigs than the stored
+        /// value). Kept in the signature so libraries carrying restDir keep a
+        /// stable call site if a stored-rest path returns.
         const std::vector<std::array<float, 3>>& clipFingerRest = {});
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and

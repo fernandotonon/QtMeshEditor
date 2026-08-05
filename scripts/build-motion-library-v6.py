@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Build motion-library v5 from the harvested motion corpus (#839).
+"""Build motion-library V2 (52-joint, fingers-as-joints) from the corpus (#838).
 
 ONE-TIME, OFFLINE developer tool — NOT shipped; the app never runs Python.
 
-Slice B of the text-to-motion v2 epic (#837): turns the license-filtered
-corpus assembled by scrape-motion-corpus.py (#838) into the template clip
-library the app downloads — replacing the 47-clip CMU-only v4 with hundreds
-of real animation clips across a much wider action vocabulary.
+The V2 generation of build-motion-library-v5.py: same corpus pipeline, but
+dumps run with `--v2` so fingers are canonical joints 22..51 instead of a
+side-channel, and the output is the `qtmesh-motion-library-v4` schema. Also
+adds the curation ship-gate: `--curation <curation.json>` / `--approved-only`
+restricts the shipped set to the clips the user starred in the Animation
+Library picker (keyed by clip `source`; auto-discovered from the AppData
+motion dir when the flag is omitted).
 
 Pipeline per corpus asset:
-  1. `qtmesh anim <file> --dump-canonical tmp.json` — the editor's own
+  1. `qtmesh anim <file> --dump-canonical tmp.json --v2` — the editor's own
      loader + the SAME bone-role matcher the retarget uses maps the rig onto
-     the 22-joint canonical skeleton and samples every skeletal animation at
-     30 fps as WORLD-frame quats (the v3 library convention).
+     the 52-joint canonical skeleton and samples every skeletal animation at
+     30 fps as WORLD-frame quats.
   2. Action labelling: normalized animation name matched against a keyword
      table (walk/run/attack/death/...); un-tabled single-word names are kept
      verbatim — MotionLibrary::matchPrompt does substring matching, so every
@@ -24,13 +27,14 @@ Pipeline per corpus asset:
   4. Dedup: sibling characters in one pack share armature actions — clips
      with identical (action, frames, sampled-quat fingerprint) collapse.
 
-OUTPUT: motion-library.json in the EXISTING "qtmesh-motion-library-v3"
-schema (frame:"world") — the shipped app consumes it unchanged — plus a copy
-of the corpus ATTRIBUTION.md, which MUST ship wherever the library does.
+OUTPUT: motion-library-v2.json in the "qtmesh-motion-library-v4" schema
+(frame:"world", jointCount:52) — plus a copy of the corpus ATTRIBUTION.md,
+which MUST ship wherever the library does.
 
 USAGE
-  python3 scripts/build-motion-library-v5.py --corpus ~/motion_corpus \
-      --out motion-library.json [--qtmesh build_local/bin/qtmesh]
+  python3 scripts/build-motion-library-v6.py --corpus ~/motion_corpus \
+      --out motion-library-v2.json [--qtmesh build_local/bin/qtmesh] \
+      [--curation curation.json --approved-only]
 """
 
 import argparse
@@ -131,7 +135,9 @@ def quat_angle(a, b):
 
 
 def frame_energy(quats):
-    """Mean joint rotation speed between consecutive frames (rad/frame)."""
+    """Mean joint rotation speed between consecutive frames (rad/frame).
+    Deliberately measures the 22 BODY joints only — on a 52-wide V2 clip the
+    30 finger channels would dilute the signal the window selector needs."""
     e = [0.0]
     for f in range(1, len(quats)):
         a = sum(quat_angle(quats[f - 1][j], quats[f][j])
@@ -218,12 +224,16 @@ REVIEW_DROP = [
 
 
 def _excluded(title, anim):
-    """True if this (asset, animation) is dropped by license or review rules."""
+    """Return a drop reason string, or None when the (asset, animation) is
+    kept. License rules (Mixamo) and the manual review drop-list."""
     hay = f"{title} {anim}".lower()
     if any(m in hay for m in MIXAMO_MARKERS):
         return "mixamo (license: Adobe ToS, not redistributable)"
     for t, a in REVIEW_DROP:
-        if t.lower() in title.lower() and (not a or a.lower() in anim.lower()):
+        # Word-boundary match on the title: a short token like "KAI" must not
+        # also drop "Samurai Kaiju" / "KAIROS".
+        if (re.search(rf"\b{re.escape(t)}\b", title, re.IGNORECASE)
+                and (not a or a.lower() in anim.lower())):
             return f"review drop-list ({t}{'/' + a if a else ''})"
     return None
 
@@ -316,7 +326,11 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
     (catches mis-mapped rigs — quadrupeds pass the role gate but retarget
     horizontal), reference completeness, and a sane energy band. Returns
     (quality, drop_reason|None)."""
-    dirs_ok = sum(1 for d in (rest_dir or [])
+    # Completeness scores the BODY joints only: a V2 (52-joint) rest array
+    # carries 30 finger entries that would otherwise push the ratio past 1.0
+    # and saturate every clip's quality (defeating the quality² take-weighting
+    # and the drop floor).
+    dirs_ok = sum(1 for d in (rest_dir or [])[:CANON_COUNT]
                   if abs(d[0]) > 1e-6 or abs(d[1]) > 1e-6 or abs(d[2]) > 1e-6)
     completeness = dirs_ok / CANON_COUNT
     roles = (resolved_roles or 0) / CANON_COUNT
@@ -347,12 +361,10 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         thigh_axes = [(r, axis(r)) for r in (RHIP, LHIP)]
         thigh_axes = [(r, a) for r, a in thigh_axes if a is not None]
         spine_up, thigh_down, ns, nt = 0.0, 0.0, 0, 0
-        spine_up_min = 1.0                       # worst (lowest) frame
         for f in range(0, len(quats), 3):
             if a_spine is not None:
                 su = qrot(quats[f][spine_role], a_spine)[1]
                 spine_up += su; ns += 1
-                spine_up_min = min(spine_up_min, su)
             if thigh_axes:
                 thigh_down += sum(-qrot(quats[f][r], a)[1]
                                   for r, a in thigh_axes) / len(thigh_axes)

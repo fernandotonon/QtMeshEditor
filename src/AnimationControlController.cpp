@@ -2097,6 +2097,9 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // root translate aren't picked up until the instance re-reads the skeleton.
     // Re-initialise it so the live viewport reflects every pass (#838).
     entity->_initialise(true);
+    // _initialise(true) recreates the entity's SkeletonInstance —
+    // m_selectedSkeleton dangles until re-fetched (see rebindSelectedSkeleton).
+    rebindSelectedSkeleton();
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
     // enabled animation states, so leaving the import's auto-enabled clip (or

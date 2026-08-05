@@ -9762,10 +9762,19 @@ Rectangle {
             }
             // Browse the library — the reliable, Mixamo-style pick-a-clip flow.
             Rectangle {
+                id: browseLibraryBtn
                 width: parent.width - 16; height: 26; radius: 3
                 color: browseMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
                      : browseMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
                      : PropertiesPanelController.highlightColor
+                border.color: activeFocus ? "white" : "transparent"
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Browse animation library"
+                Accessible.onPressAction: root.openAnimationPicker()
+                Keys.onSpacePressed: root.openAnimationPicker()
+                Keys.onReturnPressed: root.openAnimationPicker()
+                Keys.onEnterPressed: root.openAnimationPicker()
                 Text { anchors.centerIn: parent; text: "Browse animation library…"
                        color: "white"; font.pixelSize: 11 }
                 MouseArea { id: browseMa; anchors.fill: parent; hoverEnabled: true
@@ -9896,7 +9905,15 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     color: checked ? PropertiesPanelController.highlightColor
                                    : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
+                    border.color: activeFocus ? "white"
+                                              : PropertiesPanelController.borderColor
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Pin feet (contact cleanup)"
+                    Accessible.checkable: true
+                    Accessible.checked: checked
+                    Accessible.onToggleAction: checked = !checked
+                    Keys.onSpacePressed: checked = !checked
                     Text { anchors.centerIn: parent; visible: parent.checked
                            text: "✓"; color: "white"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent
@@ -9921,7 +9938,15 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     color: checked ? PropertiesPanelController.highlightColor
                                    : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
+                    border.color: activeFocus ? "white"
+                                              : PropertiesPanelController.borderColor
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Lower body on crouch and pickup clips"
+                    Accessible.checkable: true
+                    Accessible.checked: checked
+                    Accessible.onToggleAction: checked = !checked
+                    Keys.onSpacePressed: checked = !checked
                     Text { anchors.centerIn: parent; visible: parent.checked
                            text: "✓"; color: "white"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent

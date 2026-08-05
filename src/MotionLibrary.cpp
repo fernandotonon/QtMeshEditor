@@ -177,12 +177,18 @@ bool MotionLibrary::parse(const QByteArray& json)
                 clip.rootY.push_back(static_cast<float>(yv.toDouble()));
         }
         // #838 finger animation: frames × 30 × [x,y,z,w] local curl.
+        // 30 = AnimationMerger::kFingerSlots (2 sides × 5 fingers × 3 segments;
+        // literal here because this core stays Ogre-free). Rows are indexed
+        // with kFingerSlots offsets downstream, so enforce the exact width at
+        // parse time like the other joint arrays.
+        constexpr int kFingerSlots = 30;
         const QJsonArray fingersArr = co.value("fingers").toArray();
         if (fingersArr.size() == clip.frames) {
             clip.fingers.reserve(clip.frames);
             bool ok = true;
             for (const auto& fv : fingersArr) {
                 const QJsonArray slotArr = fv.toArray();
+                if (slotArr.size() != kFingerSlots) { ok = false; break; }
                 std::vector<std::array<float, 4>> row;
                 row.reserve(slotArr.size());
                 for (const auto& qv : slotArr) {
@@ -202,7 +208,7 @@ bool MotionLibrary::parse(const QByteArray& json)
         // relative-bend finger retarget (avoids the over-bend from differing
         // rig rest conventions). Optional; absent → legacy absolute aim.
         const QJsonArray fRest = co.value("fingerRestDir").toArray();
-        if (!fRest.isEmpty()) {
+        if (fRest.size() == kFingerSlots) {
             clip.fingerRestDir.reserve(fRest.size());
             for (const auto& dv : fRest) {
                 const QJsonArray d = dv.toArray();
@@ -375,7 +381,7 @@ QString MotionLibrary::ensureLibraryBlocking()
     // set) FIRST; fall back to the V1 file so overridden base URLs / older
     // hosted repos keep working. Old app builds only request the V1 name and
     // their loader rejects the v4 schema, so hosting both is non-breaking.
-    Q_UNUSED(dest);
+    bool stalled = false;
     auto tryDownload = [&](const char* fileName) -> QString {
         const QDir dir(QFileInfo(libraryPath()).absolutePath());
         const QString fdest = dir.filePath(QString::fromLatin1(fileName));
@@ -401,12 +407,18 @@ QString MotionLibrary::ensureLibraryBlocking()
         QObject::disconnect(onDone);
         QObject::disconnect(onErr);
         if (timedOut && dl) dl->cancelDownload();
+        stalled = timedOut;
         if (ok && !timedOut && QFileInfo::exists(fdest)) return fdest;
         QFile::remove(fdest);   // don't leave a partial/404 body behind
         return QString();
     };
     const QString v2 = tryDownload(kLibraryFileV2);
     if (!v2.isEmpty()) return v2;
+    // A TIMEOUT means the connection stalled, not that the V2 file is absent —
+    // retrying the V1 name would block the (GUI/CLI) caller for up to another
+    // 5 minutes for nothing. Only fall back on a fast failure (404 / older
+    // hosted repo without the V2 file).
+    if (stalled) return {};
     return tryDownload(kLibraryFile);
 }
 

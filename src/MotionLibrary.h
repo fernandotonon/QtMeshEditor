@@ -33,7 +33,8 @@ public:
         int frames = 0;
         int fps = 30;
         // quats[frame][joint] = (x,y,z,w) unit quaternion, joint in canonical
-        // order (size frames × 22). Rotation only; translation/scale are the
+        // order (size frames × jointCount(): 22 for schema v1..v3, 52 for v4
+        // with fingers folded in). Rotation only; translation/scale are the
         // caller's (the retarget writes rotation keyframes).
         std::vector<std::vector<std::array<float, 4>>> quats;
         // Optional (schema v3 clips extracted by --dump-canonical): the
