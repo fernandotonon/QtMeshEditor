@@ -10748,11 +10748,22 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                   << (ex.error.isEmpty() ? QStringLiteral("unknown") : ex.error) << Qt::endl;
             return 1;
         }
-        // 3) Remove BOTH the temporary split node AND the ORIGINAL imported
-        //    source node — sceneExporter walks every entity-bearing node, so
-        //    leaving the original in the scene would overlay an intact un-exploded
-        //    mesh on top of the exploded parts, doubling the geometry (CodeRabbit).
+        // 3) Capture the ORIGINAL imported node's world transform so each part
+        //    keeps the source placement/rotation/scale (glTF/FBX store transforms
+        //    on nodes — a non-identity source node would otherwise snap the parts
+        //    to the origin), then remove BOTH the temporary split node AND the
+        //    original source node. sceneExporter walks every entity-bearing node,
+        //    so leaving the original would overlay an un-exploded mesh on the
+        //    parts, doubling geometry (CodeRabbit).
         Ogre::SceneNode* origNode = entity ? entity->getParentSceneNode() : nullptr;
+        Ogre::Vector3 srcPos = Ogre::Vector3::ZERO;
+        Ogre::Quaternion srcOrient = Ogre::Quaternion::IDENTITY;
+        Ogre::Vector3 srcScale = Ogre::Vector3::UNIT_SCALE;
+        if (origNode) {
+            srcPos = origNode->_getDerivedPosition();
+            srcOrient = origNode->_getDerivedOrientation();
+            srcScale = origNode->_getDerivedScale();
+        }
         mgr->destroyAllAttachedMovableObjects(srcNode);
         mgr->destroySceneNode(srcNode);
         if (origNode) {
@@ -10764,9 +10775,22 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         for (const PartOpsScene::ExplodePart& p : ex.parts) {
             Ogre::SceneNode* pn =
                 mgr->addSceneNode(QString("PartOpsExplode_%1_%2").arg(idx++).arg(p.name));
-            if (!pn) continue;
-            pn->setPosition(p.offset);
-            mgr->createEntity(pn, p.mesh);
+            if (!pn) {
+                err() << "Error: could not create scene node for part '"
+                      << p.name << "'." << Qt::endl;
+                return 1;
+            }
+            // Compose the source transform with the outward explode offset (the
+            // offset is in the source node's local frame — same as the GUI
+            // ExplodePartsCommand): world = srcPos + srcOrient·(srcScale∘offset).
+            pn->setPosition(srcPos + srcOrient * (srcScale * p.offset));
+            pn->setOrientation(srcOrient);
+            pn->setScale(srcScale);
+            if (!mgr->createEntity(pn, p.mesh)) {
+                err() << "Error: could not create entity for part '"
+                      << p.name << "'." << Qt::endl;
+                return 1;
+            }
             partNodeNames << p.name;
         }
         // 4) Export the whole multi-node scene. sceneExporter/sceneImporter is the
