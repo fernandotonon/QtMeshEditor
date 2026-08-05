@@ -4922,7 +4922,10 @@ QJsonObject MCPServer::toolExplodeMeshParts(const QJsonObject &args)
         const QString entityName = args["entity_name"].toString();
         Ogre::Entity* entity = nullptr;
         for (auto* ent : mgr->getEntities()) {
-            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (!ent || ent->getMovableType() != "Entity" || !ent->getMesh()) continue;
+            // Auto-pick (empty name) must skip mesh-less movables so it doesn't
+            // grab a non-mesh entity and miss a valid multi-part one later in the
+            // list (mirrors toolJoinMeshParts's filter).
             if (entityName.isEmpty()
                 || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
         }
@@ -4930,7 +4933,7 @@ QJsonObject MCPServer::toolExplodeMeshParts(const QJsonObject &args)
             return makeErrorResult(entityName.isEmpty()
                 ? QString("Error: No mesh entity found")
                 : QString("Error: Entity '%1' not found").arg(entityName));
-        if (!entity->getMesh() || entity->getMesh()->getNumSubMeshes() < 2)
+        if (entity->getMesh()->getNumSubMeshes() < 2)
             return makeErrorResult("Error: mesh has a single part — split it into parts first");
 
         double distance = args.value("distance").toDouble(0.15);
