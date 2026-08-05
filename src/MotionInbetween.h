@@ -123,6 +123,29 @@ public:
     // (left/right, l/r, _l/_r). Pure-data + unit-testable.
     static int canonicalIndexForBone(const QString& boneName);
 
+    // ---- Canonical skeleton V2 (52 joints: 22 body + 30 finger) -------------
+    // V2 folds the fingers INTO the canonical skeleton as real joints so the
+    // trained model can learn hand poses (V1 excludes fingers entirely; they
+    // ride a separate `fingers` side-channel). V2 is additive and opt-in: V1
+    // (canonicalJointCount()==22) stays byte-for-byte so old libraries/models
+    // and older app builds keep working. Layout: indices 0..21 are IDENTICAL to
+    // V1; indices 22..51 are the finger joints in fingerSlot order
+    // (22 + (side*5 + finger)*3 + segment), side 0=right/1=left. A finger
+    // segment-0 joint's parent is the hand (rhand=9 / lhand=13); deeper segments
+    // parent to the previous segment. Channel count for the V2 model is
+    // canonicalJointCountV2()*10 = 520.
+    static int canonicalJointCountV2();            // 52
+    static QString canonicalJointNameV2(int i);
+    static int canonicalParentOfV2(int i);
+    static int canonicalChildOfV2(int i);
+    // Map a bone name to a V2 joint index (0..51), or -1. Body bones resolve
+    // exactly as V1 (0..21); finger bones resolve via fingerRoleForBone to
+    // 22..51 (dropping segments beyond the 3 V2 keeps). Pure-data + testable.
+    static int canonicalIndexForBoneV2(const QString& boneName);
+    // The V2 index for a (side,finger,segment) finger slot, or -1 if out of
+    // range. == 22 + fingerSlot-equivalent. Segments >= 3 are rejected.
+    static int fingerJointIndexV2(int side, int finger, int segment);
+
     // ---- Finger roles (#838 hand retarget) ---------------------------------
     // Fingers are NOT part of the 22-joint canonical body (which stops at the
     // hand). This classifies a finger bone into a rig-independent role so the

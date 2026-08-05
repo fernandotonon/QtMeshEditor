@@ -196,6 +196,87 @@ int MotionInbetween::canonicalIndexForBone(const QString& boneName)
     return -1;
 }
 
+// ---- Canonical skeleton V2 (52 = 22 body + 30 finger) ----------------------
+namespace {
+constexpr int kFingerSegV2 = 3;                 // segments kept per finger
+constexpr int kFingerCountV2 = 5;               // thumb..pinky
+constexpr int kFingerJointsV2 = 2 * kFingerCountV2 * kFingerSegV2;   // 30
+constexpr int kCanonCountV2 = kCanonCount + kFingerJointsV2;         // 52
+
+// V2 finger joint index (22 + fingerSlot). side 0=right/1=left.
+inline int fingerSlotV2(int side, int finger, int segment)
+{
+    if (side < 0 || side > 1 || finger < 0 || finger >= kFingerCountV2
+        || segment < 0 || segment >= kFingerSegV2)
+        return -1;
+    return kCanonCount + (side * kFingerCountV2 + finger) * kFingerSegV2
+           + segment;
+}
+// Human-readable V2 finger joint name, e.g. "rthumb0", "lindex2".
+QString fingerJointNameV2(int idx)
+{
+    const int f = idx - kCanonCount;
+    const int side = f / (kFingerCountV2 * kFingerSegV2);
+    const int rem = f - side * kFingerCountV2 * kFingerSegV2;
+    const int finger = rem / kFingerSegV2, seg = rem % kFingerSegV2;
+    static const char* kF[5] = {"thumb", "index", "middle", "ring", "pinky"};
+    return QString::fromLatin1(side == 0 ? "r" : "l")
+           + QLatin1String(kF[finger]) + QString::number(seg);
+}
+} // namespace
+
+int MotionInbetween::canonicalJointCountV2() { return kCanonCountV2; }
+
+int MotionInbetween::fingerJointIndexV2(int side, int finger, int segment)
+{
+    return fingerSlotV2(side, finger, segment);
+}
+
+QString MotionInbetween::canonicalJointNameV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return {};
+    if (i < kCanonCount) return QString::fromLatin1(kCanonJoints[i]);
+    return fingerJointNameV2(i);
+}
+
+int MotionInbetween::canonicalParentOfV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return -1;
+    if (i < kCanonCount) return kCanonParent[i];   // body: same as V1
+    // finger joint: seg0 → hand (rhand=9 / lhand=13); deeper → previous segment
+    const int f = i - kCanonCount;
+    const int side = f / (kFingerCountV2 * kFingerSegV2);
+    const int rem = f - side * kFingerCountV2 * kFingerSegV2;
+    const int seg = rem % kFingerSegV2;
+    if (seg == 0) return (side == 0) ? 9 : 13;     // rhand / lhand
+    return i - 1;                                   // previous finger segment
+}
+
+int MotionInbetween::canonicalChildOfV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return -1;
+    // Body hands now HAVE finger children, but the child used for bone-direction
+    // is unchanged for the body (leave hands as leaves for the direction calc —
+    // fingers carry their own directions). Return V1 body child for 0..21.
+    if (i < kCanonCount) return kCanonChild[i];
+    const int f = i - kCanonCount;
+    const int seg = (f % (kFingerCountV2 * kFingerSegV2)) % kFingerSegV2;
+    if (seg + 1 < kFingerSegV2) return i + 1;       // next segment
+    return -1;                                       // fingertip: leaf
+}
+
+int MotionInbetween::canonicalIndexForBoneV2(const QString& boneName)
+{
+    // Body bones resolve exactly as V1 (0..21).
+    const int body = canonicalIndexForBone(boneName);
+    if (body >= 0) return body;
+    // Finger bones → 22..51 via the finger role (drop segments beyond V2's 3).
+    const FingerRole fr = fingerRoleForBone(boneName);
+    if (fr.valid() && fr.segment < kFingerSegV2)
+        return fingerSlotV2(fr.side, fr.finger, fr.segment);
+    return -1;
+}
+
 MotionInbetween::FingerRole MotionInbetween::fingerRoleForBone(
     const QString& boneName)
 {
