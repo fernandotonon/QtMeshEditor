@@ -1878,7 +1878,28 @@ QVariantList AnimationControlController::listMotionClips()
         m["frames"] = c.frames;
         out.append(m);
     }
+    // Curation (#838 ship-gate): mark the user-approved "good" clips so the
+    // picker can filter to them. Keyed by clip source — stable across rebuilds.
+    const QSet<QString> approved = MotionLibrary::loadCuration();
+    for (int i = 0; i < out.size(); ++i) {
+        QVariantMap m = out[i].toMap();
+        m["approved"] = approved.contains(m["source"].toString());
+        out[i] = m;
+    }
     return out;
+}
+
+void AnimationControlController::setClipApproved(const QString& source,
+                                                 bool approved)
+{
+    QSet<QString> set = MotionLibrary::loadCuration();
+    if (approved) set.insert(source);
+    else set.remove(source);
+    MotionLibrary::saveCuration(set);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("curation %1: %2")
+            .arg(approved ? QStringLiteral("approve")
+                          : QStringLiteral("unapprove"), source.left(60)));
 }
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
@@ -1923,6 +1944,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     std::vector<std::array<float, 3>> clipDirs;
     std::vector<float> clipRootY;
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
+    std::vector<std::array<float, 3>> clipFingerRest;             // #838
     bool gotClip = false;
 
     // The animation PICKER passes an explicit clip index — force the template
@@ -1985,7 +2007,13 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                          : clip.restWorld;
         clipDirs = clip.restDir;
         clipRootY = clip.rootY;
-        clipFingers = clip.fingers;
+        // V2 (schema v4, 52 joints): fingers retarget as canonical joints via
+        // the body path — don't ALSO fire the applyFingerCurl side-channel
+        // (double application). Side-channel is V1-only.
+        if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
+            clipFingers = clip.fingers;
+            clipFingerRest = clip.fingerRestDir;   // #838 (per-clip const)
+        }
         clipSource = QStringLiteral("template");
         if (duration > 0.05) {
             const int want = std::max(2, int(duration * clip.fps));
@@ -2057,7 +2085,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // target's fingers (no-op if either rig lacks fingers or the clip has none).
     if (!clipFingers.empty()) {
         const int nf = AnimationMerger::applyFingerCurl(
-            skel.get(), animName, clipFingers, fps);
+            skel.get(), animName, clipFingers, fps, clipFingerRest);
         if (nf > 0) out["fingerBones"] = nf;
     }
 
