@@ -2657,9 +2657,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 const int nB = static_cast<int>(skel->getNumBones());
                 std::vector<double> sumErr(static_cast<size_t>(nB), 0.0);
                 int nSamples = 0;
-                const int nSteps = static_cast<int>(len / 0.1f) + 1;
+                // ceil + clamp so the terminal keyframe is always sampled
+                // (len is rarely a multiple of the 0.1s stride).
+                const int nSteps = std::max(
+                    1, static_cast<int>(std::ceil(len / 0.1f)) + 1);
                 for (int s = 0; s < nSteps; ++s) {
-                    const float t = 0.1f * static_cast<float>(s);
+                    const float t =
+                        std::min(len, 0.1f * static_cast<float>(s));
                     std::vector<Ogre::Quaternion> ws(
                         static_cast<size_t>(nB));
                     skel->reset(true);
