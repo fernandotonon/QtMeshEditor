@@ -26,11 +26,22 @@ Window {
     property var allClips: []          // full [{index,action,name,source,quality,frames,approved}]
     property string filterText: ""
     property int busyIndex: -1         // row currently generating (for UI feedback)
-    property bool onlyApproved: false  // curation filter: show only "good" clips
+    property bool onlyApproved: true   // curation filter: show only "good" clips
+                                       // (default ON; refresh() unchecks it when
+                                       // nothing is starred so the list is never
+                                       // silently empty on a fresh install)
     property int approvedCount: 0
 
     function refresh() {
         allClips = AnimationControlController.listMotionClips()
+        // No starred clips (fresh install / un-curated library): the
+        // only-good default would show an empty list — fall back to all.
+        if (onlyApproved) {
+            var any = false
+            for (var i = 0; i < allClips.length; ++i)
+                if (allClips[i].approved) { any = true; break }
+            if (!any) onlyApproved = false
+        }
         rebuildModel()
     }
     function rebuildModel() {
