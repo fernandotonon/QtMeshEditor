@@ -2989,6 +2989,10 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
             if (capLight) { sm->destroyLight(capLight); capLight = nullptr; }
         }
         if (rtt) { Ogre::TextureManager::getSingleton().remove(rtt); rtt.reset(); }
+        // The capture light changed the scene's light set — regenerate the
+        // cached RTSS programs so the LIVE viewport goes back to rendering
+        // against its own lighting (mirror of the pre-capture invalidation).
+        RTShaderHelper::invalidateShadergenScheme();
     };
 
     try {
@@ -3016,6 +3020,11 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
             capLightNode->attachObject(capLight);
             capLightNode->setDirection(Ogre::Vector3(-0.3f, -0.5f, -0.8f).normalisedCopy(),
                                        Ogre::Node::TS_WORLD);
+            // RTSS bakes the light configuration into its generated shaders.
+            // Without this, materials whose shaders were cached BEFORE the
+            // capture light existed render it as a no-op — the screenshot
+            // comes back flat/ambient-only (the "dark model over MCP" bug).
+            RTShaderHelper::invalidateShadergenScheme();
         }
 
         Ogre::Viewport* vp = target->addViewport(cam);

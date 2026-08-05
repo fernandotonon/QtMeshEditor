@@ -5,6 +5,14 @@
 namespace RTShaderHelper {
     void initialize(Ogre::SceneManager* sceneMgr);
     void shutdown(Ogre::SceneManager* sceneMgr);
+
+    /// Force every MSN_SHADERGEN technique to regenerate on the next render.
+    /// RTSS bakes the scene's LIGHT configuration into its generated shaders,
+    /// so a capture path that temporarily adds a key light (MCP
+    /// take_screenshot) renders with STALE cached programs — the new light
+    /// silently contributes nothing (flat ambient-only look). Call after
+    /// changing the light set, and again after restoring it.
+    void invalidateShadergenScheme();
     void applyNormalMap(Ogre::MaterialPtr& mat, const std::string& normalMapTexName);
 
     /// If the material's first pass is tagged with the slice E
