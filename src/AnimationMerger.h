@@ -286,7 +286,38 @@ public:
         /// crouch). Only the Y axis is captured — X/Z travel is deliberately
         /// discarded to avoid skate/drift. Empty when the hip wasn't resolved.
         std::vector<float> rootY;
+        /// #838 finger animation. Fingers are NOT canonical body joints, so
+        /// they ride a parallel channel: per frame, the LOCAL (parent-relative)
+        /// rotation of every finger segment, indexed by
+        /// fingerSlot(side,finger,segment). Local rotation transfers directly
+        /// between rigs (a curl is a local hinge — no canonical-frame
+        /// conjugation needed). Slots the source rig doesn't have hold identity;
+        /// empty when the rig has no fingers. Size == frames × kFingerSlots.
+        std::vector<std::vector<std::array<float, 4>>> fingers;
+        /// #838 finger REST pointing direction (canonical frame) per slot, at
+        /// the clip's reference pose. The per-frame `fingers` dirs are ABSOLUTE
+        /// source directions; a rig's finger rest convention differs from the
+        /// target's, so aiming target-bind→source-absolute over-bends every
+        /// finger by the rest-convention gap (measured 50–130° on an OPEN, static
+        /// hand). With the rest, the retarget transports the RELATIVE bend
+        /// (restDir→frameDir) onto the target bind instead. Size == kFingerSlots
+        /// (or empty for older libraries → falls back to absolute aim).
+        std::vector<std::array<float, 3>> fingerRestDir;
+        /// V2 (schema v4): true when quats/restWorld/restDir are 52-wide
+        /// (fingers folded in as joints 22..51) rather than 22-wide body-only.
+        /// The CLI dump writes schema "qtmesh-motion-library-v4" when set.
+        bool jointCountV2 = false;
     };
+
+    /// Finger channel layout: 2 sides × 5 fingers × up to 3 segments = 30.
+    static constexpr int kFingerSegs = 3;
+    static constexpr int kFingerSlots = 2 * 5 * kFingerSegs;   // 30
+    static int fingerSlot(int side, int finger, int segment) {
+        if (side < 0 || side > 1 || finger < 0 || finger > 4 ||
+            segment < 0 || segment >= kFingerSegs)
+            return -1;
+        return (side * 5 + finger) * kFingerSegs + segment;
+    }
 
     /// Post-process a generated animation to widen (+) or tuck (−) the arm
     /// chains, à la Mixamo's "Character Arm-Space" (#854). Rescues arm-into-
@@ -377,15 +408,58 @@ public:
                                  const std::string& animName,
                                  int blendFrames = 3);
 
+    /// #838 — GROUND a crouch/kneel/ground-work clip. The direction retarget
+    /// transfers bone DIRECTIONS, not world foot positions, and locks the root
+    /// at the target's standing height. A folded-leg crouch (build/farm/kneel)
+    /// then leaves the FEET dangling in the air on a rig whose proportions
+    /// differ from the source (the "floating worker" case). This drops the ROOT
+    /// bone's Y each frame by exactly how far the lowest foot sits ABOVE the
+    /// bind ground plane, so the character plants on the floor. Target-rig FK
+    /// (like pinFeet) — reads the finished keyframes, rewrites only the root
+    /// translate. Only sensible on non-locomotion descent actions (the caller
+    /// gates via MotionLibrary::isVerticalDescentAction); a walk would lose its
+    /// foot lift. Returns how many root keyframes were lowered.
+    static int groundRootToFeet(Ogre::Skeleton* skel,
+                                const std::string& animName);
+
+    /// #838 finger animation transfer. Fingers aren't canonical body joints,
+    /// so they ride this separate pass: `clipFingers` is the source clip's
+    /// per-frame LOCAL finger curl (frames × kFingerSlots, from the library),
+    /// and this writes matching keyframes onto the TARGET rig's finger bones.
+    /// Handles differently-named/segmented rigs (Biped Finger0-4 × 2 vs Mixamo
+    /// Thumb/Index/… × 3) by mapping via FingerRole and redistributing source
+    /// segments across the target's per finger. Curl is bind-relative local
+    /// rotation, so it transfers directly (no canonical-frame conjugation).
+    /// Returns the number of finger bones animated. No-op if either rig lacks
+    /// fingers or the clip carries none.
+    static int applyFingerCurl(
+        Ogre::Skeleton* skel, const std::string& animName,
+        const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
+        int fps,
+        /// #838 source finger REST directions (kFingerSlots, canonical frame).
+        /// Currently UNUSED: the implementation derives the rest from the
+        /// clip's own mean pose (more robust across rigs than the stored
+        /// value). Kept in the signature so libraries carrying restDir keep a
+        /// stable call site if a stored-rest path returns.
+        const std::vector<std::array<float, 3>>& clipFingerRest = {});
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher
     /// the retarget uses, so extraction and application are consistent by
     /// construction. Animations whose rig resolves 0 roles are skipped.
+    /// When `v2` is true, the emitted clip carries the V2 52-joint canonical
+    /// skeleton: joints 0..21 are the body (identical to V1) and joints 22..51
+    /// are the finger joints (world-frame orientation + pointing direction),
+    /// so fingers ride the ordinary joint retarget and can be trained into the
+    /// model. `restWorld`/`restDir`/`quats` are sized 52; the schema is v4. When
+    /// false (default), the V1 22-joint clip + separate `fingers` side-channel
+    /// is produced (unchanged).
     static std::vector<CanonicalClip> extractCanonicalClips(
         Ogre::Entity* entity,
         int fps = 30,
-        const QString& onlyAnimation = {});
+        const QString& onlyAnimation = {},
+        bool v2 = false);
 
     /// True when the entity's mesh appears to FACE −Z (the retarget and the
     /// CMU clips assume +Z): detected from the foot region — toe mass extends

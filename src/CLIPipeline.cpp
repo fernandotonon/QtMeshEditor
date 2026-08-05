@@ -2085,6 +2085,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
     std::vector<std::array<float, 3>> clipDirs;
     std::vector<float> clipRootY;              // #838 non-locomotion hip drop
+    std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838 fingers
+    std::vector<std::array<float, 3>> clipFingerRest;            // #838
     QString clipSource;
 
     bool gotClip = false;
@@ -2166,22 +2168,39 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                          : clip.restWorld;
         clipDirs = clip.restDir;
         clipRootY = clip.rootY;
+        // V2 (schema v4, 52 joints): fingers are canonical joints 22..51 and
+        // retarget via the body path in applyMotionClip — the separate
+        // applyFingerCurl side-channel MUST NOT also fire (double application).
+        // Only feed the side-channel for V1 (22-joint) libraries.
+        if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
+            clipFingers = clip.fingers;
+            clipFingerRest = clip.fingerRestDir;   // #838 rest ref (per-clip)
+        }
         clipSource = QStringLiteral("template");
         // Optionally retime the clip to a requested duration by frame stride/pad.
         if (duration > 0.05f) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
+            std::vector<std::vector<std::array<float, 4>>> retimedFingers;
             const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            // The V1 finger side-channel must retime WITH the body, or
+            // applyFingerCurl writes finger keys at the source duration while
+            // the body plays the retimed one.
+            const bool hadFingers =
+                static_cast<int>(clipFingers.size()) == clip.frames;
             if (hadY) retimedY.resize(want);
+            if (hadFingers) retimedFingers.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
                 const int si = std::min(clip.frames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
+                if (hadFingers) retimedFingers[f] = clipFingers[si];
             }
             quats.swap(retimed);
             if (hadY) clipRootY.swap(retimedY);
+            if (hadFingers) clipFingers.swap(retimedFingers);
         }
     }
 
@@ -2224,6 +2243,20 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                  smoothFps, fps) > 0)
             err() << "(smooth-bake: " << smoothFps << " -> " << fps
                   << " fps)" << Qt::endl;
+    }
+
+    // #838: ground crouch/kneel/work clips (drop the root so the lowest foot
+    // plants on the floor — fixes the "floating worker"). Descent actions only.
+    if (verticalDescent && MotionLibrary::isVerticalDescentAction(action)) {
+        if (AnimationMerger::groundRootToFeet(skel.get(), animName) > 0)
+            err() << "(grounded to feet)" << Qt::endl;
+    }
+
+    // #838: transfer finger animation onto the target rig's fingers.
+    if (!clipFingers.empty()) {
+        const int nf = AnimationMerger::applyFingerCurl(
+            skel.get(), animName, clipFingers, fps, clipFingerRest);
+        if (nf > 0) err() << "(fingers: " << nf << " bones)" << Qt::endl;
     }
 
     // #854: optional Mixamo-style arm-space post-process before export.
@@ -2298,6 +2331,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
     bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
     QString dumpCanonicalPath;        // --dump-canonical <out.json>
+    bool dumpCanonicalV2 = false;     // #838 --v2: 52-joint (fingers as joints)
     bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
     QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool facingMode = false;          // #837 harness: report world-space facing
@@ -2387,6 +2421,10 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             dumpCanonicalPath = QString(argv[++i]);
             continue;
         }
+        // #838 V2: emit the 52-joint canonical skeleton (fingers folded in as
+        // joints 22..51) → schema qtmesh-motion-library-v4. Without it the dump
+        // is the V1 22-joint body-only clip (+ separate `fingers` field).
+        if (arg == "--v2") { dumpCanonicalV2 = true; continue; }
         // #837 retarget parity harness (dev/test): apply an arbitrary
         // canonical clip JSON (as written by --dump-canonical) through the
         // SAME bind-referenced retarget the model path uses — no model, no
@@ -2599,6 +2637,123 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             /*worldFrame=*/true, rw, /*refineWithModel=*/false,
             /*refineStride=*/8, /*yaw180=*/false, rd);
         if (!res.ok) { err() << "Error: " << res.error << Qt::endl; return 1; }
+        // GROUND-TRUTH self-parity: when the applied json names a source
+        // animation that exists on THIS entity (self-retarget), play BOTH the
+        // original and generated_parity frame-by-frame on the same skeleton and
+        // compare RAW world orientations per bone — no canonicalization, no
+        // reference-frame selection, no export. This is the only metric immune
+        // to the extraction's per-clip reference/leveling choices (which
+        // contaminate dump-based comparisons by 20°+).
+        {
+            const QString srcAnim = clip.value("animation").toString();
+            if (!srcAnim.isEmpty()
+                && skel->hasAnimation(srcAnim.toStdString())) {
+                Ogre::Animation* aSrc =
+                    skel->getAnimation(srcAnim.toStdString());
+                Ogre::Animation* aOut =
+                    skel->getAnimation("generated_parity");
+                const float len = std::min(aSrc->getLength(),
+                                           aOut->getLength());
+                const int nB = static_cast<int>(skel->getNumBones());
+                std::vector<double> sumErr(static_cast<size_t>(nB), 0.0);
+                int nSamples = 0;
+                // ceil + clamp so the terminal keyframe is always sampled
+                // (len is rarely a multiple of the 0.1s stride).
+                const int nSteps = std::max(
+                    1, static_cast<int>(std::ceil(len / 0.1f)) + 1);
+                for (int s = 0; s < nSteps; ++s) {
+                    const float t =
+                        std::min(len, 0.1f * static_cast<float>(s));
+                    std::vector<Ogre::Quaternion> ws(
+                        static_cast<size_t>(nB));
+                    skel->reset(true);
+                    aSrc->apply(skel.get(), t);
+                    skel->_updateTransforms();
+                    for (int i = 0; i < nB; ++i)
+                        ws[static_cast<size_t>(i)] =
+                            skel->getBone(static_cast<unsigned short>(i))
+                                ->_getDerivedOrientation();
+                    skel->reset(true);
+                    aOut->apply(skel.get(), t);
+                    skel->_updateTransforms();
+                    for (int i = 0; i < nB; ++i) {
+                        const Ogre::Quaternion d =
+                            ws[static_cast<size_t>(i)].Inverse()
+                            * skel->getBone(static_cast<unsigned short>(i))
+                                  ->_getDerivedOrientation();
+                        sumErr[static_cast<size_t>(i)] += 2.0 * std::acos(
+                            std::min(1.0, std::abs(double(d.w))));
+                    }
+                    ++nSamples;
+                }
+                skel->reset(true);
+                cliWrite(QString("GROUND-TRUTH self-parity vs '%1' (%2 samples)\n")
+                             .arg(srcAnim).arg(nSamples));
+                for (int i = 0; i < nB; ++i) {
+                    const double deg = sumErr[static_cast<size_t>(i)]
+                                       / std::max(1, nSamples) * 180.0 / M_PI;
+                    if (deg > 3.0)
+                        cliWrite(QString("  %1: %2 deg\n")
+                            .arg(QString::fromStdString(
+                                skel->getBone(static_cast<unsigned short>(i))
+                                    ->getName()))
+                            .arg(deg, 0, 'f', 1));
+                }
+            }
+        }
+        // IN-PROCESS parity dump: with --dump-canonical alongside
+        // --apply-canonical, re-extract the freshly-applied clip WITHOUT the
+        // glTF export→import round-trip. The file round-trip alone measures
+        // ~25° mean loss on the arm chain (control: re-dumping an UNRETARGETED
+        // original through export/import shows the same loss), which swamps the
+        // retarget's own ~0.2° — this flag isolates the retarget.
+        if (dumpCanonicalMode && !dumpCanonicalPath.isEmpty()) {
+            const auto rclips = AnimationMerger::extractCanonicalClips(
+                ent, 30, QStringLiteral("generated_parity"), dumpCanonicalV2);
+            if (rclips.empty()) {
+                err() << "Error: in-process re-extraction produced no clip."
+                      << Qt::endl;
+                return 1;
+            }
+            const auto& c0 = rclips.front();
+            QJsonObject r2;
+            r2["schema"] = dumpCanonicalV2 ? "qtmesh-canonical-clips-v2"
+                                           : "qtmesh-canonical-clips-v1";
+            r2["frame"] = "world"; r2["fps"] = 30;
+            QJsonObject co; co["animation"] = c0.animation;
+            co["frames"] = c0.frames;
+            auto quatArr = [](const std::vector<std::array<float,4>>& pose) {
+                QJsonArray row;
+                for (const auto& qq : pose) {
+                    QJsonArray a;
+                    for (float v : qq) a.append(double(v));
+                    row.append(a);
+                }
+                return row;
+            };
+            QJsonArray fr;
+            for (const auto& pose : c0.quats) fr.append(quatArr(pose));
+            co["quats"] = fr;
+            co["restWorld"] = quatArr(c0.restWorld);
+            QJsonArray dirs;
+            for (const auto& v : c0.restDir) {
+                QJsonArray a;
+                for (float x : v) a.append(double(x));
+                dirs.append(a);
+            }
+            co["restDir"] = dirs;
+            QJsonArray ca; ca.append(co); r2["clips"] = ca;
+            QFile of(dumpCanonicalPath);
+            if (!of.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                err() << "Error: cannot write parity dump to "
+                      << dumpCanonicalPath << Qt::endl;
+                return 1;
+            }
+            of.write(QJsonDocument(r2).toJson(QJsonDocument::Compact));
+            cliWrite(QString("in-process parity dump → %1\n")
+                         .arg(dumpCanonicalPath));
+            return 0;
+        }
         const QString out = outputPath.isEmpty()
             ? QStringLiteral("/tmp/parity_out.glb") : outputPath;
         auto* node = ent->getParentSceneNode();
@@ -2874,20 +3029,29 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         SentryReporter::addBreadcrumb("ai.tool_call",
             QString("anim dump-canonical: %1").arg(fi.fileName()));
         const auto clips = AnimationMerger::extractCanonicalClips(
-            entity, 30, animationFilter);
+            entity, 30, animationFilter, dumpCanonicalV2);
         if (clips.empty()) {
             err() << "Error: no canonical clips extracted (rig resolves no "
                      "canonical roles, or no matching animation)." << Qt::endl;
             return 1;
         }
+        const int nJointsDump = dumpCanonicalV2
+            ? MotionInbetween::canonicalJointCountV2()   // 52
+            : MotionInbetween::canonicalJointCount();     // 22
         QJsonObject root;
-        root["schema"] = "qtmesh-canonical-clips-v1";
+        // v2 (52 joints, fingers folded in) → the library builder emits schema
+        // qtmesh-motion-library-v4; v1 (22 body joints) is the existing path.
+        root["schema"] = dumpCanonicalV2 ? "qtmesh-canonical-clips-v2"
+                                         : "qtmesh-canonical-clips-v1";
         root["frame"]  = "world";
         root["fps"]    = 30;
+        root["jointCount"] = nJointsDump;
         root["source"] = fi.fileName();
         QJsonArray joints;
-        for (int j = 0; j < MotionInbetween::canonicalJointCount(); ++j)
-            joints.append(MotionInbetween::canonicalJointName(j));
+        for (int j = 0; j < nJointsDump; ++j)
+            joints.append(dumpCanonicalV2
+                ? MotionInbetween::canonicalJointNameV2(j)
+                : MotionInbetween::canonicalJointName(j));
         root["joints"] = joints;
         QJsonArray clipArr;
         for (const auto& c : clips) {
@@ -2934,6 +3098,39 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                     ry.append(static_cast<double>(
                         std::round(v * 100000.0f) / 100000.0f));
                 co["rootY"] = ry;
+            }
+            // #838 finger animation: per-frame local curl, kFingerSlots wide.
+            // V2 dumps carry fingers as JOINTS 22..51 in `quats`, so the
+            // side-channel is redundant and deliberately omitted (a stray copy
+            // would double-apply if a v4 clip ever fed applyFingerCurl).
+            if (!dumpCanonicalV2 && !c.fingers.empty()) {
+                QJsonArray fr;
+                for (const auto& frame : c.fingers) {
+                    QJsonArray slotArr;
+                    for (const auto& q : frame) {
+                        QJsonArray qa;
+                        for (float v : q)
+                            qa.append(static_cast<double>(
+                                std::round(v * 100000.0f) / 100000.0f));
+                        slotArr.append(qa);
+                    }
+                    fr.append(slotArr);
+                }
+                co["fingers"] = fr;
+            }
+            // #838 finger REST directions (kFingerSlots × 3) — lets the
+            // retarget transport RELATIVE finger bend, not the absolute dir
+            // (which over-bends across differing rig rest conventions).
+            if (!c.fingerRestDir.empty()) {
+                QJsonArray fr;
+                for (const auto& d : c.fingerRestDir) {
+                    QJsonArray da;
+                    for (float v : d)
+                        da.append(static_cast<double>(
+                            std::round(v * 100000.0f) / 100000.0f));
+                    fr.append(da);
+                }
+                co["fingerRestDir"] = fr;
             }
             clipArr.append(co);
         }

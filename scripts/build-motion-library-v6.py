@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Build motion-library v5 from the harvested motion corpus (#839).
+"""Build motion-library V2 (52-joint, fingers-as-joints) from the corpus (#838).
 
 ONE-TIME, OFFLINE developer tool — NOT shipped; the app never runs Python.
 
-Slice B of the text-to-motion v2 epic (#837): turns the license-filtered
-corpus assembled by scrape-motion-corpus.py (#838) into the template clip
-library the app downloads — replacing the 47-clip CMU-only v4 with hundreds
-of real animation clips across a much wider action vocabulary.
+The V2 generation of build-motion-library-v5.py: same corpus pipeline, but
+dumps run with `--v2` so fingers are canonical joints 22..51 instead of a
+side-channel, and the output is the `qtmesh-motion-library-v4` schema. Also
+adds the curation ship-gate: `--curation <curation.json>` / `--approved-only`
+restricts the shipped set to the clips the user starred in the Animation
+Library picker (keyed by clip `source`; auto-discovered from the AppData
+motion dir when the flag is omitted).
 
 Pipeline per corpus asset:
-  1. `qtmesh anim <file> --dump-canonical tmp.json` — the editor's own
+  1. `qtmesh anim <file> --dump-canonical tmp.json --v2` — the editor's own
      loader + the SAME bone-role matcher the retarget uses maps the rig onto
-     the 22-joint canonical skeleton and samples every skeletal animation at
-     30 fps as WORLD-frame quats (the v3 library convention).
+     the 52-joint canonical skeleton and samples every skeletal animation at
+     30 fps as WORLD-frame quats.
   2. Action labelling: normalized animation name matched against a keyword
      table (walk/run/attack/death/...); un-tabled single-word names are kept
      verbatim — MotionLibrary::matchPrompt does substring matching, so every
@@ -24,13 +27,14 @@ Pipeline per corpus asset:
   4. Dedup: sibling characters in one pack share armature actions — clips
      with identical (action, frames, sampled-quat fingerprint) collapse.
 
-OUTPUT: motion-library.json in the EXISTING "qtmesh-motion-library-v3"
-schema (frame:"world") — the shipped app consumes it unchanged — plus a copy
-of the corpus ATTRIBUTION.md, which MUST ship wherever the library does.
+OUTPUT: motion-library-v2.json in the "qtmesh-motion-library-v4" schema
+(frame:"world", jointCount:52) — plus a copy of the corpus ATTRIBUTION.md,
+which MUST ship wherever the library does.
 
 USAGE
-  python3 scripts/build-motion-library-v5.py --corpus ~/motion_corpus \
-      --out motion-library.json [--qtmesh build_local/bin/qtmesh]
+  python3 scripts/build-motion-library-v6.py --corpus ~/motion_corpus \
+      --out motion-library-v2.json [--qtmesh build_local/bin/qtmesh] \
+      [--curation curation.json --approved-only]
 """
 
 import argparse
@@ -131,7 +135,9 @@ def quat_angle(a, b):
 
 
 def frame_energy(quats):
-    """Mean joint rotation speed between consecutive frames (rad/frame)."""
+    """Mean joint rotation speed between consecutive frames (rad/frame).
+    Deliberately measures the 22 BODY joints only — on a 52-wide V2 clip the
+    30 finger channels would dilute the signal the window selector needs."""
     e = [0.0]
     for f in range(1, len(quats)):
         a = sum(quat_angle(quats[f - 1][j], quats[f][j])
@@ -320,7 +326,11 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
     (catches mis-mapped rigs — quadrupeds pass the role gate but retarget
     horizontal), reference completeness, and a sane energy band. Returns
     (quality, drop_reason|None)."""
-    dirs_ok = sum(1 for d in (rest_dir or [])
+    # Completeness scores the BODY joints only: a V2 (52-joint) rest array
+    # carries 30 finger entries that would otherwise push the ratio past 1.0
+    # and saturate every clip's quality (defeating the quality² take-weighting
+    # and the drop floor).
+    dirs_ok = sum(1 for d in (rest_dir or [])[:CANON_COUNT]
                   if abs(d[0]) > 1e-6 or abs(d[1]) > 1e-6 or abs(d[2]) > 1e-6)
     completeness = dirs_ok / CANON_COUNT
     roles = (resolved_roles or 0) / CANON_COUNT
@@ -374,13 +384,13 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             if spine_bind is not None and spine_bind[1] < 0.4:
                 return 0.0, (f"non-biped torso (bind spine-up "
                              f"{spine_bind[1]:.2f})")
-            # ANIMATED uprightness HARD GATES removed (#838): a humanoid rig
-            # may LEAN, crouch, recline, throw its head back, or go to the
-            # ground as legitimate motion — the old spine-up / mid-clip-topple /
-            # thigh-down gates wrongly REJECTED those clips. Any clip on a
-            # biped rest skeleton is kept regardless of animated torso pitch;
-            # the measured up-terms survive only as the soft `upness` score
-            # term below (weighted into q, never a drop by itself).
+            # ANIMATED uprightness gates REMOVED (#838): a humanoid rig may
+            # LEAN, crouch, recline, throw its head back, or go to the ground
+            # as legitimate motion — the old spine-up / mid-clip-topple /
+            # thigh-down gates wrongly rejected (and their scoring skewed) those
+            # clips. We now keep any clip on a biped rest skeleton regardless of
+            # the animated torso pitch. Uprightness no longer factors into the
+            # quality score; use the measured up-terms only as a soft signal.
             if ns or nt:
                 up_terms = [max(0.0, v) for v in (spine_up, thigh_down)
                             if v is not None]
@@ -554,6 +564,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out", default="motion-library.json")
+    # Curation ship-gate (#838): the app's Animation Library picker writes
+    # curation.json ({"approved": ["<source>", ...]}, source = "title — anim").
+    # --approved-only ships ONLY the user-approved clips; the rest stay in the
+    # corpus for later improvement. --curation defaults to the app's file.
+    ap.add_argument("--curation", default="",
+                    help="path to curation.json (approved clip sources)")
+    ap.add_argument("--approved-only", action="store_true",
+                    help="keep only clips whose source is in --curation")
     ap.add_argument("--qtmesh", default="")
     ap.add_argument("--max-frames", type=int, default=120)      # 4 s @ 30
     ap.add_argument("--min-frames", type=int, default=15)       # 0.5 s
@@ -592,8 +610,10 @@ def main():
                     fpath = os.path.join(root, fn)
                     # Sidecar cache: extraction dominates rebuild time, so
                     # dumps persist next to the model file and are reused
-                    # when newer than it (delete *.canonical.json to force).
-                    cache = fpath + ".canonical.json"
+                    # when newer than it (delete *.canonical.v2.json to force).
+                    # V2: separate cache so it never collides with the V1
+                    # (22-joint) sidecar; passes --v2 for the 52-joint dump.
+                    cache = fpath + ".canonical.v2.json"
                     dump = None
                     if os.path.exists(cache) \
                             and os.path.getmtime(cache) >= os.path.getmtime(fpath):
@@ -605,7 +625,7 @@ def main():
                         try:
                             r = subprocess.run(
                                 [qtmesh, "anim", fpath,
-                                 "--dump-canonical", cache],
+                                 "--dump-canonical", cache, "--v2"],
                                 capture_output=True, text=True, timeout=600)
                             if r.returncode != 0 \
                                     or not os.path.exists(cache) \
@@ -650,11 +670,16 @@ def main():
                             continue      # duplicate take
                         if counts.get(action, 0) >= args.max_per_action:
                             continue
+                        # V2 dumps carry 52 joints (fingers folded in); V1 has
+                        # 22. Accept the rest arrays at the DUMP's own joint
+                        # width (the quats width), not the fixed body count —
+                        # otherwise a 52-wide V2 rest array is wrongly dropped.
+                        n_joints = len(q[0]) if q else CANON_COUNT
                         rest_world = c.get("restWorld") \
-                            if len(c.get("restWorld", [])) == CANON_COUNT \
+                            if len(c.get("restWorld", [])) == n_joints \
                             else None
                         rest_dir = c.get("restDir") \
-                            if len(c.get("restDir", [])) == CANON_COUNT \
+                            if len(c.get("restDir", [])) == n_joints \
                             else None
                         quality, drop = clip_quality(
                             action, w, rest_world, rest_dir,
@@ -682,8 +707,9 @@ def main():
                         if rest_dir:
                             clip["restDir"] = rest_dir
                         # #838 vertical descent: carry the per-frame hip Y
-                        # offset, sliced to the SAME active window as the
-                        # quats (NOT re-based — see below).
+                        # offset, sliced to the SAME active window as the quats
+                        # and re-based so frame 0 of the window reads ~0 (the
+                        # retarget deltas the descent against its start frame).
                         ry = c.get("rootY")
                         if ry and len(ry) == len(q):
                             # rootY is a crouch DEPTH vs the rig's BIND-pose
@@ -698,11 +724,10 @@ def main():
                             if wry:
                                 clip["rootY"] = [
                                     round(0.6 * min(0.0, v), 5) for v in wry]
-                        # #838 finger animation: window it to the same frames as
-                        # the quats. Per-frame × kFingerSlots × [x,y,z,w].
-                        fingers = c.get("fingers")
-                        if fingers and len(fingers) == len(q):
-                            clip["fingers"] = fingers[s:epos]
+                        # V2 (schema v4): fingers are canonical JOINTS 22..51 in
+                        # `quats`/`restWorld`/`restDir` already — no separate
+                        # `fingers` side-channel. (The V1 builder copied
+                        # c["fingers"] here; V2 dumps don't emit it.)
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
@@ -710,7 +735,40 @@ def main():
     if not clips:
         sys.exit("no clips extracted — is the corpus downloaded/validated?")
 
-    lib = {"schema": "qtmesh-motion-library-v3", "joints": joints,
+    # Curation ship-gate (#838): keep only user-approved clips when requested.
+    if args.approved_only:
+        cur = args.curation
+        if not cur:
+            # default to the app's curation file (macOS AppData layout first)
+            home = os.path.expanduser("~")
+            for cand in (
+                os.path.join(home, "Library/Application Support/QtMeshEditor/"
+                                   "QtMeshEditor/ai_models/motion/curation.json"),
+                os.path.join(home, "Library/Application Support/QtMeshEditor/"
+                                   "ai_models/motion/curation.json"),
+                os.path.join(home, ".local/share/QtMeshEditor/QtMeshEditor/"
+                                   "ai_models/motion/curation.json"),
+            ):
+                if os.path.exists(cand):
+                    cur = cand
+                    break
+        if not cur or not os.path.exists(cur):
+            sys.exit("--approved-only: no curation.json found "
+                     "(pass --curation or mark clips in the app first)")
+        approved = set(json.load(open(cur)).get("approved", []))
+        before = len(clips)
+        clips = [c for c in clips if c["source"] in approved]
+        print(f"\ncuration gate: {before} -> {len(clips)} clips "
+              f"({len(approved)} approved in {cur})")
+        if not clips:
+            sys.exit("no approved clips matched — check curation.json sources")
+        counts.clear()
+        for c in clips:
+            counts[c["action"]] = counts.get(c["action"], 0) + 1
+
+    # Schema v4 = 52-joint canonical skeleton (fingers folded in as joints
+    # 22..51). The app's MotionLibrary loader reads v1..v4; v4 → jointCount 52.
+    lib = {"schema": "qtmesh-motion-library-v4", "joints": joints,
            "fps": FPS, "frame": "world", "clips": clips}
     with open(args.out, "w") as f:
         json.dump(lib, f)

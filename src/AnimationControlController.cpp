@@ -1878,7 +1878,28 @@ QVariantList AnimationControlController::listMotionClips()
         m["frames"] = c.frames;
         out.append(m);
     }
+    // Curation (#838 ship-gate): mark the user-approved "good" clips so the
+    // picker can filter to them. Keyed by clip source — stable across rebuilds.
+    const QSet<QString> approved = MotionLibrary::loadCuration();
+    for (int i = 0; i < out.size(); ++i) {
+        QVariantMap m = out[i].toMap();
+        m["approved"] = approved.contains(m["source"].toString());
+        out[i] = m;
+    }
     return out;
+}
+
+void AnimationControlController::setClipApproved(const QString& source,
+                                                 bool approved)
+{
+    QSet<QString> set = MotionLibrary::loadCuration();
+    if (approved) set.insert(source);
+    else set.remove(source);
+    MotionLibrary::saveCuration(set);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("curation %1: %2")
+            .arg(approved ? QStringLiteral("approve")
+                          : QStringLiteral("unapprove"), source.left(60)));
 }
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
@@ -1922,6 +1943,8 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
     std::vector<float> clipRootY;
+    std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
+    std::vector<std::array<float, 3>> clipFingerRest;             // #838
     bool gotClip = false;
 
     // The animation PICKER passes an explicit clip index — force the template
@@ -1984,21 +2007,33 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                          : clip.restWorld;
         clipDirs = clip.restDir;
         clipRootY = clip.rootY;
+        // V2 (schema v4, 52 joints): fingers retarget as canonical joints via
+        // the body path — don't ALSO fire the applyFingerCurl side-channel
+        // (double application). Side-channel is V1-only.
+        if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
+            clipFingers = clip.fingers;
+            clipFingerRest = clip.fingerRestDir;   // #838 (per-clip const)
+        }
         clipSource = QStringLiteral("template");
         if (duration > 0.05) {
             const int want = std::max(2, int(duration * clip.fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
+            std::vector<std::vector<std::array<float, 4>>> retimedF;
             const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            const bool hadF = static_cast<int>(clipFingers.size()) == clip.frames;
             if (hadY) retimedY.resize(want);
+            if (hadF) retimedF.resize(want);
             for (int f = 0; f < want; ++f) {
                 const float src = (clip.frames - 1) * (float(f) / float(want - 1));
                 const int si = std::min(clip.frames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
+                if (hadF) retimedF[f] = clipFingers[si];
             }
             quats.swap(retimed);
             if (hadY) clipRootY.swap(retimedY);
+            if (hadF) clipFingers.swap(retimedF);
         }
     }
 
@@ -2024,6 +2059,14 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // retarget trembling). Before arm-space/foot-pin so pins stay exact.
     AnimationMerger::smoothBakeAnimation(skel.get(), animName, 12, fps);
 
+    // #838: ground crouch/kneel/work clips — a folded-leg pose retargeted onto
+    // a differently-proportioned rig leaves the feet dangling (the "floating
+    // worker"); drop the root so the lowest foot plants on the floor. Only for
+    // descent actions (a walk needs its foot lift). Runs after smooth-bake (on
+    // the baked keyframes) and before foot-pin (which then re-plants exactly).
+    if (doDescent)
+        AnimationMerger::groundRootToFeet(skel.get(), animName);
+
     // #854: optional Mixamo-style arm-space post-process.
     if (std::abs(armSpaceDeg) > 1e-4)
         AnimationMerger::adjustArmSpace(skel.get(), animName,
@@ -2038,6 +2081,25 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             out["footPinError"] = fp.error;   // surface why (no leg tracks, etc.)
     }
 
+    // #838 finger animation: transfer the source clip's finger curl onto the
+    // target's fingers (no-op if either rig lacks fingers or the clip has none).
+    if (!clipFingers.empty()) {
+        const int nf = AnimationMerger::applyFingerCurl(
+            skel.get(), animName, clipFingers, fps, clipFingerRest);
+        if (nf > 0) out["fingerBones"] = nf;
+    }
+
+
+    // The post-passes (grounding, finger tracks) edit/add tracks on the MASTER
+    // skeleton AFTER the live SkeletonInstance was built. The instance shares
+    // the master's animations by reference, but caches per-bone
+    // AnimationState/track bindings — newly-added finger tracks and the edited
+    // root translate aren't picked up until the instance re-reads the skeleton.
+    // Re-initialise it so the live viewport reflects every pass (#838).
+    entity->_initialise(true);
+    // _initialise(true) recreates the entity's SkeletonInstance —
+    // m_selectedSkeleton dangles until re-fetched (see rebindSelectedSkeleton).
+    rebindSelectedSkeleton();
     entity->refreshAvailableAnimationState();
     // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
     // enabled animation states, so leaving the import's auto-enabled clip (or

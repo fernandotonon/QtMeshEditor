@@ -1,5 +1,6 @@
 #include "MotionLibrary.h"
 
+#include "MotionInbetween.h"   // canonicalJointCountV2() for schema v4
 #include <QRandomGenerator>
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,8 @@
 #include <QTimer>
 
 namespace {
-constexpr const char* kLibraryFile = "motion-library.json";
+constexpr const char* kLibraryFile = "motion-library.json";        // V1 (v3 schema)
+constexpr const char* kLibraryFileV2 = "motion-library-v2.json";   // V2 (v4 schema, fingers)
 constexpr const char* kDefaultBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/motion/";
 constexpr const char* kBaseUrlSettingsKey = "ai/motionLibraryBaseUrl";
@@ -82,11 +84,19 @@ bool MotionLibrary::parse(const QByteArray& json)
     const QString schema = root.value("schema").toString();
     if (schema != QLatin1String("qtmesh-motion-library-v1") &&
         schema != QLatin1String("qtmesh-motion-library-v2") &&
-        schema != QLatin1String("qtmesh-motion-library-v3")) {
+        schema != QLatin1String("qtmesh-motion-library-v3") &&
+        schema != QLatin1String("qtmesh-motion-library-v4")) {
         m_error = QStringLiteral("unexpected library schema");
         return false;
     }
-    // v3 stores WORLD-space joint orientations (marked "frame":"world"); v1/v2
+    // v4 folds the fingers INTO the canonical skeleton (52 joints: 22 body + 30
+    // finger); v1..v3 are 22-joint body-only (fingers ride the separate
+    // `fingers` side-channel). The joint count per pose depends on the schema.
+    m_jointCount = (schema == QLatin1String("qtmesh-motion-library-v4"))
+        ? MotionInbetween::canonicalJointCountV2()   // 52
+        : kCanonJoints;                               // 22
+    const int nJoints = m_jointCount;
+    // v3/v4 store WORLD-space joint orientations (marked "frame":"world"); v1/v2
     // store LOCAL parent-relative rotations. The retarget branches on this.
     m_worldFrame = (root.value("frame").toString() == QLatin1String("world"));
     const int fps = root.value("fps").toInt(30);
@@ -118,14 +128,14 @@ bool MotionLibrary::parse(const QByteArray& json)
         clip.quats.reserve(frames.size());
         for (const QJsonValue& fv : frames) {
             const QJsonArray joints = fv.toArray();
-            if (joints.size() != kCanonJoints) {   // schema guard
+            if (joints.size() != nJoints) {   // schema guard (22 v1..v3 / 52 v4)
                 m_error = QStringLiteral("clip '%1' has %2 joints (expected %3)")
-                              .arg(clip.action).arg(joints.size()).arg(kCanonJoints);
+                              .arg(clip.action).arg(joints.size()).arg(nJoints);
                 m_clips.clear();
                 return false;
             }
-            std::vector<std::array<float, 4>> pose(kCanonJoints);
-            for (int j = 0; j < kCanonJoints; ++j) {
+            std::vector<std::array<float, 4>> pose(nJoints);
+            for (int j = 0; j < nJoints; ++j) {
                 const QJsonArray q = joints[j].toArray();
                 pose[j] = { static_cast<float>(q.at(0).toDouble()),
                             static_cast<float>(q.at(1).toDouble()),
@@ -138,9 +148,9 @@ bool MotionLibrary::parse(const QByteArray& json)
         // Optional per-clip source-bind orientations (bind-referenced
         // retarget). Malformed/absent → empty, the standing-pose path runs.
         const QJsonArray rest = co.value("restWorld").toArray();
-        if (rest.size() == kCanonJoints) {
-            clip.restWorld.reserve(kCanonJoints);
-            for (int j = 0; j < kCanonJoints; ++j) {
+        if (rest.size() == nJoints) {
+            clip.restWorld.reserve(nJoints);
+            for (int j = 0; j < nJoints; ++j) {
                 const QJsonArray q = rest[j].toArray();
                 clip.restWorld.push_back({
                     static_cast<float>(q.at(0).toDouble()),
@@ -150,9 +160,9 @@ bool MotionLibrary::parse(const QByteArray& json)
             }
         }
         const QJsonArray rdir = co.value("restDir").toArray();
-        if (rdir.size() == kCanonJoints) {
-            clip.restDir.reserve(kCanonJoints);
-            for (int j = 0; j < kCanonJoints; ++j) {
+        if (rdir.size() == nJoints) {
+            clip.restDir.reserve(nJoints);
+            for (int j = 0; j < nJoints; ++j) {
                 const QJsonArray v = rdir[j].toArray();
                 clip.restDir.push_back({
                     static_cast<float>(v.at(0).toDouble()),
@@ -165,6 +175,49 @@ bool MotionLibrary::parse(const QByteArray& json)
             clip.rootY.reserve(clip.frames);
             for (const auto& yv : rootYArr)
                 clip.rootY.push_back(static_cast<float>(yv.toDouble()));
+        }
+        // #838 finger animation: frames × 30 × [x,y,z,w] local curl.
+        // 30 = AnimationMerger::kFingerSlots (2 sides × 5 fingers × 3 segments;
+        // literal here because this core stays Ogre-free). Rows are indexed
+        // with kFingerSlots offsets downstream, so enforce the exact width at
+        // parse time like the other joint arrays.
+        constexpr int kFingerSlots = 30;
+        const QJsonArray fingersArr = co.value("fingers").toArray();
+        if (fingersArr.size() == clip.frames) {
+            clip.fingers.reserve(clip.frames);
+            bool ok = true;
+            for (const auto& fv : fingersArr) {
+                const QJsonArray slotArr = fv.toArray();
+                if (slotArr.size() != kFingerSlots) { ok = false; break; }
+                std::vector<std::array<float, 4>> row;
+                row.reserve(slotArr.size());
+                for (const auto& qv : slotArr) {
+                    const QJsonArray q = qv.toArray();
+                    if (q.size() != 4) { ok = false; break; }
+                    row.push_back({static_cast<float>(q.at(0).toDouble()),
+                                   static_cast<float>(q.at(1).toDouble()),
+                                   static_cast<float>(q.at(2).toDouble()),
+                                   static_cast<float>(q.at(3).toDouble(1.0))});
+                }
+                if (!ok) break;
+                clip.fingers.push_back(std::move(row));
+            }
+            if (!ok) clip.fingers.clear();
+        }
+        // #838 finger REST directions (kFingerSlots × [x,y,z]) — enables the
+        // relative-bend finger retarget (avoids the over-bend from differing
+        // rig rest conventions). Optional; absent → legacy absolute aim.
+        const QJsonArray fRest = co.value("fingerRestDir").toArray();
+        if (fRest.size() == kFingerSlots) {
+            clip.fingerRestDir.reserve(fRest.size());
+            for (const auto& dv : fRest) {
+                const QJsonArray d = dv.toArray();
+                if (d.size() != 3) { clip.fingerRestDir.clear(); break; }
+                clip.fingerRestDir.push_back({
+                    static_cast<float>(d.at(0).toDouble()),
+                    static_cast<float>(d.at(1).toDouble()),
+                    static_cast<float>(d.at(2).toDouble())});
+            }
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
@@ -253,11 +306,53 @@ QString MotionLibrary::libraryPath()
 {
     const QString dataPath =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/motion/")
-                                   + QString::fromLatin1(kLibraryFile));
+    const QDir dir(QDir(dataPath).filePath(QStringLiteral("ai_models/motion")));
+    // Prefer the V2 library (schema v4, fingers folded in) when present; fall
+    // back to the V1 file. Old app builds only know `motion-library.json`, so
+    // shipping a `-v2` file alongside never breaks them — this is opt-in.
+    const QString v2 = dir.filePath(QString::fromLatin1(kLibraryFileV2));
+    if (QFileInfo::exists(v2)) return v2;
+    return dir.filePath(QString::fromLatin1(kLibraryFile));
 }
 
 bool MotionLibrary::libraryPresent() { return QFileInfo::exists(libraryPath()); }
+
+QString MotionLibrary::curationPath()
+{
+    const QString dataPath =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return QDir(dataPath).filePath(
+        QStringLiteral("ai_models/motion/curation.json"));
+}
+
+QSet<QString> MotionLibrary::loadCuration()
+{
+    QSet<QString> out;
+    QFile f(curationPath());
+    if (!f.open(QIODevice::ReadOnly)) return out;
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    for (const QJsonValue& v : root.value(QStringLiteral("approved")).toArray())
+        if (v.isString()) out.insert(v.toString());
+    return out;
+}
+
+bool MotionLibrary::saveCuration(const QSet<QString>& approved)
+{
+    QJsonObject root;
+    root[QStringLiteral("schema")] =
+        QStringLiteral("qtmesh-motion-curation-v1");
+    QJsonArray arr;
+    // stable file diffs: sorted
+    QStringList sorted(approved.begin(), approved.end());
+    sorted.sort();
+    for (const QString& s : sorted) arr.append(s);
+    root[QStringLiteral("approved")] = arr;
+    QDir().mkpath(QFileInfo(curationPath()).absolutePath());
+    QFile f(curationPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return true;
+}
 
 QString MotionLibrary::ensureLibraryBlocking()
 {
@@ -282,29 +377,49 @@ QString MotionLibrary::ensureLibraryBlocking()
     auto* dl = ModelDownloader::instance();
     if (!dl) return {};
 
-    QDir().mkpath(QFileInfo(dest).absolutePath());
-    const QString url = base + QString::fromLatin1(kLibraryFile);
-    const QString label = QStringLiteral("Motion library");
-
-    QEventLoop loop;
-    bool ok = false, timedOut = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) { if (name == label) { ok = true; loop.quit(); } });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) { if (name == label) { ok = false; loop.quit(); } });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    timeout.start(300000);   // 5 min — the library is small (~1 MB)
-
-    dl->startDownload(url, dest, label);
-    loop.exec();
-
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut && dl) dl->cancelDownload();
-
-    return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
+    // Try the V2 library (schema v4, fingers-as-joints — the curated shipped
+    // set) FIRST; fall back to the V1 file so overridden base URLs / older
+    // hosted repos keep working. Old app builds only request the V1 name and
+    // their loader rejects the v4 schema, so hosting both is non-breaking.
+    bool stalled = false;
+    auto tryDownload = [&](const char* fileName) -> QString {
+        const QDir dir(QFileInfo(libraryPath()).absolutePath());
+        const QString fdest = dir.filePath(QString::fromLatin1(fileName));
+        const QString url = base + QString::fromLatin1(fileName);
+        const QString label = QStringLiteral("Motion library (%1)")
+                                  .arg(QString::fromLatin1(fileName));
+        QDir().mkpath(dir.absolutePath());
+        QEventLoop loop;
+        bool ok = false, timedOut = false;
+        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted,
+            &loop, [&](const QString& name, const QString&) {
+                if (name == label) { ok = true; loop.quit(); } });
+        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError,
+            &loop, [&](const QString& name, const QString&) {
+                if (name == label) { ok = false; loop.quit(); } });
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        QObject::connect(&timeout, &QTimer::timeout, &loop,
+                         [&]() { timedOut = true; loop.quit(); });
+        timeout.start(300000);   // 5 min — the library is small (~8 MB)
+        dl->startDownload(url, fdest, label);
+        loop.exec();
+        QObject::disconnect(onDone);
+        QObject::disconnect(onErr);
+        if (timedOut && dl) dl->cancelDownload();
+        stalled = timedOut;
+        if (ok && !timedOut && QFileInfo::exists(fdest)) return fdest;
+        QFile::remove(fdest);   // don't leave a partial/404 body behind
+        return QString();
+    };
+    const QString v2 = tryDownload(kLibraryFileV2);
+    if (!v2.isEmpty()) return v2;
+    // A TIMEOUT means the connection stalled, not that the V2 file is absent —
+    // retrying the V1 name would block the (GUI/CLI) caller for up to another
+    // 5 minutes for nothing. Only fall back on a fast failure (404 / older
+    // hosted repo without the V2 file).
+    if (stalled) return {};
+    return tryDownload(kLibraryFile);
 }
 
 std::vector<std::array<float, 3>> MotionLibrary::referenceDirsForPrompt(
@@ -353,6 +468,17 @@ bool MotionLibrary::isVerticalDescentAction(const QString& action)
         QStringLiteral("sit"),    QStringLiteral("crawl"),
         QStringLiteral("crouch"), QStringLiteral("death"),
         QStringLiteral("pray"),
+        // Ground-work actions (Gregório worker set, #838): build/cut/farm/
+        // fruit/gather all crouch or kneel at ground level — they must sink,
+        // not float in a folded-leg pose. Covers the "*loop" variants too.
+        QStringLiteral("build"),  QStringLiteral("buildloop"),
+        QStringLiteral("cut"),    QStringLiteral("cutloop"),
+        QStringLiteral("farm"),   QStringLiteral("farmloop"),
+        QStringLiteral("fruit"),  QStringLiteral("fruitloop"),
+        QStringLiteral("gather"),
+        QStringLiteral("cartgive"),  QStringLiteral("cartgiveloop"),
+        QStringLiteral("stonegive"), QStringLiteral("stonegiveloop"),
+        QStringLiteral("woodgive"),  QStringLiteral("woodgiveloop"),
     };
     return kDescent.contains(action.trimmed().toLower());
 }

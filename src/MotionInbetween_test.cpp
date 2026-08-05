@@ -262,6 +262,83 @@ TEST(MotionInbetween, CanonicalSkeletonHas22Joints)
     EXPECT_TRUE(MIB::canonicalJointName(99).isEmpty());
 }
 
+TEST(MotionInbetween, CanonicalV2Has52Joints)
+{
+    // V2 = 22 body + 30 finger (2 hands × 5 fingers × 3 segments).
+    EXPECT_EQ(MIB::canonicalJointCountV2(), 52);
+    // Body indices 0..21 identical to V1.
+    for (int i = 0; i < MIB::canonicalJointCount(); ++i) {
+        EXPECT_EQ(MIB::canonicalJointNameV2(i).toStdString(),
+                  MIB::canonicalJointName(i).toStdString());
+        EXPECT_EQ(MIB::canonicalParentOfV2(i), MIB::canonicalParentOf(i));
+    }
+    EXPECT_TRUE(MIB::canonicalJointNameV2(-1).isEmpty());
+    EXPECT_TRUE(MIB::canonicalJointNameV2(52).isEmpty());
+}
+
+TEST(MotionInbetween, CanonicalV2FingerTopology)
+{
+    // Right thumb seg0 = 22 + (0*5 + 0)*3 + 0 = 22; parent = rhand (9).
+    const int rThumb0 = MIB::fingerJointIndexV2(0, 0, 0);
+    EXPECT_EQ(rThumb0, 22);
+    EXPECT_EQ(MIB::canonicalParentOfV2(rThumb0), 9);   // rhand
+    EXPECT_EQ(MIB::canonicalChildOfV2(rThumb0), 23);   // thumb seg1
+    // deeper segment parents to previous
+    const int rThumb1 = MIB::fingerJointIndexV2(0, 0, 1);
+    EXPECT_EQ(rThumb1, 23);
+    EXPECT_EQ(MIB::canonicalParentOfV2(rThumb1), 22);
+    // fingertip (seg2) is a leaf
+    const int rThumb2 = MIB::fingerJointIndexV2(0, 0, 2);
+    EXPECT_EQ(MIB::canonicalChildOfV2(rThumb2), -1);
+    // left index seg0 parents to lhand (13)
+    const int lIndex0 = MIB::fingerJointIndexV2(1, 1, 0);
+    EXPECT_EQ(MIB::canonicalParentOfV2(lIndex0), 13);
+    // last joint = left pinky seg2 = index 51
+    EXPECT_EQ(MIB::fingerJointIndexV2(1, 4, 2), 51);
+    // out-of-range slots reject
+    EXPECT_EQ(MIB::fingerJointIndexV2(0, 0, 3), -1);
+    EXPECT_EQ(MIB::fingerJointIndexV2(2, 0, 0), -1);
+}
+
+TEST(MotionInbetween, CanonicalV2BoneMatcher)
+{
+    // Body bones resolve exactly as V1.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:Hips"), 0);
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:LeftHand"), 13);
+    // Finger bones resolve to 22..51.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:RightHandThumb1"),
+              MIB::fingerJointIndexV2(0, 0, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:LeftHandIndex2"),
+              MIB::fingerJointIndexV2(1, 1, 1));
+    // Biped numeric convention.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("Bip001 R Finger0"),
+              MIB::fingerJointIndexV2(0, 0, 0));
+    // A non-bone returns -1.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("some_prop"), -1);
+}
+
+TEST(MotionInbetween, FingerMatcherRejectsMidWordHits)
+{
+    // Finger words hiding inside NON-finger bone names must not map onto
+    // finger slots: "ring" in spring/jiggle bones (common in VRM/MMD rigs),
+    // "index" in helper bones. V1 drops these; V2 must too.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("SpringBone_L_01"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("String_R"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("EarRing"), -1);
+    // Legitimate finger namings keep resolving across conventions:
+    // separator-boundary, fused hand context, fused side word, Rigify.
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("L_Ring2"),
+              MIB::fingerJointIndexV2(1, 3, 1));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("mixamorig:LeftHandRing1"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("LeftRing1"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("f_ring.01.L"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+    EXPECT_EQ(MIB::canonicalIndexForBoneV2("Ring_L"),
+              MIB::fingerJointIndexV2(1, 3, 0));
+}
+
 TEST(MotionInbetween, BoneMatcherCmuNames)
 {
     // The exact CMU canonical names must map to themselves.

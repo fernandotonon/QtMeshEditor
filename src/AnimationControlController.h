@@ -363,6 +363,10 @@ public:
     /// human-readable label like "Walk (Tired Character)". Downloads the
     /// library on first use (blocking). Empty list if unavailable.
     Q_INVOKABLE QVariantList listMotionClips();
+    /// Curation (#838 ship-gate): persist whether a library clip (keyed by its
+    /// stable `source` string) is user-approved ("good"). The picker's checkbox
+    /// writes this; the library builder ships --approved-only.
+    Q_INVOKABLE void setClipApproved(const QString& source, bool approved);
 
     /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
     /// the selected entity. Positive `degrees` widens the arms away from the
