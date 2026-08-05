@@ -432,10 +432,12 @@ FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     # Re-pinned 2026-08: the previous pin 31c1ad3745… stopped fetching in CI
-    # ("fatal: unable to read tree" on every platform during the shallow clone).
-    # 2c980bb… is the current upstream master head and clones cleanly.
+    # ("fatal: unable to read tree" on every platform). NB stb has no upstream
+    # tags/releases, so we must pin a commit SHA — and GIT_SHALLOW does NOT
+    # support fetching an arbitrary SHA (only branches/tags), so it's OFF here: a
+    # full clone can always resolve the pinned commit even after master advances.
     GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
 )
 FetchContent_MakeAvailable(stb)
 

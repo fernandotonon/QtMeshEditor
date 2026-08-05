@@ -11,6 +11,7 @@
 #include <QLibraryInfo>
 #include <QDir>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QCommandLineParser>
 #include <QJsonObject>
 #include <QScopeGuard>
@@ -77,27 +78,42 @@ static void setSentrySessionTags(const QString& launchMode)
 // `PlugIns` / `PlugIns/qml` explicitly. Must run before QApplication so the env
 // vars take effect before Qt probes its paths. No-op when already launched inside
 // the bundle (the paths just get re-affirmed).
-static void fixBundlePathsForSymlinkLaunch(const char* argv0)
+// Returns the bundle PlugIns dir it pointed Qt at, or an empty string if it did
+// nothing (already inside a bundle / not a bundle layout / no PlugIns).
+static QString fixBundlePathsForSymlinkLaunch(const char* argv0)
 {
-    // Resolve argv0 (and any symlinks) to an absolute canonical path.
-    QFileInfo exeInfo(QString::fromLocal8Bit(argv0));
+    QString token = QString::fromLocal8Bit(argv0);
+    if (token.isEmpty())
+        return {};
+
+    // A bare command name (no '/') means the shell ran us via PATH lookup
+    // (`qtmesheditor`), so argv0 is just "qtmesheditor" — QFileInfo would resolve
+    // it against $PWD and miss the bundle. Resolve it against PATH first.
+    if (!token.contains(QLatin1Char('/'))) {
+        const QString onPath = QStandardPaths::findExecutable(token);
+        if (!onPath.isEmpty())
+            token = onPath;
+    }
+
+    // Resolve the token (and any symlinks) to an absolute canonical path.
+    QFileInfo exeInfo(token);
     QString exePath = exeInfo.canonicalFilePath();   // follows symlinks
     if (exePath.isEmpty())
         exePath = exeInfo.absoluteFilePath();
     if (exePath.isEmpty())
-        return;
+        return {};
 
     // …/Contents/MacOS/<binary>  →  bundle Contents dir is two levels up.
     QDir macosDir = QFileInfo(exePath).absoluteDir();          // Contents/MacOS
     if (macosDir.dirName() != QLatin1String("MacOS"))
-        return;                                                // not a bundle layout
+        return {};                                             // not a bundle layout
     QDir contentsDir = macosDir;
     if (!contentsDir.cdUp())                                   // → Contents
-        return;
+        return {};
 
     const QString plugins = contentsDir.absoluteFilePath(QStringLiteral("PlugIns"));
     if (!QDir(plugins).exists())
-        return;                                                // nothing to point at
+        return {};                                             // nothing to point at
     const QString qmlDir = QDir(plugins).absoluteFilePath(QStringLiteral("qml"));
 
     // Only override when Qt would otherwise look in the WRONG place — i.e. the
@@ -107,6 +123,7 @@ static void fixBundlePathsForSymlinkLaunch(const char* argv0)
     qputenv("QT_PLUGIN_PATH", plugins.toLocal8Bit());
     qputenv("QML_IMPORT_PATH", qmlDir.toLocal8Bit());
     qputenv("QML2_IMPORT_PATH", qmlDir.toLocal8Bit());
+    return plugins;
 }
 #endif
 
@@ -188,10 +205,11 @@ int main(int argc, char *argv[])
     }
 
     // Normal GUI mode (optionally with MCP server)
+    QString bundlePluginsApplied;   // non-empty if the macOS symlink fix ran
 #ifdef Q_OS_MACOS
     // Make a Homebrew CLI-symlink launch (qtmesheditor) find the bundle's Qt
     // plugins / QML modules, so its QQuickWidgets don't render blank white.
-    fixBundlePathsForSymlinkLaunch(argv[0]);
+    bundlePluginsApplied = fixBundlePathsForSymlinkLaunch(argv[0]);
 #endif
 
     // Set Qt Quick Controls style before creating QApplication
@@ -274,6 +292,12 @@ int main(int argc, char *argv[])
     setSentrySessionTags(mcpWithGuiMode ? "gui+mcp" : "gui");
     SentryReporter::captureTelemetryEvent(QStringLiteral("app.startup"),
         QJsonObject{{QStringLiteral("launch_mode"), mcpWithGuiMode ? QStringLiteral("gui+mcp") : QStringLiteral("gui")}});
+
+    // Note when the macOS symlink-launch bundle-path fix kicked in (Homebrew CLI
+    // launch), so a blank-QML report can be correlated with the plugin path used.
+    if (!bundlePluginsApplied.isEmpty())
+        SentryReporter::addBreadcrumb(QStringLiteral("app.startup"),
+            QStringLiteral("macOS symlink launch — QT_PLUGIN_PATH set to %1").arg(bundlePluginsApplied));
 
 #ifdef ENABLE_AUTO_UPDATER
     for (int i = 1; i < argc; ++i) {

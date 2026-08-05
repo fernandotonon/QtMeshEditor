@@ -4,7 +4,9 @@ PartOps (epic #859) turns QtMeshEditor's AI **mesh segmentation** into real mesh
 authoring operations: take one fused character mesh, detect its parts
 (head / torso / arms / legs …), and **split**, **explode**, **join**, or
 **solidify** them. Works in the GUI, the `qtmesh` CLI, and over MCP — all three
-produce equivalent results and are undoable in the editor.
+produce equivalent results. GUI and MCP operations run in the live editor and
+are a single undo step (`Ctrl+Z`); the CLI runs headless and writes an output
+file, so it produces the same geometry with no editor undo step.
 
 > Segmentation itself (the model + the "Select by Part" Edit-Mode tool) is
 > documented in [MESH_SEGMENTATION_STRATEGY.md](MESH_SEGMENTATION_STRATEGY.md).
