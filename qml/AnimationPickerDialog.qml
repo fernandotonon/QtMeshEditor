@@ -23,9 +23,11 @@ Window {
     // emitted after a successful apply so the panel can refresh its anim list
     signal applied(string animation, string entity)
 
-    property var allClips: []          // full [{index,action,name,source,quality,frames}]
+    property var allClips: []          // full [{index,action,name,source,quality,frames,approved}]
     property string filterText: ""
     property int busyIndex: -1         // row currently generating (for UI feedback)
+    property bool onlyApproved: false  // curation filter: show only "good" clips
+    property int approvedCount: 0
 
     function refresh() {
         allClips = AnimationControlController.listMotionClips()
@@ -34,13 +36,29 @@ Window {
     function rebuildModel() {
         var f = filterText.trim().toLowerCase()
         listModel.clear()
+        var ac = 0
         for (var i = 0; i < allClips.length; ++i) {
             var c = allClips[i]
+            if (c.approved) ac++
+            if (onlyApproved && !c.approved) continue
             if (f === "" || c.name.toLowerCase().indexOf(f) !== -1
                          || c.action.toLowerCase().indexOf(f) !== -1) {
                 listModel.append(c)
             }
         }
+        approvedCount = ac
+    }
+    // Curation (#838 ship-gate): toggle a clip's "good" mark. Persists via the
+    // controller (curation.json); the library builder ships --approved-only.
+    function toggleApproved(row) {
+        var src = listModel.get(row).source
+        var newVal = !listModel.get(row).approved
+        AnimationControlController.setClipApproved(src, newVal)
+        listModel.setProperty(row, "approved", newVal)
+        for (var i = 0; i < allClips.length; ++i)
+            if (allClips[i].source === src) { allClips[i].approved = newVal; break }
+        approvedCount += newVal ? 1 : -1
+        if (onlyApproved && !newVal) rebuildModel()
     }
     function open() { dialog.show(); dialog.raise(); dialog.requestActivate(); refresh() }
 
@@ -61,7 +79,8 @@ Window {
                 font.pixelSize: 12; font.bold: true
             }
             Text {
-                text: dialog.allClips.length + " animations · click Apply to retarget onto your mesh"
+                text: dialog.allClips.length + " animations · "
+                      + dialog.approvedCount + " marked good · click Apply to retarget"
                 color: PropertiesPanelController.textColor; opacity: 0.6
                 font.pixelSize: 10
             }
@@ -93,24 +112,51 @@ Window {
             // (descent-only). ON by default; uncheck to keep the root at
             // standing height. No effect on locomotion clips.
             Row {
-                spacing: 6
-                Rectangle {
-                    id: pickDescentChk
-                    property bool checked: true
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: pickDescentChk.checked = !pickDescentChk.checked }
+                spacing: 14
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        id: pickDescentChk
+                        property bool checked: true
+                        width: 14; height: 14; radius: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: checked ? PropertiesPanelController.highlightColor
+                                       : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text { anchors.centerIn: parent; visible: parent.checked
+                               text: "✓"; color: "white"; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent
+                                    onClicked: pickDescentChk.checked = !pickDescentChk.checked }
+                    }
+                    Text {
+                        text: "Lower body (crouch/pickup)"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
-                Text {
-                    text: "Lower body (crouch/pickup)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
+                // Curation filter: show only the clips marked good (★). The
+                // marks persist (curation.json) and gate what ships.
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        id: onlyGoodChk
+                        width: 14; height: 14; radius: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: dialog.onlyApproved
+                               ? PropertiesPanelController.highlightColor
+                               : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text { anchors.centerIn: parent; visible: dialog.onlyApproved
+                               text: "✓"; color: "white"; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent
+                                    onClicked: { dialog.onlyApproved = !dialog.onlyApproved
+                                                 dialog.rebuildModel() } }
+                    }
+                    Text {
+                        text: "Only good ★"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
             }
 
@@ -137,8 +183,27 @@ Window {
                             anchors.fill: parent
                             anchors.leftMargin: 8; anchors.rightMargin: 6
                             spacing: 8
+                            // curation "good" toggle — persists, gates shipping
+                            Text {
+                                id: goodStar
+                                width: 18
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: model.approved ? "★" : "☆"
+                                color: model.approved ? "#e8c542"
+                                     : PropertiesPanelController.textColor
+                                opacity: model.approved ? 1.0
+                                       : (starMa.containsMouse ? 0.8 : 0.35)
+                                font.pixelSize: 15
+                                horizontalAlignment: Text.AlignHCenter
+                                MouseArea {
+                                    id: starMa; anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: dialog.toggleApproved(index)
+                                }
+                            }
                             Column {
-                                width: parent.width - applyBtn.width - 14
+                                width: parent.width - applyBtn.width - goodStar.width - 22
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 1
                                 Text {
