@@ -10,6 +10,7 @@
 #include <QSysInfo>
 #include <QLibraryInfo>
 #include <QDir>
+#include <QFileInfo>
 #include <QCommandLineParser>
 #include <QJsonObject>
 #include <QScopeGuard>
@@ -60,6 +61,54 @@ static void setSentrySessionTags(const QString& launchMode)
 {
     SentryReporter::configureSession(launchMode);
 }
+
+#ifdef Q_OS_MACOS
+// When the app is launched via a SYMLINK that lives OUTSIDE the .app bundle
+// (Homebrew installs `/opt/homebrew/bin/qtmesheditor -> …/QtMeshEditor.app/
+// Contents/MacOS/QtMeshEditor`), Qt resolves applicationDirPath() to the symlink
+// directory, so it never finds `Contents/Resources/qt.conf` and can't locate the
+// bundled Qt plugins / QML modules under `Contents/PlugIns`. The GUI opens but
+// every QQuickWidget (Inspector, mode bar, Context panel, menus) renders BLANK
+// WHITE because its QML fails to load. Double-clicking the .app works because
+// Launch Services runs the binary with the bundle as its context.
+//
+// Fix: resolve the REAL executable path (follow the symlink), and if it sits in
+// `…/X.app/Contents/MacOS`, point Qt's plugin + QML import search at the bundle's
+// `PlugIns` / `PlugIns/qml` explicitly. Must run before QApplication so the env
+// vars take effect before Qt probes its paths. No-op when already launched inside
+// the bundle (the paths just get re-affirmed).
+static void fixBundlePathsForSymlinkLaunch(const char* argv0)
+{
+    // Resolve argv0 (and any symlinks) to an absolute canonical path.
+    QFileInfo exeInfo(QString::fromLocal8Bit(argv0));
+    QString exePath = exeInfo.canonicalFilePath();   // follows symlinks
+    if (exePath.isEmpty())
+        exePath = exeInfo.absoluteFilePath();
+    if (exePath.isEmpty())
+        return;
+
+    // …/Contents/MacOS/<binary>  →  bundle Contents dir is two levels up.
+    QDir macosDir = QFileInfo(exePath).absoluteDir();          // Contents/MacOS
+    if (macosDir.dirName() != QLatin1String("MacOS"))
+        return;                                                // not a bundle layout
+    QDir contentsDir = macosDir;
+    if (!contentsDir.cdUp())                                   // → Contents
+        return;
+
+    const QString plugins = contentsDir.absoluteFilePath(QStringLiteral("PlugIns"));
+    if (!QDir(plugins).exists())
+        return;                                                // nothing to point at
+    const QString qmlDir = QDir(plugins).absoluteFilePath(QStringLiteral("qml"));
+
+    // Only override when Qt would otherwise look in the WRONG place — i.e. the
+    // running dir (applicationDirPath equivalent from argv0's own, unresolved
+    // location) differs from the real bundle. Setting them unconditionally is
+    // harmless, but we gate on existence above to avoid clobbering a dev-SDK run.
+    qputenv("QT_PLUGIN_PATH", plugins.toLocal8Bit());
+    qputenv("QML_IMPORT_PATH", qmlDir.toLocal8Bit());
+    qputenv("QML2_IMPORT_PATH", qmlDir.toLocal8Bit());
+}
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -139,6 +188,12 @@ int main(int argc, char *argv[])
     }
 
     // Normal GUI mode (optionally with MCP server)
+#ifdef Q_OS_MACOS
+    // Make a Homebrew CLI-symlink launch (qtmesheditor) find the bundle's Qt
+    // plugins / QML modules, so its QQuickWidgets don't render blank white.
+    fixBundlePathsForSymlinkLaunch(argv[0]);
+#endif
+
     // Set Qt Quick Controls style before creating QApplication
     // This prevents issues with native macOS style not supporting customization
     QQuickStyle::setStyle("Basic");
@@ -168,11 +223,25 @@ int main(int argc, char *argv[])
 
     // Ensure Qt can find QML modules when running from an installed location.
     // When Qt libraries are bundled with the app, Qt may not find system QML modules
-    // automatically. Add both the app-local qml directory and the system QML path.
+    // automatically. Add the app-local qml directory and the system QML path.
     QString appDir = QCoreApplication::applicationDirPath();
     QStringList qmlImportPaths;
     qmlImportPaths << appDir + "/qml";
     qmlImportPaths << QLibraryInfo::path(QLibraryInfo::QmlImportsPath);
+#ifdef Q_OS_MACOS
+    // On macOS the bundled QML lives under Contents/PlugIns/qml (deployed by
+    // macdeployqt), NOT <appdir>/qml. Add the bundle's PlugIns + PlugIns/qml so a
+    // symlink launch (Homebrew CLI) resolves them even though applicationDirPath()
+    // points at the symlink dir — mirrors fixBundlePathsForSymlinkLaunch() above.
+    {
+        const QByteArray envPlugins = qgetenv("QT_PLUGIN_PATH");
+        if (!envPlugins.isEmpty()) {
+            const QString plugins = QString::fromLocal8Bit(envPlugins);
+            a.addLibraryPath(plugins);
+            qmlImportPaths << QDir(plugins).absoluteFilePath(QStringLiteral("qml"));
+        }
+    }
+#endif
     for (const QString &path : qmlImportPaths) {
         a.addLibraryPath(path);
     }
