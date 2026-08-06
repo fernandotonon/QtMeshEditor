@@ -3355,6 +3355,28 @@ void injectMorphWeightAnimations(const QString& filePath,
         QJsonArray buffers = root.value("buffers").toArray();
         QJsonArray animations = root.value("animations").toArray();
 
+        // Guard against a duplicate animation NAME. Assimp's glTF2 exporter can
+        // leave an empty animation carrying a morph clip's name (a channel-less
+        // skeletal clip that leaked through buildAiScene). If we then append our
+        // real weights animation under the same name, the file has two same-named
+        // glTF animations — which Ogre refuses to re-import (it throws
+        // "animation already exists" and aborts the whole load → 0 entities).
+        // Drop any existing animation whose name matches a weight clip we're
+        // about to inject, so ours is the only one. (issue #517)
+        {
+            QSet<QString> injectNames;
+            for (const MorphWeightClip& clip : clips)
+                injectNames.insert(QString::fromStdString(clip.name));
+            QJsonArray kept;
+            for (const QJsonValue& av : animations) {
+                const QString nm = av.toObject().value("name").toString();
+                if (injectNames.contains(nm))
+                    continue;  // will be re-added below (deduped)
+                kept.append(av);
+            }
+            animations = kept;
+        }
+
         const int newBufferIndex = buffers.size();  // appended below
 
         for (const MorphWeightClip& clip : clips) {
