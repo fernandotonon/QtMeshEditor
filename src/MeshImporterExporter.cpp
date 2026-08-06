@@ -2447,6 +2447,166 @@ static void reconstructNodeClipsFromFile(const QString& filePath,
     reconstructNodeClipsFromAiScene(aiscene, sn, en);
 }
 
+// ─── Node-transform-clip sidecar (FBX / .mesh workaround, #517) ─────────
+// glTF/glb carry node-transform clips natively (buildNodeClipAnimations →
+// aiNodeAnim channels). The custom FBXExporter and Ogre's .mesh serializer
+// have no concept of SceneManager-level node animation, so for those formats
+// we persist the clips to a `<basename>.nodeanim.json` sidecar — exactly the
+// pattern SceneLightsIO uses for `.lights.json` — and rebuild them on import.
+static QString nodeAnimSidecarPath(const QString& meshPath)
+{
+    const QFileInfo fi(meshPath);
+    return fi.absoluteDir().filePath(fi.completeBaseName()
+                                     + QStringLiteral(".nodeanim.json"));
+}
+
+// Serialise every SceneManager node clip that targets `sn` to the sidecar.
+// No-op (and removes any stale sidecar) when the node has no clips, so a
+// re-export after deleting the animation doesn't leave a ghost file.
+static void writeNodeAnimSidecar(const QString& meshPath, Ogre::SceneNode* sn)
+{
+    if (meshPath.isEmpty() || !sn) return;
+    auto* mgr = Manager::getSingletonPtr();
+    auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!scene) return;
+
+    const std::string nodeName = sn->getName();
+    QJsonArray clipsJson;
+
+    for (unsigned short ai = 0; ai < scene->getNumAnimations(); ++ai) {
+        Ogre::Animation* anim = scene->getAnimation(ai);
+        if (!anim) continue;
+
+        // Collect this clip's track(s) that target our scene node (skip bones).
+        QJsonArray tracksJson;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            (void)handle;
+            if (!track) continue;
+            Ogre::Node* target = track->getAssociatedNode();
+            if (!target || dynamic_cast<Ogre::Bone*>(target)) continue;
+            if (target->getName() != nodeName) continue;
+
+            QJsonArray keysJson;
+            for (unsigned short ki = 0; ki < track->getNumKeyFrames(); ++ki) {
+                auto* kf = track->getNodeKeyFrame(ki);
+                const Ogre::Vector3 p = kf->getTranslate();
+                Ogre::Quaternion r = kf->getRotation(); r.normalise();
+                const Ogre::Vector3 s = kf->getScale();
+                QJsonObject k;
+                k["t"] = static_cast<double>(kf->getTime());
+                k["p"] = QJsonArray{ p.x, p.y, p.z };
+                k["r"] = QJsonArray{ r.w, r.x, r.y, r.z };
+                k["s"] = QJsonArray{ s.x, s.y, s.z };
+                keysJson.append(k);
+            }
+            if (keysJson.isEmpty()) continue;
+            QJsonObject tr;
+            tr["node"] = QString::fromStdString(nodeName);
+            tr["keys"] = keysJson;
+            tracksJson.append(tr);
+        }
+        if (tracksJson.isEmpty()) continue;
+
+        QJsonObject clip;
+        clip["name"] = QString::fromStdString(anim->getName());
+        clip["length"] = static_cast<double>(anim->getLength());
+        clip["tracks"] = tracksJson;
+        clipsJson.append(clip);
+    }
+
+    const QString sidecarPath = nodeAnimSidecarPath(meshPath);
+    if (clipsJson.isEmpty()) {
+        // Nothing to persist — remove any stale sidecar from a prior export.
+        QFile::remove(sidecarPath);
+        return;
+    }
+
+    QJsonObject root;
+    root["schema"] = QStringLiteral("qtmesh.node.animations.v1");
+    root["clips"] = clipsJson;
+
+    QFile out(sidecarPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "Node-anim sidecar write failed: " + sidecarPath.toStdString());
+        return;
+    }
+    out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    out.close();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("file.export"),
+        QStringLiteral("Wrote node-anim sidecar (%1 clip(s)) for %2")
+            .arg(clipsJson.size()).arg(meshPath));
+}
+
+// Rebuild node clips from `<basename>.nodeanim.json` (FBX/.mesh import). Names
+// are made unique against the live scene; keyframes go through the normal
+// NodeAnimationManager path. No-op when the sidecar is absent.
+static void reconstructNodeClipsFromSidecar(const QString& meshPath,
+                                            Ogre::SceneNode* sn,
+                                            const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !sn || !en) return;
+    const QString sidecarPath = nodeAnimSidecarPath(meshPath);
+    QFile f(sidecarPath);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly)) return;
+    const QByteArray bytes = f.readAll();
+    f.close();
+
+    QJsonParseError perr;
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) return;
+    const QJsonObject root = doc.object();
+    if (root.value("schema").toString() != QStringLiteral("qtmesh.node.animations.v1"))
+        return;
+
+    auto* nam = NodeAnimationManager::instance();
+    auto* mgr = Manager::getSingletonPtr();
+    auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!nam || !scene) return;
+
+    const std::string nodeName = sn->getName();
+
+    for (const QJsonValue& cv : root.value("clips").toArray()) {
+        const QJsonObject clip = cv.toObject();
+        const QJsonArray tracks = clip.value("tracks").toArray();
+        if (tracks.isEmpty()) continue;
+        const double length = clip.value("length").toDouble();
+        if (length <= 0.0) continue;
+
+        // Unique clip name against the live scene.
+        std::string base = clip.value("name").toString().toStdString();
+        if (base.empty()) base = "NodeClip";
+        std::string unique = base;
+        int suffix = 1;
+        while (scene->hasAnimation(unique))
+            unique = base + "_" + std::to_string(suffix++);
+
+        if (!nam->createClip(QString::fromStdString(unique), length)) continue;
+
+        for (const QJsonValue& tv : tracks) {
+            const QJsonObject tr = tv.toObject();
+            // The sidecar was written for THIS entity's node; retarget its
+            // keys onto the (possibly renamed) live scene node.
+            for (const QJsonValue& kv : tr.value("keys").toArray()) {
+                const QJsonObject k = kv.toObject();
+                const double t = k.value("t").toDouble();
+                const QJsonArray pa = k.value("p").toArray();
+                const QJsonArray ra = k.value("r").toArray();
+                const QJsonArray sa = k.value("s").toArray();
+                if (pa.size() < 3 || ra.size() < 4 || sa.size() < 3) continue;
+                const Ogre::Vector3 p(pa[0].toDouble(), pa[1].toDouble(), pa[2].toDouble());
+                Ogre::Quaternion r(ra[0].toDouble(), ra[1].toDouble(),
+                                   ra[2].toDouble(), ra[3].toDouble());
+                r.normalise();
+                const Ogre::Vector3 s(sa[0].toDouble(), sa[1].toDouble(), sa[2].toDouble());
+                nam->addKeyframe(QString::fromStdString(unique),
+                                 QString::fromStdString(nodeName), t, p, r, s);
+            }
+        }
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -3023,7 +3183,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
             // Recover node-transform animation clips (#517) that the skeletal
             // import path drops (channels target the scene node, not a bone).
+            // glTF/glb carry them in the file (Assimp read below finds them);
+            // FBX/.mesh carry them in a `.nodeanim.json` sidecar instead.
             reconstructNodeClipsFromFile(file.filePath(), sn, en);
+            reconstructNodeClipsFromSidecar(file.filePath(), sn, en);
 
             configureCamera(en);
         }
@@ -3645,6 +3808,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         m.exportMesh(e->getMesh().get(),_uri.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
+        // .mesh (Ogre serializer) cannot store SceneManager node-transform
+        // clips — persist them to a `.nodeanim.json` sidecar (#517).
+        writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
         // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
@@ -3658,6 +3824,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             Ogre::LogManager::getSingleton().logWarning(
                 "FBX exported but lights sidecar write failed: " + _uri.toStdString());
         }
+        // The custom FBXExporter has no node-transform-clip path — persist
+        // SceneManager node clips to a `.nodeanim.json` sidecar (#517).
+        writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
