@@ -19,7 +19,7 @@ env:
   BUILD_TYPE: Release
   AQT_VERSION: '==3.3.*'
   QT_VERSION: '6.9.3'
-  ASSIMP_VERSION: '6.0.4'
+  ASSIMP_VERSION: '6.0.5'
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
@@ -32,7 +32,7 @@ env:
   # sdkpin2 = bust the stale assimp cache that still baked the Xcode 26.5
   # libz.tbd path — "No rule to make target .../MacOSX26.5.sdk/.../libz.tbd"
   # when OGRE consumed it under the pinned 26.3.)
-  MACOS_CACHE_VERSION: 'sdkpin2'
+  MACOS_CACHE_VERSION: 'sdkpin2-assimp605'
 
 jobs:
 #  send-slack-notification:
@@ -172,7 +172,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
@@ -208,7 +208,7 @@ jobs:
         Write-Host "gcc version: $(gcc.exe --version | Select-Object -First 1)"
         Write-Host "cmake version: $(cmake --version | Select-Object -First 1)"
         Set-Location "${{github.workspace}}/assimp"
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DASSIMP_WARNINGS_AS_ERRORS=OFF
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DASSIMP_WARNINGS_AS_ERRORS=OFF -DASSIMP_BUILD_DRACO=ON
         D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
         Copy-Item -Recurse -Force "C:/PROGRA~2/Assimp" "${{github.workspace}}/assimp-build"
       shell: powershell
@@ -221,7 +221,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         path: |
                C:/PROGRA~2/Assimp
@@ -231,7 +231,7 @@ jobs:
       id: cache-ogre-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-windows
+        cache-name: cache-ogre-windows-assimp605
       with:
         path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
@@ -322,7 +322,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
@@ -333,7 +333,7 @@ jobs:
       id: cache-ogre-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-windows
+        cache-name: cache-ogre-windows-assimp605
       with:
         path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
@@ -611,7 +611,7 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/QtMeshEditor/assimp` on Linux
         path: |
@@ -636,7 +636,7 @@ jobs:
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DASSIMP_BUILD_DRACO=ON
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
 
@@ -654,7 +654,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -670,7 +670,7 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: |
@@ -746,7 +746,7 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         path: |
                /usr/local/lib/cmake/
@@ -763,7 +763,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -785,6 +785,7 @@ jobs:
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -1031,7 +1032,7 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         path: |
                /usr/local/lib/cmake/
@@ -1048,7 +1049,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -1134,7 +1135,8 @@ jobs:
             -DENABLE_PS1_RIP=ON \
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
-            -DENABLE_MOCAP=ON
+            -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON
 
     - name: Run build-wrapper
       env:
@@ -1728,7 +1730,7 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DASSIMP_BUILD_DRACO=ON
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
 
@@ -1956,6 +1958,7 @@ jobs:
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \

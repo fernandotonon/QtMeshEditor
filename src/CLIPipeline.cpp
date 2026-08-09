@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "MeshDracoEncoder.h"
 #include "AlembicImporter.h"
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
@@ -617,6 +618,7 @@ void CLIPipeline::printUsage()
         "  info <file> [--json]              Show mesh information\n"
         "  fix <file> [-o <output>] [flags]   Fix/optimize a mesh (overwrites input if no -o)\n"
         "  convert <file> -o <output>        Convert between 3D formats\n"
+        "  convert <file> -o <output.glb> --compress draco   Convert + Draco-compress glTF\n"
         "  anim <file> --list [--json]       List animations\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
@@ -1834,8 +1836,8 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
 int CLIPipeline::cmdConvert(int argc, char* argv[])
 {
-    // Parse: convert <file> -o <output> [--format fmt]
-    QString inputPath, outputPath, format;
+    // Parse: convert <file> -o <output> [--format fmt] [--compress draco]
+    QString inputPath, outputPath, format, compress;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1848,6 +1850,10 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
             format = QString(argv[++i]);
             continue;
         }
+        if (arg == "--compress" && i + 1 < argc) {
+            compress = QString(argv[++i]).toLower();
+            continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -1856,8 +1862,30 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     if (inputPath.isEmpty() || outputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt]" << Qt::endl;
+        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt] [--compress draco]" << Qt::endl;
         return 2;
+    }
+
+    // Validate --compress up front (before the expensive import/export) so the
+    // user gets a clear error immediately.
+    if (!compress.isEmpty()) {
+        if (compress != "draco") {
+            err() << "Error: unknown --compress value '" << compress
+                  << "' (supported: draco)." << Qt::endl;
+            return 2;
+        }
+        const QString outSuffix = QFileInfo(outputPath).suffix().toLower();
+        if (outSuffix != "glb" && outSuffix != "gltf" && outSuffix != "gltf2" && outSuffix != "vrm") {
+            err() << "Error: --compress draco requires a glTF output (.glb or .gltf), got ."
+                  << outSuffix << Qt::endl;
+            return 2;
+        }
+        if (!MeshDracoEncoder::isSupported()) {
+            err() << "Error: Draco compression is not available in this build. "
+                     "Rebuild with -DENABLE_DRACO=ON (Assimp must be built with "
+                     "-DASSIMP_BUILD_DRACO=ON to provide the Draco library)." << Qt::endl;
+            return 1;
+        }
     }
 
     QFileInfo fi(inputPath);
@@ -1892,6 +1920,30 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
         SentryReporter::captureMessage(QString("CLI convert: export failed (.%1 -> .%2)").arg(fi.suffix(), QFileInfo(outputPath).suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
         return 1;
+    }
+
+    // Optional Draco mesh compression on the written glTF/glb (#506). Runs as a
+    // post-process because Assimp's glTF2 exporter cannot write Draco itself.
+    if (compress == "draco") {
+        SentryReporter::addBreadcrumb("cli.convert",
+            QString("Draco compress %1").arg(outFi.fileName()));
+        MeshDracoEncoder::Result dr = MeshDracoEncoder::compressFile(absOutput);
+        if (!dr.ok) {
+            SentryReporter::captureMessage(
+                QString("CLI convert: Draco compression failed: %1").arg(dr.error), "error");
+            err() << "Error: Draco compression failed: " << dr.error << Qt::endl;
+            return 1;
+        }
+        const double ratio = dr.originalBinBytes > 0
+            ? 100.0 * (1.0 - double(dr.compressedBinBytes) / double(dr.originalBinBytes))
+            : 0.0;
+        cliWrite(QString("Converted: %1 -> %2 (Draco: %3/%4 primitives, "
+                         "geometry %5 -> %6 bytes, %7% smaller)\n")
+                 .arg(fi.fileName(), outFi.fileName())
+                 .arg(dr.primitivesCompressed).arg(dr.primitivesTotal)
+                 .arg(dr.originalBinBytes).arg(dr.compressedBinBytes)
+                 .arg(ratio, 0, 'f', 1));
+        return 0;
     }
 
     cliWrite(QString("Converted: %1 -> %2\n").arg(fi.fileName(), outFi.fileName()));

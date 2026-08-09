@@ -328,6 +328,30 @@ else()
     message(STATUS "Alembic vertex-animation import disabled (VAT_POSE playback still available)")
 endif()
 ##############################################################
+#  Draco — glTF mesh compression on export (#506)
+##############################################################
+# Assimp's glTF2 EXPORTER has no Draco support (ASSIMP_BUILD_DRACO=ON only wires
+# the Draco DECODER into the importer), so `qtmesh convert -o out.glb --compress
+# draco` is served by the standalone MeshDracoEncoder module which links Draco's
+# encoder directly and rewrites the finished glTF. Default OFF: Draco has to be
+# present (built via Assimp's -DASSIMP_BUILD_DRACO=ON, or a standalone build via
+# -DDRACO_ROOT). The C++ #ifdef ENABLE_DRACO guards every Draco call so a build
+# without it still compiles and reports a clear "rebuild with -DENABLE_DRACO".
+option(ENABLE_DRACO "Enable Draco mesh compression on glTF/glb export (#506)" OFF)
+
+if(ENABLE_DRACO)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Draco.cmake)
+    if(QTMESH_DRACO_FOUND)
+        add_definitions(-DENABLE_DRACO)
+        message(STATUS "Draco glTF mesh compression enabled")
+    else()
+        message(WARNING "ENABLE_DRACO requested but Draco not found — disabling")
+        set(ENABLE_DRACO OFF)
+    endif()
+else()
+    message(STATUS "Draco glTF mesh compression disabled")
+endif()
+##############################################################
 #  Performance capture — video/webcam mocap (epic #869)
 ##############################################################
 # Slice B (#871): brings in Qt Multimedia (camera + video decode) and the
