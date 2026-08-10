@@ -241,7 +241,11 @@ Rectangle {
         function onClipsChanged()        { root.refreshAllBands() }
         function onEditingClipChanged()  { root.refreshAllBands() }
         function onKeyframesChanged(clip) {
-            if (clip === NodeAnimationManager.activeClip) root.refreshNodeRows()
+            // Refresh when the DISPLAYED clip changes — root.nodeClip is what
+            // refreshNodeRows() resolved (edited / active / any-for-entity), which
+            // during an edit session can differ from activeClip. Comparing against
+            // activeClip missed key add/move/delete on the shown clip. (#517)
+            if (clip === root.nodeClip) root.refreshNodeRows()
         }
     }
 
@@ -949,6 +953,13 @@ Rectangle {
         if (morphBand.visible && morphList.contentHeight > morphList.height) {
             var maxMY = morphList.contentHeight - morphList.height
             morphList.contentY = Math.max(0, Math.min(maxMY, morphList.contentY - dy))
+        }
+        // Same for the node band (interactive:false, so it needs the proxy too):
+        // a clip with more nodes than the 40% cap allows would otherwise hide the
+        // extra rows permanently. (#517)
+        if (nodeBand.visible && nodeList.contentHeight > nodeList.height) {
+            var maxNY = nodeList.contentHeight - nodeList.height
+            nodeList.contentY = Math.max(0, Math.min(maxNY, nodeList.contentY - dy))
         }
     }
 

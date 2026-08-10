@@ -90,6 +90,13 @@ Column {
             if (NodeAnimationManager.activeClip.length > 0 &&
                     nodeAnimSection.clipNames.indexOf(NodeAnimationManager.activeClip) < 0)
                 NodeAnimationManager.activeClip = ""
+            // If the clip being EDITED disappeared (e.g. deleted via the Del
+            // button while it was also the edit target after commitNewClip), end
+            // the edit session too — otherwise the authoring row stays visible and
+            // "Key selected node" targets a clip the SceneManager no longer has. (#517)
+            if (NodeAnimationManager.editingClip.length > 0 &&
+                    nodeAnimSection.clipNames.indexOf(NodeAnimationManager.editingClip) < 0)
+                NodeAnimationManager.endEdit()
             AnimationControlController.updateAnimationTree()
         }
     }

@@ -2406,32 +2406,49 @@ static void reconstructNodeClipsFromAiScene(const aiScene* aiscene,
             for (unsigned int k = 0; k < ch->mNumScalingKeys; ++k)
                 times.insert(ch->mScalingKeys[k].mTime / ticksPerSec);
 
+            // INTERPOLATE at each union time — the three TRS channels can carry
+            // DIFFERENT key times (e.g. translation at 0/2s, rotation at 1s), so
+            // snapping to the nearest key would write a wrong full-TRS key and
+            // change the motion after import + re-export. Keys are time-sorted
+            // (Assimp guarantees this); bracket t and lerp vectors / slerp quats.
             auto sampleVec = [](const aiVectorKey* keys, unsigned int n,
                                 double t, double tps, const Ogre::Vector3& def) {
                 if (n == 0) return def;
-                // nearest key (clips are exported per-key, no interpolation gaps)
-                double best = 1e30; Ogre::Vector3 out = def;
-                for (unsigned int k = 0; k < n; ++k) {
-                    const double kt = keys[k].mTime / tps;
-                    const double d = std::abs(kt - t);
-                    if (d < best) { best = d; out = Ogre::Vector3(
-                        keys[k].mValue.x, keys[k].mValue.y, keys[k].mValue.z); }
+                if (t <= keys[0].mTime / tps)
+                    return Ogre::Vector3(keys[0].mValue.x, keys[0].mValue.y, keys[0].mValue.z);
+                if (t >= keys[n - 1].mTime / tps)
+                    return Ogre::Vector3(keys[n-1].mValue.x, keys[n-1].mValue.y, keys[n-1].mValue.z);
+                for (unsigned int k = 0; k + 1 < n; ++k) {
+                    const double t0 = keys[k].mTime / tps, t1 = keys[k + 1].mTime / tps;
+                    if (t >= t0 && t <= t1) {
+                        const double span = t1 - t0;
+                        const Ogre::Real a = span > 1e-9 ? static_cast<Ogre::Real>((t - t0) / span) : 0.0f;
+                        const Ogre::Vector3 v0(keys[k].mValue.x, keys[k].mValue.y, keys[k].mValue.z);
+                        const Ogre::Vector3 v1(keys[k+1].mValue.x, keys[k+1].mValue.y, keys[k+1].mValue.z);
+                        return v0 + (v1 - v0) * a;
+                    }
                 }
-                return out;
+                return Ogre::Vector3(keys[n-1].mValue.x, keys[n-1].mValue.y, keys[n-1].mValue.z);
             };
             auto sampleQuat = [](const aiQuatKey* keys, unsigned int n,
                                  double t, double tps) {
+                auto q = [](const aiQuatKey& k) {
+                    return Ogre::Quaternion(k.mValue.w, k.mValue.x, k.mValue.y, k.mValue.z);
+                };
                 if (n == 0) return Ogre::Quaternion::IDENTITY;
-                double best = 1e30; Ogre::Quaternion out = Ogre::Quaternion::IDENTITY;
-                for (unsigned int k = 0; k < n; ++k) {
-                    const double kt = keys[k].mTime / tps;
-                    const double d = std::abs(kt - t);
-                    if (d < best) { best = d; out = Ogre::Quaternion(
-                        keys[k].mValue.w, keys[k].mValue.x,
-                        keys[k].mValue.y, keys[k].mValue.z); }
+                if (t <= keys[0].mTime / tps) { Ogre::Quaternion o = q(keys[0]); o.normalise(); return o; }
+                if (t >= keys[n - 1].mTime / tps) { Ogre::Quaternion o = q(keys[n-1]); o.normalise(); return o; }
+                for (unsigned int k = 0; k + 1 < n; ++k) {
+                    const double t0 = keys[k].mTime / tps, t1 = keys[k + 1].mTime / tps;
+                    if (t >= t0 && t <= t1) {
+                        const double span = t1 - t0;
+                        const Ogre::Real a = span > 1e-9 ? static_cast<Ogre::Real>((t - t0) / span) : 0.0f;
+                        Ogre::Quaternion o = Ogre::Quaternion::Slerp(a, q(keys[k]), q(keys[k+1]), true);
+                        o.normalise();
+                        return o;
+                    }
                 }
-                out.normalise();
-                return out;
+                Ogre::Quaternion o = q(keys[n-1]); o.normalise(); return o;
             };
 
             for (double t : times) {

@@ -3322,6 +3322,11 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
         if (!args["time"].isDouble())
             return makeErrorResult("Error: 'time' must be a number for node clips");
         const double t = args["time"].toDouble();
+        // Reject non-finite / negative times: static_cast<int>(t*1000) below is
+        // UB when the product overflows int, and a negative time is meaningless.
+        // Mirrors the node-keyframe handlers' contract. (#517)
+        if (!std::isfinite(t) || t < 0.0)
+            return makeErrorResult("Error: 'time' must be a non-negative finite number");
         auto* mgr = Manager::getSingletonPtr();
         auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
         if (!scene || !scene->hasAnimationState(animName.toStdString()))
@@ -3331,7 +3336,10 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
         nstate->setTimePosition(static_cast<float>(t));
         // Keep the controller's selection + slider in sync so the GUI reflects it.
         AnimationControlController::instance()->selectAnimation(entityName, animName);
-        AnimationControlController::instance()->setSliderValue(static_cast<int>(t * 1000));
+        // Clamp the ms slider value to int range so a large (finite) time can't
+        // overflow the cast.
+        const double ms = std::min(t * 1000.0, static_cast<double>(std::numeric_limits<int>::max()));
+        AnimationControlController::instance()->setSliderValue(static_cast<int>(ms));
         QJsonObject c; c["ok"] = true; c["animation"] = animName; c["time"] = t; c["node_clip"] = true;
         return makeSuccessResult(QString::fromUtf8(QJsonDocument(c).toJson(QJsonDocument::Indented)));
     }
@@ -7858,8 +7866,16 @@ QJsonObject MCPServer::toolSetNodeAnimationPlaying(const QJsonObject &args)
         return makeErrorResult("Error: 'enabled' must be a boolean");
     const bool enabled = args.value("enabled").toBool();
     auto* m = NodeAnimationManager::instance();
-    if (!m->setClipEnabled(clip, enabled))
+    if (!m || !m->setClipEnabled(clip, enabled))
         return makeErrorResult(QString("Error: clip '%1' not found").arg(clip));
+    // Node clips are SceneManager-level states, advanced by
+    // MainWindow::frameRenderingQueued ONLY while the global transport is
+    // playing. Enabling the state alone leaves a node-only scene frozen — start
+    // the transport, mirroring the skeletal play_animation handler. (#517)
+    if (enabled) {
+        if (MainWindow* mainWindow = qobject_cast<MainWindow*>(m_mainWindow))
+            mainWindow->setPlaying(true);
+    }
     QJsonObject content;
     content["ok"] = true;
     content["clip"] = clip;
@@ -7993,16 +8009,30 @@ QJsonObject MCPServer::toolSetLoopRegion(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "set_loop_region");
     auto* c = AnimationControlController::instance();
+    // Validate BEFORE applying so a bad value can't leave a half-set region.
+    // A non-finite / negative / inverted region produces a loop that never
+    // triggers while the response still reports ok — reject those outright
+    // (matches the finiteness contract the node-keyframe handlers use).
+    double newStart = c->loopStart();
+    double newEnd = c->loopEnd();
     if (args.contains("start")) {
         if (!args.value("start").isDouble())
             return makeErrorResult("Error: 'start' must be a number");
-        c->setLoopStart(args.value("start").toDouble());
+        newStart = args.value("start").toDouble();
+        if (!std::isfinite(newStart) || newStart < 0.0)
+            return makeErrorResult("Error: 'start' must be a non-negative finite number");
     }
     if (args.contains("end")) {
         if (!args.value("end").isDouble())
             return makeErrorResult("Error: 'end' must be a number");
-        c->setLoopEnd(args.value("end").toDouble());
+        newEnd = args.value("end").toDouble();
+        if (!std::isfinite(newEnd) || newEnd < 0.0)
+            return makeErrorResult("Error: 'end' must be a non-negative finite number");
     }
+    if (newEnd < newStart)
+        return makeErrorResult("Error: 'end' must be >= 'start'");
+    c->setLoopStart(newStart);
+    c->setLoopEnd(newEnd);
     if (args.contains("active")) {
         if (!args.value("active").isBool())
             return makeErrorResult("Error: 'active' must be a boolean");

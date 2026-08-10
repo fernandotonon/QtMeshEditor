@@ -83,15 +83,20 @@ P="$(kf 2.0 9)"; call set_node_keyframe "$P" >/dev/null
 R=$(call save_scene '{"file_path":"/tmp/anim_mcp_roundtrip.scene.glb"}'); check "save_scene glb" ok "$R"
 if [ -f /tmp/anim_mcp_roundtrip.scene.glb ]; then
   PASS=$((PASS+1)); echo "PASS: glb file written"
-  python3 - "$NODE" <<'PY'
+  # The Python block's exit status drives the PASS/FAIL counters (its stdout is
+  # informational only) — otherwise a missing node channel printed "FAIL" but
+  # left the counters + exit code untouched, defeating the round-trip assertion.
+  if python3 - "$NODE" <<'PY'
 import struct,json,sys
 node=sys.argv[1]
 d=open("/tmp/anim_mcp_roundtrip.scene.glb","rb").read()
 clen,_=struct.unpack_from("<II",d,12); g=json.loads(d[20:20+clen])
 anims=g.get("animations",[])
 ok=any(any(g["nodes"][ch["target"]["node"]].get("name")==node for ch in a["channels"]) for a in anims)
-print("PASS: glb has node animation channel" if ok else "FAIL: glb missing node animation channel")
+sys.exit(0 if ok else 1)
 PY
+  then PASS=$((PASS+1)); echo "PASS: glb has node animation channel"
+  else FAIL=$((FAIL+1)); fails+=("glb node animation channel"); echo "FAIL: glb missing node animation channel"; fi
 else FAIL=$((FAIL+1)); fails+=("glb file written"); echo "FAIL: glb file not written"; fi
 
 echo "===== GLOBAL PLAYBACK ====="

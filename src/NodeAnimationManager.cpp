@@ -217,6 +217,14 @@ bool NodeAnimationManager::deleteClip(const QString& name)
     // map to tracks Ogre no longer has.
     m_trackHandles.remove(name);
 
+    // Clear active/edit state pointing at the just-deleted clip. Every delete
+    // path (scene-node cleanup, undoable delete, undo-of-create) funnels here;
+    // leaving m_editingClip == name kept isEditing(name) true, so a later clip
+    // reusing the name could never be enabled (setClipEnabled refuses while
+    // editing). Reset + signal so the UI drops the stale draft row. (#517 review)
+    if (m_activeClip == name) { m_activeClip.clear(); emit activeClipChanged(); }
+    if (m_editingClip == name) { m_editingClip.clear(); emit editingClipChanged(); }
+
     SentryReporter::addBreadcrumb("scene.anim.node",
         QStringLiteral("delete clip '%1'").arg(name));
     emit clipsChanged();

@@ -1321,11 +1321,15 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
 
 bool PropertiesPanelController::deleteAnimation(const QString& entityName, const QString& animName)
 {
-    // Node-transform clip (#517): delete via NodeAnimationManager.
+    // Node-transform clip (#517): delete via NodeAnimationManager. Route through
+    // the UNDOABLE path so deleting from the Inspector Animations list is
+    // Ctrl+Z-revertable, matching the Node Transform Animation section's Del
+    // button (qml/NodeAnimationPanel.qml → deleteClipUndoable). Both entry points
+    // must push the same command or the two behave inconsistently.
     if (auto* nam = NodeAnimationManager::instance();
         nam && nam->listClips().contains(animName)
         && nam->animatedNodes(animName).contains(entityName)) {
-        const bool ok = nam->deleteClip(animName);
+        const bool ok = nam->deleteClipUndoable(animName);
         if (ok) { emit animationStateChanged(); }
         return ok;
     }

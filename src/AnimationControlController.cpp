@@ -199,10 +199,14 @@ void AnimationControlController::updateAnimationTree()
 
         // Append node clips that animate THIS entity's scene node (skip drafts
         // in an open edit session — they surface after "Done editing").
-        for (const QString& clip : allNodeClips) {
-            if (nodeAnimMgr->isEditing(clip)) continue;
-            if (nodeAnimMgr->animatedNodes(clip).contains(entityName))
-                animNames << clip;
+        // allNodeClips is only non-empty when nodeAnimMgr is non-null, but guard
+        // the deref explicitly so the invariant is local (and not a null-deref).
+        if (nodeAnimMgr) {
+            for (const QString& clip : allNodeClips) {
+                if (nodeAnimMgr->isEditing(clip)) continue;
+                if (nodeAnimMgr->animatedNodes(clip).contains(entityName))
+                    animNames << clip;
+            }
         }
 
         if (animNames.isEmpty()) continue;
@@ -444,17 +448,18 @@ Ogre::Bone* AnimationControlController::selectedBonePtr() const
     // m_selectedSkeleton dangling. The gizmo update path then called hasBone()
     // on freed memory and crashed. Cross-check the cached entity is still in the
     // selection before dereferencing it.
+    // Resolve the skeleton from the SELECTED entity ONLY. A previous version
+    // fell back to the first skinned entity in the selection when the cached
+    // entity was gone — but selectedEntity() still returns m_selectedEntity, so
+    // callers that use both pointers together (e.g. TransformOperator maps a
+    // bone rotation through selectedEntity()'s parent node) would mix frames
+    // from two different entities and rotate in the wrong space. Keep the two
+    // getters consistent: same entity, or both resolve to nothing. (#517 review)
     Ogre::Skeleton* skel = nullptr;
     const auto ents = SelectionSet::getSingleton()->getResolvedEntities();
     for (Ogre::Entity* e : ents) {
         if (!e || !e->hasSkeleton()) continue;
         if (e == m_selectedEntity) { skel = e->getSkeleton(); break; }
-    }
-    // Fall back to the first skinned selection if the cached entity is gone.
-    if (!skel) {
-        for (Ogre::Entity* e : ents) {
-            if (e && e->hasSkeleton()) { skel = e->getSkeleton(); break; }
-        }
     }
     if (!skel) return nullptr;
     if (!skel->hasBone(m_selectedBone)) return nullptr;
@@ -693,10 +698,20 @@ void AnimationControlController::setAnimationFrame(int ms)
     if (m_selectedIsNodeClip) {
         auto* mgr = Manager::getSingletonPtr();
         auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+        // Do NOT enable the state while this clip is being EDITED. An enabled
+        // SceneManager state makes _applySceneAnimations re-drive the node every
+        // frame, which locks it against gizmo edits and silently overrides the
+        // Enable checkbox. The authoring model is "paused = editable, Play =
+        // preview" — so only enable-to-pose when NOT in an edit session. (#517)
+        auto* nam = NodeAnimationManager::instance();
+        const bool editingThis = nam && nam->isEditing(
+            QString::fromStdString(m_selectedAnimation));
         if (scene && scene->hasAnimationState(m_selectedAnimation)) {
             auto* nstate = scene->getAnimationState(m_selectedAnimation);
-            nstate->setEnabled(true);
-            nstate->setTimePosition(ms / 1000.0f);
+            if (!editingThis) {
+                nstate->setEnabled(true);
+                nstate->setTimePosition(ms / 1000.0f);
+            }
         }
         if (m_currentKeyframe) {
             m_currentKeyframe = nullptr;
