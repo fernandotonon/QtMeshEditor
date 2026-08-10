@@ -581,6 +581,8 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
     return true;
   } catch (const Ogre::Exception &e) {
     outFrames->clear();
+    if (animState)
+      animState->setEnabled(false);   // don't leak the sampled clip's state
     restoreTurntableLighting(sm);
     if (errorOut)
       *errorOut = QString::fromStdString(e.getFullDescription());
@@ -588,6 +590,8 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
     return false;
   } catch (...) {
     outFrames->clear();
+    if (animState)
+      animState->setEnabled(false);
     restoreTurntableLighting(sm);
     if (errorOut)
       *errorOut = QStringLiteral("Turntable render failed");

@@ -230,19 +230,27 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
             channelNode->mTransformation.Decompose(ns, nr, np);
             nodeBindScale = Ogre::Vector3(ns.x, ns.y, ns.z);
 
-            Ogre::Affine3 nodeBind;
-            nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
-                                   Ogre::Vector3(ns.x, ns.y, ns.z),
-                                   Ogre::Quaternion(nr.w, nr.x, nr.y, nr.z));
-            Ogre::Affine3 ogreBind;
-            ogreBind.makeTransform(bone->getPosition(), bone->getScale(),
-                                   bone->getOrientation());
-            const Ogre::Affine3 c = ogreBind * nodeBind.inverse();
-            c.decomposition(cPos, cScale, cRot);
-            haveSpaceChange =
-                !cPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
-                !cRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
-                !cScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
+            // A zero bind-scale component makes the node transform singular —
+            // skip the space-change mapping rather than invert it (keys then
+            // apply in node space, the pre-#936 behavior for that bone).
+            const bool invertible = std::abs(ns.x) > 1e-8f &&
+                                    std::abs(ns.y) > 1e-8f &&
+                                    std::abs(ns.z) > 1e-8f;
+            if (invertible) {
+                Ogre::Affine3 nodeBind;
+                nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
+                                       Ogre::Vector3(ns.x, ns.y, ns.z),
+                                       Ogre::Quaternion(nr.w, nr.x, nr.y, nr.z));
+                Ogre::Affine3 ogreBind;
+                ogreBind.makeTransform(bone->getPosition(), bone->getScale(),
+                                       bone->getOrientation());
+                const Ogre::Affine3 c = ogreBind * nodeBind.inverse();
+                c.decomposition(cPos, cScale, cRot);
+                haveSpaceChange =
+                    !cPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
+                    !cRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
+                    !cScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
+            }
         }
     }
     for (int c = 0; c < 3; ++c)

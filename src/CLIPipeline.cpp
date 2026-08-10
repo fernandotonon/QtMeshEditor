@@ -4567,7 +4567,13 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
             axis = parsed;
             continue;
         }
-        if (arg == "--animation" && i + 1 < argc) {
+        if (arg == "--animation") {
+            // A missing value must be a usage error — silently falling through
+            // would render the static pose and still return success.
+            if (i + 1 >= argc || QString(argv[i + 1]).startsWith(QLatin1Char('-'))) {
+                err() << "Error: --animation requires an animation name." << Qt::endl;
+                return 2;
+            }
             animationName = QString(argv[++i]);
             continue;
         }
@@ -4575,9 +4581,10 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
             orbitWithAnimation = true;
             continue;
         }
-        if (arg == "--at" && i + 1 < argc) {
-            if (!parseCliFloat(QString(argv[++i]), &atSeconds) || atSeconds < 0.0f) {
-                err() << "Error: Invalid value for --at (seconds >= 0)." << Qt::endl;
+        if (arg == "--at") {
+            if (i + 1 >= argc ||
+                !parseCliFloat(QString(argv[++i]), &atSeconds) || atSeconds < 0.0f) {
+                err() << "Error: --at requires a time in seconds (>= 0)." << Qt::endl;
                 return 2;
             }
             continue;
