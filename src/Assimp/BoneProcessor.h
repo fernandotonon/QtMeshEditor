@@ -19,6 +19,11 @@ class BoneProcessor {
         void processBoneNode(aiBone *bone);
         void processNonSkinnedBone(aiNode* node);
         void processAnimationOnlyHierarchy(aiNode* node, const std::set<std::string>& animatedNodes);
+        // World (scene-root-relative) transform of a node: product of
+        // mTransformation from the scene root down to `node`.
+        Ogre::Matrix4 nodeWorldTransform(const aiNode* node) const;
+        // Node that references mesh index `meshIndex` (nullptr if none).
+        static const aiNode* findMeshNode(const aiNode* node, unsigned meshIndex);
         Ogre::Matrix4 convertToOgreMatrix4(const aiMatrix4x4& aiMat);
         void applyTransformation(const std::string& boneName, const Ogre::Matrix4 &transform);
 

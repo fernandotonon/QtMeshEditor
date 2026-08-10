@@ -66,6 +66,8 @@ qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export singl
 qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N evenly spaced frames
 qtmesh turntable model.fbx -o turntable.png  # PNG sprite sheet (12 frames default)
 qtmesh turntable model.fbx -o frame_%02d.png --frames 24 --axis y --camera-height 25
+qtmesh turntable model.fbx --animation "Walk" --frames 8 -o walk.png  # #936: sample the clip over time, fixed front camera (--orbit combines rotation+animation)
+qtmesh turntable model.fbx --at 0.5 -o pose.png  # #936: normal orbit of the pose at t=0.5s
 qtmesh isometric model.fbx -o iso.png  # 8-direction static sprite grid (rows=directions)
 qtmesh isometric model.fbx --resolution 256 -o iso.png  # square 256px cells
 qtmesh isometric model.fbx --animation "Walk" --frames 8 -o iso.png  # 8×8 animated atlas
