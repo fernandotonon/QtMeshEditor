@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include <QtEndian>
 
 #include <cstring>
+#include <functional>
 #include <vector>
 
 #ifdef ENABLE_DRACO
@@ -72,8 +73,8 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString&, const Op
     r.ok = false;
     r.error = QStringLiteral(
         "Draco compression is not available in this build. "
-        "Rebuild with -DENABLE_DRACO=ON (needs Assimp built with "
-        "-DASSIMP_BUILD_DRACO=ON to provide the Draco library).");
+        "Rebuild with -DENABLE_DRACO=ON (needs the Draco library — build the "
+        "vendored contrib/draco standalone, or pass -DDRACO_ROOT=<dir>).");
     return r;
 }
 
@@ -342,12 +343,53 @@ bool encodePrimitive(const GltfContainer& c, const QJsonObject& prim,
     QJsonObject attrs = prim.value("attributes").toObject();
     if (!attrs.contains("POSITION")) { err = "primitive has no POSITION"; return false; }
 
+    // Compression must be ALL-OR-NOTHING per primitive. Draco's mesh builder
+    // reorders + deduplicates points, so ANY per-vertex stream that is NOT
+    // folded into the Draco buffer would be left in the original vertex order
+    // and its accessor would then be addressed by the reordered Draco indices
+    // — silently corrupting skin weights (JOINTS_n/WEIGHTS_n), normalized
+    // integer colours, and morph-target deltas on rigged/animated meshes.
+    // So if the primitive carries ANY attribute we cannot represent losslessly
+    // in Draco, we refuse to compress the whole primitive (it is left intact).
+    //
+    //  - JOINTS_n / WEIGHTS_n: skinning must stay bit-exact; not compressed.
+    //  - Non-FLOAT attributes (e.g. normalized-integer COLOR_0): Draco stores
+    //    floats, which would require rewriting the accessor's componentType/
+    //    normalized flags to stay correct — out of scope, so refuse.
+    //  - Morph targets (prim.targets): each target is a parallel per-vertex
+    //    accessor array keyed by the same vertex order; Draco reordering breaks
+    //    the correspondence, so refuse.
+    if (prim.contains("targets") && !prim.value("targets").toArray().isEmpty()) {
+        err = "primitive has morph targets (skipped to avoid corrupting them)";
+        return false;
+    }
+
+    QJsonArray allAccessors = c.json.value("accessors").toArray();
+    QStringList semantics = attrs.keys();
+    for (const QString& sem : semantics) {
+        draco::GeometryAttribute::Type dtype;
+        int bits;
+        if (!dracoAttrForSemantic(sem, opts, dtype, bits)) {
+            err = QString("primitive has an attribute Draco can't fold in "
+                          "losslessly (%1); skipped").arg(sem);
+            return false;
+        }
+        int accIdx = attrs.value(sem).toInt();
+        if (accIdx < 0 || accIdx >= allAccessors.size()) {
+            err = "attribute accessor index out of range"; return false;
+        }
+        int ct = allAccessors.at(accIdx).toObject().value("componentType").toInt();
+        if (ct != GLTF_FLOAT) {
+            err = QString("primitive has a non-FLOAT attribute (%1); skipped "
+                          "to avoid corrupting its normalization").arg(sem);
+            return false;
+        }
+    }
+
     draco::TriangleSoupMeshBuilder builder;
     builder.Start(numFaces);
 
-    // Collect the semantics we will compress, in a deterministic order
-    // (POSITION first — matches most tooling and keeps ids stable).
-    QStringList semantics = attrs.keys();
+    // Deterministic attribute order (POSITION first — keeps ids stable).
     semantics.removeAll("POSITION");
     semantics.sort();
     semantics.prepend("POSITION");
@@ -357,49 +399,49 @@ bool encodePrimitive(const GltfContainer& c, const QJsonObject& prim,
         int accessorIndex;
         int dracoAttId;
         int numComponents;
+        int elementCount;   // accessor.count — guards index-vs-attr bounds
         std::vector<float> values;
         uint32_t uniqueId;
     };
     std::vector<AttrPlan> plans;
     uint32_t nextUniqueId = 0;
 
-    QJsonArray allAccessors = c.json.value("accessors").toArray();
     for (const QString& sem : semantics) {
         draco::GeometryAttribute::Type dtype;
         int bits;
-        if (!dracoAttrForSemantic(sem, opts, dtype, bits)) continue; // skip JOINTS/WEIGHTS
+        dracoAttrForSemantic(sem, opts, dtype, bits); // validated above
         int accIdx = attrs.value(sem).toInt();
-        // Only compress FLOAT attributes. A normalized integer attribute (e.g.
-        // COLOR_0 as normalized UNSIGNED_SHORT) would need its accessor's
-        // componentType/normalized flags rewritten to stay correct after Draco
-        // stores it as float; rather than risk corrupting it, leave any
-        // non-float attribute uncompressed (its bufferView survives GC).
-        if (accIdx >= 0 && accIdx < allAccessors.size()) {
-            int ct = allAccessors.at(accIdx).toObject().value("componentType").toInt();
-            if (ct != GLTF_FLOAT) continue;
-        }
         AttrPlan plan;
         plan.semantic = sem;
         plan.accessorIndex = accIdx;
         int nc = 0;
         if (!readAttributeAsFloat(c, accIdx, plan.values, nc, err)) return false;
         plan.numComponents = nc;
+        plan.elementCount = (nc > 0) ? static_cast<int>(plan.values.size() / nc) : 0;
         plan.uniqueId = nextUniqueId++;
-        // Draco stores POSITION/TEX_COORD/etc as DT_FLOAT32; COLOR normalized
-        // stays float here (decoder side re-normalizes via accessor).
         plan.dracoAttId = builder.AddAttribute(dtype,
                               static_cast<int8_t>(nc), draco::DT_FLOAT32);
         builder.SetAttributeUniqueId(plan.dracoAttId, plan.uniqueId);
         plans.push_back(std::move(plan));
     }
 
-    // Fill per-face corner values from the index buffer.
+    // Fill per-face corner values from the index buffer. Every index must be
+    // within the attribute's element count — a glTF from a third-party tool
+    // can carry indices that disagree with the accessor count; dereferencing
+    // past plan.values would be a heap over-read.
     for (int f = 0; f < numFaces; ++f) {
         uint32_t i0 = indices[f * 3 + 0];
         uint32_t i1 = indices[f * 3 + 1];
         uint32_t i2 = indices[f * 3 + 2];
         for (const AttrPlan& plan : plans) {
             const int nc = plan.numComponents;
+            if (i0 >= static_cast<uint32_t>(plan.elementCount) ||
+                i1 >= static_cast<uint32_t>(plan.elementCount) ||
+                i2 >= static_cast<uint32_t>(plan.elementCount)) {
+                err = QString("index out of range for attribute %1 "
+                              "(index >= count %2)").arg(plan.semantic).arg(plan.elementCount);
+                return false;
+            }
             const float* base = plan.values.data();
             const float* v0 = base + static_cast<size_t>(i0) * nc;
             const float* v1 = base + static_cast<size_t>(i1) * nc;
@@ -485,7 +527,7 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
     in.close();
 
     const QString suffix = fi.suffix().toLower();
-    const bool wantGlb = (suffix == "glb" || suffix == "vrm");
+    const bool wantGlb = (suffix == "glb" || suffix == "glb2" || suffix == "vrm");
 
     GltfContainer c;
     QString err;
@@ -513,6 +555,10 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
 
     // Track accessors that become "compressed" (must drop their bufferView).
     QSet<int> compressedAccessors;
+    // Attribute accessors whose element count must be rewritten to the Draco
+    // decoded point count (Draco may merge duplicate points, so count can
+    // shrink; a stale count makes validators/consumers reject the file).
+    QMap<int, int> attrAccessorNewCount;
 
     for (int m = 0; m < meshes.size(); ++m) {
         QJsonObject mesh = meshes.at(m).toObject();
@@ -547,7 +593,10 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
             QJsonObject extAttrs;
             for (const QString& sem : cp.semanticsInOrder) {
                 extAttrs.insert(sem, cp.attrUniqueIds.value(sem));
-                compressedAccessors.insert(cp.semanticAccessor.value(sem));
+                int accIdx = cp.semanticAccessor.value(sem);
+                compressedAccessors.insert(accIdx);
+                // Attribute accessors adopt the Draco point count.
+                attrAccessorNewCount.insert(accIdx, cp.decodedPointCount);
             }
             dracoExt.insert("attributes", extAttrs);
 
@@ -564,8 +613,11 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
     }
 
     if (r.primitivesCompressed == 0) {
-        r.error = "no primitive was eligible for Draco compression "
-                  "(need indexed triangle meshes with POSITION)";
+        r.nothingEligible = true;
+        r.error = "no primitive was eligible for Draco compression — every "
+                  "primitive is skinned (JOINTS/WEIGHTS), has morph targets, "
+                  "uses a non-FLOAT attribute, or is not an indexed triangle "
+                  "mesh; these are left uncompressed to avoid corrupting them";
         return r;
     }
 
@@ -582,6 +634,10 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
         r.originalBinBytes += static_cast<qint64>(count) * nc * cs;
         acc.remove("bufferView");
         acc.remove("byteOffset");
+        // Attribute accessors adopt the Draco decoded point count (indices
+        // accessors are not in this map and keep their triangle-index count).
+        if (attrAccessorNewCount.contains(a))
+            acc.insert("count", attrAccessorNewCount.value(a));
         accessors.replace(a, acc);
     }
 
@@ -589,34 +645,40 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
     // The original geometry bufferViews the compressed accessors used to point
     // at are now dead weight — without removing them the file would GROW
     // instead of shrink (the draco blob is added on top). Rebuild the binary
-    // buffer keeping only bufferViews still referenced by a surviving accessor
-    // (incl. its sparse indices/values), an image, or a draco extension, then
-    // remap every bufferView index. Anything referencing a bufferView we don't
-    // recognise as live is conservatively kept.
+    // buffer keeping only LIVE bufferViews, then remap every bufferView index.
+    //
+    // To be conservative against consumers we don't model (EXT_meshopt_
+    // compression, EXT_structural_metadata, vendor extensions on any node), the
+    // live set is built by a GENERIC recursive walk of the whole JSON that
+    // collects EVERY integer under a "bufferView" key — the accessors + Draco
+    // extensions we just rewrote already carry their references, and anything
+    // else that names a bufferView is preserved automatically. Only bufferViews
+    // no reference points at (the stripped geometry) are dropped.
     {
-        QSet<int> live;
-        auto keep = [&](int bv) { if (bv >= 0 && bv < bufferViews.size()) live.insert(bv); };
+        // CRITICAL: sync the just-rewritten accessors/meshes back into c.json
+        // BEFORE walking it. c.json still holds the PRE-strip copies (they're
+        // otherwise only re-inserted at the end); walking those stale copies
+        // would see the original geometry bufferView references and keep every
+        // orphan alive — the file would then grow instead of shrink.
+        c.json.insert("accessors", accessors);
+        c.json.insert("meshes", meshes);
 
-        for (const QJsonValue& av : accessors) {
-            QJsonObject acc = av.toObject();
-            if (acc.contains("bufferView")) keep(acc.value("bufferView").toInt());
-            if (acc.contains("sparse")) {
-                QJsonObject sp = acc.value("sparse").toObject();
-                keep(sp.value("indices").toObject().value("bufferView").toInt(-1));
-                keep(sp.value("values").toObject().value("bufferView").toInt(-1));
+        QSet<int> live;
+        std::function<void(const QJsonValue&)> walk = [&](const QJsonValue& v) {
+            if (v.isObject()) {
+                const QJsonObject o = v.toObject();
+                for (auto it = o.begin(); it != o.end(); ++it) {
+                    if (it.key() == QLatin1String("bufferView") && it.value().isDouble()) {
+                        int bv = it.value().toInt(-1);
+                        if (bv >= 0 && bv < bufferViews.size()) live.insert(bv);
+                    }
+                    walk(it.value());
+                }
+            } else if (v.isArray()) {
+                for (const QJsonValue& e : v.toArray()) walk(e);
             }
-        }
-        for (const QJsonValue& iv : c.json.value("images").toArray()) {
-            QJsonObject im = iv.toObject();
-            if (im.contains("bufferView")) keep(im.value("bufferView").toInt());
-        }
-        for (const QJsonValue& mv : meshes) {
-            for (const QJsonValue& pv : mv.toObject().value("primitives").toArray()) {
-                QJsonObject ext = pv.toObject().value("extensions").toObject()
-                                     .value("KHR_draco_mesh_compression").toObject();
-                if (ext.contains("bufferView")) keep(ext.value("bufferView").toInt());
-            }
-        }
+        };
+        walk(c.json);
 
         // Build the compacted buffer + old->new bufferView index map.
         QByteArray compact;
@@ -627,6 +689,15 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
             QJsonObject bv = bufferViews.at(i).toObject();
             int off = bv.value("byteOffset").toInt(0);
             int len = bv.value("byteLength").toInt(0);
+            // Bound the copy against the source buffer — byteOffset/byteLength
+            // come straight from JSON and a malformed file could point past the
+            // end (QByteArray::append does not clamp → heap over-read).
+            if (off < 0 || len < 0 || static_cast<qint64>(off) + len > newBin.size()) {
+                r.error = QString("bufferView %1 is out of bounds "
+                                  "(offset %2 + length %3 > buffer %4)")
+                              .arg(i).arg(off).arg(len).arg(newBin.size());
+                return r;
+            }
             // 4-byte align each view's start (glb + accessor alignment rules).
             while (compact.size() % 4 != 0) compact.append('\0');
             int newOff = compact.size();
@@ -728,13 +799,37 @@ MeshDracoEncoder::Result MeshDracoEncoder::compressFile(const QString& path, con
         outBytes = QJsonDocument(c.json).toJson(QJsonDocument::Indented);
     }
 
-    QFile out(path);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        r.error = "cannot open output for writing: " + path;
+    // Atomic write: write to a sibling temp file, verify the full byte count
+    // and flush, then replace the target. `compressFile` is called on a file
+    // the exporter has already written, so a short write or a crash must NOT
+    // leave a truncated file where the valid uncompressed export was.
+    const QString tmpPath = path + ".draco.tmp";
+    {
+        QFile tmp(tmpPath);
+        if (!tmp.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            r.error = "cannot open temp file for writing: " + tmpPath;
+            return r;
+        }
+        const qint64 written = tmp.write(outBytes);
+        const bool flushed = tmp.flush();
+        tmp.close();
+        if (written != outBytes.size() || !flushed) {
+            QFile::remove(tmpPath);
+            r.error = QString("short write to %1 (%2 of %3 bytes)")
+                          .arg(tmpPath).arg(written).arg(outBytes.size());
+            return r;
+        }
+    }
+    // QFile::rename won't overwrite an existing target — remove then rename.
+    if (!QFile::remove(path)) {
+        QFile::remove(tmpPath);
+        r.error = "cannot replace output file: " + path;
         return r;
     }
-    out.write(outBytes);
-    out.close();
+    if (!QFile::rename(tmpPath, path)) {
+        r.error = "cannot rename temp file into place: " + tmpPath;
+        return r;
+    }
 
     r.outputFileBytes = outBytes.size();
     r.ok = true;

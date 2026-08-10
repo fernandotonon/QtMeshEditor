@@ -67,6 +67,12 @@ public:
     struct Result {
         bool ok = false;
         QString error;              // human-readable failure reason when !ok
+        // True when the file was valid and readable but nothing was eligible for
+        // Draco (every primitive was skinned / morph-target / non-float / not an
+        // indexed triangle mesh). NOT a hard error — the caller should keep the
+        // already-written uncompressed file and warn rather than fail. When set,
+        // `ok` is false and `error` explains why nothing was compressed.
+        bool nothingEligible = false;
         int primitivesCompressed = 0;
         int primitivesTotal = 0;
         qint64 originalBinBytes = 0;   // size of geometry bytes before compression

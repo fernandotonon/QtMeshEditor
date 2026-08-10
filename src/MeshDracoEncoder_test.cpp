@@ -17,6 +17,7 @@ The MIT License — see other project sources for the full header.
 #include <QTemporaryDir>
 #include <QtEndian>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -313,6 +314,84 @@ TEST(MeshDracoEncoderTest, FailsOnMissingFile) {
     auto r = MeshDracoEncoder::compressFile("/nonexistent/path/to/file.glb");
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());
+}
+
+// A primitive carrying skinning (JOINTS_0/WEIGHTS_0) must be left UNCOMPRESSED
+// — Draco reorders/dedups points, so compressing POSITION while the skin
+// streams stay in the original vertex order would corrupt the rig. Verify the
+// whole primitive is skipped (no extension, POSITION keeps its bufferView) and
+// the skin accessors are untouched.
+TEST(MeshDracoEncoderTest, LeavesSkinnedPrimitiveUncompressed) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath("skinned.glb");
+
+    Grid g = makeGrid(8, 8);
+    // Build a glb by hand with POSITION + JOINTS_0(ubyte4) + WEIGHTS_0(float4).
+    QByteArray bin;
+    const int idxOff = 0;
+    for (uint32_t i : g.indices) appendU32(bin, i);
+    while (bin.size() % 4 != 0) bin.append('\0');
+    const int posOff = bin.size();
+    for (float f : g.positions) { char t[4]; std::memcpy(t, &f, 4); bin.append(t, 4); }
+    const int jointsOff = bin.size();
+    for (int v = 0; v < g.vertexCount; ++v) { char j[4] = {0,0,0,0}; bin.append(j, 4); }
+    while (bin.size() % 4 != 0) bin.append('\0');
+    const int weightsOff = bin.size();
+    for (int v = 0; v < g.vertexCount; ++v) {
+        float w[4] = {1.f,0.f,0.f,0.f};
+        for (float x : w) { char t[4]; std::memcpy(t, &x, 4); bin.append(t, 4); }
+    }
+
+    QJsonObject root;
+    root.insert("asset", QJsonObject{{"version", "2.0"}});
+    root.insert("buffers", QJsonArray{QJsonObject{{"byteLength", bin.size()}}});
+    QJsonArray bvs;
+    bvs.append(QJsonObject{{"buffer",0},{"byteOffset",idxOff},{"byteLength",int(g.indices.size()*4)}});
+    bvs.append(QJsonObject{{"buffer",0},{"byteOffset",posOff},{"byteLength",int(g.positions.size()*4)}});
+    bvs.append(QJsonObject{{"buffer",0},{"byteOffset",jointsOff},{"byteLength",g.vertexCount*4}});
+    bvs.append(QJsonObject{{"buffer",0},{"byteOffset",weightsOff},{"byteLength",g.vertexCount*16}});
+    root.insert("bufferViews", bvs);
+    QJsonArray accs;
+    accs.append(QJsonObject{{"bufferView",0},{"componentType",5125},{"count",int(g.indices.size())},{"type","SCALAR"}});
+    accs.append(QJsonObject{{"bufferView",1},{"componentType",5126},{"count",g.vertexCount},{"type","VEC3"}});
+    accs.append(QJsonObject{{"bufferView",2},{"componentType",5121},{"count",g.vertexCount},{"type","VEC4"}}); // JOINTS ubyte
+    accs.append(QJsonObject{{"bufferView",3},{"componentType",5126},{"count",g.vertexCount},{"type","VEC4"}}); // WEIGHTS float
+    root.insert("accessors", accs);
+    QJsonObject prim;
+    prim.insert("attributes", QJsonObject{{"POSITION",1},{"JOINTS_0",2},{"WEIGHTS_0",3}});
+    prim.insert("indices", 0);
+    prim.insert("mode", 4);
+    root.insert("meshes", QJsonArray{QJsonObject{{"primitives", QJsonArray{prim}}}});
+
+    QByteArray jsonChunk = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    while (jsonChunk.size() % 4 != 0) jsonChunk.append(' ');
+    while (bin.size() % 4 != 0) bin.append('\0');
+    QByteArray glb;
+    appendU32(glb, 0x46546C67); appendU32(glb, 2);
+    appendU32(glb, 12 + 8 + jsonChunk.size() + 8 + bin.size());
+    appendU32(glb, jsonChunk.size()); appendU32(glb, 0x4E4F534A); glb.append(jsonChunk);
+    appendU32(glb, bin.size()); appendU32(glb, 0x004E4942); glb.append(bin);
+    { QFile f(path); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write(glb); }
+
+    auto r = MeshDracoEncoder::compressFile(path);
+    // The only primitive is skinned → nothing eligible. That is a NON-fatal
+    // outcome (nothingEligible, ok=false), and the file must NOT be mangled.
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.nothingEligible);
+    EXPECT_EQ(r.primitivesCompressed, 0);
+
+    // File must still parse and the primitive must have NO draco extension and
+    // POSITION must keep its bufferView.
+    QFile out(path);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    QJsonObject json; QByteArray outBin;
+    ASSERT_TRUE(splitGlb(out.readAll(), json, outBin));
+    QJsonObject p = json.value("meshes").toArray().at(0).toObject()
+                        .value("primitives").toArray().at(0).toObject();
+    EXPECT_FALSE(p.value("extensions").toObject().contains("KHR_draco_mesh_compression"));
+    int posAcc = p.value("attributes").toObject().value("POSITION").toInt();
+    EXPECT_TRUE(json.value("accessors").toArray().at(posAcc).toObject().contains("bufferView"));
 }
 
 #endif // ENABLE_DRACO
