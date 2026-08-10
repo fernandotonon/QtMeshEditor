@@ -214,15 +214,47 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     // node bind scale turns that into the identity it really is (#936).
     // Guard degenerate components so a zero scale can't divide by zero.
     Ogre::Vector3 nodeBindScale = Ogre::Vector3::UNIT_SCALE;
+    // Space-change prefix for POSITION/ROTATION keys: the Ogre bind can be
+    // RE-ROOTED relative to the node bind (BoneProcessor's mesh-node-relative
+    // root, #936), so a key equal to the node's bind transform must still
+    // produce an IDENTITY delta. C = OgreBindLocal · NodeBindLocal⁻¹ maps
+    // node-local keys into the Ogre bind space; it is exactly identity for
+    // every bone whose two binds agree (all non-re-rooted bones, Mixamo rigs).
+    bool haveSpaceChange = false;
+    Ogre::Vector3 cPos = Ogre::Vector3::ZERO;
+    Ogre::Quaternion cRot = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3 cScale = Ogre::Vector3::UNIT_SCALE;
     if (scene && scene->mRootNode) {
         if (const aiNode* channelNode = scene->mRootNode->FindNode(nodeAnim->mNodeName)) {
             aiVector3D ns, np; aiQuaternion nr;
             channelNode->mTransformation.Decompose(ns, nr, np);
             nodeBindScale = Ogre::Vector3(ns.x, ns.y, ns.z);
+
+            Ogre::Affine3 nodeBind;
+            nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
+                                   Ogre::Vector3(ns.x, ns.y, ns.z),
+                                   Ogre::Quaternion(nr.w, nr.x, nr.y, nr.z));
+            Ogre::Affine3 ogreBind;
+            ogreBind.makeTransform(bone->getPosition(), bone->getScale(),
+                                   bone->getOrientation());
+            const Ogre::Affine3 c = ogreBind * nodeBind.inverse();
+            c.decomposition(cPos, cScale, cRot);
+            haveSpaceChange =
+                !cPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
+                !cRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
+                !cScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
         }
     }
     for (int c = 0; c < 3; ++c)
         if (std::abs(nodeBindScale[c]) < 1e-8f) nodeBindScale[c] = 1.0f;
+    // Map a node-local key transform into the Ogre bind space (no-op for the
+    // common consistent-bind case).
+    auto mapPos = [&](const Ogre::Vector3& p) {
+        return haveSpaceChange ? cRot * (cScale * p) + cPos : p;
+    };
+    auto mapRot = [&](const Ogre::Quaternion& q) {
+        return haveSpaceChange ? cRot * q : q;
+    };
 
     // Process the position keys.
     // Ogre applies translation keyframes in bone-local space (TS_LOCAL):
@@ -232,8 +264,9 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     for(auto i = 0u; i < nodeAnim->mNumPositionKeys; i++) {
         aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
         Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
-        // Compute delta in parent-local space, then rotate into bone-local space
-        position = boneTPoseInverseRotation * (position - boneTPosePosition);
+        // Map into the Ogre bind space first (#936 re-rooted roots), then
+        // compute the delta in parent-local space and rotate it bone-local.
+        position = boneTPoseInverseRotation * (mapPos(position) - boneTPosePosition);
 
         keyframes[positionKey.mTime] = std::make_tuple(
             position,
@@ -246,7 +279,7 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     for(auto i = 0u; i < nodeAnim->mNumRotationKeys; i++) {
         aiQuatKey rotationKey = nodeAnim->mRotationKeys[i];
         Ogre::Quaternion rot(rotationKey.mValue.w, rotationKey.mValue.x, rotationKey.mValue.y, rotationKey.mValue.z);
-        rot = boneTPoseInverseRotation * rot; // Convert from local space to model space
+        rot = boneTPoseInverseRotation * mapRot(rot); // node-local → Ogre bind space → bind-relative delta
         rot.normalise(); // Normalize the quaternion
         if (keyframes.find(rotationKey.mTime) == keyframes.end()) {
             keyframes[rotationKey.mTime] = std::make_tuple(
