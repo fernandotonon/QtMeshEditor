@@ -19,7 +19,7 @@ env:
   BUILD_TYPE: Release
   AQT_VERSION: '==3.3.*'
   QT_VERSION: '6.9.3'
-  ASSIMP_VERSION: '6.0.4'
+  ASSIMP_VERSION: '6.0.5'
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
@@ -32,7 +32,7 @@ env:
   # sdkpin2 = bust the stale assimp cache that still baked the Xcode 26.5
   # libz.tbd path — "No rule to make target .../MacOSX26.5.sdk/.../libz.tbd"
   # when OGRE consumed it under the pinned 26.3.)
-  MACOS_CACHE_VERSION: 'sdkpin2'
+  MACOS_CACHE_VERSION: 'sdkpin2-assimp605'
 
 jobs:
 #  send-slack-notification:
@@ -172,7 +172,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
@@ -208,6 +208,10 @@ jobs:
         Write-Host "gcc version: $(gcc.exe --version | Select-Object -First 1)"
         Write-Host "cmake version: $(cmake --version | Select-Object -First 1)"
         Set-Location "${{github.workspace}}/assimp"
+        # NB Draco encode (#506) is OFF on Windows/MinGW for now — Assimp's
+        # bundled Draco fails to configure under MinGW (its `draco` install
+        # target doesn't exist) and ENABLE_ONNX/MOCAP are likewise off here.
+        # Linux + macOS ship Draco via a standalone static build (see those jobs).
         cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DASSIMP_WARNINGS_AS_ERRORS=OFF
         D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
         Copy-Item -Recurse -Force "C:/PROGRA~2/Assimp" "${{github.workspace}}/assimp-build"
@@ -221,7 +225,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         path: |
                C:/PROGRA~2/Assimp
@@ -231,7 +235,7 @@ jobs:
       id: cache-ogre-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-windows
+        cache-name: cache-ogre-windows-assimp605
       with:
         path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
@@ -322,7 +326,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows-mingw1310
+        cache-name: cache-assimp-windows-mingw1310-605
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
@@ -333,7 +337,7 @@ jobs:
       id: cache-ogre-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-windows
+        cache-name: cache-ogre-windows-assimp605
       with:
         path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
@@ -611,15 +615,17 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/QtMeshEditor/assimp` on Linux
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
@@ -632,13 +638,35 @@ jobs:
           repository: assimp/assimp
           ref: v${{ env.ASSIMP_VERSION }}
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-            
+
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
+      # Assimp is built WITHOUT -DASSIMP_BUILD_DRACO: Assimp's own Draco
+      # integration is broken across platforms (macOS -Werror on draco headers,
+      # Linux exports an assimp::draco target referencing an uninstalled .so,
+      # Windows/MinGW's `draco` install target doesn't exist). We only need
+      # Draco's ENCODER for MeshDracoEncoder (#506), so we build the vendored
+      # contrib/draco as a standalone static lib below and install it to the
+      # same prefix — clean and identical on all three platforms.
       run: |
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
+
+    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+      name: Build & install Draco (standalone static, for #506 glTF compression)
+      run: |
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/draco-build \
+                  -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib/draco \
+                  -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DDRACO_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+            cmake --build /home/runner/work/QtMeshEditor/QtMeshEditor/draco-build --target draco_static -j8
+            sudo cmake --install /home/runner/work/QtMeshEditor/QtMeshEditor/draco-build || true
+            # cmake --install may miss the umbrella archive when only draco_static
+            # was built — copy the lib + headers explicitly so Draco.cmake finds them.
+            sudo cp /home/runner/work/QtMeshEditor/QtMeshEditor/draco-build/libdraco.a /usr/local/lib/ 2>/dev/null || true
+            sudo mkdir -p /usr/local/include/draco
+            sudo cp -R /home/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib/draco/src/draco/. /usr/local/include/draco/
+            sudo cp /home/runner/work/QtMeshEditor/QtMeshEditor/draco-build/draco/draco_features.h /usr/local/include/draco/ 2>/dev/null || true
 
  build-n-cache-ogre-linux:
     needs: build-n-cache-assimp-linux
@@ -654,7 +682,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -670,15 +698,17 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
@@ -746,14 +776,16 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
@@ -763,7 +795,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -785,6 +817,7 @@ jobs:
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -1031,14 +1064,16 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux
+        cache-name: cache-assimp-linux-605
       with:
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
@@ -1048,7 +1083,7 @@ jobs:
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux
+        cache-name: cache-ogre-linux-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -1134,7 +1169,8 @@ jobs:
             -DENABLE_PS1_RIP=ON \
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
-            -DENABLE_MOCAP=ON
+            -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON
 
     - name: Run build-wrapper
       env:
@@ -1705,8 +1741,10 @@ jobs:
                /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
@@ -1724,13 +1762,29 @@ jobs:
           repository: assimp/assimp
           ref: v${{ env.ASSIMP_VERSION }}
           path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
-      
+
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
+      # Draco built standalone below (not via -DASSIMP_BUILD_DRACO) — see the
+      # Linux job for the rationale (Assimp's Draco integration is broken per
+      # platform; we only need Draco's encoder for #506).
       run: |
             cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
+
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
+      name: Build & install Draco (standalone static, for #506 glTF compression)
+      run: |
+            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/draco-build \
+                  -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib/draco \
+                  -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DDRACO_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
+                  -DCMAKE_OSX_ARCHITECTURES="$(uname -m)"
+            cmake --build /Users/runner/work/QtMeshEditor/QtMeshEditor/draco-build --target draco_static -j8
+            sudo cp /Users/runner/work/QtMeshEditor/QtMeshEditor/draco-build/libdraco.a /usr/local/lib/
+            sudo mkdir -p /usr/local/include/draco
+            sudo cp -R /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib/draco/src/draco/. /usr/local/include/draco/
+            sudo cp /Users/runner/work/QtMeshEditor/QtMeshEditor/draco-build/draco/draco_features.h /usr/local/include/draco/ 2>/dev/null || true
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
@@ -1777,8 +1831,10 @@ jobs:
                /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
@@ -1893,8 +1949,10 @@ jobs:
                /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
+               /usr/local/include/draco
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libdraco*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
 
@@ -1956,6 +2014,7 @@ jobs:
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
+            -DENABLE_DRACO=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \

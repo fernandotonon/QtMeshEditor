@@ -149,6 +149,9 @@ qtmesh validate model.fbx
 # Convert between formats
 qtmesh convert model.fbx -o model.gltf2
 
+# Convert + Draco-compress the glTF (smaller .glb; needs a Draco-enabled build)
+qtmesh convert model.fbx -o model.glb --compress draco
+
 # Fix / optimize
 qtmesh fix model.fbx -o fixed.fbx --all
 
