@@ -100,10 +100,11 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
     // exact when the rig's bind matches the node pose (the Blender export
     // convention). Identity for single-skinned-mesh scenes (Mixamo).
     Ogre::Matrix4 frameAlign = Ogre::Matrix4::IDENTITY;
-    Ogre::Quaternion frameAlignRot = Ogre::Quaternion::IDENTITY;
+    Ogre::Matrix3 frameAlignLinear = Ogre::Matrix3::IDENTITY;
+    Ogre::Matrix3 frameAlignNormal = Ogre::Matrix3::IDENTITY;
     const bool hasFrameAlign =
         (skeleton && mesh->mNumBones > 0 && node)
-            ? computeFrameAlign(node, frameAlign, frameAlignRot)
+            ? computeFrameAlign(node, frameAlign, frameAlignLinear, frameAlignNormal)
             : false;
 
     // Initialize blend indices and blend weights
@@ -116,7 +117,7 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
         // Process normals
         if(mesh->HasNormals()) {
             Ogre::Vector3 n(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
-            if (hasFrameAlign) n = (frameAlignRot * n).normalisedCopy();
+            if (hasFrameAlign) n = (frameAlignNormal * n).normalisedCopy();
             subMeshData->normals.push_back(applyBake ? R_x90 * n : n);
         }
 
@@ -161,7 +162,13 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
             Ogre::Vector3 T(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z);
             Ogre::Vector3 B(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z);
             Ogre::Vector3 N(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
-            if (hasFrameAlign) { T = frameAlignRot * T; B = frameAlignRot * B; N = frameAlignRot * N; }
+            if (hasFrameAlign) {
+                // Tangent-space directions take the LINEAR part; the normal
+                // takes the inverse-transpose (non-uniform-scale correct).
+                T = (frameAlignLinear * T).normalisedCopy();
+                B = (frameAlignLinear * B).normalisedCopy();
+                N = (frameAlignNormal * N).normalisedCopy();
+            }
             if (applyBake) { T = R_x90 * T; B = R_x90 * B; N = R_x90 * N; }
             // Compute handedness: if cross(N,T) is opposite to B, the tangent space is left-handed
             float handedness = (N.crossProduct(T).dotProduct(B) < 0.0f) ? -1.0f : 1.0f;
@@ -469,14 +476,20 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
 }
 
 bool MeshProcessor::computeFrameAlign(const aiNode* node, Ogre::Matrix4& frameAlign,
-                                      Ogre::Quaternion& frameAlignRot) const
+                                      Ogre::Matrix3& frameAlignLinear,
+                                      Ogre::Matrix3& frameAlignNormal) const
 {
     frameAlign = m_refWorldInv * BoneProcessor::nodeWorldTransform(node);
+    frameAlign.extract3x3Matrix(frameAlignLinear);
+    // Normal matrix = inverse-transpose of the linear part — equals the
+    // rotation for rigid/uniform-scale frames, correct for non-uniform ones.
+    frameAlignNormal = frameAlignLinear.Inverse().Transpose();
     Ogre::Vector3 faPos;
     Ogre::Vector3 faScale;
-    Ogre::Affine3(frameAlign).decomposition(faPos, faScale, frameAlignRot);
+    Ogre::Quaternion faRot;
+    Ogre::Affine3(frameAlign).decomposition(faPos, faScale, faRot);
     return !faPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
-           !frameAlignRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
+           !faRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
            !faScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
 }
 
