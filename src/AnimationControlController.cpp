@@ -165,10 +165,25 @@ void AnimationControlController::updateAnimationTree()
     for (Ogre::Entity* entity : SelectionSet::getSingleton()->getResolvedEntities()) {
         const QString entityName = QString::fromStdString(entity->getName());
 
+        // Blend-shape POSE clips (Ogre names them "<target>" / "Shape_N" per
+        // morph target) are exposed as AnimationStates too, but they are NOT
+        // real animations — they're the morph targets themselves. Filter them
+        // out (mirrors PropertiesPanelController::animationData) so the list
+        // shows only real skeletal / vertex / node clips. Without this a
+        // reimported morph mesh lists e.g. "Shape_0" (length 0) and — being
+        // first — it gets AUTO-SELECTED below, so the dope sheet renders that
+        // empty pose instead of the real skeletal clip's bone tracks. (#517)
+        QSet<QString> morphNames;
+        for (const QString& n : MorphAnimationManager::instance()->morphTargetsFor(entity))
+            morphNames.insert(n);
+
         QStringList animNames;
         if (Ogre::AnimationStateSet* set = entity->getAllAnimationStates()) {
-            for (const auto& pair : set->getAnimationStates())
-                animNames << QString::fromStdString(pair.first);
+            for (const auto& pair : set->getAnimationStates()) {
+                const QString name = QString::fromStdString(pair.first);
+                if (morphNames.contains(name)) continue;  // blend shape, not a clip
+                animNames << name;
+            }
         }
 
         // Append node clips that animate THIS entity's scene node (skip drafts

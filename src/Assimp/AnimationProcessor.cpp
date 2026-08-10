@@ -202,6 +202,17 @@ void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene*
         aiNodeAnim* nodeAnim = animation->mChannels[i];
         processAnimationChannel(nodeAnim, ogreAnimation, scene, i, mTicksPerSecond);
     }
+    // A channel only becomes a node track when it targets a BONE
+    // (processAnimationChannel early-returns otherwise). If NONE of this
+    // aiAnimation's channels hit a bone, the clip is empty — it was a
+    // SceneNode-transform clip (#517 node anim, channel targets the scene
+    // node, not a bone) or some other non-skeletal channel. Leaving it on the
+    // skeleton produces a phantom 0-track animation that pollutes the Inspector
+    // list and dope sheet and gets auto-selected (so the real skeletal clip's
+    // bones never render in the dope sheet). Node clips are rebuilt separately
+    // by reconstructNodeClipsFrom* — drop the phantom here. (issue #517)
+    if (ogreAnimation->getNumNodeTracks() == 0)
+        skeleton->removeAnimation(animation->mName.C_Str());
 }
 
 void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex, Ogre::Real mTicksPerSecond) {

@@ -78,6 +78,33 @@ has "skeletal survives combined round-trip" "Animation:" "$SK"
 has "node clip survives combined round-trip" "Spin" "$NA"
 has "morph shapes survive combined round-trip" "Shape_" "$MO"
 
+# ── Reimport hygiene (the "dope sheet shows only morph, wrong keyframes" bug) ──
+# On reimport, node/pose-shape animations must NOT leak into the SKELETAL list
+# as phantom clips (AnimationProcessor drops 0-node-track clips), the node clip
+# must be RECONSTRUCTED even though the scene node was renamed after the file
+# (name-match relaxed to the aiScene root name), and the auto-selected animation
+# must be the REAL skeletal clip — not a length-0 "Shape_N" pose that renders an
+# empty dope sheet. Guards commits: this slice.
+# NB load_mesh is additive: the authored "Spin" stays in-scene and the
+# reimported file contributes another (uniquified "Spin_1"), so expect >=2.
+NACOUNT=$(echo "$NA" | grep -oE '"count": *[0-9]+' | grep -oE '[0-9]+' | head -1)
+if [ "${NACOUNT:-0}" -ge 2 ]; then ok "node clip reconstructed on reimport (not leaked as skeletal)"; else bad "node clip reconstructed on reimport" "node anims: $(echo "$NA"|tr -d '\n')"; fi
+PS=$(call get_playback_state '{}' | ctext)
+SEL=$(echo "$PS" | grep -oE '"selected_animation":[^,]*' | head -1)
+LEN=$(echo "$PS" | grep -oE '"length": *[0-9.]+' | grep -oE '[0-9.]+' | head -1)
+echo "  reimport auto-selected: $SEL (length $LEN)"
+# The real skeletal clip has non-zero length; a leaked Shape_N pose is length 0.
+if echo "$SEL" | grep -qiE 'Shape_'; then
+  bad "reimport does not auto-select a pose-shape clip" "$SEL"
+else
+  ok "reimport does not auto-select a pose-shape clip"
+fi
+if [ -n "$LEN" ] && python3 -c "import sys;sys.exit(0 if float('$LEN')>0.01 else 1)" 2>/dev/null; then
+  ok "reimport auto-selects a real (non-zero-length) animation"
+else
+  bad "reimport auto-selects a real animation" "selected length=$LEN"
+fi
+
 echo
 echo "===== SUMMARY: PASS=$PASS FAIL=$FAIL ====="
 [ "$FAIL" -gt 0 ] && printf 'FAILED: %s\n' "${fails[@]}"

@@ -2349,20 +2349,33 @@ static void reconstructNodeClipsFromAiScene(const aiScene* aiscene,
         (en->getMesh() && en->getMesh()->getSkeleton())
             ? en->getMesh()->getSkeleton().get() : nullptr;
 
+    // The node-clip channel targets the entity's ROOT node, which buildAiScene/
+    // buildSceneAiScene name after the entity at EXPORT time. On reimport the
+    // live SceneNode is renamed after the FILE (createEntity names the entity/
+    // node from the loaded file's basename), so `sn->getName()` no longer equals
+    // the channel's node name — the match by exact name fails and the node clip
+    // is dropped (it then leaks as a phantom skeletal clip). Accept the aiScene's
+    // ROOT node name too: that's the export-time entity name the channel carries.
+    // (issue #517 — export under one name, reimport under the file's name)
+    const std::string rootName =
+        aiscene->mRootNode ? aiscene->mRootNode->mName.C_Str() : std::string();
+
     for (unsigned int a = 0; a < aiscene->mNumAnimations; ++a) {
         const aiAnimation* anim = aiscene->mAnimations[a];
         if (!anim) continue;
         const double ticksPerSec =
             (anim->mTicksPerSecond > 0.0) ? anim->mTicksPerSecond : 1.0;
 
-        // Gather channels targeting THIS scene node that are not bones.
+        // Gather non-bone channels targeting this entity's node (matched by the
+        // live scene-node name OR the export-time root name — see above).
         std::vector<const aiNodeAnim*> nodeChannels;
         for (unsigned int c = 0; c < anim->mNumChannels; ++c) {
             const aiNodeAnim* ch = anim->mChannels[c];
             if (!ch) continue;
             const std::string chName = ch->mNodeName.C_Str();
-            if (chName != nodeName) continue;
             if (skel && skel->hasBone(chName)) continue;  // belongs to the skeleton
+            if (chName != nodeName && !(!rootName.empty() && chName == rootName))
+                continue;
             nodeChannels.push_back(ch);
         }
         if (nodeChannels.empty()) continue;
