@@ -196,15 +196,34 @@ Rectangle {
     // this mesh's skeletal/morph bands and doesn't linger when you select a
     // different, skeletal-only mesh. All three band types are shown together.
     function refreshNodeRows() {
-        var clip = NodeAnimationManager.activeClip
         var sel = AnimationControlController.selectedEntityName
         var editing = NodeAnimationManager.editingClip
-        var belongs = clip.length > 0
-                      && (clip === editing
-                          || (sel.length > 0
-                              && NodeAnimationManager.animatedNodes(clip).indexOf(sel) >= 0))
-        root.nodeClip = belongs ? clip : ""
-        root.nodeRows = belongs ? NodeAnimationManager.nodeRows(clip) : []
+        var active = NodeAnimationManager.activeClip
+
+        // Pick which node clip to show in the band, in priority order:
+        //   1. the clip being EDITED (node editor open on it), or
+        //   2. the ACTIVE clip if it animates the selected entity, or
+        //   3. ANY node clip that animates the selected entity.
+        // Case 3 is what makes a clip RECONSTRUCTED on import (or simply not the
+        // node editor's active pick) show its band on load — previously the band
+        // only appeared once activeClip was set, i.e. after the user opened the
+        // node editor and selected the clip. (#517)
+        var clip = ""
+        if (editing.length > 0) {
+            clip = editing
+        } else if (active.length > 0 && sel.length > 0
+                   && NodeAnimationManager.animatedNodes(active).indexOf(sel) >= 0) {
+            clip = active
+        } else if (sel.length > 0) {
+            var all = NodeAnimationManager.listClips()
+            for (var i = 0; i < all.length; ++i) {
+                if (NodeAnimationManager.animatedNodes(all[i]).indexOf(sel) >= 0) {
+                    clip = all[i]; break
+                }
+            }
+        }
+        root.nodeClip = clip
+        root.nodeRows = clip.length > 0 ? NodeAnimationManager.nodeRows(clip) : []
     }
     // Rebuild ALL bands when node clips change/select — the dope sheet shows
     // skeletal + morph + node together, and selecting a node clip must not drop
