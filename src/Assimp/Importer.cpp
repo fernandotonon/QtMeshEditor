@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "MeshProcessor.h"
 #include <algorithm>
 #include <string_view>
+#include <cstdlib>
 
 #include <QFileInfo>
 #include <QFile>
@@ -51,6 +52,32 @@ bool isProtectedOgreMaterialName(const std::string& name)
     if (name == "BaseWhite" || name == "BaseWhiteNoLighting" || name == "GUI_Material")
         return true;
     return name.rfind("Ogre/", 0) == 0;
+}
+
+// #933: world ORIENTATION of the reference (first skinned) mesh node — per
+// Assimp's FBX semantics the bone offsets are relative to the mesh's global
+// frame, so its rotation maps the imported content back to the file's
+// intended Y-up world. Exact when the rig's skin bind matches the node pose
+// (the normal export case); rigs whose bind diverges from the node tree
+// (rare) keep a residual tilt. Identity when there is no skinned mesh.
+Ogre::Quaternion detectNodeBakeRotation(const aiScene* scene)
+{
+    if (!scene || !scene->mRootNode)
+        return Ogre::Quaternion::IDENTITY;
+    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+        if (scene->mMeshes[i]->mNumBones == 0)
+            continue;
+        const aiNode* meshNode = BoneProcessor::findMeshNode(scene->mRootNode, i);
+        if (!meshNode)
+            return Ogre::Quaternion::IDENTITY;
+        Ogre::Vector3 pos;
+        Ogre::Vector3 scl;
+        Ogre::Quaternion rot;
+        Ogre::Affine3(BoneProcessor::nodeWorldTransform(meshNode))
+            .decomposition(pos, scl, rot);
+        return rot;   // first skinned mesh decides the orientation
+    }
+    return Ogre::Quaternion::IDENTITY;
 }
 
 } // namespace
@@ -240,29 +267,13 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             // same way as the Z-up path (root bones here; vertices in
             // MeshProcessor below). Identity for Mixamo-style rigs, so the
             // common case is untouched.
-            // The orientation comes from the reference (first skinned) mesh
-            // node's world — per Assimp's FBX semantics the bone offsets are
-            // relative to the mesh's global frame, so its rotation is what
-            // maps the imported content back to the file's intended Y-up
-            // world. Exact when the rig's skin bind matches the node pose
-            // (the normal export case); rigs whose bind diverges from the
-            // node tree (rare) keep a residual tilt.
-            for (unsigned i = 0; i < scene->mNumMeshes && scene->mRootNode; ++i) {
-                if (scene->mMeshes[i]->mNumBones == 0) continue;
-                const aiNode* meshNode =
-                    BoneProcessor::findMeshNode(scene->mRootNode, i);
-                if (!meshNode) break;
-                Ogre::Vector3 pos, scl;
-                Ogre::Affine3(BoneProcessor::nodeWorldTransform(meshNode))
-                    .decomposition(pos, scl, m_nodeBakeRotation);
-                if (m_nodeBakeRotation.equals(Ogre::Quaternion::IDENTITY,
-                                              Ogre::Radian(1e-3f)))
-                    m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
-                else {
-                    BoneProcessor::bakeRootRotation(skeleton, m_nodeBakeRotation);
-                    skeleton->setBindingPose();
-                }
-                break;   // first skinned mesh decides the orientation
+            m_nodeBakeRotation = detectNodeBakeRotation(scene);
+            if (!m_nodeBakeRotation.equals(Ogre::Quaternion::IDENTITY,
+                                           Ogre::Radian(1e-3f))) {
+                BoneProcessor::bakeRootRotation(skeleton, m_nodeBakeRotation);
+                skeleton->setBindingPose();
+            } else {
+                m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
             }
         }
     }

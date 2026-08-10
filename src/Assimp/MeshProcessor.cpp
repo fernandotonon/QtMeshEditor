@@ -1,5 +1,6 @@
 #include "MeshProcessor.h"
 #include "BoneProcessor.h"
+#include <cstdlib>
 
 // Binds a float3 vertex buffer (bitangent, etc.) to the given source index.
 static void bindVector3Buffer(Ogre::VertexData* vertexData, unsigned short source,
@@ -51,10 +52,13 @@ MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup,
 }
 
 void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
+    if (!node || !scene)
+        return;
+
     // Reference frame = the FIRST (by scene index) skinned mesh's node world —
     // the same convention BoneProcessor uses for the re-rooted bind (#936), so
     // skeleton and geometry agree.
-    if (!m_haveRef && skeleton && scene && scene->mRootNode) {
+    if (!m_haveRef && skeleton && scene->mRootNode) {
         for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
             if (scene->mMeshes[i]->mNumBones == 0) continue;
             if (const aiNode* refNode = BoneProcessor::findMeshNode(scene->mRootNode, i))
@@ -97,16 +101,10 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
     // convention). Identity for single-skinned-mesh scenes (Mixamo).
     Ogre::Matrix4 frameAlign = Ogre::Matrix4::IDENTITY;
     Ogre::Quaternion frameAlignRot = Ogre::Quaternion::IDENTITY;
-    bool hasFrameAlign = false;
-    if (skeleton && mesh->mNumBones > 0 && node) {
-        frameAlign = m_refWorldInv * BoneProcessor::nodeWorldTransform(node);
-        Ogre::Vector3 faPos, faScale;
-        Ogre::Affine3(frameAlign).decomposition(faPos, faScale, frameAlignRot);
-        hasFrameAlign =
-            !faPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
-            !frameAlignRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
-            !faScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
-    }
+    const bool hasFrameAlign =
+        (skeleton && mesh->mNumBones > 0 && node)
+            ? computeFrameAlign(node, frameAlign, frameAlignRot)
+            : false;
 
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
@@ -469,6 +467,18 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     return ogreMesh;
 }
 
+bool MeshProcessor::computeFrameAlign(const aiNode* node, Ogre::Matrix4& frameAlign,
+                                      Ogre::Quaternion& frameAlignRot) const
+{
+    frameAlign = m_refWorldInv * BoneProcessor::nodeWorldTransform(node);
+    Ogre::Vector3 faPos;
+    Ogre::Vector3 faScale;
+    Ogre::Affine3(frameAlign).decomposition(faPos, faScale, frameAlignRot);
+    return !faPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
+           !frameAlignRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
+           !faScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
+}
+
 void MeshProcessor::bindRigidMeshToParentBone(SubMeshData* data, const aiNode* node)
 {
     if (!skeleton || !data || !node)
@@ -489,10 +499,10 @@ void MeshProcessor::bindRigidMeshToParentBone(SubMeshData* data, const aiNode* n
     if (!bone) {
         // Not under any bone: fall back to the first root bone so software
         // blending has data (the part then rides the root rigidly).
-        if (skeleton->getRootBoneIterator().hasMoreElements())
-            bone = skeleton->getRootBoneIterator().getNext();
-        if (!bone)
+        const auto& roots = skeleton->getRootBones();
+        if (roots.empty())
             return;
+        bone = roots.front();
     }
 
     // Node chain from the bone's node (exclusive) down to the mesh node
@@ -516,7 +526,8 @@ void MeshProcessor::bindRigidMeshToParentBone(SubMeshData* data, const aiNode* n
                            bone->_getDerivedOrientation());
     const Ogre::Matrix4 placement = bindFull * chain;
     // Rotation part for normals/tangents (assumes near-uniform scale).
-    Ogre::Vector3 pPos, pScale;
+    Ogre::Vector3 pPos;
+    Ogre::Vector3 pScale;
     Ogre::Quaternion pRot;
     Ogre::Affine3(placement).decomposition(pPos, pScale, pRot);
 

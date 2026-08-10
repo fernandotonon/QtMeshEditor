@@ -58,6 +58,10 @@ private:
     // Renders assembled AND animates correctly; without it Ogre's software
     // vertex blend asserts (missing blend elements) on any render.
     void bindRigidMeshToParentBone(SubMeshData* data, const aiNode* node);
+    // #933: alignment of a skinned mesh into the reference mesh's frame.
+    // Returns true when the transform is meaningfully non-identity.
+    bool computeFrameAlign(const aiNode* node, Ogre::Matrix4& frameAlign,
+                           Ogre::Quaternion& frameAlignRot) const;
     Ogre::SkeletonPtr skeleton;
     bool m_isZup;
     // Rest-pose rotation baked into vertices/normals/tangents (identity when
