@@ -128,6 +128,41 @@ public:
         // classifier (callers resolve via resolveCategoryBlocking(); predict()
         // itself treats a still-Auto value as Body).
         Category category = Category::Auto;
+
+        // Split-cleanup master switch (#863). When ON (default), after labelling
+        // the boundaries are de-fringed (smoothLabelBoundaries) and small
+        // disconnected junction islands are reabsorbed (cleanupLabelIslands) so a
+        // split doesn't leave ragged seams or stray floating fragments — bad for
+        // 3D printing especially. Opt out for raw model labels via CLI
+        // --no-island-cleanup / MCP no_cleanup.
+        bool cleanupIslands = true;
+        // An island is a stray candidate only if it has FEWER than this many
+        // faces AND (see islandMaxFraction). A part's single LARGEST island is
+        // never removed, so legitimately multi-island parts survive.
+        int islandMinFaces = 32;
+        // ...AND its face count is below this fraction of its label's total
+        // faces. Both gates must hold — protects a small-but-legitimate part.
+        float islandMaxFraction = 0.02f;
+        // Straighten ragged part boundaries (the zigzag "fringe" teeth where the
+        // torso meets the legs, #863) by flipping boundary faces that are mostly
+        // surrounded by the other part. Runs BEFORE island cleanup. Gated by the
+        // same `cleanupIslands` master switch. `boundarySmoothIterations` passes
+        // (0 = off, each pass shaves one tooth-layer; 2-3 straightens a seam).
+        int boundarySmoothIterations = 3;
+        // Recut each part boundary with a straight, axis-snapped PLANE so the
+        // seam is knife-clean and mirror-paired limbs cut level (#863). EXPER-
+        // IMENTAL and OFF by default: the current band-reassign is too coarse and
+        // scrambles parts on real characters — kept for future refinement. The
+        // shipping cleanup is smoothLabelBoundaries + cleanupLabelIslands.
+        bool planarRecut = false;
+        // Level the two LEG cuts to a shared horizontal height so an explode is
+        // symmetric — a clean, level hip line instead of the lopsided,
+        // differently-heighted legs the model produces (#863). BODY category
+        // only; scoped strictly to the leg↔torso boundary via levelLimbCut, so
+        // unlike planarRecut it can't scramble other parts. Arms are excluded on
+        // purpose — they attach along a VERTICAL seam where a horizontal level
+        // is meaningless. Default ON; gated by `cleanupIslands` (same switch).
+        bool levelLimbCuts = true;
     };
 
     struct Result {
@@ -210,6 +245,100 @@ public:
     // labels. Ties break toward the lowest part index.
     static std::vector<int> facesFromVertexLabels(const std::vector<int>& vertexLabels,
                                                   const uint32_t* indices, int indexCount);
+
+    // Reabsorb small disconnected face-islands into the surrounding part.
+    //
+    // The model (and to a lesser degree the geometric fallback) occasionally
+    // mislabels a handful of faces near a part junction — e.g. an ear-tip face
+    // labelled as body, a wrist face labelled as hand — which form their own
+    // tiny connected island WITHIN that part's face set. When the mesh is
+    // split, each such island becomes a floating fragment next to the real
+    // part (visible slivers near the ears/wrists/waist; bad for 3D printing).
+    //
+    // Operates on the FACE graph (faces adjacent across a shared edge). For each
+    // part label it finds that label's connected face-islands; an island is a
+    // stray iff it has < `minFaces` faces AND < `maxFraction` of its label's
+    // total faces AND is not that label's single largest island. Each stray is
+    // reassigned to the majority label among the faces adjacent across its
+    // boundary (the part actually surrounding it). Iterated to stability (a
+    // reabsorbed island can expose another). Pure-data + unit-testable; edits
+    // `faceLabels` in place and returns the number of faces relabelled.
+    static int cleanupLabelIslands(std::vector<int>& faceLabels,
+                                   const uint32_t* indices, int indexCount,
+                                   int minFaces = 32, float maxFraction = 0.02f);
+
+    // Straighten ragged part boundaries on the FACE graph. A face on a label
+    // boundary whose edge-neighbours are MOSTLY a single other label is a
+    // zigzag "tooth" sticking into the wrong part (the green fringe where the
+    // torso meets the legs, #863) — flip it to that majority-neighbour label.
+    // A face flips only when a strict majority (>= `minAgree` of its up-to-3
+    // edge-neighbours) shares one label different from the face's own AND that
+    // agreeing label beats the face's own neighbour count — so a face flush in
+    // the middle of its part (all neighbours same label) never moves. Iterated
+    // `iterations` times; each pass shaves one tooth-layer, so 2-3 straightens
+    // the seam without eroding a part. Pure-data; edits `faceLabels` in place,
+    // returns the number of faces flipped. Run BEFORE cleanupLabelIslands (a
+    // flip can leave a tiny island the island pass then reabsorbs).
+    static int smoothLabelBoundaries(std::vector<int>& faceLabels,
+                                     const uint32_t* indices, int indexCount,
+                                     int iterations = 3, int minAgree = 2);
+
+    // MIRROR-SYMMETRISE a mirror-pair limb cut (legs) across the sagittal plane
+    // (#863). The ONNX body model gives each leg a reasonable DIAGONAL boundary
+    // (like the arms) but the LEFT and RIGHT boundaries disagree, so an explode
+    // looks lopsided. Rather than forcing a flat horizontal waistline (which
+    // dragged the torso skirt into the legs and swapped feet), this reflects the
+    // labelling across the limb region's lateral centre and makes each near-seam
+    // face agree with its mirror — preserving the natural diagonal cut, making
+    // the two legs symmetric, and keeping each foot with its own leg (reflection
+    // maps a foot to the opposite foot with the limb labels swapped). Union rule:
+    // a face is a limb if it OR its mirror is → the more-inclusive symmetric
+    // boundary; torso only if both are. Scoped to faces within a few edge-hops
+    // of the limb↔`shared` seam, so distant geometry (a raised foot, bent knee)
+    // is untouched. `limbLeft/limbRight`↔`shared` (e.g. LeftLeg/RightLeg↔Torso);
+    // arms are NOT passed here (vertical seam — mirroring across sagittal is
+    // fine for them too but they're already symmetric). `up`=0/1/2 world up axis;
+    // lateral is derived from it. `bandFraction` is a legacy no-op (kept for ABI/
+    // call-site stability). Pure-data; needs `positions`; edits `faceLabels`,
+    // returns faces relabelled. Runs right AFTER smoothLabelBoundaries and BEFORE
+    // cleanupLabelIslands (the island pass mops up any tiny stray it leaves).
+    static int levelLimbCut(std::vector<int>& faceLabels,
+                            const float* positions, int vertexCount,
+                            const uint32_t* indices, int indexCount,
+                            int limbLeft, int limbRight, int shared, int up,
+                            float bandFraction = 0.10f);
+
+    // Recut adjacent part boundaries with a straight, knife-like PLANE (#863).
+    // Local tooth-shaving (smoothLabelBoundaries) can't flatten a whole seam;
+    // this fits a separating plane through each adjacent label-pair's boundary
+    // and reassigns the faces in a band around it strictly by which side of the
+    // plane their centroid falls on — a clean planar cut instead of a wavy one.
+    //
+    // The plane normal is the A→B centroid direction refined by the boundary,
+    // and is SNAPPED to a world axis when within ~axisSnapDeg of one (a
+    // torso/leg seam is near-horizontal → a perfectly level cut). Mirror-paired
+    // parts (LeftLeg/RightLeg, LeftArm/RightArm) are coupled: their cut planes
+    // share the same offset along the dominant axis so both legs cut at the same
+    // height/size. Only faces within `bandFraction` × mesh-diagonal of the seam
+    // are reconsidered, so geometry away from the joint is never disturbed.
+    //
+    // Needs `positions` (face centroids). Pure-data; edits `faceLabels`,
+    // returns the number of faces relabelled. Run AFTER smoothing + island
+    // cleanup (it wants coherent parts to fit planes to).
+    static int planarBoundaryRecut(std::vector<int>& faceLabels,
+                                   const float* positions, int vertexCount,
+                                   const uint32_t* indices, int indexCount,
+                                   float axisSnapDeg = 25.0f,
+                                   float bandFraction = 0.12f);
+
+    // Push cleaned per-face labels back onto vertices: each vertex takes the
+    // majority label among the faces that reference it (ties → lowest label).
+    // Keeps vertexLabels consistent with faceLabels after cleanupLabelIslands so
+    // vertex-based consumers (rig priors, per-vertex export) agree with the
+    // face-based split. Pure-data.
+    static void vertexLabelsFromFaces(std::vector<int>& vertexLabels,
+                                      const std::vector<int>& faceLabels,
+                                      const uint32_t* indices, int indexCount);
 };
 
 #endif // MESH_SEGMENTER_H

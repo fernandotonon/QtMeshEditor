@@ -82,7 +82,8 @@ STOPWORDS = {"armature", "action", "anim", "animation", "animations",
              "character", "model", "mesh", "skeleton", "base", "layer",
              "scene", "root", "main", "default", "final", "new", "test"}
 # junk that survives normalization but is not an action
-BAD_ACTIONS = {"ation", "bot", "jad", "loose", "pose", "still", "static"}
+BAD_ACTIONS = {"ation", "bot", "jad", "loose", "pose", "still", "static",
+               "tempmotion", "temp", "motion", "untitled", "clip", "newanim"}
 
 
 def norm_anim_name(name):
@@ -181,9 +182,136 @@ def vnorm(v):
 # Actions that legitimately go horizontal — no uprightness gate for these.
 HORIZONTAL_OK = {"death", "roll", "crawl", "swim", "fall", "sleep"}
 
+# License exclusion: Adobe Mixamo animations cannot be redistributed as a
+# standalone library (Mixamo ToS), even when a Sketchfab uploader re-published
+# the model under CC-BY — the CC-BY covers the upload, not the underlying
+# Adobe animation data. Drop any clip whose animation/source name is Mixamo-
+# derived. Matched case-insensitively against "<title> — <animation>".
+MIXAMO_MARKERS = ("mixamo",)
+
+# Manual review drop-list (#838 curation): specific (asset-title-substring,
+# animation-substring) pairs the user reviewed and rejected — bad retargets
+# (Fox-rig tip/hunch/invert) or off-action clips. Matched case-insensitively;
+# animation "" matches any animation of that asset. Kept as (title, anim) so
+# it survives library rebuilds (JSON indices are not stable).
+REVIEW_DROP = [
+    ("GIGI", ""),          # Fox rig — tips/hunches on every action reviewed
+    ("KAI", ""),           # Fox rig — same
+    ("Shar Pei", ""),      # dog rig — wrong body plan for humanoid retarget
+    ("Square Head Character", "Loose"),  # shake [100] — weak/ambiguous
+    ("Dance | Japanese Samurai", ""),    # dance [49] — crouched, off
+    # These Quaternius packs mis-map the RIGHT upper-arm bone: it stays raised/
+    # out (mean up-Y positive) the whole clip on every action instead of
+    # hanging. Redundant with the clean Man/Woman (Oct/Dec 2017) packs, so drop
+    # them wholesale. NB: match the FULL pack name — "Animated Men/Women
+    # Characters" and "Man/Woman Animated" are DIFFERENT releases (the latter
+    # are the good ones), so do NOT use a loose "Men"/"Man" substring.
+    ("Animated Men Characters", ""),     # Feb 2019 — raised right arm
+    ("Animated Women Characters", ""),   # Feb 2019 — raised right arm
+    ("Alien Animated", ""),              # April 2019 — raised right arm
+    ("Knight Character Animated", ""),   # Jul 2018 — raised right arm
+    ("Rigged and Animated Humanoid", ""),  # bad retarget on BOTH Mixamo &
+                                           # UniRig skeletons (user review)
+    ("FNaf_DLC_moon_sun", ""),           # Moon/Sun man — jumpscare rig, bad
+    ("Low_Poly_Zombie_Game_Animation", ""),  # weak zombie clips (user review)
+]
+
+
+def _excluded(title, anim):
+    """Return a drop reason string, or None when the (asset, animation) is
+    kept. License rules (Mixamo) and the manual review drop-list."""
+    hay = f"{title} {anim}".lower()
+    if any(m in hay for m in MIXAMO_MARKERS):
+        return "mixamo (license: Adobe ToS, not redistributable)"
+    for t, a in REVIEW_DROP:
+        # Word-boundary match on the title: a short token like "KAI" must not
+        # also drop "Samurai Kaiju" / "KAIROS".
+        if (re.search(rf"\b{re.escape(t)}\b", title, re.IGNORECASE)
+                and (not a or a.lower() in anim.lower())):
+            return f"review drop-list ({t}{'/' + a if a else ''})"
+    return None
+
+
+def fix_first_frame_flip(quats):
+    """Mini Chibi Kid (and similar) clips export frame 0 with a rotated/flipped
+    hip while the rest of the clip is upright — a loop-seam artifact. If frame 0
+    is a strong outlier vs frame 1 (hip up-Y flipped past horizontal) but the
+    clip is otherwise upright, replace frame 0 with frame 1 so the retarget
+    doesn't open on the glitch. Returns the (possibly repaired) list."""
+    if len(quats) < 3:
+        return quats
+    def up_y(f):
+        x, y, z, w = f[HIP]
+        return 1.0 - 2.0 * (x * x + z * z)
+    u0, u1, u2 = up_y(quats[0]), up_y(quats[1]), up_y(quats[2])
+    # frame 0 inverted/tilted-past-horizontal but 1 & 2 upright → repair
+    if u0 < 0.3 and u1 > 0.7 and u2 > 0.7:
+        quats = list(quats)
+        quats[0] = quats[1]
+    return quats
+
 # canonical role indices
 HIP, ABDOMEN, CHEST, NECK = 0, 1, 2, 3
 RHIP, LHIP = 15, 19
+
+# Forward-locomotion actions where the body must FACE forward. Excludes
+# strafes (deliberately angled), turns, and the HORIZONTAL_OK ground actions.
+FORWARD_FACING = {"walk", "run", "march", "jog", "sprint"}
+
+
+def _quat_fwd(q):
+    """World +Z basis rotated by quat q=(x,y,z,w) → world forward vector."""
+    x, y, z, w = q
+    return (2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y))
+
+
+def _mean_hip_yaw_deg(quats):
+    """Mean PER-FRAME absolute yaw deviation (deg) of the hip's world forward
+    from +Z. ~0 = every frame faces straight ahead; large = the stride is
+    baked sideways (the stylized/quadruped-rig locomotion failure).
+
+    We take |yaw| PER FRAME and then average — NOT |average of signed yaw|.
+    Aggregating first hides opposing bad frames: a clip jittering +90°/−90°
+    (or the ±180° wrap +179°/−179°) has a zero mean/resultant yet faces
+    sideways every single frame. Per-frame-abs-then-mean flags both."""
+    if not quats:
+        return 0.0
+    tot = 0.0
+    for f in quats:
+        fx, fy, fz = _quat_fwd(f[HIP])
+        tot += abs(math.degrees(math.atan2(fx, fz)))
+    return tot / len(quats)
+
+
+def _inverted_frame_fraction(quats):
+    """Fraction of frames where the hip's world UP-vector Y drops below +0.3
+    (tilted past ~70° toward horizontal/upside-down). A clean upright clip
+    holds ~+1 every frame (fraction ~0); a systematically mis-oriented rig
+    (persistent axis offset — GIGI Fox, some dance rigs) reads 1.0. A rare
+    transient loop-seam spike reads a few percent. Mirror-invariant."""
+    if not quats:
+        return 0.0
+    bad = 0
+    for f in quats:
+        x, y, z, w = f[HIP]
+        if 1.0 - 2.0 * (x * x + z * z) < 0.3:   # Y of R·(0,1,0)
+            bad += 1
+    return bad / len(quats)
+
+
+def _mean_hip_pitch_deg(quats):
+    """Mean PER-FRAME absolute pitch deviation (deg) of the hip's world forward
+    from level. Clean upright walk/run stays within ~17°; a diving/lunging clip
+    reads 70–80°. As with yaw, take |pitch| PER FRAME then average — averaging
+    signed pitch first lets +70°/−70° frames cancel to 0° (and slip under the
+    inversion cutoff too), so an off-axis clip would wrongly pass."""
+    if not quats:
+        return 0.0
+    tot = 0.0
+    for f in quats:
+        _, fy, _ = _quat_fwd(f[HIP])
+        tot += abs(math.degrees(math.asin(max(-1.0, min(1.0, fy)))))
+    return tot / len(quats)
 
 
 def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
@@ -223,12 +351,10 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         thigh_axes = [(r, axis(r)) for r in (RHIP, LHIP)]
         thigh_axes = [(r, a) for r, a in thigh_axes if a is not None]
         spine_up, thigh_down, ns, nt = 0.0, 0.0, 0, 0
-        spine_up_min = 1.0                       # worst (lowest) frame
         for f in range(0, len(quats), 3):
             if a_spine is not None:
                 su = qrot(quats[f][spine_role], a_spine)[1]
                 spine_up += su; ns += 1
-                spine_up_min = min(spine_up_min, su)
             if thigh_axes:
                 thigh_down += sum(-qrot(quats[f][r], a)[1]
                                   for r, a in thigh_axes) / len(thigh_axes)
@@ -238,29 +364,27 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
         if action in HORIZONTAL_OK:
             upness = 0.7  # horizontal by design: neutral, no gate
         else:
-            # Bind-frame gate: the torso's REST direction must already be
-            # roughly vertical, else the rig is non-biped (horizontal torso)
-            # regardless of the animation.
+            # Bind-frame gate (KEPT): the torso's REST direction must already
+            # be roughly vertical, else the rig is non-biped (horizontal torso:
+            # quadruped / dino / spider) and CANNOT retarget onto the humanoid
+            # canonical skeleton — it would render as horizontal garbage. This
+            # is a BODY-PLAN check on the rest skeleton, independent of what the
+            # animation does. (Multi-body-plan support is future work — task
+            # #24.)
             if spine_bind is not None and spine_bind[1] < 0.4:
                 return 0.0, (f"non-biped torso (bind spine-up "
                              f"{spine_bind[1]:.2f})")
+            # ANIMATED uprightness HARD GATES removed (#838): a humanoid rig
+            # may LEAN, crouch, recline, throw its head back, or go to the
+            # ground as legitimate motion — the old spine-up / mid-clip-topple /
+            # thigh-down gates wrongly REJECTED those clips. Any clip on a
+            # biped rest skeleton is kept regardless of animated torso pitch;
+            # the measured up-terms survive only as the soft `upness` score
+            # term below (weighted into q, never a drop by itself).
             if ns or nt:
-                # Animated gate: torso must stay up, thighs hang down.
-                if spine_up is not None and spine_up < 0.5:
-                    return 0.0, f"not upright (spine-up {spine_up:.2f})"
-                # Topple gate: even if the MEAN stays up, reject clips whose
-                # torso pitches head-below-horizontal in any frame — a
-                # ground/fall kick or a mid-clip topple that averages out but
-                # renders as the character lying down on a biped rig.
-                if spine_up is not None and spine_up_min < -0.25:
-                    return 0.0, (f"topples mid-clip (spine-up min "
-                                 f"{spine_up_min:.2f})")
-                if spine_up is None and thigh_down is not None \
-                        and thigh_down < 0.3:
-                    return 0.0, f"not upright (thigh-down {thigh_down:.2f})"
                 up_terms = [max(0.0, v) for v in (spine_up, thigh_down)
                             if v is not None]
-                upness = sum(up_terms) / len(up_terms) if up_terms else 0.35
+                upness = sum(up_terms) / len(up_terms) if up_terms else 0.5
     elif action in HORIZONTAL_OK:
         upness = 0.7
 
@@ -291,24 +415,13 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             return 0.0, (f"static placeholder arms (rel arm energy "
                          f"{arms_e:.4f} vs legs {legs_e:.4f})")
 
-    # Neck-up gate: some rigs export the neck/head bone with an INVERTED
-    # axis — the extracted direction points down for the whole clip and the
-    # retargeted head renders thrown back / buried in the torso. For any
-    # upright action, the neck chain's animated direction must stay roughly
-    # up.
-    if action not in HORIZONTAL_OK and rest_world and rest_dir:
-        for r in (3, 4, 5):                       # neck, neck1, head
-            d = vnorm(rest_dir[r])
-            if d is None:
-                continue
-            q = rest_world[r]
-            a_s = qrot([-q[0], -q[1], -q[2], q[3]], d)
-            tot = sum(qrot(quats[f][r], a_s)[1] for f in range(len(quats)))
-            if tot / max(1, len(quats)) < 0.3:
-                return 0.0, (f"neck/head direction not upright (role {r} "
-                             f"mean up-dot {tot / max(1, len(quats)):.2f}) — "
-                             "inverted neck axis, head renders thrown back")
-            break                                  # first resolvable is enough
+    # Neck/head ANIMATED uprightness gate REMOVED (#838): a leaning/reclining/
+    # head-thrown-back motion is legitimate on a humanoid and this gate wrongly
+    # rejected it (and was implicated in the retarget tilt reported on the
+    # Gregorio give-item clips). A genuinely INVERTED neck AXIS (rig export bug)
+    # is a rig-level problem better handled in the retarget's spine-chain sanity
+    # pass (AnimationMerger zeroes an inverted spine restDir), not by dropping
+    # the whole clip here.
 
     # Horizontal-arm gate for plain locomotion: zombie-shamble / T-pose-armed
     # walk cycles hold the upper arms near-horizontal for the whole clip
@@ -342,6 +455,50 @@ def clip_quality(action, quats, rest_world, rest_dir, resolved_roles,
             return 0.0, (f"arm(s) not hanging (upper-arm signed up-dots "
                          f"{[round(u, 2) for u in downdots]}) — zombie/"
                          f"T-pose/raised style, not a generic {action}")
+
+    # Directionality gate (#838 follow-up): a forward-locomotion clip whose hip
+    # faces sideways renders as "walking sideways" once the root is locked at
+    # retarget. Measured across the corpus, clean human walks/runs sit at
+    # |mean hip yaw| < 10°, while stylized/quadruped rigs (Fox Warriors, Gynoid,
+    # SpongeBob) land 38–153°. Cull at 25° — a wide, safe margin in the gap.
+    # Locomotion facing/orientation gates. Scoped to FORWARD_FACING (walk/run/
+    # march) — a locomotion clip must travel upright and forward, so an off-axis
+    # or inverted hip is unambiguously broken there. Gestures / dance / crouch
+    # legitimately lean or bend, so these gates would false-positive on them
+    # (the spine-based topple gate above already protects non-locomotion
+    # actions from genuine head-below-hips). All three reads are on the hip's
+    # world-forward/up vectors: mirror-invariant and rig-agnostic.
+    if action in FORWARD_FACING and len(quats) > 1:
+        # Sideways: hip faces off +Z. Clean human walks/runs < 10°; stylized/
+        # quadruped rigs (Fox, Gynoid, SpongeBob) land 38–153°. Cull at 25°.
+        yaw = _mean_hip_yaw_deg(quats)
+        if yaw > 25.0:
+            return 0.0, (f"faces sideways (mean hip yaw {yaw:.0f}° off "
+                         f"forward) — off-axis {action}, renders sideways")
+        # Diving/lunging: clip runs face-down. Clean ≤17°; superhero dive
+        # runs read 68–79°. Cull at 30°.
+        pitch = _mean_hip_pitch_deg(quats)
+        if pitch > 30.0:
+            return 0.0, (f"pitches over (mean hip pitch {pitch:.0f}° off "
+                         f"level) — diving/lunging, not an upright {action}")
+        # Inverted: the hip tilts past horizontal for a sustained fraction of
+        # the clip (a systematically mis-oriented rig renders head-down while
+        # "walking"). Clean clips ~0%; mis-oriented rigs read ~100%.
+        inv = _inverted_frame_fraction(quats)
+        if inv > 0.15:
+            return 0.0, (f"hip tilted/inverted for {inv:.0%} of the clip — "
+                         f"mis-oriented rig, renders wrong for {action}")
+
+    # NOTE: a knee-hyperextension gate was prototyped here (user-reported
+    # backward-bending knees on the Fox/stylized rigs) but REMOVED. The signed
+    # knee-flex read from quaternions is not mirror-invariant — the left leg's
+    # local axis is mirrored on many rigs, so a straight-standing knee reads
+    # +170° on the right but −30° on the left, producing FALSE positives that
+    # culled clean Quaternius idle/jump clips. Crucially, every knee-broken
+    # LOCOMOTION clip (the Fox rigs) is ALREADY caught by the yaw gate above —
+    # the knee gate added zero unique locomotion coverage. A reliable knee
+    # check needs joint POSITIONS (bind-relative hinge sign), not bare quats;
+    # that belongs in the retargeting-math pass (foot-lock / IK), not here.
 
     # Energy band: below = a pose, way above = spasm/mis-mapped.
     lo, hi, cap = min_energy * 2.0, 0.10, 0.20
@@ -461,10 +618,19 @@ def main():
                     for c in dump.get("clips", []):
                         if c.get("resolvedRoles", 0) < args.min_roles:
                             continue
+                        anim = c.get("animation", "")
+                        excl = _excluded(title, anim)
+                        if excl:
+                            print(f"  - {'':<10} {title[:38]:<40} {anim} "
+                                  f"EXCLUDED: {excl}")
+                            continue
                         q = c.get("quats", [])
                         if len(q) < args.min_frames:
                             continue
-                        action = action_for(c.get("animation", ""), tags)
+                        # Repair a rotated/flipped first frame (Mini Chibi etc.)
+                        # before windowing, so a window opening at frame 0 is clean.
+                        q = fix_first_frame_flip(q)
+                        action = action_for(anim, tags)
                         if not action:
                             continue
                         s, epos = select_window(q, args.max_frames)
@@ -515,6 +681,28 @@ def main():
                             clip["restWorld"] = rest_world
                         if rest_dir:
                             clip["restDir"] = rest_dir
+                        # #838 vertical descent: carry the per-frame hip Y
+                        # offset, sliced to the SAME active window as the
+                        # quats (NOT re-based — see below).
+                        ry = c.get("rootY")
+                        if ry and len(ry) == len(q):
+                            # rootY is a crouch DEPTH vs the rig's BIND-pose
+                            # standing height (absolute, ≤ 0 leg-lengths), so an
+                            # always-low crawl/sit keeps its real depth — do NOT
+                            # re-anchor to the window (that would zero a clip
+                            # that opens already crouched). Just window-slice and
+                            # apply the 0.6 display gain (full-kneel hip-to-foot
+                            # compression is nearly a whole leg; 0.6 lands a
+                            # believable depth).
+                            wry = ry[s:epos]
+                            if wry:
+                                clip["rootY"] = [
+                                    round(0.6 * min(0.0, v), 5) for v in wry]
+                        # #838 finger animation: window it to the same frames as
+                        # the quats. Per-frame × kFingerSlots × [x,y,z,w].
+                        fingers = c.get("fingers")
+                        if fingers and len(fingers) == len(q):
+                            clip["fingers"] = fingers[s:epos]
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")

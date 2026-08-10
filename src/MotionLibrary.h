@@ -1,6 +1,7 @@
 #ifndef MOTION_LIBRARY_H
 #define MOTION_LIBRARY_H
 
+#include <QSet>
 #include <QString>
 #include <array>
 #include <vector>
@@ -32,7 +33,8 @@ public:
         int frames = 0;
         int fps = 30;
         // quats[frame][joint] = (x,y,z,w) unit quaternion, joint in canonical
-        // order (size frames × 22). Rotation only; translation/scale are the
+        // order (size frames × jointCount(): 22 for schema v1..v3, 52 for v4
+        // with fingers folded in). Rotation only; translation/scale are the
         // caller's (the retarget writes rotation keyframes).
         std::vector<std::vector<std::array<float, 4>>> quats;
         // Optional (schema v3 clips extracted by --dump-canonical): the
@@ -44,6 +46,27 @@ public:
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
+        // Optional (#838 vertical descent): per-frame crouch DEPTH in
+        // LEG-LENGTHS (≤ 0), preserving BIND-POSE-relative hip height — a clip
+        // that opens already crouched keeps its lowered value (NOT re-based to
+        // the window's first frame), so always-low actions like crawl stay
+        // down. Measured as the hip's height above the foot minus the rig's
+        // bind-pose standing height, normalized by the source hip→foot
+        // distance; size == frames. The retarget scales it by the TARGET rig's
+        // leg length and lowers the root bone's Y (descent-only) so crouch/
+        // pickup/working actually sink. Empty → flat root (locomotion clips).
+        std::vector<float> rootY;
+        /// Optional (#838 finger animation): per-frame LOCAL finger curl,
+        /// size frames × 30 (2 sides × 5 fingers × 3 segments, see
+        /// AnimationMerger::fingerSlot). Empty when the source rig has no
+        /// fingers. The retarget maps these onto the target rig's fingers.
+        std::vector<std::vector<std::array<float, 4>>> fingers;
+        /// Optional (#838): SOURCE finger REST pointing directions, size 30
+        /// (kFingerSlots × [x,y,z], canonical frame). Present → the retarget
+        /// transports RELATIVE finger bend (rest→frame) so a rig's finger rest
+        /// convention doesn't over-bend the target; absent → legacy absolute
+        /// aim (older libraries).
+        std::vector<std::array<float, 3>> fingerRestDir;
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;
@@ -74,6 +97,10 @@ public:
     // World-space is basis-independent so the retarget delta carries the true
     // per-bone roll (no arm-twist); the adapter branches on this.
     bool isWorldFrame() const { return m_worldFrame; }
+    // Joints per pose in this library: 22 (schema v1..v3, body only) or 52
+    // (schema v4, fingers folded in as joints 22..51). The retarget uses this to
+    // decide whether fingers ride the joint path (v4) or the side-channel (≤v3).
+    int jointCount() const { return m_jointCount; }
     // The actions this library can produce (for help text / GUI listing).
     std::vector<QString> actions() const;
 
@@ -95,6 +122,16 @@ public:
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
 
+    // ---- Curation (user-approved "good" clips) ------------------------------
+    // The user reviews retargeted clips in the Animation Library picker and
+    // marks the good ones; approvals persist as a set of clip `source` strings
+    // (stable across library rebuilds) in curation.json next to the library.
+    // The library builder consumes the same file (--curation/--approved-only)
+    // to SHIP only the approved set while the rest is iterated on.
+    static QString curationPath();                    // .../motion/curation.json
+    static QSet<QString> loadCuration();              // approved clip sources
+    static bool saveCuration(const QSet<QString>& approved);
+
     // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
     // model output carries no reference triple, so its base pose is
     // synthesized from a TEMPLATE clip's restDir instead of harvesting the
@@ -105,11 +142,18 @@ public:
     static std::vector<std::array<float, 3>> referenceDirsForPrompt(
         const QString& prompt);
 
+    // #838 vertical descent: true for NON-LOCOMOTION actions whose motion
+    // lowers the body (pickup / working / sit / crawl / death / pray). For
+    // these the retarget applies the clip's `rootY` so the body actually
+    // crouches; locomotion (walk/run/jump/…) keeps a flat root (returns false).
+    static bool isVerticalDescentAction(const QString& action);
+
 private:
     bool parse(const QByteArray& json);
     std::vector<Clip> m_clips;
     std::vector<std::array<float, 4>> m_cmuRestWorld;  // 22 quats, or empty (v1)
-    bool m_worldFrame = false;                         // true for schema v3
+    bool m_worldFrame = false;                         // true for schema v3/v4
+    int m_jointCount = 22;                              // 22 (v1..v3) or 52 (v4)
     QString m_error;
 };
 

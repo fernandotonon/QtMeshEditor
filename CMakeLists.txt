@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 3.23.1 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 3.27.1 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -303,6 +303,10 @@ option(ENABLE_ONNX "Enable AI PBR map synthesis via ONNX Runtime" OFF)
 if(ENABLE_ONNX)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OnnxRuntime.cmake)
     add_definitions(-DENABLE_ONNX)
+    if(QTMESH_ONNX_GPU)
+        add_definitions(-DQTMESH_ONNX_GPU_BUILD)
+        message(STATUS "ONNX Runtime GPU package enabled (CUDA EP on Linux x64 when cuDNN 9 is installed)")
+    endif()
     message(STATUS "AI PBR map synthesis enabled with ONNX Runtime")
 endif()
 ##############################################################
@@ -431,8 +435,13 @@ message(STATUS "xatlas enabled (auto UV unwrap)")
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
-    GIT_SHALLOW TRUE
+    # Re-pinned 2026-08: the previous pin 31c1ad3745… stopped fetching in CI
+    # ("fatal: unable to read tree" on every platform). NB stb has no upstream
+    # tags/releases, so we must pin a commit SHA — and GIT_SHALLOW does NOT
+    # support fetching an arbitrary SHA (only branches/tags), so it's OFF here: a
+    # full clone can always resolve the pinned commit even after master advances.
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
+    GIT_SHALLOW FALSE
 )
 FetchContent_MakeAvailable(stb)
 

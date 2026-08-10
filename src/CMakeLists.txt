@@ -57,6 +57,7 @@ MaterialHighlighter.cpp
 QMLMaterialHighlighter.cpp
 LLMWorker.cpp
 LLMManager.cpp
+OnnxRuntimeSettings.cpp
 ModelDownloader.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
@@ -94,6 +95,9 @@ commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
+commands/SplitMeshCommand.cpp
+commands/ExplodePartsCommand.cpp
+commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
@@ -145,7 +149,13 @@ MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
+PaintLayerBlend.cpp
+PaintLayerStack.cpp
 PaintSelectionMask.cpp
+GradientRamp.cpp
+BrushEngine.cpp
+BrushFootprint.cpp
+BrushAssetLibrary.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
@@ -182,6 +192,9 @@ Mocap/PoseCapPredictor.cpp
 Mocap/PoseIKSolver.cpp
 Mocap/MocapCLI.cpp
 Mocap/MocapController.cpp
+Mocap/MocapCameraHints.cpp
+Mocap/MocapPoseDebugOverlay.cpp
+Mocap/MocapBodyDriveDebug.cpp
 commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
@@ -239,6 +252,10 @@ EditableMesh.cpp
 EditModeController.cpp
 EditorModeController.cpp
 HalfEdgeMesh.cpp
+SubMeshOps.cpp
+PartOpsMesh.cpp
+PartOpsScene.cpp
+PartOpsController.cpp
 )
 
 set(HEADER_FILES
@@ -295,6 +312,7 @@ MaterialHighlighter.h
 QMLMaterialHighlighter.h
 LLMWorker.h
 LLMManager.h
+OnnxRuntimeSettings.h
 ModelDownloader.h
 LLMSettingsWidget.h
 MCPServer.h
@@ -355,7 +373,11 @@ MultiViewTextureBaker.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
+PaintLayerBlend.h
+PaintLayerStack.h
 PaintSelectionMask.h
+GradientRamp.h
+BrushEngine.h
 TexturePaintBuffer.h
 UpdateVersion.h
 TexturePaintController.h
@@ -368,6 +390,7 @@ DrawCallAnalyzer.h
 VertexCacheOptimizer.h
 MeshDecimator.h
 MeshDecimatorController.h
+PartOpsController.h
 MeshValidator.h
 AIChatManager.h
 AIModelCatalog.h
@@ -759,7 +782,9 @@ if(ENABLE_ONNX)
         file(GLOB _ort_runtime_libs
             "${QTMESH_ONNX_LIB_DIR}/libonnxruntime.so*"
             "${QTMESH_ONNX_LIB_DIR}/libonnxruntime*.dylib"
-            "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll")
+            "${QTMESH_ONNX_LIB_DIR}/libonnxruntime_providers*.so"
+            "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll"
+            "${QTMESH_ONNX_LIB_DIR}/onnxruntime_providers_*.dll")
         foreach(_ortlib ${_ort_runtime_libs})
             add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -924,7 +949,9 @@ if(BUILD_TESTS)
             file(GLOB _ort_test_libs
                 "${QTMESH_ONNX_LIB_DIR}/libonnxruntime.so*"
                 "${QTMESH_ONNX_LIB_DIR}/libonnxruntime*.dylib"
-                "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll")
+                "${QTMESH_ONNX_LIB_DIR}/libonnxruntime_providers*.so"
+                "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll"
+                "${QTMESH_ONNX_LIB_DIR}/onnxruntime_providers_*.dll")
             foreach(_ortlib ${_ort_test_libs})
                 add_custom_command(TARGET UnitTests POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -994,6 +1021,9 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/media/Main
             $<TARGET_FILE_DIR:UnitTests>/media/Main
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/media/paint
+            $<TARGET_FILE_DIR:UnitTests>/media/paint
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/profiles
             $<TARGET_FILE_DIR:UnitTests>/profiles

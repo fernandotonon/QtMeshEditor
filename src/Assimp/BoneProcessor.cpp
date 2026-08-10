@@ -13,14 +13,30 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
         }
     }
 
-    // Create the root bones
+    // Create the root bones.
+    // The root bind must be the armature node's transform RELATIVE TO THE
+    // MESH NODE (meshNodeWorld⁻¹ · armatureNodeWorld), not its raw local
+    // mTransformation: children's binds are derived from the offset matrices
+    // (offset⁻¹ = meshNodeWorld⁻¹ · boneBindWorld), so the whole chain lives
+    // in mesh-node space. With a raw local root the two spaces disagree by
+    // every ancestor transform above the armature — for Blender FBX rigs
+    // (scene-root unit conversion + armature ×100) that skewed every bone's
+    // bind local ×100 vs the node-local ANIMATION keys, exploding animated
+    // poses out of frame (#936). For Mixamo-style rigs (mesh node local ==
+    // identity, armature directly under the root) this reduces to the old
+    // value, so typical assets are bit-identical.
     for(auto i = 0u; i < scene->mNumMeshes; i++) {
         aiMesh* mesh = scene->mMeshes[i];
+        if (mesh->mNumBones == 0) continue;
+        const aiNode* meshNode = findMeshNode(scene->mRootNode, i);
+        const Ogre::Matrix4 meshWorldInv = meshNode
+            ? nodeWorldTransform(meshNode).inverse() : Ogre::Matrix4::IDENTITY;
         for(auto j = 0u; j < mesh->mNumBones; j++) {
             aiBone* bone = mesh->mBones[j];
             if(bone->mNode && bone->mNode->mParent && !skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
                 createBone(bone->mNode->mParent->mName.C_Str());
-                Ogre::Matrix4 rootBoneGlobalTransformation = convertToOgreMatrix4(bone->mNode->mParent->mTransformation);
+                const Ogre::Matrix4 rootBoneGlobalTransformation =
+                    meshWorldInv * nodeWorldTransform(bone->mNode->mParent);
                 applyTransformation(bone->mNode->mParent->mName.C_Str(), rootBoneGlobalTransformation);
             }
         }
@@ -95,6 +111,28 @@ void BoneProcessor::createBone(const std::string& boneName) {
         // If the bone does not exist, create it
         skeleton->createBone(boneName);
     }
+}
+
+Ogre::Matrix4 BoneProcessor::nodeWorldTransform(const aiNode* node) const {
+    Ogre::Matrix4 world = Ogre::Matrix4::IDENTITY;
+    for (const aiNode* n = node; n; n = n->mParent)
+        world = Ogre::Matrix4(
+                    n->mTransformation.a1, n->mTransformation.a2, n->mTransformation.a3, n->mTransformation.a4,
+                    n->mTransformation.b1, n->mTransformation.b2, n->mTransformation.b3, n->mTransformation.b4,
+                    n->mTransformation.c1, n->mTransformation.c2, n->mTransformation.c3, n->mTransformation.c4,
+                    n->mTransformation.d1, n->mTransformation.d2, n->mTransformation.d3, n->mTransformation.d4)
+                * world;
+    return world;
+}
+
+const aiNode* BoneProcessor::findMeshNode(const aiNode* node, unsigned meshIndex) {
+    if (!node) return nullptr;
+    for (unsigned i = 0; i < node->mNumMeshes; ++i)
+        if (node->mMeshes[i] == meshIndex) return node;
+    for (unsigned i = 0; i < node->mNumChildren; ++i)
+        if (const aiNode* hit = findMeshNode(node->mChildren[i], meshIndex))
+            return hit;
+    return nullptr;
 }
 
 Ogre::Matrix4 BoneProcessor::convertToOgreMatrix4(const aiMatrix4x4& aiMat) {

@@ -6,8 +6,9 @@
 //
 // Input: MediaPipe pose WORLD landmarks per frame (33 x xyz, metres,
 // hip-centred, MediaPipe's frame: +x subject's-left, +y DOWN, +z toward the
-// camera). Output: WORLD orientation quaternions (x,y,z,w) for the 22
-// canonical CMU roles MotionInbetween/AnimationMerger retarget with
+// camera). Canonicalized to CMU (+Y up, +Z forward, LEFT at +X) via (x,-y,+z).
+// Output: WORLD orientation quaternions (x,y,z,w) for the 22 canonical CMU
+// roles MotionInbetween/AnimationMerger retarget with
 // (`applyMotionClip(..., worldFrame=true)` takes the delta vs frame 0 and
 // transports it onto the rig, so only CONSISTENCY over time matters, not the
 // absolute basis).
@@ -65,6 +66,27 @@ public:
                            float minVisibility = 0.3f);
 
     void reset();
+
+    // Canonicalize MediaPipe world landmarks (+x subject-left, +y down, +z
+    // toward camera) into the CMU frame (+Y up, +Z forward, LEFT at +X).
+    static void canonicalizeMediaPipeWorld(
+        const float* world33x3,
+        std::array<std::array<float, 3>, kLandmarkCount>& out);
+
+    // Unit segment direction for a limb role (shoulder→elbow, etc.), or false
+    // when landmarks are missing / below minVisibility.
+    static bool limbSegmentDirection(
+        int role, const std::array<std::array<float, 3>, kLandmarkCount>& p,
+        const float* visibility, float minVisibility,
+        std::array<float, 3>& outDir);
+
+    // Live canonical bone-axis direction for any role (limbs + torso/head).
+    // Used by BodyRetargeter live drive to aim bind bones at landmark geometry
+    // — the same directions PoseIK derives internally, without the quat/Mc path.
+    static bool canonicalLiveDirection(
+        int role, const std::array<std::array<float, 3>, kLandmarkCount>& p,
+        const float* visibility, float minVisibility,
+        std::array<float, 3>& outDir);
 
 private:
     bool m_hasPrev = false;

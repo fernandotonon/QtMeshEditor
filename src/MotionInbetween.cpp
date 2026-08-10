@@ -1,13 +1,16 @@
 #include "MotionInbetween.h"
 
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTimer>
 
 #include <algorithm>
@@ -46,14 +49,38 @@ const char* const kCanonJoints[] = {
 };
 constexpr int kCanonCount = 22;
 
-// normalise: lowercase, strip a leading "mixamorig[N]:" / "bip01 " style prefix,
+// 3ds Max Biped side token: names are space-delimited like "Bip001 L UpperArm"
+// / "Bip001 R Thigh", so the side is a standalone single-letter TOKEN ('l'/'r')
+// that vanishes once spaces are stripped (leaving e.g. "bip001lupperarm", whose
+// sideOf() can't tell 'l' apart from the "bip001" prefix). Detect it from the
+// raw space-split tokens BEFORE normalisation and fold it into a "left"/"right"
+// word so the rest of the matcher works unchanged.
+char bipedSideToken(const QString& raw)
+{
+    const QStringList toks = raw.split(QRegularExpression("[ _\\-.:]"),
+                                       Qt::SkipEmptyParts);
+    for (const QString& t : toks) {
+        const QString tl = t.toLower();
+        if (tl == "l") return 'l';
+        if (tl == "r") return 'r';
+    }
+    return 0;
+}
+
+// normalise: lowercase, strip a leading "mixamorig[N]:" / "bip001 " style prefix,
 // drop separators, fold side tokens so "LeftArm"/"L_Arm"/"arm.l" all compare.
 QString normaliseBoneName(const QString& raw)
 {
     QString s = raw.toLower();
     int colon = s.lastIndexOf(':');           // mixamorig:LeftArm → LeftArm
     if (colon >= 0) s = s.mid(colon + 1);
+    // Fold a 3ds Max Biped standalone side token into a "left"/"right" word so
+    // it survives separator stripping (and drop the "bipNNN" armature prefix).
+    const char bipedSide = bipedSideToken(raw);
     s.remove(' ').remove('_').remove('-').remove('.');
+    s.remove(QRegularExpression("^bip\\d+"));      // "bip001pelvis" → "pelvis"
+    if (bipedSide == 'l') s.prepend("left");
+    else if (bipedSide == 'r') s.prepend("right");
     return s;
 }
 
@@ -168,6 +195,183 @@ int MotionInbetween::canonicalIndexForBone(const QString& boneName)
         if (has({"foot", "ankle"}))                      return 21;  // lfoot
     }
     return -1;
+}
+
+// ---- Canonical skeleton V2 (52 = 22 body + 30 finger) ----------------------
+namespace {
+constexpr int kFingerSegV2 = 3;                 // segments kept per finger
+constexpr int kFingerCountV2 = 5;               // thumb..pinky
+constexpr int kFingerJointsV2 = 2 * kFingerCountV2 * kFingerSegV2;   // 30
+constexpr int kCanonCountV2 = kCanonCount + kFingerJointsV2;         // 52
+
+// V2 finger joint index (22 + fingerSlot). side 0=right/1=left.
+inline int fingerSlotV2(int side, int finger, int segment)
+{
+    if (side < 0 || side > 1 || finger < 0 || finger >= kFingerCountV2
+        || segment < 0 || segment >= kFingerSegV2)
+        return -1;
+    return kCanonCount + (side * kFingerCountV2 + finger) * kFingerSegV2
+           + segment;
+}
+// Human-readable V2 finger joint name, e.g. "rthumb0", "lindex2".
+QString fingerJointNameV2(int idx)
+{
+    const int f = idx - kCanonCount;
+    const int side = f / (kFingerCountV2 * kFingerSegV2);
+    const int rem = f - side * kFingerCountV2 * kFingerSegV2;
+    const int finger = rem / kFingerSegV2, seg = rem % kFingerSegV2;
+    static const char* kF[5] = {"thumb", "index", "middle", "ring", "pinky"};
+    return QString::fromLatin1(side == 0 ? "r" : "l")
+           + QLatin1String(kF[finger]) + QString::number(seg);
+}
+} // namespace
+
+int MotionInbetween::canonicalJointCountV2() { return kCanonCountV2; }
+
+int MotionInbetween::fingerJointIndexV2(int side, int finger, int segment)
+{
+    return fingerSlotV2(side, finger, segment);
+}
+
+QString MotionInbetween::canonicalJointNameV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return {};
+    if (i < kCanonCount) return QString::fromLatin1(kCanonJoints[i]);
+    return fingerJointNameV2(i);
+}
+
+int MotionInbetween::canonicalParentOfV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return -1;
+    if (i < kCanonCount) return kCanonParent[i];   // body: same as V1
+    // finger joint: seg0 → hand (rhand=9 / lhand=13); deeper → previous segment
+    const int f = i - kCanonCount;
+    const int side = f / (kFingerCountV2 * kFingerSegV2);
+    const int rem = f - side * kFingerCountV2 * kFingerSegV2;
+    const int seg = rem % kFingerSegV2;
+    if (seg == 0) return (side == 0) ? 9 : 13;     // rhand / lhand
+    return i - 1;                                   // previous finger segment
+}
+
+int MotionInbetween::canonicalChildOfV2(int i)
+{
+    if (i < 0 || i >= kCanonCountV2) return -1;
+    // Body hands now HAVE finger children, but the child used for bone-direction
+    // is unchanged for the body (leave hands as leaves for the direction calc —
+    // fingers carry their own directions). Return V1 body child for 0..21.
+    if (i < kCanonCount) return kCanonChild[i];
+    const int f = i - kCanonCount;
+    const int seg = (f % (kFingerCountV2 * kFingerSegV2)) % kFingerSegV2;
+    if (seg + 1 < kFingerSegV2) return i + 1;       // next segment
+    return -1;                                       // fingertip: leaf
+}
+
+int MotionInbetween::canonicalIndexForBoneV2(const QString& boneName)
+{
+    // Body bones resolve exactly as V1 (0..21).
+    const int body = canonicalIndexForBone(boneName);
+    if (body >= 0) return body;
+    // Finger bones → 22..51 via the finger role (drop segments beyond V2's 3).
+    const FingerRole fr = fingerRoleForBone(boneName);
+    if (fr.valid() && fr.segment < kFingerSegV2)
+        return fingerSlotV2(fr.side, fr.finger, fr.segment);
+    return -1;
+}
+
+MotionInbetween::FingerRole MotionInbetween::fingerRoleForBone(
+    const QString& boneName)
+{
+    FingerRole r;
+    const char side = bipedSideToken(boneName);   // Biped "L"/"R" token
+    QString n = boneName.toLower();
+    const int colon = n.lastIndexOf(':');
+    if (colon >= 0) n = n.mid(colon + 1);
+    n.remove(' ').remove('_').remove('-').remove('.');
+    // Side: word or single-letter affix, falling back to the Biped token.
+    if (n.contains("left")) r.side = 1;
+    else if (n.contains("right")) r.side = 0;
+    else if (side == 'l') r.side = 1;
+    else if (side == 'r') r.side = 0;
+    else if (n.startsWith('l')) r.side = 1;
+    else if (n.startsWith('r')) r.side = 0;
+
+    // Separator-PRESERVING variant for boundary checks: `n` strips '_'/' '/…,
+    // so in `n` a finger word is always letter-preceded ("lefthandring1") and
+    // a plain substring test can't tell "L_Ring2" from "SpringBone_L_01".
+    QString nsep = boneName.toLower();
+    {
+        const int c2 = nsep.lastIndexOf(':');
+        if (c2 >= 0) nsep = nsep.mid(c2 + 1);
+    }
+
+    // Named (Mixamo) convention: Thumb/Index/Middle/Ring/Pinky + trailing seg.
+    // Guard against substring hits on NON-finger bones ("ring" in
+    // "SpringBone_L_01"/"EarRing", "index" in "IndexHelper"): accept only when
+    // the word starts at a boundary in the separator-preserving name (start or
+    // non-letter before it), or when the name carries hand context (Mixamo
+    // "LeftHandRing1" fuses the words with no separator).
+    static const char* kNamed[5] =
+        {"thumb", "index", "middle", "ring", "pinky"};
+    const bool handContext = n.contains("hand");
+    for (int fi = 0; fi < 5; ++fi) {
+        const QString key = QLatin1String(kNamed[fi]);
+        const int at = n.indexOf(key);
+        if (at < 0) continue;
+        if (!handContext) {
+            // A fused side word directly before it is also fine ("LeftRing1").
+            const bool sideFused =
+                (at >= 4 && n.mid(at - 4, 4) == QLatin1String("left")) ||
+                (at >= 5 && n.mid(at - 5, 5) == QLatin1String("right"));
+            const int atSep = nsep.indexOf(key);
+            if (!sideFused &&
+                (atSep < 0 || (atSep > 0 && nsep.at(atSep - 1).isLetter())))
+                continue;   // mid-word hit (spring/string/earring) — not a finger
+        }
+        r.finger = fi;
+        // segment = trailing number after the finger word (1-based → 0-based).
+        const QString tail = n.mid(at + key.size());
+        int seg = 0; bool got = false;
+        for (const QChar& ch : tail)
+            if (ch.isDigit()) { seg = ch.digitValue(); got = true; break; }
+        r.segment = got ? std::max(0, seg - 1) : 0;
+        return r;
+    }
+    // "pinkie" spelling.
+    if (n.contains("pinkie")) {
+        r.finger = 4;
+        const int at = n.indexOf("pinkie");
+        const QString tail = n.mid(at + 6);
+        int seg = 0; bool got = false;
+        for (const QChar& ch : tail)
+            if (ch.isDigit()) { seg = ch.digitValue(); got = true; break; }
+        r.segment = got ? std::max(0, seg - 1) : 0;
+        return r;
+    }
+
+    // Numeric (3ds Max Biped) convention: "finger<F>[<S>]" where F=0..4 is the
+    // finger (0=thumb … 4=pinky) and an OPTIONAL trailing digit is the segment
+    // (Finger0 = seg0, Finger01 = seg1, Finger02 = seg2). "fingerNub" ignored.
+    const int fpos = n.indexOf("finger");
+    if (fpos >= 0) {
+        const QString tail = n.mid(fpos + 6);      // after "finger"
+        if (tail.contains("nub")) return {};       // helper tip, skip
+        // digits after "finger": first = finger id, rest = segment.
+        QString digits;
+        for (const QChar& ch : tail) {
+            if (ch.isDigit()) digits += ch;
+            else break;
+        }
+        if (!digits.isEmpty()) {
+            const int fid = digits.at(0).digitValue();
+            if (fid >= 0 && fid <= 4) {
+                r.finger = fid;
+                r.segment = (digits.size() >= 2)
+                    ? std::max(0, digits.at(1).digitValue()) : 0;
+                return r;
+            }
+        }
+    }
+    return {};   // not a finger
 }
 
 bool MotionInbetween::isModelBackendAvailable()
@@ -428,14 +632,8 @@ MotionInbetween::Result MotionInbetween::predict(
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_inbetween");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) { /* CPU EP fallback */ }
-#endif
 #ifdef _WIN32
         const std::wstring wpath = modelPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);

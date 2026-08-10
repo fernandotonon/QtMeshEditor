@@ -12,6 +12,7 @@
     <file alias="UvUnwrapDialog.qml">../qml/UvUnwrapDialog.qml</file>
     <file alias="QuadRetopoDialog.qml">../qml/QuadRetopoDialog.qml</file>
     <file alias="SkinWeightsDialog.qml">../qml/SkinWeightsDialog.qml</file>
+    <file alias="AnimationPickerDialog.qml">../qml/AnimationPickerDialog.qml</file>
     <file alias="RemoveBoneDialog.qml">../qml/RemoveBoneDialog.qml</file>
     <file alias="RenameBoneDialog.qml">../qml/RenameBoneDialog.qml</file>
     <file alias="ReparentBoneDialog.qml">../qml/ReparentBoneDialog.qml</file>
@@ -38,7 +39,10 @@
     <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
+    <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>
+    <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="TextureEditorWindow.qml">../qml/TextureEditorWindow.qml</file>
+    <file alias="GradientRampEditor.qml">../qml/GradientRampEditor.qml</file>
   </qresource>
   <qresource prefix="/ModeBar">
     <file alias="ModeBar.qml">../qml/ModeBar.qml</file>

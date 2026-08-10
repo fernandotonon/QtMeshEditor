@@ -62,6 +62,8 @@ class MocapController : public QObject
     // body: only offerable when the selection is a humanoid rig
     Q_PROPERTY(bool bodyAvailable READ bodyAvailable NOTIFY mappingChanged)
     Q_PROPERTY(bool bodyDetected READ bodyDetected NOTIFY liveStatsChanged)
+    Q_PROPERTY(QString bodyCalibrationHint READ bodyCalibrationHint
+               NOTIFY liveStatsChanged)
     // channel enables (writable from the QML Face/Head/Body checkboxes)
     Q_PROPERTY(bool faceEnabled READ faceEnabled WRITE setFaceEnabled
                NOTIFY channelsChanged)
@@ -73,6 +75,8 @@ class MocapController : public QObject
                NOTIFY clipNameChanged)
     Q_PROPERTY(double smoothingCutoff READ smoothingCutoff
                WRITE setSmoothingCutoff NOTIFY smoothingChanged)
+    Q_PROPERTY(bool showPoseDebug READ showPoseDebug WRITE setShowPoseDebug
+               NOTIFY previewSettingsChanged)
 
 public:
     enum State { Idle = 0, CameraStarting, Previewing, Recording };
@@ -97,6 +101,7 @@ public:
     bool headAvailable() const;
     bool bodyAvailable() const;
     bool bodyDetected() const;
+    QString bodyCalibrationHint() const;
     bool faceEnabled() const;
     void setFaceEnabled(bool on);
     bool headEnabled() const;
@@ -107,6 +112,8 @@ public:
     void setClipName(const QString& name);
     double smoothingCutoff() const;
     void setSmoothingCutoff(double hz);
+    bool showPoseDebug() const;
+    void setShowPoseDebug(bool on);
 
     Q_INVOKABLE void refreshDevices();
     // Start the camera + live drive of the SELECTED entity. Empty deviceId =
@@ -151,6 +158,7 @@ signals:
     void channelsChanged();
     void clipNameChanged();
     void smoothingChanged();
+    void previewSettingsChanged();
     void errorOccurred(const QString& message);
 
 private:
@@ -167,6 +175,7 @@ private:
     // the source spins up. Returns false (and restores state) on any failure.
     bool beginPreviewWithLiveSource(std::unique_ptr<class VideoFrameSource> source,
                                     const QString& startingMessage);
+    void resetLiveCaptureCalibration();
     // Inspect the currently-selected entity and (re)build the face mapping,
     // head bone, and body-rig role set — so matchedChannelCount / headAvailable
     // / bodyAvailable reflect the selection BEFORE a preview runs (the channel

@@ -7,24 +7,24 @@
 #include <array>
 #include <vector>
 
-// Stateful per-frame body retargeter — the SAME legacy-transport math
-// applyMotionClip bakes into a clip, exposed for LIVE drive (mocap preview)
-// so the live path and the recorded clip can never diverge. Construct once
-// from the target skeleton (captures the bind frame, torso frame Ct, per-role
-// bind directions, and the rig's harvested STANDING pose from the calmest
-// frame of its first authored animation), then call evaluateFrame() per pose.
+// Stateful per-frame body retargeter for live mocap and clip baking. Construct
+// once from the target skeleton (bind frame, torso Ct, per-role bind directions,
+// harvested STANDING pose). evaluateFrame() per pose.
 //
-// Input: 22 canonical-role WORLD quaternions (x,y,z,w) from PoseIK — the same
-// array recordBody feeds applyMotionClip. Each joint's parent-relative LOCAL
-// articulation delta (vs the FIRST frame, cached as the neutral reference on
-// the first call) is composed onto the standing pose, with the Mixamo roll
-// correction Mc: local = standLocal · (Mc⁻¹ · delta · Mc). The root/hip is
-// locked to standing (facing is baked into the hip); unresolved roles hold
-// standing. Output: per-bone ABSOLUTE LOCAL orientation for
-// Bone::setOrientation() (Ogre node keyframes are absolute, not deltas).
+// Live mocap (mediaPipeWorld33 passed): landmark-direction matching — the same
+// per-frame aim math applyMotionClip uses for direction retarget. MediaPipe
+// landmarks are canonicalized and each bone is aimed at its live segment
+// direction relative to the neutral calibration frame. This matches the PoseIK
+// debug overlay geometry without a mirror-L/R swap.
+//
+// Clip bake / tests (no landmarks): parent-relative PoseIK quaternion delta vs
+// neutral, composed onto standing with Mc roll correction.
 class BodyRetargeter {
 public:
-    explicit BodyRetargeter(Ogre::Skeleton* skel);
+    // yaw180: pass detectBackwardFacing(entity) for rigs with no harvested
+    // standing animation — conjugates limb deltas 180° about +Y (same bridge
+    // applyMotionClip uses for -Z-facing meshes).
+    explicit BodyRetargeter(Ogre::Skeleton* skel, bool yaw180 = false);
     bool valid() const { return m_valid; }
     // resolvedMask bit i set => canonical role i is tracked this frame; roles
     // not set hold the standing pose. Returns {boneHandle -> local quat}.
@@ -33,7 +33,22 @@ public:
     // use only (the mocap live/bake paths); call frames in order.
     std::vector<std::pair<unsigned short, Ogre::Quaternion>>
     evaluateFrame(const std::array<std::array<float, 4>, 22>& canonicalQuats,
-                  uint32_t resolvedMask) const;
+                  uint32_t resolvedMask,
+                  uint32_t skipRolesMask = 0,
+                  const float* mediaPipeWorld33 = nullptr,
+                  const float* mediaPipeVisibility33 = nullptr) const;
+    // Live mocap: capture the reference pose and precompute direction anchors.
+    // When mediaPipeWorld33 is supplied, neutral landmark directions + Qbase
+    // are stored for the direction-matching path. Until set, evaluateFrame()
+    // holds the standing pose.
+    void setNeutralReference(
+        const std::array<std::array<float, 4>, 22>& canonicalQuats,
+        uint32_t resolvedMask = 0xFFFFFFFFu,
+        const float* mediaPipeWorld33 = nullptr,
+        const float* mediaPipeVisibility33 = nullptr);
+    bool hasNeutralReference() const;
+    // Forget the neutral reference so the next setNeutralReference() re-calibrates.
+    void resetLiveNeutral();
 private:
     struct Impl;
     std::shared_ptr<Impl> d;   // shared_ptr so the class stays copyable/movable
@@ -221,7 +236,20 @@ public:
         // them collapses real motion (measured: mouse elbow 180°→124°, total
         // parity 5.1°→3.1° with caps off). So default = relaxed; the model
         // path passes modelClip=true to re-enable the tight caps.
-        bool modelClip = false);
+        bool modelClip = false,
+        // #838 vertical descent: per-frame hip Y offset in SOURCE leg-lengths
+        // (from the library's `rootY`). When non-empty AND verticalDescent is
+        // true (the caller enables it only for non-locomotion actions like
+        // pickup/working/sit/crawl), the root bone's keyframe Y is lowered by
+        // clipRootY[f] × (target rig hip→foot length) so the body actually
+        // crouches instead of running in place. Locomotion clips pass empty /
+        // false to keep the root flat.
+        const std::vector<float>& clipRootY = {},
+        bool verticalDescent = false,
+        // CMU BVH / motion-library clips store LEFT at +X; Ogre rigs with LEFT
+        // at −X need L/R bone-index swap. Pose-ik mocap already labels L/R
+        // anatomically — leave this false for qtmesh mocap / live drive.
+        bool cmuLibraryHandedness = true);
 
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
@@ -250,7 +278,46 @@ public:
         /// same way, so every retargeted bone POINTS where the source bone
         /// points each frame. 22 × [x,y,z]; zero for unresolved roles.
         std::vector<std::array<float, 3>> restDir;
+        /// #838 vertical root descent: per-frame hip VERTICAL displacement
+        /// from the clip's reference frame, NORMALISED by the source rig's
+        /// leg length (so it's proportion-independent — the target scales it
+        /// by its own leg length). Length == `frames`; a value of −0.5 means
+        /// the hip dropped half a leg-length below its reference height (a
+        /// crouch). Only the Y axis is captured — X/Z travel is deliberately
+        /// discarded to avoid skate/drift. Empty when the hip wasn't resolved.
+        std::vector<float> rootY;
+        /// #838 finger animation. Fingers are NOT canonical body joints, so
+        /// they ride a parallel channel: per frame, the LOCAL (parent-relative)
+        /// rotation of every finger segment, indexed by
+        /// fingerSlot(side,finger,segment). Local rotation transfers directly
+        /// between rigs (a curl is a local hinge — no canonical-frame
+        /// conjugation needed). Slots the source rig doesn't have hold identity;
+        /// empty when the rig has no fingers. Size == frames × kFingerSlots.
+        std::vector<std::vector<std::array<float, 4>>> fingers;
+        /// #838 finger REST pointing direction (canonical frame) per slot, at
+        /// the clip's reference pose. The per-frame `fingers` dirs are ABSOLUTE
+        /// source directions; a rig's finger rest convention differs from the
+        /// target's, so aiming target-bind→source-absolute over-bends every
+        /// finger by the rest-convention gap (measured 50–130° on an OPEN, static
+        /// hand). With the rest, the retarget transports the RELATIVE bend
+        /// (restDir→frameDir) onto the target bind instead. Size == kFingerSlots
+        /// (or empty for older libraries → falls back to absolute aim).
+        std::vector<std::array<float, 3>> fingerRestDir;
+        /// V2 (schema v4): true when quats/restWorld/restDir are 52-wide
+        /// (fingers folded in as joints 22..51) rather than 22-wide body-only.
+        /// The CLI dump writes schema "qtmesh-motion-library-v4" when set.
+        bool jointCountV2 = false;
     };
+
+    /// Finger channel layout: 2 sides × 5 fingers × up to 3 segments = 30.
+    static constexpr int kFingerSegs = 3;
+    static constexpr int kFingerSlots = 2 * 5 * kFingerSegs;   // 30
+    static int fingerSlot(int side, int finger, int segment) {
+        if (side < 0 || side > 1 || finger < 0 || finger > 4 ||
+            segment < 0 || segment >= kFingerSegs)
+            return -1;
+        return (side * 5 + finger) * kFingerSegs + segment;
+    }
 
     /// Post-process a generated animation to widen (+) or tuck (−) the arm
     /// chains, à la Mixamo's "Character Arm-Space" (#854). Rescues arm-into-
@@ -341,15 +408,58 @@ public:
                                  const std::string& animName,
                                  int blendFrames = 3);
 
+    /// #838 — GROUND a crouch/kneel/ground-work clip. The direction retarget
+    /// transfers bone DIRECTIONS, not world foot positions, and locks the root
+    /// at the target's standing height. A folded-leg crouch (build/farm/kneel)
+    /// then leaves the FEET dangling in the air on a rig whose proportions
+    /// differ from the source (the "floating worker" case). This drops the ROOT
+    /// bone's Y each frame by exactly how far the lowest foot sits ABOVE the
+    /// bind ground plane, so the character plants on the floor. Target-rig FK
+    /// (like pinFeet) — reads the finished keyframes, rewrites only the root
+    /// translate. Only sensible on non-locomotion descent actions (the caller
+    /// gates via MotionLibrary::isVerticalDescentAction); a walk would lose its
+    /// foot lift. Returns how many root keyframes were lowered.
+    static int groundRootToFeet(Ogre::Skeleton* skel,
+                                const std::string& animName);
+
+    /// #838 finger animation transfer. Fingers aren't canonical body joints,
+    /// so they ride this separate pass: `clipFingers` is the source clip's
+    /// per-frame LOCAL finger curl (frames × kFingerSlots, from the library),
+    /// and this writes matching keyframes onto the TARGET rig's finger bones.
+    /// Handles differently-named/segmented rigs (Biped Finger0-4 × 2 vs Mixamo
+    /// Thumb/Index/… × 3) by mapping via FingerRole and redistributing source
+    /// segments across the target's per finger. Curl is bind-relative local
+    /// rotation, so it transfers directly (no canonical-frame conjugation).
+    /// Returns the number of finger bones animated. No-op if either rig lacks
+    /// fingers or the clip carries none.
+    static int applyFingerCurl(
+        Ogre::Skeleton* skel, const std::string& animName,
+        const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
+        int fps,
+        /// #838 source finger REST directions (kFingerSlots, canonical frame).
+        /// Currently UNUSED: the implementation derives the rest from the
+        /// clip's own mean pose (more robust across rigs than the stored
+        /// value). Kept in the signature so libraries carrying restDir keep a
+        /// stable call site if a stored-rest path returns.
+        const std::vector<std::array<float, 3>>& clipFingerRest = {});
+
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role
     /// mapping is MotionInbetween::canonicalIndexForBone — the same matcher
     /// the retarget uses, so extraction and application are consistent by
     /// construction. Animations whose rig resolves 0 roles are skipped.
+    /// When `v2` is true, the emitted clip carries the V2 52-joint canonical
+    /// skeleton: joints 0..21 are the body (identical to V1) and joints 22..51
+    /// are the finger joints (world-frame orientation + pointing direction),
+    /// so fingers ride the ordinary joint retarget and can be trained into the
+    /// model. `restWorld`/`restDir`/`quats` are sized 52; the schema is v4. When
+    /// false (default), the V1 22-joint clip + separate `fingers` side-channel
+    /// is produced (unchanged).
     static std::vector<CanonicalClip> extractCanonicalClips(
         Ogre::Entity* entity,
         int fps = 30,
-        const QString& onlyAnimation = {});
+        const QString& onlyAnimation = {},
+        bool v2 = false);
 
     /// True when the entity's mesh appears to FACE −Z (the retarget and the
     /// CMU clips assume +Z): detected from the foot region — toe mass extends

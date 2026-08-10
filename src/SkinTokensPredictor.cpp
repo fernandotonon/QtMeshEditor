@@ -1,5 +1,6 @@
 #include "SkinTokensPredictor.h"
 #include "ModelDownloader.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -19,7 +20,6 @@
 #include <limits>
 #include <string>
 #include <set>
-#include <thread>
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -594,13 +594,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_skintokens");
         Ort::SessionOptions so;
-        // hardware_concurrency() may legally return 0 — guard before the -1
-        // (0u - 1 underflows to a UINT_MAX-sized thread pool request).
-        const unsigned hc = std::thread::hardware_concurrency();
-        so.SetIntraOpNumThreads(hc > 1 ? static_cast<int>(hc - 1) : 1);
-        // Don't busy-spin the pool between ops — spinning starves the GUI
-        // render loop even though the compute runs on a worker thread.
-        so.AddConfigEntry("session.intra_op.allow_spinning", "0");
+        OnnxRuntimeSettings::configureSessionOptions(so);
         auto openSession = [&](const char* file) -> Ort::Session {
             const QString p = modelDir() + QLatin1Char('/')
                               + QLatin1String(file);
@@ -705,17 +699,17 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
                 "SkinTokens: VAE conditioning failed."));
 
         dbg("stage 3: embed skeleton");
-        // ── (3) embed the skeleton ids ──────────────────────────────
+        // ── (3) embed the skeleton ids (reuse the embed session for decode) ─
         std::vector<float> skelEmbeds;
+        Ort::Session embed = openSession("embed.onnx");
         {
-            Ort::Session s = openSession("embed.onnx");
             std::vector<std::int64_t> ids = skelIds;
             const int64_t shp[2] = { 1, int64_t(ids.size()) };
             std::vector<Ort::Value> ins;
             ins.push_back(Ort::Value::CreateTensor<int64_t>(
                 mem, ids.data(), ids.size(), shp, 2));
             std::vector<int64_t> eshape;
-            skelEmbeds = runSimple(s, ins, eshape);
+            skelEmbeds = runSimple(embed, ins, eshape);
             if (skelEmbeds.empty() || eshape.size() != 3
                 || eshape[2] != hidden)
                 return failResult(QStringLiteral(
@@ -724,10 +718,8 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
 
         dbg("stage 4: decoder open");
         // ── (4) decoder prefix + greedy skin decode ─────────────────
-        Ort::Session dec   = openSession("decoder.onnx");
+        Ort::Session dec = openSession("decoder.onnx");
         dbg("stage 4a: decoder session created");
-        Ort::Session embed = openSession("embed.onnx");
-        dbg("stage 4a2: embed session created");
 
         const size_t decIn = dec.GetInputCount();
         std::vector<Ort::AllocatedStringPtr> dInHold;

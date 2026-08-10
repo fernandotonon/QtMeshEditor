@@ -20,6 +20,7 @@
 
 #include "../Mocap/FaceCapMapper.h"
 #include "../Mocap/MocapRecorder.h"
+#include "../Mocap/MocapLiveTypes.h"
 
 #include <string>
 #include <vector>
@@ -60,6 +61,10 @@ public:
                           std::vector<std::vector<std::array<float, 4>>> clipQuats,
                           int fps, MocapRecorder::BodyRecordOptions options,
                           QUndoCommand* parent = nullptr);
+    RecordBodyClipCommand(std::string entityName,
+                          std::vector<BodyLiveFrame> liveFrames,
+                          int fps, MocapRecorder::BodyRecordOptions options,
+                          QUndoCommand* parent = nullptr);
     ~RecordBodyClipCommand() override;
 
     void undo() override;
@@ -72,6 +77,7 @@ private:
 
     std::string m_entityName;
     std::vector<std::vector<std::array<float, 4>>> m_clipQuats;
+    std::vector<BodyLiveFrame> m_liveFrames;
     int m_fps;
     MocapRecorder::BodyRecordOptions m_options;
     MocapRecorder::BodyRecordReport m_report;

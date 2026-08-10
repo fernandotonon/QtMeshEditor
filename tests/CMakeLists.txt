@@ -70,6 +70,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/OnnxRuntimeSettings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.cpp
@@ -94,6 +95,7 @@ if(BUILD_TESTS)
         # ENABLE_MOCAP (empty TU when off), so listing them unconditionally is
         # safe and keeps the per-suite test executables linking either way.
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/VideoFrameSource.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCameraHints.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/OneEuroFilter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapMapper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPose.cpp
@@ -104,6 +106,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseIKSolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapPoseDebugOverlay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapBodyDriveDebug.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RecordMocapClipCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
@@ -155,7 +159,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureChannelPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureAtlasPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBufferImageProvider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintLayerBlend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintLayerStack.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GradientRamp.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushEngine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushFootprint.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushAssetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
@@ -186,6 +196,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ExplodePartsCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/JoinPartsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonBoneCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UvSeamCommands.cpp
@@ -212,6 +225,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimatorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVEditorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVTransform.cpp
@@ -257,6 +271,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PartOpsScene.cpp
 
         # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
         # Include them so the MaterialEditorQML test executables link successfully.

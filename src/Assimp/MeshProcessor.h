@@ -25,6 +25,8 @@ struct SubMeshData {
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::vector<MorphTargetData> morphTargets;  ///< Empty when source had no blend shapes.
     unsigned int materialIndex;
+    std::string name;  ///< From `aiMesh::mName`; drives Mesh::nameSubMesh so
+                       ///< named submeshes (e.g. PartOps parts) survive import.
 };
 
 class MeshProcessor {

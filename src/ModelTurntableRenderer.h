@@ -27,6 +27,15 @@ struct TurntableOptions {
   /// Camera angle above the orbit plane, in degrees (see axis).
   float elevationDegrees = 20.0f;
   Ogre::ColourValue background{0.12f, 0.12f, 0.13f, 1.0f};
+  /// #936: sample this skeletal animation across its duration instead of
+  /// rotating the pose — frame i at time `length * i/(frameCount-1)`, camera
+  /// FIXED at the front unless `orbitWithAnimation` combines both.
+  QString animationName;
+  bool orbitWithAnimation = false;
+  /// #936: pose the model at this time (seconds) for every frame — a normal
+  /// orbit of a single posed frame (thumbnail of a specific pose). Ignored
+  /// when < 0 or when `animationName` is set.
+  float atSeconds = -1.0f;
 };
 
 class ModelTurntableRenderer

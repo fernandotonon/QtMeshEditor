@@ -106,8 +106,22 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                                    float falloff,
                                    BrushShape shape)
 {
+    return paintBrush(uv, radiusUV,
+                      [color](float, float) { return color; },
+                      strength, falloff, shape);
+}
+
+int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
+                                   float radiusUV,
+                                   const ColorAtFn& colorAt,
+                                   float strength,
+                                   float falloff,
+                                   BrushShape shape,
+                                   bool multiplyBlendByColorAlpha)
+{
     if (m_width <= 0 || m_height <= 0) return 0;
     if (radiusUV <= 0.0f) return 0;
+    if (!colorAt) return 0;
     strength = std::clamp(strength, 0.0f, 1.0f);
     falloff = std::clamp(falloff, 0.0f, 1.0f);
     if (strength <= 0.0f) return 0;
@@ -154,15 +168,22 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                 blend = strength * w;
             }
             if (blend <= 0.0f) continue;
+            const Ogre::ColourValue color = colorAt(dx, dy);
+            if (multiplyBlendByColorAlpha)
+                blend *= color.a;
+            if (blend <= 0.0f) continue;
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
-            const float prevR = byteToFloat(m_pixels[off + 0]);
-            const float prevG = byteToFloat(m_pixels[off + 1]);
-            const float prevB = byteToFloat(m_pixels[off + 2]);
-            const float prevA = byteToFloat(m_pixels[off + 3]);
-            m_pixels[off + 0] = floatToByte(prevR + (color.r - prevR) * blend);
-            m_pixels[off + 1] = floatToByte(prevG + (color.g - prevG) * blend);
-            m_pixels[off + 2] = floatToByte(prevB + (color.b - prevB) * blend);
-            m_pixels[off + 3] = floatToByte(prevA + (color.a - prevA) * blend);
+            const int blend256 = static_cast<int>(std::lround(blend * 256.0f));
+            if (blend256 <= 0) continue;
+            const int inv256 = 256 - blend256;
+            const int cr = static_cast<int>(std::lround(color.r * 255.0f));
+            const int cg = static_cast<int>(std::lround(color.g * 255.0f));
+            const int cb = static_cast<int>(std::lround(color.b * 255.0f));
+            const int ca = static_cast<int>(std::lround(color.a * 255.0f));
+            m_pixels[off + 0] = static_cast<uint8_t>((m_pixels[off + 0] * inv256 + cr * blend256) >> 8);
+            m_pixels[off + 1] = static_cast<uint8_t>((m_pixels[off + 1] * inv256 + cg * blend256) >> 8);
+            m_pixels[off + 2] = static_cast<uint8_t>((m_pixels[off + 2] * inv256 + cb * blend256) >> 8);
+            m_pixels[off + 3] = static_cast<uint8_t>((m_pixels[off + 3] * inv256 + ca * blend256) >> 8);
             ++affected;
             touchedX0 = std::min(touchedX0, x);
             touchedY0 = std::min(touchedY0, y);
@@ -174,6 +195,120 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
     if (affected > 0)
         expandDirty(touchedX0, touchedY0, touchedX1, touchedY1);
     return affected;
+}
+
+int TexturePaintBuffer::paintStamp(const Ogre::Vector2& uv,
+                                   float radiusUV,
+                                   const BrushFootprint::RasterizedStamp& stamp,
+                                   float angleRad,
+                                   const ColorAtFn& colorAt,
+                                   float strength)
+{
+    if (stamp.empty() || !colorAt)
+        return paintBrush(uv, radiusUV, colorAt, strength, 0.0f, BrushShape::Round);
+    if (m_width <= 0 || m_height <= 0 || radiusUV <= 0.0f)
+        return 0;
+    strength = std::clamp(strength, 0.0f, 1.0f);
+    if (strength <= 0.0f)
+        return 0;
+
+    const float radiusXf = radiusUV * static_cast<float>(m_width);
+    const float radiusYf = radiusUV * static_cast<float>(m_height);
+    const float centerXf = uv.x * static_cast<float>(m_width);
+    const float centerYf = uv.y * static_cast<float>(m_height);
+    const float cosA = std::cos(angleRad);
+    const float sinA = std::sin(angleRad);
+    const float rotExpand = std::abs(cosA) + std::abs(sinA);
+    const float extXf = radiusXf * rotExpand;
+    const float extYf = radiusYf * rotExpand;
+
+    int x0 = static_cast<int>(std::floor(centerXf - extXf));
+    int x1 = static_cast<int>(std::ceil(centerXf + extXf));
+    int y0 = static_cast<int>(std::floor(centerYf - extYf));
+    int y1 = static_cast<int>(std::ceil(centerYf + extYf));
+    x0 = std::max(0, x0);
+    y0 = std::max(0, y0);
+    x1 = std::min(m_width, x1);
+    y1 = std::min(m_height, y1);
+    if (x0 >= x1 || y0 >= y1)
+        return 0;
+
+    const float invRx = 1.0f / std::max(radiusXf, 1e-6f);
+    const float invRy = 1.0f / std::max(radiusYf, 1e-6f);
+    int affected = 0;
+    int touchedX0 = x1;
+    int touchedX1 = x0;
+    int touchedY0 = y1;
+    int touchedY1 = y0;
+
+    for (int y = y0; y < y1; ++y) {
+        const float py = (static_cast<float>(y) + 0.5f - centerYf) * invRy;
+        for (int x = x0; x < x1; ++x) {
+            const float px = (static_cast<float>(x) + 0.5f - centerXf) * invRx;
+            const float lx = px * cosA + py * sinA;
+            const float ly = -px * sinA + py * cosA;
+            if (std::fabs(lx) > 1.0f || std::fabs(ly) > 1.0f)
+                continue;
+            const float su = (lx + 1.0f) * 0.5f;
+            const float sv = (ly + 1.0f) * 0.5f;
+            const int sx = std::clamp(static_cast<int>(su * stamp.size), 0, stamp.size - 1);
+            const int sy = std::clamp(static_cast<int>(sv * stamp.size), 0, stamp.size - 1);
+            const float mask = stamp.alpha[static_cast<size_t>(sy) * static_cast<size_t>(stamp.size)
+                                             + static_cast<size_t>(sx)];
+            if (mask <= 0.0f)
+                continue;
+            const Ogre::ColourValue color = colorAt(lx, ly);
+            const float blend = strength * mask * color.a;
+            if (blend <= 0.0f)
+                continue;
+            const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
+            const int blend256 = static_cast<int>(std::lround(blend * 256.0f));
+            const int inv256 = 256 - blend256;
+            const int cr = static_cast<int>(std::lround(color.r * 255.0f));
+            const int cg = static_cast<int>(std::lround(color.g * 255.0f));
+            const int cb = static_cast<int>(std::lround(color.b * 255.0f));
+            const int ca = static_cast<int>(std::lround(color.a * 255.0f));
+            m_pixels[off + 0] = static_cast<uint8_t>((m_pixels[off + 0] * inv256 + cr * blend256) >> 8);
+            m_pixels[off + 1] = static_cast<uint8_t>((m_pixels[off + 1] * inv256 + cg * blend256) >> 8);
+            m_pixels[off + 2] = static_cast<uint8_t>((m_pixels[off + 2] * inv256 + cb * blend256) >> 8);
+            m_pixels[off + 3] = static_cast<uint8_t>((m_pixels[off + 3] * inv256 + ca * blend256) >> 8);
+            ++affected;
+            touchedX0 = std::min(touchedX0, x);
+            touchedY0 = std::min(touchedY0, y);
+            touchedX1 = std::max(touchedX1, x + 1);
+            touchedY1 = std::max(touchedY1, y + 1);
+        }
+    }
+
+    if (affected > 0)
+        expandDirty(touchedX0, touchedY0, touchedX1, touchedY1);
+    return affected;
+}
+
+int TexturePaintBuffer::paintTilingBrush(const Ogre::Vector2& uv,
+                                         float radiusUV,
+                                         const BrushFootprint::ImageRgba& tiling,
+                                         const BrushFootprint::TilingSettings& settings,
+                                         float strength,
+                                         float falloff,
+                                         BrushShape shape)
+{
+    if (tiling.empty())
+        return 0;
+    const BrushFootprint::TilingSettings settingsCopy = settings;
+    const BrushFootprint::ImageRgba* tilingPtr = &tiling;
+    const float radiusCopy = radiusUV;
+    const Ogre::Vector2 center = uv;
+    return paintBrush(
+        uv, radiusUV,
+        [tilingPtr, settingsCopy, center, radiusCopy](float dx, float dy) {
+            float tu = 0.0f;
+            float tv = 0.0f;
+            BrushFootprint::brushOffsetToUv(center.x, center.y, radiusCopy, dx, dy, tu, tv);
+            const auto c = BrushFootprint::sampleTiling(*tilingPtr, tu, tv, settingsCopy);
+            return Ogre::ColourValue(c.r, c.g, c.b, c.a);
+        },
+        strength, falloff, shape, true);
 }
 
 int TexturePaintBuffer::floodFill(int sx, int sy, const Ogre::ColourValue& fill)

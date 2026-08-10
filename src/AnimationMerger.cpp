@@ -18,6 +18,10 @@
 #include <vector>
 #include <cmath>
 
+#ifdef ENABLE_MOCAP
+#include "Mocap/PoseIKSolver.h"
+#endif
+
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
 static QMap<QString, int> s_skeletonUpAxis;
@@ -961,7 +965,7 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
 
 std::vector<AnimationMerger::CanonicalClip>
 AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
-                                       const QString& onlyAnimation)
+                                       const QString& onlyAnimation, bool v2)
 {
     std::vector<CanonicalClip> out;
     if (!entity || !entity->hasSkeleton() || fps <= 0)
@@ -970,7 +974,11 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     if (!skel)
         return out;
 
+    // Body-role sampling always uses the 22-joint layout (all the spine/limb/
+    // facing logic depends on it). For V2 we ADDITIONALLY sample the finger
+    // bones and append them as joints 22..51 at finalize.
     const int J = MotionInbetween::canonicalJointCount();
+    const int JV2 = MotionInbetween::canonicalJointCountV2();   // 52
 
     // Bone → canonical role, first match wins per role (the same matcher the
     // retarget uses, so round-trips are consistent by construction).
@@ -986,6 +994,23 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     }
     if (resolved == 0)
         return out;
+
+    // #838 finger bones → finger slots (parallel to the body roles). Keep only
+    // the first kFingerSegs (3) segments per finger; a rig with 2-segment
+    // fingers (Biped) fills slots 0..1, a 3-segment rig (Mixamo) fills 0..2.
+    std::vector<Ogre::Bone*> fingerBone(
+        static_cast<size_t>(kFingerSlots), nullptr);
+    int fingerResolved = 0;
+    for (auto* bone : skel->getBones()) {
+        const auto fr = MotionInbetween::fingerRoleForBone(
+            QString::fromStdString(bone->getName()));
+        if (!fr.valid()) continue;
+        const int slot = fingerSlot(fr.side, fr.finger, fr.segment);
+        if (slot >= 0 && !fingerBone[static_cast<size_t>(slot)]) {
+            fingerBone[static_cast<size_t>(slot)] = bone;
+            ++fingerResolved;
+        }
+    }
 
     // ── source-frame → canonical-frame conjugation ─────────────────────
     // Scraped rigs live in arbitrary file frames (Blender FBX armatures are
@@ -1064,10 +1089,80 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         const int frames =
             std::max(2, static_cast<int>(std::lround(length * fps)) + 1);
 
-        // Pass 1: sample RAW world orientations per frame per role.
+        // Pass 1: sample RAW world orientations per frame per role, plus the
+        // hip and a foot world POSITION per frame (for #838 vertical descent).
         std::vector<std::vector<Ogre::Quaternion>> raw(
             static_cast<size_t>(frames),
             std::vector<Ogre::Quaternion>(static_cast<size_t>(J)));
+        std::vector<Ogre::Vector3> hipPos(static_cast<size_t>(frames),
+                                          Ogre::Vector3::ZERO);
+        std::vector<Ogre::Vector3> footPos(static_cast<size_t>(frames),
+                                           Ogre::Vector3::ZERO);
+        Ogre::Bone* hipBone = roleBone[0];                 // "hip"
+        Ogre::Bone* footBone = roleBone[17];               // "rfoot"
+        if (!footBone) footBone = roleBone[21];            // "lfoot" fallback
+        // Bind-pose (T-pose STANDING) hip + foot positions — the absolute
+        // reference for crouch depth. Using the clip's own max hip-height as
+        // "standing" fails for always-low actions (a crawl never stands, so
+        // relative-to-max reads ~0); the bind pose is the true upright height.
+        Ogre::Vector3 bindHip = Ogre::Vector3::ZERO, bindFoot = Ogre::Vector3::ZERO;
+        {
+            skel->reset(true);
+            skel->_updateTransforms();
+            if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
+            if (footBone) bindFoot = footBone->_getDerivedPosition();
+        }
+        // Finger transfer uses DIRECTIONS (body-retarget style), NOT rotations:
+        // the Biped finger bones have large, wildly-varying per-segment bind
+        // axes (measured 300-350° about arbitrary axes), so copying local/world
+        // rotation mangles them on a differently-axised Mixamo hand. But a
+        // finger segment's POINTING direction (toward its child/tip) is
+        // rig-independent — aim the target segment there each frame, like the
+        // body limbs. Per frame we store each segment's canonical-frame world
+        // pointing direction as [dx,dy,dz,0] (w=0 marks a direction, not a quat).
+        // The child bone per slot (next segment along the finger), for the
+        // pointing direction (segment → child position).
+        std::vector<Ogre::Bone*> fingerChild(
+            static_cast<size_t>(kFingerSlots), nullptr);
+        for (int s = 0; s < kFingerSlots; ++s) {
+            Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+            if (!b) continue;
+            // child = the same finger's next segment bone, if resolved
+            const int side = (s / (5 * kFingerSegs));
+            const int rem = s - side * 5 * kFingerSegs;
+            const int fgr = rem / kFingerSegs, seg = rem % kFingerSegs;
+            if (seg + 1 < kFingerSegs) {
+                const int cslot = fingerSlot(side, fgr, seg + 1);
+                if (cslot >= 0) fingerChild[static_cast<size_t>(s)] =
+                    fingerBone[static_cast<size_t>(cslot)];
+            }
+            // Fallback: the LAST resolved segment of a finger (e.g. Biped
+            // Finger01, whose only child is a skipped "Finger0Nub") has no
+            // finger-ROLE child, so its pointing direction — the actual
+            // knuckle-bend curl signal — would be dropped. Use the bone's real
+            // skeleton child (the nub/tip) instead. Without this, open vs
+            // closed hands are indistinguishable (all curl lives past seg0).
+            if (!fingerChild[static_cast<size_t>(s)]
+                && b->numChildren() > 0) {
+                if (auto* tip =
+                        dynamic_cast<Ogre::Bone*>(b->getChild(0)))
+                    fingerChild[static_cast<size_t>(s)] = tip;
+            }
+        }
+        std::vector<std::vector<std::array<float, 4>>> fingerCurl;
+        if (fingerResolved > 0)
+            fingerCurl.assign(static_cast<size_t>(frames),
+                std::vector<std::array<float, 4>>(
+                    static_cast<size_t>(kFingerSlots), {0.f, 0.f, 0.f, 0.f}));
+        // V2: raw world orientation per finger slot per frame (canonicalised at
+        // finalize), so fingers become ordinary joints 22..51. Identity where a
+        // slot has no bone.
+        std::vector<std::vector<Ogre::Quaternion>> fingerWorld;
+        if (v2 && fingerResolved > 0)
+            fingerWorld.assign(static_cast<size_t>(frames),
+                std::vector<Ogre::Quaternion>(static_cast<size_t>(kFingerSlots),
+                                              Ogre::Quaternion::IDENTITY));
+
         for (int f = 0; f < frames; ++f) {
             skel->reset(true);
             anim->apply(skel, std::min(length,
@@ -1077,6 +1172,34 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 if (Ogre::Bone* b = roleBone[static_cast<size_t>(j)])
                     raw[static_cast<size_t>(f)][static_cast<size_t>(j)] =
                         b->_getDerivedOrientation();
+            if (hipBone)
+                hipPos[static_cast<size_t>(f)] = hipBone->_getDerivedPosition();
+            if (footBone)
+                footPos[static_cast<size_t>(f)] = footBone->_getDerivedPosition();
+            // Finger pointing direction (segment → child), canonical frame.
+            if (fingerResolved > 0) {
+                for (int s = 0; s < kFingerSlots; ++s) {
+                    Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+                    // V2: capture the finger bone's raw world orientation (even
+                    // for the last segment that has no child direction) so it
+                    // rides the joint retarget.
+                    if (v2 && b)
+                        fingerWorld[static_cast<size_t>(f)]
+                                   [static_cast<size_t>(s)] =
+                            b->_getDerivedOrientation();
+                    Ogre::Bone* c = fingerChild[static_cast<size_t>(s)];
+                    if (!b || !c) continue;
+                    Ogre::Vector3 dir = c->_getDerivedPosition()
+                                        - b->_getDerivedPosition();
+                    if (dir.squaredLength() < 1e-12f) continue;
+                    dir.normalise();
+                    // stored in canonical frame at finalize (via C); raw world
+                    // here.
+                    fingerCurl[static_cast<size_t>(f)][static_cast<size_t>(s)] =
+                        {static_cast<float>(dir.x), static_cast<float>(dir.y),
+                         static_cast<float>(dir.z), 0.0f};
+                }
+            }
         }
 
         // Calm reference frame f*: minimum mean joint rotation speed —
@@ -1099,14 +1222,154 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
             if (e < bestE) { bestE = e; fStar = f - 1; }
         }
 
-        // Measure the reference triple at f*: canonical frame C, reference
-        // world orientation and bone directions — all from the SAME applied
-        // pose, so they share one frame with the sampled quats.
+        // Reference pose for C + the triple (restWorld/restDir). Normally the
+        // calm frame f*, but if f*'s torso is NOT upright (a kneel/crouch clip
+        // may have no upright frame — Gregório BuildLoop's calm frame leans
+        // ~60°), the leveling frame C bakes that tilt in and the whole retarget
+        // reclines. Detect it (f* torso-up vs bind torso-up) and, when f*
+        // leans, reference the BIND pose instead so C is level AND the triple
+        // is sampled in that same upright pose — keeping them consistent with
+        // the per-frame quats (which are C·raw·Cinv either way).
+        auto torsoUpNow = [&]() -> Ogre::Vector3 {
+            const Ogre::Bone* hip = roleBone[0];
+            const Ogre::Bone* head = roleBone[5] ? roleBone[5] : roleBone[3];
+            if (!hip || !head) return Ogre::Vector3::ZERO;
+            Ogre::Vector3 u = head->_getDerivedPosition()
+                              - hip->_getDerivedPosition();
+            return (u.squaredLength() > 1e-9f) ? u.normalisedCopy()
+                                               : Ogre::Vector3::ZERO;
+        };
+        skel->reset(true); skel->_updateTransforms();
+        const Ogre::Vector3 bindUp = torsoUpNow();
         skel->reset(true);
         anim->apply(skel, std::min(length,
             static_cast<float>(fStar) / static_cast<float>(fps)));
         skel->_updateTransforms();
-        const Ogre::Quaternion C = deriveFrame();
+        const Ogre::Vector3 starUp = torsoUpNow();
+        // Reference-pose selection for C + the triple (restWorld/restDir). The
+        // per-frame quats are C·raw(f)·Cinv, so C MUST level the same frame the
+        // quats live in. Two cases the old bind-fallback got wrong:
+        //  (a) crouch/kneel clips whose calm frame f* is bent — bind IS a valid
+        //      upright reference AND is in the animation's frame, so bind works.
+        //  (b) rigs whose BIND and ANIMATION are in DIFFERENT frames (Blender FBX
+        //      with a −90°X armature node baked into the anim but not the bind,
+        //      e.g. Quaternius Woman; game rips like the Half-Life zombie).
+        //      Referencing bind levels a frame the quats aren't in → the whole
+        //      body tips onto its side (X/Z axis).
+        // Distinguish them: level a sample ANIMATED frame with the BIND-derived
+        // C; if the result is NOT upright, bind and animation disagree (case b)
+        // → reference the most-upright ANIMATED frame instead so C+quats share a
+        // frame. Otherwise keep the old behaviour (f*, or bind for bent f*).
+        const bool fStarBent =
+            bindUp.squaredLength() > 1e-9f && starUp.squaredLength() > 1e-9f
+            && bindUp.dotProduct(starUp) < 0.94f;   // f* torso >~20° off bind
+        int refFrame = fStarBent ? -1 : fStar;   // -1 sentinel = bind
+        {
+            // provisional bind-derived C
+            skel->reset(true); skel->_updateTransforms();
+            const Ogre::Quaternion Cbind = deriveFrame();
+            // level a sample animated frame (f*) and check torso-up is vertical
+            skel->reset(true);
+            anim->apply(skel, std::min(length,
+                static_cast<float>(fStar) / static_cast<float>(fps)));
+            skel->_updateTransforms();
+            const Ogre::Vector3 u = torsoUpNow();
+            const Ogre::Vector3 leveled = (u.squaredLength() > 1e-9f)
+                ? (Cbind * u.normalisedCopy()) : Ogre::Vector3::ZERO;
+            const bool animUpright =
+                leveled.squaredLength() > 1e-9f && leveled.y > 0.82f;  // ~35°
+            if (!animUpright) {
+                // case (b): bind ≠ animation frame. Reference the most-upright
+                // ANIMATED frame (torso-up closest to the bind torso-up).
+                float best = -2.f; int bestF = fStar;
+                for (int f = 0; f < frames; ++f) {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    const Ogre::Vector3 uf = torsoUpNow();
+                    if (uf.squaredLength() < 1e-9f) continue;
+                    const float d = bindUp.dotProduct(uf.normalisedCopy());
+                    if (d > best) { best = d; bestF = f; }
+                }
+                refFrame = bestF;
+            }
+        }
+        skel->reset(true);
+        if (refFrame >= 0)
+            anim->apply(skel, std::min(length,
+                static_cast<float>(refFrame) / static_cast<float>(fps)));
+        skel->_updateTransforms();
+        Ogre::Quaternion C = deriveFrame();
+        if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG")) {
+            // bind-derived frame for comparison
+            const Ogre::Quaternion Cref = C;
+            skel->reset(true); skel->_updateTransforms();
+            const Ogre::Quaternion Cbind2 = deriveFrame();
+            const Ogre::Quaternion dq = Cref * Cbind2.Inverse();
+            const float mismatch = 2.0f * std::acos(std::min(1.0f,
+                std::abs(dq.w))) * 180.0f / float(M_PI);
+            fprintf(stderr, "[extract] %s: refFrame=%d fStar=%d fStarBent=%d "
+                    "C-vs-bindC mismatch=%.1fdeg\n",
+                    anim->getName().c_str(), refFrame, fStar,
+                    fStarBent ? 1 : 0, mismatch);
+            // restore the reference pose
+            skel->reset(true);
+            if (refFrame >= 0)
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(refFrame) / static_cast<float>(fps)));
+            skel->_updateTransforms();
+        }
+        // CLIP-AVERAGED UP-LEVELING. A single reference frame (f*/bind/most-
+        // upright) can still be BENT — a jump/pickup/sit clip on a rig whose
+        // bind≠animation frame has NO upright frame, so C bakes that frame's
+        // lean and the whole clip tips onto its side (the Quaternius Woman
+        // jump/pickup/sit "on the Z axis"). Fix: after the provisional C, level
+        // it against the clip-AVERAGED torso-up. Averaging over all frames
+        // cancels transient bend (a jump rises+falls, a crouch dips+rises → the
+        // mean torso-up is the true standing up), giving a stable upright frame
+        // regardless of any single frame. A genuinely one-sided clip (always
+        // bent, e.g. a pure crawl) still averages to its dominant up, which is
+        // the right reference for it. Skip when the average is degenerate.
+        {
+            const Ogre::Bone* hipB  = roleBone[0];
+            const Ogre::Bone* headB = roleBone[5] ? roleBone[5] : roleBone[3];
+            if (hipB && headB) {
+                // Soft-weighted torso-up (head-hip) over all frames, favouring
+                // the upright ones (u.y^3): lying frames drop out, so one-sided
+                // clips (death/fall) aren't dragged horizontal and oscillating
+                // clips (jump/crouch) still average smoothly. Levels the body's
+                // UP-tilt (the X/Z-axis lying bug). NOTE: this is position-based
+                // (hip→head), so it cannot see a pelvis PITCH where the spine
+                // stays vertical but the hip bone rotates (Quaternius Woman
+                // residual back-lean) — that lives in the hip bone ORIENTATION,
+                // which the retarget composes via restWorld; a safe fix for it
+                // is out of reach without regressing legit-pitching crouches.
+                Ogre::Vector3 meanUp = Ogre::Vector3::ZERO;
+                for (int f = 0; f < frames; ++f) {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    Ogre::Vector3 u = headB->_getDerivedPosition()
+                                      - hipB->_getDerivedPosition();
+                    if (u.squaredLength() < 1e-9f) continue;
+                    u = (C * u).normalisedCopy();
+                    const float wy = std::max(0.0f, u.y);
+                    meanUp += u * (wy * wy * wy);
+                }
+                if (meanUp.squaredLength() > 1e-6f) {
+                    meanUp.normalise();
+                    C = meanUp.getRotationTo(Ogre::Vector3::UNIT_Y) * C;
+                }
+            }
+        }
+        // re-pose at the reference frame for the restWorld/restDir sampling below
+        skel->reset(true);
+        if (refFrame >= 0)
+            anim->apply(skel, std::min(length,
+                static_cast<float>(refFrame) / static_cast<float>(fps)));
+        skel->_updateTransforms();
         const Ogre::Quaternion Cinv = C.Inverse();
         std::vector<std::array<float, 4>> restWorld(
             static_cast<size_t>(J), {0.f, 0.f, 0.f, 1.f});
@@ -1145,6 +1408,35 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 dirBetween(parent, j, restDir[static_cast<size_t>(j)]);
         }
 
+        // Spine-chain sanity (#838): the spine (hip→abdomen→chest→neck→neck1→
+        // head, roles 0..5) is monotonically UPWARD on any humanoid. Some rigs
+        // (e.g. the Samurai dance clip) stack a spine joint BELOW its parent in
+        // bind pose — its bone direction points DOWN the hip→head axis. That
+        // makes the source bone's own frame degenerate/inverted, so the aim-
+        // based retarget folds the chest UNDER the hip and snaps the model in
+        // half. We can't trust that bone's motion, so ZERO its restDir: the
+        // retarget skips it (`squaredLength() <= 1e-8` guard) and the target
+        // bone HOLDS its upright bind pose while the rest of the clip plays.
+        {
+            const Ogre::Bone* hipB  = roleBone[0];
+            const Ogre::Bone* headB = roleBone[5];
+            if (hipB && headB) {
+                Ogre::Vector3 up = C * (headB->_getDerivedPosition()
+                                        - hipB->_getDerivedPosition());
+                if (up.squaredLength() > 1e-9f) {
+                    up.normalise();
+                    for (int j = 1; j <= 4; ++j) {   // abdomen..neck1
+                        auto& d = restDir[static_cast<size_t>(j)];
+                        const Ogre::Vector3 v(d[0], d[1], d[2]);
+                        if (v.squaredLength() > 1e-9f
+                            && v.dotProduct(up) < -0.2f) {   // clearly downward
+                            d = {0.f, 0.f, 0.f};             // drop this bone
+                        }
+                    }
+                }
+            }
+        }
+
         // Pass 2: conjugate the stored raw worlds into the canonical frame.
         clip.quats.reserve(static_cast<size_t>(frames));
         for (int f = 0; f < frames; ++f) {
@@ -1164,6 +1456,187 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         clip.frames = static_cast<int>(clip.quats.size());
         clip.restWorld = std::move(restWorld);
         clip.restDir = std::move(restDir);
+
+        // #838 finger REST pointing direction per slot, at the reference pose
+        // (the skeleton is still posed there — restWorld/restDir were just read
+        // from it). The retarget transports the RELATIVE bend restDir→frameDir,
+        // so a rig's finger rest convention no longer over-bends the target.
+        if (fingerResolved > 0) {
+            clip.fingerRestDir.assign(static_cast<size_t>(kFingerSlots),
+                                      {0.f, 0.f, 0.f});
+            for (int s = 0; s < kFingerSlots; ++s) {
+                Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+                Ogre::Bone* c = fingerChild[static_cast<size_t>(s)];
+                if (!b || !c) continue;
+                Ogre::Vector3 dir = c->_getDerivedPosition()
+                                    - b->_getDerivedPosition();
+                if (dir.squaredLength() < 1e-12f) continue;
+                dir = (C * dir).normalisedCopy();
+                clip.fingerRestDir[static_cast<size_t>(s)] = {
+                    static_cast<float>(dir.x), static_cast<float>(dir.y),
+                    static_cast<float>(dir.z)};
+            }
+        }
+
+        // ---- V2: fold the finger bones in as canonical joints 22..51 --------
+        // Body joints 0..21 are already in quats/restWorld/restDir (22-wide).
+        // Grow each to 52 and fill the finger joints from the sampled finger
+        // world orientations (canonicalised via C, like the body) + the finger
+        // bind world (reference pose, still active) + the rest dir just built.
+        // V2 index for finger slot s == 22 + s (fingerSlot order matches
+        // fingerJointIndexV2). Missing slots stay identity/zero and the retarget
+        // skips them, exactly like an unresolved body role.
+        // ALWAYS pad to 52 in V2 mode — even a FINGERLESS rig (low-poly toon /
+        // chibi with no finger bones) must emit 52-wide clips or the v4 loader's
+        // schema guard rejects the whole library. Absent finger joints stay
+        // identity/zero and the retarget skips them (like an unresolved role).
+        if (v2) {
+            const bool haveFingers = fingerResolved > 0 && !fingerWorld.empty();
+            // per-frame quats → 52 wide
+            for (int f = 0; f < frames; ++f) {
+                auto& pose = clip.quats[static_cast<size_t>(f)];
+                pose.resize(static_cast<size_t>(JV2), {0.f, 0.f, 0.f, 1.f});
+                if (!haveFingers) continue;
+                for (int s = 0; s < kFingerSlots; ++s) {
+                    if (!fingerBone[static_cast<size_t>(s)]) continue;
+                    const Ogre::Quaternion w =
+                        C * fingerWorld[static_cast<size_t>(f)]
+                                       [static_cast<size_t>(s)] * Cinv;
+                    pose[static_cast<size_t>(J + s)] = {
+                        static_cast<float>(w.x), static_cast<float>(w.y),
+                        static_cast<float>(w.z), static_cast<float>(w.w)};
+                }
+            }
+            // restWorld → 52 (finger bind world, canonicalised). Sample now: the
+            // reference pose is still applied (restWorld/restDir read from it).
+            if (static_cast<int>(clip.restWorld.size()) == J) {
+                clip.restWorld.resize(static_cast<size_t>(JV2),
+                                      {0.f, 0.f, 0.f, 1.f});
+                if (haveFingers)
+                    for (int s = 0; s < kFingerSlots; ++s) {
+                        Ogre::Bone* b = fingerBone[static_cast<size_t>(s)];
+                        if (!b) continue;
+                        const Ogre::Quaternion w =
+                            C * b->_getDerivedOrientation() * Cinv;
+                        clip.restWorld[static_cast<size_t>(J + s)] = {
+                            static_cast<float>(w.x), static_cast<float>(w.y),
+                            static_cast<float>(w.z), static_cast<float>(w.w)};
+                    }
+            }
+            // restDir → 52 (reuse the finger rest dirs already computed)
+            if (static_cast<int>(clip.restDir.size()) == J) {
+                clip.restDir.resize(static_cast<size_t>(JV2), {0.f, 0.f, 0.f});
+                if (haveFingers
+                    && static_cast<int>(clip.fingerRestDir.size())
+                           == kFingerSlots)
+                    for (int s = 0; s < kFingerSlots; ++s)
+                        clip.restDir[static_cast<size_t>(J + s)] =
+                            clip.fingerRestDir[static_cast<size_t>(s)];
+            }
+
+            // FINGER REPLICATION. Many simple rigs (Quaternius Woman, etc.) have
+            // ONE non-thumb finger bone standing in for all four — only the
+            // thumb + "index" slots get data; middle/ring/pinky stay flat, so a
+            // fist looks like it's missing three fingers. Copy the first
+            // POPULATED non-thumb finger (per side) onto any empty non-thumb
+            // finger, per segment: quats (all frames) + restWorld + restDir. The
+            // thumb is never a donor/recipient (it moves independently).
+            if (haveFingers) {
+                auto slotHasData = [&](int side, int fgr, int seg) {
+                    const int j = J + fingerSlot(side, fgr, seg);
+                    for (int f = 0; f < frames; ++f) {
+                        const auto& p = clip.quats[static_cast<size_t>(f)]
+                                                  [static_cast<size_t>(j)];
+                        if (std::abs(p[0]) > 1e-3f || std::abs(p[1]) > 1e-3f
+                            || std::abs(p[2]) > 1e-3f) return true;
+                    }
+                    return false;
+                };
+                for (int side = 0; side < 2; ++side) {
+                    // donor = first non-thumb finger (1..4) that carries data
+                    int donor = -1;
+                    for (int fgr = 1; fgr < 5 && donor < 0; ++fgr)
+                        for (int seg = 0; seg < kFingerSegs; ++seg)
+                            if (slotHasData(side, fgr, seg)) { donor = fgr; break; }
+                    if (donor < 0) continue;   // no non-thumb finger data
+                    for (int fgr = 1; fgr < 5; ++fgr) {
+                        if (fgr == donor) continue;
+                        // only replicate onto a finger that is ENTIRELY empty
+                        bool anyData = false;
+                        for (int seg = 0; seg < kFingerSegs && !anyData; ++seg)
+                            anyData = slotHasData(side, fgr, seg);
+                        if (anyData) continue;
+                        for (int seg = 0; seg < kFingerSegs; ++seg) {
+                            const int src = J + fingerSlot(side, donor, seg);
+                            const int dst = J + fingerSlot(side, fgr, seg);
+                            for (int f = 0; f < frames; ++f)
+                                clip.quats[static_cast<size_t>(f)]
+                                          [static_cast<size_t>(dst)] =
+                                    clip.quats[static_cast<size_t>(f)]
+                                              [static_cast<size_t>(src)];
+                            if (static_cast<int>(clip.restWorld.size()) == JV2)
+                                clip.restWorld[static_cast<size_t>(dst)] =
+                                    clip.restWorld[static_cast<size_t>(src)];
+                            if (static_cast<int>(clip.restDir.size()) == JV2)
+                                clip.restDir[static_cast<size_t>(dst)] =
+                                    clip.restDir[static_cast<size_t>(src)];
+                        }
+                    }
+                }
+            }
+            clip.jointCountV2 = true;   // mark this clip as 52-joint (schema v4)
+        }
+
+        // #838 vertical root descent: how far the hip sinks toward the feet as
+        // a CROUCH measure. Sign-safe by construction — we measure the hip's
+        // height ABOVE the foot along the canonical +Y (always ≥ 0), take the
+        // standing height as the MAX across the clip, and report each frame's
+        // DROP below that as a NEGATIVE rootY in leg-lengths. This avoids the
+        // per-rig sign chaos of raw hip-Y translation (some Quaternius rigs
+        // read the hip RISING during pickup/sit) — a genuine crouch always
+        // lowers the hip toward the planted foot regardless of rig axes.
+        if (hipBone && footBone && frames > 0) {
+            // Standing reference = the BIND-pose hip height above the foot
+            // (canonical +Y). Absolute, so an always-low crawl still reads a
+            // real drop — but fall back to the clip's own max if the bind pose
+            // is degenerate (hip ≈ foot height, e.g. a T-pose that isn't
+            // upright), so we never divide the descent away.
+            const Ogre::Vector3 bh = C * bindHip;
+            const Ogre::Vector3 bf = C * bindFoot;
+            float standH = bh.y - bf.y;
+            const float legLen = (bindHip - bindFoot).length();
+            std::vector<float> hipAboveFoot(static_cast<size_t>(frames));
+            float clipMaxH = 0.0f;
+            for (int f = 0; f < frames; ++f) {
+                const Ogre::Vector3 hp = C * hipPos[static_cast<size_t>(f)];
+                const Ogre::Vector3 fp = C * footPos[static_cast<size_t>(f)];
+                hipAboveFoot[static_cast<size_t>(f)] = hp.y - fp.y;
+                clipMaxH = std::max(clipMaxH, hp.y - fp.y);
+            }
+            // If the clip ever stands TALLER than the bind pose (bind wasn't a
+            // clean upright T-pose), anchor to the clip max so drops stay ≤ 0.
+            standH = std::max(standH, clipMaxH);
+            if (legLen > 1e-3f && standH > 1e-3f) {
+                clip.rootY.reserve(static_cast<size_t>(frames));
+                for (int f = 0; f < frames; ++f) {
+                    const float drop =
+                        (hipAboveFoot[static_cast<size_t>(f)] - standH) / legLen;
+                    clip.rootY.push_back(std::clamp(drop, -1.0f, 0.0f));
+                }
+            }
+        }
+        if (fingerResolved > 0) {
+            // Rotate each finger pointing DIRECTION into the canonical frame C
+            // (w==0 → it's a direction vector; leave zero/unfilled slots alone).
+            for (auto& frame : fingerCurl)
+                for (auto& q : frame) {
+                    if (q[0] == 0.f && q[1] == 0.f && q[2] == 0.f) continue;
+                    const Ogre::Vector3 v = C * Ogre::Vector3(q[0], q[1], q[2]);
+                    q = {static_cast<float>(v.x), static_cast<float>(v.y),
+                         static_cast<float>(v.z), 0.0f};
+                }
+            clip.fingers = std::move(fingerCurl);
+        }
         out.push_back(std::move(clip));
     }
 
@@ -1237,10 +1710,23 @@ struct TargetBindFrame {
 };
 
 TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
-                                    const std::vector<int>& boneToCanon)
+                                    const std::vector<int>& boneToCanon,
+                                    bool v2 = false)
 {
     const int nBones = static_cast<int>(skel->getNumBones());
-    const int Jc = MotionInbetween::canonicalJointCount();
+    // V2 (52 joints, fingers folded in) uses the V2 topology functions; V1 (22)
+    // is unchanged. Body roles 0..21 are identical in both, so the facing
+    // derivation below (roles 0/5/7/11/15/19) needs no branch.
+    const int Jc = v2 ? MotionInbetween::canonicalJointCountV2()
+                      : MotionInbetween::canonicalJointCount();
+    auto canonChild = [v2](int i) {
+        return v2 ? MotionInbetween::canonicalChildOfV2(i)
+                  : MotionInbetween::canonicalChildOf(i);
+    };
+    auto canonParent = [v2](int i) {
+        return v2 ? MotionInbetween::canonicalParentOfV2(i)
+                  : MotionInbetween::canonicalParentOf(i);
+    };
     TargetBindFrame tb;
     tb.bindWorld.resize(static_cast<size_t>(nBones));
     tb.bindLocal.resize(static_cast<size_t>(nBones));
@@ -1296,8 +1782,8 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
         }
     }
     auto targetDir = [&](int role) -> Ogre::Vector3 {
-        const int child = MotionInbetween::canonicalChildOf(role);
-        const int parent = MotionInbetween::canonicalParentOf(role);
+        const int child = canonChild(role);
+        const int parent = canonParent(role);
         const int a = tb.roleBoneIdx[static_cast<size_t>(role)];
         if (a >= 0 && child >= 0) {
             const int bIdx = tb.roleBoneIdx[static_cast<size_t>(child)];
@@ -1344,13 +1830,77 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
         if (!placed[static_cast<size_t>(i)]) tb.order.push_back(i);
     return tb;
 }
+
+// HANDEDNESS COMPENSATION (shared by applyMotionClip + BodyRetargeter). Bone
+// names are anatomically correct, but a mesh may face opposite CMU — then the
+// rig's "Left" bones sit on −X while canonical left joints expect +X. Detect
+// from world-X of a left vs right bone pair and swap canonical L/R indices.
+void compensateCanonicalHandedness(Ogre::Skeleton* skel,
+                                   std::vector<int>& boneToCanon)
+{
+    if (!skel) return;
+    skel->reset(true);
+    skel->_updateTransforms();
+    const int nBones = static_cast<int>(boneToCanon.size());
+    auto worldXForCanon = [&](int canon) -> double {
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[static_cast<size_t>(i)] == canon)
+                return skel->getBone(static_cast<unsigned short>(i))
+                    ->_getDerivedPosition().x;
+        return 0.0;
+    };
+    double lx = worldXForCanon(11), rx = worldXForCanon(7);   // arms
+    if (std::abs(lx - rx) < 1e-4) {
+        lx = worldXForCanon(19);
+        rx = worldXForCanon(15);  // legs
+    }
+    if (lx < rx - 1e-5) {
+        static const int kLR[][2] = {{6, 10},  {7, 11},  {8, 12},  {9, 13},
+                                     {14, 18}, {15, 19}, {16, 20}, {17, 21}};
+        auto swapCanon = [&](int& c) {
+            for (auto& p : kLR) {
+                if (c == p[0]) {
+                    c = p[1];
+                    return;
+                }
+                if (c == p[1]) {
+                    c = p[0];
+                    return;
+                }
+            }
+        };
+        for (int i = 0; i < nBones; ++i)
+            if (boneToCanon[static_cast<size_t>(i)] >= 0)
+                swapCanon(boneToCanon[static_cast<size_t>(i)]);
+    }
+}
+
 } // namespace
+
+namespace {
+// Same parent indices applyMotionClip uses for world-frame PoseIK quats.
+constexpr int kParentCanon[22] = {
+    -1, 0, 1, 2, 3, 4,   // hip, abdomen, chest, neck, neck1, head
+     2, 6, 7, 8,          // rcollar, rshoulder, relbow, rhand
+     2, 10, 11, 12,       // lcollar, lshoulder, lelbow, lhand
+     0, 14, 15, 16,       // rbuttock, rhip, rknee, rfoot
+     0, 18, 19, 20 };     // lbuttock, lhip, lknee, lfoot
+
+// PoseIK leaves collar/buttock at identity (unresolved) — walk up to chest/hip
+// for parent-relative articulation, matching MocapPoseDebugOverlay / PoseIK.
+int effectiveParentRole(int role, uint32_t resolvedMask)
+{
+    int p = kParentCanon[role];
+    while (p >= 0 && !(resolvedMask & (1u << static_cast<unsigned>(p))))
+        p = kParentCanon[p];
+    return p;
+}
+}  // namespace
 
 // ── BodyRetargeter — the applyMotionClip direction-match, per single frame ──
 struct BodyRetargeter::Impl {
     TargetBindFrame tb;
     std::vector<int> boneToCanon;   // per bone
-    Ogre::Quaternion CtInv = Ogre::Quaternion::IDENTITY;
     int nBones = 0;
     int Jc = 0;
     // Harvested STANDING pose per bone (the calmest frame of the rig's existing
@@ -1360,18 +1910,53 @@ struct BodyRetargeter::Impl {
     std::vector<Ogre::Quaternion> standLocal;     // per bone
     std::vector<bool> haveStand;                  // per bone
     std::vector<Ogre::Quaternion> Mc, McInv;      // per bone (roll correction)
+    std::vector<int> canonDup;                    // bones sharing a canonical role
     bool restsAreIdentity = true;
     bool haveAnyStand = false;
-    // neutral (first-frame) canonical quats — the reference the per-frame
-    // local-articulation delta is taken against.
+    // neutral (first-frame) canonical WORLD quats — reference for PoseIK alignment.
     std::array<std::array<float, 4>, 22> neutral{};
+    uint32_t neutralResolvedMask = 0;
     bool haveNeutral = false;
+    bool neutralHadTorso = false;
+    bool yaw180 = false;
+#ifdef ENABLE_MOCAP
+    // Landmark direction retarget (live mocap): neutral ref dirs in skeleton
+    // world + per-bone Qbase (bind aligned to neutral), same as applyMotionClip.
+    std::vector<Ogre::Vector3> neutralDref;       // per canonical role
+    std::vector<Ogre::Quaternion> dirQbase;       // per bone
+    bool haveNeutralDir = false;
+#endif
 };
 
-BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
+#ifdef ENABLE_MOCAP
+namespace {
+void collectCanonicalLiveDirections(
+    const float* world33, const float* visibility33, int Jc,
+    std::vector<Ogre::Vector3>& outCanonDir)
+{
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(world33, canon);
+    outCanonDir.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+    for (int c = 0; c < Jc; ++c) {
+        std::array<float, 3> dir{};
+        if (PoseIK::Solver::canonicalLiveDirection(
+                c, canon, visibility33, 0.3f, dir)) {
+            Ogre::Vector3 v(dir[0], dir[1], dir[2]);
+            if (v.squaredLength() > 1e-12f) {
+                v.normalise();
+                outCanonDir[static_cast<size_t>(c)] = v;
+            }
+        }
+    }
+}
+}  // namespace
+#endif
+
+BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
 {
     if (!skel) return;
     d = std::make_shared<Impl>();
+    d->yaw180 = yaw180;
     d->nBones = static_cast<int>(skel->getNumBones());
     d->Jc = MotionInbetween::canonicalJointCount();
     d->boneToCanon.assign(static_cast<size_t>(d->nBones), -1);
@@ -1379,8 +1964,14 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
         d->boneToCanon[static_cast<size_t>(i)] =
             MotionInbetween::canonicalIndexForBone(QString::fromStdString(
                 skel->getBone(static_cast<unsigned short>(i))->getName()));
+    // Pose-ik mocap: anatomical name→role only (NO CMU handedness swap — that
+    // swap is for BVH/library clips and would mirror live limb motion).
     d->tb = readTargetBindFrame(skel, d->boneToCanon);
-    d->CtInv = d->tb.Ct.Inverse();
+
+    d->canonDup.assign(static_cast<size_t>(d->Jc), 0);
+    for (int i = 0; i < d->nBones; ++i)
+        if (d->boneToCanon[static_cast<size_t>(i)] >= 0)
+            ++d->canonDup[static_cast<size_t>(d->boneToCanon[static_cast<size_t>(i)])];
 
     // ── Harvest the STANDING pose (calmest frame of the rig's first authored,
     //    non-generated animation) — the same pose applyMotionClip's legacy
@@ -1441,8 +2032,8 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
             d->haveAnyStand = true;
         }
     }
-    // Rig bone rests identity? (Mixamo yes → Mc heuristic valid; UniRig/template
-    // no → skip Mc, use raw delta on the standing pose.)
+    // Rig bone rests identity? (common FBX humanoids → Mc heuristic valid;
+    // UniRig/template no → skip Mc, use raw delta on the standing pose.)
     for (int i = 0; i < d->nBones && d->restsAreIdentity; ++i) {
         Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
         if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,
@@ -1459,90 +2050,237 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel)
     m_valid = mapped * 2 >= d->Jc;
 }
 
-std::vector<std::pair<unsigned short, Ogre::Quaternion>>
-BodyRetargeter::evaluateFrame(
-    const std::array<std::array<float, 4>, 22>& canonicalQuats,
-    uint32_t resolvedMask) const
+bool BodyRetargeter::hasNeutralReference() const
 {
-    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
-    if (!m_valid || !d) return out;
+    return m_valid && d && d->haveNeutral;
+}
+
+void BodyRetargeter::setNeutralReference(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask,
+    const float* mediaPipeWorld33,
+    const float* mediaPipeVisibility33)
+{
+    if (!m_valid || !d)
+        return;
     const TargetBindFrame& tb = d->tb;
     const int Jc = d->Jc;
     auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
         -> Ogre::Quaternion {
         const auto& q = src[static_cast<size_t>(joint)];
-        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
     };
-    // First frame becomes the NEUTRAL reference — the clip's "calm" frame, which
-    // is what applyMotionClip's legacy transport takes its per-joint LOCAL
-    // articulation delta and its Mc roll-correction frame against. Composing the
-    // delta onto the harvested STANDING pose (arms at chest) is what makes the
-    // live preview match the Record path.
-    if (!d->haveNeutral) {
-        d->neutral = canonicalQuats;
-        d->haveNeutral = true;
-        // Mc[i] = standWorldOf(bone)⁻¹ · clipQ(neutral, c) — Mixamo-only roll
-        // correction; on non-identity-rest rigs it is left identity.
-        if (d->haveAnyStand && d->restsAreIdentity) {
-            std::vector<Ogre::Quaternion> standW(static_cast<size_t>(d->nBones),
-                                                 Ogre::Quaternion::IDENTITY);
-            for (int i : tb.order) {
-                const int pi = tb.parentIdx[static_cast<size_t>(i)];
-                const Ogre::Quaternion Wp = (pi >= 0)
-                    ? standW[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
-                const Ogre::Quaternion localRot = d->haveStand[static_cast<size_t>(i)]
-                    ? d->standLocal[static_cast<size_t>(i)]
-                    : tb.bindLocal[static_cast<size_t>(i)];
-                standW[static_cast<size_t>(i)] = Wp * localRot;
-            }
+    d->neutral = canonicalQuats;
+    d->neutralResolvedMask = resolvedMask;
+    d->haveNeutral = true;
+    constexpr uint32_t kTorsoMask =
+        (1u << 0) | (1u << 1) | (1u << 2);  // hip, abdomen, chest
+    d->neutralHadTorso = (resolvedMask & kTorsoMask) == kTorsoMask;
+    if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
+        std::vector<Ogre::Quaternion> standW(static_cast<size_t>(d->nBones),
+                                             Ogre::Quaternion::IDENTITY);
+        for (int i : tb.order) {
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            const Ogre::Quaternion Wp = (pi >= 0)
+                ? standW[static_cast<size_t>(pi)] : Ogre::Quaternion::IDENTITY;
+            const Ogre::Quaternion localRot = d->haveStand[static_cast<size_t>(i)]
+                ? d->standLocal[static_cast<size_t>(i)]
+                : tb.bindLocal[static_cast<size_t>(i)];
+            standW[static_cast<size_t>(i)] = Wp * localRot;
+        }
+        for (int i = 0; i < d->nBones; ++i) {
+            const int c = d->boneToCanon[static_cast<size_t>(i)];
+            if (c <= 0 || c >= Jc)
+                continue;
+            d->Mc[static_cast<size_t>(i)] =
+                standW[static_cast<size_t>(i)].Inverse() * clipQ(d->neutral, c);
+            d->McInv[static_cast<size_t>(i)] =
+                d->Mc[static_cast<size_t>(i)].Inverse();
+        }
+    }
+#ifdef ENABLE_MOCAP
+    d->haveNeutralDir = false;
+    if (mediaPipeWorld33) {
+        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+        std::vector<Ogre::Vector3> neutralCanon(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        collectCanonicalLiveDirections(
+            mediaPipeWorld33, mediaPipeVisibility33, Jc, neutralCanon);
+        d->neutralDref.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        d->dirQbase.assign(static_cast<size_t>(d->nBones),
+                           Ogre::Quaternion::IDENTITY);
+        for (int c = 0; c < Jc; ++c) {
+            const Ogre::Vector3& nc = neutralCanon[static_cast<size_t>(c)];
+            if (nc.squaredLength() < 1e-12f)
+                continue;
+            Ogre::Vector3 ref = CtInv * nc;
+            if (ref.squaredLength() < 1e-12f)
+                continue;
+            ref.normalise();
+            d->neutralDref[static_cast<size_t>(c)] = ref;
+            d->haveNeutralDir = true;
+        }
+        if (d->haveNeutralDir) {
             for (int i = 0; i < d->nBones; ++i) {
                 const int c = d->boneToCanon[static_cast<size_t>(i)];
-                if (c <= 0 || c >= Jc) continue;   // root (c==0) keeps identity Mc
-                d->Mc[static_cast<size_t>(i)] =
-                    standW[static_cast<size_t>(i)].Inverse() * clipQ(d->neutral, c);
-                d->McInv[static_cast<size_t>(i)] = d->Mc[static_cast<size_t>(i)].Inverse();
+                if (c < 0 || c >= Jc || c == 0)
+                    continue;
+                if (d->neutralDref[static_cast<size_t>(c)].squaredLength()
+                    < 1e-12f)
+                    continue;
+                if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                    < 1e-12f)
+                    continue;
+                d->dirQbase[static_cast<size_t>(i)] =
+                    tb.tgtBindDir[static_cast<size_t>(c)].getRotationTo(
+                        d->neutralDref[static_cast<size_t>(c)])
+                    * tb.bindWorld[static_cast<size_t>(i)];
             }
         }
     }
+#endif
+}
+
+std::vector<std::pair<unsigned short, Ogre::Quaternion>>
+BodyRetargeter::evaluateFrame(
+    const std::array<std::array<float, 4>, 22>& canonicalQuats,
+    uint32_t resolvedMask,
+    uint32_t skipRolesMask,
+    const float* mediaPipeWorld33,
+    const float* mediaPipeVisibility33) const
+{
+    std::vector<std::pair<unsigned short, Ogre::Quaternion>> out;
+    if (!m_valid || !d) return out;
+    const TargetBindFrame& tb = d->tb;
+    const int Jc = d->Jc;
+    const int nBones = d->nBones;
+
+    auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
+        -> Ogre::Quaternion {
+        const auto& q = src[static_cast<size_t>(joint)];
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
+    };
+    // PoseIK emits WORLD quats per role. Collar/buttock stay identity (unresolved)
+    // — skip them and use chest/hip as the parent (same as the debug overlay).
+    auto parentRelativeLocal = [&](const std::array<std::array<float, 4>, 22>& src,
+                                 int role, uint32_t mask) -> Ogre::Quaternion {
+        const int pc = effectiveParentRole(role, mask);
+        if (pc >= 0 && pc < Jc)
+            return clipQ(src, pc).Inverse() * clipQ(src, role);
+        return clipQ(src, role);
+    };
+    const bool haveNeutral = d->haveNeutral;
+
+#ifdef ENABLE_MOCAP
+    // Live mocap: aim bind bones at landmark segment directions (same math as
+    // applyMotionClip direction retarget) — matches the PoseIK debug overlay.
+    if (mediaPipeWorld33 && haveNeutral && d->haveNeutralDir) {
+        std::vector<Ogre::Vector3> liveCanon(
+            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+        collectCanonicalLiveDirections(
+            mediaPipeWorld33, mediaPipeVisibility33, Jc, liveCanon);
+        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+        std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
+        for (int i : tb.order) {
+            const Ogre::Quaternion base =
+                (d->haveStand[static_cast<size_t>(i)]
+                    ? d->standLocal[static_cast<size_t>(i)]
+                    : tb.bindLocal[static_cast<size_t>(i)]);
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            const Ogre::Quaternion Wp =
+                (pi >= 0) ? W[static_cast<size_t>(pi)]
+                          : Ogre::Quaternion::IDENTITY;
+            const int c = d->boneToCanon[static_cast<size_t>(i)];
+            if (c < 0 || c >= Jc
+                || (skipRolesMask & (1u << static_cast<unsigned>(c)))) {
+                W[static_cast<size_t>(i)] = Wp * base;
+                continue;
+            }
+            Ogre::Quaternion local;
+            if (c == 0) {
+                local = base;
+                W[static_cast<size_t>(i)] = Wp * local;
+            } else if (liveCanon[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f
+                       && d->neutralDref[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f
+                       && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f) {
+                Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
+                ds.normalise();
+                const Ogre::Quaternion R =
+                    d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
+                const Ogre::Quaternion Wt =
+                    R * d->dirQbase[static_cast<size_t>(i)];
+                local = Wp.Inverse() * Wt;
+                W[static_cast<size_t>(i)] = Wt;
+            } else {
+                local = base;
+                W[static_cast<size_t>(i)] = Wp * local;
+            }
+            out.emplace_back(static_cast<unsigned short>(i), local);
+        }
+        return out;
+    }
+#endif
+    (void)mediaPipeWorld33;
+    (void)mediaPipeVisibility33;
+
     for (int i : tb.order) {
         const int c = d->boneToCanon[static_cast<size_t>(i)];
         if (c < 0 || c >= Jc) continue;
-        const int pc = MotionInbetween::canonicalParentOf(c);
-        // world -> parent-relative LOCAL articulation, current and neutral
-        auto localArtic = [&](const std::array<std::array<float, 4>, 22>& src) {
-            return (pc >= 0 && pc < Jc)
-                ? clipQ(src, pc).Inverse() * clipQ(src, c)
-                : clipQ(src, c);
-        };
-        // base = harvested standing pose local (arms at chest), else bind local.
-        const Ogre::Quaternion base = d->haveStand[static_cast<size_t>(i)]
-            ? d->standLocal[static_cast<size_t>(i)]
-            : tb.bindLocal[static_cast<size_t>(i)];
-        // UNRESOLVED role (e.g. legs of a seated subject) → hold the standing
-        // pose; never drive a bone from a role PoseIK couldn't observe.
+        if (skipRolesMask & (1u << static_cast<unsigned>(c)))
+            continue;
+        const Ogre::Quaternion base =
+            (d->haveStand[static_cast<size_t>(i)]
+                ? d->standLocal[static_cast<size_t>(i)]
+                : tb.bindLocal[static_cast<size_t>(i)]);
         const bool resolved = (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
         if (!resolved) {
             out.emplace_back(static_cast<unsigned short>(i), base);
             continue;
         }
-        if (c == 0) {
-            // Root/hip: MediaPipe/CMU bake the whole-body FACING into the hip.
-            // Locking the root to the standing pose keeps the figure upright
-            // (applying the full hip delta folds the torso forward). A subtle
-            // pelvic sway could be re-added later; upright + stable first.
+        if (c == 0 || !haveNeutral) {
             out.emplace_back(static_cast<unsigned short>(i), base);
             continue;
         }
-        const Ogre::Quaternion cur = localArtic(canonicalQuats);
-        const Ogre::Quaternion ref = localArtic(d->neutral);
-        const Ogre::Quaternion delta = ref.Inverse() * cur;
-        // roll-corrected articulation, composed onto the standing pose.
-        const Ogre::Quaternion artic =
-            d->McInv[static_cast<size_t>(i)] * delta * d->Mc[static_cast<size_t>(i)];
-        const Ogre::Quaternion local = base * artic;
-        out.emplace_back(static_cast<unsigned short>(i), local);
+        // PoseIK alignment: parent-relative delta vs neutral, transported onto
+        // the rig standing pose with the same Mc frame map as applyMotionClip.
+        const Ogre::Quaternion localCur =
+            parentRelativeLocal(canonicalQuats, c, resolvedMask);
+        const Ogre::Quaternion localRef =
+            parentRelativeLocal(d->neutral, c, d->neutralResolvedMask);
+        Ogre::Quaternion delta = localRef.Inverse() * localCur;
+        Ogre::Quaternion artic = delta;
+        if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
+            artic = d->McInv[static_cast<size_t>(i)] * delta
+                    * d->Mc[static_cast<size_t>(i)];
+        } else if (d->yaw180 && !d->haveAnyStand && c > 0) {
+            static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f);
+            artic = kYawPi.Inverse() * delta * kYawPi;
+        }
+        const int dup = std::max(1, d->canonDup[static_cast<size_t>(c)]);
+        if (dup > 1)
+            artic = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                            Ogre::Quaternion::IDENTITY, artic,
+                                            true);
+        out.emplace_back(static_cast<unsigned short>(i), base * artic);
     }
     return out;
+}
+
+void BodyRetargeter::resetLiveNeutral()
+{
+    if (!d)
+        return;
+    d->haveNeutral = false;
+    d->neutralHadTorso = false;
+    d->neutralResolvedMask = 0;
+#ifdef ENABLE_MOCAP
+    d->haveNeutralDir = false;
+    d->neutralDref.clear();
+    d->dirQbase.clear();
+#endif
 }
 
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
@@ -1938,6 +2676,390 @@ AnimationMerger::FootPinResult AnimationMerger::pinFeet(
     return res;
 }
 
+int AnimationMerger::groundRootToFeet(Ogre::Skeleton* skel,
+                                      const std::string& animName)
+{
+    if (!skel || !skel->hasAnimation(animName)) return 0;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    const int nBones = static_cast<int>(skel->getNumBones());
+
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    // Bind-local positions for the manual FK (skeleton is in reset pose).
+    std::vector<Ogre::Vector3> bindLocalPos(static_cast<size_t>(nBones));
+    for (int i = 0; i < nBones; ++i)
+        bindLocalPos[static_cast<size_t>(i)] =
+            skel->getBone(static_cast<unsigned short>(i))->getPosition();
+
+    const int rootIdx = tb.roleBoneIdx[0];
+    const int rFoot = tb.roleBoneIdx[17];
+    const int lFoot = tb.roleBoneIdx[21];
+    if (rootIdx < 0 || (rFoot < 0 && lFoot < 0)) return 0;
+    auto* rootTrk = anim->hasNodeTrack(static_cast<unsigned short>(rootIdx))
+        ? anim->getNodeTrack(static_cast<unsigned short>(rootIdx)) : nullptr;
+    if (!rootTrk || rootTrk->getNumKeyFrames() == 0) return 0;
+
+    // Bind ground = the lowest foot's canonical-Y in the reset pose.
+    auto canonY = [&](int bone) {
+        return (tb.Ct * tb.bindPos[static_cast<size_t>(bone)]).y;
+    };
+    float groundY = std::numeric_limits<float>::max();
+    if (rFoot >= 0) groundY = std::min(groundY, canonY(rFoot));
+    if (lFoot >= 0) groundY = std::min(groundY, canonY(lFoot));
+
+    // Root's parent-local UP direction (canonical +Y mapped into the frame the
+    // keyframe translate is applied in) — for a top-of-hierarchy root this is
+    // world up, matching applyMotionClip's descent convention.
+    const Ogre::Vector3 dropAxis =
+        tb.Ct.Inverse() * Ogre::Vector3(0.0f, 1.0f, 0.0f);
+
+    const int nk = static_cast<int>(rootTrk->getNumKeyFrames());
+    auto trackOf = [&](int bone) -> Ogre::NodeAnimationTrack* {
+        if (bone < 0 || !anim->hasNodeTrack(static_cast<unsigned short>(bone)))
+            return nullptr;
+        return anim->getNodeTrack(static_cast<unsigned short>(bone));
+    };
+
+    int adjusted = 0;
+    for (int k = 0; k < nk; ++k) {
+        Ogre::TransformKeyFrame* rkf =
+            rootTrk->getNodeKeyFrame(static_cast<unsigned short>(k));
+        const float t = rkf->getTime();
+        const Ogre::TimeIndex ti = anim->_getTimeIndex(t);
+        // Manual FK at this time to find world foot positions.
+        std::vector<Ogre::Quaternion> Wrot(static_cast<size_t>(nBones));
+        std::vector<Ogre::Vector3> Wpos(static_cast<size_t>(nBones));
+        for (int i : tb.order) {
+            Ogre::Quaternion lrot = tb.bindLocal[static_cast<size_t>(i)];
+            Ogre::Vector3 lpos = bindLocalPos[static_cast<size_t>(i)];
+            if (auto* trk = trackOf(i)) {
+                Ogre::TransformKeyFrame kf(nullptr, 0.0f);
+                trk->getInterpolatedKeyFrame(ti, &kf);
+                lrot = lrot * kf.getRotation();
+                lpos = lpos + kf.getTranslate();
+            }
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            if (pi >= 0) {
+                Wrot[static_cast<size_t>(i)] =
+                    Wrot[static_cast<size_t>(pi)] * lrot;
+                Wpos[static_cast<size_t>(i)] =
+                    Wpos[static_cast<size_t>(pi)]
+                    + Wrot[static_cast<size_t>(pi)] * lpos;
+            } else {
+                Wrot[static_cast<size_t>(i)] = lrot;
+                Wpos[static_cast<size_t>(i)] = lpos;
+            }
+        }
+        float lowest = std::numeric_limits<float>::max();
+        if (rFoot >= 0)
+            lowest = std::min(lowest, (tb.Ct * Wpos[static_cast<size_t>(rFoot)]).y);
+        if (lFoot >= 0)
+            lowest = std::min(lowest, (tb.Ct * Wpos[static_cast<size_t>(lFoot)]).y);
+        // How far the lowest foot floats above the bind ground (≥ 0). Lower the
+        // root by that much so the foot re-plants. Never RAISE (max(0,...)).
+        const float above = std::max(0.0f, lowest - groundY);
+        if (above > 1e-4f) {
+            rkf->setTranslate(rkf->getTranslate() - dropAxis * above);
+            ++adjusted;
+        }
+    }
+    if (adjusted > 0) rootTrk->_keyFrameDataChanged();
+    return adjusted;
+}
+
+int AnimationMerger::applyFingerCurl(
+    Ogre::Skeleton* skel, const std::string& animName,
+    const std::vector<std::vector<std::array<float, 4>>>& clipFingers,
+    int fps,
+    const std::vector<std::array<float, 3>>& clipFingerRest)
+{
+    if (!skel || !skel->hasAnimation(animName) || clipFingers.empty())
+        return 0;
+    // Rows are indexed with kFingerSlots offsets below — reject any clip whose
+    // rows aren't exactly that wide (parse enforces it, but extraction paths
+    // and direct callers also feed this).
+    for (const auto& row : clipFingers)
+        if (static_cast<int>(row.size()) != kFingerSlots) return 0;
+    if (fps <= 0) fps = 30;
+    (void)clipFingerRest;   // superseded by the clip-mean rest computed below;
+                            // kept in the signature for the stored-rest path.
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    const int frames = static_cast<int>(clipFingers.size());
+    const float dt = 1.0f / static_cast<float>(fps);
+    const int nBones = static_cast<int>(skel->getNumBones());
+
+    // The stored curl is C·(source world delta)·C⁻¹ (canonical frame). To
+    // reproduce the same WORLD bend on the target, map it into the target's
+    // world via Ct⁻¹ (Ct = target world→canonical), then express as the
+    // finger bone's local keyframe delta. Need the target's Ct + per-bone bind
+    // world/local + parent bind world — all from the reset (bind) pose.
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+    // Capture finger bones' bind world + bind local + parent bind world.
+    skel->reset(true); skel->_updateTransforms();
+    std::vector<Ogre::Quaternion> bindWorld(static_cast<size_t>(nBones));
+    std::vector<Ogre::Quaternion> bindLocal(static_cast<size_t>(nBones));
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        bindWorld[static_cast<size_t>(i)] = b->_getDerivedOrientation();
+        bindLocal[static_cast<size_t>(i)] = b->getOrientation();
+    }
+    auto parentBindWorld = [&](Ogre::Bone* b) -> Ogre::Quaternion {
+        if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+            return bindWorld[static_cast<size_t>(p->getHandle())];
+        return Ogre::Quaternion::IDENTITY;
+    };
+
+    // Map the TARGET rig's finger bones by (side,finger,segment). Keep, per
+    // (side,finger), the segments in order so we can redistribute.
+    std::vector<std::vector<std::pair<int, Ogre::Bone*>>> tgt(
+        2 * MotionInbetween::kFingerCount);
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        const auto fr = MotionInbetween::fingerRoleForBone(
+            QString::fromStdString(b->getName()));
+        if (!fr.valid()) continue;
+        tgt[static_cast<size_t>(fr.side * MotionInbetween::kFingerCount
+                                + fr.finger)].push_back({fr.segment, b});
+    }
+    int animated = 0;
+    for (auto& v : tgt)
+        std::sort(v.begin(), v.end(),
+                  [](auto& a, auto& b){ return a.first < b.first; });
+
+    // Target bind pointing direction per bone (segment → child, canonical
+    // frame). Same signal the source stored — aiming one at the other bends
+    // the finger the same way regardless of local axis conventions.
+    auto childOfTarget = [&](Ogre::Bone* b) -> Ogre::Bone* {
+        // the finger child = a child bone that is also a finger of the same
+        // (side,finger) with segment+1; simplest: any finger-role child.
+        for (unsigned short k = 0; k < b->numChildren(); ++k) {
+            auto* c = dynamic_cast<Ogre::Bone*>(b->getChild(k));
+            if (c && MotionInbetween::fingerRoleForBone(
+                    QString::fromStdString(c->getName())).valid())
+                return c;
+        }
+        // Fallback (mirror of the extraction side): the last finger segment's
+        // only child is often a non-role "nub"/tip. Use it for the pointing
+        // direction so the distal segment still aims — else the knuckle-bend
+        // curl is lost on the target too.
+        if (b->numChildren() > 0)
+            return dynamic_cast<Ogre::Bone*>(b->getChild(0));
+        return nullptr;
+    };
+    std::vector<Ogre::Vector3> tgtBindDir(static_cast<size_t>(nBones),
+                                          Ogre::Vector3::ZERO);
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        Ogre::Bone* c = childOfTarget(b);
+        if (!c) continue;
+        Ogre::Vector3 d = c->_getDerivedPosition() - b->_getDerivedPosition();
+        if (d.squaredLength() < 1e-12f) continue;
+        tgtBindDir[static_cast<size_t>(i)] = (tb.Ct * d).normalisedCopy();
+    }
+
+    // Per-hand FLEXION AXIS (canonical frame): the axis a finger rotates about
+    // to curl into the palm. Fingers 1..4 (index..pinky) lie in a plane; their
+    // pointing dirs share it and their knuckle roots spread across it. The
+    // flexion axis ⟂ that plane = mean(fingerDir) × (knuckleSpread). Derived
+    // from TARGET bind geometry so the re-applied curl bends in the target's
+    // own anatomical plane — the source curl's rotation AXIS is in a finger
+    // frame ~100° misaligned from the target's, so transporting the rotation
+    // directly wastes most of it; we transport only the scalar curl ANGLE and
+    // rotate about THIS axis instead.
+    std::array<Ogre::Vector3, 2> flexAxis = {Ogre::Vector3::ZERO,
+                                             Ogre::Vector3::ZERO};
+    for (int side = 0; side < 2; ++side) {
+        Ogre::Vector3 meanDir = Ogre::Vector3::ZERO;
+        std::vector<Ogre::Vector3> roots;
+        for (int fgr = 1; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            auto& segs = tgt[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty()) continue;
+            Ogre::Bone* b = segs.front().second;   // seg0 (knuckle root)
+            const int bi = b->getHandle();
+            if (tgtBindDir[static_cast<size_t>(bi)].squaredLength() > 1e-9f) {
+                meanDir += tgtBindDir[static_cast<size_t>(bi)];
+                roots.push_back(tb.Ct * b->_getDerivedPosition());
+            }
+        }
+        if (meanDir.squaredLength() < 1e-9f || roots.size() < 2) continue;
+        meanDir.normalise();
+        // FLEXION axis = the KNUCKLE LINE (index-root → pinky-root). Fingers
+        // point along meanDir; curling folds them toward the palm — a rotation
+        // in the plane of meanDir and the palm normal, whose axis is the knuckle
+        // line. (meanDir × spread would be the palm-normal → ABDUCTION, i.e.
+        // fingers splaying sideways, which barely closes the fist — the earlier
+        // bug.) Orthogonalise the spread against meanDir so the axis is clean.
+        Ogre::Vector3 spread = roots.back() - roots.front();
+        spread = spread - meanDir * spread.dotProduct(meanDir);
+        if (spread.squaredLength() < 1e-9f) continue;
+        Ogre::Vector3 ax = spread.normalisedCopy();
+        // Sign the axis so +rotation = FLEXION (fingers fold toward the palm).
+        // The palm side is unambiguous from the THUMB: the thumb always sits on
+        // the palm/flexion side of the hand. palmN = meanDir × spread is the
+        // finger-plane normal (sign unknown); the thumb's offset from the finger
+        // plane picks the correct sign. Fingers flex by rotating so the tip
+        // gains a component toward +palmSide (the thumb side). This is rig-
+        // independent (no bind micro-bend needed — rumba's fingers are dead
+        // straight — and no source-frame correspondence).
+        Ogre::Vector3 palmN = meanDir.crossProduct(spread.normalisedCopy());
+        if (palmN.squaredLength() > 1e-9f) {
+            palmN.normalise();
+            // thumb (finger 0) seg0 position relative to the index knuckle
+            Ogre::Vector3 palmSide = Ogre::Vector3::ZERO;
+            auto& thumbSegs = tgt[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + 0)];
+            if (!thumbSegs.empty() && !roots.empty()) {
+                const Ogre::Vector3 thumbPos =
+                    tb.Ct * thumbSegs.front().second->_getDerivedPosition();
+                const Ogre::Vector3 off = thumbPos - roots.front();
+                const float side_ = off.dotProduct(palmN);
+                if (std::abs(side_) > 1e-5f)
+                    palmSide = palmN * (side_ >= 0.f ? 1.f : -1.f);
+            }
+            // Fallback if no thumb: assume palm faces the hand-bone's own
+            // down/forward — use the raw palmN (may be wrong, but rare).
+            if (palmSide.squaredLength() < 1e-9f) palmSide = palmN;
+            // choose sign whose small +rotation moves meanDir toward palmSide
+            const Ogre::Vector3 test =
+                Ogre::Quaternion(Ogre::Radian(0.4f), ax) * meanDir;
+            if ((test - meanDir).dotProduct(palmSide) < 0.f)
+                ax = -ax;
+        }
+        flexAxis[static_cast<size_t>(side)] = ax;
+    }
+
+    // For each target finger segment, pull the proportional source segment's
+    // pointing direction and AIM the target bone's bind direction at it.
+    for (int side = 0; side < 2; ++side) {
+        for (int fgr = 0; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            auto& segs = tgt[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty()) continue;
+            // How many source segments carry a direction (are populated)?
+            int srcSegs = 0;
+            for (int s = 0; s < kFingerSegs; ++s) {
+                const int slot = fingerSlot(side, fgr, s);
+                bool filled = false;
+                for (int f = 0; f < frames && !filled; ++f) {
+                    const auto& q = clipFingers[static_cast<size_t>(f)]
+                                              [static_cast<size_t>(slot)];
+                    if (q[0] != 0.f || q[1] != 0.f || q[2] != 0.f) filled = true;
+                }
+                if (filled) srcSegs = s + 1;
+            }
+            if (srcSegs == 0) continue;
+            const int tgtSegs = static_cast<int>(segs.size());
+            for (int ts = 0; ts < tgtSegs; ++ts) {
+                int ss = (tgtSegs <= 1) ? 0
+                    : static_cast<int>(std::round(
+                          double(ts) * (srcSegs - 1) / (tgtSegs - 1)));
+                ss = std::clamp(ss, 0, kFingerSegs - 1);
+                const int slot = fingerSlot(side, fgr, ss);
+                Ogre::Bone* b = segs[static_cast<size_t>(ts)].second;
+                const int bi = b->getHandle();
+                const Ogre::Vector3 dbind = tgtBindDir[static_cast<size_t>(bi)];
+                if (dbind.squaredLength() < 1e-9f) continue;   // tip, no child
+                const Ogre::Quaternion Lbind = bindLocal[static_cast<size_t>(bi)];
+                const Ogre::Quaternion Pbind = parentBindWorld(b);
+                const Ogre::Quaternion Wbind = bindWorld[static_cast<size_t>(bi)];
+                // Source REST pointing dir for this slot = the finger's MEAN
+                // direction across the clip. Aiming target-bind at the ABSOLUTE
+                // source dir over-bends every finger by the gap between the two
+                // rigs' finger rest conventions (measured 50–130° even on an
+                // OPEN, static hand). Transporting the RELATIVE bend (rest→frame)
+                // cancels that: a static hand → 0° bend, a grasping hand tracks
+                // its real 0→~45° curl. The clip-mean is a rig-agnostic neutral
+                // computed from the per-frame data itself — no library/extraction
+                // change, works on every existing clip. (The stored
+                // `clipFingerRest`, when present, isn't used here: the bind-pose
+                // rest carries a constant convention offset the mean avoids.)
+                Ogre::Vector3 dsrcRest = Ogre::Vector3::ZERO;
+                {
+                    Ogre::Vector3 acc = Ogre::Vector3::ZERO;
+                    for (int f = 0; f < frames; ++f) {
+                        const auto& qf = clipFingers[static_cast<size_t>(f)]
+                                                    [static_cast<size_t>(slot)];
+                        Ogre::Vector3 v(qf[0], qf[1], qf[2]);
+                        if (v.squaredLength() > 1e-9f) acc += v.normalisedCopy();
+                    }
+                    if (acc.squaredLength() > 1e-9f)
+                        dsrcRest = acc.normalisedCopy();
+                }
+                const bool useRel = dsrcRest.squaredLength() > 1e-9f;
+                const Ogre::Vector3& fax = flexAxis[static_cast<size_t>(side)];
+                const bool useScalar = useRel && fax.squaredLength() > 1e-9f;
+                auto* trk = anim->hasNodeTrack(static_cast<unsigned short>(bi))
+                    ? anim->getNodeTrack(static_cast<unsigned short>(bi))
+                    : anim->createNodeTrack(static_cast<unsigned short>(bi), b);
+                for (int f = 0; f < frames; ++f) {
+                    const auto& q = clipFingers[static_cast<size_t>(f)]
+                                              [static_cast<size_t>(slot)];
+                    Ogre::Vector3 dsrc(q[0], q[1], q[2]);   // canonical dir
+                    Ogre::Quaternion kf;
+                    if (dsrc.squaredLength() > 1e-9f) {
+                        dsrc.normalise();
+                        Ogre::Quaternion aimC;
+                        if (useScalar) {
+                            // SCALAR-ANGLE CURL. The source finger frame is
+                            // ~100° misaligned from the target's, so transporting
+                            // the curl ROTATION directly bends in the wrong plane
+                            // (fist won't close). Instead take only the source
+                            // curl MAGNITUDE — the fold angle from its own rest —
+                            // and re-apply it about the TARGET hand's own flexion
+                            // axis, so the target finger curls in its anatomical
+                            // plane by the same amount. Signed so an open frame
+                            // (near rest) gives ~0 and never hyperextends.
+                            float curl = std::acos(std::clamp(
+                                dsrcRest.dotProduct(dsrc), -1.f, 1.f));
+                            // sign: does dsrc fold to the SAME side of rest that
+                            // curling (about the source's own bend) would? Use
+                            // the source rest→frame axis vs the source flex proxy
+                            // (mean finger dir change). Simple, robust: keep the
+                            // fold as a positive curl (fingers only close here).
+                            aimC = Ogre::Quaternion(Ogre::Radian(curl), fax);
+                            // aimC rotates about fax in the +curl (closing) sense;
+                            // applied to the target bind dir below.
+                        } else if (useRel) {
+                            const Ogre::Quaternion srcBend =
+                                dsrcRest.getRotationTo(dsrc);
+                            const Ogre::Vector3 dtarget =
+                                (srcBend * dbind).normalisedCopy();
+                            aimC = dbind.getRotationTo(dtarget);
+                        } else {
+                            aimC = dbind.getRotationTo(dsrc);
+                        }
+                        // canonical → world, apply on bind world, → local delta.
+                        const Ogre::Quaternion aimW = CtInv * aimC * tb.Ct;
+                        const Ogre::Quaternion newWorld = aimW * Wbind;
+                        const Ogre::Quaternion newLocal =
+                            Pbind.Inverse() * newWorld;
+                        kf = Lbind.Inverse() * newLocal;
+                    }  // else identity (no source dir this frame)
+                    Ogre::TransformKeyFrame* nk =
+                        trk->createNodeKeyFrame(f * dt);
+                    nk->setRotation(kf);
+                    nk->setTranslate(Ogre::Vector3::ZERO);
+                    nk->setScale(Ogre::Vector3::UNIT_SCALE);
+                }
+                trk->_keyFrameDataChanged();
+                ++animated;
+            }
+        }
+    }
+    return animated;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,
@@ -1949,22 +3071,38 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     int refineStride,
     bool yaw180,
     const std::vector<std::array<float, 3>>& clipRestDir,
-    bool modelClip)
+    bool modelClip,
+    const std::vector<float>& clipRootY,
+    bool verticalDescent,
+    bool cmuLibraryHandedness)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
     if (clipQuats.empty()) { res.error = QStringLiteral("empty motion clip"); return res; }
     if (fps <= 0) fps = 30;
     const int frames = static_cast<int>(clipQuats.size());
+    // #838 V2: a 52-joint clip folds the fingers in as canonical joints 22..51,
+    // so they retarget through the SAME body path (no separate applyFingerCurl).
+    // Detect from the clip width; V1 (22-joint) is unchanged. The joint count
+    // and the bone→role matcher both switch on this.
+    const int canonN = (!clipQuats.empty()
+        && static_cast<int>(clipQuats[0].size())
+               >= MotionInbetween::canonicalJointCountV2())
+        ? MotionInbetween::canonicalJointCountV2()   // 52 (V2)
+        : MotionInbetween::canonicalJointCount();     // 22 (V1)
+    const bool clipIsV2 = (canonN == MotionInbetween::canonicalJointCountV2());
+    auto matchBoneToCanon = [clipIsV2](const QString& bn) {
+        return clipIsV2 ? MotionInbetween::canonicalIndexForBoneV2(bn)
+                        : MotionInbetween::canonicalIndexForBone(bn);
+    };
     // Guard: every frame must carry all canonical joints — clipQ() indexes up to
-    // canonicalJointCount(), and a malformed/downloaded/generated clip with a
-    // short frame would otherwise crash during retargeting.
+    // canonN, and a malformed/downloaded/generated clip with a short frame would
+    // otherwise crash during retargeting.
     {
-        const int need = MotionInbetween::canonicalJointCount();
         for (int f = 0; f < frames; ++f)
-            if (static_cast<int>(clipQuats[f].size()) < need) {
+            if (static_cast<int>(clipQuats[f].size()) < canonN) {
                 res.error = QStringLiteral("motion clip frame %1 has %2 joints; expected >= %3")
-                    .arg(f).arg(clipQuats[f].size()).arg(need);
+                    .arg(f).arg(clipQuats[f].size()).arg(canonN);
                 return res;
             }
     }
@@ -1976,44 +3114,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // Map each skeleton bone -> canonical joint index (the #409 retargeting).
     const int nBones = static_cast<int>(skel->getNumBones());
     std::vector<int> boneToCanon(nBones, -1);
-    std::vector<char> canonSeen(MotionInbetween::canonicalJointCount(), 0);
+    std::vector<char> canonSeen(canonN, 0);
     int distinct = 0;
     for (int i = 0; i < nBones; ++i) {
         const QString bn = QString::fromStdString(skel->getBone(static_cast<unsigned short>(i))->getName());
-        const int c = MotionInbetween::canonicalIndexForBone(bn);
+        const int c = matchBoneToCanon(bn);
         if (c >= 0 && c < static_cast<int>(canonSeen.size())) {
             boneToCanon[i] = c;
             if (!canonSeen[c]) { canonSeen[c] = 1; ++distinct; }
         }
     }
-    // HANDEDNESS COMPENSATION. The bone NAMES are anatomically correct for the
-    // mesh, but a mesh may face opposite to the CMU data — then the rig's "Left"
-    // bones sit on the −X side while CMU's left canonical joints are at +X. If we
-    // mapped name→canon directly the motion would play MIRRORED. So detect the
-    // rig's handedness from the actual world-X of a left vs right bone and, when
-    // it's opposite CMU's (+X = left), SWAP the canonical L/R indices in the
-    // mapping — labels stay correct, motion stays correct. Uses the upper-arm
-    // pair (canon 11 = left, 7 = right) with a fallback to the leg pair (19/15).
-    {
-        auto worldXForCanon = [&](int canon) -> double {
-            for (int i = 0; i < nBones; ++i)
-                if (boneToCanon[i] == canon)
-                    return skel->getBone(static_cast<unsigned short>(i))->_getDerivedPosition().x;
-            return 0.0;
-        };
-        double lx = worldXForCanon(11), rx = worldXForCanon(7);   // arms
-        if (std::abs(lx - rx) < 1e-4) { lx = worldXForCanon(19); rx = worldXForCanon(15); }  // legs
-        // CMU: left at +X. If the rig's "left" bone is more −X than its "right",
-        // the rig is mirrored vs CMU → swap L/R canonical targets.
-        if (lx < rx - 1e-5) {
-            static const int kLR[][2] = {{6,10},{7,11},{8,12},{9,13},{14,18},{15,19},{16,20},{17,21}};
-            auto swapCanon = [&](int& c) {
-                for (auto& p : kLR) { if (c == p[0]) { c = p[1]; return; } if (c == p[1]) { c = p[0]; return; } }
-            };
-            for (int i = 0; i < nBones; ++i)
-                if (boneToCanon[i] >= 0) swapCanon(boneToCanon[i]);
-        }
-    }
+    if (cmuLibraryHandedness)
+        compensateCanonicalHandedness(skel, boneToCanon);
 
     res.canonicalJoints = distinct;
     // Bones-per-role: rigs segment chains differently (Mixamo has Spine AND
@@ -2021,16 +3133,29 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // Applying the full role delta to EVERY mapped bone would bend the chain
     // N times over — distribute it instead: each of the N bones gets the
     // N-th fractional rotation so the chain's total matches the clip.
-    std::vector<int> canonDup(MotionInbetween::canonicalJointCount(), 0);
+    std::vector<int> canonDup(canonN, 0);   // 22 (V1) or 52 (V2)
     for (int i = 0; i < nBones; ++i)
         if (boneToCanon[i] >= 0) ++canonDup[boneToCanon[i]];
-    // Need a humanoid-ish rig: require a reasonable share of the 22 roles.
-    if (distinct < (MotionInbetween::canonicalJointCount() * 1) / 2) {
-        res.error = QStringLiteral(
-            "skeleton resolved only %1/%2 canonical joints — not a humanoid rig the "
-            "motion library can retarget onto")
-            .arg(distinct).arg(MotionInbetween::canonicalJointCount());
-        return res;
+    // Need a humanoid-ish rig: require a reasonable share of the BODY roles. The
+    // gate is always against the 22 body joints (fingers are a bonus in V2, and
+    // many rigs have sparse/absent finger bones — they must not fail the gate).
+    // `distinct` counts body+finger for V2, so cap it at the body count for the
+    // threshold so a finger-rich rig can't mask a missing body.
+    {
+        int bodyDistinct = 0;
+        std::vector<char> seenBody(MotionInbetween::canonicalJointCount(), 0);
+        for (int i = 0; i < nBones; ++i) {
+            const int c = boneToCanon[i];
+            if (c >= 0 && c < MotionInbetween::canonicalJointCount()
+                && !seenBody[c]) { seenBody[c] = 1; ++bodyDistinct; }
+        }
+        if (bodyDistinct < (MotionInbetween::canonicalJointCount() * 1) / 2) {
+            res.error = QStringLiteral(
+                "skeleton resolved only %1/%2 canonical BODY joints — not a humanoid rig the "
+                "motion library can retarget onto")
+                .arg(bodyDistinct).arg(MotionInbetween::canonicalJointCount());
+            return res;
+        }
     }
 
     if (skel->hasAnimation(animName))
@@ -2067,15 +3192,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // clips to the synthetic-standing-pose path.
     bool haveRestWorld = false;
     if (worldFrame
-        && cmuRestWorld.size() == static_cast<size_t>(
-               MotionInbetween::canonicalJointCount())) {
+        && cmuRestWorld.size() == static_cast<size_t>(canonN)) {   // 22 or 52
         for (const auto& q : cmuRestWorld)
             if (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 0.25f) {
                 haveRestWorld = true;
                 break;
             }
     }
-    const int Jc = MotionInbetween::canonicalJointCount();
+    const int Jc = canonN;   // 22 (V1) or 52 (V2, fingers folded in)
+    auto canonParentJc = [clipIsV2](int i) {
+        return clipIsV2 ? MotionInbetween::canonicalParentOfV2(i)
+                        : MotionInbetween::canonicalParentOf(i);
+    };
 
     // The rig's STANDING pose the legacy transport composes onto — declared
     // here so the SYNTHETIC bind-referenced path below can fill it before
@@ -2085,7 +3213,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool synthStand = false;
 
     if (!clipRestDir.empty()) {
-        const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+        const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon,
+                                                       clipIsV2);
         const Ogre::Quaternion CtInv = tb.Ct.Inverse();
 
         if (haveRestWorld) {
@@ -2174,6 +3303,23 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 3.15f, 3.15f, 3.15f, 3.15f };
             const float* kTwistCapRole = modelClip ? kTwistCapModel
                                                    : kTwistCapOpen;
+            // Bounds-safe accessors: the cap/gain arrays are body-only (22). V2
+            // finger joints (c>=22) use finger defaults — full gain (fingers
+            // curl freely) and a 180° cap on template clips / 90° on model
+            // clips (finger roll is noisy like the body's).
+            auto twistCapAt = [&](int c) -> float {
+                return (c < 22) ? kTwistCapRole[c] : (modelClip ? 1.57f : 3.15f);
+            };
+            // Finger joints (c>=22, V2): ZERO twist gain. A finger's flexion is a
+            // SWING (its pointing direction changes), captured by the direction
+            // aim below. The twist DoF about the finger axis is exactly the
+            // rig-axis-mismatch garbage that over-bends / rotates the hand (the
+            // same instability the V1 finger path dropped) — the source & target
+            // finger frames don't correspond, so transporting finger twist adds
+            // noise, not motion. Body joints keep their tuned gains.
+            auto twistGainAt = [&](int c) -> float {
+                return (c < 22) ? kTwistGain[c] : 0.0f;
+            };
             std::vector<std::vector<float>> twistTheta(
                 static_cast<size_t>(frames),
                 std::vector<float>(static_cast<size_t>(Jc), 0.0f));
@@ -2207,7 +3353,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         has[static_cast<size_t>(c)] = 1;
                         twistTheta[static_cast<size_t>(f)]
                                   [static_cast<size_t>(c)] = std::clamp(
-                            th, -kTwistCapRole[c], kTwistCapRole[c]);
+                            th, -twistCapAt(c), twistCapAt(c));
                     }
                 // Low-pass the twist trajectories (5-tap binomial). θ comes
                 // from per-frame shortest-arc decompositions and jitters near
@@ -2254,11 +3400,29 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 const int c = boneToCanon[i];
                 if (c >= 0 && c < Jc
                     && srcLocalAxis[static_cast<size_t>(c)].squaredLength()
-                           > 1e-8f)
+                           > 1e-8f) {
                     Qbase[static_cast<size_t>(i)] =
                         tb.tgtBindDir[static_cast<size_t>(c)]
                             .getRotationTo(dref[static_cast<size_t>(c)])
                         * tb.bindWorld[static_cast<size_t>(i)];
+                    // NOTE (2026-08-02 investigation): this minimal-arc baseline
+                    // keeps the TARGET-BIND's roll about the bone axis, dropping
+                    // the roll of the source's bind→reference rotation — the
+                    // measured 50-170° arm-chain loss on the Gregorio SELF-
+                    // retarget (collar 49° → upper arm 165° → hand 132°; flared
+                    // elbows, wrist/nail roll). A source-reference roll-
+                    // correction here CANNOT be computed from the clip alone:
+                    // stored orientations are conjugated in the EXTRACTION's
+                    // frame C (per-clip reference + leveling) while the retarget
+                    // bridges with the bind-derived Ct, and C≠Ct by up to ~57°
+                    // per clip — orientation-level comparisons across that gap
+                    // corrupted even the pelvis (94-173°) when attempted. Fixing
+                    // the roll baseline requires the extraction to ALSO export
+                    // its C↔bind frame link (schema v5 candidate `bindC`), so
+                    // the retarget can reconstruct consistent frames. Direction-
+                    // level bridging (this aim) is the only frame-safe transport
+                    // without it.
+                }
             }
             std::vector<Ogre::NodeAnimationTrack*> tracks(
                 static_cast<size_t>(nBones), nullptr);
@@ -2269,6 +3433,22 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         skel->getBone(static_cast<unsigned short>(i)));
                     ++res.tracksWritten;
                 }
+            // #838 vertical descent (bind-referenced path): TARGET leg length
+            // from the bind-pose derived positions (hip role 0 → foot role 17,
+            // else 21), so the clip's leg-normalized rootY scales to this rig.
+            const bool doVerticalDescentBR =
+                verticalDescent && !clipRootY.empty()
+                && static_cast<int>(clipRootY.size()) == frames;
+            float tgtLegLenBR = 0.0f;
+            if (doVerticalDescentBR) {
+                const int hipB = tb.roleBoneIdx[0];
+                int footB = tb.roleBoneIdx[17];
+                if (footB < 0) footB = tb.roleBoneIdx[21];
+                if (hipB >= 0 && footB >= 0)
+                    tgtLegLenBR = (tb.bindPos[static_cast<size_t>(hipB)]
+                                   - tb.bindPos[static_cast<size_t>(footB)])
+                                      .length();
+            }
             std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
             for (int f = 0; f < frames; ++f) {
                 for (int i : tb.order) {
@@ -2278,7 +3458,109 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         : Ogre::Quaternion::IDENTITY;
                     const int c = boneToCanon[i];
                     Ogre::Quaternion local;
-                    if (c >= 0 && c < Jc
+                    // ROOT/HIP full-orientation transport — ONLY for descent
+                    // (crouch/ground-work) clips (#838). The hip is the FK-chain
+                    // base, so its FULL 3-DOF orientation matters: a direction-
+                    // aim (hip→abdomen) captures the spine lean but DROPS the
+                    // pelvis PITCH, leaving a crouch torso-vertical when it
+                    // should tip forward over the hands (the "won't rotate"
+                    // bug). Transport the source hip's full rotation relative to
+                    // its own reference onto the target bind hip. NOT done for
+                    // locomotion — the full delta carries the source's whole-
+                    // body FACING (yaw), which must stay locked so a walk
+                    // doesn't spin; those clips keep the aim-only path below.
+                    if (c == 0 && doVerticalDescentBR
+                        && srcLocalAxis[0].squaredLength() > 1e-8f) {
+                        const auto& rq = cmuRestWorld[0];
+                        const Ogre::Quaternion refQ(rq[3], rq[0], rq[1], rq[2]);
+                        const Ogre::Quaternion srcDelta =
+                            clipQ(f, 0) * refQ.Inverse();     // canonical-frame
+                        const Ogre::Quaternion Wt =
+                            srcDelta * Qbase[static_cast<size_t>(i)];
+                        local = Wp.Inverse() * Wt;   // Wp == identity (root)
+                        W[static_cast<size_t>(i)] = Wt;
+                    } else if (clipIsV2
+                        && c >= MotionInbetween::canonicalJointCount()) {
+                        // #838 V2 FINGERS: STANDARD HIERARCHICAL bind-referenced
+                        // transport — the same change-of-basis pattern the #411
+                        // body retarget documents (Wcmu·clip·Wcmu⁻¹), replacing
+                        // the direction-aim + twist heuristics (which can't
+                        // control twist: nails flipped sides, fingers rendered
+                        // straight/extended). Transport the finger's curl
+                        // RELATIVE to its parent so it rides the TARGET's hand
+                        // and only adds the source's articulation:
+                        //   Dp(f) = clipQ(f,pc)·restQ(pc)⁻¹      (parent delta)
+                        //   Df(f) = clipQ(f,c) ·restQ(c)⁻¹       (finger delta)
+                        //   Drel  = Dp⁻¹·Df                       (pure curl,
+                        //           anchored to the source's REST axes)
+                        //   Wt(f) = [Wp(f)·Wp_bind⁻¹] · (Ct⁻¹·Drel·Ct) · Wbind
+                        // At the source's bind Drel = identity → the finger
+                        // rests at ITS OWN bind carried rigidly by the target
+                        // hand (no rest-convention over-bend); the full 3-DoF
+                        // delta carries twist so the nail stays put. Unresolved
+                        // slots hold identity → target holds bind.
+                        const auto& rq = cmuRestWorld[static_cast<size_t>(c)];
+                        const float rn = rq[0]*rq[0] + rq[1]*rq[1]
+                                       + rq[2]*rq[2] + rq[3]*rq[3];
+                        const auto& cq = clipQuats[static_cast<size_t>(f)]
+                                                  [static_cast<size_t>(c)];
+                        const float cn = cq[0]*cq[0] + cq[1]*cq[1]
+                                       + cq[2]*cq[2] + cq[3]*cq[3];
+                        // UNPOPULATED source slot (rig lacks this segment, e.g.
+                        // a pruned Biped nub): extraction leaves rest AND quats
+                        // exactly identity. It must HOLD BIND — transporting it
+                        // would compute Df=identity against a curling parent
+                        // (Drel=Dp⁻¹) and COUNTER-ROTATE the tip, straightening
+                        // the finger (the "fingers look longer" artifact).
+                        const bool populated =
+                            std::abs(rq[0]) + std::abs(rq[1]) + std::abs(rq[2])
+                                > 1e-4f
+                            || std::abs(cq[0]) + std::abs(cq[1])
+                                   + std::abs(cq[2]) > 1e-4f;
+                        if (haveRestWorld && populated
+                            && rn > 0.25f && cn > 0.25f) {
+                            const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
+                                                        rq[2]);
+                            const Ogre::Quaternion Df =
+                                clipQ(f, c) * refQ.Inverse();
+                            // parent delta on the SOURCE side (canonical parent:
+                            // hand for seg0, previous segment deeper).
+                            Ogre::Quaternion Dp = Ogre::Quaternion::IDENTITY;
+                            const int pc =
+                                MotionInbetween::canonicalParentOfV2(c);
+                            if (pc >= 0 && pc < canonN) {
+                                const auto& prq =
+                                    cmuRestWorld[static_cast<size_t>(pc)];
+                                const float prn = prq[0]*prq[0] + prq[1]*prq[1]
+                                               + prq[2]*prq[2] + prq[3]*prq[3];
+                                const auto& pcq =
+                                    clipQuats[static_cast<size_t>(f)]
+                                             [static_cast<size_t>(pc)];
+                                const float pcn = pcq[0]*pcq[0] + pcq[1]*pcq[1]
+                                               + pcq[2]*pcq[2] + pcq[3]*pcq[3];
+                                if (prn > 0.25f && pcn > 0.25f) {
+                                    const Ogre::Quaternion prefQ(
+                                        prq[3], prq[0], prq[1], prq[2]);
+                                    Dp = clipQ(f, pc) * prefQ.Inverse();
+                                }
+                            }
+                            const Ogre::Quaternion Drel = Dp.Inverse() * Df;
+                            // target parent's animated delta (world frame)
+                            const Ogre::Quaternion WpBind = (pi >= 0)
+                                ? tb.bindWorld[static_cast<size_t>(pi)]
+                                : Ogre::Quaternion::IDENTITY;
+                            const Ogre::Quaternion handDelta =
+                                Wp * WpBind.Inverse();
+                            const Ogre::Quaternion Wt =
+                                handDelta * (CtInv * Drel * tb.Ct)
+                                * tb.bindWorld[static_cast<size_t>(i)];
+                            local = Wp.Inverse() * Wt;
+                            W[static_cast<size_t>(i)] = Wt;
+                        } else {
+                            local = tb.bindLocal[static_cast<size_t>(i)];
+                            W[static_cast<size_t>(i)] = Wp * local;
+                        }
+                    } else if (c >= 0 && c < Jc
                         && srcLocalAxis[static_cast<size_t>(c)]
                                .squaredLength() > 1e-8f) {
                         // NB: yaw180 is deliberately NOT applied here — this
@@ -2297,9 +3579,16 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             R * Qbase[static_cast<size_t>(i)];
                         // #857: re-apply the source's roll about the aimed
                         // direction (the swing above deliberately dropped it).
+                        // (A hierarchical "exact twist" hybrid and a source-
+                        // reference roll-corrected Qbase were both attempted on
+                        // 2026-08-02 and REVERTED: orientation-level transport
+                        // requires the extraction's frame C and the retarget's
+                        // Ct to agree, and they differ per clip by up to ~57° —
+                        // see the Qbase note above. Only direction-level
+                        // bridging is frame-safe here.)
                         const float th = twistTheta[static_cast<size_t>(f)]
                                                    [static_cast<size_t>(c)]
-                                         * kTwistGain[c];
+                                         * twistGainAt(c);
                         if (std::abs(th) > 1e-5f) {
                             Ogre::Vector3 axis = ds;
                             axis.normalise();
@@ -2321,7 +3610,21 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         kf->setRotation(
                             tb.bindLocal[static_cast<size_t>(i)].Inverse()
                             * local);
-                        kf->setTranslate(Ogre::Vector3::ZERO);
+                        Ogre::Vector3 tdelta = Ogre::Vector3::ZERO;
+                        // #838: lower the ROOT (canon 0) by the clip's descent
+                        // (negative rootY only) × target leg length, along the
+                        // canonical UP axis mapped into the rig's world frame.
+                        // The keyframe is a parent-space translate delta; for a
+                        // top-of-hierarchy root the parent frame is world, so
+                        // the canonical-up vector (Ct⁻¹·+Y) is the drop axis.
+                        if (c == 0 && doVerticalDescentBR && tgtLegLenBR > 1e-4f) {
+                            const float drop =
+                                std::min(0.0f, clipRootY[static_cast<size_t>(f)])
+                                * tgtLegLenBR;
+                            tdelta = tb.Ct.Inverse()
+                                     * Ogre::Vector3(0.0f, drop, 0.0f);
+                        }
+                        kf->setTranslate(tdelta);
                         kf->setScale(Ogre::Vector3::UNIT_SCALE);
                     }
                 }
@@ -2541,6 +3844,28 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             restsAreIdentity = false;
     }
 
+    // #838 vertical descent: TARGET rig hip→foot length (bind pose) so the
+    // clip's source-normalized rootY (leg-lengths) scales to this rig's world
+    // units. Only wired when the caller enabled verticalDescent AND the clip
+    // carries a rootY track (non-locomotion actions). Uses the derived bind
+    // positions of the hip (canon 0) and a foot (canon 17 = left, else 21).
+    float targetLegLen = 0.0f;
+    const bool doVerticalDescent =
+        verticalDescent && !clipRootY.empty()
+        && static_cast<int>(clipRootY.size()) == frames;
+    if (doVerticalDescent) {
+        // Measure the leg length from the BIND pose (readTargetBindFrame resets
+        // + updates the skeleton, then reads derived positions), NOT the live
+        // pose — otherwise a crouched runtime pose would skew the scale.
+        const TargetBindFrame tbd = readTargetBindFrame(skel, boneToCanon);
+        const int hipB  = tbd.roleBoneIdx[0];
+        int footB = tbd.roleBoneIdx[17];
+        if (footB < 0) footB = tbd.roleBoneIdx[21];
+        if (hipB >= 0 && footB >= 0)
+            targetLegLen = (tbd.bindPos[static_cast<size_t>(hipB)]
+                            - tbd.bindPos[static_cast<size_t>(footB)]).length();
+    }
+
     for (int i = 0; i < nBones; ++i) {
         const int c = boneToCanon[i];
         if (c < 0 || c >= J) continue;       // unmapped bone keeps its bind pose
@@ -2612,7 +3937,24 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             }
             Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
             kf->setRotation(local);
-            kf->setTranslate(standPos);
+            Ogre::Vector3 trans = standPos;
+            // #838 vertical descent: lower the ROOT along its parent-local Y by
+            // the clip's normalized hip drop × the target leg length. The hip's
+            // parent-local +Y is the world up axis for an unrotated root, so
+            // this reads as the body crouching straight down. Only the root
+            // (c==0) moves; children follow through the hierarchy.
+            //
+            // DESCENT-ONLY: apply only the negative (lowering) component. Source
+            // rigs vary wildly in whether/which-sign they bake hip translation
+            // for crouch/pickup/sit (some author the whole squat in the KNEE/HIP
+            // joint rotations we already retarget, leaving the hip pinned; a few
+            // read spuriously POSITIVE). Clamping positive to 0 makes this strictly
+            // safe — it can pull a floating crouch down but never lift a grounded
+            // pose up. Genuine descents (working/crawl/death, measured ≤ ~1.8 leg)
+            // still land.
+            if (c == 0 && doVerticalDescent && targetLegLen > 1e-4f)
+                trans.y += std::min(0.0f, clipRootY[f]) * targetLegLen;
+            kf->setTranslate(trans);
             kf->setScale(standScale);
         }
         ++res.tracksWritten;

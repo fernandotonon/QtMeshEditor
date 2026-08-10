@@ -60,6 +60,9 @@ public:
         // Coarse cap on emitted joints. UniRig's decode terminates on the EOS
         // token; this is a safety bound (decode also stops at 2048 tokens).
         int maxJoints = 256;
+        // Surface sample count for the encoder (0 = auto — full budget on small
+        // meshes, scaled down on very large ones to reduce encoder peak RAM).
+        int numSamples = 0;
         // Up axis: 0=X, 1=Y, 2=Z (default +Y). UniRig is trained +Y-up; a
         // non-Y up axis is rotated into +Y for inference and back out after.
         int upAxis = 1;
@@ -96,6 +99,10 @@ public:
     static QString embedModelPath();     // AppData/ai_models/unirig/embed.onnx
     // True when all three model files already exist on disk (no download needed).
     static bool modelsPresent();
+
+    // Encoder surface-sample budget. `requested` > 0 clamps to [4096, 65536];
+    // 0 picks an automatic budget that scales down on very large meshes.
+    static int sampleBudgetForMesh(int vertexCount, int requested = 0);
 
     // Ensure ALL THREE models exist on disk, downloading whichever is missing on
     // first use (blocks via a local event loop, like

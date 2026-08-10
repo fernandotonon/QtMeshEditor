@@ -1003,6 +1003,21 @@ private:
     }
 
     // ── Geometry objects (one per submesh) ────────────────────────
+    // FBX object name for a submesh: prefer the Ogre registered submesh name
+    // (Mesh::nameSubMesh — e.g. PartOps "head"/"torso") so a split's part names
+    // round-trip through export → Assimp reimport (which reads aiMesh::mName)
+    // and show up in the Scene tree. Falls back to the legacy positional name.
+    std::string submeshFbxName(unsigned int si) const
+    {
+        if (m_mesh) {
+            for (const auto& kv : m_mesh->getSubMeshNameMap()) {
+                if (kv.second == si && !kv.first.empty())
+                    return kv.first;
+            }
+        }
+        return std::string(m_entity->getName()) + "_submesh" + std::to_string(si);
+    }
+
     void writeGeometryObjects()
     {
         for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
@@ -1016,8 +1031,7 @@ private:
             m_geomIds.push_back(geomId);
             m_geomSubmeshIndices.push_back(si);
 
-            std::string geomName = std::string(m_entity->getName()) +
-                                   "_submesh" + std::to_string(si);
+            std::string geomName = submeshFbxName(si);
 
             m_w.beginNode("Geometry");
             m_w.writePropertyL(geomId);
@@ -1390,8 +1404,7 @@ private:
             int64_t modelId = nextId();
             m_meshModelIds.push_back(modelId);
 
-            std::string modelName = std::string(m_entity->getName()) +
-                                    "_submesh" + std::to_string(si);
+            std::string modelName = submeshFbxName(si);
 
             m_w.beginNode("Model");
             m_w.writePropertyL(modelId);

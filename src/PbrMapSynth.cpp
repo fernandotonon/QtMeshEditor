@@ -1,4 +1,5 @@
 #include "PbrMapSynth.h"
+#include "OnnxRuntimeSettings.h"
 
 #include <QtGlobal>
 #include <QColor>
@@ -298,16 +299,8 @@ std::vector<float> runTiledModel(const QImage& albedoIn, const QString& modelPat
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_pbr");
         Ort::SessionOptions so;
+        OnnxRuntimeSettings::configureSessionOptions(so);
         so.SetIntraOpNumThreads(1);
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-#ifdef __APPLE__
-        // CoreML EP — best-effort; fall back to CPU if it can't be appended.
-        try {
-            std::unordered_map<std::string, std::string> coremlOpts;
-            so.AppendExecutionProvider("CoreML", coremlOpts);
-        } catch (const Ort::Exception&) {
-        }
-#endif
 #ifdef _WIN32
         std::wstring wpath = modelPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);

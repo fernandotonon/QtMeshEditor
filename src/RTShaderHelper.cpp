@@ -145,6 +145,12 @@ static void addRTSSResources()
 }
 }
 
+void RTShaderHelper::invalidateShadergenScheme()
+{
+    if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr())
+        sg->invalidateScheme(Ogre::MSN_SHADERGEN);
+}
+
 void RTShaderHelper::initialize(Ogre::SceneManager* sceneMgr)
 {
     if (auto* existing = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
