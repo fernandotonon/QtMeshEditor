@@ -1,6 +1,7 @@
 #include "AnimationProcessor.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <string>
 
 AnimationProcessor::AnimationProcessor(Ogre::SkeletonPtr skeleton): skeleton(skeleton) {}
@@ -205,6 +206,23 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     // Get the bone's T-pose position and orientation
     auto boneTPosePosition = bone->getPosition();
     Ogre::Quaternion boneTPoseInverseRotation = bone->getOrientation().Inverse();
+    // The channel's keys live in the source NODE's local space, so the bind
+    // reference for scale keys is the aiNode's own bind scale — NOT the Ogre
+    // bone's (the two differ when the bind chain was re-rooted, e.g. the
+    // mesh-node-relative root bind). Blender-style FBX rigs re-express the
+    // armature's static ×100 scale in every animation curve; dividing by the
+    // node bind scale turns that into the identity it really is (#936).
+    // Guard degenerate components so a zero scale can't divide by zero.
+    Ogre::Vector3 nodeBindScale = Ogre::Vector3::UNIT_SCALE;
+    if (scene && scene->mRootNode) {
+        if (const aiNode* channelNode = scene->mRootNode->FindNode(nodeAnim->mNodeName)) {
+            aiVector3D ns, np; aiQuaternion nr;
+            channelNode->mTransformation.Decompose(ns, nr, np);
+            nodeBindScale = Ogre::Vector3(ns.x, ns.y, ns.z);
+        }
+    }
+    for (int c = 0; c < 3; ++c)
+        if (std::abs(nodeBindScale[c]) < 1e-8f) nodeBindScale[c] = 1.0f;
 
     // Process the position keys.
     // Ogre applies translation keyframes in bone-local space (TS_LOCAL):
@@ -241,10 +259,17 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
         }
     }
 
-    // Process the scaling keys
+    // Process the scaling keys.
+    // Ogre applies keyframe scale MULTIPLICATIVELY on top of the bind pose
+    // (bones reset to bind each frame), so the key must hold the scale
+    // RELATIVE to the T-pose — like position/rotation above. Blender-style
+    // FBX rigs re-express the armature's static scale (e.g. ×100) in every
+    // animation curve; storing it raw double-applied it (bind ×100 × key
+    // ×100), blowing the skinned mesh up 100× and out of frame (#936).
     for(auto i = 0u; i < nodeAnim->mNumScalingKeys; i++) {
         aiVectorKey scalingKey = nodeAnim->mScalingKeys[i];
         Ogre::Vector3 scale(scalingKey.mValue.x, scalingKey.mValue.y, scalingKey.mValue.z);
+        scale = scale / nodeBindScale;
         if (keyframes.find(scalingKey.mTime) == keyframes.end()) {
             keyframes[scalingKey.mTime] = std::make_tuple(
                 Ogre::Vector3::ZERO,

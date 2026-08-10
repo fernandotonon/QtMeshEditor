@@ -430,6 +430,29 @@ void ModelTurntableRenderer::shutdown()
   st.pivotNode = nullptr;
 }
 
+namespace {
+
+// #936: pose `entity` at `time` of `animState` — same recipe as the isometric
+// renderer (enable + set time + notify + fire queued so software/hardware
+// animation state updates, then force the entity update).
+void applyTurntableAnimationFrame(Ogre::Entity *entity, Ogre::AnimationState *animState, float time)
+{
+  if (!entity || !animState)
+    return;
+  animState->setEnabled(true);
+  animState->setTimePosition(time);
+  if (Ogre::AnimationStateSet *states = entity->getAllAnimationStates())
+    states->_notifyDirty();
+  Ogre::FrameEvent ev{};
+  ev.timeSinceLastFrame = 0.0f;
+  ev.timeSinceLastEvent = 0.0f;
+  if (Ogre::Root *root = Ogre::Root::getSingletonPtr())
+    root->_fireFrameRenderingQueued(ev);
+  entity->_updateAnimation();
+}
+
+} // namespace
+
 bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entities,
                                             const TurntableOptions &options, QList<QImage> *outFrames,
                                             QString *errorOut)
@@ -458,6 +481,48 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   const int height = std::max(16, options.height);
   const int frameCount = std::clamp(options.frameCount, 1, 360);
 
+  // #936: resolve the animated entity + state up front so a bad name fails
+  // with a clear error instead of silently rendering the bind pose.
+  const bool wantsAnimation = !options.animationName.isEmpty();
+  Ogre::Entity *animatedEntity = nullptr;
+  Ogre::AnimationState *animState = nullptr;
+  float animLength = 0.0f;
+  if (wantsAnimation || options.atSeconds >= 0.0f) {
+    const std::string wanted = options.animationName.toStdString();
+    for (Ogre::Entity *entity : entities) {
+      if (!entity || !entity->hasSkeleton())
+        continue;
+      Ogre::AnimationStateSet *states = entity->getAllAnimationStates();
+      if (!states)
+        continue;
+      if (wantsAnimation) {
+        if (states->hasAnimationState(wanted)) {
+          animatedEntity = entity;
+          animState = states->getAnimationState(wanted);
+          break;
+        }
+      } else if (!states->getAnimationStates().empty()) {
+        // --at with no name: pose the first animation found.
+        animatedEntity = entity;
+        animState = states->getAnimationStates().begin()->second;
+        break;
+      }
+    }
+    if (!animState) {
+      if (errorOut)
+        *errorOut = wantsAnimation
+            ? QStringLiteral("Animation '%1' not found").arg(options.animationName)
+            : QStringLiteral("--at needs a skeletal animation, none found");
+      return false;
+    }
+    animLength = animState->getLength();
+    // Only the sampled clip drives the pose — disable everything else.
+    if (Ogre::AnimationStateSet *states = animatedEntity->getAllAnimationStates())
+      for (const auto &entry : states->getAnimationStates())
+        if (entry.second)
+          entry.second->setEnabled(false);
+  }
+
   if (!ensureRenderTarget(width, height, options.background, errorOut))
     return false;
 
@@ -484,14 +549,32 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   SentryReporter::addBreadcrumb("cli.turntable",
                                 QStringLiteral("render start frames=%1").arg(frameCount));
 
+  // #936: --at poses once, before framing bounds matter for the orbit.
+  if (animState && !wantsAnimation && options.atSeconds >= 0.0f)
+    applyTurntableAnimationFrame(animatedEntity, animState,
+                                 std::min(options.atSeconds, animLength));
+
   outFrames->reserve(frameCount);
   try {
     for (int i = 0; i < frameCount; ++i) {
-      const float angle = Ogre::Math::TWO_PI * static_cast<float>(i) / static_cast<float>(frameCount);
+      if (wantsAnimation) {
+        // Frame i at `length * i/(frames-1)` — the issue's sampling contract.
+        const float t = frameCount > 1
+            ? animLength * static_cast<float>(i) / static_cast<float>(frameCount - 1)
+            : 0.0f;
+        applyTurntableAnimationFrame(animatedEntity, animState, t);
+      }
+      // Animation sampling keeps the camera FIXED at the front unless the
+      // caller combines both via --orbit.
+      const float angle = (wantsAnimation && !options.orbitWithAnimation)
+          ? 0.0f
+          : Ogre::Math::TWO_PI * static_cast<float>(i) / static_cast<float>(frameCount);
       placeCameraOnAxis(bounds, angle, options.axis, elevationRad, 1.25f);
       state().renderTarget->update();
       outFrames->append(readRenderTarget(width, height));
     }
+    if (animState)
+      animState->setEnabled(false);
     restoreTurntableLighting(sm);
     SentryReporter::addBreadcrumb("cli.turntable",
                                   QStringLiteral("render ok frames=%1").arg(outFrames->size()));

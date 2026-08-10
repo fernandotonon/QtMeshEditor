@@ -4474,7 +4474,8 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
 int CLIPipeline::cmdTurntable(int argc, char* argv[])
 {
     // turntable <file> -o <output> [--frames N] [--size WxH] [--width W] [--height H]
-    //                     [--columns C] [--axis y|x|z] [--elevation deg] [--camera-height deg] [--json]
+    //                     [--columns C] [--axis y|x|z] [--elevation deg] [--camera-height deg]
+    //                     [--animation NAME [--orbit]] [--at SECONDS] [--json]
     QString inputPath, outputPath;
     int frameCount = 12;
     int width = 512;
@@ -4483,6 +4484,9 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     float elevation = 20.0f;
     bool jsonOutput = false;
     TurntableAxis axis = TurntableAxis::Y;
+    QString animationName;          // #936: sample a clip over time
+    bool orbitWithAnimation = false;   // #936: combine rotation + animation
+    float atSeconds = -1.0f;           // #936: single posed frame, normal orbit
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -4563,6 +4567,21 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
             axis = parsed;
             continue;
         }
+        if (arg == "--animation" && i + 1 < argc) {
+            animationName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--orbit") {
+            orbitWithAnimation = true;
+            continue;
+        }
+        if (arg == "--at" && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &atSeconds) || atSeconds < 0.0f) {
+                err() << "Error: Invalid value for --at (seconds >= 0)." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -4622,6 +4641,9 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     options.frameCount = qBound(1, frameCount, 360);
     options.axis = axis;
     options.elevationDegrees = elevation;
+    options.animationName = animationName;       // #936
+    options.orbitWithAnimation = orbitWithAnimation;
+    options.atSeconds = atSeconds;
 
     QList<QImage> frames;
     QString renderError;
