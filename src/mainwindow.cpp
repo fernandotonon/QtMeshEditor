@@ -4695,7 +4695,15 @@ void advanceEntityStates(Ogre::Entity* ent, bool isActiveEntity,
 
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
+    // This fires on every rendered frame, including frames that sneak in while a
+    // MainWindow is still being constructed / torn down (e.g. MainWindowTest
+    // rebuilds it many times under Xvfb). Guard the singletons before use — a
+    // null AnimationControlController / Manager here would segfault the render
+    // thread. (#517: the SceneManager-state advance below is new, so this path
+    // now runs earlier in the frame than before.)
     const auto* animCtrl = AnimationControlController::instance();
+    auto* manager = Manager::getSingletonPtr();
+    if (!animCtrl || !manager) return true;
     const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
     const double scaledDt = dt * animCtrl->playbackSpeed();
 
@@ -4707,7 +4715,7 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     // (paused-but-enabled-for-preview) clip from drifting off its frame. Entity
     // states are handled in the per-mesh loop below (also isPlaying-gated).
     if (isPlaying) {
-        if (auto* sm = Manager::getSingleton()->getSceneMgr()) {
+        if (auto* sm = manager->getSceneMgr()) {
             for (const auto& [key, state] : sm->getAnimationStates()) {
                 if (state && state->getEnabled())
                     state->addTime(static_cast<float>(scaledDt));
@@ -4725,7 +4733,7 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
     const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
 
-    for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+    for (Ogre::SceneNode* node : manager->getSceneNodes()) {
         if (!node) continue;
         for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
             Ogre::MovableObject* obj = node->getAttachedObject(i);
