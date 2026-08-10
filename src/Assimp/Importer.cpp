@@ -100,6 +100,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     const aiScene* scene = importer.ReadFile(path, flags);
     // Do this immediately after ReadFile while the scene is still valid.
     m_sceneUpAxis = 1; // default: Y-up
+    m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
     if (scene && scene->mMetaData)
         scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
     // glTF / glb are Y-up BY SPECIFICATION. Assimp's glTF importer can stamp a
@@ -230,6 +231,39 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             // Re-snapshot the binding pose after baking so Ogre's reset() returns
             // to the correct Y-up rest pose.
             skeleton->setBindingPose();
+        } else if (!animationOnly) {
+            // #933: Blender-style FBX stamps Y-up METADATA but carries the
+            // standing orientation on the NODE chain (armature/mesh nodes get
+            // e.g. −90°X). Bones and vertices live in mesh-node space, so the
+            // bind pose renders LYING DOWN (marketplace thumbnails read
+            // top-down). Bake the skinned mesh node's world ORIENTATION the
+            // same way as the Z-up path (root bones here; vertices in
+            // MeshProcessor below). Identity for Mixamo-style rigs, so the
+            // common case is untouched.
+            // The orientation comes from the reference (first skinned) mesh
+            // node's world — per Assimp's FBX semantics the bone offsets are
+            // relative to the mesh's global frame, so its rotation is what
+            // maps the imported content back to the file's intended Y-up
+            // world. Exact when the rig's skin bind matches the node pose
+            // (the normal export case); rigs whose bind diverges from the
+            // node tree (rare) keep a residual tilt.
+            for (unsigned i = 0; i < scene->mNumMeshes && scene->mRootNode; ++i) {
+                if (scene->mMeshes[i]->mNumBones == 0) continue;
+                const aiNode* meshNode =
+                    BoneProcessor::findMeshNode(scene->mRootNode, i);
+                if (!meshNode) break;
+                Ogre::Vector3 pos, scl;
+                Ogre::Affine3(BoneProcessor::nodeWorldTransform(meshNode))
+                    .decomposition(pos, scl, m_nodeBakeRotation);
+                if (m_nodeBakeRotation.equals(Ogre::Quaternion::IDENTITY,
+                                              Ogre::Radian(1e-3f)))
+                    m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
+                else {
+                    BoneProcessor::bakeRootRotation(skeleton, m_nodeBakeRotation);
+                    skeleton->setBindingPose();
+                }
+                break;   // first skinned mesh decides the orientation
+            }
         }
     }
 
@@ -238,7 +272,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         return {};
 
     // Process the root node recursively (meshes)
-    MeshProcessor meshProcessor(skeleton, isZup);
+    MeshProcessor meshProcessor(skeleton, isZup, m_nodeBakeRotation);
 
     // ARKit blendshape name sidecar (`<file>.arkit.json`, schema
     // qtmesh-arkit-blendshapes-v1): Assimp's glTF2 exporter drops

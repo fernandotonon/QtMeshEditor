@@ -36,6 +36,9 @@ struct TurntableOptions {
   /// orbit of a single posed frame (thumbnail of a specific pose). Ignored
   /// when < 0 or when `animationName` is set.
   float atSeconds = -1.0f;
+  /// #933: three-point studio preset (warm key / cool fill / rim) for
+  /// thumbnail-quality output. Default = shaded key+fill.
+  bool studio = false;
 };
 
 class ModelTurntableRenderer

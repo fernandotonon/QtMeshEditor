@@ -43,6 +43,8 @@ struct IsometricState {
   Ogre::SceneNode *cameraNode = nullptr;
   Ogre::Light *light = nullptr;
   Ogre::SceneNode *lightNode = nullptr;
+  Ogre::Light *fillLight = nullptr;
+  Ogre::SceneNode *fillLightNode = nullptr;
   Ogre::TexturePtr rttTexture;
   Ogre::RenderTarget *renderTarget = nullptr;
   int rttWidth = 0;
@@ -133,7 +135,10 @@ void applyIsometricLighting(Ogre::SceneManager *sm)
   IsometricState &st = state();
   st.savedAmbient = sm->getAmbientLight();
   st.hasSavedAmbient = true;
-  sm->setAmbientLight(Ogre::ColourValue(1.0f, 1.0f, 1.0f));
+  // #933: shaded default (was full-white ambient — untextured models
+  // rendered as flat silhouettes). Low ambient + key + fill, matching the
+  // turntable renderer.
+  sm->setAmbientLight(Ogre::ColourValue(0.35f, 0.35f, 0.36f));
 
   if (!st.light) {
     st.light = sm->createLight("ModelIsometricLight");
@@ -141,9 +146,20 @@ void applyIsometricLighting(Ogre::SceneManager *sm)
     st.lightNode = sm->getRootSceneNode()->createChildSceneNode("ModelIsometricLightNode");
     st.lightNode->attachObject(st.light);
   }
-  st.light->setDiffuseColour(0.85f, 0.85f, 0.85f);
+  st.light->setDiffuseColour(0.9f, 0.9f, 0.9f);
   st.light->setSpecularColour(0.35f, 0.35f, 0.35f);
   st.lightNode->setDirection(Ogre::Vector3(-0.35f, -0.85f, -0.4f).normalisedCopy());
+
+  if (!st.fillLight) {
+    st.fillLight = sm->createLight("ModelIsometricFillLight");
+    st.fillLight->setType(Ogre::Light::LT_DIRECTIONAL);
+    st.fillLightNode = sm->getRootSceneNode()->createChildSceneNode("ModelIsometricFillLightNode");
+    st.fillLightNode->attachObject(st.fillLight);
+  }
+  st.fillLight->setDiffuseColour(0.35f, 0.35f, 0.37f);
+  st.fillLight->setSpecularColour(0.0f, 0.0f, 0.0f);
+  st.fillLightNode->setDirection(Ogre::Vector3(0.6f, -0.15f, 0.65f).normalisedCopy());
+  RTShaderHelper::invalidateShadergenScheme();
 }
 
 void restoreIsometricLighting(Ogre::SceneManager *sm)

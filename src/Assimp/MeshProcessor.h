@@ -31,7 +31,8 @@ struct SubMeshData {
 
 class MeshProcessor {
 public:
-    MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup = false);
+    MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup = false,
+                  const Ogre::Quaternion& bakeRotation = Ogre::Quaternion::IDENTITY);
     void processNode(aiNode* node, const aiScene* scene);
     Ogre::MeshPtr createMesh(const Ogre::String& name, const Ogre::String& group, MaterialProcessor &materialProcessor);
 
@@ -45,12 +46,30 @@ public:
 
 protected:
     // Protected for testing purposes
-    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
+    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene,
+                             const aiNode* node = nullptr);
 
 private:
     std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
+    // #933: bind a RIGID (bone-less) mesh that is node-parented under a bone
+    // (Blender bone-parented objects — Quaternius Robot) to that bone with
+    // weight 1, baking its node chain relative to the bone into the vertices.
+    // Renders assembled AND animates correctly; without it Ogre's software
+    // vertex blend asserts (missing blend elements) on any render.
+    void bindRigidMeshToParentBone(SubMeshData* data, const aiNode* node);
     Ogre::SkeletonPtr skeleton;
     bool m_isZup;
+    // Rest-pose rotation baked into vertices/normals/tangents (identity when
+    // none). Set from Z-up metadata (+90°X) or the skinned mesh node's world
+    // orientation for Blender-style rigs (#933).
+    Ogre::Quaternion m_bakeRot = Ogre::Quaternion::IDENTITY;
+    bool m_hasBake = false;
+    // #933: multi-mesh skinned scenes — Assimp bone offsets are relative to
+    // EACH mesh's own node, but the Ogre skeleton is built against the FIRST
+    // skinned mesh's node frame. Align every other skinned mesh into that
+    // reference frame (C = refWorld⁻¹ · thisMeshNodeWorld) so parts assemble.
+    Ogre::Matrix4 m_refWorldInv = Ogre::Matrix4::IDENTITY;
+    bool m_haveRef = false;
     std::vector<std::string> m_nameHints;
 };
