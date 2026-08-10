@@ -402,18 +402,28 @@ bool encodePrimitive(const GltfContainer& c, const QJsonObject& prim,
         int elementCount;   // accessor.count — guards index-vs-attr bounds
         std::vector<float> values;
         uint32_t uniqueId;
+        draco::GeometryAttribute::Type dracoType; // captured once, reused for quantization
+        int quantBits;
     };
     std::vector<AttrPlan> plans;
     uint32_t nextUniqueId = 0;
 
     for (const QString& sem : semantics) {
-        draco::GeometryAttribute::Type dtype;
-        int bits;
-        dracoAttrForSemantic(sem, opts, dtype, bits); // validated above
+        // Initialize defensively: dracoAttrForSemantic only writes dtype/bits on
+        // success. Every semantic here already passed the eligibility check
+        // above, but guard the return anyway so dtype is never used uninit'd.
+        draco::GeometryAttribute::Type dtype = draco::GeometryAttribute::GENERIC;
+        int bits = opts.genericBits;
+        if (!dracoAttrForSemantic(sem, opts, dtype, bits)) {
+            err = "internal: attribute became ineligible during encode"; // unreachable
+            return false;
+        }
         int accIdx = attrs.value(sem).toInt();
         AttrPlan plan;
         plan.semantic = sem;
         plan.accessorIndex = accIdx;
+        plan.dracoType = dtype;
+        plan.quantBits = bits;
         int nc = 0;
         if (!readAttributeAsFloat(c, accIdx, plan.values, nc, err)) return false;
         plan.numComponents = nc;
@@ -456,10 +466,10 @@ bool encodePrimitive(const GltfContainer& c, const QJsonObject& prim,
 
     draco::Encoder encoder;
     for (const AttrPlan& plan : plans) {
-        draco::GeometryAttribute::Type dtype;
-        int bits;
-        dracoAttrForSemantic(plan.semantic, opts, dtype, bits);
-        if (bits > 0) encoder.SetAttributeQuantization(dtype, bits);
+        // Reuse the type/bits captured when the plan was built (no second
+        // lookup, no uninitialized-value path).
+        if (plan.quantBits > 0)
+            encoder.SetAttributeQuantization(plan.dracoType, plan.quantBits);
     }
     encoder.SetSpeedOptions(opts.encodeSpeed, opts.decodeSpeed);
 
