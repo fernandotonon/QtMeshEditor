@@ -2460,6 +2460,27 @@ static void reconstructNodeClipsFromFile(const QString& filePath,
     reconstructNodeClipsFromAiScene(aiscene, sn, en);
 }
 
+// After import, select the entity if a node-transform clip animates its scene
+// node. The Inspector Animations list / dope sheet only surface node clips for
+// the SELECTED entity, and import auto-selects nothing — so a reconstructed
+// clip is invisible until the user selects the entity themselves. Selecting it
+// here fires SelectionSet::selectionChanged, which refreshes both views. Safe
+// to call on the main thread (all import runs there); no-op when the node has
+// no clips. (#517)
+static void selectEntityIfHasNodeClip(Ogre::SceneNode* sn)
+{
+    if (!sn) return;
+    auto* nam = NodeAnimationManager::instance();
+    if (!nam) return;
+    const QString nodeName = QString::fromStdString(sn->getName());
+    bool hasClip = false;
+    for (const QString& clip : nam->listClips()) {
+        if (nam->animatedNodes(clip).contains(nodeName)) { hasClip = true; break; }
+    }
+    if (hasClip)
+        SelectionSet::getSingleton()->selectOne(sn);
+}
+
 // ─── Node-transform-clip sidecar (FBX / .mesh workaround, #517) ─────────
 // glTF/glb carry node-transform clips natively (buildNodeClipAnimations →
 // aiNodeAnim channels). The custom FBXExporter and Ogre's .mesh serializer
@@ -3200,6 +3221,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // FBX/.mesh carry them in a `.nodeanim.json` sidecar instead.
             reconstructNodeClipsFromFile(file.filePath(), sn, en);
             reconstructNodeClipsFromSidecar(file.filePath(), sn, en);
+
+            // If a node-transform clip was reconstructed for this node, select
+            // the entity so the Inspector Animations list + dope sheet populate
+            // immediately. Node clips only list under a SELECTED entity, and
+            // nothing else selects the freshly-imported entity — without this
+            // the reconstructed clip stayed invisible until the user manually
+            // selected it and round-tripped through the node editor. (#517)
+            selectEntityIfHasNodeClip(sn);
 
             configureCamera(en);
         }
@@ -5465,6 +5494,9 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             // separate path from plain Import (importer) — without this, node
             // anim was dropped on the File > Save Scene / Open Scene round-trip.
             reconstructNodeClipsFromAiScene(scene, sn, nodeEnt);
+            // Select the entity so a reconstructed node clip appears in the
+            // Animations list / dope sheet without a manual select (#517).
+            selectEntityIfHasNodeClip(sn);
         }
 
         if (!SceneLightsIO::importLightsSidecar(_uri, true))
