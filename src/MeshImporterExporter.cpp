@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <QCryptographicHash>
 #include <QFileDialog>
 #include <QImage>
+#include <QTimer>
 #include <QMessageBox>
 #include <QDebug>
 #include <QFile>
@@ -2477,8 +2478,24 @@ static void selectEntityIfHasNodeClip(Ogre::SceneNode* sn)
     for (const QString& clip : nam->listClips()) {
         if (nam->animatedNodes(clip).contains(nodeName)) { hasClip = true; break; }
     }
-    if (hasClip)
-        SelectionSet::getSingleton()->selectOne(sn);
+    if (!hasClip) return;
+
+    // DEFER the selection to the next event-loop tick. importer() runs inside
+    // MainWindow::frameRenderingQueued (the Ogre render callback) — selecting
+    // synchronously there fires selectionChanged mid-frame, and the QML
+    // Inspector's refreshAnimData() binding update gets coalesced/dropped as the
+    // frame completes, so the reconstructed node clip never appears in the list
+    // (the user had to manually re-select). Posting via a zero-timer runs the
+    // selection AFTER the frame settles and the QML event loop is idle, so the
+    // list + dope sheet refresh reliably. Re-resolve the node by name at fire
+    // time in case the scene changed. (#517)
+    QTimer::singleShot(0, [nodeName]() {
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+        if (!scene || !scene->hasSceneNode(nodeName.toStdString())) return;
+        SelectionSet::getSingleton()->selectOne(
+            scene->getSceneNode(nodeName.toStdString()));
+    });
 }
 
 // ─── Node-transform-clip sidecar (FBX / .mesh workaround, #517) ─────────
