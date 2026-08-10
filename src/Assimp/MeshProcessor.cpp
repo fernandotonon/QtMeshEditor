@@ -481,6 +481,15 @@ bool MeshProcessor::computeFrameAlign(const aiNode* node, Ogre::Matrix4& frameAl
 {
     frameAlign = m_refWorldInv * BoneProcessor::nodeWorldTransform(node);
     frameAlign.extract3x3Matrix(frameAlignLinear);
+    // A singular linear part (zero-scale node) has no valid normal matrix —
+    // Matrix3::Inverse() would return ZERO and null every normal. Skip the
+    // alignment entirely (identity outputs).
+    if (std::abs(frameAlignLinear.Determinant()) < 1e-10f) {
+        frameAlign = Ogre::Matrix4::IDENTITY;
+        frameAlignLinear = Ogre::Matrix3::IDENTITY;
+        frameAlignNormal = Ogre::Matrix3::IDENTITY;
+        return false;
+    }
     // Normal matrix = inverse-transpose of the linear part — equals the
     // rotation for rigid/uniform-scale frames, correct for non-uniform ones.
     frameAlignNormal = frameAlignLinear.Inverse().Transpose();
