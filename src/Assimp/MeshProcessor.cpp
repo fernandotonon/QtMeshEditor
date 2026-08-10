@@ -144,15 +144,6 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
         }
     }
 
-    // #933: Blender bone-parented rigid parts (Quaternius Robot) have no
-    // vertex weights — Ogre's software vertex blend then asserts on ANY
-    // render ("srcElemPos && srcElemBlendIndices && srcElemBlendWeights").
-    // Bind the whole submesh to its nearest ancestor bone with weight 1 and
-    // bake its node-chain placement into the vertices: renders assembled and
-    // follows the bone during animation.
-    if (rigidUnderSkeleton)
-        bindRigidMeshToParentBone(subMeshData, node);
-
     // Process indices
     for(auto i = 0u; i < mesh->mNumFaces; i++) {
         aiFace face = mesh->mFaces[i];
@@ -221,6 +212,16 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
         }
         subMeshData->morphTargets.push_back(std::move(target));
     }
+
+    // #933: Blender bone-parented rigid parts (Quaternius Robot) have no
+    // vertex weights — Ogre's software vertex blend then asserts on ANY
+    // render ("srcElemPos && srcElemBlendIndices && srcElemBlendWeights").
+    // Bind the whole submesh to its nearest ancestor bone with weight 1 and
+    // bake its node-chain placement into the vertices: renders assembled and
+    // follows the bone during animation. Runs LAST so tangents and morph
+    // targets (filled above) receive the placement transform too.
+    if (rigidUnderSkeleton)
+        bindRigidMeshToParentBone(subMeshData, node);
 
     return subMeshData;
 }

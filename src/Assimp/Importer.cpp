@@ -70,11 +70,15 @@ Ogre::Quaternion detectNodeBakeRotation(const aiScene* scene)
         const aiNode* meshNode = BoneProcessor::findMeshNode(scene->mRootNode, i);
         if (!meshNode)
             return Ogre::Quaternion::IDENTITY;
+        const Ogre::Matrix4 world = BoneProcessor::nodeWorldTransform(meshNode);
+        // A mirrored (negative-determinant) node frame has no meaningful
+        // rotation decomposition — skip the bake rather than apply garbage.
+        if (world.linear().determinant() < 0.0f)
+            return Ogre::Quaternion::IDENTITY;
         Ogre::Vector3 pos;
         Ogre::Vector3 scl;
         Ogre::Quaternion rot;
-        Ogre::Affine3(BoneProcessor::nodeWorldTransform(meshNode))
-            .decomposition(pos, scl, rot);
+        Ogre::Affine3(world).decomposition(pos, scl, rot);
         return rot;   // first skinned mesh decides the orientation
     }
     return Ogre::Quaternion::IDENTITY;

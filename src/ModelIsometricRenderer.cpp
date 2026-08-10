@@ -169,6 +169,8 @@ void restoreIsometricLighting(Ogre::SceneManager *sm)
     sm->setAmbientLight(st.savedAmbient);
     st.hasSavedAmbient = false;
   }
+  // Regenerate the cached RTSS programs against the restored light set.
+  RTShaderHelper::invalidateShadergenScheme();
 }
 
 bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QString *errorOut)
@@ -577,6 +579,13 @@ void ModelIsometricRenderer::shutdown()
       }
       sm->destroyLight(st.light);
     }
+    if (st.fillLight) {
+      if (st.fillLightNode) {
+        st.fillLightNode->detachObject(st.fillLight);
+        sm->destroySceneNode(st.fillLightNode);
+      }
+      sm->destroyLight(st.fillLight);
+    }
     if (st.camera) {
       if (st.cameraNode)
         st.cameraNode->detachObject(st.camera);
@@ -589,6 +598,8 @@ void ModelIsometricRenderer::shutdown()
   }
   st.lightNode = nullptr;
   st.light = nullptr;
+  st.fillLightNode = nullptr;
+  st.fillLight = nullptr;
   st.camera = nullptr;
   st.cameraNode = nullptr;
   st.pivotNode = nullptr;

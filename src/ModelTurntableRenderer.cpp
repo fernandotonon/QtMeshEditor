@@ -453,6 +453,20 @@ void ModelTurntableRenderer::shutdown()
       }
       sm->destroyLight(st.light);
     }
+    if (st.fillLight) {
+      if (st.fillLightNode) {
+        st.fillLightNode->detachObject(st.fillLight);
+        sm->destroySceneNode(st.fillLightNode);
+      }
+      sm->destroyLight(st.fillLight);
+    }
+    if (st.rimLight) {
+      if (st.rimLightNode) {
+        st.rimLightNode->detachObject(st.rimLight);
+        sm->destroySceneNode(st.rimLightNode);
+      }
+      sm->destroyLight(st.rimLight);
+    }
     if (st.camera) {
       if (st.cameraNode)
         st.cameraNode->detachObject(st.camera);
@@ -465,6 +479,10 @@ void ModelTurntableRenderer::shutdown()
   }
   st.lightNode = nullptr;
   st.light = nullptr;
+  st.fillLightNode = nullptr;
+  st.fillLight = nullptr;
+  st.rimLightNode = nullptr;
+  st.rimLight = nullptr;
   st.camera = nullptr;
   st.cameraNode = nullptr;
   st.pivotNode = nullptr;
