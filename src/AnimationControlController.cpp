@@ -64,6 +64,17 @@ AnimationControlController::AnimationControlController()
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &AnimationControlController::updateAnimationTree);
 
+    // Node-transform clips are SceneManager-level, not entity AnimationStates,
+    // so a change to the node-clip set does NOT fire selectionChanged. Without
+    // this, a clip RECONSTRUCTED on import (#517 reconstructNodeClipsFrom*) never
+    // appears in the animation list / dope sheet until some later edit happens to
+    // rebuild the tree — the user saw the reimported node clip only after opening
+    // the node editor. Rebuild the tree whenever the node-clip set changes so
+    // reconstructed / created / deleted clips surface immediately.
+    if (auto* nam = NodeAnimationManager::instance())
+        connect(nam, &NodeAnimationManager::clipsChanged,
+                this, &AnimationControlController::updateAnimationTree);
+
     // Adding a morph target calls Entity::_initialise(true) (via
     // EditableMesh::commitToEntity), which DESTROYS and recreates the entity's
     // SkeletonInstance — leaving our cached m_selectedSkeleton dangling and
