@@ -34,6 +34,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonEditor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDracoEncoder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.cpp
@@ -354,6 +355,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonDebug.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDracoEncoder.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.h
@@ -592,6 +594,12 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
     endif()
     if(ENABLE_ALEMBIC)
         list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_alembic)
+    endif()
+    # #506: MeshDracoEncoder.cpp (compiled into this common lib, and called from
+    # CLIPipeline.cpp) links Draco when ENABLE_DRACO is set — the QML component
+    # test executables need it on their link line too.
+    if(ENABLE_DRACO AND QTMESH_DRACO_FOUND)
+        list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_draco)
     endif()
 
     add_library(qtmesh_test_common STATIC ${TEST_SRC_FILES} ${TEST_HEADER_FILES})
