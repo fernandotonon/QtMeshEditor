@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "MeshProcessor.h"
 #include <algorithm>
 #include <string_view>
+#include <cstdlib>
 
 #include <QFileInfo>
 #include <QFile>
@@ -51,6 +52,36 @@ bool isProtectedOgreMaterialName(const std::string& name)
     if (name == "BaseWhite" || name == "BaseWhiteNoLighting" || name == "GUI_Material")
         return true;
     return name.rfind("Ogre/", 0) == 0;
+}
+
+// #933: world ORIENTATION of the reference (first skinned) mesh node — per
+// Assimp's FBX semantics the bone offsets are relative to the mesh's global
+// frame, so its rotation maps the imported content back to the file's
+// intended Y-up world. Exact when the rig's skin bind matches the node pose
+// (the normal export case); rigs whose bind diverges from the node tree
+// (rare) keep a residual tilt. Identity when there is no skinned mesh.
+Ogre::Quaternion detectNodeBakeRotation(const aiScene* scene)
+{
+    if (!scene || !scene->mRootNode)
+        return Ogre::Quaternion::IDENTITY;
+    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+        if (scene->mMeshes[i]->mNumBones == 0)
+            continue;
+        const aiNode* meshNode = BoneProcessor::findMeshNode(scene->mRootNode, i);
+        if (!meshNode)
+            return Ogre::Quaternion::IDENTITY;
+        const Ogre::Matrix4 world = BoneProcessor::nodeWorldTransform(meshNode);
+        // A mirrored (negative-determinant) node frame has no meaningful
+        // rotation decomposition — skip the bake rather than apply garbage.
+        if (world.linear().determinant() < 0.0f)
+            return Ogre::Quaternion::IDENTITY;
+        Ogre::Vector3 pos;
+        Ogre::Vector3 scl;
+        Ogre::Quaternion rot;
+        Ogre::Affine3(world).decomposition(pos, scl, rot);
+        return rot;   // first skinned mesh decides the orientation
+    }
+    return Ogre::Quaternion::IDENTITY;
 }
 
 } // namespace
@@ -100,6 +131,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     const aiScene* scene = importer.ReadFile(path, flags);
     // Do this immediately after ReadFile while the scene is still valid.
     m_sceneUpAxis = 1; // default: Y-up
+    m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
     if (scene && scene->mMetaData)
         scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
     // glTF / glb are Y-up BY SPECIFICATION. Assimp's glTF importer can stamp a
@@ -230,6 +262,23 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             // Re-snapshot the binding pose after baking so Ogre's reset() returns
             // to the correct Y-up rest pose.
             skeleton->setBindingPose();
+        } else if (!animationOnly) {
+            // #933: Blender-style FBX stamps Y-up METADATA but carries the
+            // standing orientation on the NODE chain (armature/mesh nodes get
+            // e.g. −90°X). Bones and vertices live in mesh-node space, so the
+            // bind pose renders LYING DOWN (marketplace thumbnails read
+            // top-down). Bake the skinned mesh node's world ORIENTATION the
+            // same way as the Z-up path (root bones here; vertices in
+            // MeshProcessor below). Identity for Mixamo-style rigs, so the
+            // common case is untouched.
+            m_nodeBakeRotation = detectNodeBakeRotation(scene);
+            if (!m_nodeBakeRotation.equals(Ogre::Quaternion::IDENTITY,
+                                           Ogre::Radian(1e-3f))) {
+                BoneProcessor::bakeRootRotation(skeleton, m_nodeBakeRotation);
+                skeleton->setBindingPose();
+            } else {
+                m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
+            }
         }
     }
 
@@ -238,7 +287,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         return {};
 
     // Process the root node recursively (meshes)
-    MeshProcessor meshProcessor(skeleton, isZup);
+    MeshProcessor meshProcessor(skeleton, isZup, m_nodeBakeRotation);
 
     // ARKit blendshape name sidecar (`<file>.arkit.json`, schema
     // qtmesh-arkit-blendshapes-v1): Assimp's glTF2 exporter drops

@@ -31,6 +31,10 @@ struct TurntableState {
   Ogre::SceneNode *cameraNode = nullptr;
   Ogre::Light *light = nullptr;
   Ogre::SceneNode *lightNode = nullptr;
+  Ogre::Light *fillLight = nullptr;
+  Ogre::SceneNode *fillLightNode = nullptr;
+  Ogre::Light *rimLight = nullptr;
+  Ogre::SceneNode *rimLightNode = nullptr;
   Ogre::TexturePtr rttTexture;
   Ogre::RenderTarget *renderTarget = nullptr;
   int rttWidth = 0;
@@ -57,12 +61,16 @@ void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
   }
 }
 
-void applyTurntableLighting(Ogre::SceneManager *sm)
+void applyTurntableLighting(Ogre::SceneManager *sm, bool studio)
 {
   TurntableState &st = state();
   st.savedAmbient = sm->getAmbientLight();
   st.hasSavedAmbient = true;
-  sm->setAmbientLight(Ogre::ColourValue(1.0f, 1.0f, 1.0f));
+  // #933: DCC-style shaded default. Full-white ambient rendered untextured
+  // models as flat silhouettes (zero shading); a low ambient + key + fill
+  // gives shaped gray renders — like every DCC's default viewport.
+  sm->setAmbientLight(studio ? Ogre::ColourValue(0.25f, 0.25f, 0.27f)
+                             : Ogre::ColourValue(0.35f, 0.35f, 0.36f));
 
   if (!st.light) {
     st.light = sm->createLight("ModelTurntableLight");
@@ -70,9 +78,40 @@ void applyTurntableLighting(Ogre::SceneManager *sm)
     st.lightNode = sm->getRootSceneNode()->createChildSceneNode("ModelTurntableLightNode");
     st.lightNode->attachObject(st.light);
   }
-  st.light->setDiffuseColour(0.85f, 0.85f, 0.85f);
+  // Key: from the upper camera-left, slightly warm in studio mode.
+  st.light->setDiffuseColour(studio ? Ogre::ColourValue(1.0f, 0.98f, 0.94f)
+                                    : Ogre::ColourValue(0.9f, 0.9f, 0.9f));
   st.light->setSpecularColour(0.35f, 0.35f, 0.35f);
   st.lightNode->setDirection(Ogre::Vector3(-0.35f, -0.85f, -0.4f).normalisedCopy());
+
+  if (!st.fillLight) {
+    st.fillLight = sm->createLight("ModelTurntableFillLight");
+    st.fillLight->setType(Ogre::Light::LT_DIRECTIONAL);
+    st.fillLightNode = sm->getRootSceneNode()->createChildSceneNode("ModelTurntableFillLightNode");
+    st.fillLightNode->attachObject(st.fillLight);
+  }
+  // Fill: from the opposite lower side, cool in studio mode, no speculars.
+  st.fillLight->setDiffuseColour(studio ? Ogre::ColourValue(0.30f, 0.33f, 0.38f)
+                                        : Ogre::ColourValue(0.35f, 0.35f, 0.37f));
+  st.fillLight->setSpecularColour(0.0f, 0.0f, 0.0f);
+  st.fillLightNode->setDirection(Ogre::Vector3(0.6f, -0.15f, 0.65f).normalisedCopy());
+
+  if (!st.rimLight) {
+    st.rimLight = sm->createLight("ModelTurntableRimLight");
+    st.rimLight->setType(Ogre::Light::LT_DIRECTIONAL);
+    st.rimLightNode = sm->getRootSceneNode()->createChildSceneNode("ModelTurntableRimLightNode");
+    st.rimLightNode->attachObject(st.rimLight);
+  }
+  // Rim: from behind/above, separates the silhouette — studio preset only.
+  st.rimLight->setDiffuseColour(studio ? Ogre::ColourValue(0.5f, 0.5f, 0.55f)
+                                       : Ogre::ColourValue(0.0f, 0.0f, 0.0f));
+  st.rimLight->setSpecularColour(studio ? Ogre::ColourValue(0.4f, 0.4f, 0.45f)
+                                        : Ogre::ColourValue(0.0f, 0.0f, 0.0f));
+  st.rimLightNode->setDirection(Ogre::Vector3(0.15f, -0.35f, 0.92f).normalisedCopy());
+  st.rimLight->setVisible(studio);
+  // The RTSS shaders bake the light configuration — regenerate so the fill/
+  // rim actually contribute (the take_screenshot lesson, #933).
+  RTShaderHelper::invalidateShadergenScheme();
 }
 
 void restoreTurntableLighting(Ogre::SceneManager *sm)
@@ -82,6 +121,7 @@ void restoreTurntableLighting(Ogre::SceneManager *sm)
     sm->setAmbientLight(st.savedAmbient);
     st.hasSavedAmbient = false;
   }
+  RTShaderHelper::invalidateShadergenScheme();
 }
 
 bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QString *errorOut)
@@ -413,6 +453,20 @@ void ModelTurntableRenderer::shutdown()
       }
       sm->destroyLight(st.light);
     }
+    if (st.fillLight) {
+      if (st.fillLightNode) {
+        st.fillLightNode->detachObject(st.fillLight);
+        sm->destroySceneNode(st.fillLightNode);
+      }
+      sm->destroyLight(st.fillLight);
+    }
+    if (st.rimLight) {
+      if (st.rimLightNode) {
+        st.rimLightNode->detachObject(st.rimLight);
+        sm->destroySceneNode(st.rimLightNode);
+      }
+      sm->destroyLight(st.rimLight);
+    }
     if (st.camera) {
       if (st.cameraNode)
         st.cameraNode->detachObject(st.camera);
@@ -425,6 +479,10 @@ void ModelTurntableRenderer::shutdown()
   }
   st.lightNode = nullptr;
   st.light = nullptr;
+  st.fillLightNode = nullptr;
+  st.fillLight = nullptr;
+  st.rimLightNode = nullptr;
+  st.rimLight = nullptr;
   st.camera = nullptr;
   st.cameraNode = nullptr;
   st.pivotNode = nullptr;
@@ -544,7 +602,7 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   // Tangents + RTSS normal wiring, then strip any duplicate normal-map TUS that
   // would still modulate in the FFP chain (common on FBX like Jump.fbx).
   prepareMaterialsForTurntable(entities);
-  applyTurntableLighting(sm);
+  applyTurntableLighting(sm, options.studio);
 
   SentryReporter::addBreadcrumb("cli.turntable",
                                 QStringLiteral("render start frames=%1").arg(frameCount));

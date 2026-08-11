@@ -69,6 +69,7 @@ qtmesh turntable model.fbx -o turntable.png  # PNG sprite sheet (12 frames defau
 qtmesh turntable model.fbx -o frame_%02d.png --frames 24 --axis y --camera-height 25
 qtmesh turntable model.fbx --animation "Walk" --frames 8 -o walk.png  # #936: sample the clip over time, fixed front camera (--orbit combines rotation+animation)
 qtmesh turntable model.fbx --at 0.5 -o pose.png  # #936: normal orbit of the pose at t=0.5s
+qtmesh turntable model.fbx --studio -o thumb.png --frames 1  # #933: three-point studio lighting (warm key/cool fill/rim) for marketplace thumbnails; the DEFAULT is now a shaded key+fill (untextured models render shaped gray, not flat silhouettes)
 qtmesh isometric model.fbx -o iso.png  # 8-direction static sprite grid (rows=directions)
 qtmesh isometric model.fbx --resolution 256 -o iso.png  # square 256px cells
 qtmesh isometric model.fbx --animation "Walk" --frames 8 -o iso.png  # 8×8 animated atlas
