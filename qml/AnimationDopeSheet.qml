@@ -33,6 +33,18 @@ Rectangle {
     // morph tracks is a future slice.
     property var morphRows: AnimationControlController.allMorphRows()
 
+    // Slice C (#517): scene-node transform-animation rows. Independent of
+    // the selected entity — node clips are owned by the SceneManager, not
+    // a mesh — so they track NodeAnimationManager.activeClip (the clip the
+    // Inspector's "Node Transform Animation" section is editing). Each row
+    // is `{ node, keyTimes }`. Renders as an interactive band below the
+    // morph band with the same timeline math. Empty when no node clip is
+    // active or the active clip has no tracks yet.
+    property string nodeClip: NodeAnimationManager.activeClip
+    property var nodeRows: NodeAnimationManager.activeClip.length > 0
+                           ? NodeAnimationManager.nodeRows(NodeAnimationManager.activeClip)
+                           : []
+
     // Per-bone expansion state for per-channel rows. Keys are bone names,
     // values are bool. Reset when a new clip is selected (different bones).
     property var expandedBones: ({})
@@ -158,6 +170,7 @@ Rectangle {
         function onSelectionChanged() {
             root.rows = AnimationControlController.allBoneRows()
             root.morphRows = AnimationControlController.allMorphRows()
+            root.refreshNodeRows()
             root.clearSelection()
             root.expandedBones = {}
         }
@@ -171,6 +184,68 @@ Rectangle {
         target: MorphAnimationManager
         function onMorphTargetsChanged() {
             root.morphRows = AnimationControlController.allMorphRows()
+        }
+    }
+
+    // Node transform clips changed (create/delete/key/move/undo) → rebuild
+    // the node band. Rebuild on any of the three signals: activeClip change
+    // (Inspector picked a different clip), clipsChanged (create/delete), and
+    // keyframesChanged (key added/moved/deleted, incl. via undo/redo).
+    // Show the active node clip's rows only when it animates the CURRENTLY
+    // SELECTED entity (or is being edited) — so the node band appears alongside
+    // this mesh's skeletal/morph bands and doesn't linger when you select a
+    // different, skeletal-only mesh. All three band types are shown together.
+    function refreshNodeRows() {
+        var sel = AnimationControlController.selectedEntityName
+        var editing = NodeAnimationManager.editingClip
+        var active = NodeAnimationManager.activeClip
+
+        // Pick which node clip to show in the band, in priority order:
+        //   1. the clip being EDITED (node editor open on it), or
+        //   2. the ACTIVE clip if it animates the selected entity, or
+        //   3. ANY node clip that animates the selected entity.
+        // Case 3 is what makes a clip RECONSTRUCTED on import (or simply not the
+        // node editor's active pick) show its band on load — previously the band
+        // only appeared once activeClip was set, i.e. after the user opened the
+        // node editor and selected the clip. (#517)
+        var clip = ""
+        if (editing.length > 0) {
+            clip = editing
+        } else if (active.length > 0 && sel.length > 0
+                   && NodeAnimationManager.animatedNodes(active).indexOf(sel) >= 0) {
+            clip = active
+        } else if (sel.length > 0) {
+            var all = NodeAnimationManager.listClips()
+            for (var i = 0; i < all.length; ++i) {
+                if (NodeAnimationManager.animatedNodes(all[i]).indexOf(sel) >= 0) {
+                    clip = all[i]; break
+                }
+            }
+        }
+        root.nodeClip = clip
+        root.nodeRows = clip.length > 0 ? NodeAnimationManager.nodeRows(clip) : []
+    }
+    // Rebuild ALL bands when node clips change/select — the dope sheet shows
+    // skeletal + morph + node together, and selecting a node clip must not drop
+    // the mesh's bone/morph rows. allBoneRows/allMorphRows resolve the skeleton
+    // + morph clip from the selected entity, so refreshing them here keeps the
+    // full picture in sync with node-clip activity.
+    function refreshAllBands() {
+        root.rows = AnimationControlController.allBoneRows()
+        root.morphRows = AnimationControlController.allMorphRows()
+        root.refreshNodeRows()
+    }
+    Connections {
+        target: NodeAnimationManager
+        function onActiveClipChanged()   { root.refreshAllBands() }
+        function onClipsChanged()        { root.refreshAllBands() }
+        function onEditingClipChanged()  { root.refreshAllBands() }
+        function onKeyframesChanged(clip) {
+            // Refresh when the DISPLAYED clip changes — root.nodeClip is what
+            // refreshNodeRows() resolved (edited / active / any-for-entity), which
+            // during an edit session can differ from activeClip. Comparing against
+            // activeClip missed key add/move/delete on the shown clip. (#517)
+            if (clip === root.nodeClip) root.refreshNodeRows()
         }
     }
 
@@ -221,6 +296,7 @@ Rectangle {
     Text {
         anchors.centerIn: parent
         visible: root.rows.length === 0 && root.morphRows.length === 0
+                 && root.nodeRows.length === 0
         text: AnimationControlController.hasAnimation
               ? "No animated bones in this clip."
               : "Select a rigged mesh, or add morph targets, to view keyframes."
@@ -435,12 +511,17 @@ Rectangle {
         id: rowsView
         anchors.left: parent.left; anchors.right: parent.right
         anchors.top: header.visible ? header.bottom : parent.top
-        // Leave room for the morph band at the bottom when it's visible
-        // — otherwise the bone list would draw over it.
-        anchors.bottom: morphBand.visible ? morphBand.top : parent.bottom
+        // Leave room for the morph + node bands at the bottom when
+        // visible — otherwise the bone list would draw over them. The
+        // bands stack: node band (bottom-most), morph band above it.
+        anchors.bottom: morphBand.visible ? morphBand.top
+                        : (nodeBand.visible ? nodeBand.top : parent.bottom)
         clip: true
         model: root.rows
         spacing: 1
+        // Show whenever the selected mesh has skeletal tracks — the dope sheet
+        // displays ALL animation types the selection contains (skeletal +
+        // morph + node) together, so users see every clip's keys at once.
         visible: root.rows.length > 0
         // Disabled flicking so Flickable doesn't grab presses meant for
         // diamond MouseAreas / Ctrl+click multi-select. Wheel scrolling is
@@ -873,6 +954,13 @@ Rectangle {
             var maxMY = morphList.contentHeight - morphList.height
             morphList.contentY = Math.max(0, Math.min(maxMY, morphList.contentY - dy))
         }
+        // Same for the node band (interactive:false, so it needs the proxy too):
+        // a clip with more nodes than the 40% cap allows would otherwise hide the
+        // extra rows permanently. (#517)
+        if (nodeBand.visible && nodeList.contentHeight > nodeList.height) {
+            var maxNY = nodeList.contentHeight - nodeList.height
+            nodeList.contentY = Math.max(0, Math.min(maxNY, nodeList.contentY - dy))
+        }
     }
 
     WheelHandler {
@@ -904,6 +992,8 @@ Rectangle {
         id: morphBand
         anchors.left: parent.left
         anchors.right: parent.right
+        // Shown whenever the selection has morph targets — the sheet shows all
+        // animation types together (skeletal + morph + node).
         visible: morphRowsRep.count > 0
 
         // When there ARE bone tracks, the band docks to the BOTTOM under them
@@ -912,23 +1002,25 @@ Rectangle {
         // header down — otherwise it left an empty gap where the old skeleton
         // message used to sit.
         readonly property bool boneRowsPresent: root.rows.length > 0
-        anchors.top: boneRowsPresent ? undefined : (header.visible ? header.bottom : parent.top)
-        anchors.bottom: parent.bottom
-        anchors.topMargin: boneRowsPresent ? 0 : 2
+        // Dock above the node band when it's showing, else to the bottom. ALWAYS
+        // bottom-anchored, never top-anchored — toggling anchors.top to undefined
+        // doesn't reliably clear in QML (same negative-height bug the node band
+        // hit). Size purely via `height`.
+        anchors.bottom: nodeBand.visible ? nodeBand.top : parent.bottom
 
-        // Cap the band at ~40% of the dope-sheet height so high-count
-        // blendshape rigs (Mixamo characters routinely ship 50+) can't
-        // push the bone tracks off-screen. When the content needs more
-        // room, morphList becomes scrollable internally.
         readonly property int naturalContentHeight:
             morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4
         readonly property int maxBandHeight:
             Math.max(morphHeader.height + root.rowHeight + 6,
                      Math.floor(root.height * 0.4))
-        // Morph-only: fill (top+bottom anchors set height). With bones: capped.
+        // Fill height for the morph-only case (no bone rows): from below the
+        // header to whatever the band is anchored above (node band or bottom).
+        readonly property int fillHeight:
+            (nodeBand.visible ? nodeBand.y : root.height)
+            - (header.visible ? (header.y + header.height) : 0) - 2
         height: !visible ? 0
                 : boneRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
-                : undefined
+                : Math.max(naturalContentHeight, fillHeight)
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1
@@ -1093,6 +1185,211 @@ Rectangle {
                                             if (Math.abs(target - originalTime) > 0.001) {
                                                 MorphAnimationManager.moveMorphWeightKeyframe(
                                                     morphTrackArea.morphName, originalTime, target)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Node transform rows (#517 slice C) ───────────────────────────────────
+    // Interactive band, docked at the very bottom (below the morph band), for
+    // the SceneManager-owned node-transform clips the Inspector's "Node
+    // Transform Animation" section authors. One row per animated SceneNode,
+    // diamonds at each keyframe time. Drag a diamond to re-time it, right-click
+    // to delete, double-click empty space to key the node's CURRENT transform
+    // at that time (undoable). Shares the bone/morph timeline math (pxPerSec,
+    // viewStart) so all three bands line up vertically. Collapses to height 0
+    // when no node clip is active, so bone/morph-only sheets are unchanged.
+    Rectangle {
+        id: nodeBand
+        anchors.left: parent.left
+        anchors.right: parent.right
+        // ALWAYS bottom-anchored, NEVER top-anchored. Toggling anchors.top to
+        // `undefined` (the previous approach) does not reliably clear the anchor
+        // in QML — the band stayed pinned to the header and grew to fill the
+        // whole sheet, giving rowsView a NEGATIVE height (bug: bone rows
+        // invisible when a node clip existed). Instead we control the band's
+        // size purely with `height`: a fixed content-sized band when other bands
+        // are present, or a taller fill (capped) when the sheet is node-only.
+        anchors.bottom: parent.bottom
+        visible: nodeRowsRep.count > 0
+
+        readonly property bool otherRowsPresent: root.rows.length > 0 || root.morphRows.length > 0
+
+        // Content-sized height, capped at 40% so a many-node clip can't shove
+        // the bone/morph rows off-screen; scrolls internally past the cap.
+        readonly property int naturalContentHeight:
+            nodeHeader.height + nodeRowsRep.count * (root.rowHeight + 1) + 4
+        readonly property int maxBandHeight:
+            Math.max(nodeHeader.height + root.rowHeight + 6,
+                     Math.floor(root.height * 0.4))
+        // node-only sheet: fill from just below the header to the bottom.
+        readonly property int fillHeight:
+            root.height - (header.visible ? (header.y + header.height) : 0) - 2
+        height: !visible ? 0
+                : otherRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
+                : Math.max(naturalContentHeight, fillHeight)
+        color: AnimationControlController.panelColor
+        border.color: AnimationControlController.borderColor
+        border.width: 1
+
+        Rectangle {
+            id: nodeHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 16
+            color: Qt.darker(AnimationControlController.panelColor, 1.15)
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left; anchors.leftMargin: 6
+                text: "Node Transforms — " + root.nodeClip + " (" + nodeRowsRep.count + ")"
+                color: AnimationControlController.textColor
+                font.pixelSize: 10
+                font.bold: true
+                elide: Text.ElideRight
+                width: parent.width - 12
+            }
+        }
+
+        Flickable {
+            id: nodeList
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: nodeHeader.bottom
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 2
+            clip: true
+            contentHeight: nodeCol.height
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: false
+
+            Column {
+                id: nodeCol
+                width: parent.width
+                spacing: 1
+
+                Repeater {
+                    id: nodeRowsRep
+                    model: root.nodeRows
+
+                    Item {
+                        width: parent.width
+                        height: root.rowHeight
+
+                        Rectangle {
+                            width: root.leftStripWidth; height: root.rowHeight
+                            color: AnimationControlController.panelColor
+                            border.color: AnimationControlController.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left; anchors.leftMargin: 8
+                                text: modelData.node
+                                color: AnimationControlController.textColor
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                width: root.leftStripWidth - 12
+                            }
+                        }
+
+                        Item {
+                            id: nodeTrackArea
+                            property string nodeName: modelData.node
+                            anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
+                            anchors.right: parent.right
+                            height: root.rowHeight
+                            clip: true
+
+                            Rectangle {
+                                anchors.left: parent.left; anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                height: 1
+                                color: AnimationControlController.borderColor
+                                opacity: 0.4
+                            }
+
+                            // Empty-area double-click: key the node's CURRENT
+                            // transform at the clicked time. Sits under the
+                            // diamonds so their MouseAreas win for drag/delete.
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                onDoubleClicked: function(mouse) {
+                                    var t = mouse.x / root.pxPerSec + root.viewStart
+                                    if (t < 0) t = 0
+                                    NodeAnimationManager.keyNodeCurrentTransform(
+                                        root.nodeClip, nodeTrackArea.nodeName, t)
+                                    AnimationControlController.sliderValue = Math.round(t * 1000)
+                                }
+                            }
+
+                            Repeater {
+                                model: modelData.keyTimes
+                                Rectangle {
+                                    id: nodeDiamond
+                                    property real keyTime: modelData
+                                    property real dragPreviewTime: keyTime
+                                    property real displayTime: dragNode.dragging ? dragPreviewTime : keyTime
+                                    x: (displayTime - root.viewStart) * root.pxPerSec - width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: dragNode.dragging ? 14 : 10
+                                    height: width
+                                    rotation: 45
+                                    color: dragNode.dragging ? "#88ffaa" : "#66dd88"
+                                    border.color: AnimationControlController.borderColor
+                                    border.width: 1
+
+                                    MouseArea {
+                                        id: dragNode
+                                        anchors.fill: parent
+                                        anchors.margins: -3
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        cursorShape: Qt.SizeHorCursor
+                                        preventStealing: true
+                                        property bool dragging: false
+                                        property real pressX: 0
+                                        property real originalTime: 0
+                                        onPressed: function(mouse) {
+                                            root.forceActiveFocus()
+                                            if (mouse.button === Qt.RightButton) {
+                                                NodeAnimationManager.deleteNodeKeyframe(
+                                                    root.nodeClip, nodeTrackArea.nodeName,
+                                                    nodeDiamond.keyTime)
+                                                mouse.accepted = true
+                                                return
+                                            }
+                                            originalTime = nodeDiamond.keyTime
+                                            pressX = mouse.x
+                                            dragging = true
+                                            // Scrub so the viewport shows this pose.
+                                            AnimationControlController.sliderValue =
+                                                Math.round(nodeDiamond.keyTime * 1000)
+                                            NodeAnimationManager.scrubClip(
+                                                root.nodeClip, nodeDiamond.keyTime)
+                                            mouse.accepted = true
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            if (!dragging) return
+                                            var dt = (mouse.x - pressX) / root.pxPerSec
+                                            var target = originalTime + dt
+                                            if (target < 0) target = 0
+                                            nodeDiamond.dragPreviewTime = target
+                                        }
+                                        onReleased: function(mouse) {
+                                            if (!dragging) return
+                                            dragging = false
+                                            var target = nodeDiamond.dragPreviewTime
+                                            if (Math.abs(target - originalTime) > 0.001) {
+                                                NodeAnimationManager.moveNodeKeyframe(
+                                                    root.nodeClip, nodeTrackArea.nodeName,
+                                                    originalTime, target)
                                             }
                                         }
                                     }

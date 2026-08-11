@@ -52,6 +52,7 @@
   </qresource>
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
+    <file alias="NodeAnimationPanel.qml">../qml/NodeAnimationPanel.qml</file>
     <file alias="AnimationDopeSheet.qml">../qml/AnimationDopeSheet.qml</file>
     <file alias="AnimationCurveEditor.qml">../qml/AnimationCurveEditor.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>

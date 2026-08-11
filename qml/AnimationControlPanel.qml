@@ -545,4 +545,5 @@ Column {
                 onCommitted: function(v) { AnimationControlController.setKfRotZ(v) } }
         }
     }
+
 }

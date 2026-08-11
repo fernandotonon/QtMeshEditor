@@ -8,6 +8,7 @@
 #include "GlobalDefinitions.h"
 
 #include "TransformOperator.h"
+#include "NodeAnimationManager.h"
 #include "LightManager.h"
 #include "LightVisualizer.h"
 #include "LightsController.h"
@@ -1744,6 +1745,21 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         Ogre::Entity* ent = AnimationControlController::instance()->selectedEntity();
         if (!ent || !ent->getParentSceneNode()) return;
 
+        // Node-transform animation (#517): while a node clip is being edited,
+        // the Rotate tool must rotate the SCENE NODE, not a bone pose. In
+        // Animation Mode the rotate gizmo normally drives the selected bone
+        // (line below), which visibly turns the mesh via the skeleton while
+        // leaving node->getOrientation() at identity — so "Key selected node"
+        // captured no rotation. Redirect the world rotation onto the node.
+        auto* nodeAnimMgr = NodeAnimationManager::instance();
+        if (nodeAnimMgr && !nodeAnimMgr->editingClip().isEmpty()) {
+            ent->getParentSceneNode()->rotate(worldRot, Ogre::Node::TS_WORLD);
+            ent->getParentSceneNode()->needUpdate(true);
+            mStartPoint = point;
+            updateGizmoPosition();
+            return;
+        }
+
         // Map world rotation into bone-local space by composing with
         // the entity world + parent-bone derived orientations.
         Ogre::Quaternion entWorldOri = ent->getParentSceneNode()->_getDerivedOrientation();
@@ -2502,6 +2518,36 @@ void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientati
 
 void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
 {
+    // Node-transform animation (#517): while a node clip is being edited, ALL
+    // rotation must land on the SceneNode (not baked into mesh vertices /
+    // skeleton), so "Key selected node" captures it and playback drives it.
+    // This runs before the normal hasNodes/hasEntities split so no dispatch
+    // path can bypass it (rigged meshes select as entities and would otherwise
+    // vertex-bake the rotation, leaving the node at identity).
+    auto* nodeAnimMgr = NodeAnimationManager::instance();
+    if (nodeAnimMgr && !nodeAnimMgr->editingClip().isEmpty()) {
+        // Collect the DISTINCT target scene nodes from both selection lists: a
+        // selected SceneNode can also be the parent node of a selected Entity,
+        // and rotating the same node twice would double the rotation. Dedup via
+        // a set, then rotate each once (pivot-relative, like the hasNodes path).
+        std::set<Ogre::SceneNode*> targets;
+        for (Ogre::SceneNode* node : SelectionSet::getSingleton()->getNodesSelectionList())
+            if (node) targets.insert(node);
+        for (Ogre::Entity* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
+            if (Ogre::SceneNode* sn = ent ? ent->getParentSceneNode() : nullptr)
+                targets.insert(sn);
+        if (!targets.empty()) {
+            for (Ogre::SceneNode* node : targets) {
+                Ogre::Vector3 translation =
+                    node->_getDerivedPosition() - m_pTransformNode->_getDerivedPosition();
+                node->setPosition(m_pTransformNode->getPosition());
+                node->rotate(rotation, Ogre::Node::TS_WORLD);
+                node->setPosition(node->getPosition() + rotation * translation);
+            }
+            updateGizmoPosition();
+            return;
+        }
+    }
     if(SelectionSet::getSingleton()->hasNodes())
     {
         Ogre::Vector3 translation;
@@ -2517,6 +2563,16 @@ void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
     }
     else if(SelectionSet::getSingleton()->hasEntities())
     {
+        // Node-transform animation (#517) edit session override: the editor
+        // normally BAKES a mesh rotation into vertices + skeleton
+        // (MeshTransform::rotateMesh), leaving the SceneNode at identity — so
+        // "Key selected node" (which reads node->getOrientation()) captured no
+        // rotation. While a node-anim clip is being edited, rotate the entity's
+        // SCENE NODE instead, so the rotation lives where node-anim keys it and
+        // playback drives it. Translate/scale already go to the node via the
+        // hasNodes() branch; this closes the rotation gap for rigged meshes
+        // that select as entities.
+
         // Convert quaternion to Euler for rotation tracking (used by spinboxes)
         Ogre::Euler euler;
         euler.fromQuaternion(rotation);
@@ -2554,11 +2610,31 @@ void TransformOperator::rotateSelected(const Ogre::Vector3 &rotation)
 {
     if(SelectionSet::getSingleton()->hasEntities())
         {
+            // Node-transform animation (#517): the Inspector rotation FIELDS
+            // reach entities through this Euler overload, which otherwise
+            // destructively bakes the rotation into the mesh vertices/skeleton
+            // (MeshTransform::rotateMesh) and leaves the SceneNode at identity —
+            // so a node-anim key records no rotation. While a node clip is being
+            // edited, convert the per-entity DELTA (target − current) to a
+            // quaternion and route through the quaternion overload, which rotates
+            // the SceneNode (where node-anim keys it). Mirrors the gizmo path.
+            auto* nodeAnimMgr = NodeAnimationManager::instance();
+            const bool editingNode = nodeAnimMgr && !nodeAnimMgr->editingClip().isEmpty();
             foreach(Ogre::Entity* obj,SelectionSet::getSingleton()->getEntitiesSelectionList())
             {
-                MeshTransform::rotateMesh(obj,rotation - SelectionSet::getSingleton()->getEntityRotation(obj));
-                obj->getParentSceneNode()->needUpdate(true);
+                const Ogre::Vector3 delta = rotation - SelectionSet::getSingleton()->getEntityRotation(obj);
+                if (editingNode) {
+                    if (Ogre::SceneNode* sn = obj->getParentSceneNode()) {
+                        Ogre::Euler e(Ogre::Degree(delta.y), Ogre::Degree(delta.x), Ogre::Degree(delta.z));
+                        sn->rotate(e.toQuaternion(), Ogre::Node::TS_WORLD);
+                        sn->needUpdate(true);
+                    }
+                } else {
+                    MeshTransform::rotateMesh(obj, delta);
+                    obj->getParentSceneNode()->needUpdate(true);
+                }
                 SelectionSet::getSingleton()->setEntityRotation(obj,rotation);
             }
+            if (editingNode) updateGizmoPosition();
         }
 }

@@ -302,3 +302,142 @@ void SetNodeKeyframeCommand::undo()
         }
     }
 }
+
+namespace {
+
+// Shared by the move + delete commands: resolve the NodeAnimationTrack
+// for `nodeName` on `clipName`. Null when the clip/track is missing.
+Ogre::NodeAnimationTrack* trackForNode(const QString& clipName,
+                                       const QString& nodeName)
+{
+    auto* scene = sceneMgr();
+    if (!scene) return nullptr;
+    const std::string sclip = clipName.toStdString();
+    if (!scene->hasAnimation(sclip)) return nullptr;
+    auto* anim = scene->getAnimation(sclip);
+    if (!anim) return nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        auto* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) == nodeName)
+            return t;
+    }
+    return nullptr;
+}
+
+// Re-time the keyframe nearest `from` to `to` while keeping its TRS.
+// Ogre keeps keyframes time-sorted internally, so we remove-and-re-add
+// rather than mutate the time in place (setTime exists but doesn't
+// resort, which would corrupt interpolation).
+void retimeKeyframe(Ogre::NodeAnimationTrack* track, double from, double to)
+{
+    if (!track) return;
+    auto* src = findKeyframeNear(track, from);
+    if (!src) return;
+    const Ogre::Vector3 t = src->getTranslate();
+    const Ogre::Quaternion r = src->getRotation();
+    const Ogre::Vector3 s = src->getScale();
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (track->getKeyFrame(i) == src) { track->removeKeyFrame(i); break; }
+    }
+    auto* dst = track->createNodeKeyFrame(static_cast<Ogre::Real>(to));
+    if (!dst) return;
+    dst->setTranslate(t);
+    dst->setRotation(r);
+    dst->setScale(s);
+}
+
+} // namespace
+
+// ──────────────── MoveNodeKeyframeCommand ───────────────────────────
+
+MoveNodeKeyframeCommand::MoveNodeKeyframeCommand(const QString& clipName,
+                                                 const QString& nodeName,
+                                                 double oldTime,
+                                                 double newTime,
+                                                 QUndoCommand* parent)
+    : QUndoCommand(parent),
+      mClipName(clipName),
+      mNodeName(nodeName),
+      mOldTime(oldTime),
+      mNewTime(newTime)
+{
+    setText(QStringLiteral("Move node keyframe '%1'@%2→%3s")
+                .arg(nodeName).arg(oldTime, 0, 'f', 2).arg(newTime, 0, 'f', 2));
+}
+
+void MoveNodeKeyframeCommand::redo()
+{
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("redo: move kf '%1':'%2' %3→%4")
+            .arg(mClipName, mNodeName).arg(mOldTime, 0, 'f', 3).arg(mNewTime, 0, 'f', 3));
+    retimeKeyframe(trackForNode(mClipName, mNodeName), mOldTime, mNewTime);
+    if (auto* m = NodeAnimationManager::instance())
+        m->emitKeyframesChanged(mClipName);
+}
+
+void MoveNodeKeyframeCommand::undo()
+{
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("undo: move kf '%1':'%2' %3→%4")
+            .arg(mClipName, mNodeName).arg(mNewTime, 0, 'f', 3).arg(mOldTime, 0, 'f', 3));
+    retimeKeyframe(trackForNode(mClipName, mNodeName), mNewTime, mOldTime);
+    if (auto* m = NodeAnimationManager::instance())
+        m->emitKeyframesChanged(mClipName);
+}
+
+// ──────────────── DeleteNodeKeyframeCommand ─────────────────────────
+
+DeleteNodeKeyframeCommand::DeleteNodeKeyframeCommand(const QString& clipName,
+                                                     const QString& nodeName,
+                                                     double time,
+                                                     QUndoCommand* parent)
+    : QUndoCommand(parent),
+      mClipName(clipName),
+      mNodeName(nodeName)
+{
+    if (auto* track = trackForNode(clipName, nodeName)) {
+        if (auto* kf = findKeyframeNear(track, time)) {
+            mSnapshot.time = static_cast<double>(kf->getTime());
+            mSnapshot.translate = kf->getTranslate();
+            mSnapshot.rotation = kf->getRotation();
+            mSnapshot.scale = kf->getScale();
+            mValid = true;
+        }
+    }
+    setText(QStringLiteral("Delete node keyframe '%1'@%2s")
+                .arg(nodeName).arg(time, 0, 'f', 2));
+}
+
+void DeleteNodeKeyframeCommand::redo()
+{
+    if (!mValid) return;
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("redo: delete kf '%1':'%2'@%3")
+            .arg(mClipName, mNodeName).arg(mSnapshot.time, 0, 'f', 3));
+    auto* track = trackForNode(mClipName, mNodeName);
+    if (!track) return;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = track->getKeyFrame(i);
+        if (kf && std::abs(kf->getTime() - mSnapshot.time) < kKeyframeMergeEpsilon) {
+            track->removeKeyFrame(i);
+            break;
+        }
+    }
+    if (auto* m = NodeAnimationManager::instance())
+        m->emitKeyframesChanged(mClipName);
+}
+
+void DeleteNodeKeyframeCommand::undo()
+{
+    if (!mValid) return;
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("undo: delete kf '%1':'%2'@%3")
+            .arg(mClipName, mNodeName).arg(mSnapshot.time, 0, 'f', 3));
+    // Re-add through the manager so a track destroyed by removing its
+    // last keyframe is recreated on the correct handle.
+    if (auto* m = NodeAnimationManager::instance())
+        m->addKeyframe(mClipName, mNodeName, mSnapshot.time,
+                       mSnapshot.translate, mSnapshot.rotation, mSnapshot.scale);
+}

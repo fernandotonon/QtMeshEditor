@@ -182,6 +182,18 @@ void AnimationProcessor::processAnimations(const aiScene* scene) {
 }
 
 void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene* scene) {
+    // Skip channel-less animations. Assimp represents a glTF morph-weight
+    // animation as an aiAnimation with mNumChannels == 0 (the weights live in
+    // mMorphMeshChannels, handled separately by processMorphWeightAnimations).
+    // Creating a 0-track SKELETON clip for it here is worse than useless: the
+    // mesh-level VAT_POSE clip already carries the same name (e.g. "MorphAnim"),
+    // so on RE-EXPORT buildAiScene emits this empty skeletal clip AND
+    // injectMorphWeightAnimations appends the real one — two glTF animations
+    // with the same name, which makes the file fail to re-import (Ogre throws
+    // "animation already exists" and the whole load is aborted → 0 entities).
+    // A skeletal clip with no node tracks animates nothing, so dropping it is
+    // always safe. (issue #517: skeletal + morph coexistence)
+    if (animation->mNumChannels == 0) return;
     // get the animation speed
     auto mTicksPerSecond = (Ogre::Real)((0 == animation->mTicksPerSecond) ? 24.0f : animation->mTicksPerSecond);
     // Create the animation
@@ -191,6 +203,17 @@ void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene*
         aiNodeAnim* nodeAnim = animation->mChannels[i];
         processAnimationChannel(nodeAnim, ogreAnimation, scene, i, mTicksPerSecond);
     }
+    // A channel only becomes a node track when it targets a BONE
+    // (processAnimationChannel early-returns otherwise). If NONE of this
+    // aiAnimation's channels hit a bone, the clip is empty — it was a
+    // SceneNode-transform clip (#517 node anim, channel targets the scene
+    // node, not a bone) or some other non-skeletal channel. Leaving it on the
+    // skeleton produces a phantom 0-track animation that pollutes the Inspector
+    // list and dope sheet and gets auto-selected (so the real skeletal clip's
+    // bones never render in the dope sheet). Node clips are rebuilt separately
+    // by reconstructNodeClipsFrom* — drop the phantom here. (issue #517)
+    if (ogreAnimation->getNumNodeTracks() == 0)
+        skeleton->removeAnimation(animation->mName.C_Str());
 }
 
 void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex, Ogre::Real mTicksPerSecond) {

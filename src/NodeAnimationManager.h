@@ -17,6 +17,7 @@ The MIT License
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
 #include <OgreVector.h>
@@ -53,6 +54,29 @@ public:
     static NodeAnimationManager* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
 
+    /// The clip currently being authored/inspected. The Inspector
+    /// section and the dope-sheet node band both read this so they
+    /// agree on which clip's tracks are shown. Empty when no node
+    /// clip is selected. Not persisted — it's editor UI state.
+    Q_PROPERTY(QString activeClip READ activeClip WRITE setActiveClip NOTIFY activeClipChanged)
+    QString activeClip() const { return m_activeClip; }
+    void setActiveClip(const QString& name);
+
+    /// The clip currently in an EDIT session (authoring), or empty. While a
+    /// clip is being edited its driving AnimationState is forced DISABLED so
+    /// the SceneNode stays free for the gizmo (an enabled state re-drives the
+    /// node every frame and locks it). `beginEdit` opens the session (also
+    /// sets it active); `endEdit` closes it — after which the clip plays via
+    /// the main transport like any other animation. A draft clip (being
+    /// edited) is hidden from the main animation list until endEdit.
+    Q_PROPERTY(QString editingClip READ editingClip NOTIFY editingClipChanged)
+    QString editingClip() const { return m_editingClip; }
+    Q_INVOKABLE void beginEdit(const QString& name);
+    Q_INVOKABLE void endEdit();
+    /// True when `name` is being edited (draft) — used to hide it from the
+    /// main animation list and to gate enable.
+    Q_INVOKABLE bool isEditing(const QString& name) const { return !name.isEmpty() && m_editingClip == name; }
+
     /// Create a named clip with `length` seconds duration. Returns
     /// false if the name already exists on the scene (clip names are
     /// unique within `Ogre::SceneManager`'s animation table).
@@ -86,6 +110,68 @@ public:
     Q_INVOKABLE QList<double> keyTimesForNode(const QString& clipName,
                                               const QString& nodeName) const;
 
+    /// Names of the SceneNodes that have a NodeAnimationTrack on
+    /// `clipName`, in track-handle order. Read directly off the Ogre
+    /// Animation so it stays correct even after undo/redo rebuilds a
+    /// clip (the m_trackHandles allocator map is a runtime cache, not
+    /// the source of truth for "which nodes are animated").
+    Q_INVOKABLE QStringList animatedNodes(const QString& clipName) const;
+
+    /// Clip duration in seconds, or 0 when the clip is missing.
+    Q_INVOKABLE double clipLength(const QString& clipName) const;
+
+    /// Dope-sheet row model: one QVariantMap per animated node,
+    /// `{ "node": QString, "keyTimes": QVariantList<double seconds> }`.
+    /// Mirrors AnimationControlController::allMorphRows() so the dope
+    /// sheet's node band can reuse the morph-band rendering pattern.
+    Q_INVOKABLE QVariantList nodeRows(const QString& clipName) const;
+
+    /// Whether `name` names a live scene AnimationState that is enabled.
+    Q_INVOKABLE bool isClipEnabled(const QString& name) const;
+
+    /// Sample `clipName` at `time` and push it onto the scene so the
+    /// viewport reflects the scrubbed pose immediately (used by the
+    /// timeline slider while playback is paused). No-op on a missing
+    /// clip. Enables the driving AnimationState if needed but leaves
+    /// playback paused — the caller owns play/pause.
+    Q_INVOKABLE void scrubClip(const QString& clipName, double time);
+
+    // ── Undoable QML authoring surface ──────────────────────────────
+    // These push QUndoCommands (NodeAnimCommands) so Inspector edits
+    // are Ctrl+Z-able, matching every other authoring path. They are
+    // distinct from the raw createClip/deleteClip/addKeyframe above,
+    // which the commands themselves call and which the CLI/MCP use
+    // directly (those surfaces don't share the GUI undo stack).
+
+    /// Create a clip via CreateNodeAnimClipCommand (undoable).
+    Q_INVOKABLE bool createClipUndoable(const QString& name, double length);
+
+    /// Delete a clip via DeleteNodeAnimClipCommand (undoable, restores
+    /// every track + keyframe on undo).
+    Q_INVOKABLE bool deleteClipUndoable(const QString& name);
+
+    /// Capture `nodeName`'s CURRENT world-relative transform (the live
+    /// SceneNode's position/orientation/scale) as a keyframe on
+    /// `clipName` at `time`, via SetNodeKeyframeCommand (undoable).
+    /// This is the "key at playhead" authoring gesture — the user
+    /// moves the node with the gizmo, scrubs the timeline, clicks Key.
+    Q_INVOKABLE bool keyNodeCurrentTransform(const QString& clipName,
+                                             const QString& nodeName,
+                                             double time);
+
+    /// Move an existing keyframe on (`clipName`,`nodeName`) from
+    /// `oldTime` to `newTime` (undoable). Used by dope-sheet drag.
+    Q_INVOKABLE bool moveNodeKeyframe(const QString& clipName,
+                                      const QString& nodeName,
+                                      double oldTime,
+                                      double newTime);
+
+    /// Delete the keyframe on (`clipName`,`nodeName`) nearest `time`
+    /// (undoable). Used by dope-sheet right-click.
+    Q_INVOKABLE bool deleteNodeKeyframe(const QString& clipName,
+                                        const QString& nodeName,
+                                        double time);
+
     /// QML-friendly variants of the setters; pass POD-ish doubles in
     /// instead of Ogre types so the API binds cleanly into JS.
     Q_INVOKABLE bool createClipForName(const QString& name, double length);
@@ -106,11 +192,32 @@ public:
     /// PR #584 fixed, just in a different code path).
     void forgetTrackHandle(const QString& clipName, const QString& nodeName);
 
+    /// Public relays so the NodeAnimCommands (which mutate tracks
+    /// directly for move/delete rather than through addKeyframe) can
+    /// notify the dope sheet + inspector to rebuild. Emitting a
+    /// signal is otherwise only possible from within the class.
+    void emitKeyframesChanged(const QString& clipName);
+    void emitClipsChanged();
+
 signals:
     /// The set of clips visible on the scene changed (create / delete).
     void clipsChanged();
     /// A clip's keyframes changed (add / overwrite / future remove).
     void keyframesChanged(const QString& clipName);
+    /// The active (inspected) clip changed.
+    void activeClipChanged();
+    /// The edit-session clip changed (beginEdit / endEdit).
+    void editingClipChanged();
+
+private slots:
+    /// Drop every node-animation track that targets a SceneNode being
+    /// destroyed (Manager::sceneNodeDestroyed), and delete any clip left with
+    /// no tracks. Without this the clip's tracks + AnimationState keep raw
+    /// pointers to the freed node and the frame loop crashes on the next
+    /// _applySceneAnimations (bug: "crashed when I tried to delete a node …
+    /// while it had node animation checked"). Fired BEFORE destruction so the
+    /// node name is still resolvable.
+    void onSceneNodeDestroyed(Ogre::SceneNode* node);
 
 private:
     explicit NodeAnimationManager(QObject* parent = nullptr);
@@ -135,6 +242,12 @@ private:
     /// (lazy allocation) and `deleteClip` (forgets the whole clip
     /// entry). Lives only on the manager — no Ogre dependency.
     QHash<QString, QHash<QString, unsigned short>> m_trackHandles;
+
+    /// The clip currently being authored/inspected (editor UI state).
+    QString m_activeClip;
+
+    /// The clip in an open EDIT session (draft), or empty. See editingClip.
+    QString m_editingClip;
 
     static NodeAnimationManager* s_instance;
 };
