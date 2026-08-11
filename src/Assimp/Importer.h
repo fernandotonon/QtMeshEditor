@@ -54,6 +54,9 @@ private:
     Ogre::SkeletonPtr skeleton;
     std::string modelName;
     int m_sceneUpAxis = 1;
+    // #933: node-chain orientation baked into the skeleton/vertices for
+    // Blender-style Y-up-metadata rigs (identity otherwise).
+    Ogre::Quaternion m_nodeBakeRotation = Ogre::Quaternion::IDENTITY;
 
     MaterialProcessor materialProcessor;
 };

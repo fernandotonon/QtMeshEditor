@@ -4570,6 +4570,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     QString animationName;          // #936: sample a clip over time
     bool orbitWithAnimation = false;   // #936: combine rotation + animation
     float atSeconds = -1.0f;           // #936: single posed frame, normal orbit
+    bool studioLighting = false;       // #933: three-point studio preset
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -4664,6 +4665,10 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
             orbitWithAnimation = true;
             continue;
         }
+        if (arg == "--studio") {
+            studioLighting = true;
+            continue;
+        }
         if (arg == "--at") {
             if (i + 1 >= argc ||
                 !parseCliFloat(QString(argv[++i]), &atSeconds) || atSeconds < 0.0f) {
@@ -4734,6 +4739,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     options.animationName = animationName;       // #936
     options.orbitWithAnimation = orbitWithAnimation;
     options.atSeconds = atSeconds;
+    options.studio = studioLighting;             // #933
 
     QList<QImage> frames;
     QString renderError;
