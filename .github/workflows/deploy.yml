@@ -807,7 +807,10 @@ jobs:
          submodules: true
 
     - name: Install Qt
-      uses: jurplel/install-qt-action@v3
+      # v4 is required for the arm64 lane: v3 rejects host "linux_arm64"
+      # ("not one of windows|mac|linux"). v4 adds linux_arm64/windows_arm64
+      # hosts and is backward-compatible with the amd64 host: linux inputs.
+      uses: jurplel/install-qt-action@v4
       with:
         aqtversion: ${{ env.AQT_VERSION }}
         version: ${{ env.QT_VERSION }}
