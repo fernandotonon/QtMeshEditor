@@ -604,18 +604,32 @@ jobs:
 
  build-n-cache-assimp-linux:
     needs: scan-assets-qtmesh
-    runs-on: ubuntu-latest
+    # Build Assimp + Draco for BOTH Linux arches so the Docker image can ship a
+    # native linux/arm64 variant (Apple Silicon Macs) alongside linux/amd64.
+    # arm64 runs on GitHub's native ubuntu-24.04-arm runner (no QEMU).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
     - name: change folder permissions
       run: |
             sudo chmod 777 /usr/local/lib
             sudo chmod 777 /usr/local/include
-      
+
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux-605
+        # Cache key is per-ARCH: runner.os is "Linux" for both amd64 and the
+        # ubuntu-*-arm runner, so without matrix.arch the two builds would
+        # clobber each other's cache (arm64 restoring amd64 .so's, etc.).
+        cache-name: cache-assimp-linux-${{ matrix.arch }}-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/QtMeshEditor/assimp` on Linux
         path: |
@@ -670,19 +684,27 @@ jobs:
 
  build-n-cache-ogre-linux:
     needs: build-n-cache-assimp-linux
-    runs-on: ubuntu-latest
-    steps:        
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
     - name: change folder permissions
       run: |
             sudo chmod 777 /usr/local/lib
             sudo chmod 777 /usr/local/include
             sudo chmod 777 /usr/local/share
-      
+
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux-assimp605
+        cache-name: cache-ogre-linux-${{ matrix.arch }}-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -698,7 +720,7 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux-605
+        cache-name: cache-assimp-linux-${{ matrix.arch }}-605
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: |
@@ -747,14 +769,32 @@ jobs:
       
  build-linux:
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
-    runs-on: ubuntu-latest
-    env: 
+    # Matrix over both Linux arches → qtmesheditor_amd64.deb + qtmesheditor_arm64.deb.
+    # The arm64 .deb is what lets the Docker image ship a native linux/arm64
+    # variant for Apple Silicon Macs (no QEMU). Qt arch and the multiarch lib
+    # triplet differ per arch; everything else (packaging) is shared verbatim.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            qt_arch: linux_gcc_64
+            qt_dir: gcc_64
+            triplet: x86_64-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            qt_arch: linux_gcc_arm64
+            qt_dir: gcc_arm64
+            triplet: aarch64-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    env:
       LD_LIBRARY_PATH: /usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
     - uses: actions/checkout@v3.5.3
       with:
          submodules: true
-           
+
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -762,7 +802,7 @@ jobs:
         version: ${{ env.QT_VERSION }}
         host: 'linux'
         target: 'desktop'
-        arch: 'linux_gcc_64'
+        arch: '${{ matrix.qt_arch }}'
         # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
         modules: 'qtmultimedia'
 
@@ -771,12 +811,12 @@ jobs:
           sudo chmod 777 /usr/local/lib
           sudo chmod 777 /usr/local/include
           sudo chmod 777 /usr/local/share
-        
+
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux-605
+        cache-name: cache-assimp-linux-${{ matrix.arch }}-605
       with:
         path: |
                /usr/local/lib/cmake/
@@ -790,12 +830,12 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
-    
+
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux-assimp605
+        cache-name: cache-ogre-linux-${{ matrix.arch }}-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -821,9 +861,9 @@ jobs:
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
-            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools
+            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/cmake/Qt6 \
+            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/cmake/Qt6GuiTools
 
     - name: Build
       run: sudo make install -j8
@@ -850,18 +890,18 @@ jobs:
             mkdir -p ./build/bin
             
             # Copy Qt ICU libraries to both locations
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
-            
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicui18n.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicuuc.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicudata.* ./bin
+
             # Also copy to build/bin where cmake actually puts the executables
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/bin/ || true
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/bin/ || true
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/bin/ || true
-            
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicui18n.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicuuc.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/lib/libicudata.* ./build/bin/ || true
+
             # Copy libraries to system locations
-            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu || true
-            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu || true
+            sudo cp -R ./bin/*.so* /lib/${{ matrix.triplet }} || true
+            sudo cp -R /usr/local/lib/OGRE/* /lib/${{ matrix.triplet }} || true
             sudo cp -R /usr/local/lib/OGRE/* ./bin || true
             sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
   
@@ -924,7 +964,7 @@ jobs:
             cp /usr/local/lib/libOgre*.so* ./pack-deb/usr/lib/qtmesheditor/ 2>/dev/null || true
 
             # Copy Qt QML modules for Material Editor
-            QT_DIR="/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64"
+            QT_DIR="/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
             mkdir -p ./pack-deb/usr/share/qtmesheditor/qml
             cp -R "$QT_DIR/qml/QtQuick" ./pack-deb/usr/share/qtmesheditor/qml/
             cp -R "$QT_DIR/qml/QtQml" ./pack-deb/usr/share/qtmesheditor/qml/
@@ -985,7 +1025,7 @@ jobs:
             # enumeration on modern Linux (not via the FFmpeg plugin).
             sudo apt-get install -y libpipewire-0.3-0t64
             for lib in libpipewire-0.3.so.0; do
-              src="/usr/lib/x86_64-linux-gnu/${lib}"
+              src="/usr/lib/${{ matrix.triplet }}/${lib}"
               if [ ! -e "$src" ]; then
                 echo "ERROR: missing ${src} (needed for webcam enumeration)" >&2
                 exit 1
@@ -993,13 +1033,20 @@ jobs:
               cp -L "$src" ./pack-deb/usr/lib/qtmesheditor/
             done
 
+            # Set the .deb Architecture field to match this build (control file
+            # ships amd64 by default; the arm64 build must advertise arm64 or
+            # dpkg refuses to install it on an arm64 system / in the arm64 image).
+            sed -i 's/^Architecture:.*/Architecture: ${{ matrix.arch }}/' ./pack-deb/DEBIAN/control
+
             dpkg-deb --build --root-owner-group pack-deb
-            mv pack-deb.deb qtmesheditor_amd64.deb
+            mv pack-deb.deb qtmesheditor_${{ matrix.arch }}.deb
     
     - uses: actions/upload-artifact@v4
       if: github.event_name == 'release' && github.event.action == 'published'
       with:
-        name: linux-binaries
+        # Per-arch artifact name — upload-artifact@v4 errors on duplicate names,
+        # and the matrix runs this job once per arch.
+        name: linux-binaries-${{ matrix.arch }}
         path: ${{github.workspace}}/*.deb
 
     - if: github.event_name == 'release' && github.event.action == 'published'
@@ -1064,7 +1111,8 @@ jobs:
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-linux-605
+        # This job runs on amd64 — restore the amd64 producer's cache.
+        cache-name: cache-assimp-linux-amd64-605
       with:
         path: |
                /usr/local/lib/cmake/
@@ -1078,12 +1126,12 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
- 
+
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-linux-assimp605
+        cache-name: cache-ogre-linux-amd64-assimp605
       with:
         path: |
                /usr/local/lib/lib*
@@ -2799,7 +2847,8 @@ jobs:
 
     - uses: actions/download-artifact@v4
       with:
-        name: linux-binaries
+        # Snap remains amd64-only for now — pull the amd64 .deb specifically.
+        name: linux-binaries-amd64
         path: .
 
     - name: Verify snap input artifact
@@ -2855,30 +2904,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download .deb artifact from build-linux
+      - name: Download both-arch .deb artifacts from build-linux
         uses: actions/download-artifact@v4
         with:
-          name: linux-binaries
+          # build-linux uploads linux-binaries-amd64 and linux-binaries-arm64;
+          # merge both into the build context so the multi-arch Dockerfile can
+          # COPY qtmesheditor_${TARGETARCH}.deb per platform.
+          pattern: linux-binaries-*
+          merge-multiple: true
           path: .
 
-      - name: Prepare .deb for Docker build
+      - name: Verify both .deb inputs are present
         run: |
-          shopt -s nullglob
-          debs=(./*.deb)
-          if [ "${#debs[@]}" -ne 1 ]; then
-            echo "Expected exactly one .deb, found ${#debs[@]}" >&2
-            ls -la ./*.deb 2>/dev/null || true
-            exit 1
-          fi
-          mv "${debs[0]}" ./qtmesheditor.deb
-          ls -la ./qtmesheditor.deb
+          ls -la ./qtmesheditor_amd64.deb ./qtmesheditor_arm64.deb
+          test -f ./qtmesheditor_amd64.deb
+          test -f ./qtmesheditor_arm64.deb
 
       - name: Extract version from downloaded package
         id: version
         run: |
-          VERSION=$(dpkg-deb -f ./qtmesheditor.deb Version | sed 's/-.*//')
+          VERSION=$(dpkg-deb -f ./qtmesheditor_amd64.deb Version | sed 's/-.*//')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Extracted version: $VERSION"
+
+      - name: Set up QEMU (arm64 emulation for the arm64 image layer)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -2906,11 +2956,16 @@ jobs:
           TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:latest"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (multi-arch)
         uses: docker/build-push-action@v5
         with:
           context: .
+          # Native linux/amd64 (Intel Macs, Linux x64) + linux/arm64 (Apple
+          # Silicon Macs, ARM servers). Buildx pushes a single multi-arch
+          # manifest; `docker run` on each host auto-selects the matching image.
+          platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -2923,12 +2978,27 @@ jobs:
       - name: Verify image
         run: |
           IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
-          # Check for missing shared libraries before running
-          echo "=== Checking for missing shared libraries ==="
-          docker run --rm --entrypoint bash "$IMAGE" -c \
+          # Confirm the pushed manifest advertises BOTH arches.
+          echo "=== Manifest platforms ==="
+          docker buildx imagetools inspect "$IMAGE" | grep -iE "platform|mediatype" || true
+          docker buildx imagetools inspect "$IMAGE" --format '{{range .Manifest.Manifests}}{{println .Platform.OS "/" .Platform.Architecture}}{{end}}' \
+            | grep -q 'linux/arm64' || { echo "arm64 missing from manifest" >&2; exit 1; }
+          docker buildx imagetools inspect "$IMAGE" --format '{{range .Manifest.Manifests}}{{println .Platform.OS "/" .Platform.Architecture}}{{end}}' \
+            | grep -q 'linux/amd64' || { echo "amd64 missing from manifest" >&2; exit 1; }
+          # Check for missing shared libraries before running (amd64 variant,
+          # pulled natively on this amd64 runner).
+          echo "=== Checking for missing shared libraries (amd64) ==="
+          docker run --rm --platform linux/amd64 --entrypoint bash "$IMAGE" -c \
             'LD_LIBRARY_PATH=/usr/lib/qtmesheditor ldd /usr/share/qtmesheditor/qtmesheditor 2>&1 | grep "not found" && exit 1 || echo "All libraries found"'
           # Run --help to verify CLI works end-to-end
-          docker run --rm "$IMAGE" --help
+          docker run --rm --platform linux/amd64 "$IMAGE" --help
+          # Smoke-test the arm64 variant under QEMU (the layer only installs a
+          # .deb; this confirms the arm64 binary loads + CLI dispatches).
+          echo "=== arm64 variant smoke test (QEMU) ==="
+          docker run --rm --platform linux/arm64 "$IMAGE" --version || {
+            echo "::warning::arm64 --version under QEMU failed (emulation-only check)"
+            true
+          }
 
       - name: Scan repository assets via Docker
         run: |
