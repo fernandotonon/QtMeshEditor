@@ -665,8 +665,12 @@ jobs:
       # Draco's ENCODER for MeshDracoEncoder (#506), so we build the vendored
       # contrib/draco as a standalone static lib below and install it to the
       # same prefix — clean and identical on all three platforms.
+      # -DASSIMP_WARNINGS_AS_ERRORS=OFF: Assimp defaults it ON, and on the arm64
+      # runner's GCC a warning in Common/Assimp.cpp is fatal ("all warnings
+      # being treated as errors") — it doesn't fire on amd64's GCC. Disable it
+      # (the Windows Assimp build already does, for the same reason).
       run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DASSIMP_WARNINGS_AS_ERRORS=OFF
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
 
