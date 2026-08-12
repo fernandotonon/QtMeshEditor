@@ -76,13 +76,16 @@ jobs:
           set -euo pipefail
           VERSION="$(grep -E '^[[:space:]]*project\([[:space:]]*QtMeshEditor[[:space:]]+VERSION' CMakeLists.txt \
             | sed -E 's/.*VERSION[[:space:]]+([0-9.]+).*/\1/')"
+          # The Dockerfile now COPYs qtmesheditor_${TARGETARCH}.deb; this scan
+          # job builds for the host arch only (amd64 runner), so fetch the amd64
+          # .deb under that exact name.
           DEB_URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${VERSION}/qtmesheditor_amd64.deb"
-          if ! curl -fsSL -o qtmesheditor.deb "$DEB_URL"; then
+          if ! curl -fsSL -o qtmesheditor_amd64.deb "$DEB_URL"; then
             echo "::notice::No release .deb for ${VERSION}; using 3.4.0 package for Docker scan build."
-            curl -fsSL -o qtmesheditor.deb \
+            curl -fsSL -o qtmesheditor_amd64.deb \
               "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.4.0/qtmesheditor_amd64.deb"
           fi
-          docker build -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
+          docker build --platform linux/amd64 -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
 
       - name: Scan media/ via Docker (ci-scan image)
         run: |
@@ -2478,6 +2481,7 @@ jobs:
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
           "QtMeshEditor-${VERSION}-setup-Windows.exe"
           "qtmesheditor_amd64.deb"
+          "qtmesheditor_arm64.deb"
           "QtMeshEditor-${VERSION}-MacOS.dmg"
         )
         missing_required() {
@@ -2518,6 +2522,7 @@ jobs:
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
           "QtMeshEditor-${VERSION}-setup-Windows.exe"
           "qtmesheditor_amd64.deb"
+          "qtmesheditor_arm64.deb"
           "QtMeshEditor-${VERSION}-MacOS.dmg"
         )
         for name in "${REQUIRED[@]}"; do
@@ -2547,6 +2552,7 @@ jobs:
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
           "QtMeshEditor-${VERSION}-setup-Windows.exe"
           "qtmesheditor_amd64.deb"
+          "qtmesheditor_arm64.deb"
           "QtMeshEditor-${VERSION}-MacOS.dmg"
         )
         sign_file() {
