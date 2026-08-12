@@ -786,11 +786,15 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-latest
+            qt_host: linux
             qt_arch: linux_gcc_64
             qt_dir: gcc_64
             triplet: x86_64-linux-gnu
           - arch: arm64
             runner: ubuntu-24.04-arm
+            # Qt 6.9.3 arm64 lives under the aqt host "linux_arm64" (NOT "linux"
+            # — that host has no arm64 packages: aqt errors "qt_base not found").
+            qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
             qt_dir: gcc_arm64
             triplet: aarch64-linux-gnu
@@ -807,7 +811,7 @@ jobs:
       with:
         aqtversion: ${{ env.AQT_VERSION }}
         version: ${{ env.QT_VERSION }}
-        host: 'linux'
+        host: '${{ matrix.qt_host }}'
         target: 'desktop'
         arch: '${{ matrix.qt_arch }}'
         # qtmultimedia: performance capture (ENABLE_MOCAP, epic #869)
