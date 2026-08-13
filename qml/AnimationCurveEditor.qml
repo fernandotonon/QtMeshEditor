@@ -623,6 +623,7 @@ Rectangle {
         property real   dragKeyTime: 0
         property real   dragOriginalKeyTime: 0
         property real   dragOriginalValue: 0
+        property var    dragOriginalTRS: ({})   // #520: full pre-drag TRS (node clips)
         property real   dragLastValue: 0
         property real   dragPressX: 0
         property real   dragPressY: 0
@@ -683,6 +684,14 @@ Rectangle {
                     panArea.dragKeyTime = khit.time
                     panArea.dragOriginalKeyTime = khit.time
                     panArea.dragOriginalValue = khit.value
+                    // #520: snapshot the FULL pre-drag TRS for node clips so the
+                    // commit can restore the exact original rotation (a single
+                    // component revert can't undo the per-event quaternion
+                    // normalisation). Empty {} for bones (they use scalar revert).
+                    panArea.dragOriginalTRS = root.isNodeClip
+                        ? NodeAnimationManager.nodeKeyframeTRS(
+                              root.nodeClipName, khit.bone, khit.time)
+                        : ({})
                     // Seed lastValue too — onReleased compares it to
                     // originalValue to decide whether to commit. Without
                     // this, a click without drag (or a Shift-X-locked
@@ -738,9 +747,16 @@ Rectangle {
                     // the controller. Both leave the undo stack untouched
                     // during the drag.
                     if (root.isNodeClip) {
+                        // The node keyframe has NOT been moved yet during a
+                        // combined time+value drag (the move is only TRACKED in
+                        // dragKeyTime and committed on release). Preview against
+                        // the keyframe's ACTUAL current time (dragOriginalKeyTime),
+                        // not the intended new time — otherwise the 1ms match in
+                        // setNodeKeyframeValuePreview fails and the live preview
+                        // silently freezes for any time+value drag. (#520 review)
                         NodeAnimationManager.setNodeKeyframeValuePreview(
                             root.nodeClipName, panArea.dragBone,
-                            panArea.dragChannel, panArea.dragKeyTime, newValue)
+                            panArea.dragChannel, panArea.dragOriginalKeyTime, newValue)
                     } else {
                         AnimationControlController.setKeyframeValuePreview(
                             panArea.dragBone, panArea.dragChannel,
@@ -803,22 +819,25 @@ Rectangle {
                     //
                     // Order matters: re-time first (moveNodeKeyframe reads
                     // dragOriginalKeyTime), then set the value at the new time.
-                    if (timeChanged) {
-                        NodeAnimationManager.setNodeKeyframeValuePreview(
+                    // Revert the live preview to the FULL original TRS FIRST, at
+                    // the keyframe's current (un-moved) time — the preview always
+                    // ran there during the drag (#520 review). Restoring the whole
+                    // TRS (not just the dragged scalar) reconstructs the exact
+                    // pre-drag rotation, which a single-component revert can't do
+                    // once preview normalisation has drifted the quaternion. Then
+                    // re-time (if moved) and commit the value at the final time so
+                    // the undoable command snapshots the correct prior TRS.
+                    if (valueChanged) {
+                        NodeAnimationManager.restoreNodeKeyframeTRS(
                             root.nodeClipName, panArea.dragBone,
-                            panArea.dragChannel, panArea.dragOriginalKeyTime,
-                            panArea.dragOriginalValue)
+                            panArea.dragOriginalKeyTime, panArea.dragOriginalTRS)
+                    }
+                    if (timeChanged) {
                         NodeAnimationManager.moveNodeKeyframe(
                             root.nodeClipName, panArea.dragBone,
                             panArea.dragOriginalKeyTime, panArea.dragKeyTime)
                     }
                     if (valueChanged) {
-                        // Revert the live preview to the original value before
-                        // committing so the undoable set snapshots correctly.
-                        NodeAnimationManager.setNodeKeyframeValuePreview(
-                            root.nodeClipName, panArea.dragBone,
-                            panArea.dragChannel, panArea.dragKeyTime,
-                            panArea.dragOriginalValue)
                         NodeAnimationManager.setNodeKeyframeValue(
                             root.nodeClipName, panArea.dragBone,
                             panArea.dragChannel, panArea.dragKeyTime,

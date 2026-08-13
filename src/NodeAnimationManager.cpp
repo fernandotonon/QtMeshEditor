@@ -395,6 +395,12 @@ bool NodeAnimationManager::addKeyframe(const QString& clipName,
     kf->setTranslate(translate);
     kf->setRotation(rotation);
     kf->setScale(scale);
+    // TransformKeyFrame::set* does not invalidate the track's interpolation
+    // caches, so the next apply() would replay the pre-edit pose. Rebuild them
+    // here — this covers the live edit path AND SetNodeKeyframeCommand::redo()
+    // (which routes through addKeyframe), so undo/redo are honoured on playback.
+    // (#520 review — mirrors the arm-space _keyFrameDataChanged gotcha.)
+    track->_keyFrameDataChanged();
 
     SentryReporter::addBreadcrumb("scene.anim.node",
         QStringLiteral("keyframe '%1':'%2'@%3").arg(clipName, nodeName).arg(time, 0, 'f', 3));
@@ -766,6 +772,73 @@ bool NodeAnimationManager::setNodeKeyframeValuePreview(const QString& clipName,
     // pose — the drag would appear to lag one event. (#520)
     track->_keyFrameDataChanged();
     return true;
+}
+
+QVariantMap NodeAnimationManager::nodeKeyframeTRS(const QString& clipName,
+                                                  const QString& nodeName,
+                                                  double time) const
+{
+    QVariantMap out;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return out;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) != nodeName)
+            continue;
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i) {
+            auto* kf = static_cast<Ogre::TransformKeyFrame*>(t->getKeyFrame(i));
+            if (std::abs(kf->getTime() - static_cast<float>(time)) < kKeyframeMergeEpsilon) {
+                const Ogre::Vector3 p = kf->getTranslate();
+                const Ogre::Quaternion r = kf->getRotation();
+                const Ogre::Vector3 s = kf->getScale();
+                out["tx"] = p.x; out["ty"] = p.y; out["tz"] = p.z;
+                out["rw"] = r.w; out["rx"] = r.x; out["ry"] = r.y; out["rz"] = r.z;
+                out["sx"] = s.x; out["sy"] = s.y; out["sz"] = s.z;
+                return out;
+            }
+        }
+        break;
+    }
+    return out;
+}
+
+bool NodeAnimationManager::restoreNodeKeyframeTRS(const QString& clipName,
+                                                  const QString& nodeName,
+                                                  double time,
+                                                  const QVariantMap& trs)
+{
+    assertMainThread();
+    if (trs.isEmpty()) return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) != nodeName)
+            continue;
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i) {
+            auto* kf = static_cast<Ogre::TransformKeyFrame*>(t->getKeyFrame(i));
+            if (std::abs(kf->getTime() - static_cast<float>(time)) < kKeyframeMergeEpsilon) {
+                // Restore the WHOLE TRS in one shot — needed on rotation drag
+                // release: writeChannel normalised the quaternion each preview
+                // event, so reverting a single component can't reconstruct the
+                // pre-drag rotation. Restoring all four (+ T/S) exactly does.
+                // (#520 review)
+                kf->setTranslate(Ogre::Vector3(trs["tx"].toFloat(), trs["ty"].toFloat(), trs["tz"].toFloat()));
+                Ogre::Quaternion r(trs["rw"].toFloat(), trs["rx"].toFloat(),
+                                   trs["ry"].toFloat(), trs["rz"].toFloat());
+                kf->setRotation(r);
+                kf->setScale(Ogre::Vector3(trs["sx"].toFloat(), trs["sy"].toFloat(), trs["sz"].toFloat()));
+                t->_keyFrameDataChanged();
+                return true;
+            }
+        }
+        break;
+    }
+    return false;
 }
 
 // ── Curve resample / Bake (#520) ────────────────────────────────────

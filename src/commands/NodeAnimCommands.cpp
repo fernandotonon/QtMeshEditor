@@ -277,6 +277,11 @@ void SetNodeKeyframeCommand::undo()
             kf->setTranslate(mPriorKeyframe->translate);
             kf->setRotation(mPriorKeyframe->rotation);
             kf->setScale(mPriorKeyframe->scale);
+            // TransformKeyFrame::set* does NOT invalidate the track's spline /
+            // rotation interpolation caches, so the next apply() would replay the
+            // pre-undo pose. Force a rebuild so Ctrl+Z is honoured on playback.
+            // (#520 review — mirrors the arm-space _keyFrameDataChanged gotcha.)
+            track->_keyFrameDataChanged();
         }
     } else {
         // We added a fresh key. Drop it. Ogre's NodeAnimationTrack

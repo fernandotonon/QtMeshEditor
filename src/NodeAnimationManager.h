@@ -173,6 +173,23 @@ public:
                                                  const QString& channel,
                                                  double time, double value);
 
+    /// Read the FULL TRS of the keyframe at `time` as {tx..sz}. Empty when the
+    /// clip/track/keyframe is missing. The curve editor snapshots this at
+    /// rotation-drag start so it can restore the exact pre-drag quaternion on
+    /// release (a single-component revert can't, since preview normalisation
+    /// drifts the other three). (#520)
+    Q_INVOKABLE QVariantMap nodeKeyframeTRS(const QString& clipName,
+                                            const QString& nodeName,
+                                            double time) const;
+
+    /// Restore the whole TRS ({tx..sz}) onto the keyframe at `time` in one shot
+    /// (no undo push — the curve editor uses this to revert a drag preview
+    /// before committing the undoable value). Returns false when missing. (#520)
+    Q_INVOKABLE bool restoreNodeKeyframeTRS(const QString& clipName,
+                                            const QString& nodeName,
+                                            double time,
+                                            const QVariantMap& trs);
+
     /// Resample ONE curve segment [t0, t1] on (`clipName`, `nodeName`,
     /// `channel`) into dense TransformKeyFrames so live Ogre playback
     /// traces the Bezier/Auto/Stepped shape held in CurveEditModel —

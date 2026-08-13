@@ -11363,11 +11363,27 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--clip" && i + 1 < argc) { clipName = QString::fromUtf8(argv[++i]); continue; }
-        if (arg == "--length" && i + 1 < argc) { clipLength = QString::fromUtf8(argv[++i]).toDouble(); continue; }
+        if (arg == "--length" && i + 1 < argc) {
+            bool okLen = false;
+            clipLength = QString::fromUtf8(argv[++i]).toDouble(&okLen);
+            if (!okLen || clipLength <= 0.0) {
+                err() << "Error: --length must be a positive number." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) { outputPath = QString::fromUtf8(argv[++i]); continue; }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
         }
+    }
+
+    // An --add with no following --keyframes leaves pendingAddSpec unconsumed —
+    // it would otherwise be silently dropped (and a lone --add would misreport as
+    // "requires --list or --add").
+    if (!pendingAddSpec.isEmpty()) {
+        err() << "Error: --add " << pendingAddSpec << " has no matching --keyframes." << Qt::endl;
+        return 2;
     }
 
     const bool addMode = !adds.empty();
@@ -11489,7 +11505,15 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
             for (const auto& [t, vals] : kfs) {
                 // Seed this (node,time) from the node's current TRS the first
                 // time it's touched; later specs mutate the accumulated entry.
-                auto it = nodeMap.find(t);
+                // Coalesce by the SAME 1ms epsilon NodeAnimationManager::addKeyframe
+                // uses to merge keyframes — otherwise two spec times within 1ms
+                // stay separate here but collapse in the manager, so the later
+                // full-TRS write would drop the earlier channel. (#520 review)
+                constexpr double kMergeEps = 1e-3;
+                auto it = nodeMap.end();
+                for (auto cand = nodeMap.begin(); cand != nodeMap.end(); ++cand) {
+                    if (std::abs(cand->first - t) < kMergeEps) { it = cand; break; }
+                }
                 if (it == nodeMap.end())
                     it = nodeMap.emplace(t, TRS{ node->getPosition(),
                                                  node->getOrientation(),
