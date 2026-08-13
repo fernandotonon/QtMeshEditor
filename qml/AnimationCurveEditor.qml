@@ -322,7 +322,15 @@ Rectangle {
                     if (!row || !row.channels) return
                     for (var i = 0; i < root.channelOrder.length; i++) {
                         var ch = root.channelOrder[i]
-                        if (row.channels[ch.id]) {
+                        if (!row.channels[ch.id]) continue
+                        // Node clips resample through NodeAnimationManager
+                        // (SceneManager-owned track); bones through the
+                        // controller (skeleton track). Same density levels,
+                        // same undoable ResampleCurveCommand under the hood. (#520)
+                        if (root.isNodeClip) {
+                            NodeAnimationManager.resampleAllNodeSegments(
+                                root.nodeClipName, root.nodeName, ch.id, density)
+                        } else {
                             AnimationControlController.resampleAllSegmentsForBone(
                                 root.selectedBone, ch.id, density)
                         }

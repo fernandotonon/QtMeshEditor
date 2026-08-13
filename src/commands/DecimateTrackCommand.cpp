@@ -1,12 +1,14 @@
 #include "DecimateTrackCommand.h"
 
 #include "SkeletonResolver.h"
+#include "../Manager.h"
 
 #include <Ogre.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
 #include <OgreKeyFrame.h>
+#include <OgreSceneManager.h>
 
 #include <QObject>
 #include <cmath>
@@ -14,10 +16,33 @@
 
 namespace {
 
+// Node-clip track resolution (see ResampleCurveCommand): match by
+// associated-node name off the SceneManager-owned Animation. (#520)
+Ogre::NodeAnimationTrack* resolveNodeTrack(const std::string& animName,
+                                           const std::string& nodeName)
+{
+    if (animName.empty() || nodeName.empty()) return nullptr;
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    Ogre::SceneManager* scene = mgr->getSceneMgr();
+    if (!scene || !scene->hasAnimation(animName)) return nullptr;
+    Ogre::Animation* anim = scene->getAnimation(animName);
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (t && t->getAssociatedNode()
+            && t->getAssociatedNode()->getName() == nodeName)
+            return t;
+    }
+    return nullptr;
+}
+
 Ogre::NodeAnimationTrack* resolveTrack(const std::string& entityName,
                                        const std::string& animName,
-                                       const std::string& boneName)
+                                       const std::string& boneName,
+                                       bool isNodeClip)
 {
+    if (isNodeClip) return resolveNodeTrack(animName, boneName);
     if (animName.empty() || boneName.empty()) return nullptr;
     Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(entityName);
     if (!skel) return nullptr;
@@ -34,19 +59,21 @@ DecimateTrackCommand::DecimateTrackCommand(std::string entityName,
                                             std::string animationName,
                                             std::string boneName,
                                             int targetFps,
+                                            bool isNodeClip,
                                             QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mBoneName(std::move(boneName))
     , mTargetFps(targetFps)
+    , mIsNodeClip(isNodeClip)
 {
     setText(QObject::tr("Reduce keyframes"));
 }
 
 bool DecimateTrackCommand::snapshotTrack(std::vector<KeyframeSnapshot>& out)
 {
-    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName, mIsNodeClip);
     if (!track) return false;
     out.clear();
     out.reserve(track->getNumKeyFrames());
@@ -62,7 +89,7 @@ bool DecimateTrackCommand::snapshotTrack(std::vector<KeyframeSnapshot>& out)
 
 bool DecimateTrackCommand::replaceTrack(const std::vector<KeyframeSnapshot>& snap)
 {
-    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName, mIsNodeClip);
     if (!track) return false;
 
     // Strip every keyframe (downward to keep indices valid).

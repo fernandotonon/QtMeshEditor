@@ -173,6 +173,32 @@ public:
                                                  const QString& channel,
                                                  double time, double value);
 
+    /// Resample ONE curve segment [t0, t1] on (`clipName`, `nodeName`,
+    /// `channel`) into dense TransformKeyFrames so live Ogre playback
+    /// traces the Bezier/Auto/Stepped shape held in CurveEditModel —
+    /// the node-clip equivalent of
+    /// AnimationControlController::resampleCurveSegment (bone tracks).
+    /// Both endpoints must sit near existing keyframes. Pushes an
+    /// UNDOable node-capable ResampleCurveCommand. Returns false when
+    /// the clip/node/channel/segment is invalid. (#520)
+    Q_INVOKABLE bool resampleNodeCurveSegment(const QString& clipName,
+                                              const QString& nodeName,
+                                              const QString& channel,
+                                              double t0, double t1,
+                                              double toleranceMul = 1.0,
+                                              int fixedFps = 0);
+
+    /// Resample every segment on (`clipName`, `nodeName`, `channel`) at
+    /// the given `density` level (0..6 — matches the bone Bake dropdown:
+    /// 0=Sparse, 1=Medium, 2=Dense, 3..6 = 10/15/30/60 FPS exact) inside
+    /// ONE undo macro. Node-clip equivalent of
+    /// AnimationControlController::resampleAllSegmentsForBone. Returns
+    /// the number of segments resampled. (#520)
+    Q_INVOKABLE int resampleAllNodeSegments(const QString& clipName,
+                                            const QString& nodeName,
+                                            const QString& channel,
+                                            int density);
+
     /// Whether `name` names a live scene AnimationState that is enabled.
     Q_INVOKABLE bool isClipEnabled(const QString& name) const;
 

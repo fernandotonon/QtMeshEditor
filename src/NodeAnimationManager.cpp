@@ -14,6 +14,11 @@ The MIT License
 #include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/NodeAnimCommands.h"
+#include "commands/ResampleCurveCommand.h"
+#include "commands/DecimateTrackCommand.h"
+
+#include <QUndoStack>
+#include <cmath>
 
 #include <QCoreApplication>
 #include <QHash>
@@ -761,6 +766,164 @@ bool NodeAnimationManager::setNodeKeyframeValuePreview(const QString& clipName,
     // pose — the drag would appear to lag one event. (#520)
     track->_keyFrameDataChanged();
     return true;
+}
+
+// ── Curve resample / Bake (#520) ────────────────────────────────────
+// Node-clip equivalents of AnimationControlController::resampleCurveSegment
+// / resampleAllSegmentsForBone. Ogre's NodeAnimationTrack interpolates
+// linearly/spherically between keyframes, so a Bezier curve authored in
+// the curve editor is purely VISUAL until it is densified into keyframes
+// that trace the curve. These push a node-capable ResampleCurveCommand
+// (isNodeClip=true) — the exact same densification/undo machinery the
+// bone Bake uses.
+//
+// The CurveEditModel tangent side-table is keyed by
+// (entityName, animName, boneName, channel). qml/AnimationCurveEditor.qml
+// writes node-clip tangents under (selectedEntityName, selectedAnimation,
+// node) which for a node clip is (nodeName, clipName, nodeName) — so we
+// pass entity=node, anim=clip, bone=node to ResampleCurveCommand and it
+// reads the SAME tangents the editor drew.
+bool NodeAnimationManager::resampleNodeCurveSegment(const QString& clipName,
+                                                    const QString& nodeName,
+                                                    const QString& channel,
+                                                    double t0, double t1,
+                                                    double toleranceMul,
+                                                    int fixedFps)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty() || !isKnownChannel(channel))
+        return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+    if (t1 <= t0) return false;
+
+    // Resolve the track by associated-node name (the m_trackHandles
+    // cache can be stale after undo — same walk the query helpers use).
+    Ogre::NodeAnimationTrack* track = nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (t && t->getAssociatedNode()
+            && QString::fromStdString(t->getAssociatedNode()->getName()) == nodeName) {
+            track = t;
+            break;
+        }
+    }
+    if (!track) return false;
+
+    // Pre-check: both endpoints must sit near existing keyframes so the
+    // command's interior-overwrite math is well defined (matches the
+    // bone path's guard).
+    bool foundT0 = false, foundT1 = false;
+    constexpr float kEps = 0.001f;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float kt = track->getKeyFrame(i)->getTime();
+        if (std::fabs(kt - static_cast<float>(t0)) <= kEps) foundT0 = true;
+        if (std::fabs(kt - static_cast<float>(t1)) <= kEps) foundT1 = true;
+    }
+    if (!foundT0 || !foundT1) return false;
+
+    UndoManager::getSingleton()->push(new ResampleCurveCommand( // NOSONAR — stack owns
+        nodeName.toStdString(),          // entity key == node (curve tangent side-table)
+        clipName.toStdString(),          // anim key == clip
+        nodeName.toStdString(),          // bone key == node
+        channel.toLower().toStdString(),
+        static_cast<float>(t0),
+        static_cast<float>(t1),
+        toleranceMul,
+        fixedFps,
+        /*isNodeClip=*/true));
+    SentryReporter::addBreadcrumb("scene.anim.node.curve",
+        QStringLiteral("resample '%1':'%2'.%3 [%4,%5]")
+            .arg(clipName, nodeName, channel.toLower())
+            .arg(t0, 0, 'f', 3).arg(t1, 0, 'f', 3));
+    emit keyframesChanged(clipName);
+    return true;
+}
+
+int NodeAnimationManager::resampleAllNodeSegments(const QString& clipName,
+                                                  const QString& nodeName,
+                                                  const QString& channel,
+                                                  int density)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty() || !isKnownChannel(channel))
+        return 0;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return 0;
+
+    Ogre::NodeAnimationTrack* track = nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (t && t->getAssociatedNode()
+            && QString::fromStdString(t->getAssociatedNode()->getName()) == nodeName) {
+            track = t;
+            break;
+        }
+    }
+    if (!track || track->getNumKeyFrames() < 2) return 0;
+
+    // Density level → (toleranceMul, baselineFps, fixedFps) — mirrors
+    // AnimationControlController::resampleAllSegmentsForBone exactly so
+    // node Bake behaves identically to bone Bake.
+    double toleranceMul = 1.0;
+    int    fixedFps     = 0;   // exact-rate modes
+    int    baselineFps  = 0;   // adaptive pre-decimate target
+    switch (density) {
+        case 6:  fixedFps = 60; break;          // 60 FPS exact
+        case 5:  fixedFps = 30; break;          // 30 FPS exact
+        case 4:  fixedFps = 15; break;          // 15 FPS exact
+        case 3:  fixedFps = 10; break;          // 10 FPS exact
+        case 2:  toleranceMul = 1.0;  baselineFps = 30; break;  // Dense
+        case 1:  toleranceMul = 4.0;  baselineFps = 15; break;  // Medium
+        default: toleranceMul = 12.0; baselineFps = 5;  break;  // Sparse
+    }
+
+    std::vector<double> anchors;
+    anchors.reserve(track->getNumKeyFrames());
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
+        anchors.push_back(track->getKeyFrame(i)->getTime());
+
+    auto* stack = UndoManager::getSingleton()->stack();
+    stack->beginMacro(QObject::tr("Resample node curve"));
+
+    int count = 0;
+    if (fixedFps > 0 && anchors.size() >= 2) {
+        // Fixed-FPS bake: treat the whole clip as one segment so the
+        // per-pair "1/N source duration → 0 samples" issue disappears.
+        // ResampleCurveCommand snapshots the full series before the
+        // strip, so the curve evaluator still sees every original pose.
+        if (resampleNodeCurveSegment(clipName, nodeName, channel,
+                                     anchors.front(), anchors.back(),
+                                     1.0, fixedFps)) {
+            ++count;
+        }
+    } else {
+        // Adaptive modes pre-decimate to a coarser baseline so repeated
+        // bakes converge to a stable keyframe count (same rationale as
+        // the bone path — without it an already-dense track no-ops).
+        if (baselineFps > 0) {
+            UndoManager::getSingleton()->push(new DecimateTrackCommand( // NOSONAR — stack owns
+                nodeName.toStdString(), clipName.toStdString(),
+                nodeName.toStdString(), baselineFps, /*isNodeClip=*/true));
+            anchors.clear();
+            anchors.reserve(track->getNumKeyFrames());
+            for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
+                anchors.push_back(track->getKeyFrame(i)->getTime());
+        }
+        for (size_t i = 1; i < anchors.size(); ++i) {
+            if (resampleNodeCurveSegment(clipName, nodeName, channel,
+                                         anchors[i-1], anchors[i],
+                                         toleranceMul, fixedFps)) {
+                ++count;
+            }
+        }
+    }
+
+    stack->endMacro();
+    emit keyframesChanged(clipName);
+    return count;
 }
 
 bool NodeAnimationManager::isClipEnabled(const QString& name) const
