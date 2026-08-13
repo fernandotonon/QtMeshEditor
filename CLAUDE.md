@@ -475,7 +475,7 @@ Note: `MCPServer.h` has a separate `SERVER_VERSION` ("1.0.0") for the MCP protoc
 
 ## Docker
 
-A Docker image is published on each release to both `ghcr.io/fernandotonon/qtmesh` and `fernandotr1/qtmesh` (Docker Hub).
+A **multi-arch** Docker image (`linux/amd64` + `linux/arm64`) is published on each release to both `ghcr.io/fernandotonon/qtmesh` and `fernandotr1/qtmesh` (Docker Hub). Because it ships a native `linux/arm64` variant, it runs natively on Apple Silicon Macs (and ARM servers) as well as Intel/x64 — `docker run` auto-selects the host arch from the manifest, no QEMU.
 
 **Run via Docker:**
 ```bash
@@ -484,10 +484,15 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh convert model.
 ```
 
 **Key files:**
-- `Dockerfile` — Ubuntu 24.04 base, installs the `.deb` release artifact, Xvfb for headless GL
+- `Dockerfile` — Ubuntu 24.04 base. Multi-arch via `ARG TARGETARCH` → `COPY qtmesheditor_${TARGETARCH}.deb`, so each platform in the buildx manifest installs its own `.deb`. Xvfb for headless GL. Build context must contain both `qtmesheditor_amd64.deb` and `qtmesheditor_arm64.deb`.
 - `docker-entrypoint.sh` — Starts Xvfb, routes CLI commands via `--cli` flag, MCP commands to `qtmesheditor`
-- `.github/workflows/docker-publish.yml` — Manual `workflow_dispatch` for rebuilding images
+- `.github/workflows/deploy.yml` — the release `docker-publish` job downloads both per-arch `.deb`s (`linux-binaries-amd64` + `linux-binaries-arm64` artifacts from the `build-linux` matrix) and `docker buildx build --platform linux/amd64,linux/arm64` pushes one multi-arch manifest.
+- `.github/workflows/docker-publish.yml` — Manual `workflow_dispatch`; downloads both release `.deb`s (falls back to amd64-only for old releases without an arm64 `.deb`).
 - `.github/actions/qtmesh/action.yml` — Reusable composite action for CI/CD pipelines
+
+**Multi-arch build pipeline (#): the arm64 `.deb`.**
+- `build-linux` (and its `build-n-cache-assimp-linux` / `build-n-cache-ogre-linux` dependencies) is a **`strategy.matrix` over `{amd64: ubuntu-latest, arm64: ubuntu-24.04-arm}`** — arm64 builds on GitHub's **native arm64 runner** (no QEMU), producing `qtmesheditor_arm64.deb`. Qt for arm64 is `arch: linux_gcc_arm64` (install path `gcc_arm64`); the multiarch lib triplet is `aarch64-linux-gnu`. Cache keys embed `matrix.arch` (runner.os is `Linux` for both, so without it the two arches would clobber each other's assimp/ogre caches). The packaging `sed`s the `.deb` control `Architecture:` field to match.
+- Consumers pinned to one arch: `unit-tests-linux` restores the `-amd64-` caches; `snap-publish` downloads `linux-binaries-amd64` (Snap stays amd64-only). ONNX Runtime downloads a per-platform archive (`cmake/OnnxRuntime.cmake`) — the arm64 build pulls the aarch64 ORT.
 
 **Notes:**
 - The entrypoint passes `--cli` explicitly because the launcher script's `exec` changes argv[0] to contain "editor", which breaks CLI mode detection by binary name.

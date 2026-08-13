@@ -109,6 +109,8 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
     image-tag: "3.28.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
+# The image is multi-arch (linux/amd64 + linux/arm64), so it runs natively on
+# both Intel and Apple Silicon Macs — no --platform flag or QEMU needed.
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh:latest scan ./assets --fail-on error
 ```
 
