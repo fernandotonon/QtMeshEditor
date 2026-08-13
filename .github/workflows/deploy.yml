@@ -2995,13 +2995,16 @@ jobs:
       - name: Verify image
         run: |
           IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
-          # Confirm the pushed manifest advertises BOTH arches.
+          # Confirm the pushed manifest advertises BOTH arches. Parse the plain
+          # `imagetools inspect` "Platform: linux/arm64" lines (whitespace-
+          # tolerant) rather than a Go-template — `{{println .OS "/" .Arch}}`
+          # space-separates its args and prints "linux / arm64", which a
+          # 'linux/arm64' grep never matched (spurious verify failure on 3.29.0).
           echo "=== Manifest platforms ==="
-          docker buildx imagetools inspect "$IMAGE" | grep -iE "platform|mediatype" || true
-          docker buildx imagetools inspect "$IMAGE" --format '{{range .Manifest.Manifests}}{{println .Platform.OS "/" .Platform.Architecture}}{{end}}' \
-            | grep -q 'linux/arm64' || { echo "arm64 missing from manifest" >&2; exit 1; }
-          docker buildx imagetools inspect "$IMAGE" --format '{{range .Manifest.Manifests}}{{println .Platform.OS "/" .Platform.Architecture}}{{end}}' \
-            | grep -q 'linux/amd64' || { echo "amd64 missing from manifest" >&2; exit 1; }
+          PLATFORMS="$(docker buildx imagetools inspect "$IMAGE" | awk '/Platform:/ {print $2}')"
+          echo "$PLATFORMS"
+          echo "$PLATFORMS" | grep -qx 'linux/arm64' || { echo "arm64 missing from manifest" >&2; exit 1; }
+          echo "$PLATFORMS" | grep -qx 'linux/amd64' || { echo "amd64 missing from manifest" >&2; exit 1; }
           # Check for missing shared libraries before running (amd64 variant,
           # pulled natively on this amd64 runner).
           echo "=== Checking for missing shared libraries (amd64) ==="

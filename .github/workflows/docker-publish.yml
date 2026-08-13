@@ -128,5 +128,5 @@ jobs:
       - name: Verify image
         run: |
           IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
-          docker buildx imagetools inspect "$IMAGE" --format '{{range .Manifest.Manifests}}{{println .Platform.OS "/" .Platform.Architecture}}{{end}}' || true
+          docker buildx imagetools inspect "$IMAGE" | awk '/Platform:/ {print $2}' || true
           docker run --rm --platform linux/amd64 "$IMAGE" --help
