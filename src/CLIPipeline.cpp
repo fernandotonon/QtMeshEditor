@@ -887,8 +887,11 @@ void CLIPipeline::printUsage()
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
-        "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
-        "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
+        "                                    animated lights — anything non-skeletal).\n"
+        "  nodeanim <file> --add <node>:<position|rotation|scale> --keyframes \"0:0,0,0;1:5,0,0\"\n"
+        "                  [--clip NAME] [--length S] -o out\n"
+        "                                    Author a node-transform clip and export it (rotation values are\n"
+        "                                    Euler degrees; repeat --add/--keyframes for more channels/nodes).\n"
         "  mocap <video> [--face] [--body] --mesh <meshfile> [-o out.glb] [--clip-name NAME]\n"
         "              [--fps N] [--smooth-cutoff HZ] [--no-smooth] [--map overrides.json]\n"
         "              [--no-head] [--algo sam3dbody|pose-ik] [--no-model] [--frames-dir DIR] [--json]\n"
@@ -11327,28 +11330,60 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
 
 int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
 {
-    // Parse: nodeanim <file> --list [--json]
-    QString filePath;
+    // Parse:
+    //   nodeanim <file> --list [--json]
+    //   nodeanim <file> --add <node>:<channel> --keyframes "t:v,v,v;t:v,v,v"
+    //                   [--clip NAME] [--length SECONDS] -o out
+    // <channel> is position | rotation | scale. rotation values are Euler
+    // degrees (x,y,z). Multiple --add/--keyframes pairs may be given to author
+    // several channels/nodes into one clip. (#520)
+    QString filePath, outputPath, clipName;
     bool listMode = false;
     bool jsonOutput = false;
+    double clipLength = 0.0;
+    struct AddSpec { QString node; QString channel; QString keyframes; };
+    std::vector<AddSpec> adds;
+    QString pendingAddSpec;   // "<node>:<channel>" awaiting its --keyframes
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "nodeanim" || arg == "--cli") continue;
         if (arg == "--list") { listMode = true; continue; }
         if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--add" && i + 1 < argc) { pendingAddSpec = QString::fromUtf8(argv[++i]); continue; }
+        if (arg == "--keyframes" && i + 1 < argc) {
+            const QString kf = QString::fromUtf8(argv[++i]);
+            const int colon = pendingAddSpec.indexOf(':');
+            if (pendingAddSpec.isEmpty() || colon < 0) {
+                err() << "Error: --keyframes must follow --add <node>:<channel>." << Qt::endl;
+                return 2;
+            }
+            adds.push_back({pendingAddSpec.left(colon), pendingAddSpec.mid(colon + 1), kf});
+            pendingAddSpec.clear();
+            continue;
+        }
+        if (arg == "--clip" && i + 1 < argc) { clipName = QString::fromUtf8(argv[++i]); continue; }
+        if (arg == "--length" && i + 1 < argc) { clipLength = QString::fromUtf8(argv[++i]).toDouble(); continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) { outputPath = QString::fromUtf8(argv[++i]); continue; }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
         }
     }
 
+    const bool addMode = !adds.empty();
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh nodeanim <file> --list [--json]" << Qt::endl;
+        err() << "       qtmesh nodeanim <file> --add <node>:<position|rotation|scale> "
+                 "--keyframes \"0:0,0,0;1:5,0,0\" [--clip NAME] [--length S] -o out" << Qt::endl;
         return 2;
     }
-    if (!listMode) {
-        err() << "Error: nodeanim subcommand requires --list (other modes need C5 exporter round-trip)." << Qt::endl;
+    if (!listMode && !addMode) {
+        err() << "Error: nodeanim requires --list or --add." << Qt::endl;
+        return 2;
+    }
+    if (addMode && outputPath.isEmpty()) {
+        err() << "Error: --add requires -o <output>." << Qt::endl;
         return 2;
     }
 
@@ -11361,11 +11396,155 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.nodeanim",
-        QString("NodeAnim list .%1").arg(fi.suffix()));
+        QString("NodeAnim %1 .%2").arg(addMode ? "add" : "list", fi.suffix()));
     SentryReporter::addBreadcrumb("file.import",
-        QString("Importing %1 for nodeanim list").arg(fi.absoluteFilePath()));
+        QString("Importing %1 for nodeanim").arg(fi.absoluteFilePath()));
 
-    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    // Import path depends on the mode:
+    //  - --list (glTF/glb): sceneImporter retains the aiScene and reconstructs
+    //    node clips reliably (the flag-less re-read in importer() can miss them
+    //    on rigged multi-anim files). FBX/.mesh fall through to importer(), which
+    //    also reads the .nodeanim.json sidecar.
+    //  - --add: importer() names the scene node after the entity (e.g. "out_body")
+    //    so `--add <node>` resolves to the name the user sees; sceneImporter uses
+    //    a different internal node naming that wouldn't match. (#520)
+    const QString suffix = fi.suffix().toLower();
+    const bool sceneCapable = (suffix == "glb" || suffix == "gltf" || suffix == "gltf2");
+    if (!addMode && sceneCapable)
+        MeshImporterExporter::sceneImporter(fi.absoluteFilePath());
+    else
+        MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    // ── Authoring path: create a clip, add keyframes, export ──────────────
+    if (addMode) {
+        auto* nam = NodeAnimationManager::instance();
+        if (!nam) { err() << "Error: node-animation subsystem unavailable." << Qt::endl; return 1; }
+
+        // Parse a "t:v,v,v;t:v,v,v" spec into (time, [values]) pairs.
+        auto parseKeyframes = [](const QString& spec, QString& parseErr)
+            -> std::vector<std::pair<double, QVector<double>>> {
+            std::vector<std::pair<double, QVector<double>>> out;
+            const auto keys = spec.split(';', Qt::SkipEmptyParts);
+            for (const QString& k : keys) {
+                const int c = k.indexOf(':');
+                if (c < 0) { parseErr = QStringLiteral("keyframe '%1' missing ':'").arg(k); return {}; }
+                bool okT = false;
+                const double t = k.left(c).toDouble(&okT);
+                if (!okT || t < 0.0) { parseErr = QStringLiteral("bad time in '%1'").arg(k); return {}; }
+                QVector<double> vals;
+                for (const QString& v : k.mid(c + 1).split(',', Qt::SkipEmptyParts)) {
+                    bool okV = false; const double d = v.toDouble(&okV);
+                    if (!okV) { parseErr = QStringLiteral("bad value in '%1'").arg(k); return {}; }
+                    vals.push_back(d);
+                }
+                out.emplace_back(t, vals);
+            }
+            return out;
+        };
+
+        // Determine the clip length: max keyframe time across all --add specs,
+        // unless the user pinned it with --length.
+        double maxT = 0.0;
+        for (const AddSpec& a : adds) {
+            QString perr;
+            for (const auto& [t, vals] : parseKeyframes(a.keyframes, perr)) maxT = std::max(maxT, t);
+        }
+        const double length = clipLength > 0.0 ? clipLength : (maxT > 0.0 ? maxT : 1.0);
+        if (clipName.isEmpty()) clipName = QStringLiteral("NodeClip");
+        if (!nam->createClip(clipName, length)) {
+            err() << "Error: could not create clip '" << clipName << "'." << Qt::endl;
+            return 1;
+        }
+
+        // Accumulate all channels per (node, time) BEFORE writing, so multiple
+        // --add specs on the same node/time (e.g. position AND rotation) MERGE
+        // into one keyframe instead of the later spec clobbering the earlier
+        // one's channels. Each keyframe starts from the node's current TRS, then
+        // every spec touching that (node,time) overrides its own channel.
+        struct TRS { Ogre::Vector3 pos; Ogre::Quaternion rot; Ogre::Vector3 scl; };
+        // node → (time → TRS). Ordered by time within a node via std::map.
+        std::map<QString, std::map<double, TRS>> pending;
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+
+        int channelsWritten = 0;
+        for (const AddSpec& a : adds) {
+            const QString ch = a.channel.toLower();
+            if (ch != "position" && ch != "rotation" && ch != "scale") {
+                err() << "Error: channel must be position|rotation|scale (got '" << a.channel << "')." << Qt::endl;
+                return 2;
+            }
+            Ogre::SceneNode* node =
+                (scene && scene->hasSceneNode(a.node.toStdString()))
+                    ? scene->getSceneNode(a.node.toStdString()) : nullptr;
+            if (!node) {
+                err() << "Error: node '" << a.node << "' not found in scene." << Qt::endl;
+                return 1;
+            }
+            QString perr;
+            auto kfs = parseKeyframes(a.keyframes, perr);
+            if (!perr.isEmpty()) { err() << "Error: " << perr << Qt::endl; return 2; }
+
+            auto& nodeMap = pending[a.node];
+            for (const auto& [t, vals] : kfs) {
+                // Seed this (node,time) from the node's current TRS the first
+                // time it's touched; later specs mutate the accumulated entry.
+                auto it = nodeMap.find(t);
+                if (it == nodeMap.end())
+                    it = nodeMap.emplace(t, TRS{ node->getPosition(),
+                                                 node->getOrientation(),
+                                                 node->getScale() }).first;
+                TRS& trs = it->second;
+                if (ch == "position") {
+                    if (vals.size() < 3) { err() << "Error: position needs 3 values." << Qt::endl; return 2; }
+                    trs.pos = Ogre::Vector3(vals[0], vals[1], vals[2]);
+                } else if (ch == "scale") {
+                    if (vals.size() < 3) { err() << "Error: scale needs 3 values." << Qt::endl; return 2; }
+                    trs.scl = Ogre::Vector3(vals[0], vals[1], vals[2]);
+                } else { // rotation: Euler degrees x,y,z → quaternion (XYZ order)
+                    if (vals.size() < 3) { err() << "Error: rotation needs 3 Euler-degree values." << Qt::endl; return 2; }
+                    Ogre::Quaternion qx, qy, qz;
+                    qx.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[0])), Ogre::Vector3::UNIT_X);
+                    qy.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[1])), Ogre::Vector3::UNIT_Y);
+                    qz.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[2])), Ogre::Vector3::UNIT_Z);
+                    trs.rot = qx * qy * qz;
+                    trs.rot.normalise();
+                }
+            }
+            ++channelsWritten;
+        }
+
+        // Write the merged keyframes.
+        for (const auto& [nodeName, nodeMap] : pending) {
+            for (const auto& [t, trs] : nodeMap) {
+                if (!nam->addKeyframe(clipName, nodeName, t, trs.pos, trs.rot, trs.scl)) {
+                    err() << "Error: failed to add keyframe at t=" << t << " on '" << nodeName << "'." << Qt::endl;
+                    return 1;
+                }
+            }
+        }
+
+        // Export the whole scene (node clips ride sceneExporter — glTF native,
+        // FBX/.mesh via the .nodeanim.json sidecar).
+        const QFileInfo outFi(outputPath);
+        if (MeshImporterExporter::sceneExporter(outFi.absoluteFilePath()) != 0) {
+            err() << "Error: export failed: " << outputPath << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["ok"] = true;
+            root["clip"] = clipName;
+            root["length"] = length;
+            root["channels"] = channelsWritten;
+            root["output"] = outputPath;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            cliWrite(QStringLiteral("Wrote clip '%1' (%2 channel(s), %3s) to %4\n")
+                     .arg(clipName).arg(channelsWritten).arg(length, 0, 'f', 3).arg(outputPath));
+        }
+        return 0;
+    }
 
     // The NodeAnimationManager reads from the SceneManager's animation
     // table, which is what `importer()` populated. Round-trip the

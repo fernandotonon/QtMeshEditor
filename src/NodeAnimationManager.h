@@ -121,10 +121,57 @@ public:
     Q_INVOKABLE double clipLength(const QString& clipName) const;
 
     /// Dope-sheet row model: one QVariantMap per animated node,
-    /// `{ "node": QString, "keyTimes": QVariantList<double seconds> }`.
-    /// Mirrors AnimationControlController::allMorphRows() so the dope
-    /// sheet's node band can reuse the morph-band rendering pattern.
+    /// `{ "node": QString, "keyTimes": QVariantList<double seconds>,
+    ///    "channels": { tx:bool, ty:bool, … sz:bool } }`.
+    /// Mirrors AnimationControlController::allBoneRows() so the dope
+    /// sheet's node band AND the curve editor can reuse the same
+    /// rendering pattern. The `channels` field was added in #520 (the
+    /// curve editor needs the active-channel map); `keyTimes` stays for
+    /// backward compatibility with the dope sheet's existing band. (#520)
     Q_INVOKABLE QVariantList nodeRows(const QString& clipName) const;
+
+    // ── Curve-editor surface (#520) ─────────────────────────────────
+    // These mirror AnimationControlController's per-channel bone-curve
+    // API (channelValuesAt / setKeyframeValue / setKeyframeValuePreview)
+    // so qml/AnimationCurveEditor.qml can edit a node clip's TRS curves
+    // IDENTICALLY to how it edits a skeletal bone's tracks. Channel ids
+    // are the same tx/ty/tz/rw/rx/ry/rz/sx/sy/sz set; rotation channels
+    // recompose the quaternion from all four components then normalise.
+
+    /// The active-channel bool map for (`clipName`, `nodeName`), same
+    /// shape/logic as AnimationControlController::collectActiveChannels —
+    /// `{ tx:bool, …, sz:bool }`. Empty map when the track is missing.
+    Q_INVOKABLE QVariantMap nodeChannels(const QString& clipName,
+                                         const QString& nodeName) const;
+
+    /// Per-keyframe values for one channel on (`clipName`, `nodeName`),
+    /// in keyframe (time) order — the values the curve editor plots.
+    /// Empty when the channel is unknown or the track is missing.
+    Q_INVOKABLE QVariantList nodeChannelValuesAt(const QString& clipName,
+                                                 const QString& nodeName,
+                                                 const QString& channel) const;
+
+    /// Write ONE channel into the keyframe at `time` on
+    /// (`clipName`, `nodeName`), leaving the other nine components
+    /// untouched, via an UNDOable SetNodeKeyframeCommand (which
+    /// snapshots the full prior TRS so undo restores it). Rotation
+    /// channels recompose + normalise the quaternion. Returns false
+    /// when the channel/clip/node/keyframe is missing.
+    Q_INVOKABLE bool setNodeKeyframeValue(const QString& clipName,
+                                          const QString& nodeName,
+                                          const QString& channel,
+                                          double time, double value);
+
+    /// Same as setNodeKeyframeValue but writes straight to the
+    /// TransformKeyFrame with NO undo push — for live curve-handle
+    /// drags; the caller commits the final value on release. Calls
+    /// `track->_keyFrameDataChanged()` after the edit so the change is
+    /// picked up (setRotation/setTranslate don't invalidate the track's
+    /// interpolation caches — the arm-space gotcha in CLAUDE.md). (#520)
+    Q_INVOKABLE bool setNodeKeyframeValuePreview(const QString& clipName,
+                                                 const QString& nodeName,
+                                                 const QString& channel,
+                                                 double time, double value);
 
     /// Whether `name` names a live scene AnimationState that is enabled.
     Q_INVOKABLE bool isClipEnabled(const QString& name) const;

@@ -1,12 +1,30 @@
 import QtQuick
 import QtQuick.Controls
 import AnimationControl 1.0
+import PropertiesPanel 1.0
 
 // Curve editor — per-channel animation curves with Bezier handles.
+//
+// Edits skeletal BONE tracks by default; when the selected animation is a
+// SceneManager-level NODE-transform clip (#520) it sources its rows and
+// routes every value read/write through NodeAnimationManager instead, so a
+// node clip's TRS curves edit IDENTICALLY (quaternion-correct rotation,
+// undoable, live-drag preview). The bone path is byte-for-byte unchanged
+// when `isNodeClip` is false.
 Rectangle {
     id: root
     color: AnimationControlController.panelColor
     focus: true
+
+    // True when the selected animation is a node-transform clip rather than
+    // a skeletal one. When true, `rows` come from NodeAnimationManager and
+    // the "selected row" is the animated node (keyed by node name). (#520)
+    readonly property bool isNodeClip: AnimationControlController.selectedIsNodeClip
+    // The node a node-clip's curves belong to. A node clip animates the
+    // SceneNode whose name == the selected entity name (see
+    // AnimationControlController::setAnimation node-clip branch). (#520)
+    readonly property string nodeClipName: AnimationControlController.selectedAnimation
+    readonly property string nodeName: AnimationControlController.selectedEntityName
 
     property real pxPerSec: 200
     property real viewStart: 0.0
@@ -16,8 +34,35 @@ Rectangle {
     property int leftStripWidth: 130
     property var hiddenChannels: ({})
 
-    property var rows: AnimationControlController.allBoneRows()
-    readonly property string selectedBone: AnimationControlController.selectedBone
+    // Row model: bone rows from the controller, OR node-clip rows from
+    // NodeAnimationManager (normalised so each carries a `bone` field ==
+    // the node name — every downstream reference reads row.bone, so the
+    // draw / pick / drag code needs no node-specific branch). (#520)
+    property var rows: root.fetchRows()
+
+    function fetchRows() {
+        if (isNodeClip) {
+            if (nodeClipName.length === 0) return []
+            var nrows = NodeAnimationManager.nodeRows(nodeClipName)
+            var out = []
+            for (var i = 0; i < nrows.length; i++) {
+                // Alias `node` → `bone` so selectedBoneRow()/onPaint/pick
+                // all keep reading `.bone` unchanged.
+                out.push({ bone: nrows[i].node,
+                           keyTimes: nrows[i].keyTimes,
+                           channels: nrows[i].channels })
+            }
+            return out
+        }
+        return AnimationControlController.allBoneRows()
+    }
+
+    // For a node clip the "selected bone" is the animated node; there is
+    // typically one node per clip, so default to it. Falls back to the
+    // controller's selected bone for the skeletal path. (#520)
+    readonly property string selectedBone: isNodeClip
+                                           ? root.nodeName
+                                           : AnimationControlController.selectedBone
 
     readonly property var channelOrder: [
         { id: "tx", label: "T.X", color: "#c04040" },
@@ -120,22 +165,40 @@ Rectangle {
         if (root.viewStart < 0) root.viewStart = 0
     }
 
+    // Re-pull rows + values from whichever source is current (bone or
+    // node) and repaint. Centralised so every refresh trigger stays in
+    // sync with the bone-vs-node branch. (#520)
+    function reloadAndRepaint() {
+        root.rows = root.fetchRows()
+        curveCanvas.refreshChannelValues(root.selectedBoneRow())
+        curveCanvas.requestPaint()
+    }
+
+    // A change of clip type (skeletal ↔ node) must re-source the rows.
+    onIsNodeClipChanged: reloadAndRepaint()
+    onNodeClipNameChanged: if (isNodeClip) reloadAndRepaint()
+
     Connections {
         target: AnimationControlController
-        function onBoneRowsChanged()      {
-            root.rows = AnimationControlController.allBoneRows()
-            curveCanvas.refreshChannelValues(root.selectedBoneRow())
-            curveCanvas.requestPaint()
-        }
-        function onSelectionChanged()     {
-            root.rows = AnimationControlController.allBoneRows()
-            curveCanvas.refreshChannelValues(root.selectedBoneRow())
-            curveCanvas.requestPaint()
-        }
+        function onBoneRowsChanged()      { root.reloadAndRepaint() }
+        function onSelectionChanged()     { root.reloadAndRepaint() }
         function onKeyframeTicksChanged() { curveCanvas.requestPaint() }
         function onBoneListChanged()      {
             curveCanvas.refreshChannelValues(root.selectedBoneRow())
             curveCanvas.requestPaint()
+        }
+    }
+
+    // #520: node-clip keyframe/clip changes (add/move/delete, undo/redo)
+    // fire on NodeAnimationManager, not the controller — refresh on them so
+    // node curves stay live the same way bone curves do.
+    Connections {
+        target: NodeAnimationManager
+        function onKeyframesChanged(clipName) {
+            if (root.isNodeClip) root.reloadAndRepaint()
+        }
+        function onActiveClipChanged() {
+            if (root.isNodeClip) root.reloadAndRepaint()
         }
     }
 
@@ -344,16 +407,28 @@ Rectangle {
 
         function refreshChannelValues(boneRow) {
             var cache = {}
+            if (!boneRow) { curveCanvas.channelValues = cache; return }
             var chans = root.activeChannelsFor(boneRow)
             for (var i = 0; i < chans.length; i++) {
-                cache[chans[i].id] = AnimationControlController.channelValuesAt(
-                    boneRow.bone, chans[i].id)
+                // #520: node clips read per-channel values from
+                // NodeAnimationManager; bones from the controller. Same
+                // (time-ordered) shape, so the rest of the canvas is agnostic.
+                cache[chans[i].id] = root.isNodeClip
+                    ? NodeAnimationManager.nodeChannelValuesAt(
+                          root.nodeClipName, boneRow.bone, chans[i].id)
+                    : AnimationControlController.channelValuesAt(
+                          boneRow.bone, chans[i].id)
             }
             curveCanvas.channelValues = cache
         }
 
         function valueAtTimeForChannel(boneRow, channelId, time) {
             var values = channelValues[channelId] || []
+            // CurveEditModel is track-agnostic (#520): it only does curve math
+            // on the times/values passed in, keyed by (skeleton,anim,bone,
+            // channel) for its tangent side-table. Passing the node clip name
+            // as the anim key + the node name as the bone key gives node
+            // curves their own independent tangent state.
             return CurveEditModel.evaluate(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
@@ -650,17 +725,37 @@ Rectangle {
                 // to T-pose between events. Commit on release.
                 if (writeValue) {
                     panArea.dragLastValue = newValue
-                    AnimationControlController.setKeyframeValuePreview(
-                        panArea.dragBone, panArea.dragChannel,
-                        panArea.dragKeyTime, newValue)
+                    // #520: node clips preview through NodeAnimationManager
+                    // (no undo push — committed on release); bones through
+                    // the controller. Both leave the undo stack untouched
+                    // during the drag.
+                    if (root.isNodeClip) {
+                        NodeAnimationManager.setNodeKeyframeValuePreview(
+                            root.nodeClipName, panArea.dragBone,
+                            panArea.dragChannel, panArea.dragKeyTime, newValue)
+                    } else {
+                        AnimationControlController.setKeyframeValuePreview(
+                            panArea.dragBone, panArea.dragChannel,
+                            panArea.dragKeyTime, newValue)
+                    }
                 }
                 if (writeTime) {
-                    var ok = AnimationControlController.moveKeyframePreview(
-                        panArea.dragBone, panArea.dragKeyTime, newTime)
-                    if (ok) panArea.dragKeyTime = newTime
+                    if (root.isNodeClip) {
+                        // NodeAnimationManager has no "preview" (non-undoable)
+                        // move — moveNodeKeyframe pushes a command. Pushing one
+                        // per mouse move would spam the undo stack, so during
+                        // the drag we only TRACK the intended time and commit a
+                        // single moveNodeKeyframe on release (see onReleased).
+                        panArea.dragKeyTime = newTime
+                    } else {
+                        var ok = AnimationControlController.moveKeyframePreview(
+                            panArea.dragBone, panArea.dragKeyTime, newTime)
+                        if (ok) panArea.dragKeyTime = newTime
+                    }
                 }
-                // boneRowsChanged is suppressed by the preview API; refresh inline.
-                root.rows = AnimationControlController.allBoneRows()
+                // boneRowsChanged is suppressed by the preview API; refresh
+                // inline. fetchRows() picks the bone-vs-node source. (#520)
+                root.rows = root.fetchRows()
                 curveCanvas.refreshChannelValues(root.selectedBoneRow())
                 curveCanvas.requestPaint()
             } else if (panArea.dragMode === "tangent") {
@@ -691,6 +786,42 @@ Rectangle {
                 var valueChanged = panArea.dragLastValue !== panArea.dragOriginalValue
                 var timeChanged  = panArea.dragKeyTime    !== panArea.dragOriginalKeyTime
 
+                if (root.isNodeClip) {
+                    // #520: node path. Value was previewed (non-undoable);
+                    // time was only TRACKED during the drag (dragKeyTime holds
+                    // the desired new time — no live move happened). Restore the
+                    // previewed value to the ORIGINAL first so the command's
+                    // redo snapshots the right prior TRS, then commit.
+                    //
+                    // Order matters: re-time first (moveNodeKeyframe reads
+                    // dragOriginalKeyTime), then set the value at the new time.
+                    if (timeChanged) {
+                        NodeAnimationManager.setNodeKeyframeValuePreview(
+                            root.nodeClipName, panArea.dragBone,
+                            panArea.dragChannel, panArea.dragOriginalKeyTime,
+                            panArea.dragOriginalValue)
+                        NodeAnimationManager.moveNodeKeyframe(
+                            root.nodeClipName, panArea.dragBone,
+                            panArea.dragOriginalKeyTime, panArea.dragKeyTime)
+                    }
+                    if (valueChanged) {
+                        // Revert the live preview to the original value before
+                        // committing so the undoable set snapshots correctly.
+                        NodeAnimationManager.setNodeKeyframeValuePreview(
+                            root.nodeClipName, panArea.dragBone,
+                            panArea.dragChannel, panArea.dragKeyTime,
+                            panArea.dragOriginalValue)
+                        NodeAnimationManager.setNodeKeyframeValue(
+                            root.nodeClipName, panArea.dragBone,
+                            panArea.dragChannel, panArea.dragKeyTime,
+                            panArea.dragLastValue)
+                    }
+                    // Refresh the local row/value caches (no boneRowsChanged
+                    // fires for node edits).
+                    root.rows = root.fetchRows()
+                    curveCanvas.refreshChannelValues(root.selectedBoneRow())
+                    curveCanvas.requestPaint()
+                } else {
                 // Restore originals before pushing the real commands so
                 // their redo() captures the correct old-state snapshot.
                 if (timeChanged) {
@@ -712,6 +843,7 @@ Rectangle {
                 // Value/time edits already pushed proper commands via
                 // setKeyframeValue/moveKeyframe — Ogre's existing
                 // interp draws the segment, no implicit resample.
+                }
             } else if (panArea.dragMode === "tangent") {
                 // Tangent drag wrote CurveEditModel directly during
                 // move (no undo per move). On release, restore the

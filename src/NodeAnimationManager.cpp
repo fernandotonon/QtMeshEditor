@@ -45,6 +45,116 @@ inline void assertMainThread()
 // accidentally create back-to-back keys.
 constexpr double kKeyframeMergeEpsilon = 1e-3;
 
+// ── Curve-editor channel helpers (#520) ─────────────────────────────
+// Deliberately mirror AnimationControlController's private readChannel /
+// isKnownChannel / writeChannel / collectActiveChannels so a node clip's
+// TRS curves edit IDENTICALLY to a skeletal bone's tracks. Kept local
+// (not shared) because the two managers don't include each other and the
+// helper bodies are tiny — duplicating is cheaper than a new header.
+
+// Below-this magnitude a channel is treated as "at its identity value"
+// (0 for translate/rotation-imaginary, 1 for scale) so an all-default
+// track doesn't advertise ten always-on curves. Matches
+// AnimationControlController::kChannelEpsilon.
+constexpr float kChannelEpsilon = 1e-4f;
+
+// Resolve channel id → scalar reader on a TransformKeyFrame.
+double readChannel(const Ogre::TransformKeyFrame* kf, const QString& ch)
+{
+    const QString c = ch.toLower();
+    if (c == "tx") return kf->getTranslate().x;
+    if (c == "ty") return kf->getTranslate().y;
+    if (c == "tz") return kf->getTranslate().z;
+    if (c == "rw") return kf->getRotation().w;
+    if (c == "rx") return kf->getRotation().x;
+    if (c == "ry") return kf->getRotation().y;
+    if (c == "rz") return kf->getRotation().z;
+    if (c == "sx") return kf->getScale().x;
+    if (c == "sy") return kf->getScale().y;
+    if (c == "sz") return kf->getScale().z;
+    return 0.0;
+}
+
+bool isKnownChannel(const QString& ch)
+{
+    static const QStringList kKnown = {
+        QStringLiteral("tx"), QStringLiteral("ty"), QStringLiteral("tz"),
+        QStringLiteral("rw"), QStringLiteral("rx"),
+        QStringLiteral("ry"), QStringLiteral("rz"),
+        QStringLiteral("sx"), QStringLiteral("sy"), QStringLiteral("sz"),
+    };
+    return kKnown.contains(ch.toLower());
+}
+
+// True when `ch` is one of the four rotation components (rw/rx/ry/rz).
+bool isRotationChannel(const QString& ch)
+{
+    const QString c = ch.toLower();
+    return c == "rw" || c == "rx" || c == "ry" || c == "rz";
+}
+
+// Write the requested scalar onto the keyframe's TRS without touching
+// the other nine components. Rotation channels overwrite one quaternion
+// component then NORMALISE — a raw component edit denormalises the quat,
+// which would skew every interpolated slerp between it and its neighbours.
+void writeChannel(Ogre::TransformKeyFrame* kf, const QString& ch, double v)
+{
+    const QString c = ch.toLower();
+    const float fv = static_cast<float>(v);
+    if (c == "tx") { auto t = kf->getTranslate(); t.x = fv; kf->setTranslate(t); return; }
+    if (c == "ty") { auto t = kf->getTranslate(); t.y = fv; kf->setTranslate(t); return; }
+    if (c == "tz") { auto t = kf->getTranslate(); t.z = fv; kf->setTranslate(t); return; }
+    if (isRotationChannel(c)) {
+        Ogre::Quaternion r = kf->getRotation();
+        if      (c == "rw") r.w = fv;
+        else if (c == "rx") r.x = fv;
+        else if (c == "ry") r.y = fv;
+        else                r.z = fv;   // rz
+        // Renormalise so the quaternion stays unit-length; a degenerate
+        // (all-zero) edit falls back to identity rather than NaN.
+        if (r.Norm() > 1e-8f) r.normalise();
+        else                  r = Ogre::Quaternion::IDENTITY;
+        kf->setRotation(r);
+        return;
+    }
+    if (c == "sx") { auto s = kf->getScale(); s.x = fv; kf->setScale(s); return; }
+    if (c == "sy") { auto s = kf->getScale(); s.y = fv; kf->setScale(s); return; }
+    if (c == "sz") { auto s = kf->getScale(); s.z = fv; kf->setScale(s); return; }
+}
+
+// The active-channel bool map for a node track (mirrors
+// AnimationControlController::collectActiveChannels). A channel is
+// "active" when at least one keyframe deviates from the identity value.
+QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
+{
+    bool tx = false, ty = false, tz = false;
+    bool rw = false, rx = false, ry = false, rz = false;
+    bool sx = false, sy = false, sz = false;
+    for (unsigned short i = 0; track && i < track->getNumKeyFrames(); ++i) {
+        const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        const Ogre::Vector3    t = kf->getTranslate();
+        const Ogre::Quaternion r = kf->getRotation();
+        const Ogre::Vector3    s = kf->getScale();
+        if (std::fabs(t.x) > kChannelEpsilon) tx = true;
+        if (std::fabs(t.y) > kChannelEpsilon) ty = true;
+        if (std::fabs(t.z) > kChannelEpsilon) tz = true;
+        // Sign-agnostic rotation identity check (w=±1 is identity).
+        if (std::fabs(std::fabs(r.w) - 1.0f) > kChannelEpsilon) rw = true;
+        if (std::fabs(r.x) > kChannelEpsilon) rx = true;
+        if (std::fabs(r.y) > kChannelEpsilon) ry = true;
+        if (std::fabs(r.z) > kChannelEpsilon) rz = true;
+        if (std::fabs(s.x - 1.0f) > kChannelEpsilon) sx = true;
+        if (std::fabs(s.y - 1.0f) > kChannelEpsilon) sy = true;
+        if (std::fabs(s.z - 1.0f) > kChannelEpsilon) sz = true;
+    }
+    QVariantMap m;
+    m[QStringLiteral("tx")] = tx; m[QStringLiteral("ty")] = ty; m[QStringLiteral("tz")] = tz;
+    m[QStringLiteral("rw")] = rw; m[QStringLiteral("rx")] = rx;
+    m[QStringLiteral("ry")] = ry; m[QStringLiteral("rz")] = rz;
+    m[QStringLiteral("sx")] = sx; m[QStringLiteral("sy")] = sy; m[QStringLiteral("sz")] = sz;
+    return m;
+}
+
 } // namespace
 
 NodeAnimationManager* NodeAnimationManager::s_instance = nullptr;
@@ -479,9 +589,178 @@ QVariantList NodeAnimationManager::nodeRows(const QString& clipName) const
         QVariantMap row;
         row[QStringLiteral("node")]     = QString::fromStdString(node->getName());
         row[QStringLiteral("keyTimes")] = keyTimes;
+        // #520: the curve editor needs the active-channel map to know
+        // which TRS curves to draw. Backward-compatible add — the dope
+        // sheet's node band ignores it and still reads keyTimes.
+        row[QStringLiteral("channels")] = collectActiveChannels(t);
         rows.append(row);
     }
     return rows;
+}
+
+QVariantMap NodeAnimationManager::nodeChannels(const QString& clipName,
+                                               const QString& nodeName) const
+{
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim || nodeName.isEmpty()) return {};
+    // Resolve the track by associated-node name (same walk animatedNodes /
+    // the commands use — the m_trackHandles cache can be stale after undo).
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) == nodeName)
+            return collectActiveChannels(t);
+    }
+    return {};
+}
+
+QVariantList NodeAnimationManager::nodeChannelValuesAt(const QString& clipName,
+                                                       const QString& nodeName,
+                                                       const QString& channel) const
+{
+    QVariantList out;
+    if (!isKnownChannel(channel)) return out;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim || nodeName.isEmpty()) return out;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) != nodeName)
+            continue;
+        out.reserve(static_cast<int>(t->getNumKeyFrames()));
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i) {
+            const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(t->getKeyFrame(i));
+            out.append(readChannel(kf, channel));
+        }
+        break;
+    }
+    return out;
+}
+
+bool NodeAnimationManager::setNodeKeyframeValue(const QString& clipName,
+                                                const QString& nodeName,
+                                                const QString& channel,
+                                                double time, double value)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty() || !isKnownChannel(channel))
+        return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+
+    // Resolve the track + the exact keyframe at `time`. We snapshot the
+    // FULL current TRS, overwrite the one requested channel on it, and
+    // push a SetNodeKeyframeCommand — its overwrite path restores the
+    // prior TRS on undo, so a single-channel curve edit is Ctrl+Z-able
+    // exactly like the bone path (which uses SetKeyframeValueCommand).
+    Ogre::TransformKeyFrame* target = nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) != nodeName)
+            continue;
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i) {
+            auto* kf = static_cast<Ogre::TransformKeyFrame*>(t->getKeyFrame(i));
+            if (std::abs(kf->getTime() - static_cast<float>(time)) < kKeyframeMergeEpsilon) {
+                target = kf;
+                break;
+            }
+        }
+        break;
+    }
+    if (!target) return false;   // no keyframe at `time` — don't push a no-op
+
+    // Compose the new full TRS: start from the current values, apply the
+    // one requested channel (rotation is renormalised, matching
+    // writeChannel). We build the TRS in locals rather than mutating the
+    // live keyframe here because committing the change is the command's
+    // job — the command snapshots the prior TRS for undo, then writes.
+    Ogre::Vector3    t = target->getTranslate();
+    Ogre::Quaternion r = target->getRotation();
+    Ogre::Vector3    s = target->getScale();
+    const QString c = channel.toLower();
+    const float fv = static_cast<float>(value);
+    if      (c == "tx") t.x = fv;
+    else if (c == "ty") t.y = fv;
+    else if (c == "tz") t.z = fv;
+    else if (isRotationChannel(c)) {
+        if      (c == "rw") r.w = fv;
+        else if (c == "rx") r.x = fv;
+        else if (c == "ry") r.y = fv;
+        else                r.z = fv;
+        if (r.Norm() > 1e-8f) r.normalise();
+        else                  r = Ogre::Quaternion::IDENTITY;
+    }
+    else if (c == "sx") s.x = fv;
+    else if (c == "sy") s.y = fv;
+    else if (c == "sz") s.z = fv;
+
+    SentryReporter::addBreadcrumb("scene.anim.node.curve",
+        QStringLiteral("set '%1':'%2'.%3@%4=%5")
+            .arg(clipName, nodeName, c)
+            .arg(time, 0, 'f', 3).arg(value, 0, 'f', 4));
+    UndoManager::getSingleton()->push(new SetNodeKeyframeCommand(
+        clipName, nodeName, time, t, r, s));
+
+    // The command's redo() overwrote the keyframe's TRS in place via
+    // addKeyframe (setTranslate/setRotation/setScale) — which does NOT
+    // invalidate the track's interpolation caches. Flush them so the
+    // next apply() (Play preview) reflects the edit instead of replaying
+    // the pre-edit pose (the arm-space gotcha in CLAUDE.md). (#520)
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t2 = it->second;
+        if (t2 && t2->getAssociatedNode() &&
+            QString::fromStdString(t2->getAssociatedNode()->getName()) == nodeName) {
+            t2->_keyFrameDataChanged();
+            break;
+        }
+    }
+    return true;
+}
+
+bool NodeAnimationManager::setNodeKeyframeValuePreview(const QString& clipName,
+                                                       const QString& nodeName,
+                                                       const QString& channel,
+                                                       double time, double value)
+{
+    assertMainThread();
+    if (clipName.isEmpty() || nodeName.isEmpty() || !isKnownChannel(channel))
+        return false;
+    Ogre::Animation* anim = animForClip(clipName);
+    if (!anim) return false;
+
+    Ogre::NodeAnimationTrack* track = nullptr;
+    Ogre::TransformKeyFrame* target = nullptr;
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (!t || !t->getAssociatedNode()) continue;
+        if (QString::fromStdString(t->getAssociatedNode()->getName()) != nodeName)
+            continue;
+        track = t;
+        for (unsigned short i = 0; i < t->getNumKeyFrames(); ++i) {
+            auto* kf = static_cast<Ogre::TransformKeyFrame*>(t->getKeyFrame(i));
+            if (std::abs(kf->getTime() - static_cast<float>(time)) < kKeyframeMergeEpsilon) {
+                target = kf;
+                break;
+            }
+        }
+        break;
+    }
+    if (!track || !target) return false;
+
+    // No undo push — this is the live-drag path; the caller commits the
+    // final value through setNodeKeyframeValue on release.
+    writeChannel(target, channel, value);
+    // setRotation/setTranslate/setScale do NOT invalidate the track's
+    // interpolation caches (the arm-space gotcha documented in CLAUDE.md),
+    // so force a cache rebuild or the next apply() replays the pre-edit
+    // pose — the drag would appear to lag one event. (#520)
+    track->_keyFrameDataChanged();
+    return true;
 }
 
 bool NodeAnimationManager::isClipEnabled(const QString& name) const
