@@ -74,12 +74,13 @@ TEST(PaintChannelTest, TexturePaintChannelCountExcludesVertexColor) {
     EXPECT_EQ(static_cast<Channel>(kTexturePaintChannelCount), Channel::VertexColor);
 }
 
-TEST(PaintChannelTest, DefaultBrushColorIsVisible) {
+TEST(PaintChannelTest, DefaultBrushColorIsWhiteAndInRange) {
     for (int i = 0; i < kTexturePaintChannelCount; ++i) {
         int r = -1, g = -1, b = -1;
         defaultBrushColor(static_cast<Channel>(i), r, g, b);
-        EXPECT_GE(r, 0); EXPECT_LE(r, 255);
-        EXPECT_GE(g, 0); EXPECT_LE(g, 255);
-        EXPECT_GE(b, 0); EXPECT_LE(b, 255);
+        // White default for every channel (max scalar value / any hue).
+        EXPECT_EQ(r, 255);
+        EXPECT_EQ(g, 255);
+        EXPECT_EQ(b, 255);
     }
 }

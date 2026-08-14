@@ -4522,6 +4522,9 @@ Rectangle {
                     texPaintCol.layerCount = TexturePaintController.layerCount
                     texPaintCol.activeLayerIndex = TexturePaintController.activeLayerIndex
                     texPaintCol.paintLayers = TexturePaintController.paintLayers
+                    // Layer add/remove changes which channels have layers — keep
+                    // the channel picker's hasLayers badges in sync.
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
             }
 
@@ -4770,6 +4773,7 @@ Rectangle {
                 Item { width: 1; height: 1 }
                 Rectangle {
                     width: 60; height: 22; radius: 4
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
                     color: PropertiesPanelController.controlBgColor
                     border.color: PropertiesPanelController.borderColor; border.width: 1
                     anchors.verticalCenter: parent.verticalCenter
@@ -4778,7 +4782,9 @@ Rectangle {
                         color: PropertiesPanelController.textColor; font.pixelSize: 10
                     }
                     MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        anchors.fill: parent
+                        enabled: texPaintCol.hasSession
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: TexturePaintController.bakeChannel(texPaintCol.activeChannel)
                     }
                 }

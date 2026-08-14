@@ -123,6 +123,11 @@ bool PaintChannelPresets::applyPreset(const QString& name)
     pc->setBrushStrength(p.strength);
     pc->setBrushFalloff(p.falloff);
     pc->setBrushColor(QColor(p.colorR, p.colorG, p.colorB));
+    // Apply the preset's blend mode to the active layer so e.g. "Emissive
+    // sparks" (Add) and "Dirt build-up" (Multiply) actually composite as
+    // designed instead of Normal.
+    if (pc->layerCount() > 0)
+        pc->setPaintLayerBlendMode(pc->activeLayerIndex(), p.blendMode);
     // Stamp vs round brush.
     if (!p.stamp.isEmpty()) {
         pc->setFootprintType(static_cast<int>(BrushFootprint::FootprintType::StampImage));

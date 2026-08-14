@@ -123,14 +123,13 @@ inline const char* label(Channel c)
     }
 }
 
-/// Default brush RGBA the picker seeds when a channel is first selected.
-/// Colour channels start white; scalar/height start mid-to-white grayscale so
-/// a first stroke is visible against a black (0) empty layer. Returns packed
-/// 0xRRGGBBAA-agnostic components via out params (0..255).
-inline void defaultBrushColor(Channel c, int& r, int& g, int& b)
+/// Default brush RGB the picker seeds when a channel is first selected
+/// (components 0..255, via out-params). White is the sensible default for both
+/// colour channels (paint any hue) and scalar/height channels (max value —
+/// full roughness/metal/AO/height — visible against a black empty layer).
+inline void defaultBrushColor(Channel /*c*/, int& r, int& g, int& b)
 {
-    if (isScalar(c)) { r = g = b = 255; return; }   // full roughness/metallic/ao/height
-    r = g = b = 255;                                 // white colour default
+    r = g = b = 255;
 }
 
 /// Resolve a channel back from its stable id (for QML / presets). Returns

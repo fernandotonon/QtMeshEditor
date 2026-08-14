@@ -1714,9 +1714,15 @@ Ogre::TextureUnitState* TexturePaintController::findOrCreateActiveTextureUnit(Og
     // targets a slot (legacy path) fall back to albedo/diffuse_map.
     const std::string wantSlot = activeChannelSlotName();
     if (!wantSlot.empty()) {
+        // BaseColor aliases: imported PBR materials name the diffuse texture
+        // `diffuse_map` (or both albedo + diffuse_map). Reuse the existing one
+        // instead of creating an empty `albedo` slot + a blank white session.
+        const bool baseColor = (m_activeChannel == PaintChannelNS::Channel::BaseColor);
         for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
             auto* tus = pass->getTextureUnitState(i);
-            if (tus->getName() == wantSlot) return tus;
+            const std::string& n = tus->getName();
+            if (n == wantSlot) return tus;
+            if (baseColor && n == "diffuse_map") return tus;
         }
         // Not present — create it named for the channel's slot. It starts with
         // no texture; ensurePaintableTexture fills it with a blank/loaded buffer
@@ -1748,6 +1754,16 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         emit sessionChanged();
         return false;
     }
+
+    // Per-channel sessions belong to ONE entity. If the painted entity changed
+    // (e.g. the user selected a different mesh), drop the stashed stacks so a
+    // previously-used channel doesn't restore — or bake — the old entity's
+    // pixels onto the new one (#547 review).
+    if (m_channelSessionEntity && m_channelSessionEntity != entity) {
+        m_channelSessions.clear();
+        m_activeChannel = PaintChannelNS::Channel::BaseColor;
+    }
+    m_channelSessionEntity = entity;
 
     if (m_sessionEntity == entity && m_buffer.width() > 0 && !m_textureName.isEmpty()) {
         // Active session for this entity — make sure m_paintMesh is
@@ -1781,6 +1797,12 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     }
 
     QString existingTex = QString::fromStdString(tu->getTextureName());
+    // Height paints a fresh HEIGHT field, but it targets the normal_map slot
+    // (which may already hold a tangent-space normal). Do NOT seed the buffer
+    // from that texture — Sobel would then read normal RGB as height and bake
+    // garbage. Force a blank session for Height (bind still resolves the slot).
+    if (m_activeChannel == PaintChannelNS::Channel::Height)
+        existingTex.clear();
     bool loadedExisting = false;
     QString loadError;
     // Track the original texture handle (not just its name) so we
@@ -3789,7 +3811,9 @@ void TexturePaintController::refreshSlots()
                 // Paint v2 Slice D: tag the slot with the PBR channel it maps
                 // to (by canonical TUS name) so the channel router can find the
                 // TUS for a given channel. -1 = not a recognised PBR channel.
-                m["channel"] = static_cast<int>(paintChannelForSlotName(n));
+                const auto slotChan = paintChannelForSlotName(n);
+                m["channel"] = (slotChan == PaintChannelNS::Channel::Count)
+                                   ? -1 : static_cast<int>(slotChan);
                 newSlots.append(m);
             }
         }
@@ -3827,9 +3851,18 @@ QVariantList TexturePaintController::paintChannels() const
         m["label"] = QString::fromLatin1(PaintChannelNS::label(c));
         m["slot"] = QString::fromLatin1(PaintChannelNS::slotName(c));
         m["scalar"] = PaintChannelNS::isScalar(c);
-        auto it = m_channelSessions.constFind(i);
-        m["hasLayers"] = (it != m_channelSessions.constEnd() && it->initialized
-                          && it->layerStack.layerCount() > 0);
+        // hasLayers: the ACTIVE channel's stack is the live m_layerStack (its
+        // stashed copy is stale until the next channel switch); other channels
+        // read their stashed session.
+        bool hasLayers = false;
+        if (c == m_activeChannel) {
+            hasLayers = m_layerStack.layerCount() > 0;
+        } else {
+            auto it = m_channelSessions.constFind(i);
+            hasLayers = (it != m_channelSessions.constEnd() && it->initialized
+                         && it->layerStack.layerCount() > 0);
+        }
+        m["hasLayers"] = hasLayers;
         out.append(m);
     }
     return out;
@@ -3997,12 +4030,14 @@ bool TexturePaintController::bakeChannel(int channel)
         // Scalar (Roughness/Metallic/AO): collapse to luminance and write into
         // the packed ORM texture the Cook-Torrance SRS reads from the
         // `metallic` slot — .r = AO, .g = roughness, .b = metallic. Preserve
-        // the other two lanes (start from the existing ORM if bound, else full
-        // white = rough dielectric).
+        // the other two lanes (start from the existing ORM if bound, else a
+        // sensible unpainted default: AO=255 (no occlusion), roughness=255
+        // (rough dielectric), metallic=0 (NON-metal — filling metallic with
+        // 255 would turn a first roughness bake fully metallic).
         slot = "metallic";
         // Find an existing ORM/ metallic texture on the material to merge with.
         QImage orm(painted.size(), QImage::Format_RGBA8888);
-        orm.fill(qRgba(255, 255, 255, 255));
+        orm.fill(qRgba(/*AO*/255, /*rough*/255, /*metal*/0, 255));
         {
             // Read back the current metallic-slot texture if present.
             const QString cur = currentSlotTextureName("metallic");
@@ -4117,6 +4152,25 @@ void TexturePaintController::bindBakedChannelTexture(
         RTShaderHelper::applyPbrIfTagged(mat);
         try { mat->compile(); } catch (...) {}
     }
+
+    // A bake permanently rebinds `slot` to the baked file. closeSession()
+    // restores each m_boundSlots entry's recorded original texture — so if a
+    // bound TUS IS the slot we just baked, drop that entry, otherwise the next
+    // closeSession()/channel-switch would overwrite the bake with the pre-bake
+    // texture (#547 review). Resolve each bound slot's TUS name and prune the
+    // matches.
+    m_boundSlots.erase(
+        std::remove_if(m_boundSlots.begin(), m_boundSlots.end(),
+            [&](const BoundSlot& bs) {
+                auto m = Ogre::MaterialManager::getSingleton().getByName(bs.materialName);
+                if (!m || bs.techIdx >= m->getNumTechniques()) return false;
+                auto* tech = m->getTechnique(bs.techIdx);
+                if (!tech || bs.passIdx >= tech->getNumPasses()) return false;
+                auto* pass = tech->getPass(bs.passIdx);
+                if (!pass || bs.tusIdx >= pass->getNumTextureUnitStates()) return false;
+                return pass->getTextureUnitState(bs.tusIdx)->getName() == slot;
+            }),
+        m_boundSlots.end());
 
     // Re-attach the HDR IBL SRS so the freshly-bound channel renders under the
     // current environment.

@@ -760,6 +760,10 @@ private:
         bool initialized = false;   ///< has this channel's stack been built?
     };
     QMap<int, ChannelSessionState> m_channelSessions;  ///< key = (int)Channel
+    /// The entity the per-channel sessions belong to. When the painted entity
+    /// changes, the stashed stacks are cleared so one entity's paint never
+    /// leaks into (or bakes onto) another.
+    Ogre::Entity* m_channelSessionEntity = nullptr;
     /// Stash the live session into m_channelSessions[channel].
     void stashChannelSession(PaintChannelNS::Channel channel);
     /// Restore m_channelSessions[channel] into the live session (or mark it
