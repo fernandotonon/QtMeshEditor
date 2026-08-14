@@ -797,6 +797,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
         {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
         {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
+        {QStringLiteral("blend_poses"), &MCPServer::toolBlendPoses},
         {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
         {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
         {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked},
@@ -965,7 +966,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
-        QStringLiteral("load_pose_library")
+        QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
     };
     SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name,
         failed ? QStringLiteral("failed") : QStringLiteral("completed"),
@@ -9435,8 +9436,16 @@ QJsonObject MCPServer::toolApplyPose(const QJsonObject &args)
     if (name.isEmpty())
         return makeErrorResult("Error: missing required 'name' argument");
 
+    // D2: an optional positive `duration` turns the snap into a time
+    // blend that the render loop advances. Absent / <= 0 keeps the
+    // original snap behaviour, so existing callers are unaffected.
+    const double duration = args.value("duration").toDouble(0.0);
+
     auto* lib = PoseLibrary::instance();
-    if (!lib->applyPoseForSelection(name))
+    const bool ok = duration > 0.0
+        ? lib->applyPoseBlendedForSelection(name, duration)
+        : lib->applyPoseForSelection(name);
+    if (!ok)
         return makeErrorResult(
             QString("Error: failed to apply pose '%1' (no selection, unskinned entity, "
                     "or pose name not found in this entity's library)")
@@ -9445,6 +9454,43 @@ QJsonObject MCPServer::toolApplyPose(const QJsonObject &args)
     QJsonObject content;
     content["ok"] = true;
     content["name"] = name;
+    content["duration"] = duration > 0.0 ? duration : 0.0;
+    content["blended"] = duration > 0.0;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolBlendPoses(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "blend_poses");
+    const QString a = args.value("a").toString();
+    const QString b = args.value("b").toString();
+    const QString dst = args.value("dst").toString();
+    if (a.isEmpty())
+        return makeErrorResult("Error: missing required 'a' argument");
+    if (b.isEmpty())
+        return makeErrorResult("Error: missing required 'b' argument");
+    if (dst.isEmpty())
+        return makeErrorResult("Error: missing required 'dst' argument");
+    // Default 0.5 = the halfway pose, the useful thing to get when the
+    // caller doesn't say.
+    const double weight = args.value("weight").toDouble(0.5);
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->blendPosesForSelection(a, b, weight, dst))
+        return makeErrorResult(
+            QString("Error: failed to blend poses '%1' + '%2' → '%3' "
+                    "(no selection, or one of the source poses not found)")
+                .arg(a, b, dst));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["a"] = a;
+    content["b"] = b;
+    // Echo the CLAMPED weight so a caller passing 1.5 sees what actually
+    // happened rather than assuming extrapolation ran.
+    content["weight"] = std::clamp(weight, 0.0, 1.0);
+    content["dst"] = dst;
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
@@ -12799,14 +12845,15 @@ QJsonArray MCPServer::buildToolsList()
     {
         QJsonObject props;
         props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name (use list_poses to enumerate)."}};
+        props["duration"] = QJsonObject{{"type", "number"}, {"description", "Optional blend-in time in seconds. Omit or 0 to snap instantly; a positive value eases (smoothstep) from the current pose to the target over that many seconds. The transition is advanced by the editor's render loop, so it needs a running GUI — in headless MCP use 0."}};
         QJsonArray required;
         required.append("name");
         appendTool(
             "apply_pose",
-            "Snap the first selected entity back to a saved pose — writes every "
+            "Apply a saved pose to the first selected entity — writes every "
             "captured bone TRS onto the skeleton instance. Bones present at save "
             "time but missing now are skipped silently (handles LOD changes). "
-            "Snap-apply only; time-blended apply lands in D6.",
+            "Snaps by default; pass `duration` to blend in over time.",
             props,
             required
         );
@@ -12842,6 +12889,31 @@ QJsonArray MCPServer::buildToolsList()
             "naming. TRS flip: pos.x → -pos.x, rotation (w,x,y,z) → (w,x,-y,-z), "
             "scale.x → -scale.x. Centre-line bones (Spine, Hips, Head) get "
             "the X-flipped TRS in place. Writes the result under `dst`.",
+            props,
+            required
+        );
+    }
+
+    // blend_poses
+    {
+        QJsonObject props;
+        props["a"] = QJsonObject{{"type", "string"}, {"description", "First source pose (weight 0 end)."}};
+        props["b"] = QJsonObject{{"type", "string"}, {"description", "Second source pose (weight 1 end)."}};
+        props["weight"] = QJsonObject{{"type", "number"}, {"description", "Position on the A→B axis: 0 = pure `a`, 1 = pure `b`, 0.5 (default) = halfway. Clamped to [0,1] — extrapolation past the endpoints folds real rigs, so it is refused."}};
+        props["dst"] = QJsonObject{{"type", "string"}, {"description", "Output pose name. **Overwrites any existing pose at this name** — pick a unique name (or list_poses first) to avoid silent clobber."}};
+        QJsonArray required;
+        required.append("a");
+        required.append("b");
+        required.append("dst");
+        appendTool(
+            "blend_poses",
+            "Blend two saved poses into a third on the first selected entity. "
+            "Per bone: translation and scale interpolate linearly, rotation "
+            "slerps along the shortest arc (so a >180° difference never spins "
+            "the long way round). A bone present in only one source is taken "
+            "from that source verbatim. Use to build in-between expressions "
+            "(half-smile from neutral + smile) or blend an A-pose toward a "
+            "T-pose. Writes the result under `dst`.",
             props,
             required
         );

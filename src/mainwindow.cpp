@@ -152,6 +152,7 @@
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
 #include "NodeAnimationManager.h"
+#include "PoseLibrary.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
 #include <QDockWidget>
@@ -1300,6 +1301,60 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return NodeAnimationManager::qmlInstance(engine, nullptr);
             });
+        // #521 slice D: the Pose Library panel's backing singleton.
+        qmlRegisterSingletonType<PoseLibrary>("PropertiesPanel", 1, 0, "PoseLibrary",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PoseLibrary::qmlInstance(engine, nullptr);
+            });
+        // .poselib sidecar export / import. QML can't parent a native file
+        // dialog, so the panel raises a signal and we run the dialog here —
+        // the same split HdrEnvironmentController::browseRequested uses. The
+        // singleShot defers out of the QML signal handler so the dialog's
+        // nested event loop doesn't re-enter QQuickWidget's own.
+        connect(PoseLibrary::instance(), &PoseLibrary::exportLibraryRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getSaveFileName(
+                    this,
+                    tr("Export Pose Library"),
+                    QString(),
+                    tr("Pose Library (*.poselib);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("poselib.exportCancelled"));
+                    return;
+                }
+                const bool ok = PoseLibrary::instance()->savePoseLibraryForSelection(path);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    QStringLiteral("poselib.export%1=%2")
+                        .arg(ok ? QStringLiteral("Saved") : QStringLiteral("Failed"),
+                             QFileInfo(path).fileName()));
+            });
+        });
+        connect(PoseLibrary::instance(), &PoseLibrary::importLibraryRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Import Pose Library"),
+                    QString(),
+                    tr("Pose Library (*.poselib);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("poselib.importCancelled"));
+                    return;
+                }
+                const bool ok = PoseLibrary::instance()->loadPoseLibraryForSelection(path);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    QStringLiteral("poselib.import%1=%2")
+                        .arg(ok ? QStringLiteral("Loaded") : QStringLiteral("Failed"),
+                             QFileInfo(path).fileName()));
+            });
+        });
 
         // Same image provider the detached editor window uses — serves the
         // live paint buffer as a QImage view (no PNG encode, no base64).
@@ -4787,6 +4842,16 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     if (!animCtrl || !manager) return true;
     const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
     const double scaledDt = dt * animCtrl->playbackSpeed();
+
+    // Advance any in-flight pose-library time blend (#521 slice D). This runs
+    // BEFORE (and independently of) the isPlaying gate on purpose: a blended
+    // "apply pose" is an authoring transition, not clip playback, so it has to
+    // complete whether or not the transport is running — the author is usually
+    // paused while posing. Uses raw dt rather than scaledDt for the same
+    // reason: the playback-speed knob belongs to clips, not to this.
+    // No-op (single hash check) when nothing is blending.
+    if (auto* poseLib = PoseLibrary::instance())
+        poseLib->tickBlend(static_cast<float>(dt));
 
     // Advance SceneManager-level animation states — the NodeAnimationManager's
     // transform clips (animated props/doors, #517 slice C) live here. They now
