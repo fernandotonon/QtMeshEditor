@@ -4474,6 +4474,10 @@ Rectangle {
             property int layerCount: TexturePaintController.layerCount
             property int activeLayerIndex: TexturePaintController.activeLayerIndex
             property var paintLayers: TexturePaintController.paintLayers
+            // Paint v2 Slice D — PBR channel painting (#547).
+            property int activeChannel: TexturePaintController.activeChannel
+            property var paintChannels: TexturePaintController.paintChannels
+            property var paintPresetNames: PaintChannelPresets.presetNames
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4499,6 +4503,10 @@ Rectangle {
                 }
                 function onPaintTargetChanged() {
                     texPaintCol.paintTarget = TexturePaintController.paintTarget
+                }
+                function onActiveChannelChanged() {
+                    texPaintCol.activeChannel = TexturePaintController.activeChannel
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
                 function onHoveredUVChanged(u, v) {
                     texPaintCol.hoverU = u
@@ -4698,7 +4706,110 @@ Rectangle {
                 }
             }
 
-            // Texture slot picker \u2014 populated by selection
+            // ---- PBR channel picker (Paint v2 Slice D #547) ----
+            // Seven buttons \u2014 Base Color / Normal / Roughness / Metallic / AO /
+            // Emissive / Height. Selecting a channel switches the paint session
+            // to that channel's own layer stack (auto-creating the material
+            // slot if the asset never shipped it).
+            Text {
+                text: "Channel"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Flow {
+                id: channelPicker
+                width: parent.width - 16
+                spacing: 4
+                Repeater {
+                    model: texPaintCol.paintChannels
+                    delegate: Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: 74; height: 24; radius: 4
+                        color: texPaintCol.activeChannel === index
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.width: modelData.hasLayers ? 2 : 1
+                        border.color: modelData.hasLayers
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
+                            width: parent.width - 6
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.activeChannel = index
+                        }
+                        ToolTip.visible: false
+                    }
+                }
+            }
+            // Scalar channels are painted grayscale (bright = high); "Bake"
+            // collapses the active channel into its real PBR slot under IBL.
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: (texPaintCol.paintChannels[texPaintCol.activeChannel]
+                           && texPaintCol.paintChannels[texPaintCol.activeChannel].scalar)
+                        ? "Grayscale (bright = high)"
+                        : "Colour channel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9
+                    opacity: 0.7
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Item { width: 1; height: 1 }
+                Rectangle {
+                    width: 60; height: 22; radius: 4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent; text: "Bake"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.bakeChannel(texPaintCol.activeChannel)
+                    }
+                }
+            }
+
+            // ---- Channel-aware presets (Paint v2 Slice D #547) ----
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Preset:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
+                ThemedComboBox {
+                    id: paintPresetCombo
+                    width: 200
+                    model: texPaintCol.paintPresetNames
+                    currentIndex: -1
+                    displayText: currentIndex < 0 ? "Choose a preset\u2026" : currentText
+                    onActivated: function(index) {
+                        if (index >= 0 && index < texPaintCol.paintPresetNames.length)
+                            PaintChannelPresets.applyPreset(texPaintCol.paintPresetNames[index])
+                    }
+                }
+            }
+
+            // Texture slot picker \u2014 populated by selection (advanced override:
+            // lets the user target a specific TUS regardless of channel mapping)
             Row {
                 spacing: 6
                 width: parent.width - 16

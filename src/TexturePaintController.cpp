@@ -14,6 +14,10 @@
 #include "VertexColorBaker.h"
 #include "EmbeddedTextureCache.h"
 #include "PropertiesPanelController.h"
+#include "RTShaderHelper.h"
+#include "NormalMapGenerator.h"
+#include "TextureChannelPacker.h"
+#include "MeshImporterExporter.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -32,6 +36,8 @@
 #include <QByteArray>
 #include <QColorDialog>
 #include <QDir>
+#include <QDateTime>
+#include <QStandardPaths>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
@@ -1691,8 +1697,7 @@ Ogre::TextureUnitState* TexturePaintController::findOrCreateActiveTextureUnit(Og
         }
     }
 
-    // Fallback: first submesh, first material, first pass, prefer
-    // canonical diffuse slot names; otherwise first TUS or create.
+    // Fallback: first submesh, first material, first pass.
     auto* subEnt = entity->getSubEntity(0);
     if (!subEnt) return nullptr;
     Ogre::MaterialPtr mat = subEnt->getMaterial();
@@ -1701,6 +1706,29 @@ Ogre::TextureUnitState* TexturePaintController::findOrCreateActiveTextureUnit(Og
     if (!tech || tech->getNumPasses() == 0) return nullptr;
     auto* pass = tech->getPass(0);
     if (!pass) return nullptr;
+
+    // Paint v2 Slice D: the active channel names the canonical slot we want
+    // (albedo/normal_map/roughness/metallic/ao/emissive; Height→normal_map).
+    // Find that named TUS; if the material doesn't have it yet, CREATE it so
+    // the user can paint a channel the asset never shipped. When no channel
+    // targets a slot (legacy path) fall back to albedo/diffuse_map.
+    const std::string wantSlot = activeChannelSlotName();
+    if (!wantSlot.empty()) {
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            if (tus->getName() == wantSlot) return tus;
+        }
+        // Not present — create it named for the channel's slot. It starts with
+        // no texture; ensurePaintableTexture fills it with a blank/loaded buffer
+        // and bakeChannel wires it into the PBR material for IBL.
+        auto* tus = pass->createTextureUnitState();
+        tus->setName(wantSlot);
+        SentryReporter::addBreadcrumb(
+            "paint.channel",
+            QStringLiteral("created slot %1").arg(QString::fromStdString(wantSlot)));
+        return tus;
+    }
+
     for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
         auto* tus = pass->getTextureUnitState(i);
         const std::string& n = tus->getName();
@@ -3697,6 +3725,25 @@ void TexturePaintController::clearHoveredUV()
 // Texture slot enumeration
 // ---------------------------------------------------------------------------
 
+namespace {
+// Paint v2 Slice D — map a canonical Ogre TUS name to the PBR channel it
+// represents (or Channel::Count when it isn't a recognised PBR slot). Uses the
+// same name conventions as RTShaderHelper's slot predicates.
+PaintChannelNS::Channel paintChannelForSlotName(const std::string& n)
+{
+    using C = PaintChannelNS::Channel;
+    if (n == "albedo" || n == "diffuse_map" || n == "Diffuse" || n == "BaseColor")
+        return C::BaseColor;
+    if (n == "normal_map" || n == "NormalMap" || n == "Bump" || n == "bump")
+        return C::Normal;
+    if (n == "roughness" || n == "Roughness") return C::Roughness;
+    if (n == "metallic"  || n == "Metallic")  return C::Metallic;
+    if (n == "ao" || n == "AO" || n == "occlusion") return C::AO;
+    if (n == "emissive" || n == "Emissive")   return C::Emissive;
+    return C::Count;
+}
+} // namespace
+
 void TexturePaintController::refreshSlots()
 {
     // Refresh is pure metadata — it must not create a paint session
@@ -3739,6 +3786,10 @@ void TexturePaintController::refreshSlots()
                 m["submesh"] = static_cast<int>(si);
                 m["slot"] = QString::fromStdString(n);
                 m["textureName"] = QString::fromStdString(tex);
+                // Paint v2 Slice D: tag the slot with the PBR channel it maps
+                // to (by canonical TUS name) so the channel router can find the
+                // TUS for a given channel. -1 = not a recognised PBR channel.
+                m["channel"] = static_cast<int>(paintChannelForSlotName(n));
                 newSlots.append(m);
             }
         }
@@ -3748,6 +3799,330 @@ void TexturePaintController::refreshSlots()
     if (m_activeSlot >= m_slots.size())
         m_activeSlot = m_slots.isEmpty() ? -1 : 0;
     emit slotsChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice D — PBR channel painting (#547)
+// ---------------------------------------------------------------------------
+
+std::string TexturePaintController::activeChannelSlotName() const
+{
+    // Height has no direct slot — it is painted as a heightmap and baked into
+    // the normal_map slot, so it targets normal_map for its live session too.
+    if (m_activeChannel == PaintChannelNS::Channel::Height)
+        return "normal_map";
+    return PaintChannelNS::slotName(m_activeChannel);
+}
+
+QVariantList TexturePaintController::paintChannels() const
+{
+    // Model for the 7-button channel picker (VertexColor excluded — it's the
+    // Texture/Vertex paintTarget toggle). `hasLayers` lets QML mark channels
+    // the user has already painted into.
+    QVariantList out;
+    for (int i = 0; i < PaintChannelNS::kTexturePaintChannelCount; ++i) {
+        const auto c = static_cast<PaintChannelNS::Channel>(i);
+        QVariantMap m;
+        m["id"] = QString::fromLatin1(PaintChannelNS::id(c));
+        m["label"] = QString::fromLatin1(PaintChannelNS::label(c));
+        m["slot"] = QString::fromLatin1(PaintChannelNS::slotName(c));
+        m["scalar"] = PaintChannelNS::isScalar(c);
+        auto it = m_channelSessions.constFind(i);
+        m["hasLayers"] = (it != m_channelSessions.constEnd() && it->initialized
+                          && it->layerStack.layerCount() > 0);
+        out.append(m);
+    }
+    return out;
+}
+
+void TexturePaintController::stashChannelSession(PaintChannelNS::Channel channel)
+{
+    ChannelSessionState& s = m_channelSessions[static_cast<int>(channel)];
+    s.layerStack = m_layerStack;                 // deep copy (layers own buffers)
+    s.layerStrokeBaseline = m_layerStrokeBaseline;
+    s.initialized = (m_layerStack.layerCount() > 0);
+}
+
+bool TexturePaintController::restoreChannelSession(PaintChannelNS::Channel channel)
+{
+    auto it = m_channelSessions.find(static_cast<int>(channel));
+    if (it == m_channelSessions.end() || !it->initialized)
+        return false;
+    m_layerStack = it->layerStack;
+    m_layerStrokeBaseline = it->layerStrokeBaseline;
+    return true;
+}
+
+void TexturePaintController::setActiveChannel(int channel)
+{
+    if (channel < 0 || channel >= PaintChannelNS::kTexturePaintChannelCount)
+        return;
+    const auto newChannel = static_cast<PaintChannelNS::Channel>(channel);
+    if (newChannel == m_activeChannel) return;
+
+    SentryReporter::addBreadcrumb(
+        "paint.channel",
+        QStringLiteral("switch to %1").arg(PaintChannelNS::id(newChannel)));
+
+    // Preserve the working resolution across channel switches (same rationale
+    // as setActiveSlotIndex).
+    const int preservedRes = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+
+    // Stash the current channel's live layer stack, then close the live
+    // session (tears down GPU texture handles + paint mesh).
+    if (hasActiveSession() || m_layerStack.layerCount() > 0)
+        stashChannelSession(m_activeChannel);
+    closeSession();
+
+    m_activeChannel = newChannel;
+
+    // Point the slot router at this channel's canonical slot, if the model has
+    // a matching slot; else -1 so findOrCreateActiveTextureUnit creates it.
+    m_activeSlot = -1;
+    for (int i = 0; i < m_slots.size(); ++i) {
+        if (m_slots.at(i).toMap().value("channel", -1).toInt() == channel) {
+            m_activeSlot = i;
+            break;
+        }
+    }
+
+    // Rebuild the live session for the new channel's texture, then restore any
+    // previously-stashed layer stack for it (overwriting the freshly-loaded
+    // single layer). If none was stashed, ensurePaintableTexture's stack stands.
+    ensurePaintableTexture(preservedRes);
+    if (restoreChannelSession(newChannel)) {
+        m_layerStack.compositeTo(m_buffer);
+        m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
+        schedulePreviewRefresh();
+        flushDirtyToOgre();
+    }
+
+    emit activeChannelChanged();
+    emit layersChanged();
+    emit slotsChanged();
+}
+
+namespace {
+// Composite a channel's stashed (or live) layer stack into an RGBA8 QImage.
+QImage compositeChannelToImage(const PaintLayerStack& stack)
+{
+    if (stack.empty() || stack.width() <= 0 || stack.height() <= 0)
+        return {};
+    std::vector<uint8_t> px;
+    stack.compositeTo(px);
+    const int w = stack.width(), h = stack.height();
+    if (static_cast<int>(px.size()) < w * h * 4) return {};
+    QImage img(w, h, QImage::Format_RGBA8888);
+    std::memcpy(img.bits(), px.data(), static_cast<size_t>(w) * h * 4);
+    return img;
+}
+
+// Rec.601 luminance of an RGBA pixel row-major image → grayscale [0..255].
+inline uint8_t luma601(QRgb p)
+{
+    return static_cast<uint8_t>(qBound(0, static_cast<int>(
+        0.299 * qRed(p) + 0.587 * qGreen(p) + 0.114 * qBlue(p) + 0.5), 255));
+}
+
+// Directory for baked channel textures (shared with AI-generated maps).
+QString generatedTexDir()
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dir = QDir(base).filePath("generated_textures");
+    QDir().mkpath(dir);
+    return dir;
+}
+} // namespace
+
+bool TexturePaintController::bakeChannel(int channel)
+{
+    if (channel < 0 || channel >= PaintChannelNS::kTexturePaintChannelCount)
+        return false;
+    const auto ch = static_cast<PaintChannelNS::Channel>(channel);
+
+    // Source the channel's layer stack: the live stack if it's the active
+    // channel, else the stashed session.
+    const PaintLayerStack* stack = nullptr;
+    if (ch == m_activeChannel && m_layerStack.layerCount() > 0) {
+        stack = &m_layerStack;
+    } else {
+        auto it = m_channelSessions.constFind(channel);
+        if (it != m_channelSessions.constEnd() && it->initialized)
+            stack = &it->layerStack;
+    }
+    if (!stack || stack->empty()) return false;
+
+    QImage painted = compositeChannelToImage(*stack);
+    if (painted.isNull()) return false;
+
+    auto* entity = activeEntity();
+    if (!entity) return false;
+
+    SentryReporter::addBreadcrumb(
+        "paint.channel", QStringLiteral("bake %1").arg(PaintChannelNS::id(ch)));
+
+    const QString dir = generatedTexDir();
+    const QString stamp = QString::number(QDateTime::currentMSecsSinceEpoch());
+    QString outFile;      // file written to disk (basename bound into the slot)
+    std::string slot;     // canonical TUS slot to bind
+
+    if (PaintChannelNS::isColor(ch)) {
+        // BaseColor / Emissive: paint the RGBA straight into the slot.
+        slot = PaintChannelNS::slotName(ch);
+        outFile = QDir(dir).filePath(QStringLiteral("paint_%1_%2.png")
+                      .arg(PaintChannelNS::id(ch), stamp));
+        if (!painted.save(outFile, "PNG")) return false;
+    } else if (ch == PaintChannelNS::Channel::Height
+               || ch == PaintChannelNS::Channel::Normal) {
+        // Height → tangent-space normal via Sobel (NormalMapGenerator). A layer
+        // painted directly on the Normal channel is treated the same way: the
+        // grayscale is the height field. Write a grayscale heightmap first.
+        QImage height(painted.size(), QImage::Format_Grayscale8);
+        for (int y = 0; y < painted.height(); ++y)
+            for (int x = 0; x < painted.width(); ++x)
+                height.scanLine(y)[x] = luma601(painted.pixel(x, y));
+        const QString heightFile = QDir(dir).filePath(
+            QStringLiteral("paint_height_%1.png").arg(stamp));
+        if (!height.save(heightFile, "PNG")) return false;
+
+        NormalMapGenerator::GenSpec spec;
+        spec.sourcePath = heightFile;
+        spec.strength = 2.0f;
+        NormalMapGenerator::GenResult nr = NormalMapGenerator::generate(spec);
+        if (!nr.ok || nr.image.isNull()) return false;
+        slot = "normal_map";
+        outFile = QDir(dir).filePath(QStringLiteral("paint_normal_%1.png").arg(stamp));
+        if (!nr.image.save(outFile, "PNG")) return false;
+    } else {
+        // Scalar (Roughness/Metallic/AO): collapse to luminance and write into
+        // the packed ORM texture the Cook-Torrance SRS reads from the
+        // `metallic` slot — .r = AO, .g = roughness, .b = metallic. Preserve
+        // the other two lanes (start from the existing ORM if bound, else full
+        // white = rough dielectric).
+        slot = "metallic";
+        // Find an existing ORM/ metallic texture on the material to merge with.
+        QImage orm(painted.size(), QImage::Format_RGBA8888);
+        orm.fill(qRgba(255, 255, 255, 255));
+        {
+            // Read back the current metallic-slot texture if present.
+            const QString cur = currentSlotTextureName("metallic");
+            if (!cur.isEmpty()) {
+                QImage existing = loadImageAcrossGroups(cur);
+                if (!existing.isNull()) {
+                    orm = existing.convertToFormat(QImage::Format_RGBA8888)
+                              .scaled(painted.size());
+                }
+            }
+        }
+        const int lane = (ch == PaintChannelNS::Channel::AO) ? 0
+                       : (ch == PaintChannelNS::Channel::Roughness) ? 1 : 2;
+        for (int y = 0; y < painted.height(); ++y) {
+            uchar* row = orm.scanLine(y);
+            for (int x = 0; x < painted.width(); ++x) {
+                row[x * 4 + lane] = luma601(painted.pixel(x, y));
+                row[x * 4 + 3] = 255;
+            }
+        }
+        outFile = QDir(dir).filePath(QStringLiteral("paint_orm_%1.png").arg(stamp));
+        if (!orm.save(outFile, "PNG")) return false;
+    }
+
+    // Ensure the baked file is discoverable + bind it into every material on
+    // the active entity that should carry this slot, then wire PBR + IBL.
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        dir.toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+    const std::string baseName = QFileInfo(outFile).fileName().toStdString();
+    bindBakedChannelTexture(entity, slot, baseName, ch);
+    return true;
+}
+
+QString TexturePaintController::currentSlotTextureName(const std::string& slot) const
+{
+    auto* entity = activeEntity();
+    if (!entity || entity->getNumSubEntities() == 0) return {};
+    for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+        auto* se = entity->getSubEntity(s);
+        if (!se) continue;
+        Ogre::MaterialPtr mat = se->getMaterial();
+        if (!mat || mat->getNumTechniques() == 0) continue;
+        auto* tech = mat->getTechnique(0);
+        if (!tech || tech->getNumPasses() == 0) continue;
+        auto* pass = tech->getPass(0);
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            if (tus->getName() == slot && !tus->getTextureName().empty())
+                return QString::fromStdString(tus->getTextureName());
+        }
+    }
+    return {};
+}
+
+QImage TexturePaintController::loadImageAcrossGroups(const QString& textureName) const
+{
+    if (textureName.isEmpty()) return {};
+    // Prefer a CPU-side read (handles embedded FBX bytes / on-disk origins /
+    // resource-group paths), reusing the paint session's own loader.
+    TexturePaintBuffer tmp;
+    Ogre::TexturePtr tex;
+    try { tex = findTextureAcrossGroups(textureName.toStdString()); } catch (...) {}
+    if (loadPaintBufferFromNonGpuSources(tmp, tex, textureName)
+        && tmp.width() > 0 && tmp.height() > 0) {
+        QImage img(tmp.width(), tmp.height(), QImage::Format_RGBA8888);
+        std::memcpy(img.bits(), tmp.data().data(),
+                    static_cast<size_t>(tmp.width()) * tmp.height() * 4);
+        return img;
+    }
+    return {};
+}
+
+void TexturePaintController::bindBakedChannelTexture(
+    Ogre::Entity* entity, const std::string& slot,
+    const std::string& textureBaseName, PaintChannelNS::Channel channel)
+{
+    if (!entity || slot.empty() || textureBaseName.empty()) return;
+
+    // Bind the baked texture into `slot` on every material used by the entity
+    // (create the TUS if the material never had that slot), then wire PBR/FFP
+    // and Cook-Torrance so it renders live under the active HDR env — the same
+    // recipe the Material Editor's "Generate PBR maps" button uses.
+    std::set<std::string> wiredMats;
+    for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+        auto* se = entity->getSubEntity(s);
+        if (!se) continue;
+        Ogre::MaterialPtr mat = se->getMaterial();
+        if (!mat || wiredMats.count(mat->getName())) continue;
+        wiredMats.insert(mat->getName());
+
+        for (auto* tech : mat->getTechniques()) {
+            for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                auto* pass = tech->getPass(p);
+                Ogre::TextureUnitState* tus = nullptr;
+                for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+                    if (pass->getTextureUnitState(i)->getName() == slot) {
+                        tus = pass->getTextureUnitState(i); break;
+                    }
+                if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+                tus->setTextureName(textureBaseName);
+            }
+        }
+
+        RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+        // Normal maps need tangents wired via the entity path (else unlit).
+        if (channel == PaintChannelNS::Channel::Normal
+            || channel == PaintChannelNS::Channel::Height) {
+            MeshImporterExporter::applyNormalMapsToEntity(entity);
+        }
+        // Attach Cook-Torrance/IBL if the material is (or becomes) PBR-tagged.
+        RTShaderHelper::applyPbrIfTagged(mat);
+        try { mat->compile(); } catch (...) {}
+    }
+
+    // Re-attach the HDR IBL SRS so the freshly-bound channel renders under the
+    // current environment.
+    RTShaderHelper::refreshAllPbrMaterialsForHdr();
+    flushDirtyToOgre();
+    emit sessionChanged();
 }
 
 // ---------------------------------------------------------------------------

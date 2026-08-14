@@ -8,6 +8,7 @@
 #include "BrushFootprint.h"
 #include "GradientRamp.h"
 #include "PaintLayerStack.h"
+#include "PaintChannel.h"
 
 #include <QColor>
 #include <QObject>
@@ -16,6 +17,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QMap>
 #include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
@@ -347,6 +349,24 @@ public:
     Q_INVOKABLE void refreshSlots();
     /// @}
 
+    /// @name Paint v2 Slice D — PBR channel painting (#547)
+    /// @{
+    /// Active PBR channel the brush paints into. Values are
+    /// PaintChannelNS::Channel casts (0=BaseColor … 6=Height); VertexColor is
+    /// not selected here (it's the Texture/Vertex `paintTarget` toggle).
+    Q_PROPERTY(int activeChannel READ activeChannel WRITE setActiveChannel NOTIFY activeChannelChanged)
+    /// Channel picker model: [{ id, label, slot, scalar, hasLayers }].
+    Q_PROPERTY(QVariantList paintChannels READ paintChannels NOTIFY activeChannelChanged)
+    int activeChannel() const { return static_cast<int>(m_activeChannel); }
+    void setActiveChannel(int channel);
+    QVariantList paintChannels() const;
+    /// Collapse/convert the given channel's painted buffer into its real PBR
+    /// slot on the live material (scalar→ORM luminance, height→normal via
+    /// Sobel) and re-wire the material for IBL. Returns false if the channel
+    /// has no painted session. Exposed for the "Bake channel" button + tests.
+    Q_INVOKABLE bool bakeChannel(int channel);
+    /// @}
+
     /// Preview data URI (PNG, base64) regenerated on every dirty flush.
     QString previewDataUri() const { return m_previewUri; }
     /// Full-resolution preview URL — see the property doc.
@@ -558,6 +578,7 @@ signals:
     void rampEditorChanged();
     void stampChanged();
     void layersChanged();
+    void activeChannelChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -724,6 +745,42 @@ private:
     TexturePaintBuffer m_buffer;
     PaintLayerStack m_layerStack;
     quint64 m_layerPreviewVersion = 0;
+
+    // Paint v2 Slice D (#547) — per-channel sessions.
+    //
+    // The active channel's session lives in the m_buffer / m_layerStack /
+    // m_originalTexture* fields (unchanged — the whole stroke/GPU/undo path
+    // keeps operating on "the active session"). Switching channels STASHES the
+    // current session's layer stack + baseline here and RESTORES the target
+    // channel's, so each channel keeps its own layer stack across switches.
+    PaintChannelNS::Channel m_activeChannel = PaintChannelNS::Channel::BaseColor;
+    struct ChannelSessionState {
+        PaintLayerStack layerStack;
+        std::vector<uint8_t> layerStrokeBaseline;
+        bool initialized = false;   ///< has this channel's stack been built?
+    };
+    QMap<int, ChannelSessionState> m_channelSessions;  ///< key = (int)Channel
+    /// Stash the live session into m_channelSessions[channel].
+    void stashChannelSession(PaintChannelNS::Channel channel);
+    /// Restore m_channelSessions[channel] into the live session (or mark it
+    /// uninitialized so ensurePaintableTexture builds it fresh). Returns true
+    /// if a stored stack was restored.
+    bool restoreChannelSession(PaintChannelNS::Channel channel);
+    /// The canonical PBR slot name the active channel targets (or "" for
+    /// Height, which bakes into normal_map). Drives findOrCreateActiveTextureUnit.
+    std::string activeChannelSlotName() const;
+    /// Texture name currently bound to the named slot on the active entity's
+    /// first material (empty if none). Used by scalar bake to merge ORM lanes.
+    QString currentSlotTextureName(const std::string& slot) const;
+    /// Load an Ogre-resolvable texture name into a QImage (across groups /
+    /// generated_textures / media). Empty QImage on failure.
+    QImage loadImageAcrossGroups(const QString& textureName) const;
+    /// Bind a baked texture file (basename) into `slot` on every material of
+    /// `entity`, then wire the material for FFP + Cook-Torrance/IBL (+ tangents
+    /// for normal maps). The live-IBL binding recipe for baked channels.
+    void bindBakedChannelTexture(Ogre::Entity* entity, const std::string& slot,
+                                 const std::string& textureBaseName,
+                                 PaintChannelNS::Channel channel);
     QString m_textureName;
     Ogre::TexturePtr m_ogreTexture;
     /// The original texture we're painting into. We blit our dirty

@@ -866,3 +866,112 @@ TEST_F(TexturePaintControllerSceneTest, ChangingResolutionAfterCloseProducesNewB
     ASSERT_TRUE(ctrl->ensurePaintableTexture(48));
     EXPECT_EQ(ctrl->textureResolution(), 48);
 }
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice D — PBR channel painting (#547)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Does the entity's first material's first pass carry a TUS named `slot`
+// (optionally with a non-empty texture bound)?
+bool passHasSlot(Ogre::Entity* ent, const char* slot, bool needTexture = false)
+{
+    if (!ent || ent->getNumSubEntities() == 0) return false;
+    auto mat = ent->getSubEntity(0)->getMaterial();
+    if (!mat || mat->getNumTechniques() == 0) return false;
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slot)
+            return !needTexture || !tus->getTextureName().empty();
+    }
+    return false;
+}
+} // namespace
+
+TEST_F(TexturePaintControllerSceneTest, PaintChannelsModelHasSevenChannels) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanModel")));
+    auto* ctrl = TexturePaintController::instance();
+    const QVariantList chans = ctrl->paintChannels();
+    ASSERT_EQ(chans.size(), PaintChannelNS::kTexturePaintChannelCount);
+    // First entry is BaseColor → albedo; a scalar entry reports scalar=true.
+    EXPECT_EQ(chans.at(0).toMap().value("slot").toString(), QStringLiteral("albedo"));
+    EXPECT_TRUE(chans.at(static_cast<int>(PaintChannelNS::Channel::Roughness))
+                    .toMap().value("scalar").toBool());
+    EXPECT_FALSE(chans.at(static_cast<int>(PaintChannelNS::Channel::BaseColor))
+                     .toMap().value("scalar").toBool());
+}
+
+TEST_F(TexturePaintControllerSceneTest, SwitchingChannelAutoCreatesCanonicalSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanSlot")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    // The fixture material only ships `diffuse_map`. Switching to Roughness
+    // must create a `roughness` TUS so the channel is paintable.
+    EXPECT_FALSE(passHasSlot(m_fix.entity, "roughness"));
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "roughness"));
+}
+
+TEST_F(TexturePaintControllerSceneTest, ScalarChannelBakeBindsMetallicOrmSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ScalarBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    // Paint a stroke, then bake — scalar channels collapse into the packed ORM
+    // texture bound to the `metallic` slot the Cook-Torrance SRS reads.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.55, 0.55);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Roughness)));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "metallic", /*needTexture*/true));
+}
+
+TEST_F(TexturePaintControllerSceneTest, HeightChannelBakeBindsNormalMapSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.5);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    // Height bakes a Sobel normal map into the normal_map slot.
+    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Height)));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "normal_map", /*needTexture*/true));
+}
+
+TEST_F(TexturePaintControllerSceneTest, ChannelSessionsAreIsolated) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanIsolate")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    // Add a layer on BaseColor.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    const int baseLayers = ctrl->layerCount();
+    ctrl->addPaintLayer(QStringLiteral("bc-extra"));
+    const int baseAfter = ctrl->layerCount();
+    EXPECT_GT(baseAfter, baseLayers);
+
+    // Switch to Emissive — its own (fresh) session shouldn't inherit the
+    // BaseColor layer we just added.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Emissive));
+    EXPECT_LT(ctrl->layerCount(), baseAfter);
+
+    // Switch back to BaseColor — the stashed stack is restored.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    EXPECT_EQ(ctrl->layerCount(), baseAfter);
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeUnpaintedChannelReturnsFalse) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeEmpty")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    // Metallic never painted → nothing to bake.
+    EXPECT_FALSE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Metallic)));
+}
