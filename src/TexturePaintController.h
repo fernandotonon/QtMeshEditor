@@ -563,6 +563,15 @@ public:
     /// Undo/redo: restore full layer stack state.
     void applyLayerStackSnapshot(const PaintLayerStack::Snapshot& snap);
 
+    /// Undo/redo target resolution (#547): make the live session the one that
+    /// owns `entity`'s `channel` before an undo command applies its snapshot.
+    /// Reselects the entity + switches channel if needed. Returns false when
+    /// the entity is gone (command becomes a safe no-op) — this replaces the
+    /// old, brittle guard that keyed undo validity to the transient GPU texture
+    /// name (which changes on every channel/session switch, so undo silently
+    /// no-oped after a channel change).
+    bool ensureUndoTarget(Ogre::Entity* entity, int channel);
+
 signals:
     void texturePaintChanged();
     void sessionChanged();

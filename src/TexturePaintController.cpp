@@ -85,7 +85,8 @@ public:
                               std::vector<uint8_t> after,
                               int width,
                               int height,
-                              QString textureName)
+                              Ogre::Entity* entity,
+                              int channel)
         : QUndoCommand(QStringLiteral("Texture paint"))
         , m_controller(controller)
         , m_layerIndex(layerIndex)
@@ -93,7 +94,8 @@ public:
         , m_after(std::move(after))
         , m_width(width)
         , m_height(height)
-        , m_textureName(std::move(textureName))
+        , m_entity(entity)
+        , m_channel(channel)
     {
     }
 
@@ -111,7 +113,9 @@ private:
     void apply(const std::vector<uint8_t>& pixels)
     {
         if (!m_controller) return;
-        if (m_controller->currentTextureName() != m_textureName) return;
+        // Activate the (entity, channel) this stroke belongs to — undo works
+        // even after the user switched channels or deselected the mesh.
+        if (!m_controller->ensureUndoTarget(m_entity, m_channel)) return;
         m_controller->applyLayerPixelSnapshot(m_layerIndex, pixels);
     }
 
@@ -121,7 +125,8 @@ private:
     std::vector<uint8_t> m_after;
     int m_width = 0;
     int m_height = 0;
-    QString m_textureName;
+    Ogre::Entity* m_entity = nullptr;
+    int m_channel = 0;
     bool m_skipFirstRedo = true;
 };
 
@@ -131,12 +136,14 @@ class PaintLayerOpCommand : public QUndoCommand
 public:
     PaintLayerOpCommand(TexturePaintController* controller,
                         QString label,
-                        QString textureName,
+                        Ogre::Entity* entity,
+                        int channel,
                         PaintLayerStack::Snapshot before,
                         PaintLayerStack::Snapshot after)
         : QUndoCommand(std::move(label))
         , m_controller(controller)
-        , m_textureName(std::move(textureName))
+        , m_entity(entity)
+        , m_channel(channel)
         , m_before(std::move(before))
         , m_after(std::move(after))
     {}
@@ -152,12 +159,13 @@ private:
     void apply(const PaintLayerStack::Snapshot& snap)
     {
         if (!m_controller) return;
-        if (m_controller->currentTextureName() != m_textureName) return;
+        if (!m_controller->ensureUndoTarget(m_entity, m_channel)) return;
         m_controller->applyLayerStackSnapshot(snap);
     }
 
     TexturePaintController* m_controller = nullptr;
-    QString m_textureName;
+    Ogre::Entity* m_entity = nullptr;
+    int m_channel = 0;
     PaintLayerStack::Snapshot m_before;
     PaintLayerStack::Snapshot m_after;
     bool m_skipFirstRedo = true;
@@ -177,7 +185,8 @@ public:
                                   std::vector<uint8_t> after,
                                   int width,
                                   int height,
-                                  QString textureName,
+                                  Ogre::Entity* entity,
+                                  int channel,
                                   QString label)
         : QUndoCommand(label)
         , m_controller(controller)
@@ -186,7 +195,8 @@ public:
         , m_after(std::move(after))
         , m_width(width)
         , m_height(height)
-        , m_textureName(std::move(textureName))
+        , m_entity(entity)
+        , m_channel(channel)
     {}
 
     void undo() override { apply(m_before); }
@@ -200,7 +210,7 @@ private:
     void apply(const std::vector<uint8_t>& pixels)
     {
         if (!m_controller) return;
-        if (m_controller->currentTextureName() != m_textureName) return;
+        if (!m_controller->ensureUndoTarget(m_entity, m_channel)) return;
         m_controller->applyLayerPixelSnapshot(m_layerIndex, pixels);
     }
 
@@ -210,7 +220,8 @@ private:
     std::vector<uint8_t> m_after;
     int m_width = 0;
     int m_height = 0;
-    QString m_textureName;
+    Ogre::Entity* m_entity = nullptr;
+    int m_channel = 0;
     bool m_skipFirstRedo = true;
 };
 
@@ -2480,7 +2491,8 @@ void TexturePaintController::commitStrokeUndo(std::vector<uint8_t> prePixels, in
             std::move(after),
             activePaintBuffer().width(),
             activePaintBuffer().height(),
-            m_textureName));
+            m_sessionEntity,
+            static_cast<int>(m_activeChannel)));
     m_layerStrokeBaseline = snapshotActiveLayerPixels();
 }
 
@@ -3526,6 +3538,44 @@ int TexturePaintController::bakeVertexColorsToTexture(int resolution,
     refreshPreviewUri();
     emit sessionChanged();
     return painted;
+}
+
+bool TexturePaintController::ensureUndoTarget(Ogre::Entity* entity, int channel)
+{
+    if (!entity) return false;
+    if (channel < 0 || channel >= PaintChannelNS::kTexturePaintChannelCount)
+        return false;
+
+    // The command captured a raw Ogre::Entity*. Confirm it's still alive before
+    // touching it (an undo after the mesh was deleted must be a safe no-op).
+    bool alive = false;
+    if (auto* mgr = Manager::getSingletonPtr()) {
+        for (Ogre::Entity* e : mgr->getEntities()) {
+            if (e == entity && e->getMovableType() == "Entity") { alive = true; break; }
+        }
+    }
+    if (!alive) return false;
+
+    // Make `entity` the paint target if it isn't already (undo of a stroke on a
+    // mesh the user has since deselected still restores the right pixels).
+    if (activeEntity() != entity) {
+        if (auto* sel = SelectionSet::getSingleton()) {
+            sel->clear();
+            sel->append(entity);
+        }
+        // A different entity means fresh per-channel sessions.
+        m_channelSessions.clear();
+        m_channelSessionEntity = nullptr;
+        closeSession();
+    }
+
+    // Switch to the command's channel (stashes/restores the right stack) and
+    // make sure a live session exists on it.
+    if (m_activeChannel != static_cast<PaintChannelNS::Channel>(channel))
+        setActiveChannel(channel);
+    if (!hasActiveSession())
+        ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024);
+    return hasActiveSession();
 }
 
 void TexturePaintController::applyPixelSnapshot(const std::vector<uint8_t>& pixels)
@@ -4717,7 +4767,7 @@ int TexturePaintController::fillMaskWithFG()
     const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
         this, layerIdx, std::move(before), layerBuf.data(),
-        layerBuf.width(), layerBuf.height(), m_textureName,
+        layerBuf.width(), layerBuf.height(), m_sessionEntity, static_cast<int>(m_activeChannel),
         QStringLiteral("Fill selection (FG)")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: filled %1 px with FG %2")
@@ -4745,7 +4795,7 @@ int TexturePaintController::fillMaskWithBG()
     const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
         this, layerIdx, std::move(before), layerBuf.data(),
-        layerBuf.width(), layerBuf.height(), m_textureName,
+        layerBuf.width(), layerBuf.height(), m_sessionEntity, static_cast<int>(m_activeChannel),
         QStringLiteral("Fill selection (BG)")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: filled %1 px with BG %2")
@@ -4768,7 +4818,7 @@ int TexturePaintController::deleteMaskPixels()
     const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
     UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
         this, layerIdx, std::move(before), layerBuf.data(),
-        layerBuf.width(), layerBuf.height(), m_textureName,
+        layerBuf.width(), layerBuf.height(), m_sessionEntity, static_cast<int>(m_activeChannel),
         QStringLiteral("Delete selection")));
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: deleted %1 px").arg(affected));
@@ -5175,7 +5225,7 @@ void TexturePaintController::pushLayerOpUndo(const QString& label,
                                              PaintLayerStack::Snapshot after)
 {
     UndoManager::getSingleton()->push(
-        new PaintLayerOpCommand(this, label, m_textureName,
+        new PaintLayerOpCommand(this, label, m_sessionEntity, static_cast<int>(m_activeChannel),
                                 std::move(before), std::move(after)));
 }
 

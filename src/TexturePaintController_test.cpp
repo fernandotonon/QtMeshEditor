@@ -975,3 +975,40 @@ TEST_F(TexturePaintControllerSceneTest, BakeUnpaintedChannelReturnsFalse) {
     // Metallic never painted → nothing to bake.
     EXPECT_FALSE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Metallic)));
 }
+
+// Undo must survive a channel switch (#547): a stroke on BaseColor, then switch
+// to another channel, then Ctrl+Z restores BaseColor — the undo command keys on
+// (entity, channel), NOT the transient GPU texture name that changes on switch.
+TEST_F(TexturePaintControllerSceneTest, UndoSurvivesChannelSwitch) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("UndoAcrossChannel")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Snapshot BaseColor before, paint a stroke, snapshot after.
+    const QImage before = ctrl->snapshotBufferImage();
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.5);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    const QImage afterPaint = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(before.isNull());
+    ASSERT_FALSE(afterPaint.isNull());
+    ASSERT_NE(before, afterPaint) << "stroke should have changed the buffer";
+
+    // Switch to Roughness — a different session with a fresh GPU texture name.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Roughness));
+
+    // Undo: must reactivate BaseColor and restore its pre-stroke pixels
+    // (before the fix this no-oped because the texture name had changed).
+    UndoManager::getSingleton()->undo();
+    pumpEventsFor(150);
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    const QImage afterUndo = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(afterUndo.isNull());
+    EXPECT_EQ(afterUndo, before) << "undo across a channel switch must restore BaseColor";
+}
