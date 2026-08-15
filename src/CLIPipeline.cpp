@@ -1526,12 +1526,11 @@ int CLIPipeline::run(int argc, char* argv[])
     // transactions from CI — e.g. the CLIPipelineRun.UnknownCommand fixture
     // showed up in production telemetry as "cli.not-a-command".
     const bool envNoTelemetry = qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY");
-    if (envNoTelemetry)
-        s_noTelemetry = true;
+    bool flagNoTelemetry = false;
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "--verbose") s_verbose = true;
-        if (arg == "--no-telemetry") s_noTelemetry = true;
+        if (arg == "--no-telemetry") flagNoTelemetry = true;
     }
 
     // Find the subcommand (skip executable name and --cli flag)
@@ -1585,6 +1584,7 @@ int CLIPipeline::run(int argc, char* argv[])
     // --no-telemetry also suppresses gamification events at every call site
     // for this process — without this, operation notes inside the subcommands
     // would land in the persistent queue and flush on a later run (#796).
+    s_noTelemetry = envNoTelemetry || flagNoTelemetry;
     if (s_noTelemetry)
         GamificationManager::setEmissionSuspended(true);
 
@@ -1592,12 +1592,14 @@ int CLIPipeline::run(int argc, char* argv[])
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
     // suppresses the notice to avoid printing it on every container run.
-    if (envNoTelemetry) {
-        // Session-only: no QSettings write, no notice — the init below is
-        // simply skipped for this process.
-    } else if (s_noTelemetry) {
+    if (flagNoTelemetry) {
+        // The explicit flag persists — even when the session env var is also
+        // set (the user asked for the permanent preference).
         SentryReporter::setEnabled(false);
         err() << "Telemetry disabled. This preference is stored permanently." << Qt::endl;
+    } else if (envNoTelemetry) {
+        // Session-only: no QSettings write, no notice — the init below is
+        // simply skipped for this process.
     } else if (SentryReporter::isFirstLaunch()) {
         SentryReporter::setEnabled(true);
         if (!qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY_NOTICE"))
