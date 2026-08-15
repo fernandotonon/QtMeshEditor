@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <QCryptographicHash>
 #include <QFileDialog>
 #include <QImage>
+#include <QTimer>
 #include <QMessageBox>
 #include <QDebug>
 #include <QFile>
@@ -82,6 +83,7 @@ THE SOFTWARE.
 // see the last line before SIGSEGV. Remove once fixed.
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
+#include "NodeAnimationManager.h"
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
@@ -1111,6 +1113,12 @@ static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::strin
     return anim;
 }
 
+// Forward decl — defined below (scene-export section). Emits aiAnimations for
+// the SceneManager-level NodeAnimationManager clips (#517 C5) that target the
+// given node names.
+static std::vector<aiAnimation*> buildNodeClipAnimations(
+    const std::set<std::string, std::less<>>& exportedNodeNames);
+
 // Build an aiScene directly from an Ogre Entity, bypassing the XML round-trip
 static aiScene* buildAiScene(const Ogre::Entity* entity)
 {
@@ -1227,6 +1235,17 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     {
         for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
             animations.push_back(buildAiAnimation(skeleton->getAnimation(ai)));
+    }
+
+    // Node-transform clips (#517 C5): the single-entity export path
+    // (Export Selected) must also carry node animation, or it drops. The
+    // entity is named after its scene node, so export clips targeting that
+    // node. Root node is named after the entity, matching the channel target.
+    {
+        std::set<std::string, std::less<>> nodeNames;
+        nodeNames.insert(std::string(entity->getName()));
+        auto nodeAnims = buildNodeClipAnimations(nodeNames);
+        animations.insert(animations.end(), nodeAnims.begin(), nodeAnims.end());
     }
 
     // NOTE: morph-target SHAPES export fine (via aiMesh::mAnimMeshes above),
@@ -2304,6 +2323,359 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
     }
 }
 
+// Reconstruct NodeAnimationManager clips (#517) from a freshly-imported
+// aiScene. On export, node-transform animation is written as aiAnimations whose
+// aiNodeAnim channels target the mesh's scene NODE (not a bone). The skeletal
+// AnimationProcessor deliberately skips those channels (Skeleton::hasBone
+// returns false), so without this they were lost — or, on a skeleton-less mesh,
+// mis-imported as a bogus skeletal clip. Here we walk the aiScene's animations,
+// pick channels whose target node name matches the just-created SceneNode AND
+// is NOT a bone on the mesh's skeleton, and rebuild them as node clips so they
+// show in the animation list + dope-sheet node band and drive the SceneNode.
+//
+// The node was auto-scaled by `nodeScale` (sub-unit mesh fix). A node clip
+// animates the node's OWN local transform; its translation lives in PARENT
+// space and is unaffected by the node's own scale, so translations are taken
+// verbatim (no *nodeScale) — the previous "100x off" report came from the
+// channel being dropped/misrouted, not a scale factor here.
+static void reconstructNodeClipsFromAiScene(const aiScene* aiscene,
+                                            Ogre::SceneNode* sn,
+                                            const Ogre::Entity* en)
+{
+    if (!aiscene || !sn || !en || aiscene->mNumAnimations == 0) return;
+    auto* nam = NodeAnimationManager::instance();
+    if (!nam) return;
+
+    const std::string nodeName = sn->getName();
+    Ogre::Skeleton* skel =
+        (en->getMesh() && en->getMesh()->getSkeleton())
+            ? en->getMesh()->getSkeleton().get() : nullptr;
+
+    // The node-clip channel targets the entity's ROOT node, which buildAiScene/
+    // buildSceneAiScene name after the entity at EXPORT time. On reimport the
+    // live SceneNode is renamed after the FILE (createEntity names the entity/
+    // node from the loaded file's basename), so `sn->getName()` no longer equals
+    // the channel's node name — the match by exact name fails and the node clip
+    // is dropped (it then leaks as a phantom skeletal clip). Accept the aiScene's
+    // ROOT node name too: that's the export-time entity name the channel carries.
+    // (issue #517 — export under one name, reimport under the file's name)
+    const std::string rootName =
+        aiscene->mRootNode ? aiscene->mRootNode->mName.C_Str() : std::string();
+
+    for (unsigned int a = 0; a < aiscene->mNumAnimations; ++a) {
+        const aiAnimation* anim = aiscene->mAnimations[a];
+        if (!anim) continue;
+        const double ticksPerSec =
+            (anim->mTicksPerSecond > 0.0) ? anim->mTicksPerSecond : 1.0;
+
+        // Gather non-bone channels targeting this entity's node (matched by the
+        // live scene-node name OR the export-time root name — see above).
+        std::vector<const aiNodeAnim*> nodeChannels;
+        for (unsigned int c = 0; c < anim->mNumChannels; ++c) {
+            const aiNodeAnim* ch = anim->mChannels[c];
+            if (!ch) continue;
+            const std::string chName = ch->mNodeName.C_Str();
+            if (skel && skel->hasBone(chName)) continue;  // belongs to the skeleton
+            if (chName != nodeName && !(!rootName.empty() && chName == rootName))
+                continue;
+            nodeChannels.push_back(ch);
+        }
+        if (nodeChannels.empty()) continue;
+
+        // Clip name: the aiAnimation name, made unique on the scene.
+        std::string clipName = anim->mName.C_Str();
+        if (clipName.empty()) clipName = "NodeClip";
+        std::string unique = clipName;
+        int suffix = 1;
+        auto* scene = Manager::getSingletonPtr() ? Manager::getSingletonPtr()->getSceneMgr() : nullptr;
+        while (scene && scene->hasAnimation(unique))
+            unique = clipName + "_" + std::to_string(suffix++);
+
+        const double lengthSec = (anim->mDuration > 0.0)
+            ? anim->mDuration / ticksPerSec : 0.0;
+        if (lengthSec <= 0.0) continue;
+        if (!nam->createClip(QString::fromStdString(unique), lengthSec)) continue;
+
+        for (const aiNodeAnim* ch : nodeChannels) {
+            // Collect the union of key times across P/R/S, then sample each.
+            std::set<double> times;
+            for (unsigned int k = 0; k < ch->mNumPositionKeys; ++k)
+                times.insert(ch->mPositionKeys[k].mTime / ticksPerSec);
+            for (unsigned int k = 0; k < ch->mNumRotationKeys; ++k)
+                times.insert(ch->mRotationKeys[k].mTime / ticksPerSec);
+            for (unsigned int k = 0; k < ch->mNumScalingKeys; ++k)
+                times.insert(ch->mScalingKeys[k].mTime / ticksPerSec);
+
+            // INTERPOLATE at each union time — the three TRS channels can carry
+            // DIFFERENT key times (e.g. translation at 0/2s, rotation at 1s), so
+            // snapping to the nearest key would write a wrong full-TRS key and
+            // change the motion after import + re-export. Keys are time-sorted
+            // (Assimp guarantees this); bracket t and lerp vectors / slerp quats.
+            auto sampleVec = [](const aiVectorKey* keys, unsigned int n,
+                                double t, double tps, const Ogre::Vector3& def) {
+                if (n == 0) return def;
+                if (t <= keys[0].mTime / tps)
+                    return Ogre::Vector3(keys[0].mValue.x, keys[0].mValue.y, keys[0].mValue.z);
+                if (t >= keys[n - 1].mTime / tps)
+                    return Ogre::Vector3(keys[n-1].mValue.x, keys[n-1].mValue.y, keys[n-1].mValue.z);
+                for (unsigned int k = 0; k + 1 < n; ++k) {
+                    const double t0 = keys[k].mTime / tps, t1 = keys[k + 1].mTime / tps;
+                    if (t >= t0 && t <= t1) {
+                        const double span = t1 - t0;
+                        const Ogre::Real a = span > 1e-9 ? static_cast<Ogre::Real>((t - t0) / span) : 0.0f;
+                        const Ogre::Vector3 v0(keys[k].mValue.x, keys[k].mValue.y, keys[k].mValue.z);
+                        const Ogre::Vector3 v1(keys[k+1].mValue.x, keys[k+1].mValue.y, keys[k+1].mValue.z);
+                        return v0 + (v1 - v0) * a;
+                    }
+                }
+                return Ogre::Vector3(keys[n-1].mValue.x, keys[n-1].mValue.y, keys[n-1].mValue.z);
+            };
+            auto sampleQuat = [](const aiQuatKey* keys, unsigned int n,
+                                 double t, double tps) {
+                auto q = [](const aiQuatKey& k) {
+                    return Ogre::Quaternion(k.mValue.w, k.mValue.x, k.mValue.y, k.mValue.z);
+                };
+                if (n == 0) return Ogre::Quaternion::IDENTITY;
+                if (t <= keys[0].mTime / tps) { Ogre::Quaternion o = q(keys[0]); o.normalise(); return o; }
+                if (t >= keys[n - 1].mTime / tps) { Ogre::Quaternion o = q(keys[n-1]); o.normalise(); return o; }
+                for (unsigned int k = 0; k + 1 < n; ++k) {
+                    const double t0 = keys[k].mTime / tps, t1 = keys[k + 1].mTime / tps;
+                    if (t >= t0 && t <= t1) {
+                        const double span = t1 - t0;
+                        const Ogre::Real a = span > 1e-9 ? static_cast<Ogre::Real>((t - t0) / span) : 0.0f;
+                        Ogre::Quaternion o = Ogre::Quaternion::Slerp(a, q(keys[k]), q(keys[k+1]), true);
+                        o.normalise();
+                        return o;
+                    }
+                }
+                Ogre::Quaternion o = q(keys[n-1]); o.normalise(); return o;
+            };
+
+            for (double t : times) {
+                const Ogre::Vector3 pos = sampleVec(ch->mPositionKeys,
+                    ch->mNumPositionKeys, t, ticksPerSec, Ogre::Vector3::ZERO);
+                const Ogre::Quaternion rot = sampleQuat(ch->mRotationKeys,
+                    ch->mNumRotationKeys, t, ticksPerSec);
+                const Ogre::Vector3 scl = sampleVec(ch->mScalingKeys,
+                    ch->mNumScalingKeys, t, ticksPerSec, Ogre::Vector3(1, 1, 1));
+                nam->addKeyframe(QString::fromStdString(unique),
+                                 QString::fromStdString(nodeName),
+                                 t, pos, rot, scl);
+            }
+        }
+    }
+}
+
+// File-reading wrapper: the plain-import path (importer()) doesn't retain the
+// aiScene, so do an independent no-process Assimp read purely to recover the
+// node-transform channels, then delegate to the core above.
+static void reconstructNodeClipsFromFile(const QString& filePath,
+                                         Ogre::SceneNode* sn,
+                                         const Ogre::Entity* en)
+{
+    if (filePath.isEmpty() || !sn || !en) return;
+    Assimp::Importer aimp;
+    const aiScene* aiscene = aimp.ReadFile(filePath.toStdString(), 0);
+    reconstructNodeClipsFromAiScene(aiscene, sn, en);
+}
+
+// After import, select the entity if a node-transform clip animates its scene
+// node. The Inspector Animations list / dope sheet only surface node clips for
+// the SELECTED entity, and import auto-selects nothing — so a reconstructed
+// clip is invisible until the user selects the entity themselves. Selecting it
+// here fires SelectionSet::selectionChanged, which refreshes both views. Safe
+// to call on the main thread (all import runs there); no-op when the node has
+// no clips. (#517)
+static void selectEntityIfHasNodeClip(Ogre::SceneNode* sn)
+{
+    if (!sn) return;
+    auto* nam = NodeAnimationManager::instance();
+    if (!nam) return;
+    const QString nodeName = QString::fromStdString(sn->getName());
+    bool hasClip = false;
+    for (const QString& clip : nam->listClips()) {
+        if (nam->animatedNodes(clip).contains(nodeName)) { hasClip = true; break; }
+    }
+    if (!hasClip) return;
+
+    // DEFER the selection to the next event-loop tick. importer() runs inside
+    // MainWindow::frameRenderingQueued (the Ogre render callback) — selecting
+    // synchronously there fires selectionChanged mid-frame, and the QML
+    // Inspector's refreshAnimData() binding update gets coalesced/dropped as the
+    // frame completes, so the reconstructed node clip never appears in the list
+    // (the user had to manually re-select). Posting via a zero-timer runs the
+    // selection AFTER the frame settles and the QML event loop is idle, so the
+    // list + dope sheet refresh reliably. Re-resolve the node by name at fire
+    // time in case the scene changed. (#517)
+    QTimer::singleShot(0, [nodeName]() {
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+        if (!scene || !scene->hasSceneNode(nodeName.toStdString())) return;
+        SelectionSet::getSingleton()->selectOne(
+            scene->getSceneNode(nodeName.toStdString()));
+    });
+}
+
+// ─── Node-transform-clip sidecar (FBX / .mesh workaround, #517) ─────────
+// glTF/glb carry node-transform clips natively (buildNodeClipAnimations →
+// aiNodeAnim channels). The custom FBXExporter and Ogre's .mesh serializer
+// have no concept of SceneManager-level node animation, so for those formats
+// we persist the clips to a `<basename>.nodeanim.json` sidecar — exactly the
+// pattern SceneLightsIO uses for `.lights.json` — and rebuild them on import.
+static QString nodeAnimSidecarPath(const QString& meshPath)
+{
+    const QFileInfo fi(meshPath);
+    return fi.absoluteDir().filePath(fi.completeBaseName()
+                                     + QStringLiteral(".nodeanim.json"));
+}
+
+// Serialise every SceneManager node clip that targets `sn` to the sidecar.
+// No-op (and removes any stale sidecar) when the node has no clips, so a
+// re-export after deleting the animation doesn't leave a ghost file.
+static void writeNodeAnimSidecar(const QString& meshPath, Ogre::SceneNode* sn)
+{
+    if (meshPath.isEmpty() || !sn) return;
+    auto* mgr = Manager::getSingletonPtr();
+    auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!scene) return;
+
+    const std::string nodeName = sn->getName();
+    QJsonArray clipsJson;
+
+    for (unsigned short ai = 0; ai < scene->getNumAnimations(); ++ai) {
+        Ogre::Animation* anim = scene->getAnimation(ai);
+        if (!anim) continue;
+
+        // Collect this clip's track(s) that target our scene node (skip bones).
+        QJsonArray tracksJson;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            (void)handle;
+            if (!track) continue;
+            Ogre::Node* target = track->getAssociatedNode();
+            if (!target || dynamic_cast<Ogre::Bone*>(target)) continue;
+            if (target->getName() != nodeName) continue;
+
+            QJsonArray keysJson;
+            for (unsigned short ki = 0; ki < track->getNumKeyFrames(); ++ki) {
+                auto* kf = track->getNodeKeyFrame(ki);
+                const Ogre::Vector3 p = kf->getTranslate();
+                Ogre::Quaternion r = kf->getRotation(); r.normalise();
+                const Ogre::Vector3 s = kf->getScale();
+                QJsonObject k;
+                k["t"] = static_cast<double>(kf->getTime());
+                k["p"] = QJsonArray{ p.x, p.y, p.z };
+                k["r"] = QJsonArray{ r.w, r.x, r.y, r.z };
+                k["s"] = QJsonArray{ s.x, s.y, s.z };
+                keysJson.append(k);
+            }
+            if (keysJson.isEmpty()) continue;
+            QJsonObject tr;
+            tr["node"] = QString::fromStdString(nodeName);
+            tr["keys"] = keysJson;
+            tracksJson.append(tr);
+        }
+        if (tracksJson.isEmpty()) continue;
+
+        QJsonObject clip;
+        clip["name"] = QString::fromStdString(anim->getName());
+        clip["length"] = static_cast<double>(anim->getLength());
+        clip["tracks"] = tracksJson;
+        clipsJson.append(clip);
+    }
+
+    const QString sidecarPath = nodeAnimSidecarPath(meshPath);
+    if (clipsJson.isEmpty()) {
+        // Nothing to persist — remove any stale sidecar from a prior export.
+        QFile::remove(sidecarPath);
+        return;
+    }
+
+    QJsonObject root;
+    root["schema"] = QStringLiteral("qtmesh.node.animations.v1");
+    root["clips"] = clipsJson;
+
+    QFile out(sidecarPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "Node-anim sidecar write failed: " + sidecarPath.toStdString());
+        return;
+    }
+    out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    out.close();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("file.export"),
+        QStringLiteral("Wrote node-anim sidecar (%1 clip(s)) for %2")
+            .arg(clipsJson.size()).arg(meshPath));
+}
+
+// Rebuild node clips from `<basename>.nodeanim.json` (FBX/.mesh import). Names
+// are made unique against the live scene; keyframes go through the normal
+// NodeAnimationManager path. No-op when the sidecar is absent.
+static void reconstructNodeClipsFromSidecar(const QString& meshPath,
+                                            Ogre::SceneNode* sn,
+                                            const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !sn || !en) return;
+    const QString sidecarPath = nodeAnimSidecarPath(meshPath);
+    QFile f(sidecarPath);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly)) return;
+    const QByteArray bytes = f.readAll();
+    f.close();
+
+    QJsonParseError perr;
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) return;
+    const QJsonObject root = doc.object();
+    if (root.value("schema").toString() != QStringLiteral("qtmesh.node.animations.v1"))
+        return;
+
+    auto* nam = NodeAnimationManager::instance();
+    auto* mgr = Manager::getSingletonPtr();
+    auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!nam || !scene) return;
+
+    const std::string nodeName = sn->getName();
+
+    for (const QJsonValue& cv : root.value("clips").toArray()) {
+        const QJsonObject clip = cv.toObject();
+        const QJsonArray tracks = clip.value("tracks").toArray();
+        if (tracks.isEmpty()) continue;
+        const double length = clip.value("length").toDouble();
+        if (length <= 0.0) continue;
+
+        // Unique clip name against the live scene.
+        std::string base = clip.value("name").toString().toStdString();
+        if (base.empty()) base = "NodeClip";
+        std::string unique = base;
+        int suffix = 1;
+        while (scene->hasAnimation(unique))
+            unique = base + "_" + std::to_string(suffix++);
+
+        if (!nam->createClip(QString::fromStdString(unique), length)) continue;
+
+        for (const QJsonValue& tv : tracks) {
+            const QJsonObject tr = tv.toObject();
+            // The sidecar was written for THIS entity's node; retarget its
+            // keys onto the (possibly renamed) live scene node.
+            for (const QJsonValue& kv : tr.value("keys").toArray()) {
+                const QJsonObject k = kv.toObject();
+                const double t = k.value("t").toDouble();
+                const QJsonArray pa = k.value("p").toArray();
+                const QJsonArray ra = k.value("r").toArray();
+                const QJsonArray sa = k.value("s").toArray();
+                if (pa.size() < 3 || ra.size() < 4 || sa.size() < 3) continue;
+                const Ogre::Vector3 p(pa[0].toDouble(), pa[1].toDouble(), pa[2].toDouble());
+                Ogre::Quaternion r(ra[0].toDouble(), ra[1].toDouble(),
+                                   ra[2].toDouble(), ra[3].toDouble());
+                r.normalise();
+                const Ogre::Vector3 s(sa[0].toDouble(), sa[1].toDouble(), sa[2].toDouble());
+                nam->addKeyframe(QString::fromStdString(unique),
+                                 QString::fromStdString(nodeName), t, p, r, s);
+            }
+        }
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -2878,6 +3250,21 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 }
             }
 
+            // Recover node-transform animation clips (#517) that the skeletal
+            // import path drops (channels target the scene node, not a bone).
+            // glTF/glb carry them in the file (Assimp read below finds them);
+            // FBX/.mesh carry them in a `.nodeanim.json` sidecar instead.
+            reconstructNodeClipsFromFile(file.filePath(), sn, en);
+            reconstructNodeClipsFromSidecar(file.filePath(), sn, en);
+
+            // If a node-transform clip was reconstructed for this node, select
+            // the entity so the Inspector Animations list + dope sheet populate
+            // immediately. Node clips only list under a SELECTED entity, and
+            // nothing else selects the freshly-imported entity — without this
+            // the reconstructed clip stayed invisible until the user manually
+            // selected it and round-tripped through the node editor. (#517)
+            selectEntityIfHasNodeClip(sn);
+
             configureCamera(en);
         }
     }
@@ -3208,6 +3595,28 @@ void injectMorphWeightAnimations(const QString& filePath,
         QJsonArray buffers = root.value("buffers").toArray();
         QJsonArray animations = root.value("animations").toArray();
 
+        // Guard against a duplicate animation NAME. Assimp's glTF2 exporter can
+        // leave an empty animation carrying a morph clip's name (a channel-less
+        // skeletal clip that leaked through buildAiScene). If we then append our
+        // real weights animation under the same name, the file has two same-named
+        // glTF animations — which Ogre refuses to re-import (it throws
+        // "animation already exists" and aborts the whole load → 0 entities).
+        // Drop any existing animation whose name matches a weight clip we're
+        // about to inject, so ours is the only one. (issue #517)
+        {
+            QSet<QString> injectNames;
+            for (const MorphWeightClip& clip : clips)
+                injectNames.insert(QString::fromStdString(clip.name));
+            QJsonArray kept;
+            for (const QJsonValue& av : animations) {
+                const QString nm = av.toObject().value("name").toString();
+                if (injectNames.contains(nm))
+                    continue;  // will be re-added below (deduped)
+                kept.append(av);
+            }
+            animations = kept;
+        }
+
         const int newBufferIndex = buffers.size();  // appended below
 
         for (const MorphWeightClip& clip : clips) {
@@ -3485,6 +3894,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         m.exportMesh(e->getMesh().get(),_uri.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
+        // .mesh (Ogre serializer) cannot store SceneManager node-transform
+        // clips — persist them to a `.nodeanim.json` sidecar (#517).
+        writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
         // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
@@ -3498,6 +3910,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             Ogre::LogManager::getSingleton().logWarning(
                 "FBX exported but lights sidecar write failed: " + _uri.toStdString());
         }
+        // The custom FBXExporter has no node-transform-clip path — persist
+        // SceneManager node clips to a `.nodeanim.json` sidecar (#517).
+        writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4292,6 +4707,98 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
     return result;
 }
 
+// Build aiAnimations for the SceneManager-level node-transform clips
+// (NodeAnimationManager, #517 slice C / C5 export). These are distinct
+// from skeletal animations: their tracks target real Ogre::SceneNodes
+// (animated props/doors/lights/cameras), not bones. glTF/FBX/DAE all
+// support plain node TRS animation natively, so each clip becomes one
+// aiAnimation whose aiNodeAnim channels target the scene node by name —
+// the SAME name buildSceneAiScene() gives each entity's aiNode, so the
+// importer rebinds them on round-trip.
+//
+// Unlike buildAiAnimation() (skeletal), node keyframes store the node's
+// ABSOLUTE local TRS (that's what NodeAnimationManager writes via
+// setTranslate/setRotation/setScale = node->getPosition()/Orientation()/
+// Scale()), so we emit them directly with no bind-pose offset.
+//
+// `exportedNodeNames` gates channels to nodes actually being exported, so
+// a clip that references a since-deleted node contributes nothing rather
+// than an orphan channel. Empty clips (no surviving channels) are skipped.
+static std::vector<aiAnimation*> buildNodeClipAnimations(
+    const std::set<std::string, std::less<>>& exportedNodeNames)
+{
+    std::vector<aiAnimation*> out;
+    auto* manager = Manager::getSingletonPtr();
+    if (!manager) return out;
+    auto* scene = manager->getSceneMgr();
+    if (!scene) return out;
+
+    for (unsigned short ai = 0; ai < scene->getNumAnimations(); ++ai)
+    {
+        Ogre::Animation* ogreAnim = scene->getAnimation(ai);
+        if (!ogreAnim) continue;
+
+        std::vector<aiNodeAnim*> channels;
+        for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
+        {
+            if (!track) continue;
+            Ogre::Node* target = track->getAssociatedNode();
+            if (!target) continue;
+            // Skip bone tracks — those belong to the skeletal path. Node
+            // clips target SceneNodes. (A bone is-a Node, so exclude it.)
+            if (dynamic_cast<Ogre::Bone*>(target)) continue;
+            const std::string nodeName = target->getName();
+            if (exportedNodeNames.find(nodeName) == exportedNodeNames.end())
+                continue;
+
+            const unsigned short numKeys = track->getNumKeyFrames();
+            if (numKeys == 0) continue;
+
+            auto* ch = new aiNodeAnim();
+            ch->mNodeName = aiString(nodeName);
+            ch->mNumPositionKeys = numKeys;
+            ch->mNumRotationKeys = numKeys;
+            ch->mNumScalingKeys  = numKeys;
+            ch->mPositionKeys = new aiVectorKey[numKeys];
+            ch->mRotationKeys = new aiQuatKey[numKeys];
+            ch->mScalingKeys  = new aiVectorKey[numKeys];
+
+            for (unsigned short ki = 0; ki < numKeys; ++ki)
+            {
+                auto* kf = track->getNodeKeyFrame(ki);
+                const double t = kf->getTime();
+
+                const Ogre::Vector3 pos = kf->getTranslate();
+                ch->mPositionKeys[ki].mTime = t;
+                ch->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
+
+                Ogre::Quaternion rot = kf->getRotation();
+                rot.normalise();
+                ch->mRotationKeys[ki].mTime = t;
+                ch->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
+
+                const Ogre::Vector3 scl = kf->getScale();
+                ch->mScalingKeys[ki].mTime = t;
+                ch->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
+            }
+            channels.push_back(ch);
+        }
+
+        if (channels.empty()) continue;
+
+        auto* anim = new aiAnimation();
+        anim->mName = aiString(ogreAnim->getName());
+        anim->mTicksPerSecond = 1.0;  // key times are in seconds
+        anim->mDuration = ogreAnim->getLength();
+        anim->mNumChannels = static_cast<unsigned int>(channels.size());
+        anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
+        for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
+            anim->mChannels[ci] = channels[ci];
+        out.push_back(anim);
+    }
+    return out;
+}
+
 // ─── Scene-level export: all scene nodes → single glTF ──────────────
 static aiScene* buildSceneAiScene()
 {
@@ -4373,6 +4880,9 @@ static aiScene* buildSceneAiScene()
     unsigned int globalMeshIdx = 0;
     std::set<Ogre::Skeleton*> processedSkeletons;
     std::vector<aiAnimation*> allAnimations;
+    // Names of the aiNodes we emit (one per scene node) — used to bind
+    // NodeAnimationManager node-transform clips (#517 C5) on export.
+    std::set<std::string, std::less<>> exportedNodeNames;
 
     for (unsigned int ni = 0; ni < nodeEntities.size(); ++ni)
     {
@@ -4436,6 +4946,7 @@ static aiScene* buildSceneAiScene()
         Ogre::Matrix4 nodeTransform;
         nodeTransform.makeTransform(sn->getPosition(), sn->getScale(), sn->getOrientation());
         entityNode->mTransformation = toAiMatrix(nodeTransform);
+        exportedNodeNames.insert(std::string(sn->getName()));
 
         scene->mRootNode->mChildren[ni] = entityNode;
 
@@ -4454,7 +4965,17 @@ static aiScene* buildSceneAiScene()
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
+            // Morph-target SHAPES (blend shapes). The single-entity buildAiScene
+            // attaches these; the SCENE path (save_scene / glb) did NOT, so
+            // exported scenes dropped every blend shape and morph animation had
+            // no targets to drive (bug: "morph carried the T-pose"). Attach
+            // before compaction, then remap the target vertex arrays like the
+            // single-entity path.
+            const unsigned int preCompactCount = aiM->mNumVertices;
+            attachMorphTargetsToAiMesh(aiM, mesh, subMesh, si);
+
             const std::vector<unsigned int> remap = compactAiMesh(aiM);
+            remapAiMeshMorphTargets(aiM, remap, preCompactCount);
 
             std::vector<std::vector<unsigned int>> ngonFaces;
             if (meshOwnerNode
@@ -4486,6 +5007,15 @@ static aiScene* buildSceneAiScene()
         }
 
         globalMeshIdx += numSub;
+    }
+
+    // Append SceneManager-level node-transform clips (#517 C5). These
+    // target the scene-node aiNodes by name and coexist with skeletal
+    // animations in the same glTF `animations` array.
+    {
+        auto nodeClipAnims = buildNodeClipAnimations(exportedNodeNames);
+        allAnimations.insert(allAnimations.end(),
+                             nodeClipAnims.begin(), nodeClipAnims.end());
     }
 
     // Assign animations to scene
@@ -4570,6 +5100,21 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         }
 
         delete scene;
+
+        // Assimp's glTF2 exporter drops morph-target WEIGHT animation channels
+        // (it only emits node TRS). The single-entity exporter() path patches
+        // them back in via injectMorphWeightAnimations; do the same for the
+        // SCENE path so morph-weight clips (Inspector / MCP set_morph_weight_
+        // keyframe) survive save_scene now that the shapes export too. No-op
+        // when an entity has no weight clips.
+        for (const auto& [snPair, entityPair] : entities)
+        {
+            (void)snPair;
+            if (entityPair && entityPair->getMesh() && entityPair->getMesh()->getPoseCount() > 0)
+                injectMorphWeightAnimations(file.filePath(), entityPair,
+                                            /*isBinary=*/formatId == "glb2");
+        }
+
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
         // (same strategy as FBX export) so user-added lights always round-trip.
         if (!SceneLightsIO::writeLightsSidecar(_uri))
@@ -4986,7 +5531,16 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             sn->setOrientation(orient);
             sn->setScale(scale);
 
-            manager->createEntity(sn, ogreMesh);
+            Ogre::Entity* nodeEnt = manager->createEntity(sn, ogreMesh);
+
+            // Recover node-transform animation clips (#517) for THIS node from
+            // the aiScene we already have. Open Scene (sceneImporter) is a
+            // separate path from plain Import (importer) — without this, node
+            // anim was dropped on the File > Save Scene / Open Scene round-trip.
+            reconstructNodeClipsFromAiScene(scene, sn, nodeEnt);
+            // Select the entity so a reconstructed node clip appears in the
+            // Animations list / dope sheet without a manual select (#517).
+            selectEntityIfHasNodeClip(sn);
         }
 
         if (!SceneLightsIO::importLightsSidecar(_uri, true))

@@ -23,6 +23,7 @@ public:
                          std::string animationName,
                          std::string boneName,
                          int targetFps,
+                         bool isNodeClip = false,
                          QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -45,6 +46,9 @@ private:
     std::string mAnimationName;
     std::string mBoneName;
     int         mTargetFps;
+    // True → the track lives on a SceneManager node clip, not a
+    // skeleton (see ResampleCurveCommand). (#520)
+    bool        mIsNodeClip;
     std::vector<KeyframeSnapshot> mBefore;
     std::vector<KeyframeSnapshot> mAfter;
     bool        mCaptured = false;

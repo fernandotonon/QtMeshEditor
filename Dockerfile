@@ -23,8 +23,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # "libQt6Multimedia.so.6: cannot open shared object file" — even for CLI/scan
 # runs that never touch video. (The .deb bundles libQt6Multimedia itself.)
 
-# Copy and install the .deb (skip declared Qt package deps — libs are bundled)
-COPY qtmesheditor.deb /tmp/qtmesheditor.deb
+# Multi-arch: buildx sets TARGETARCH to "amd64" or "arm64" for each platform in
+# the manifest. Each build stage copies + installs the matching .deb so the
+# image runs NATIVELY on Intel and Apple Silicon Macs (no QEMU). The build
+# context must contain both qtmesheditor_amd64.deb and qtmesheditor_arm64.deb.
+ARG TARGETARCH
+COPY qtmesheditor_${TARGETARCH}.deb /tmp/qtmesheditor.deb
+# Skip declared Qt package deps — libs are bundled in /usr/lib/qtmesheditor.
 RUN dpkg --install --force-depends /tmp/qtmesheditor.deb \
     && rm /tmp/qtmesheditor.deb
 

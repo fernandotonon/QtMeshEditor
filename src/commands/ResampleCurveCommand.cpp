@@ -3,12 +3,14 @@
 #include "SkeletonResolver.h"
 #include "../CurveEditModel.h"
 #include "../CurveResampler.h"
+#include "../Manager.h"
 
 #include <Ogre.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
 #include <OgreKeyFrame.h>
+#include <OgreSceneManager.h>
 
 #include <QObject>
 #include <QString>
@@ -20,10 +22,37 @@
 namespace {
 constexpr float kEpsilon = 0.001f;
 
+// Resolve a node-clip track: the clip is a SceneManager-owned
+// Ogre::Animation named `animName`; the track is the one whose
+// associated node is named `boneName` (the node name). Mirrors the
+// resolution walk NodeAnimationManager's curve/query helpers use — the
+// m_trackHandles cache can be stale after undo, so we match by node
+// name off _getNodeTrackList(). (#520)
+Ogre::NodeAnimationTrack* resolveNodeTrack(const std::string& animName,
+                                           const std::string& nodeName)
+{
+    if (animName.empty() || nodeName.empty()) return nullptr;
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    Ogre::SceneManager* scene = mgr->getSceneMgr();
+    if (!scene || !scene->hasAnimation(animName)) return nullptr;
+    Ogre::Animation* anim = scene->getAnimation(animName);
+    const auto& tracks = anim->_getNodeTrackList();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        Ogre::NodeAnimationTrack* t = it->second;
+        if (t && t->getAssociatedNode()
+            && t->getAssociatedNode()->getName() == nodeName)
+            return t;
+    }
+    return nullptr;
+}
+
 Ogre::NodeAnimationTrack* resolveTrack(const std::string& entityName,
                                        const std::string& animName,
-                                       const std::string& boneName)
+                                       const std::string& boneName,
+                                       bool isNodeClip)
 {
+    if (isNodeClip) return resolveNodeTrack(animName, boneName);
     if (animName.empty() || boneName.empty()) return nullptr;
     Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(entityName);
     if (!skel) return nullptr;
@@ -82,6 +111,7 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
                                              float t0, float t1,
                                              double toleranceMul,
                                              int fixedFps,
+                                             bool isNodeClip,
                                              QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
@@ -92,13 +122,14 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
     , mT1(t1)
     , mToleranceMul(toleranceMul)
     , mFixedFps(fixedFps)
+    , mIsNodeClip(isNodeClip)
 {
     setText(QObject::tr("Resample curve"));
 }
 
 bool ResampleCurveCommand::captureBefore()
 {
-    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName, mIsNodeClip);
     if (!track) return false;
 
     mBefore.clear();
@@ -117,7 +148,7 @@ bool ResampleCurveCommand::captureBefore()
 
 bool ResampleCurveCommand::applySnapshot(const std::vector<KeyframeSnapshot>& snap)
 {
-    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName, mIsNodeClip);
     if (!track) return false;
 
     // Strip every interior keyframe in (t0, t1). Iterate downward so
@@ -144,7 +175,7 @@ bool ResampleCurveCommand::applySnapshot(const std::vector<KeyframeSnapshot>& sn
 
 bool ResampleCurveCommand::resampleAndWrite()
 {
-    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName, mIsNodeClip);
     if (!track) return false;
 
     // Snapshot every keyframe in the segment + endpoints. The

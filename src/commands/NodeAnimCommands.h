@@ -107,4 +107,54 @@ private:
     bool mTrackCreatedByRedo = false;
 };
 
+// MoveNodeKeyframeCommand: re-times a single keyframe on one node
+// track from mOldTime to mNewTime, preserving its TRS values. Undo
+// re-times it back. Both directions go through the same time-set
+// helper (find nearest key, mutate its time, resort the track). No-op
+// (never pushed) when there is no key at mOldTime or a key already
+// sits at mNewTime — the manager validates before constructing.
+class MoveNodeKeyframeCommand : public QUndoCommand
+{
+public:
+    MoveNodeKeyframeCommand(const QString& clipName,
+                            const QString& nodeName,
+                            double oldTime,
+                            double newTime,
+                            QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    QString mClipName;
+    QString mNodeName;
+    double mOldTime = 0.0;
+    double mNewTime = 0.0;
+};
+
+// DeleteNodeKeyframeCommand: removes one keyframe (the one nearest
+// mTime within the merge epsilon) from a node track. Snapshots its
+// TRS + exact time at construction so undo re-adds it. If removing
+// the last keyframe empties the track, undo re-adds the key (which
+// recreates the track through the manager's normal path).
+class DeleteNodeKeyframeCommand : public QUndoCommand
+{
+public:
+    DeleteNodeKeyframeCommand(const QString& clipName,
+                              const QString& nodeName,
+                              double time,
+                              QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+    // True when construction found a keyframe to delete. The manager
+    // checks this before pushing so a miss never pollutes undo history.
+    bool valid() const { return mValid; }
+
+private:
+    QString mClipName;
+    QString mNodeName;
+    NodeKeyframeSnapshot mSnapshot;
+    bool mValid = false;
+};
+
 #endif // NODE_ANIM_COMMANDS_H

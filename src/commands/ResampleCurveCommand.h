@@ -16,6 +16,11 @@ namespace Ogre { class TransformKeyFrame; }
  * per gesture (tangent drag release, value drag release, mode change)
  * so a single Ctrl+Z reverts the whole edit.
  *
+ * Works for BOTH skeletal bone tracks and SceneManager-owned node-clip
+ * tracks (NodeAnimationManager). `isNodeClip` selects the track source;
+ * everything downstream (sampling, dense insert, snapshot/restore) is
+ * identical. (#520)
+ *
  * Captures every keyframe inside (t0, t1] before the first redo so
  * undo can restore the pre-resample state exactly. New keyframes get
  * non-resampled channels filled by linearly interpolating the bracketing
@@ -32,6 +37,7 @@ public:
                          float t0, float t1,
                          double toleranceMul = 1.0,
                          int fixedFps = 0,
+                         bool isNodeClip = false,
                          QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -57,6 +63,11 @@ private:
     float       mT1;
     double      mToleranceMul;
     int         mFixedFps;
+    // When true the track lives on a SceneManager-owned Ogre::Animation
+    // (a NodeAnimationManager node clip) instead of a skeleton — the only
+    // difference is track resolution; the densification math below is
+    // track-type-agnostic. (#520)
+    bool        mIsNodeClip;
     std::vector<KeyframeSnapshot> mBefore;
     std::vector<KeyframeSnapshot> mAfter;
     bool        mCaptured = false;
