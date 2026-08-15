@@ -1519,6 +1519,15 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
 int CLIPipeline::run(int argc, char* argv[])
 {
     // Pre-scan for --verbose and --no-telemetry before anything else
+    // QTMESH_NO_TELEMETRY: SESSION-ONLY environment opt-out (CI / unit tests /
+    // containers) — suppresses all telemetry for this process WITHOUT
+    // persisting a preference or printing the opt-out notice. Without it the
+    // first-launch auto-enable made the TEST SUITE send real Sentry
+    // transactions from CI — e.g. the CLIPipelineRun.UnknownCommand fixture
+    // showed up in production telemetry as "cli.not-a-command".
+    const bool envNoTelemetry = qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY");
+    if (envNoTelemetry)
+        s_noTelemetry = true;
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "--verbose") s_verbose = true;
@@ -1583,7 +1592,10 @@ int CLIPipeline::run(int argc, char* argv[])
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
     // suppresses the notice to avoid printing it on every container run.
-    if (s_noTelemetry) {
+    if (envNoTelemetry) {
+        // Session-only: no QSettings write, no notice — the init below is
+        // simply skipped for this process.
+    } else if (s_noTelemetry) {
         SentryReporter::setEnabled(false);
         err() << "Telemetry disabled. This preference is stored permanently." << Qt::endl;
     } else if (SentryReporter::isFirstLaunch()) {
@@ -1593,7 +1605,7 @@ int CLIPipeline::run(int argc, char* argv[])
                      "Use --no-telemetry to disable." << Qt::endl;
     }
 
-    if (SentryReporter::isEnabled()) {
+    if (!s_noTelemetry && SentryReporter::isEnabled()) {
         SentryReporter::configureSession(QStringLiteral("cli"));
         SentryReporter::initialize();
     }
@@ -1648,6 +1660,11 @@ int CLIPipeline::run(int argc, char* argv[])
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
+        // Keep the attempted command visible in telemetry (sanitized — path/
+        // file-looking tokens are redacted) so typo patterns can inform
+        // aliases/suggestions. The transaction name carries it too.
+        SentryReporter::addBreadcrumb("cli",
+            QString("Unknown command: %1").arg(cmd));
         printUsage();
         rc = 2;
     }

@@ -193,7 +193,7 @@ qtmesh ps1 dump-vram game.cue --bios scph1001.bin --frames 300 -o vram.png  # sn
 #   xvfb-run -a qtmesh ps1 capture game.cue --bios scph1001.bin -o out.gltf
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `light`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `facerig`, `segment`, `generate3d`, `mocap`, `ps1`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `light`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `facerig`, `segment`, `generate3d`, `mocap`, `ps1`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection (the `QTMESH_NO_TELEMETRY` env var opts out per-process without persisting — CI/containers/tests; the unit-test main sets it so the suite never phones home).
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
