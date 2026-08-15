@@ -570,7 +570,7 @@ public:
     /// old, brittle guard that keyed undo validity to the transient GPU texture
     /// name (which changes on every channel/session switch, so undo silently
     /// no-oped after a channel change).
-    bool ensureUndoTarget(Ogre::Entity* entity, int channel);
+    bool ensureUndoTarget(const std::string& entityName, int channel);
 
 signals:
     void texturePaintChanged();
