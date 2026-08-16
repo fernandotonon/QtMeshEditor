@@ -4171,10 +4171,33 @@ void TexturePaintController::bindBakedChannelTexture(
 {
     if (!entity || slot.empty() || textureBaseName.empty()) return;
 
+    // The BaseColor bake targets the model's EXISTING diffuse TUS, which on a
+    // typical import is named "diffuse_map" (or "Diffuse"/"BaseColor"), NOT the
+    // canonical "albedo". Forcing a brand-new "albedo" TUS left the real
+    // diffuse_map still bound to the transient paint texture (tracked in
+    // m_boundSlots) — closeSession()/channel-switch then restored diffuse_map to
+    // its pre-paint texture while the freshly-baked bytes sat on an unused
+    // second slot, so the model "lost" the painted texture (#547 bug). Match the
+    // diffuse slot by any albedo alias so a color bake overwrites the slot the
+    // model actually samples.
+    auto slotMatchesTus = [&](const std::string& tusName) {
+        if (tusName == slot) return true;
+        if (channel == PaintChannelNS::Channel::BaseColor) {
+            // Alias-aware: diffuse_map / albedo / Diffuse / BaseColor.
+            return tusName == "diffuse_map" || tusName == "albedo"
+                || tusName == "Diffuse" || tusName == "BaseColor";
+        }
+        return false;
+    };
+
     // Bind the baked texture into `slot` on every material used by the entity
     // (create the TUS if the material never had that slot), then wire PBR/FFP
-    // and Cook-Torrance so it renders live under the active HDR env — the same
-    // recipe the Material Editor's "Generate PBR maps" button uses.
+    // so it renders live. We deliberately do NOT promote a plain (non-PBR)
+    // material to Cook-Torrance here: completing the 6-slot metallic-roughness
+    // layout (e.g. a scalar bake adding the `metallic` slot) would otherwise
+    // flip applyPbrIfTagged on and darken the surface to near-black when no HDR
+    // env is loaded — the other way the model appeared to "lose" its texture.
+    // Only re-run applyPbrIfTagged for materials that were ALREADY PBR.
     std::set<std::string> wiredMats;
     for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
         auto* se = entity->getSubEntity(s);
@@ -4183,12 +4206,27 @@ void TexturePaintController::bindBakedChannelTexture(
         if (!mat || wiredMats.count(mat->getName())) continue;
         wiredMats.insert(mat->getName());
 
+        // "Already PBR" = the slice-E `pbr_workflow` user tag is present on the
+        // first pass (set by imports / the Material Editor's Convert-to-PBR).
+        // We only re-run Cook-Torrance for these; a plain material keeps its
+        // FFP shading after a bake (see the comment above).
+        bool wasPbr = false;
+        if (mat->getNumTechniques() > 0
+            && mat->getTechnique(0)->getNumPasses() > 0) {
+            const auto& b = mat->getTechnique(0)->getPass(0)->getUserObjectBindings();
+            const Ogre::Any& tag = b.getUserAny("pbr_workflow");
+            if (tag.has_value()) {
+                try { wasPbr = !Ogre::any_cast<Ogre::String>(tag).empty(); }
+                catch (...) { wasPbr = false; }
+            }
+        }
+
         for (auto* tech : mat->getTechniques()) {
             for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
                 auto* pass = tech->getPass(p);
                 Ogre::TextureUnitState* tus = nullptr;
                 for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
-                    if (pass->getTextureUnitState(i)->getName() == slot) {
+                    if (slotMatchesTus(pass->getTextureUnitState(i)->getName())) {
                         tus = pass->getTextureUnitState(i); break;
                     }
                 if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
@@ -4202,17 +4240,18 @@ void TexturePaintController::bindBakedChannelTexture(
             || channel == PaintChannelNS::Channel::Height) {
             MeshImporterExporter::applyNormalMapsToEntity(entity);
         }
-        // Attach Cook-Torrance/IBL if the material is (or becomes) PBR-tagged.
-        RTShaderHelper::applyPbrIfTagged(mat);
+        // Re-attach Cook-Torrance/IBL only for materials that were already PBR —
+        // never silently convert a plain material's shading model on bake.
+        if (wasPbr) RTShaderHelper::applyPbrIfTagged(mat);
         try { mat->compile(); } catch (...) {}
     }
 
-    // A bake permanently rebinds `slot` to the baked file. closeSession()
+    // A bake permanently rebinds the slot to the baked file. closeSession()
     // restores each m_boundSlots entry's recorded original texture — so if a
-    // bound TUS IS the slot we just baked, drop that entry, otherwise the next
-    // closeSession()/channel-switch would overwrite the bake with the pre-bake
-    // texture (#547 review). Resolve each bound slot's TUS name and prune the
-    // matches.
+    // bound TUS IS the slot we just baked (alias-aware for BaseColor's
+    // diffuse_map), drop that entry, otherwise the next closeSession()/
+    // channel-switch would overwrite the bake with the pre-bake texture
+    // (#547 review + bug). Resolve each bound slot's TUS name and prune matches.
     m_boundSlots.erase(
         std::remove_if(m_boundSlots.begin(), m_boundSlots.end(),
             [&](const BoundSlot& bs) {
@@ -4222,7 +4261,7 @@ void TexturePaintController::bindBakedChannelTexture(
                 if (!tech || bs.passIdx >= tech->getNumPasses()) return false;
                 auto* pass = tech->getPass(bs.passIdx);
                 if (!pass || bs.tusIdx >= pass->getNumTextureUnitStates()) return false;
-                return pass->getTextureUnitState(bs.tusIdx)->getName() == slot;
+                return slotMatchesTus(pass->getTextureUnitState(bs.tusIdx)->getName());
             }),
         m_boundSlots.end());
 

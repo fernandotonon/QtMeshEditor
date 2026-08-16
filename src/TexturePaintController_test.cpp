@@ -1012,3 +1012,65 @@ TEST_F(TexturePaintControllerSceneTest, UndoSurvivesChannelSwitch) {
     ASSERT_FALSE(afterUndo.isNull());
     EXPECT_EQ(afterUndo, before) << "undo across a channel switch must restore BaseColor";
 }
+
+namespace {
+// Read the texture bound to a named (alias-aware for diffuse) slot on sub 0.
+QString slotTextureName(Ogre::Entity* ent, const char* slot)
+{
+    if (!ent || ent->getNumSubEntities() == 0) return {};
+    auto mat = ent->getSubEntity(0)->getMaterial();
+    if (!mat || mat->getNumTechniques() == 0) return {};
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slot)
+            return QString::fromStdString(tus->getTextureName());
+    }
+    return {};
+}
+} // namespace
+
+// #547 bug: clicking Bake on the BaseColor channel must overwrite the model's
+// EXISTING diffuse TUS (named "diffuse_map" on a typical import — NOT the
+// canonical "albedo"). The pre-fix code created a brand-new "albedo" TUS,
+// leaving the real diffuse_map still bound to the transient paint texture; when
+// closeSession() then restored diffuse_map to its pre-paint texture and removed
+// the paint texture, the model "lost" the painted result. The baked texture
+// must survive closeSession() on the slot the model actually samples, and the
+// plain material must NOT be silently promoted to Cook-Torrance.
+TEST_F(TexturePaintControllerSceneTest, BaseColorBakeSurvivesCloseSession) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BaseColorBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.55);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+
+    // The baked file lands on the model's existing diffuse_map slot (alias of
+    // BaseColor's canonical "albedo"), not a new stray albedo TUS.
+    const QString baked = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_FALSE(baked.isEmpty()) << "diffuse_map must carry the baked texture";
+    EXPECT_TRUE(baked.startsWith(QStringLiteral("paint_basecolor_")))
+        << "expected the baked file, got '" << baked.toStdString() << "'";
+    EXPECT_FALSE(passHasSlot(m_fix.entity, "albedo"))
+        << "bake must not create a duplicate albedo TUS on a diffuse_map model";
+
+    // The plain (non-PBR) material must not be promoted to Cook-Torrance.
+    {
+        const auto& b = m_fix.mat->getTechnique(0)->getPass(0)->getUserObjectBindings();
+        EXPECT_FALSE(b.getUserAny("pbr_workflow").has_value())
+            << "a BaseColor bake must not add a PBR workflow tag";
+    }
+
+    // The crux: ending the session must NOT revert diffuse_map to its pre-paint
+    // texture — the bake is permanent, so the model keeps the painted result.
+    ctrl->closeSession();
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"), baked)
+        << "closeSession() lost the baked BaseColor texture (the #547 bug)";
+}
