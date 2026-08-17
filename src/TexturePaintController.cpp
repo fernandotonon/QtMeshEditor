@@ -419,6 +419,16 @@ void TexturePaintController::kill()
 TexturePaintController::TexturePaintController(QObject* parent)
     : QObject(parent)
 {
+    // The paintChannels() picker model depends on both the active channel and
+    // the live layer stack (its hasLayers badges). Re-notify the QML property
+    // whenever either changes — done via signal-to-signal connections so every
+    // existing layersChanged()/activeChannelChanged() emit site is covered
+    // without threading an extra emit through all of them (#547 review).
+    connect(this, &TexturePaintController::layersChanged,
+            this, &TexturePaintController::paintChannelsChanged);
+    connect(this, &TexturePaintController::activeChannelChanged,
+            this, &TexturePaintController::paintChannelsChanged);
+
     // Mirror the toolbar brush settings — texture paint and vertex paint
     // share one source of truth so the user isn't juggling two sets of
     // controls. EditModeController owns the canonical values; we just
@@ -1774,7 +1784,14 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     // pixels onto the new one (#547 review).
     if (m_channelSessionEntity && m_channelSessionEntity != entity) {
         m_channelSessions.clear();
+        const bool channelReset = (m_activeChannel != PaintChannelNS::Channel::BaseColor);
         m_activeChannel = PaintChannelNS::Channel::BaseColor;
+        SentryReporter::addBreadcrumb(
+            "paint.channel",
+            QStringLiteral("entity changed → discard channel sessions, reset to BaseColor"));
+        // QML may still show the previous channel while painting now targets
+        // BaseColor — notify so the picker selection follows the forced reset.
+        if (channelReset) emit activeChannelChanged();
     }
     m_channelSessionEntity = entity;
 
@@ -4004,7 +4021,14 @@ void TexturePaintController::setActiveChannel(int channel)
     // single layer). If none was stashed, ensurePaintableTexture's stack stands.
     ensurePaintableTexture(preservedRes);
     if (restoreChannelSession(newChannel)) {
+        // compositeTo() resizes m_buffer to the restored stack's own dimensions.
+        // Same-entity sessions share preservedRes so this is normally a no-op,
+        // but keep the selection mask paired 1:1 with the buffer regardless so
+        // smartSelect's per-pixel indexing can never run past the buffer if a
+        // stashed stack ever differed in size (#547 review — defensive).
         m_layerStack.compositeTo(m_buffer);
+        if (m_mask.width() != m_buffer.width() || m_mask.height() != m_buffer.height())
+            m_mask.resize(m_buffer.width(), m_buffer.height());
         m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
         schedulePreviewRefresh();
         flushDirtyToOgre();

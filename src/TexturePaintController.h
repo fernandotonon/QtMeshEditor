@@ -356,7 +356,11 @@ public:
     /// not selected here (it's the Texture/Vertex `paintTarget` toggle).
     Q_PROPERTY(int activeChannel READ activeChannel WRITE setActiveChannel NOTIFY activeChannelChanged)
     /// Channel picker model: [{ id, label, slot, scalar, hasLayers }].
-    Q_PROPERTY(QVariantList paintChannels READ paintChannels NOTIFY activeChannelChanged)
+    /// Notified by paintChannelsChanged, which fires on channel switch AND on
+    /// layer changes — `hasLayers` tracks the active channel's LIVE stack, which
+    /// changes without a channel switch, so a layers-only NOTIFY would leave the
+    /// picker's badges stale.
+    Q_PROPERTY(QVariantList paintChannels READ paintChannels NOTIFY paintChannelsChanged)
     int activeChannel() const { return static_cast<int>(m_activeChannel); }
     void setActiveChannel(int channel);
     QVariantList paintChannels() const;
@@ -588,6 +592,10 @@ signals:
     void stampChanged();
     void layersChanged();
     void activeChannelChanged();
+    /// Fires whenever the paintChannels() picker model may have changed —
+    /// on channel switch AND on layer add/remove/paint (so hasLayers badges
+    /// stay live without a channel switch).
+    void paintChannelsChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".

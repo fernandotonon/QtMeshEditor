@@ -4490,6 +4490,11 @@ Rectangle {
                 function onSessionChanged() {
                     texPaintCol.hasSession = TexturePaintController.hasActiveSession
                     texPaintCol.sessionRes = TexturePaintController.textureResolution
+                    // A new/torn-down session changes which channels have layers
+                    // (and can force-reset the active channel) — refresh the
+                    // picker model so its hasLayers badges + selection stay live.
+                    texPaintCol.activeChannel = TexturePaintController.activeChannel
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
                 function onSlotsChanged() {
                     texPaintCol.slots = TexturePaintController.textureSlots
