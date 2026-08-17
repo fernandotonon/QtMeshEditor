@@ -1074,3 +1074,37 @@ TEST_F(TexturePaintControllerSceneTest, BaseColorBakeSurvivesCloseSession) {
     EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"), baked)
         << "closeSession() lost the baked BaseColor texture (the #547 bug)";
 }
+
+// #547 bug: merely NAVIGATING channels (without painting) must not swap the
+// model's real slot textures for blank paint textures. The pre-fix code
+// rebound a manual (blank/white) paint texture onto the active channel's slot
+// at session-create, so switching to an unpainted Normal/Roughness/etc. slot
+// washed the surface out or made it render untextured. The rebind is now
+// deferred to the first painted stroke, so a channel switch alone leaves every
+// existing slot texture untouched.
+TEST_F(TexturePaintControllerSceneTest, ChannelSwitchWithoutPaintingKeepsSlotTextures) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanSwitchKeepTex")));
+    // Give the fixture's diffuse a stable texture name we can watch.
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName("orig_diffuse.png");
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Walk every channel WITHOUT painting a single stroke.
+    for (int c = 0; c < PaintChannelNS::kTexturePaintChannelCount; ++c)
+        ctrl->setActiveChannel(c);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+
+    // The model's diffuse must still point at its original texture — no blank
+    // paint texture was ever bound because nothing was painted.
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"),
+              QStringLiteral("orig_diffuse.png"))
+        << "navigating channels without painting must not rebind the diffuse";
+
+    ctrl->closeSession();
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"),
+              QStringLiteral("orig_diffuse.png"));
+}

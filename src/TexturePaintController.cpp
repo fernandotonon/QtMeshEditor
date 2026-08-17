@@ -1966,7 +1966,15 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     if (!loadedExisting) {
         const int res = std::max(16, resolution);
         m_buffer.resize(res, res);
-        m_buffer.clear(Ogre::ColourValue::White);
+        // Start a source-less channel session TRANSPARENT, not opaque white.
+        // Layer 0 is initFromFlatBuffer(m_buffer), so an opaque-white base
+        // meant: (a) switching to an unpainted channel rebound a solid-white
+        // texture onto the model's slot (washing the surface out / "losing"
+        // the texture), and (b) a Bake on a barely-painted channel captured
+        // that white base. Transparent composites to nothing, so an unpainted
+        // channel leaves the model's real textures showing and bakes empty
+        // (#547 bake-goes-white bug).
+        m_buffer.clear(Ogre::ColourValue(0.f, 0.f, 0.f, 0.f));
         m_buffer.clearDirty();
         // CPU buffer size won't match the model's bound GPU texture. In-place
         // blit with mismatched sizes crashes some GL/Metal drivers (OOB
@@ -2017,7 +2025,14 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     }
     if (m_forceManualPaintTexture) {
         m_originalTexture.reset();
-        scheduleRebindToPaintTexture(entity);
+        // Do NOT rebind the manual paint texture onto the model here. On
+        // session-create the buffer is either the model's own texture (loaded)
+        // or blank/transparent — rebinding a blank texture the instant the user
+        // switches channels swaps the model's real slot texture for an empty
+        // one, which is exactly how navigating channels "lost" the texture
+        // (#547). The rebind is deferred to the first real dirty upload in
+        // doFlushDirtyToOgre() (which schedules it when m_boundSlots is empty),
+        // so the model keeps its real textures until the user actually paints.
     }
 
     SentryReporter::addBreadcrumb("ui.action",
