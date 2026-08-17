@@ -1225,3 +1225,58 @@ TEST_F(TexturePaintControllerSceneTest, RepeatedBaseColorBakeKeepsValidTexture) 
 
     ctrl->closeSession();
 }
+
+// #547: a Height/Normal bake must COMBINE with the model's existing normal map,
+// not replace it. It generates a detail normal from the painted height field
+// and whiteout-blends it onto the base normal; untouched texels (flat height →
+// detail normal 0,0,1) keep the base normal exactly. This test binds a tilted
+// base normal, paints a small height stroke, bakes, and asserts an unpainted
+// corner still carries the tilted base (not a flat 128,128,255 wipe).
+TEST_F(TexturePaintControllerSceneTest, HeightBakeCombinesWithExistingNormal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightCombine")));
+    static QTemporaryDir s_tmp3;
+    ASSERT_TRUE(s_tmp3.isValid());
+    const QString baseName = QStringLiteral("base_normal.png");
+    // A distinctly tilted tangent-space normal: +X lean → R high, G mid, B mid.
+    QImage baseN(64, 64, QImage::Format_RGBA8888);
+    baseN.fill(QColor(220, 128, 150, 255));
+    ASSERT_TRUE(baseN.save(s_tmp3.path() + "/" + baseName));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp3.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+
+    // Give the fixture material a normal_map slot holding the tilted base.
+    auto* pass = m_fix.mat->getTechnique(0)->getPass(0);
+    auto* ntus = pass->createTextureUnitState();
+    ntus->setName("normal_map");
+    ntus->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Height)));
+
+    const QString baked = slotTextureName(m_fix.entity, "normal_map");
+    ASSERT_TRUE(baked.startsWith(QStringLiteral("paint_normal_")));
+    Ogre::Image img;
+    bool ok = false;
+    try {
+        img.load(baked.toStdString(),
+                 Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        ok = img.getWidth() > 0;
+    } catch (...) { ok = false; }
+    ASSERT_TRUE(ok);
+    // Unpainted corner must retain the tilted base (R clearly > B), NOT a flat
+    // (128,128,255) normal that a plain overwrite would have produced.
+    const Ogre::ColourValue corner = img.getColourAt(0, 0, 0);
+    EXPECT_GT(corner.r, 0.65f) << "corner lost the base normal's +X tilt";
+    EXPECT_GT(corner.r, corner.b) << "flat-wiped normal (base normal replaced)";
+
+    ctrl->closeSession();
+}

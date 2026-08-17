@@ -67,6 +67,7 @@
 #include <OgreTextureUnitState.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <cstring>
 #include <memory>
@@ -4149,8 +4150,58 @@ bool TexturePaintController::bakeChannel(int channel)
         NormalMapGenerator::GenResult nr = NormalMapGenerator::generate(spec);
         if (!nr.ok || nr.image.isNull()) return false;
         slot = "normal_map";
+        QImage detail = nr.image.convertToFormat(QImage::Format_RGBA8888);
+
+        // COMBINE the painted detail normal with the model's EXISTING normal map
+        // rather than replacing it. Untouched texels produce a flat detail
+        // normal (0,0,1 → RGB 128,128,255) which must leave the base normal
+        // unchanged; painted texels add their relief on top. Without this a
+        // Height/Normal bake wiped the original normal map everywhere the user
+        // didn't paint (#547). Skip the transient QMEPaint_* paint texture (the
+        // same trap the colour path guards against).
+        {
+            auto isPaintTex = [](const QString& n) {
+                return n.startsWith(QStringLiteral("QMEPaint_"));
+            };
+            QString cur = currentSlotTextureName("normal_map");
+            if (cur.isEmpty() || isPaintTex(cur)) {
+                for (const char* alias : {"NormalMap", "Bump", "bump", "BumpMap", "height_map"}) {
+                    const QString c = currentSlotTextureName(alias);
+                    if (!c.isEmpty() && !isPaintTex(c)) { cur = c; break; }
+                }
+            }
+            QImage base = isPaintTex(cur) ? QImage() : loadImageAcrossGroups(cur);
+            if (!base.isNull()) {
+                base = base.convertToFormat(QImage::Format_RGBA8888)
+                           .scaled(detail.size());
+                // Whiteout / partial-derivative blend:
+                //   n.xy = base.xy + detail.xy ; n.z = base.z * detail.z ; normalize
+                for (int y = 0; y < detail.height(); ++y) {
+                    uchar* d = detail.scanLine(y);
+                    const uchar* b = base.constScanLine(y);
+                    for (int x = 0; x < detail.width(); ++x) {
+                        const int i = x * 4;
+                        auto dec = [](uchar c) { return (c / 255.0f) * 2.0f - 1.0f; };
+                        auto enc = [](float v) {
+                            int c = static_cast<int>((v * 0.5f + 0.5f) * 255.0f + 0.5f);
+                            return static_cast<uchar>(std::clamp(c, 0, 255));
+                        };
+                        float bx = dec(b[i]),   by = dec(b[i+1]),   bz = dec(b[i+2]);
+                        float dx = dec(d[i]),   dy = dec(d[i+1]),   dz = dec(d[i+2]);
+                        float nx = bx + dx, ny = by + dy, nz = bz * dz;
+                        const float len = std::sqrt(nx*nx + ny*ny + nz*nz);
+                        if (len > 1e-6f) { nx /= len; ny /= len; nz /= len; }
+                        else { nx = 0.f; ny = 0.f; nz = 1.f; }
+                        d[i]   = enc(nx);
+                        d[i+1] = enc(ny);
+                        d[i+2] = enc(nz);
+                        d[i+3] = 255;
+                    }
+                }
+            }
+        }
         outFile = QDir(dir).filePath(QStringLiteral("paint_normal_%1.png").arg(stamp));
-        if (!nr.image.save(outFile, "PNG")) return false;
+        if (!detail.save(outFile, "PNG")) return false;
     } else {
         // Scalar (Roughness/Metallic/AO): collapse to luminance and write into
         // the packed ORM texture the Cook-Torrance SRS reads from the
