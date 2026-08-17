@@ -781,6 +781,11 @@ private:
     /// changes, the stashed stacks are cleared so one entity's paint never
     /// leaks into (or bakes onto) another.
     Ogre::Entity* m_channelSessionEntity = nullptr;
+    /// For the Normal channel: the real normal_map texture the slot held when
+    /// the session opened (NOT the transient paint texture, and NOT seeded into
+    /// the paint buffer). bakeChannel whiteout-blends the painted detail normal
+    /// onto this base so the model's existing normal survives where unpainted.
+    QString m_channelBaseTextureName;
     /// Stash the live session into m_channelSessions[channel].
     void stashChannelSession(PaintChannelNS::Channel channel);
     /// Restore m_channelSessions[channel] into the live session (or mark it

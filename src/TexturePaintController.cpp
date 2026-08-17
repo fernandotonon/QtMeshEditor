@@ -1827,12 +1827,22 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     }
 
     QString existingTex = QString::fromStdString(tu->getTextureName());
-    // Height paints a fresh HEIGHT field, but it targets the normal_map slot
-    // (which may already hold a tangent-space normal). Do NOT seed the buffer
-    // from that texture — Sobel would then read normal RGB as height and bake
-    // garbage. Force a blank session for Height (bind still resolves the slot).
-    if (m_activeChannel == PaintChannelNS::Channel::Height)
+    // The Normal (and legacy Height) channel paints a fresh HEIGHT field that
+    // targets the normal_map slot (which may already hold a tangent-space
+    // normal). Do NOT seed the paint buffer from that texture — Sobel would
+    // then read the existing normal's RGB as height and bake garbage, and the
+    // painted layer would carry the base normal instead of just the sculpted
+    // relief. Start blank, but REMEMBER the real slot texture (skipping any
+    // transient QMEPaint_* paint texture) so bakeChannel can whiteout-blend the
+    // detail onto it.
+    m_channelBaseTextureName.clear();
+    if (m_activeChannel == PaintChannelNS::Channel::Height
+        || m_activeChannel == PaintChannelNS::Channel::Normal) {
+        if (!existingTex.isEmpty()
+            && !existingTex.startsWith(QStringLiteral("QMEPaint_")))
+            m_channelBaseTextureName = existingTex;
         existingTex.clear();
+    }
     bool loadedExisting = false;
     QString loadError;
     // Track the original texture handle (not just its name) so we
@@ -3988,7 +3998,20 @@ void TexturePaintController::setActiveChannel(int channel)
     // Normal directly). Redirect any stray request to Normal.
     if (newChannel == PaintChannelNS::Channel::Height)
         return setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
-    if (newChannel == m_activeChannel) return;
+    // Selecting the already-active channel is normally a no-op — BUT a bake
+    // tears the live session down while leaving m_activeChannel unchanged, so
+    // re-selecting the same channel after a bake must REOPEN the session (else
+    // the panel shows no active session and the next stroke can't start).
+    if (newChannel == m_activeChannel) {
+        if (!hasActiveSession() && activeEntity()) {
+            const int res = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+            ensurePaintableTexture(res);
+            restoreChannelSession(newChannel);
+            emit sessionChanged();
+            emit layersChanged();
+        }
+        return;
+    }
 
     SentryReporter::addBreadcrumb(
         "paint.channel",
@@ -4200,15 +4223,16 @@ bool TexturePaintController::bakeChannel(int channel)
             auto isPaintTex = [](const QString& n) {
                 return n.startsWith(QStringLiteral("QMEPaint_"));
             };
-            // Prefer the session's recorded original (the texture the Normal
-            // session was seeded FROM at session-create — the most reliable
-            // handle on the real existing normal map); the live TUS may point
-            // at the transient QMEPaint_* paint texture. Fall back to the slot
-            // and its aliases.
+            // Prefer m_channelBaseTextureName — the real normal_map texture the
+            // slot held when the Normal session opened, captured before the
+            // buffer was blanked (the Normal session is NOT seeded from it, so
+            // m_originalTextureName is empty here). The live TUS may point at
+            // the transient QMEPaint_* paint texture. Fall back to the slot and
+            // its aliases.
             QString cur;
-            if (ch == m_activeChannel && !m_originalTextureName.isEmpty()
-                && !isPaintTex(m_originalTextureName)) {
-                cur = m_originalTextureName;
+            if (ch == m_activeChannel && !m_channelBaseTextureName.isEmpty()
+                && !isPaintTex(m_channelBaseTextureName)) {
+                cur = m_channelBaseTextureName;
             }
             if (cur.isEmpty() || isPaintTex(cur)) {
                 QString c = currentSlotTextureName("normal_map");
@@ -4334,6 +4358,28 @@ QImage TexturePaintController::loadImageAcrossGroups(const QString& textureName)
                     static_cast<size_t>(tmp.width()) * tmp.height() * 4);
         return img;
     }
+
+    // Fallback: the texture may be referenced only by resource-group NAME (a
+    // FileSystem-registered file that was never loaded into TextureManager, or
+    // an imported normal/diffuse whose GPU texture has no readable CPU buffer).
+    // Ogre::Image::load resolves it through the resource system (AUTODETECT
+    // group), which findTextureAcrossGroups + the non-GPU loader miss. Without
+    // this, a bake's "combine with the existing texture" step silently found no
+    // base and overwrote it (the #547 normal-map-replaced-not-combined bug).
+    try {
+        Ogre::Image ogreImg;
+        ogreImg.load(textureName.toStdString(),
+                     Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        const int w = static_cast<int>(ogreImg.getWidth());
+        const int h = static_cast<int>(ogreImg.getHeight());
+        if (w > 0 && h > 0) {
+            QImage img(w, h, QImage::Format_RGBA8888);
+            Ogre::PixelBox src = ogreImg.getPixelBox();
+            Ogre::PixelBox dst(w, h, 1, Ogre::PF_BYTE_RGBA, img.bits());
+            Ogre::PixelUtil::bulkPixelConversion(src, dst);
+            return img;
+        }
+    } catch (...) {}
     return {};
 }
 
