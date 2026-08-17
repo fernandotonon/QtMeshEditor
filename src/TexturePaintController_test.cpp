@@ -889,11 +889,17 @@ bool passHasSlot(Ogre::Entity* ent, const char* slot, bool needTexture = false)
 }
 } // namespace
 
-TEST_F(TexturePaintControllerSceneTest, PaintChannelsModelHasSevenChannels) {
+TEST_F(TexturePaintControllerSceneTest, PaintChannelsModelExcludesHeight) {
     ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanModel")));
     auto* ctrl = TexturePaintController::instance();
     const QVariantList chans = ctrl->paintChannels();
-    ASSERT_EQ(chans.size(), PaintChannelNS::kTexturePaintChannelCount);
+    // Height is not a selectable channel — it has no slot of its own and is
+    // baked via the Normal channel. So the picker shows one fewer than the
+    // painter-channel count (which itself already excludes VertexColor).
+    ASSERT_EQ(chans.size(), PaintChannelNS::kTexturePaintChannelCount - 1);
+    for (const auto& v : chans)
+        EXPECT_NE(v.toMap().value("id").toString(), QStringLiteral("height"))
+            << "Height must not appear in the channel picker";
     // First entry is BaseColor → albedo; a scalar entry reports scalar=true.
     EXPECT_EQ(chans.at(0).toMap().value("slot").toString(), QStringLiteral("albedo"));
     EXPECT_TRUE(chans.at(static_cast<int>(PaintChannelNS::Channel::Roughness))
@@ -931,19 +937,30 @@ TEST_F(TexturePaintControllerSceneTest, ScalarChannelBakeBindsMetallicOrmSlot) {
     EXPECT_TRUE(passHasSlot(m_fix.entity, "metallic", /*needTexture*/true));
 }
 
-TEST_F(TexturePaintControllerSceneTest, HeightChannelBakeBindsNormalMapSlot) {
-    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightBake")));
+TEST_F(TexturePaintControllerSceneTest, NormalChannelBakeBindsNormalMapSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("NormalBake")));
     auto* ctrl = TexturePaintController::instance();
     ctrl->setTexturePaintEnabled(true);
-    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
     ASSERT_TRUE(ctrl->hasActiveSession());
     ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
     ctrl->updateStrokeUV(0.6, 0.5);
     ctrl->endStrokeUV();
     pumpEventsFor(150);
-    // Height bakes a Sobel normal map into the normal_map slot.
-    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Height)));
+    // The Normal channel Sobel-bakes the painted grayscale into normal_map.
+    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Normal)));
     EXPECT_TRUE(passHasSlot(m_fix.entity, "normal_map", /*needTexture*/true));
+}
+
+// Height is not a selectable channel: setActiveChannel(Height) redirects to
+// Normal (they share the normal_map slot), and Height is absent from the picker.
+TEST_F(TexturePaintControllerSceneTest, HeightChannelRedirectsToNormal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightRedirect")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Normal));
 }
 
 TEST_F(TexturePaintControllerSceneTest, ChannelSessionsAreIsolated) {
@@ -1226,14 +1243,14 @@ TEST_F(TexturePaintControllerSceneTest, RepeatedBaseColorBakeKeepsValidTexture) 
     ctrl->closeSession();
 }
 
-// #547: a Height/Normal bake must COMBINE with the model's existing normal map,
-// not replace it. It generates a detail normal from the painted height field
-// and whiteout-blends it onto the base normal; untouched texels (flat height →
-// detail normal 0,0,1) keep the base normal exactly. This test binds a tilted
-// base normal, paints a small height stroke, bakes, and asserts an unpainted
-// corner still carries the tilted base (not a flat 128,128,255 wipe).
-TEST_F(TexturePaintControllerSceneTest, HeightBakeCombinesWithExistingNormal) {
-    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightCombine")));
+// #547: a Normal bake must COMBINE with the model's existing normal map, not
+// replace it. It generates a detail normal from the painted grayscale and
+// whiteout-blends it onto the base normal; untouched texels (flat detail normal
+// 0,0,1) keep the base normal exactly. This test binds a tilted base normal,
+// paints a small stroke, bakes, and asserts an unpainted corner still carries
+// the tilted base (not a flat 128,128,255 wipe).
+TEST_F(TexturePaintControllerSceneTest, NormalBakeCombinesWithExistingNormal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("NormalCombine")));
     static QTemporaryDir s_tmp3;
     ASSERT_TRUE(s_tmp3.isValid());
     const QString baseName = QStringLiteral("base_normal.png");
@@ -1253,14 +1270,14 @@ TEST_F(TexturePaintControllerSceneTest, HeightBakeCombinesWithExistingNormal) {
 
     auto* ctrl = TexturePaintController::instance();
     ctrl->setTexturePaintEnabled(true);
-    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
     ASSERT_TRUE(ctrl->hasActiveSession());
 
     ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
     ctrl->updateStrokeUV(0.52, 0.52);
     ctrl->endStrokeUV();
     pumpEventsFor(150);
-    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Height)));
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Normal)));
 
     const QString baked = slotTextureName(m_fix.entity, "normal_map");
     ASSERT_TRUE(baked.startsWith(QStringLiteral("paint_normal_")));

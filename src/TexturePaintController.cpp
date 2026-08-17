@@ -3916,6 +3916,12 @@ QVariantList TexturePaintController::paintChannels() const
     QVariantList out;
     for (int i = 0; i < PaintChannelNS::kTexturePaintChannelCount; ++i) {
         const auto c = static_cast<PaintChannelNS::Channel>(i);
+        // Height is NOT offered as its own channel: it has no slot of its own
+        // (it can only be Sobel-converted INTO normal_map, which is exactly
+        // what the Normal channel already does), and a separate Height channel
+        // just produced a second normal-map bake that fought the first. Paint
+        // the Normal channel directly instead (#547).
+        if (c == PaintChannelNS::Channel::Height) continue;
         QVariantMap m;
         m["id"] = QString::fromLatin1(PaintChannelNS::id(c));
         m["label"] = QString::fromLatin1(PaintChannelNS::label(c));
@@ -3961,6 +3967,10 @@ void TexturePaintController::setActiveChannel(int channel)
     if (channel < 0 || channel >= PaintChannelNS::kTexturePaintChannelCount)
         return;
     const auto newChannel = static_cast<PaintChannelNS::Channel>(channel);
+    // Height is not a selectable channel (it has no slot of its own — paint
+    // Normal directly). Redirect any stray request to Normal.
+    if (newChannel == PaintChannelNS::Channel::Height)
+        return setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
     if (newChannel == m_activeChannel) return;
 
     SentryReporter::addBreadcrumb(
@@ -4133,9 +4143,12 @@ bool TexturePaintController::bakeChannel(int channel)
         if (!painted.save(outFile, "PNG")) return false;
     } else if (ch == PaintChannelNS::Channel::Height
                || ch == PaintChannelNS::Channel::Normal) {
-        // Height → tangent-space normal via Sobel (NormalMapGenerator). A layer
-        // painted directly on the Normal channel is treated the same way: the
-        // grayscale is the height field. Write a grayscale heightmap first.
+        // Normal channel: the painted grayscale is treated as a height field and
+        // Sobel-converted to a tangent-space normal (NormalMapGenerator), then
+        // combined with the existing normal (below). (Height is no longer a
+        // selectable channel — setActiveChannel redirects it here — but the
+        // branch still accepts it so a direct bakeChannel(Height) call works.)
+        // Write a grayscale heightmap first.
         QImage height(painted.size(), QImage::Format_Grayscale8);
         for (int y = 0; y < painted.height(); ++y)
             for (int x = 0; x < painted.width(); ++x)
@@ -4163,12 +4176,25 @@ bool TexturePaintController::bakeChannel(int channel)
             auto isPaintTex = [](const QString& n) {
                 return n.startsWith(QStringLiteral("QMEPaint_"));
             };
-            QString cur = currentSlotTextureName("normal_map");
+            // Prefer the session's recorded original (the texture the Normal
+            // session was seeded FROM at session-create — the most reliable
+            // handle on the real existing normal map); the live TUS may point
+            // at the transient QMEPaint_* paint texture. Fall back to the slot
+            // and its aliases.
+            QString cur;
+            if (ch == m_activeChannel && !m_originalTextureName.isEmpty()
+                && !isPaintTex(m_originalTextureName)) {
+                cur = m_originalTextureName;
+            }
             if (cur.isEmpty() || isPaintTex(cur)) {
-                for (const char* alias : {"NormalMap", "Bump", "bump", "BumpMap", "height_map"}) {
-                    const QString c = currentSlotTextureName(alias);
-                    if (!c.isEmpty() && !isPaintTex(c)) { cur = c; break; }
+                QString c = currentSlotTextureName("normal_map");
+                if (c.isEmpty() || isPaintTex(c)) {
+                    for (const char* alias : {"NormalMap", "Bump", "bump", "BumpMap", "height_map"}) {
+                        const QString a = currentSlotTextureName(alias);
+                        if (!a.isEmpty() && !isPaintTex(a)) { c = a; break; }
+                    }
                 }
+                if (!c.isEmpty() && !isPaintTex(c)) cur = c;
             }
             QImage base = isPaintTex(cur) ? QImage() : loadImageAcrossGroups(cur);
             if (!base.isNull()) {

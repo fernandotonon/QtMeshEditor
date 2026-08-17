@@ -197,12 +197,14 @@ qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / mac
 ### 🎨 Paint Tools
 
 ZBrush-style polypaint and **full PBR channel** texture painting — Base Color,
-Normal, Roughness, Metallic, AO, Emissive and Height — with a 2D preview panel,
+Normal, Roughness, Metallic, AO and Emissive — with a 2D preview panel,
 multiple brush tools (paint, erase, fill, color picker, smudge), layers, a
-seven-channel picker, channel-aware presets (scratches into roughness, emissive
+channel picker, channel-aware presets (scratches into roughness, emissive
 sparks, edge wear, dirt build-up, sticker), and a one-click bake that turns
-vertex colors into a UV-space texture. Scalar channels collapse to their PBR
-slot and height sculpts bake to a tangent-space normal map, all rendering live
+vertex colors into a UV-space texture. Every bake merges with the slot's
+existing texture rather than overwriting it — scalar channels collapse into
+their lane of the packed ORM map, and Normal-channel sculpts Sobel-convert to a
+tangent-space normal and blend onto the existing normal map, all rendering live
 under IBL.
 
 **Quick start (texture paint, GUI):**
