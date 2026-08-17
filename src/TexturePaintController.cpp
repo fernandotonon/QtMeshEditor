@@ -4069,8 +4069,64 @@ bool TexturePaintController::bakeChannel(int channel)
     std::string slot;     // canonical TUS slot to bind
 
     if (PaintChannelNS::isColor(ch)) {
-        // BaseColor / Emissive: paint the RGBA straight into the slot.
+        // BaseColor / Emissive: composite the painted strokes OVER the slot's
+        // existing texture (source-over), not straight into the slot. A paint
+        // session whose base texture couldn't be loaded starts TRANSPARENT
+        // (so an unpainted channel doesn't wash the model — see
+        // ensurePaintableTexture); saving that composite raw would bind a
+        // mostly-transparent diffuse and "lose" the base color (#547). Reading
+        // the current slot texture back and painting on top keeps the original
+        // colour everywhere the user didn't paint.
         slot = PaintChannelNS::slotName(ch);
+        {
+            // Resolve the slot's UNDERLYING texture to composite over. The live
+            // TUS may currently point at the transient manual paint texture
+            // (name "QMEPaint_*") — reading THAT back would give the painted
+            // strokes over transparent, wiping the real base colour on bake. So
+            // prefer the session's recorded original texture, and ignore any
+            // QMEPaint_* name when falling back to the slot/alias lookup.
+            auto isPaintTex = [](const QString& n) {
+                return n.startsWith(QStringLiteral("QMEPaint_"));
+            };
+            QString cur;
+            if (ch == m_activeChannel && !m_originalTextureName.isEmpty()
+                && !isPaintTex(m_originalTextureName)) {
+                cur = m_originalTextureName;
+            }
+            if (cur.isEmpty() || isPaintTex(cur)) {
+                QString c = currentSlotTextureName(slot);
+                if ((c.isEmpty() || isPaintTex(c))
+                    && ch == PaintChannelNS::Channel::BaseColor) {
+                    for (const char* alias : {"diffuse_map", "albedo", "Diffuse", "BaseColor"}) {
+                        c = currentSlotTextureName(alias);
+                        if (!c.isEmpty() && !isPaintTex(c)) break;
+                    }
+                }
+                if (!c.isEmpty() && !isPaintTex(c)) cur = c;
+            }
+            QImage base = isPaintTex(cur) ? QImage() : loadImageAcrossGroups(cur);
+            if (!base.isNull()) {
+                base = base.convertToFormat(QImage::Format_RGBA8888)
+                           .scaled(painted.size());
+                QPainter p(&base);
+                p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                p.drawImage(0, 0, painted.convertToFormat(QImage::Format_RGBA8888));
+                p.end();
+                painted = base;
+            }
+            // No existing texture (a brand-new diffuse) → paint the strokes as
+            // the whole texture. Flatten any transparency onto an opaque base
+            // so a partially-painted new diffuse doesn't render see-through:
+            // BaseColor is opaque by nature.
+            else if (ch == PaintChannelNS::Channel::BaseColor) {
+                QImage opaque(painted.size(), QImage::Format_RGBA8888);
+                opaque.fill(Qt::white);
+                QPainter p(&opaque);
+                p.drawImage(0, 0, painted.convertToFormat(QImage::Format_RGBA8888));
+                p.end();
+                painted = opaque;
+            }
+        }
         outFile = QDir(dir).filePath(QStringLiteral("paint_%1_%2.png")
                       .arg(PaintChannelNS::id(ch), stamp));
         if (!painted.save(outFile, "PNG")) return false;

@@ -1108,3 +1108,65 @@ TEST_F(TexturePaintControllerSceneTest, ChannelSwitchWithoutPaintingKeepsSlotTex
     EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"),
               QStringLiteral("orig_diffuse.png"));
 }
+
+// #547 bug: baking BaseColor must PRESERVE the model's existing diffuse where
+// the user didn't paint. The paint session's base buffer is transparent when
+// its source texture couldn't be seeded, so a raw save would bind a mostly-
+// transparent diffuse and "lose" the base colour. bakeChannel composites the
+// painted strokes OVER the slot's underlying texture — so untouched texels keep
+// the original colour. This test binds a known solid-red diffuse, paints, bakes,
+// and verifies a corner texel (unlikely to be painted at UV 0.5) stays red.
+TEST_F(TexturePaintControllerSceneTest, BaseColorBakePreservesUnpaintedDiffuse) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BaseColorPreserve")));
+
+    // Write a solid-red base diffuse to a temp dir and register it so the
+    // controller's loadImageAcrossGroups can read it back.
+    static QTemporaryDir s_tmp;  // outlive the resource-location registration
+    ASSERT_TRUE(s_tmp.isValid());
+    const QString baseName = QStringLiteral("preserve_base.png");
+    const QString basePath = s_tmp.path() + "/" + baseName;
+    QImage red(64, 64, QImage::Format_RGBA8888);
+    red.fill(QColor(220, 20, 20, 255));
+    ASSERT_TRUE(red.save(basePath));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Paint a small stroke near the centre; the corners stay unpainted.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+
+    // The freshly-bound diffuse must be the composited bake, and its corner
+    // (unpainted) must still be the original red — not transparent/black/white.
+    const QString baked = slotTextureName(m_fix.entity, "diffuse_map");
+    ASSERT_TRUE(baked.startsWith(QStringLiteral("paint_basecolor_")));
+    // Re-read the baked file through Ogre's resource system — bakeChannel
+    // already registered its generatedTexDir as a resource location.
+    Ogre::Image ogreImg;
+    bool haveImg = false;
+    try {
+        ogreImg.load(baked.toStdString(),
+                     Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        haveImg = ogreImg.getWidth() > 0 && ogreImg.getHeight() > 0;
+    } catch (...) { haveImg = false; }
+    ASSERT_TRUE(haveImg) << "baked diffuse '" << baked.toStdString()
+                         << "' should be loadable";
+    const Ogre::ColourValue corner = ogreImg.getColourAt(0, 0, 0);
+    EXPECT_GT(corner.r, 0.6f) << "unpainted corner lost its red base colour";
+    EXPECT_LT(corner.g, 0.4f);
+    EXPECT_LT(corner.b, 0.4f);
+    EXPECT_GT(corner.a, 0.9f) << "baked diffuse must be opaque, not transparent";
+
+    ctrl->closeSession();
+}
