@@ -109,6 +109,13 @@ int main(int argc, char **argv)
             qputenv(guard, "1");
     }
 
+    // Never send telemetry from the test suite. Without this, tests that
+    // drive CLIPipeline::run (e.g. CLIPipelineRun.UnknownCommand) hit the
+    // first-launch auto-enable on fresh CI runners and sent REAL Sentry
+    // transactions — the production "cli.not-a-command" noise.
+    if (!qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY"))
+        qputenv("QTMESH_NO_TELEMETRY", "1");
+
 #ifdef ENABLE_MOCAP
     MocapCameraHints::ensureMultimediaBackendSafe();
 #endif
