@@ -4339,7 +4339,22 @@ void TexturePaintController::bindBakedChannelTexture(
     // Re-attach the HDR IBL SRS so the freshly-bound channel renders under the
     // current environment.
     RTShaderHelper::refreshAllPbrMaterialsForHdr();
-    flushDirtyToOgre();
+
+    // Do NOT flushDirtyToOgre() here. The bake has committed this channel to a
+    // file and bound it into the slot; the live manual paint texture must no
+    // longer touch that slot. flushDirtyToOgre() would re-upload the (now
+    // stale) paint buffer and — because we just pruned m_boundSlots — its
+    // deferred-rebind branch would re-bind the transient paint texture straight
+    // back over the freshly-baked file, so the first bake changed the render
+    // and a second bake wiped the texture entirely (#547). Instead, tear the
+    // live session down cleanly: the model is left sampling the baked files,
+    // and the next stroke lazily rebuilds a session seeded FROM the baked
+    // result. Stash the just-baked channel's layer stack first so its layers
+    // (and undo history) survive the teardown.
+    stashChannelSession(m_activeChannel);
+    m_buffer.clearDirty();
+    closeSession();
+
     emit sessionChanged();
 }
 

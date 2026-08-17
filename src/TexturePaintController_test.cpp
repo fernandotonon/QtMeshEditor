@@ -1170,3 +1170,58 @@ TEST_F(TexturePaintControllerSceneTest, BaseColorBakePreservesUnpaintedDiffuse) 
 
     ctrl->closeSession();
 }
+
+// #547 bug: the SECOND bake wiped the texture. bindBakedChannelTexture used to
+// flushDirtyToOgre() at the end, which re-uploaded the stale paint buffer and —
+// after pruning m_boundSlots — re-bound the transient paint texture straight
+// over the just-baked file. So the first bake changed the render and the second
+// bake left the slot pointing at an empty paint texture. bakeChannel now tears
+// the live session down cleanly instead, and each bake produces a fresh, valid
+// file bound into the slot. This test bakes BaseColor twice and asserts the slot
+// still carries a real baked diffuse (never a QMEPaint_* / empty binding).
+TEST_F(TexturePaintControllerSceneTest, RepeatedBaseColorBakeKeepsValidTexture) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("RepeatBake")));
+    static QTemporaryDir s_tmp2;
+    ASSERT_TRUE(s_tmp2.isValid());
+    const QString baseName = QStringLiteral("repeat_base.png");
+    QImage base(64, 64, QImage::Format_RGBA8888);
+    base.fill(QColor(30, 120, 200, 255));
+    ASSERT_TRUE(base.save(s_tmp2.path() + "/" + baseName));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp2.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    auto paintAndBake = [&](double u, double v) {
+        ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+        ASSERT_TRUE(ctrl->hasActiveSession());
+        ASSERT_TRUE(ctrl->beginStrokeUV(u, v));
+        ctrl->updateStrokeUV(u + 0.02, v + 0.02);
+        ctrl->endStrokeUV();
+        pumpEventsFor(150);
+        ASSERT_TRUE(ctrl->bakeChannel(
+            static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+    };
+
+    paintAndBake(0.4, 0.4);
+    const QString first = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_TRUE(first.startsWith(QStringLiteral("paint_basecolor_")))
+        << "first bake bound '" << first.toStdString() << "'";
+
+    // Second round: the session was torn down by the first bake; painting
+    // rebuilds it seeded from the baked result. The slot must end on a real
+    // baked file, NOT a transient paint texture or empty name.
+    paintAndBake(0.6, 0.6);
+    const QString second = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_TRUE(second.startsWith(QStringLiteral("paint_basecolor_")))
+        << "second bake bound '" << second.toStdString() << "' (the #547 bug)";
+    EXPECT_FALSE(second.startsWith(QStringLiteral("QMEPaint_")))
+        << "second bake left the slot on the transient paint texture";
+    EXPECT_FALSE(second.isEmpty());
+
+    ctrl->closeSession();
+}
