@@ -3364,6 +3364,10 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     const int hand = side == 0 ? 9 : 13;
                     const int thumb0 =
                         MotionInbetween::fingerJointIndexV2(side, 0, 0);
+                    if (thumb0 < 0 || thumb0 >= canonN
+                        || hand >= static_cast<int>(tb.tgtBindDir.size())
+                        || thumb0 >= static_cast<int>(tb.tgtBindDir.size()))
+                        continue;
                     const auto& hd = clipRestDir[static_cast<size_t>(hand)];
                     const auto& td = clipRestDir[static_cast<size_t>(thumb0)];
                     Ogre::Quaternion qs, qt;
