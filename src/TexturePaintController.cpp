@@ -2642,6 +2642,9 @@ void TexturePaintController::resetStrokePaintState()
 {
     m_strokeJustBegan = true;
     m_smudgeHavePrev = false;
+    // Paint v2 Slice E (#548): reset per-subset mirror-segment continuity so a
+    // new stroke doesn't fan a segment from the previous stroke's last mirror UV.
+    std::fill(m_mirrorHavePrevUV.begin(), m_mirrorHavePrevUV.end(), false);
     m_strokeLiveUploadStarted = false;
     m_strokeGpuFlushPending = false;
     m_strokeGpuFlushScheduled = false;
@@ -5190,27 +5193,32 @@ void TexturePaintController::applyBrushSymmetryDabs(const Ogre::Vector2& primary
     // axis-subset, in ascending-subset order (X, Y, XY, Z, ...). We track the
     // matching subset bitmask so the topology map for that axis can be used.
     const std::vector<Ogre::Vector3> pts = mirrorLocalPoints(primaryLocal);
+    const int nSubsets = static_cast<int>(pts.size());
+    // Per-subset previous mirror UV, so mirror strokes fan a segment (E-B) and
+    // don't gap on fast moves — mirroring the primary path's segment behaviour.
+    if (static_cast<int>(m_mirrorPrevUV.size()) != nSubsets) {
+        m_mirrorPrevUV.assign(nSubsets, Ogre::Vector2::ZERO);
+        m_mirrorHavePrevUV.assign(nSubsets, false);
+    }
+    const bool canSegment = m_tool != ToolFill && m_tool != ToolColorPicker
+                            && m_tool != ToolSmartSelect;
     int idx = 0;
     for (int subset = 1; subset <= (SymAxisX | SymAxisY | SymAxisZ); ++subset) {
         if ((subset & m_symmetryAxes) != subset) continue;
-        if (idx >= static_cast<int>(pts.size())) break;
+        if (idx >= nSubsets) break;
         Ogre::Vector2 mUV;
         if (mirrorUvForLocalPoint(pts[static_cast<size_t>(idx)], subset, primaryUV, mUV)) {
-            if (applyBrushAtUV(mUV)) m_strokeMadeChanges = true;
+            bool ch = false;
+            if (canSegment && m_mirrorHavePrevUV[static_cast<size_t>(idx)])
+                ch = paintBrushAlongSegment(m_mirrorPrevUV[static_cast<size_t>(idx)], mUV);
+            else
+                ch = applyBrushAtUV(mUV);
+            if (ch) m_strokeMadeChanges = true;
+            m_mirrorPrevUV[static_cast<size_t>(idx)] = mUV;
+            m_mirrorHavePrevUV[static_cast<size_t>(idx)] = true;
         }
         ++idx;
     }
-}
-
-void TexturePaintController::applyBrushSymmetrySegment(const Ogre::Vector2& fromUV,
-                                                       const Ogre::Vector2& toUV)
-{
-    // For the segment path we simply mirror the endpoint dab (toUV). Per-subset
-    // gap-free segment continuity is added in Slice E-B; a single mirrored dab
-    // per move keeps early slices correct (dabs are dense enough on typical
-    // moves, and endStroke's final dab closes the stroke).
-    (void)fromUV;
-    applyBrushSymmetryDabs(toUV);
 }
 
 void TexturePaintController::invalidateSymmetryMaps()

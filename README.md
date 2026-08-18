@@ -205,7 +205,11 @@ vertex colors into a UV-space texture. Every bake merges with the slot's
 existing texture rather than overwriting it — scalar channels collapse into
 their lane of the packed ORM map, and Normal-channel sculpts Sobel-convert to a
 tangent-space normal and blend onto the existing normal map, all rendering live
-under IBL.
+under IBL. **Symmetry** mirrors every stroke in real time across the local or
+world X/Y/Z planes (combine axes for 4- or 8-way mirroring; a topology-aware
+mode keeps mirrors correct on meshes with an asymmetric UV unwrap), and a
+**line stabilizer** (moving-average or trailing) smooths mouse jitter for clean
+strokes.
 
 **Quick start (texture paint, GUI):**
 

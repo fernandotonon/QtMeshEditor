@@ -636,8 +636,6 @@ public:
     /// from the stroke-update paths AFTER the primary dab; all dabs land in the
     /// same buffer inside one begin/end window → captured by one undo command.
     void applyBrushSymmetryDabs(const Ogre::Vector2& primaryUV);
-    void applyBrushSymmetrySegment(const Ogre::Vector2& fromUV,
-                                   const Ogre::Vector2& toUV);
     /// Rebuild/clear the faint translucent symmetry-plane overlay.
     void refreshSymmetryPlaneOverlay();
     /// Drop the cached topology mirror maps (entity/mesh changed or axes toggled).
