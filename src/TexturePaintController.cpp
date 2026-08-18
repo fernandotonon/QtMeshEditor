@@ -2819,8 +2819,15 @@ void TexturePaintController::processPendingStrokeUpdate()
 
     // Paint v2 Slice E (#548): mirror this dab across the enabled symmetry axes
     // (in the same buffer, inside the begin/end window → one undo step).
+    // Excluded tools: ColorPicker/SmartSelect (not paint ops); Fill (the primary
+    // consumes the single-stamp m_strokeJustBegan flag, so mirrored fills would
+    // no-op — a correct per-target mirrored flood-fill is a follow-up); Smudge
+    // (shares m_smudgePrev — a mirror dab would sample its delta from the distant
+    // primary UV and corrupt the next primary dab; independent per-path history
+    // is a follow-up). #548 review.
     if (m_symmetryEnabled && m_symmetryAxes != SymAxisNone
-        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect) {
+        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect
+        && m_tool != ToolFill && m_tool != ToolSmudge) {
         applyBrushSymmetryDabs(uv);
     }
 
@@ -2867,8 +2874,15 @@ void TexturePaintController::processPendingStrokeUpdateUV()
 
     // Paint v2 Slice E (#548): mirror this dab across the enabled symmetry axes
     // (in the same buffer, inside the begin/end window → one undo step).
+    // Excluded tools: ColorPicker/SmartSelect (not paint ops); Fill (the primary
+    // consumes the single-stamp m_strokeJustBegan flag, so mirrored fills would
+    // no-op — a correct per-target mirrored flood-fill is a follow-up); Smudge
+    // (shares m_smudgePrev — a mirror dab would sample its delta from the distant
+    // primary UV and corrupt the next primary dab; independent per-path history
+    // is a follow-up). #548 review.
     if (m_symmetryEnabled && m_symmetryAxes != SymAxisNone
-        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect) {
+        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect
+        && m_tool != ToolFill && m_tool != ToolSmudge) {
         applyBrushSymmetryDabs(uv);
     }
 
@@ -5103,7 +5117,12 @@ bool TexturePaintController::mirrorUvForLocalPoint(const Ogre::Vector3& mirrorLo
     // matching the subset when it is one bit).
     const bool singleAxis =
         axisSubset == SymAxisX || axisSubset == SymAxisY || axisSubset == SymAxisZ;
-    if (m_topologyMirror && singleAxis && m_paintMesh && m_hitCache.valid
+    // The topology map is built across a MESH-LOCAL axis. In WORLD space the
+    // reflection plane is world-aligned (and differs from any local axis on a
+    // rotated entity), so the local-axis map would return the wrong-side UV —
+    // use the geometric resolver in world mode. (#548 review.)
+    if (m_symmetrySpace == SymLocal
+        && m_topologyMirror && singleAxis && m_paintMesh && m_hitCache.valid
         && m_hitCache.submesh >= 0 && m_hitCache.triangle >= 0) {
         // Lazily build (and entity-guard) the per-axis map.
         auto* entity = activeEntity();
@@ -5317,11 +5336,21 @@ void TexturePaintController::refreshSymmetryPlaneOverlay()
         m_symPlaneObj->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
         m_symPlaneNode->attachObject(m_symPlaneObj);
     }
-    // Inherit the entity's transform so local planes render in the mesh frame.
+    // Local symmetry mirrors about the mesh-local axes, so the plane inherits
+    // the entity's full transform (renders in the mesh frame). World symmetry
+    // mirrors about WORLD-aligned axes through the entity's derived origin, so
+    // the overlay must be world-aligned — position at the derived origin but
+    // with identity orientation/scale — else the guide shows a different plane
+    // than the one that controls painting on a rotated model. (#548 review.)
     if (auto* node = entity ? entity->getParentSceneNode() : nullptr) {
         m_symPlaneNode->setPosition(node->_getDerivedPosition());
-        m_symPlaneNode->setOrientation(node->_getDerivedOrientation());
-        m_symPlaneNode->setScale(node->_getDerivedScale());
+        if (m_symmetrySpace == SymWorld) {
+            m_symPlaneNode->setOrientation(Ogre::Quaternion::IDENTITY);
+            m_symPlaneNode->setScale(Ogre::Vector3::UNIT_SCALE);
+        } else {
+            m_symPlaneNode->setOrientation(node->_getDerivedOrientation());
+            m_symPlaneNode->setScale(node->_getDerivedScale());
+        }
     }
     const Ogre::AxisAlignedBox bb = m_paintMesh->calculateBounds();
     const Ogre::Vector3 ext = bb.getSize() * 0.6f + Ogre::Vector3(1e-3f, 1e-3f, 1e-3f);
