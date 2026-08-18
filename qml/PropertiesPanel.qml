@@ -4478,6 +4478,13 @@ Rectangle {
             property int activeChannel: TexturePaintController.activeChannel
             property var paintChannels: TexturePaintController.paintChannels
             property var paintPresetNames: PaintChannelPresets.presetNames
+            // Paint v2 Slice E — symmetry + stabilizer (#548).
+            property bool symmetryEnabled: TexturePaintController.symmetryEnabled
+            property int  symmetrySpace: TexturePaintController.symmetrySpace
+            property int  symmetryAxes: TexturePaintController.symmetryAxes
+            property bool topologyMirror: TexturePaintController.topologyMirror
+            property int  stabilizerMode: TexturePaintController.stabilizerMode
+            property real stabilizerAmount: TexturePaintController.stabilizerAmount
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4530,6 +4537,16 @@ Rectangle {
                     // Layer add/remove changes which channels have layers — keep
                     // the channel picker's hasLayers badges in sync.
                     texPaintCol.paintChannels = TexturePaintController.paintChannels
+                }
+                function onSymmetryChanged() {
+                    texPaintCol.symmetryEnabled = TexturePaintController.symmetryEnabled
+                    texPaintCol.symmetrySpace = TexturePaintController.symmetrySpace
+                    texPaintCol.symmetryAxes = TexturePaintController.symmetryAxes
+                    texPaintCol.topologyMirror = TexturePaintController.topologyMirror
+                }
+                function onStabilizerChanged() {
+                    texPaintCol.stabilizerMode = TexturePaintController.stabilizerMode
+                    texPaintCol.stabilizerAmount = TexturePaintController.stabilizerAmount
                 }
             }
 
@@ -4816,6 +4833,122 @@ Rectangle {
                         if (index >= 0 && index < texPaintCol.paintPresetNames.length)
                             PaintChannelPresets.applyPreset(texPaintCol.paintPresetNames[index])
                     }
+                }
+            }
+
+            // ---- Symmetry (Paint v2 Slice E #548) ----
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor; opacity: 0.4 }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: 90; height: 22; radius: 4
+                    color: texPaintCol.symmetryEnabled
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Symmetry"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.symmetryEnabled = !texPaintCol.symmetryEnabled }
+                }
+                // Local / World space.
+                Repeater {
+                    model: [{ label: "Local", space: 0 }, { label: "World", space: 1 }]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 46; height: 22; radius: 4
+                        opacity: texPaintCol.symmetryEnabled ? 1.0 : 0.4
+                        color: texPaintCol.symmetrySpace === modelData.space
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent
+                            enabled: texPaintCol.symmetryEnabled
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.symmetrySpace = modelData.space }
+                    }
+                }
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                opacity: texPaintCol.symmetryEnabled ? 1.0 : 0.4
+                // X / Y / Z axis toggles (OR into the bitmask).
+                Repeater {
+                    model: [{ label: "X", bit: 1 }, { label: "Y", bit: 2 }, { label: "Z", bit: 4 }]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 34; height: 22; radius: 4
+                        color: (texPaintCol.symmetryAxes & modelData.bit)
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent
+                            enabled: texPaintCol.symmetryEnabled
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.symmetryAxes =
+                                       (texPaintCol.symmetryAxes ^ modelData.bit) }
+                    }
+                }
+                Rectangle {
+                    width: 92; height: 22; radius: 4
+                    color: texPaintCol.topologyMirror
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Topology"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.symmetryEnabled
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.topologyMirror = !texPaintCol.topologyMirror }
+                }
+            }
+
+            // ---- Line stabilizer (Paint v2 Slice E #548) ----
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text { text: "Stabilizer"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter }
+                Repeater {
+                    model: [{ label: "Avg", mode: 0 }, { label: "Trail", mode: 1 }]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 44; height: 22; radius: 4
+                        color: texPaintCol.stabilizerMode === modelData.mode
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.stabilizerMode = modelData.mode }
+                    }
+                }
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text { text: "Amount"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter }
+                Slider {
+                    width: 120
+                    from: 0; to: 100; stepSize: 1
+                    value: texPaintCol.stabilizerAmount
+                    onMoved: TexturePaintController.stabilizerAmount = value
+                }
+                Text {
+                    text: Math.round(texPaintCol.stabilizerAmount)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
                 }
             }
 

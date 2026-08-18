@@ -470,6 +470,24 @@ TexturePaintController::TexturePaintController(QObject* parent)
         reloadActiveRamp();
     }
 
+    // Restore Paint v2 Slice E (#548) symmetry + stabilizer preferences.
+    {
+        QSettings s;
+        m_symmetryEnabled = s.value(AppSettingsKeys::paintSymmetryEnabled(), false).toBool();
+        m_symmetrySpace = (s.value(AppSettingsKeys::paintSymmetrySpace(),
+                                   static_cast<int>(SymLocal)).toInt() == static_cast<int>(SymWorld))
+                              ? SymWorld : SymLocal;
+        m_symmetryAxes = s.value(AppSettingsKeys::paintSymmetryAxes(),
+                                 static_cast<int>(SymAxisX)).toInt()
+                         & (SymAxisX | SymAxisY | SymAxisZ);
+        m_topologyMirror = s.value(AppSettingsKeys::paintTopologyMirror(), true).toBool();
+        m_stabilizerMode = (s.value(AppSettingsKeys::paintStabilizerMode(),
+                                    static_cast<int>(StabAverage)).toInt() == static_cast<int>(StabTrail))
+                               ? StabTrail : StabAverage;
+        m_stabilizerAmount = std::clamp(
+            s.value(AppSettingsKeys::paintStabilizerAmount(), 0.0).toDouble(), 0.0, 100.0);
+    }
+
     {
         QSettings s;
         {
@@ -629,6 +647,83 @@ void TexturePaintController::setBrushTool(int tool)
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Texture paint: tool = %1").arg(tool));
     emit brushToolChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice E (#548) — symmetry + stabilizer setters
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::setSymmetryEnabled(bool on)
+{
+    if (on == m_symmetryEnabled) return;
+    m_symmetryEnabled = on;
+    // Enabling with no axes set defaults to local X (the modelling convention).
+    if (on && m_symmetryAxes == SymAxisNone) m_symmetryAxes = SymAxisX;
+    QSettings().setValue(AppSettingsKeys::paintSymmetryEnabled(), m_symmetryEnabled);
+    SentryReporter::addBreadcrumb("paint.symmetry",
+        QStringLiteral("enabled=%1 space=%2 axes=%3 topo=%4")
+            .arg(m_symmetryEnabled).arg(static_cast<int>(m_symmetrySpace))
+            .arg(m_symmetryAxes).arg(m_topologyMirror));
+    invalidateSymmetryMaps();
+    refreshSymmetryPlaneOverlay();
+    emit symmetryChanged();
+}
+
+void TexturePaintController::setSymmetrySpace(int space)
+{
+    const SymmetrySpace s = (space == static_cast<int>(SymWorld)) ? SymWorld : SymLocal;
+    if (s == m_symmetrySpace) return;
+    m_symmetrySpace = s;
+    QSettings().setValue(AppSettingsKeys::paintSymmetrySpace(), static_cast<int>(m_symmetrySpace));
+    SentryReporter::addBreadcrumb("paint.symmetry",
+        QStringLiteral("space=%1").arg(static_cast<int>(m_symmetrySpace)));
+    invalidateSymmetryMaps();
+    refreshSymmetryPlaneOverlay();
+    emit symmetryChanged();
+}
+
+void TexturePaintController::setSymmetryAxes(int axes)
+{
+    axes &= (SymAxisX | SymAxisY | SymAxisZ);
+    if (axes == m_symmetryAxes) return;
+    m_symmetryAxes = axes;
+    QSettings().setValue(AppSettingsKeys::paintSymmetryAxes(), m_symmetryAxes);
+    SentryReporter::addBreadcrumb("paint.symmetry",
+        QStringLiteral("axes=%1").arg(m_symmetryAxes));
+    invalidateSymmetryMaps();   // per-axis maps must be rebuilt for the new set
+    refreshSymmetryPlaneOverlay();
+    emit symmetryChanged();
+}
+
+void TexturePaintController::setTopologyMirror(bool on)
+{
+    if (on == m_topologyMirror) return;
+    m_topologyMirror = on;
+    QSettings().setValue(AppSettingsKeys::paintTopologyMirror(), m_topologyMirror);
+    SentryReporter::addBreadcrumb("paint.symmetry",
+        QStringLiteral("topology=%1").arg(m_topologyMirror));
+    invalidateSymmetryMaps();
+    emit symmetryChanged();
+}
+
+void TexturePaintController::setStabilizerMode(int mode)
+{
+    const StabilizerMode m = (mode == static_cast<int>(StabTrail)) ? StabTrail : StabAverage;
+    if (m == m_stabilizerMode) return;
+    m_stabilizerMode = m;
+    QSettings().setValue(AppSettingsKeys::paintStabilizerMode(), static_cast<int>(m_stabilizerMode));
+    SentryReporter::addBreadcrumb("paint.stabilizer",
+        QStringLiteral("mode=%1").arg(static_cast<int>(m_stabilizerMode)));
+    emit stabilizerChanged();
+}
+
+void TexturePaintController::setStabilizerAmount(double amount)
+{
+    amount = std::clamp(amount, 0.0, 100.0);
+    if (std::abs(amount - m_stabilizerAmount) < 1e-6) return;
+    m_stabilizerAmount = amount;
+    QSettings().setValue(AppSettingsKeys::paintStabilizerAmount(), m_stabilizerAmount);
+    emit stabilizerChanged();
 }
 
 void TexturePaintController::setColorSource(int source)
@@ -2081,6 +2176,9 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
 
     refreshPreviewUri();
     if (m_uvOverlayVisible) refreshUvOverlay();
+    // Paint v2 Slice E (#548): a fresh session for a new entity invalidates the
+    // topology maps; (re)build the symmetry plane overlay for this mesh.
+    refreshSymmetryPlaneOverlay();
     emit sessionChanged();
     emit layersChanged();
     emit smartSelectChanged();
@@ -2716,7 +2814,14 @@ void TexturePaintController::processPendingStrokeUpdate()
     else
         changed = applyBrushAtUV(uv);
 
-    if (changed) {
+    // Paint v2 Slice E (#548): mirror this dab across the enabled symmetry axes
+    // (in the same buffer, inside the begin/end window → one undo step).
+    if (m_symmetryEnabled && m_symmetryAxes != SymAxisNone
+        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect) {
+        applyBrushSymmetryDabs(uv);
+    }
+
+    if (changed || m_strokeMadeChanges) {
         m_strokePrevUV = uv;
         m_strokeHavePrevUV = true;
         m_strokeMadeChanges = true;
@@ -2757,7 +2862,14 @@ void TexturePaintController::processPendingStrokeUpdateUV()
     else
         changed = applyBrushAtUV(uv);
 
-    if (changed) {
+    // Paint v2 Slice E (#548): mirror this dab across the enabled symmetry axes
+    // (in the same buffer, inside the begin/end window → one undo step).
+    if (m_symmetryEnabled && m_symmetryAxes != SymAxisNone
+        && m_tool != ToolColorPicker && m_tool != ToolSmartSelect) {
+        applyBrushSymmetryDabs(uv);
+    }
+
+    if (changed || m_strokeMadeChanges) {
         m_strokePrevUV = uv;
         m_strokeHavePrevUV = true;
         m_strokeMadeChanges = true;
@@ -3135,8 +3247,20 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
         && m_boundSlots.empty()) {
         rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
     }
+    // Paint v2 Slice E (#548): seed the stabilizer with the press point so the
+    // first dab is exact (no start-of-stroke lag), and log once per stroke.
+    m_stabSamples.clear();
+    m_stabHaveTrail = false;
+    m_stabHaveLastRaw = false;
+    m_stabTrailPos = QPointF(screenPos);
+    if (m_stabilizerAmount > 0.0) {
+        SentryReporter::addBreadcrumb("paint.stabilizer",
+            QStringLiteral("mode=%1 amount=%2")
+                .arg(static_cast<int>(m_stabilizerMode))
+                .arg(m_stabilizerAmount, 0, 'f', 0));
+    }
     m_pendingStrokeWidget = widget;
-    m_pendingStrokePos = screenPos;
+    m_pendingStrokePos = screenPos;   // first dab uses the exact press point
     processPendingStrokeUpdate();
     return true;
 }
@@ -3145,7 +3269,11 @@ void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& scre
 {
     if (!m_strokeActive || !m_paintEnabled) return;
     m_pendingStrokeWidget = widget;
-    m_pendingStrokePos = screenPos;
+    // Paint v2 Slice E (#548): smooth the raw cursor before hit-testing.
+    // amount==0 is an exact passthrough (zero latency).
+    const QPointF stab = stabilizeScreen(QPointF(screenPos));
+    m_pendingStrokePos = QPoint(static_cast<int>(std::lround(stab.x())),
+                                static_cast<int>(std::lround(stab.y())));
     processPendingStrokeUpdate();
 }
 
@@ -3323,6 +3451,22 @@ void TexturePaintController::endStroke()
         m_strokeActive = false;
         SentryReporter::addBreadcrumb("ui.action", "Vertex paint stroke end");
         return;
+    }
+
+    // Paint v2 Slice E (#548): stabilizer catch-up. The smoothed cursor lags the
+    // true cursor; before ending, drive the brush the rest of the way to the
+    // real last position so the stroke terminates where the user released
+    // (Krita behaviour). SYNCHRONOUS — still inside the begin/end window, so the
+    // one deferred undo command below captures these final dabs too. Bypass the
+    // stabilizer for this final dab (paint exactly at the true cursor).
+    if (m_stabilizerAmount > 0.0 && m_stabHaveLastRaw && m_pendingStrokeWidget
+        && !m_strokeFromUvPreview) {
+        const double savedAmount = m_stabilizerAmount;
+        m_stabilizerAmount = 0.0;                 // passthrough for the final dab
+        m_pendingStrokePos = QPoint(static_cast<int>(std::lround(m_stabLastRaw.x())),
+                                    static_cast<int>(std::lround(m_stabLastRaw.y())));
+        processPendingStrokeUpdate();
+        m_stabilizerAmount = savedAmount;
     }
 
     m_strokeActive = false;
@@ -3723,11 +3867,24 @@ void TexturePaintController::closeSession()
                 }
                 if (m_ringObj)
                     sceneMgr->destroyManualObject(m_ringObj);
+                // Paint v2 Slice E (#548): tear down the symmetry-plane overlay.
+                if (m_symPlaneNode) {
+                    m_symPlaneNode->detachAllObjects();
+                    sceneMgr->getRootSceneNode()->removeChild(m_symPlaneNode);
+                    sceneMgr->destroySceneNode(m_symPlaneNode);
+                }
+                if (m_symPlaneObj)
+                    sceneMgr->destroyManualObject(m_symPlaneObj);
             } catch (...) {}
         }
         m_ringNode = nullptr;
         m_ringObj = nullptr;
+        m_symPlaneNode = nullptr;
+        m_symPlaneObj = nullptr;
     }
+    // Paint v2 Slice E (#548): the topology mirror maps are per-entity/per-mesh;
+    // drop them so a rebuilt session (or a different entity) rebuilds fresh.
+    invalidateSymmetryMaps();
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
     m_layerStack = PaintLayerStack();
@@ -4785,14 +4942,19 @@ bool TexturePaintController::wouldStrokeHit(OgreWidget* widget,
 
 bool TexturePaintController::findMeshPointForUV(const Ogre::Vector2& uv,
                                                 Ogre::Vector3& outLocal,
-                                                Ogre::Vector3& outNormal) const
+                                                Ogre::Vector3& outNormal,
+                                                int* outSubmesh,
+                                                int* outTriangle) const
 {
     if (!m_paintMesh) return false;
     // Walk every triangle, find the one whose UV-space contains `uv`
     // (barycentric test on UV triangle), then interpolate the 3D
     // position with those same barycentrics.
-    for (const auto& sub : m_paintMesh->subMeshes()) {
-        for (const auto& tri : sub.triangles) {
+    const auto& subs = m_paintMesh->subMeshes();
+    for (size_t s = 0; s < subs.size(); ++s) {
+        const auto& sub = subs[s];
+        for (size_t t = 0; t < sub.triangles.size(); ++t) {
+            const auto& tri = sub.triangles[t];
             const auto& v0 = sub.vertices[tri.indices[0]];
             const auto& v1 = sub.vertices[tri.indices[1]];
             const auto& v2 = sub.vertices[tri.indices[2]];
@@ -4814,10 +4976,374 @@ bool TexturePaintController::findMeshPointForUV(const Ogre::Vector2& uv,
             if (!n.isZeroLength()) n.normalise();
             else n = Ogre::Vector3::UNIT_Y;
             outNormal = n;
+            if (outSubmesh) *outSubmesh = static_cast<int>(s);
+            if (outTriangle) *outTriangle = static_cast<int>(t);
             return true;
         }
     }
     return false;
+}
+
+// ===========================================================================
+// Paint v2 Slice E (#548) — symmetry mirror + line stabilizer
+// ===========================================================================
+
+bool TexturePaintController::uvForLocalPoint(const Ogre::Vector3& local,
+                                             Ogre::Vector2& outUV,
+                                             int* outSubmesh, int* outTriangle,
+                                             float* outBary) const
+{
+    if (!m_paintMesh) return false;
+    const float maxExtent = std::max({m_paintMesh->calculateBounds().getSize().x,
+                                      m_paintMesh->calculateBounds().getSize().y,
+                                      m_paintMesh->calculateBounds().getSize().z, 1e-4f});
+    // Accept a triangle whose plane the point is within `planeTol` of; among all
+    // such (and their in-triangle projections) keep the closest 3D distance.
+    const float planeTol = maxExtent * 5e-2f;   // generous — mirror point rarely on-surface
+    float bestDist = std::numeric_limits<float>::max();
+    bool found = false;
+    const auto& subs = m_paintMesh->subMeshes();
+    for (size_t s = 0; s < subs.size(); ++s) {
+        const auto& sub = subs[s];
+        for (size_t t = 0; t < sub.triangles.size(); ++t) {
+            const auto& tri = sub.triangles[t];
+            const auto& v0 = sub.vertices[tri.indices[0]];
+            const auto& v1 = sub.vertices[tri.indices[1]];
+            const auto& v2 = sub.vertices[tri.indices[2]];
+            if (!v0.hasUV || !v1.hasUV || !v2.hasUV) continue;
+            const Ogre::Vector3 e1 = v1.position - v0.position;
+            const Ogre::Vector3 e2 = v2.position - v0.position;
+            Ogre::Vector3 nrm = e1.crossProduct(e2);
+            const float area2 = nrm.length();
+            if (area2 < 1e-12f) continue;
+            nrm /= area2;
+            const float planeDist = std::abs((local - v0.position).dotProduct(nrm));
+            if (planeDist > planeTol) continue;
+            // Barycentric of the projection of `local` onto the triangle plane.
+            const Ogre::Vector3 p = local - nrm * (local - v0.position).dotProduct(nrm);
+            const Ogre::Vector3 dp = p - v0.position;
+            const float d00 = e1.dotProduct(e1), d01 = e1.dotProduct(e2);
+            const float d11 = e2.dotProduct(e2);
+            const float d20 = dp.dotProduct(e1), d21 = dp.dotProduct(e2);
+            const float denom = d00 * d11 - d01 * d01;
+            if (std::abs(denom) < 1e-12f) continue;
+            const float bu = (d11 * d20 - d01 * d21) / denom;   // weight of v1
+            const float bv = (d00 * d21 - d01 * d20) / denom;   // weight of v2
+            const float bw = 1.0f - bu - bv;                    // weight of v0
+            const float eps = 1e-3f;
+            if (bu < -eps || bv < -eps || bw < -eps) continue;
+            const float dist = (p - local).length() + planeDist;
+            if (dist < bestDist) {
+                bestDist = dist;
+                outUV = v0.uv * bw + v1.uv * bu + v2.uv * bv;
+                if (outSubmesh) *outSubmesh = static_cast<int>(s);
+                if (outTriangle) *outTriangle = static_cast<int>(t);
+                if (outBary) { outBary[0] = bw; outBary[1] = bu; outBary[2] = bv; }
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
+Ogre::Vector3 TexturePaintController::reflectLocal(const Ogre::Vector3& p,
+                                                   int axisBit,
+                                                   const Ogre::Vector3& pivot)
+{
+    Ogre::Vector3 r = p;
+    if (axisBit & SymAxisX) r.x = 2.0f * pivot.x - p.x;
+    if (axisBit & SymAxisY) r.y = 2.0f * pivot.y - p.y;
+    if (axisBit & SymAxisZ) r.z = 2.0f * pivot.z - p.z;
+    return r;
+}
+
+std::vector<Ogre::Vector3>
+TexturePaintController::mirrorLocalPoints(const Ogre::Vector3& primaryLocal) const
+{
+    std::vector<Ogre::Vector3> out;
+    if (!m_symmetryEnabled || m_symmetryAxes == SymAxisNone) return out;
+
+    // For WORLD space, reflect about the plane through the entity's derived
+    // origin: local → world, reflect world coord, world → local.
+    Ogre::Matrix4 toWorld, toLocal;
+    Ogre::Vector3 worldPivot = m_symmetryPivotLocal;
+    const bool world = (m_symmetrySpace == SymWorld);
+    if (world && m_paintMeshEntity && m_paintMeshEntity->getParentSceneNode()) {
+        auto* node = m_paintMeshEntity->getParentSceneNode();
+        toWorld = node->_getFullTransform();
+        toLocal = toWorld.inverse();
+        worldPivot = node->_getDerivedPosition();
+    }
+
+    const Ogre::Vector3 basis = world
+        ? (toWorld * primaryLocal) : primaryLocal;
+    const Ogre::Vector3& pivot = world ? worldPivot : m_symmetryPivotLocal;
+
+    // Every nonzero subset of the enabled axis bits → one mirror image.
+    for (int subset = 1; subset <= (SymAxisX | SymAxisY | SymAxisZ); ++subset) {
+        if ((subset & m_symmetryAxes) != subset) continue;   // only enabled bits
+        Ogre::Vector3 m = reflectLocal(basis, subset, pivot);
+        if (world) m = toLocal * m;
+        out.push_back(m);
+    }
+    return out;
+}
+
+bool TexturePaintController::mirrorUvForLocalPoint(const Ogre::Vector3& mirrorLocal,
+                                                   int axisSubset,
+                                                   const Ogre::Vector2& primaryUV,
+                                                   Ogre::Vector2& outUV)
+{
+    (void)primaryUV;
+    // Topology-aware path: only for a single-axis subset (composed maps handle
+    // combos by reflecting sequentially — here we look up the single-axis map
+    // matching the subset when it is one bit).
+    const bool singleAxis =
+        axisSubset == SymAxisX || axisSubset == SymAxisY || axisSubset == SymAxisZ;
+    if (m_topologyMirror && singleAxis && m_paintMesh && m_hitCache.valid
+        && m_hitCache.submesh >= 0 && m_hitCache.triangle >= 0) {
+        // Lazily build (and entity-guard) the per-axis map.
+        auto* entity = activeEntity();
+        if (entity && m_symmetryMapEntity != entity) {
+            m_symmetryMaps.clear();
+            m_symmetryMapEntity = entity;
+        }
+        auto it = m_symmetryMaps.find(axisSubset);
+        if (it == m_symmetryMaps.end()) {
+            SymmetryMirrorMap map;
+            const float diag = m_paintMesh->calculateBounds().getSize().length();
+            const float weld = std::max(diag * 1e-3f, 1e-5f);
+            const bool ok = map.build(*m_paintMesh, axisSubset,
+                                      m_symmetryPivotLocal, weld);
+            SentryReporter::addBreadcrumb("paint.symmetry",
+                QStringLiteral("topology map axis=%1 built=%2 coverage=%3")
+                    .arg(axisSubset).arg(ok).arg(map.coverage(), 0, 'f', 2));
+            it = m_symmetryMaps.emplace(axisSubset, std::move(map)).first;
+        }
+        const SymmetryMirrorMap& map = it->second;
+        if (map.valid()) {
+            const auto& subs = m_paintMesh->subMeshes();
+            const auto& sub = subs[static_cast<size_t>(m_hitCache.submesh)];
+            const auto& tri = sub.triangles[static_cast<size_t>(m_hitCache.triangle)];
+            // Recover the primary dab's barycentric weights on the cached
+            // triangle from the mirror local point's PRE-image is not needed —
+            // we need the PRIMARY dab's barycentrics. Recompute them from the
+            // cached triangle + the current primary hit via uvForLocalPoint on
+            // the primary local point isn't available here; instead compute the
+            // primary barycentric directly from the cached triangle geometry.
+            // The primary local point is the reflection pre-image; but we only
+            // hold mirrorLocal. So derive the primary bary from the hit cache's
+            // stored UV path: use the corner indices and let mirrorDab permute.
+            const int corner[3] = { static_cast<int>(tri.indices[0]),
+                                    static_cast<int>(tri.indices[1]),
+                                    static_cast<int>(tri.indices[2]) };
+            // Primary barycentric: from the primary local point. We reflect the
+            // mirror point back to get the primary local point, then compute
+            // bary on the cached triangle.
+            const Ogre::Vector3 primaryLocal =
+                reflectLocal(mirrorLocal, axisSubset, m_symmetryPivotLocal);
+            const auto& p0 = sub.vertices[tri.indices[0]].position;
+            const auto& p1 = sub.vertices[tri.indices[1]].position;
+            const auto& p2 = sub.vertices[tri.indices[2]].position;
+            const Ogre::Vector3 e1 = p1 - p0, e2 = p2 - p0, dpv = primaryLocal - p0;
+            const float d00 = e1.dotProduct(e1), d01 = e1.dotProduct(e2);
+            const float d11 = e2.dotProduct(e2);
+            const float d20 = dpv.dotProduct(e1), d21 = dpv.dotProduct(e2);
+            const float denom = d00 * d11 - d01 * d01;
+            if (std::abs(denom) > 1e-12f) {
+                const float bu = (d11 * d20 - d01 * d21) / denom;
+                const float bv = (d00 * d21 - d01 * d20) / denom;
+                const float bary[3] = { 1.0f - bu - bv, bu, bv };
+                int oSub = -1, oTri = -1; float oBary[3];
+                if (map.mirrorDab(m_hitCache.submesh, corner, bary, oSub, oTri, oBary)) {
+                    const auto& msub = subs[static_cast<size_t>(oSub)];
+                    const auto& mtri = msub.triangles[static_cast<size_t>(oTri)];
+                    outUV = msub.vertices[mtri.indices[0]].uv * oBary[0]
+                          + msub.vertices[mtri.indices[1]].uv * oBary[1]
+                          + msub.vertices[mtri.indices[2]].uv * oBary[2];
+                    return true;
+                }
+            }
+        }
+    }
+    // Geometric fallback.
+    return uvForLocalPoint(mirrorLocal, outUV);
+}
+
+void TexturePaintController::applyBrushSymmetryDabs(const Ogre::Vector2& primaryUV)
+{
+    if (!m_symmetryEnabled || m_symmetryAxes == SymAxisNone) return;
+    Ogre::Vector3 primaryLocal, primaryNormal;
+    // Prefer the screen-raycast hit cache; fall back to the reverse UV lookup so
+    // the 2D-panel (UV) paint path mirrors too. The fallback also seeds the hit
+    // cache so the topology-aware path can key off the primary triangle.
+    if (!localPointFromHitCache(primaryUV, primaryLocal, primaryNormal)) {
+        int hs = -1, ht = -1;
+        if (!findMeshPointForUV(primaryUV, primaryLocal, primaryNormal, &hs, &ht))
+            return;
+        m_hitCache.submesh = hs;
+        m_hitCache.triangle = ht;
+        m_hitCache.valid = true;
+    }
+
+    // mirrorLocalPoints returns one mesh-LOCAL mirror point per enabled
+    // axis-subset, in ascending-subset order (X, Y, XY, Z, ...). We track the
+    // matching subset bitmask so the topology map for that axis can be used.
+    const std::vector<Ogre::Vector3> pts = mirrorLocalPoints(primaryLocal);
+    int idx = 0;
+    for (int subset = 1; subset <= (SymAxisX | SymAxisY | SymAxisZ); ++subset) {
+        if ((subset & m_symmetryAxes) != subset) continue;
+        if (idx >= static_cast<int>(pts.size())) break;
+        Ogre::Vector2 mUV;
+        if (mirrorUvForLocalPoint(pts[static_cast<size_t>(idx)], subset, primaryUV, mUV)) {
+            if (applyBrushAtUV(mUV)) m_strokeMadeChanges = true;
+        }
+        ++idx;
+    }
+}
+
+void TexturePaintController::applyBrushSymmetrySegment(const Ogre::Vector2& fromUV,
+                                                       const Ogre::Vector2& toUV)
+{
+    // For the segment path we simply mirror the endpoint dab (toUV). Per-subset
+    // gap-free segment continuity is added in Slice E-B; a single mirrored dab
+    // per move keeps early slices correct (dabs are dense enough on typical
+    // moves, and endStroke's final dab closes the stroke).
+    (void)fromUV;
+    applyBrushSymmetryDabs(toUV);
+}
+
+void TexturePaintController::invalidateSymmetryMaps()
+{
+    m_symmetryMaps.clear();
+    m_symmetryMapEntity = nullptr;
+}
+
+int TexturePaintController::stabilizerWindow(double amount)
+{
+    const double a = std::clamp(amount, 0.0, 100.0) / 100.0;
+    const int Nmax = 24;
+    return 1 + static_cast<int>(std::lround(a * (Nmax - 1)));
+}
+
+QPointF TexturePaintController::stabilizeAveragePoint(const std::deque<QPointF>& samples,
+                                                      int window)
+{
+    if (samples.empty()) return QPointF();
+    const int n = static_cast<int>(samples.size());
+    const int start = std::max(0, n - std::max(1, window));
+    double wx = 0.0, wy = 0.0, wsum = 0.0;
+    for (int i = start; i < n; ++i) {
+        const double w = static_cast<double>(i - start + 1);   // newest heaviest
+        wx += samples[static_cast<size_t>(i)].x() * w;
+        wy += samples[static_cast<size_t>(i)].y() * w;
+        wsum += w;
+    }
+    return (wsum > 0.0) ? QPointF(wx / wsum, wy / wsum) : samples.back();
+}
+
+QPointF TexturePaintController::stabilizeTrailPoint(const QPointF& trail,
+                                                    const QPointF& raw, double lag)
+{
+    const QPointF d = raw - trail;
+    const double dist = std::hypot(d.x(), d.y());
+    if (dist > lag && dist > 1e-6)
+        return trail + d * ((dist - lag) / dist);
+    return trail;
+}
+
+QPointF TexturePaintController::stabilizeScreen(const QPointF& raw)
+{
+    m_stabLastRaw = raw;
+    m_stabHaveLastRaw = true;
+    if (m_stabilizerAmount <= 0.0) {          // passthrough — zero latency
+        m_stabSamples.clear();
+        m_stabHaveTrail = false;
+        return raw;
+    }
+    if (m_stabilizerMode == StabTrail) {
+        const double L = (m_stabilizerAmount / 100.0) * 60.0;   // Lmax = 60 px
+        if (!m_stabHaveTrail) { m_stabTrailPos = raw; m_stabHaveTrail = true; }
+        m_stabTrailPos = stabilizeTrailPoint(m_stabTrailPos, raw, L);
+        return m_stabTrailPos;
+    }
+    const int N = stabilizerWindow(m_stabilizerAmount);
+    m_stabSamples.push_back(raw);
+    while (static_cast<int>(m_stabSamples.size()) > N) m_stabSamples.pop_front();
+    return stabilizeAveragePoint(m_stabSamples, N);
+}
+
+void TexturePaintController::refreshSymmetryPlaneOverlay()
+{
+    auto* entity = m_paintMeshEntity;
+    auto* sceneMgr = (entity ? entity->_getManager() : nullptr);
+    if (!sceneMgr) sceneMgr = Manager::getSingletonPtr()
+                       ? Manager::getSingletonPtr()->getSceneMgr() : nullptr;
+    if (!sceneMgr) return;
+
+    const bool show = m_symmetryEnabled && m_symmetryAxes != SymAxisNone
+                      && hasActiveSession() && m_paintMesh;
+
+    if (!show) {
+        if (m_symPlaneObj) m_symPlaneObj->clear();
+        if (m_symPlaneNode) m_symPlaneNode->setVisible(false);
+        return;
+    }
+
+    static const char* kMat = "TexturePaint/SymPlane";
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    if (!matMgr.getByName(kMat)) {
+        auto mat = matMgr.create(kMat, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+        pass->setCullingMode(Ogre::CULL_NONE);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    }
+    if (!m_symPlaneNode)
+        m_symPlaneNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    if (!m_symPlaneObj) {
+        m_symPlaneObj = sceneMgr->createManualObject("TexturePaint_SymPlane");
+        m_symPlaneObj->setDynamic(true);
+        m_symPlaneObj->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+        m_symPlaneNode->attachObject(m_symPlaneObj);
+    }
+    // Inherit the entity's transform so local planes render in the mesh frame.
+    if (auto* node = entity ? entity->getParentSceneNode() : nullptr) {
+        m_symPlaneNode->setPosition(node->_getDerivedPosition());
+        m_symPlaneNode->setOrientation(node->_getDerivedOrientation());
+        m_symPlaneNode->setScale(node->_getDerivedScale());
+    }
+    const Ogre::AxisAlignedBox bb = m_paintMesh->calculateBounds();
+    const Ogre::Vector3 ext = bb.getSize() * 0.6f + Ogre::Vector3(1e-3f, 1e-3f, 1e-3f);
+    const Ogre::Vector3 c = m_symmetryPivotLocal;
+
+    m_symPlaneObj->clear();
+    m_symPlaneObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+    auto quad = [&](const Ogre::Vector3& a, const Ogre::Vector3& b,
+                    const Ogre::Vector3& d, const Ogre::Vector3& e,
+                    const Ogre::ColourValue& col) {
+        const int base = static_cast<int>(m_symPlaneObj->getCurrentVertexCount());
+        for (const auto& v : {a, b, d, e}) { m_symPlaneObj->position(v); m_symPlaneObj->colour(col); }
+        m_symPlaneObj->triangle(base, base + 1, base + 2);
+        m_symPlaneObj->triangle(base, base + 2, base + 3);
+    };
+    const float alpha = 0.12f;
+    if (m_symmetryAxes & SymAxisX)   // plane x=c.x, spans Y/Z
+        quad({c.x, c.y - ext.y, c.z - ext.z}, {c.x, c.y + ext.y, c.z - ext.z},
+             {c.x, c.y + ext.y, c.z + ext.z}, {c.x, c.y - ext.y, c.z + ext.z},
+             Ogre::ColourValue(1, 0.2f, 0.2f, alpha));
+    if (m_symmetryAxes & SymAxisY)   // plane y=c.y, spans X/Z
+        quad({c.x - ext.x, c.y, c.z - ext.z}, {c.x + ext.x, c.y, c.z - ext.z},
+             {c.x + ext.x, c.y, c.z + ext.z}, {c.x - ext.x, c.y, c.z + ext.z},
+             Ogre::ColourValue(0.2f, 1, 0.2f, alpha));
+    if (m_symmetryAxes & SymAxisZ)   // plane z=c.z, spans X/Y
+        quad({c.x - ext.x, c.y - ext.y, c.z}, {c.x + ext.x, c.y - ext.y, c.z},
+             {c.x + ext.x, c.y + ext.y, c.z}, {c.x - ext.x, c.y + ext.y, c.z},
+             Ogre::ColourValue(0.3f, 0.3f, 1, alpha));
+    m_symPlaneObj->end();
+    m_symPlaneNode->setVisible(true);
 }
 
 void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,

@@ -9,10 +9,12 @@
 #include "GradientRamp.h"
 #include "PaintLayerStack.h"
 #include "PaintChannel.h"
+#include "SymmetryMirrorMap.h"
 
 #include <QColor>
 #include <QObject>
 #include <QPoint>
+#include <QPointF>
 #include <QQmlEngine>
 #include <QString>
 #include <QStringList>
@@ -24,8 +26,10 @@
 #include <OgreTexture.h>
 #include <OgreVector.h>
 
+#include <deque>
 #include <memory>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 class EditableMesh;
@@ -122,6 +126,15 @@ class TexturePaintController : public QObject
     Q_PROPERTY(QVariantList textureSlots READ textureSlots NOTIFY slotsChanged)
     Q_PROPERTY(int activeSlotIndex READ activeSlotIndex WRITE setActiveSlotIndex NOTIFY slotsChanged)
 
+    // Paint v2 Slice E (#548) — symmetry. WRITE-backed (assign directly from QML).
+    Q_PROPERTY(bool symmetryEnabled READ symmetryEnabled WRITE setSymmetryEnabled NOTIFY symmetryChanged)
+    Q_PROPERTY(int  symmetrySpace   READ symmetrySpace   WRITE setSymmetrySpace   NOTIFY symmetryChanged)
+    Q_PROPERTY(int  symmetryAxes    READ symmetryAxes    WRITE setSymmetryAxes    NOTIFY symmetryChanged)
+    Q_PROPERTY(bool topologyMirror  READ topologyMirror  WRITE setTopologyMirror  NOTIFY symmetryChanged)
+    // Paint v2 Slice E (#548) — line stabilizer.
+    Q_PROPERTY(int    stabilizerMode   READ stabilizerMode   WRITE setStabilizerMode   NOTIFY stabilizerChanged)
+    Q_PROPERTY(double stabilizerAmount READ stabilizerAmount WRITE setStabilizerAmount NOTIFY stabilizerChanged)
+
 public:
     enum BrushTool {
         ToolPaint       = 0,  ///< Lerp pixels toward brush color.
@@ -154,6 +167,30 @@ public:
         GradientAngular = 2,
     };
     Q_ENUM(GradientMode)
+
+    /// Paint v2 Slice E (#548) — the space the symmetry mirror plane lives in.
+    enum SymmetrySpace {
+        SymLocal = 0,  ///< Reflect about the mesh's local origin plane (default).
+        SymWorld = 1,  ///< Reflect about the world plane through the entity origin.
+    };
+    Q_ENUM(SymmetrySpace)
+
+    /// Paint v2 Slice E (#548) — enabled mirror axes as a bitmask (OR-combinable
+    /// for multi-axis, e.g. X|Y mirrors to 4 locations, X|Y|Z to 8).
+    enum SymmetryAxis {
+        SymAxisNone = 0,
+        SymAxisX = 1,
+        SymAxisY = 2,
+        SymAxisZ = 4,
+    };
+    Q_FLAG(SymmetryAxis)
+
+    /// Paint v2 Slice E (#548) — line-stabilizer smoothing mode.
+    enum StabilizerMode {
+        StabAverage = 0,  ///< Cursor is a weighted moving average of recent samples.
+        StabTrail   = 1,  ///< Brush lags a fixed distance behind the cursor (Krita/PS).
+    };
+    Q_ENUM(StabilizerMode)
 
     static TexturePaintController* instance();
     static TexturePaintController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
@@ -347,6 +384,33 @@ public:
     void setActiveSlotIndex(int index);
     /// Recompute the texture slot list from the current selection.
     Q_INVOKABLE void refreshSlots();
+    /// @}
+
+    /// @name Paint v2 Slice E — symmetry + line stabilizer (#548)
+    /// @{
+    bool symmetryEnabled() const { return m_symmetryEnabled; }
+    void setSymmetryEnabled(bool on);
+    int  symmetrySpace() const { return static_cast<int>(m_symmetrySpace); }
+    void setSymmetrySpace(int space);
+    int  symmetryAxes() const { return m_symmetryAxes; }
+    void setSymmetryAxes(int axes);
+    bool topologyMirror() const { return m_topologyMirror; }
+    void setTopologyMirror(bool on);
+
+    int  stabilizerMode() const { return static_cast<int>(m_stabilizerMode); }
+    void setStabilizerMode(int mode);
+    double stabilizerAmount() const { return m_stabilizerAmount; }
+    void setStabilizerAmount(double amount);
+
+    // Pure math (no member state) — exposed for unit testing the stabilizer.
+    /// Window size for the weighted moving average at `amount` (0..100).
+    static int stabilizerWindow(double amount);
+    /// Newest-heaviest weighted average of the last `window` samples.
+    static QPointF stabilizeAveragePoint(const std::deque<QPointF>& samples,
+                                         int window);
+    /// Step a lagging trail position toward `raw`, keeping distance `lag` px.
+    static QPointF stabilizeTrailPoint(const QPointF& trail, const QPointF& raw,
+                                       double lag);
     /// @}
 
     /// @name Paint v2 Slice D — PBR channel painting (#547)
@@ -543,7 +607,47 @@ public:
     /// math against an in-memory mesh.
     bool findMeshPointForUV(const Ogre::Vector2& uv,
                             Ogre::Vector3& outLocal,
-                            Ogre::Vector3& outNormal) const;
+                            Ogre::Vector3& outNormal,
+                            int* outSubmesh = nullptr,
+                            int* outTriangle = nullptr) const;
+
+    // --- Paint v2 Slice E symmetry helpers (#548) ---
+    /// Inverse of findMeshPointForUV: nearest triangle to a mesh-LOCAL point →
+    /// interpolated UV (and optionally the winning submesh/triangle/barycentric).
+    /// Returns false if no triangle lies within tolerance of `local`.
+    bool uvForLocalPoint(const Ogre::Vector3& local,
+                         Ogre::Vector2& outUV,
+                         int* outSubmesh = nullptr,
+                         int* outTriangle = nullptr,
+                         float* outBary = nullptr /* [3] */) const;
+    /// Reflect a mesh-LOCAL point across the given single axis bit about `pivot`.
+    static Ogre::Vector3 reflectLocal(const Ogre::Vector3& p, int axisBit,
+                                      const Ogre::Vector3& pivot);
+    /// All mirror images of a primary LOCAL point for the currently-enabled
+    /// axes: 1 point for a single axis, 3 for X|Y, 7 for X|Y|Z (every nonzero
+    /// axis-subset). Empty when symmetry is disabled / no axes set.
+    std::vector<Ogre::Vector3> mirrorLocalPoints(const Ogre::Vector3& primaryLocal) const;
+    /// Resolve a mirror LOCAL point to a UV — topology-aware when enabled and a
+    /// correspondence exists for `axisSubset`, else geometric (uvForLocalPoint).
+    bool mirrorUvForLocalPoint(const Ogre::Vector3& mirrorLocal, int axisSubset,
+                               const Ogre::Vector2& primaryUV,
+                               Ogre::Vector2& outUV);
+    /// Paint the primary dab's mirror images for the enabled symmetry. Called
+    /// from the stroke-update paths AFTER the primary dab; all dabs land in the
+    /// same buffer inside one begin/end window → captured by one undo command.
+    void applyBrushSymmetryDabs(const Ogre::Vector2& primaryUV);
+    void applyBrushSymmetrySegment(const Ogre::Vector2& fromUV,
+                                   const Ogre::Vector2& toUV);
+    /// Rebuild/clear the faint translucent symmetry-plane overlay.
+    void refreshSymmetryPlaneOverlay();
+    /// Drop the cached topology mirror maps (entity/mesh changed or axes toggled).
+    void invalidateSymmetryMaps();
+
+    // --- Paint v2 Slice E stabilizer helpers (#548) ---
+    /// Smooth a raw screen position per the active stabilizer mode/amount.
+    /// amount==0 is an exact passthrough (zero latency). Static-friendly math
+    /// lives in stabilizeSamples for unit testing.
+    QPointF stabilizeScreen(const QPointF& raw);
 
     /// Quick "would beginStroke hit the mesh at screenPos?" probe.
     /// Public wrapper around hitTestUV used by TransformOperator to
@@ -596,6 +700,9 @@ signals:
     /// on channel switch AND on layer add/remove/paint (so hasLayers badges
     /// stay live without a channel switch).
     void paintChannelsChanged();
+    /// Paint v2 Slice E (#548): symmetry / stabilizer settings changed.
+    void symmetryChanged();
+    void stabilizerChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -950,6 +1057,32 @@ private:
     // units while painting.
     Ogre::SceneNode* m_ringNode = nullptr;
     Ogre::ManualObject* m_ringObj = nullptr;
+
+    // --- Paint v2 Slice E (#548): symmetry state ---
+    bool m_symmetryEnabled = false;                       // starts OFF
+    SymmetrySpace m_symmetrySpace = SymLocal;             // LOCAL X default when enabled
+    int  m_symmetryAxes = SymAxisX;                       // bitmask; default X
+    bool m_topologyMirror = true;                         // full-spec default on
+    Ogre::Vector3 m_symmetryPivotLocal = Ogre::Vector3::ZERO;  // mesh local origin
+    /// Per-single-axis topology mirror maps, built lazily; guarded by the entity
+    /// they were built for (invalidated on entity/mesh change).
+    std::unordered_map<int, SymmetryMirrorMap> m_symmetryMaps;
+    Ogre::Entity* m_symmetryMapEntity = nullptr;
+    /// Per-mirror-subset previous UV, so mirror strokes fan segments without gaps.
+    std::vector<Ogre::Vector2> m_mirrorPrevUV;
+    std::vector<bool> m_mirrorHavePrevUV;
+    // Symmetry-plane overlay (mirrors the m_ring* hover-ring pattern).
+    Ogre::SceneNode* m_symPlaneNode = nullptr;
+    Ogre::ManualObject* m_symPlaneObj = nullptr;
+
+    // --- Paint v2 Slice E (#548): line stabilizer state ---
+    StabilizerMode m_stabilizerMode = StabAverage;
+    double m_stabilizerAmount = 0.0;      // 0..100; 0 = passthrough (zero latency)
+    std::deque<QPointF> m_stabSamples;    // moving-average window
+    QPointF m_stabTrailPos;               // trail-mode lagging brush position
+    bool    m_stabHaveTrail = false;
+    QPointF m_stabLastRaw;                // true last cursor (for end catch-up)
+    bool    m_stabHaveLastRaw = false;
 
     // Preview PNG cache.
     QString m_previewUri;
