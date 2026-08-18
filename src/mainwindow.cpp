@@ -133,6 +133,7 @@
 #include "SkeletonEditor.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
+#include "PaintChannelPresets.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
@@ -874,6 +875,7 @@ MainWindow::~MainWindow()
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
+        PaintChannelPresets::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
         ShadowController::kill();
@@ -1145,6 +1147,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MaterialPresetLibrary>("PropertiesPanel", 1, 0, "MaterialPresetLibrary",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<PaintChannelPresets>("PropertiesPanel", 1, 0, "PaintChannelPresets",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PaintChannelPresets::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

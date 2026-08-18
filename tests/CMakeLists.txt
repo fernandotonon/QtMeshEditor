@@ -157,6 +157,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintChannelPresets.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureChannelPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureAtlasPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBufferImageProvider.cpp
@@ -413,6 +414,8 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintChannel.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintChannelPresets.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.h

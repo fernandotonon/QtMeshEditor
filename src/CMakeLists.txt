@@ -110,6 +110,7 @@ SceneTreeModel.cpp
 ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
+PaintChannelPresets.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
@@ -341,6 +342,7 @@ SceneTreeModel.h
 ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
+PaintChannelPresets.h
 MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
@@ -377,6 +379,7 @@ TextureAtlasPacker.h
 PaintBufferImageProvider.h
 PaintLayerBlend.h
 PaintLayerStack.h
+PaintChannel.h
 PaintSelectionMask.h
 GradientRamp.h
 BrushEngine.h
