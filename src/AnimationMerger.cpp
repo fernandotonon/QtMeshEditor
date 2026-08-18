@@ -3341,22 +3341,21 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             bool fingerBasisOk[2] = {false, false};
             if (clipIsV2 && !clipRestDir.empty()
                 && static_cast<int>(clipRestDir.size()) >= canonN) {
-                auto basisQuat = [](const Ogre::Vector3& dIn,
-                                    const Ogre::Vector3& tIn,
+                // Basis from a hand direction + a flexion axis: x = hand
+                // direction, y = flexion axis (orthogonalized), z = x×y.
+                auto basisQuat = [](Ogre::Vector3 d, Ogre::Vector3 fl,
                                     Ogre::Quaternion& out) -> bool {
-                    Ogre::Vector3 d = dIn, t = tIn;
-                    if (d.squaredLength() < 1e-8f || t.squaredLength() < 1e-8f)
+                    if (d.squaredLength() < 1e-8f || fl.squaredLength() < 1e-8f)
                         return false;
                     d.normalise();
-                    Ogre::Vector3 p = t - d * t.dotProduct(d);
-                    if (p.squaredLength() < 1e-6f)
-                        return false;   // thumb ~parallel to hand: degenerate
-                    p.normalise();
-                    const Ogre::Vector3 b = d.crossProduct(p);
+                    fl = fl - d * fl.dotProduct(d);
+                    if (fl.squaredLength() < 1e-6f)
+                        return false;
+                    fl.normalise();
                     Ogre::Matrix3 m;
                     m.SetColumn(0, d);
-                    m.SetColumn(1, p);
-                    m.SetColumn(2, b);
+                    m.SetColumn(1, fl);
+                    m.SetColumn(2, d.crossProduct(fl));
                     out = Ogre::Quaternion(m);
                     return true;
                 };
@@ -3369,14 +3368,184 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         || thumb0 >= static_cast<int>(tb.tgtBindDir.size()))
                         continue;
                     const auto& hd = clipRestDir[static_cast<size_t>(hand)];
-                    const auto& td = clipRestDir[static_cast<size_t>(thumb0)];
+                    const Ogre::Vector3 dS(hd[0], hd[1], hd[2]);
+
+                    // SOURCE flexion axis: SELF-CALIBRATED from the curl data
+                    // itself — the dominant rotation axis of the non-thumb
+                    // finger deltas (power-iterated axis covariance). Rigs
+                    // whose thumb rest points oddly (block-hand exports) fool
+                    // a thumb-based palmward guess, but the fingers' own curl
+                    // axis is ground truth (measured 0.99+ concentration on
+                    // such rigs). Sign: fingers FLEX far more than they
+                    // extend, so the net signed curl points along +flexion.
+                    Ogre::Matrix3 cov(0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    float totW = 0.0f;
+                    for (int fgr = 1; fgr < 5; ++fgr)
+                        for (int seg = 0; seg < 3; ++seg) {
+                            const int c = MotionInbetween::fingerJointIndexV2(
+                                side, fgr, seg);
+                            const int pc =
+                                MotionInbetween::canonicalParentOfV2(c);
+                            if (c < 0 || c >= canonN || pc < 0) continue;
+                            const auto& rq =
+                                cmuRestWorld[static_cast<size_t>(c)];
+                            const auto& prq =
+                                cmuRestWorld[static_cast<size_t>(pc)];
+                            if (rq[0]*rq[0] + rq[1]*rq[1] + rq[2]*rq[2]
+                                    + rq[3]*rq[3] < 0.25f) continue;
+                            const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
+                                                        rq[2]);
+                            const Ogre::Quaternion prefQ(prq[3], prq[0],
+                                                         prq[1], prq[2]);
+                            for (int f = 0; f < frames; ++f) {
+                                const Ogre::Quaternion Df =
+                                    clipQ(f, c) * refQ.Inverse();
+                                const Ogre::Quaternion Dp =
+                                    clipQ(f, pc) * prefQ.Inverse();
+                                Ogre::Quaternion Drel = Dp.Inverse() * Df;
+                                if (Drel.w < 0) Drel = -Drel;
+                                Ogre::Vector3 ax(Drel.x, Drel.y, Drel.z);
+                                const float deg = 2.0f * Ogre::Math::ACos(
+                                    std::min(1.0f, Drel.w)).valueDegrees();
+                                if (deg < 10.0f
+                                    || ax.squaredLength() < 1e-10f)
+                                    continue;
+                                ax.normalise();
+                                for (int r = 0; r < 3; ++r)
+                                    for (int cc = 0; cc < 3; ++cc)
+                                        cov[r][cc] += deg * ax[r] * ax[cc];
+                                totW += deg;
+                            }
+                        }
+                    Ogre::Vector3 flexS = Ogre::Vector3::ZERO;
+                    float concentration = 0.0f;
+                    if (totW > 30.0f) {   // enough articulation to calibrate
+                        Ogre::Vector3 v(1, 1, 1);
+                        for (int it = 0; it < 40; ++it) {
+                            v = cov * v;
+                            if (v.squaredLength() < 1e-20f) break;
+                            v.normalise();
+                        }
+                        // concentration + net sign in one pass
+                        float aligned = 0.0f, net = 0.0f;
+                        for (int fgr = 1; fgr < 5; ++fgr)
+                            for (int seg = 0; seg < 3; ++seg) {
+                                const int c =
+                                    MotionInbetween::fingerJointIndexV2(
+                                        side, fgr, seg);
+                                const int pc =
+                                    MotionInbetween::canonicalParentOfV2(c);
+                                if (c < 0 || c >= canonN || pc < 0) continue;
+                                const auto& rq =
+                                    cmuRestWorld[static_cast<size_t>(c)];
+                                const auto& prq =
+                                    cmuRestWorld[static_cast<size_t>(pc)];
+                                if (rq[0]*rq[0] + rq[1]*rq[1] + rq[2]*rq[2]
+                                        + rq[3]*rq[3] < 0.25f) continue;
+                                const Ogre::Quaternion refQ(rq[3], rq[0],
+                                                            rq[1], rq[2]);
+                                const Ogre::Quaternion prefQ(prq[3], prq[0],
+                                                             prq[1], prq[2]);
+                                for (int f = 0; f < frames; ++f) {
+                                    const Ogre::Quaternion Df =
+                                        clipQ(f, c) * refQ.Inverse();
+                                    const Ogre::Quaternion Dp =
+                                        clipQ(f, pc) * prefQ.Inverse();
+                                    Ogre::Quaternion Drel =
+                                        Dp.Inverse() * Df;
+                                    if (Drel.w < 0) Drel = -Drel;
+                                    Ogre::Vector3 ax(Drel.x, Drel.y, Drel.z);
+                                    const float deg = 2.0f * Ogre::Math::ACos(
+                                        std::min(1.0f, Drel.w))
+                                            .valueDegrees();
+                                    if (deg < 10.0f
+                                        || ax.squaredLength() < 1e-10f)
+                                        continue;
+                                    ax.normalise();
+                                    const float d = ax.dotProduct(v);
+                                    aligned += deg * std::abs(d);
+                                    net += deg * (d >= 0 ? 1.0f : -1.0f);
+                                }
+                            }
+                        concentration = aligned / totW;
+                        flexS = (net >= 0.0f) ? v : -v;
+                    }
+
+                    // TARGET flexion axis: the KNUCKLE LINE (seg0 bone
+                    // positions of index..pinky) — anatomically the axis
+                    // fingers flex about; sign chosen so +rotation curls
+                    // toward the palm (thumb side).
+                    Ogre::Vector3 flexT = Ogre::Vector3::ZERO;
+                    {
+                        std::vector<Ogre::Vector3> kn;
+                        for (int fgr = 1; fgr < 5; ++fgr) {
+                            const int c = MotionInbetween::fingerJointIndexV2(
+                                side, fgr, 0);
+                            if (c < 0 || c >= canonN) continue;
+                            const int bi =
+                                tb.roleBoneIdx[static_cast<size_t>(c)];
+                            if (bi >= 0)
+                                kn.push_back(
+                                    tb.bindPos[static_cast<size_t>(bi)]);
+                        }
+                        const int hb =
+                            tb.roleBoneIdx[static_cast<size_t>(hand)];
+                        const int tbi =
+                            tb.roleBoneIdx[static_cast<size_t>(thumb0)];
+                        if (kn.size() >= 2 && hb >= 0 && tbi >= 0) {
+                            Ogre::Vector3 line = kn.back() - kn.front();
+                            const Ogre::Vector3 dT =
+                                tb.tgtBindDir[static_cast<size_t>(hand)]
+                                    .normalisedCopy();
+                            line = line - dT * line.dotProduct(dT);
+                            if (line.squaredLength() > 1e-10f) {
+                                line.normalise();
+                                // palm side = where the thumb sits
+                                Ogre::Vector3 palm =
+                                    tb.bindPos[static_cast<size_t>(tbi)]
+                                    - tb.bindPos[static_cast<size_t>(hb)];
+                                palm = palm - dT * palm.dotProduct(dT);
+                                // +rotation about `line` moves fingertips
+                                // toward line×dT — require that to be the
+                                // palm side.
+                                if (line.crossProduct(dT).dotProduct(palm)
+                                        < 0.0f)
+                                    line = -line;
+                                flexT = line;
+                            }
+                        }
+                    }
+
                     Ogre::Quaternion qs, qt;
-                    const bool okS = basisQuat(
-                        Ogre::Vector3(hd[0], hd[1], hd[2]),
-                        Ogre::Vector3(td[0], td[1], td[2]), qs);
-                    const bool okT = basisQuat(
-                        tb.tgtBindDir[static_cast<size_t>(hand)],
-                        tb.tgtBindDir[static_cast<size_t>(thumb0)], qt);
+                    bool okS = false, okT = false;
+                    if (concentration > 0.8f
+                        && flexS.squaredLength() > 0.5f)
+                        okS = basisQuat(dS, flexS, qs);
+                    if (flexT.squaredLength() > 0.5f)
+                        okT = basisQuat(
+                            tb.tgtBindDir[static_cast<size_t>(hand)], flexT,
+                            qt);
+                    if (!okS || !okT) {
+                        // Fallback: thumb-direction palmward on both sides
+                        // (the previous construction — fine for rigs with a
+                        // sane thumb rest, e.g. Gregorio).
+                        const auto& td =
+                            clipRestDir[static_cast<size_t>(thumb0)];
+                        Ogre::Vector3 tS(td[0], td[1], td[2]);
+                        // flexion ≈ d × palmward: build via palmward and
+                        // rotate: basis (d, palmward, d×palmward) is the same
+                        // family — reuse it directly on both sides.
+                        okS = basisQuat(dS, dS.crossProduct(
+                                  tS - dS * tS.dotProduct(
+                                      dS.normalisedCopy())), qs);
+                        const Ogre::Vector3 dT =
+                            tb.tgtBindDir[static_cast<size_t>(hand)];
+                        const Ogre::Vector3 tT =
+                            tb.tgtBindDir[static_cast<size_t>(thumb0)];
+                        okT = basisQuat(dT, dT.crossProduct(
+                                  tT - dT * tT.dotProduct(
+                                      dT.normalisedCopy())), qt);
+                    }
                     if (okS && okT) {
                         fingerBasisMap[side] = qt * qs.Inverse();
                         fingerBasisOk[side] = true;

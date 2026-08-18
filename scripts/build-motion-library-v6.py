@@ -101,14 +101,6 @@ def norm_anim_name(name):
 # Fold verbatim-word actions onto a canonical base so we don't split a
 # handful of clips across near-duplicate labels ("waving"→"wave"). Keeps the
 # runtime kSynonyms table and these labels consistent.
-# Sources whose rigs have BLOCK/UNAUTHORED hands: their finger bones carry
-# junk (never polished — the mesh shows no fingers), which splays a real
-# hand's fingers on retarget. Zero the finger joints (22..51) for these so
-# targets hold their bind hands. Substring match on the asset title.
-FINGERLESS_SOURCES = [
-    "Animated Human Low Poly",
-]
-
 CANON_ACTION = {
     "waving": "wave", "singing": "sing", "walking": "walk",
     "running": "run", "jumping": "jump", "dancing": "dance",
@@ -736,19 +728,6 @@ def main():
                         # `quats`/`restWorld`/`restDir` already — no separate
                         # `fingers` side-channel. (The V1 builder copied
                         # c["fingers"] here; V2 dumps don't emit it.)
-                        # Block-hand rigs ship WITHOUT finger data (targets
-                        # hold their bind hands — see FINGERLESS_SOURCES).
-                        if any(fs.lower() in title.lower()
-                               for fs in FINGERLESS_SOURCES):
-                            for fr in clip["quats"]:
-                                for j in range(22, min(52, len(fr))):
-                                    fr[j] = [0.0, 0.0, 0.0, 0.0]
-                            for key in ("restWorld", "restDir"):
-                                arr = clip.get(key)
-                                if arr and len(arr) == 52:
-                                    zero = [0.0]*len(arr[22])
-                                    for j in range(22, 52):
-                                        arr[j] = list(zero)
                         clips.append(clip)
                         print(f"  + {action:<10} {title[:38]:<40}"
                               f" {c.get('animation')} ({len(w)}f, q={quality:.2f})")
