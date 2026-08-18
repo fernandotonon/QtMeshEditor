@@ -151,7 +151,8 @@ std::vector<std::array<float, 2>> genSsdAnchors(int inputSize,
 std::vector<Detection> decodeDetections(
     const float* rawBoxes, const float* rawScores,
     const std::vector<std::array<float, 2>>& anchors, int inputSize,
-    int numKeypoints, float minScore, float iouThreshold)
+    int numKeypoints, float minScore, float iouThreshold,
+    bool reverseOutputOrder)
 {
     const int boxDim = 4 + 2 * numKeypoints;
     std::vector<Detection> candidates;
@@ -162,15 +163,26 @@ std::vector<Detection> decodeDetections(
         const float* box = rawBoxes + i * boxDim;
         Detection d;
         d.score = score;
-        const float cx = box[0] / inputSize + anchors[i][0];
-        const float cy = box[1] / inputSize + anchors[i][1];
-        const float w = box[2] / inputSize;
-        const float h = box[3] / inputSize;
+        // reverse_output_order (BlazePalm TFLite): y,x,h,w instead of x,y,w,h.
+        const float cx = (reverseOutputOrder ? box[1] : box[0]) / inputSize
+                         + anchors[i][0];
+        const float cy = (reverseOutputOrder ? box[0] : box[1]) / inputSize
+                         + anchors[i][1];
+        const float w = (reverseOutputOrder ? box[3] : box[2]) / inputSize;
+        const float h = (reverseOutputOrder ? box[2] : box[3]) / inputSize;
         d.box = {cx - w / 2.f, cy - h / 2.f, w, h};
         d.keypoints.reserve(numKeypoints);
-        for (int k = 0; k < numKeypoints; ++k)
-            d.keypoints.push_back({box[4 + 2 * k] / inputSize + anchors[i][0],
-                                   box[5 + 2 * k] / inputSize + anchors[i][1]});
+        for (int k = 0; k < numKeypoints; ++k) {
+            const float kx = (reverseOutputOrder ? box[5 + 2 * k]
+                                                 : box[4 + 2 * k])
+                             / inputSize
+                             + anchors[i][0];
+            const float ky = (reverseOutputOrder ? box[4 + 2 * k]
+                                                 : box[5 + 2 * k])
+                             / inputSize
+                             + anchors[i][1];
+            d.keypoints.push_back({kx, ky});
+        }
         candidates.push_back(std::move(d));
     }
 
@@ -263,6 +275,115 @@ RotatedRect rectFromPoseDetection(const Detection& det, int imgW, int imgH)
     r.angle = normalizeAngle(static_cast<float>(M_PI) / 2.f - std::atan2(-dy, dx));
     r.w = r.h = 2.f * radius * 1.25f;
     return r;
+}
+
+RotatedRect rectFromPoseHand(float wristX, float wristY, float indexX,
+                             float indexY, float pinkyX, float pinkyY)
+{
+    RotatedRect r;
+    const float mx = 0.5f * (indexX + pinkyX);
+    const float my = 0.5f * (indexY + pinkyY);
+    const float dx = mx - wristX;
+    const float dy = my - wristY;
+    const float palm = std::sqrt(dx * dx + dy * dy);
+    if (palm < 1.f)
+        return r;
+    r.cx = wristX + dx * 0.5f;
+    r.cy = wristY + dy * 0.5f;
+    r.angle = normalizeAngle(static_cast<float>(M_PI) / 2.f
+                             - std::atan2(-dy, dx));
+    r.w = r.h = std::max(palm * 3.0f, 24.f);
+    return r;
+}
+
+RotatedRect rectFromPalmDetection(const Detection& det, int imgW, int imgH)
+{
+    RotatedRect r;
+    if (det.keypoints.size() < 3 || imgW <= 0 || imgH <= 0)
+        return r;
+    r.cx = (det.box[0] + det.box[2] / 2.f) * imgW;
+    r.cy = (det.box[1] + det.box[3] / 2.f) * imgH;
+    const float dx = (det.keypoints[2][0] - det.keypoints[0][0]) * imgW;
+    const float dy = (det.keypoints[2][1] - det.keypoints[0][1]) * imgH;
+    r.angle = normalizeAngle(static_cast<float>(M_PI) / 2.f
+                             - std::atan2(-dy, dx));
+    const float side =
+        std::max(det.box[2] * imgW, det.box[3] * imgH) * 2.6f;
+    r.w = r.h = std::max(side, 24.f);
+    const float ca = std::cos(r.angle);
+    const float sa = std::sin(r.angle);
+    // MediaPipe RectTransformationCalculator shift_y = -0.5
+    r.cx += 0.5f * r.h * sa;
+    r.cy += -0.5f * r.h * ca;
+    return r;
+}
+
+RotatedRect rectFromHandLandmarks(const float* imageXy21x2, int imgW, int imgH)
+{
+    RotatedRect r;
+    if (!imageXy21x2 || imgW <= 0 || imgH <= 0)
+        return r;
+    const float wx = imageXy21x2[0], wy = imageXy21x2[1];
+    const float mx = imageXy21x2[9 * 2 + 0], my = imageXy21x2[9 * 2 + 1];
+    const float dx = mx - wx, dy = my - wy;
+    const float palm = std::sqrt(dx * dx + dy * dy);
+    if (palm < 1.f)
+        return r;
+    r.cx = wx + dx * 0.5f;
+    r.cy = wy + dy * 0.5f;
+    r.angle = normalizeAngle(static_cast<float>(M_PI) / 2.f
+                             - std::atan2(-dy, dx));
+    r.w = r.h = std::max(palm * 2.6f, 24.f);
+    const float ca = std::cos(r.angle);
+    const float sa = std::sin(r.angle);
+    r.cx += 0.1f * r.h * sa;
+    r.cy += -0.1f * r.h * ca;
+    (void)imgW;
+    (void)imgH;
+    return r;
+}
+
+float handJointFlexRad(const float* xyz21, int a, int b, int c)
+{
+    if (!xyz21 || a < 0 || b < 0 || c < 0 || a >= kHandLandmarkCount
+        || b >= kHandLandmarkCount || c >= kHandLandmarkCount)
+        return 0.f;
+    const float* pa = xyz21 + a * 3;
+    const float* pb = xyz21 + b * 3;
+    const float* pc = xyz21 + c * 3;
+    float ax = pa[0] - pb[0], ay = pa[1] - pb[1], az = pa[2] - pb[2];
+    float cx = pc[0] - pb[0], cy = pc[1] - pb[1], cz = pc[2] - pb[2];
+    const float al = std::sqrt(ax * ax + ay * ay + az * az);
+    const float cl = std::sqrt(cx * cx + cy * cy + cz * cz);
+    if (al < 1e-8f || cl < 1e-8f)
+        return 0.f;
+    ax /= al;
+    ay /= al;
+    az /= al;
+    cx /= cl;
+    cy /= cl;
+    cz /= cl;
+    const float d = std::clamp(ax * cx + ay * cy + az * cz, -1.f, 1.f);
+    return static_cast<float>(M_PI) - std::acos(d);
+}
+
+void handFingerFlexRad(const float* xyz21, float outFlex[5][3])
+{
+    static const int kChain[5][4] = {
+        {1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12},
+        {13, 14, 15, 16}, {17, 18, 19, 20},
+    };
+    for (int f = 0; f < 5; ++f) {
+        for (int s = 0; s < 3; ++s)
+            outFlex[f][s] = 0.f;
+        if (!xyz21)
+            continue;
+        outFlex[f][0] = handJointFlexRad(xyz21, 0, kChain[f][0], kChain[f][1]);
+        outFlex[f][1] =
+            handJointFlexRad(xyz21, kChain[f][0], kChain[f][1], kChain[f][2]);
+        outFlex[f][2] =
+            handJointFlexRad(xyz21, kChain[f][1], kChain[f][2], kChain[f][3]);
+    }
 }
 
 void cropRotatedRectToTensor(const QImage& rgb888, const RotatedRect& rect,

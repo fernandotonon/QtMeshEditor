@@ -11,6 +11,8 @@ enum Lm : int {
     Nose = 0, LEar = 7, REar = 8,
     LShoulderLm = 11, RShoulderLm = 12, LElbowLm = 13, RElbowLm = 14,
     LWrist = 15, RWrist = 16,
+    LPinky = 17, RPinky = 18, LIndex = 19, RIndex = 20,
+    LThumb = 21, RThumb = 22,
     LHipLm = 23, RHipLm = 24, LKneeLm = 25, RKneeLm = 26,
     LAnkle = 27, RAnkle = 28, LFootIndex = 31, RFootIndex = 32,
 };
@@ -132,6 +134,21 @@ bool Solver::limbSegmentDirection(
             return false;
         outDir = dir;
         return true;
+    }
+    // Foot-index landmarks are often occluded — aim the foot bone along the shin.
+    if (role == RFoot && visible(26) && visible(28)) {
+        Vec3 dir = sub(p[28], p[26]);
+        if (normalize(dir)) {
+            outDir = dir;
+            return true;
+        }
+    }
+    if (role == LFoot && visible(25) && visible(27)) {
+        Vec3 dir = sub(p[27], p[25]);
+        if (normalize(dir)) {
+            outDir = dir;
+            return true;
+        }
     }
     return false;
 }
@@ -373,6 +390,48 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
     (void)torsoOk;
     (void)hipQ;
     (void)chestQ;
+
+    // ---- hands (wrist twist + palm frame from finger tips) ------------------
+    struct HandSpec {
+        Role role;
+        int wrist, index, pinky;
+    };
+    const HandSpec hands[] = {
+        {RHand, RWrist, RIndex, RPinky},
+        {LHand, LWrist, LIndex, LPinky},
+    };
+    for (const HandSpec& h : hands) {
+        if (!visible(h.wrist) || !visible(h.index) || !visible(h.pinky))
+            continue;
+        const Vec3 w = p[h.wrist];
+        const Vec3 idx = p[h.index];
+        const Vec3 pk = p[h.pinky];
+        Vec3 vIdx = sub(idx, w);
+        Vec3 vPk = sub(pk, w);
+        if (length(vIdx) < 1e-5f || length(vPk) < 1e-5f)
+            continue;
+        Vec3 y = add(vIdx, vPk);
+        if (!normalize(y))
+            continue;
+        Vec3 x = sub(idx, pk);
+        if (!normalize(x)) {
+            x = cross(y, torsoUp);
+            if (!normalize(x))
+                x = cross(y, torsoFwd);
+            if (!normalize(x))
+                continue;
+        }
+        Vec3 z = cross(x, y);
+        if (!normalize(z))
+            continue;
+        x = cross(y, z);
+        if (!normalize(x))
+            continue;
+        result.quats[h.role] = quatFromBasis(x, y, z);
+        result.resolvedMask |= (1u << h.role);
+        secondaryUsed[h.role] = x;
+        m_prevPrimary[h.role] = y;
+    }
 
     m_prevSecondary = secondaryUsed;
     m_prevQuats = result.quats;

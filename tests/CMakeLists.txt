@@ -108,6 +108,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapPoseDebugOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapBodyDriveDebug.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/HandCapPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RecordMocapClipCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp

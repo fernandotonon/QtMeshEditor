@@ -28,6 +28,10 @@
 struct PoseSample {
     double timeSec = 0.0;
     std::array<float, 33 * 3> world{};      // xyz metres, MediaPipe world frame
+    /// Normalized x,y in the 256 crop [0,1]; z is model relative depth.
+    std::array<float, 33 * 3> screenCrop{};
+    /// Full-frame pixel x,y (LandmarkProjection through the pose ROI).
+    std::array<float, 33 * 2> imageXy{};
     std::array<float, 33> visibility{};     // sigmoided per-landmark visibility
     float confidence = 0.f;                 // pose presence; 0 = none found
 };

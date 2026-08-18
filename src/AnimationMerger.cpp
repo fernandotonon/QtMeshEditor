@@ -20,6 +20,7 @@
 
 #ifdef ENABLE_MOCAP
 #include "Mocap/PoseIKSolver.h"
+#include "Mocap/MocapPoseIkFk.h"
 #endif
 
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
@@ -1939,8 +1940,10 @@ void collectCanonicalLiveDirections(
     outCanonDir.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
     for (int c = 0; c < Jc; ++c) {
         std::array<float, 3> dir{};
+        const float minVis =
+            (c >= PoseIK::RHip && c <= PoseIK::LFoot) ? 0.2f : 0.3f;
         if (PoseIK::Solver::canonicalLiveDirection(
-                c, canon, visibility33, 0.3f, dir)) {
+                c, canon, visibility33, minVis, dir)) {
             Ogre::Vector3 v(dir[0], dir[1], dir[2]);
             if (v.squaredLength() > 1e-12f) {
                 v.normalise();
@@ -1949,7 +1952,123 @@ void collectCanonicalLiveDirections(
         }
     }
 }
+
+bool legLandmarksReliable(int role, const float* visibility33)
+{
+    if (!visibility33)
+        return false;
+    auto vis = [&](int lm) { return visibility33[lm] >= 0.2f; };
+    switch (role) {
+    case PoseIK::RHip:
+        return vis(24) && vis(26);
+    case PoseIK::RKnee:
+        return vis(26) && vis(28);
+    case PoseIK::RFoot:
+        return vis(28);
+    case PoseIK::LHip:
+        return vis(23) && vis(25);
+    case PoseIK::LKnee:
+        return vis(25) && vis(27);
+    case PoseIK::LFoot:
+        return vis(27);
+    default:
+        return false;
+    }
+}
+
+void collectFingerDirsFromPoseLandmarks(
+    const float* world33, const float* visibility33,
+    std::array<std::array<float, 3>, AnimationMerger::kFingerSlots>& out,
+    const float* screenCrop33x3,
+    const std::array<Ogre::Quaternion, 2>* wristCanonQuats,
+    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>* handQuats,
+    uint32_t handResolvedMask)
+{
+    AnimationMerger::collectFingerDirsFromPoseLandmarks(
+        world33, visibility33, out, screenCrop33x3, wristCanonQuats, handQuats,
+        handResolvedMask);
+}
 }  // namespace
+#endif
+
+#ifdef ENABLE_MOCAP
+void AnimationMerger::collectFingerDirsFromPoseLandmarks(
+    const float* world33, const float* visibility33,
+    std::array<std::array<float, 3>, kFingerSlots>& out,
+    const float* screenCrop33x3,
+    const std::array<Ogre::Quaternion, 2>* wristCanonQuats,
+    const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>* handQuats,
+    uint32_t handResolvedMask)
+{
+    out.fill({0.f, 0.f, 0.f});
+    if (!world33)
+        return;
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(world33, canon);
+    auto visible = [&](int lm) {
+        return !visibility33 || visibility33[lm] >= 0.2f;
+    };
+    auto wristQuatForSide = [&](int side, int handRole) -> Ogre::Quaternion {
+        if (wristCanonQuats
+            && (handResolvedMask & (1u << static_cast<unsigned>(handRole)))
+            != 0u)
+            return (*wristCanonQuats)[static_cast<size_t>(side)];
+        if (handQuats
+            && (handResolvedMask & (1u << static_cast<unsigned>(handRole)))
+            != 0u) {
+            const auto& q = (*handQuats)[static_cast<size_t>(handRole)];
+            return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
+        }
+        return Ogre::Quaternion::IDENTITY;
+    };
+    struct FingerLm {
+        int side;
+        int finger;
+        int handRole;
+        int wrist;
+        int tip;
+    };
+    static const FingerLm map[] = {
+        {0, 0, PoseIK::RHand, 16, 22}, {0, 1, PoseIK::RHand, 16, 20},
+        {0, 4, PoseIK::RHand, 16, 18},
+        {1, 0, PoseIK::LHand, 15, 21}, {1, 1, PoseIK::LHand, 15, 19},
+        {1, 4, PoseIK::LHand, 15, 17},
+    };
+    for (const FingerLm& m : map) {
+        if (!visible(m.wrist) || !visible(m.tip))
+            continue;
+        MocapPoseIkFk::Vec3 dir{};
+        const bool handOk =
+            screenCrop33x3
+            && (handResolvedMask & (1u << static_cast<unsigned>(m.handRole)))
+            != 0u;
+        if (handOk) {
+            const Ogre::Quaternion wristQ =
+                wristQuatForSide(m.side, m.handRole);
+            if (wristQ == Ogre::Quaternion::IDENTITY && !wristCanonQuats
+                && !handQuats)
+                continue;
+            dir = MocapPoseIkFk::fingerDirFromScreenCrop(
+                screenCrop33x3, m.wrist, m.tip, wristQ);
+        } else {
+            const auto& w = canon[static_cast<size_t>(m.wrist)];
+            const auto& t = canon[static_cast<size_t>(m.tip)];
+            dir = MocapPoseIkFk::Vec3{t[0] - w[0], t[1] - w[1], t[2] - w[2]};
+            const float l = MocapPoseIkFk::len(dir);
+            if (l < 1e-8f)
+                continue;
+            dir = MocapPoseIkFk::mul(dir, 1.f / l);
+        }
+        if (dir[0] == 0.f && dir[1] == 0.f && dir[2] == 0.f)
+            continue;
+        const int slot = fingerSlot(m.side, m.finger, 0);
+        if (slot >= 0)
+            out[static_cast<size_t>(slot)] = {dir[0], dir[1], dir[2]};
+    }
+    // Middle/ring have no pose-model landmarks — leave unset so they stay at
+    // bind rather than inheriting a bogus index+pinky blend (breaks spread
+    // gestures like Vulcan salute where index/pinky diverge).
+}
 #endif
 
 BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
@@ -2180,6 +2299,33 @@ BodyRetargeter::evaluateFrame(
         collectCanonicalLiveDirections(
             mediaPipeWorld33, mediaPipeVisibility33, Jc, liveCanon);
         const Ogre::Quaternion CtInv = tb.Ct.Inverse();
+        auto quatDeltaArtic = [&](int boneIdx, int role,
+                                  const Ogre::Quaternion& basePose)
+            -> Ogre::Quaternion {
+            if (role < 0 || !haveNeutral)
+                return basePose;
+            if (!(resolvedMask & (1u << static_cast<unsigned>(role))))
+                return basePose;
+            const Ogre::Quaternion localCur =
+                parentRelativeLocal(canonicalQuats, role, resolvedMask);
+            const Ogre::Quaternion localRef =
+                parentRelativeLocal(d->neutral, role, d->neutralResolvedMask);
+            Ogre::Quaternion delta = localRef.Inverse() * localCur;
+            Ogre::Quaternion artic = delta;
+            if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
+                artic = d->McInv[static_cast<size_t>(boneIdx)] * delta
+                        * d->Mc[static_cast<size_t>(boneIdx)];
+            } else if (d->yaw180 && !d->haveAnyStand && role > 0) {
+                static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f);
+                artic = kYawPi.Inverse() * delta * kYawPi;
+            }
+            const int dup = std::max(1, d->canonDup[static_cast<size_t>(role)]);
+            if (dup > 1)
+                artic = Ogre::Quaternion::Slerp(
+                    1.0f / static_cast<float>(dup), Ogre::Quaternion::IDENTITY,
+                    artic, true);
+            return basePose * artic;
+        };
         std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
         for (int i : tb.order) {
             const Ogre::Quaternion base =
@@ -2197,25 +2343,98 @@ BodyRetargeter::evaluateFrame(
                 continue;
             }
             Ogre::Quaternion local;
+            // Leg landmark directions are often wrong (standing hallucination when
+            // knees are occluded). Prefer PoseIK quats for legs when resolved.
+            // Hip stays on bind/direction path — quat hip rotation breaks W
+            // propagation and distorts arms/torso direction retarget.
+            const bool isLegRole =
+                (c >= PoseIK::RButtock && c <= PoseIK::LFoot);
+            const bool isHandRole =
+                (c == PoseIK::RHand || c == PoseIK::LHand);
+            const bool legQuatResolved =
+                isLegRole
+                && (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
+            const bool legDirOk =
+                isLegRole
+                && legLandmarksReliable(c, mediaPipeVisibility33)
+                && liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
+                && d->neutralDref[static_cast<size_t>(c)].squaredLength()
+                       > 1e-12f
+                && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                       > 1e-12f;
             if (c == 0) {
-                local = base;
-                W[static_cast<size_t>(i)] = Wp * local;
-            } else if (liveCanon[static_cast<size_t>(c)].squaredLength()
+                // Torso/arm direction retarget reads W[hip] — keep hip on the
+                // landmark-direction path. Full PoseIK hip quats use a torso
+                // basis that does not match Mixamo bind and can flip the mesh
+                // 180° while the debug overlay (raw PoseIK FK) still looks fine.
+                Ogre::Quaternion localDir = base;
+                if (liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
+                    && d->neutralDref[static_cast<size_t>(c)].squaredLength()
                            > 1e-12f
+                    && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f) {
+                    Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
+                    ds.normalise();
+                    const Ogre::Quaternion R =
+                        d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
+                    const Ogre::Quaternion Wt =
+                        R * d->dirQbase[static_cast<size_t>(i)];
+                    localDir = Wp.Inverse() * Wt;
+                    W[static_cast<size_t>(i)] = Wt;
+                } else {
+                    W[static_cast<size_t>(i)] = Wp * base;
+                }
+                local = localDir;
+            } else if (isLegRole) {
+                if (legDirOk) {
+                    Ogre::Vector3 ds =
+                        CtInv * liveCanon[static_cast<size_t>(c)];
+                    ds.normalise();
+                    const Ogre::Quaternion R =
+                        d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
+                    const Ogre::Quaternion Wt =
+                        R * d->dirQbase[static_cast<size_t>(i)];
+                    local = Wp.Inverse() * Wt;
+                    W[static_cast<size_t>(i)] = Wt;
+                } else if (legQuatResolved) {
+                    local = quatDeltaArtic(i, c, base);
+                    W[static_cast<size_t>(i)] = Wp * local;
+                } else {
+                    local = base;
+                    W[static_cast<size_t>(i)] = Wp * local;
+                }
+            } else if (isHandRole
+                       && (resolvedMask & (1u << static_cast<unsigned>(c)))
+                       != 0u) {
+                local = quatDeltaArtic(i, c, base);
+                W[static_cast<size_t>(i)] = Wp * local;
+            } else if (liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
                        && d->neutralDref[static_cast<size_t>(c)].squaredLength()
                            > 1e-12f
                        && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
                            > 1e-12f) {
                 Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
                 ds.normalise();
-                const Ogre::Quaternion R =
-                    d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
-                const Ogre::Quaternion Wt =
-                    R * d->dirQbase[static_cast<size_t>(i)];
-                local = Wp.Inverse() * Wt;
-                W[static_cast<size_t>(i)] = Wt;
+                const Ogre::Vector3& dref =
+                    d->neutralDref[static_cast<size_t>(c)];
+                const bool quatResolved =
+                    (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
+                // Stale / held landmark dirs that still match neutral block
+                // PoseIK quaternions — otherwise arms/torso freeze at T-pose.
+                const bool dirNearNeutral =
+                    dref.dotProduct(ds) > 0.9995f;
+                if (quatResolved && dirNearNeutral && c != 0) {
+                    local = quatDeltaArtic(i, c, base);
+                    W[static_cast<size_t>(i)] = Wp * local;
+                } else {
+                    const Ogre::Quaternion R = dref.getRotationTo(ds);
+                    const Ogre::Quaternion Wt =
+                        R * d->dirQbase[static_cast<size_t>(i)];
+                    local = Wp.Inverse() * Wt;
+                    W[static_cast<size_t>(i)] = Wt;
+                }
             } else {
-                local = base;
+                local = quatDeltaArtic(i, c, base);
                 W[static_cast<size_t>(i)] = Wp * local;
             }
             out.emplace_back(static_cast<unsigned short>(i), local);
@@ -3059,6 +3278,429 @@ int AnimationMerger::applyFingerCurl(
     }
     return animated;
 }
+
+#ifdef ENABLE_MOCAP
+AnimationMerger::FingerLiveDriveContext
+AnimationMerger::buildFingerLiveDriveContext(Ogre::SkeletonInstance* skel)
+{
+    FingerLiveDriveContext ctx;
+    if (!skel)
+        return ctx;
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+    ctx.CtInv = tb.Ct.Inverse();
+    ctx.bindWorld.assign(static_cast<size_t>(nBones),
+                         Ogre::Quaternion::IDENTITY);
+    ctx.bindLocal.assign(static_cast<size_t>(nBones),
+                         Ogre::Quaternion::IDENTITY);
+    ctx.tgtBindDir.assign(static_cast<size_t>(nBones), Ogre::Vector3::ZERO);
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        ctx.bindWorld[static_cast<size_t>(i)] = b->_getDerivedOrientation();
+        ctx.bindLocal[static_cast<size_t>(i)] = b->getOrientation();
+    }
+    ctx.fingerBones.assign(
+        static_cast<size_t>(2 * MotionInbetween::kFingerCount), {});
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        const auto fr = MotionInbetween::fingerRoleForBone(
+            QString::fromStdString(b->getName()));
+        if (!fr.valid())
+            continue;
+        ctx.fingerBones[static_cast<size_t>(
+            fr.side * MotionInbetween::kFingerCount + fr.finger)]
+            .push_back({fr.segment, b->getHandle()});
+    }
+    for (auto& v : ctx.fingerBones)
+        std::sort(v.begin(), v.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    auto childOfTarget = [&](Ogre::Bone* b) -> Ogre::Bone* {
+        for (unsigned short k = 0; k < b->numChildren(); ++k) {
+            auto* c = dynamic_cast<Ogre::Bone*>(b->getChild(k));
+            if (c && MotionInbetween::fingerRoleForBone(
+                    QString::fromStdString(c->getName())).valid())
+                return c;
+        }
+        if (b->numChildren() > 0)
+            return dynamic_cast<Ogre::Bone*>(b->getChild(0));
+        return nullptr;
+    };
+    for (int i = 0; i < nBones; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        Ogre::Bone* c = childOfTarget(b);
+        if (!c)
+            continue;
+        Ogre::Vector3 d = c->_getDerivedPosition() - b->_getDerivedPosition();
+        if (d.squaredLength() < 1e-12f)
+            continue;
+        ctx.tgtBindDir[static_cast<size_t>(i)] =
+            (tb.Ct * d).normalisedCopy();
+    }
+    for (int side = 0; side < 2; ++side) {
+        Ogre::Vector3 meanDir = Ogre::Vector3::ZERO;
+        std::vector<Ogre::Vector3> roots;
+        for (int fgr = 1; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            auto& segs = ctx.fingerBones[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty())
+                continue;
+            const unsigned short h = segs.front().second;
+            if (ctx.tgtBindDir[static_cast<size_t>(h)].squaredLength() > 1e-9f) {
+                meanDir += ctx.tgtBindDir[static_cast<size_t>(h)];
+                roots.push_back(
+                    tb.Ct * skel->getBone(h)->_getDerivedPosition());
+            }
+        }
+        if (meanDir.squaredLength() < 1e-9f || roots.size() < 2)
+            continue;
+        meanDir.normalise();
+        Ogre::Vector3 spread = roots.back() - roots.front();
+        spread = spread - meanDir * spread.dotProduct(meanDir);
+        if (spread.squaredLength() < 1e-9f)
+            continue;
+        Ogre::Vector3 ax = spread.normalisedCopy();
+        Ogre::Vector3 palmN = meanDir.crossProduct(spread.normalisedCopy());
+        if (palmN.squaredLength() > 1e-9f) {
+            palmN.normalise();
+            Ogre::Vector3 palmSide = Ogre::Vector3::ZERO;
+            auto& thumbSegs = ctx.fingerBones[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + 0)];
+            if (!thumbSegs.empty() && !roots.empty()) {
+                const Ogre::Vector3 thumbPos =
+                    tb.Ct * skel->getBone(thumbSegs.front().second)
+                               ->_getDerivedPosition();
+                const Ogre::Vector3 off = thumbPos - roots.front();
+                const float side_ = off.dotProduct(palmN);
+                if (std::abs(side_) > 1e-5f)
+                    palmSide = palmN * (side_ >= 0.f ? 1.f : -1.f);
+            }
+            if (palmSide.squaredLength() < 1e-9f)
+                palmSide = palmN;
+            const Ogre::Vector3 test =
+                Ogre::Quaternion(Ogre::Radian(0.4f), ax) * meanDir;
+            if ((test - meanDir).dotProduct(palmSide) < 0.f)
+                ax = -ax;
+        }
+        ctx.flexAxis[static_cast<size_t>(side)] = ax;
+    }
+    ctx.valid = true;
+    return ctx;
+}
+
+int AnimationMerger::driveFingersLive(
+    Ogre::SkeletonInstance* skel,
+    const std::array<std::array<float, 3>, kFingerSlots>& frameDirs,
+    const FingerLiveDriveContext& ctx,
+    const std::array<std::array<float, 3>, kFingerSlots>* neutralDirs)
+{
+    if (!skel || !ctx.valid || !neutralDirs)
+        return 0;
+    const int nBones = static_cast<int>(skel->getNumBones());
+    auto parentBindWorld = [&](unsigned short handle) -> Ogre::Quaternion {
+        Ogre::Bone* b = skel->getBone(handle);
+        if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+            return ctx.bindWorld[static_cast<size_t>(p->getHandle())];
+        return Ogre::Quaternion::IDENTITY;
+    };
+    auto segArticWeight = [](int seg) -> float {
+        switch (seg) {
+        case 0: return 1.f;
+        case 1: return 0.72f;
+        case 2: return 0.45f;
+        default: return 0.35f;
+        }
+    };
+
+    int animated = 0;
+    for (int side = 0; side < 2; ++side) {
+        for (int fgr = 0; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            const auto& segs = ctx.fingerBones[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty())
+                continue;
+            const int slot0 = fingerSlot(side, fgr, 0);
+            const auto& n = (*neutralDirs)[static_cast<size_t>(slot0)];
+            Ogre::Vector3 drest(n[0], n[1], n[2]);
+            const bool haveNeutral = drest.squaredLength() > 1e-9f;
+            const auto& q = frameDirs[static_cast<size_t>(slot0)];
+            Ogre::Vector3 dsrc(q[0], q[1], q[2]);
+            const bool haveLive = dsrc.squaredLength() > 1e-9f;
+            if (!haveNeutral) {
+                for (const auto& [seg, handle] : segs) {
+                    (void)seg;
+                    if (handle >= static_cast<unsigned short>(nBones))
+                        continue;
+                    Ogre::Bone* b = skel->getBone(handle);
+                    b->setManuallyControlled(true);
+                    b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)]);
+                    b->needUpdate(true);
+                }
+                continue;
+            }
+            drest.normalise();
+            if (!haveLive) {
+                for (const auto& [seg, handle] : segs) {
+                    (void)seg;
+                    if (handle >= static_cast<unsigned short>(nBones))
+                        continue;
+                    Ogre::Bone* b = skel->getBone(handle);
+                    b->setManuallyControlled(true);
+                    b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)]);
+                    b->needUpdate(true);
+                }
+                continue;
+            }
+            dsrc.normalise();
+            Ogre::Quaternion srcBendFull = drest.getRotationTo(dsrc);
+            for (const auto& [seg, handle] : segs) {
+                if (handle >= static_cast<unsigned short>(nBones))
+                    continue;
+                const Ogre::Vector3 dbind =
+                    ctx.tgtBindDir[static_cast<size_t>(handle)];
+                if (dbind.squaredLength() < 1e-9f)
+                    continue;
+                const Ogre::Quaternion srcBend = Ogre::Quaternion::Slerp(
+                    segArticWeight(seg), Ogre::Quaternion::IDENTITY,
+                    srcBendFull, true);
+                const Ogre::Vector3 dtarget =
+                    (srcBend * dbind).normalisedCopy();
+                const Ogre::Quaternion aimC = dbind.getRotationTo(dtarget);
+                const Ogre::Quaternion Ct = ctx.CtInv.Inverse();
+                const Ogre::Quaternion aimW = ctx.CtInv * aimC * Ct;
+                const Ogre::Quaternion Wbind =
+                    ctx.bindWorld[static_cast<size_t>(handle)];
+                const Ogre::Quaternion newWorld = aimW * Wbind;
+                const Ogre::Quaternion newLocalAtBind =
+                    parentBindWorld(handle).Inverse() * newWorld;
+                const Ogre::Quaternion kf =
+                    ctx.bindLocal[static_cast<size_t>(handle)].Inverse()
+                    * newLocalAtBind;
+                Ogre::Bone* b = skel->getBone(handle);
+                b->setManuallyControlled(true);
+                // Hand-local delta (bindLocal * kf): follows wrist rotation
+                // without needing derived transforms this frame.
+                b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)]
+                                  * kf);
+                b->needUpdate(true);
+                ++animated;
+            }
+        }
+    }
+    return animated;
+}
+
+void AnimationMerger::captureFingerNeutralScreenDirs(
+    const float* screenCrop33x3,
+    std::array<std::array<float, 2>, kFingerSlots>& outDir2d)
+{
+    outDir2d.fill({0.f, 0.f});
+    if (!screenCrop33x3)
+        return;
+    struct FingerLm {
+        int side;
+        int finger;
+        int wrist;
+        int tip;
+    };
+    static const FingerLm map[] = {
+        {0, 0, 16, 22}, {0, 1, 16, 20}, {0, 4, 16, 18},
+        {1, 0, 15, 21}, {1, 1, 15, 19}, {1, 4, 15, 17},
+    };
+    for (const FingerLm& m : map) {
+        float dx, dy, len2d;
+        if (!MocapPoseIkFk::screenCropFingerDelta2D(
+                screenCrop33x3, m.wrist, m.tip, dx, dy, len2d))
+            continue;
+        const int slot = fingerSlot(m.side, m.finger, 0);
+        if (slot >= 0)
+            outDir2d[static_cast<size_t>(slot)] = {dx, dy};
+    }
+}
+
+int AnimationMerger::driveFingersLiveFromScreenCrop(
+    Ogre::SkeletonInstance* skel,
+    const std::array<std::array<float, 2>, kFingerSlots>& neutralDir2d,
+    const std::array<std::array<float, 2>, kFingerSlots>& liveDir2d,
+    const FingerLiveDriveContext& ctx)
+{
+    if (!skel || !ctx.valid)
+        return 0;
+    const int nBones = static_cast<int>(skel->getNumBones());
+    const Ogre::Quaternion Ct = ctx.CtInv.Inverse();
+    auto parentBindWorld = [&](unsigned short handle) -> Ogre::Quaternion {
+        Ogre::Bone* b = skel->getBone(handle);
+        if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+            return ctx.bindWorld[static_cast<size_t>(p->getHandle())];
+        return Ogre::Quaternion::IDENTITY;
+    };
+    auto segArticWeight = [](int seg) -> float {
+        switch (seg) {
+        case 0: return 1.f;
+        case 1: return 0.72f;
+        case 2: return 0.45f;
+        default: return 0.35f;
+        }
+    };
+    struct FingerLm {
+        int side;
+        int finger;
+        int wrist;
+        int tip;
+    };
+    static const FingerLm map[] = {
+        {0, 0, 16, 22}, {0, 1, 16, 20}, {0, 4, 16, 18},
+        {1, 0, 15, 21}, {1, 1, 15, 19}, {1, 4, 15, 17},
+    };
+
+    int animated = 0;
+    auto applyCurl = [&](int side, int finger, float curl) {
+        const auto& segs = ctx.fingerBones[static_cast<size_t>(
+            side * MotionInbetween::kFingerCount + finger)];
+        if (segs.empty())
+            return;
+        const Ogre::Vector3 fax = ctx.flexAxis[static_cast<size_t>(side)];
+        if (fax.squaredLength() < 1e-9f)
+            return;
+        for (const auto& [seg, handle] : segs) {
+            if (handle >= static_cast<unsigned short>(nBones))
+                continue;
+            const Ogre::Vector3 dbind =
+                ctx.tgtBindDir[static_cast<size_t>(handle)];
+            if (dbind.squaredLength() < 1e-9f)
+                continue;
+            const float segCurl = curl * segArticWeight(seg);
+            const Ogre::Quaternion aimC(Ogre::Radian(segCurl), fax);
+            const Ogre::Quaternion aimW = ctx.CtInv * aimC * Ct;
+            const Ogre::Quaternion Wbind =
+                ctx.bindWorld[static_cast<size_t>(handle)];
+            const Ogre::Quaternion newWorld = aimW * Wbind;
+            const Ogre::Quaternion newLocalAtBind =
+                parentBindWorld(handle).Inverse() * newWorld;
+            const Ogre::Quaternion kf =
+                ctx.bindLocal[static_cast<size_t>(handle)].Inverse()
+                * newLocalAtBind;
+            Ogre::Bone* b = skel->getBone(handle);
+            b->setManuallyControlled(true);
+            b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)] * kf);
+            b->needUpdate(true);
+            ++animated;
+        }
+    };
+
+    float curlByFinger[2][5];
+    for (int s = 0; s < 2; ++s)
+        for (int f = 0; f < 5; ++f)
+            curlByFinger[s][f] = -1.f;
+
+    for (const FingerLm& m : map) {
+        const int slot0 = fingerSlot(m.side, m.finger, 0);
+        if (slot0 < 0)
+            continue;
+        const auto& n2 = neutralDir2d[static_cast<size_t>(slot0)];
+        const auto& l2 = liveDir2d[static_cast<size_t>(slot0)];
+        const float nlen =
+            std::sqrt(n2[0] * n2[0] + n2[1] * n2[1]);
+        const float llen =
+            std::sqrt(l2[0] * l2[0] + l2[1] * l2[1]);
+        if (nlen < 1e-5f || llen < 1e-5f)
+            continue;
+        // Facing the camera, curling shortens wrist→tip in 2D much more than
+        // it rotates the 2D direction. Use length as the primary curl signal.
+        const float shorten =
+            std::clamp((nlen - llen) / (nlen * 0.70f), 0.f, 1.f);
+        const float ndx = n2[0] / nlen, ndy = n2[1] / nlen;
+        const float ldx = l2[0] / llen, ldy = l2[1] / llen;
+        const float dot = ndx * ldx + ndy * ldy;
+        const float cross = ndx * ldy - ndy * ldx;
+        float rot = std::atan2(cross, dot);
+        rot = std::clamp(rot, -0.6f, 0.6f);
+        float curl = shorten * 1.45f + rot * 0.25f;
+        curl = std::clamp(curl, 0.f, 1.55f);
+        curlByFinger[m.side][m.finger] = curl;
+        applyCurl(m.side, m.finger, curl);
+    }
+    for (int side = 0; side < 2; ++side) {
+        const float idx = curlByFinger[side][1];
+        const float pnk = curlByFinger[side][4];
+        if (idx < 0.f || pnk < 0.f)
+            continue;
+        applyCurl(side, 2, 0.60f * idx + 0.40f * pnk);
+        applyCurl(side, 3, 0.35f * idx + 0.65f * pnk);
+    }
+    return animated;
+}
+
+int AnimationMerger::driveFingersLiveFromFlex(
+    Ogre::SkeletonInstance* skel,
+    const std::array<float, kFingerSlots>& liveFlexRad,
+    const std::array<float, kFingerSlots>& neutralFlexRad,
+    const FingerLiveDriveContext& ctx)
+{
+    if (!skel || !ctx.valid)
+        return 0;
+    const int nBones = static_cast<int>(skel->getNumBones());
+    const Ogre::Quaternion Ct = ctx.CtInv.Inverse();
+    auto parentBindWorld = [&](unsigned short handle) -> Ogre::Quaternion {
+        Ogre::Bone* b = skel->getBone(handle);
+        if (auto* p = dynamic_cast<Ogre::Bone*>(b->getParent()))
+            return ctx.bindWorld[static_cast<size_t>(p->getHandle())];
+        return Ogre::Quaternion::IDENTITY;
+    };
+
+    int animated = 0;
+    for (int side = 0; side < 2; ++side) {
+        const Ogre::Vector3 fax = ctx.flexAxis[static_cast<size_t>(side)];
+        if (fax.squaredLength() < 1e-9f)
+            continue;
+        for (int fgr = 0; fgr < MotionInbetween::kFingerCount; ++fgr) {
+            const auto& segs = ctx.fingerBones[static_cast<size_t>(
+                side * MotionInbetween::kFingerCount + fgr)];
+            if (segs.empty())
+                continue;
+            for (const auto& [seg, handle] : segs) {
+                if (handle >= static_cast<unsigned short>(nBones))
+                    continue;
+                const int slot = fingerSlot(side, fgr, std::min(seg, kFingerSegs - 1));
+                if (slot < 0)
+                    continue;
+                const float live = liveFlexRad[static_cast<size_t>(slot)];
+                const float rest = neutralFlexRad[static_cast<size_t>(slot)];
+                if (live < 0.f || rest < 0.f)
+                    continue;
+                float delta = live - rest;
+                delta = std::clamp(delta, -0.25f, 1.65f);
+                const Ogre::Vector3 dbind =
+                    ctx.tgtBindDir[static_cast<size_t>(handle)];
+                if (dbind.squaredLength() < 1e-9f)
+                    continue;
+                const Ogre::Quaternion aimC(Ogre::Radian(delta), fax);
+                const Ogre::Quaternion aimW = ctx.CtInv * aimC * Ct;
+                const Ogre::Quaternion Wbind =
+                    ctx.bindWorld[static_cast<size_t>(handle)];
+                const Ogre::Quaternion newWorld = aimW * Wbind;
+                const Ogre::Quaternion newLocalAtBind =
+                    parentBindWorld(handle).Inverse() * newWorld;
+                const Ogre::Quaternion kf =
+                    ctx.bindLocal[static_cast<size_t>(handle)].Inverse()
+                    * newLocalAtBind;
+                Ogre::Bone* b = skel->getBone(handle);
+                b->setManuallyControlled(true);
+                b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)]
+                                  * kf);
+                b->needUpdate(true);
+                ++animated;
+            }
+        }
+    }
+    return animated;
+}
+#endif
 
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,

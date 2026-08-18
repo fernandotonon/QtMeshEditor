@@ -4,6 +4,7 @@
 
 #include "MocapLiveTypes.h"
 #include "MocapPoseIkFk.h"
+#include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
 
 #include <Ogre.h>
@@ -63,6 +64,11 @@ Ogre::Vector3 toOgre(const Vec3& v, float scale)
 Ogre::Quaternion quatFromArray(const std::array<float, 4>& q)
 {
     return Ogre::Quaternion(q[3], q[0], q[1], q[2]);
+}
+
+bool handResolved(uint32_t mask, int handRole)
+{
+    return (mask & (1u << static_cast<unsigned>(handRole))) != 0u;
 }
 
 const int kLmEdges[][2] = {
@@ -127,12 +133,20 @@ void MocapPoseDebugOverlay::rebuildDrawables()
         m_sceneMgr->destroyManualObject(m_landmarks);
     if (m_poseIk)
         m_sceneMgr->destroyManualObject(m_poseIk);
+    if (m_fingers)
+        m_sceneMgr->destroyManualObject(m_fingers);
     m_landmarks = m_sceneMgr->createManualObject("MocapPoseDebug/Landmarks");
     m_poseIk = m_sceneMgr->createManualObject("MocapPoseDebug/PoseIK");
+    m_fingers = m_sceneMgr->createManualObject("MocapPoseDebug/Fingers");
+    m_landmarks->setDynamic(true);
+    m_poseIk->setDynamic(true);
+    m_fingers->setDynamic(true);
     m_landmarks->setCastShadows(false);
     m_poseIk->setCastShadows(false);
+    m_fingers->setCastShadows(false);
     m_root->attachObject(m_landmarks);
     m_root->attachObject(m_poseIk);
+    m_root->attachObject(m_fingers);
 }
 
 void MocapPoseDebugOverlay::attach(Ogre::SceneManager* sceneMgr,
@@ -160,6 +174,10 @@ void MocapPoseDebugOverlay::detach()
         m_sceneMgr->destroyManualObject(m_poseIk);
         m_poseIk = nullptr;
     }
+    if (m_fingers) {
+        m_sceneMgr->destroyManualObject(m_fingers);
+        m_fingers = nullptr;
+    }
     if (m_root && m_anchor) {
         m_anchor->removeChild(m_root);
         m_sceneMgr->destroySceneNode(m_root);
@@ -171,7 +189,7 @@ void MocapPoseDebugOverlay::detach()
 
 void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeightLocal)
 {
-    if (!m_landmarks || !m_poseIk || !body.valid)
+    if (!m_landmarks || !m_poseIk || !m_fingers || !body.valid)
         return;
 
     std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
@@ -180,6 +198,10 @@ void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeight
     const float skelH = skeletonHeight(canon);
     const float scale =
         (entityHeightLocal > 1e-3f ? entityHeightLocal : 1.8f) / skelH;
+
+    auto visible = [&](int lm) {
+        return body.visibility[static_cast<size_t>(lm)] >= 0.2f;
+    };
 
     std::vector<std::pair<Vec3, Vec3>> lmLines;
     lmLines.reserve(std::size(kLmEdges));
@@ -201,6 +223,118 @@ void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeight
                              joints[static_cast<size_t>(role)]);
     }
 
+    auto appendHand21 = [&](std::vector<std::pair<Vec3, Vec3>>& dest,
+                            const HandLandmarks& h, int handRole, int wristLm) {
+        if (!h.valid)
+            return;
+        Vec3 wrist = canonLm(canon, wristLm);
+        Ogre::Quaternion wristQ = Ogre::Quaternion::IDENTITY;
+        if (handResolved(body.resolvedMask, handRole)) {
+            wrist = joints[static_cast<size_t>(handRole)];
+            const auto& hq = body.quats[static_cast<size_t>(handRole)];
+            wristQ = Ogre::Quaternion(hq[3], hq[0], hq[1], hq[2]);
+        }
+        const float wx = h.cropXyz[0], wy = h.cropXyz[1];
+        auto toCanon = [&](int i) -> Vec3 {
+            const float dx = h.cropXyz[static_cast<size_t>(i * 3 + 0)] - wx;
+            const float dy = h.cropXyz[static_cast<size_t>(i * 3 + 1)] - wy;
+            const float dz = h.cropXyz[static_cast<size_t>(i * 3 + 2)]
+                             - h.cropXyz[2];
+            const Ogre::Vector3 local(dx, -dy, -dz);
+            const Ogre::Vector3 c = wristQ * local * 0.28f;
+            return add(wrist, {c.x, c.y, c.z});
+        };
+        static const int kHandEdges[][2] = {
+            {0, 1},  {1, 2},  {2, 3},  {3, 4},  {0, 5},  {5, 6},  {6, 7},
+            {7, 8},  {0, 9},  {9, 10}, {10, 11}, {11, 12}, {0, 13}, {13, 14},
+            {14, 15}, {15, 16}, {0, 17}, {17, 18}, {18, 19}, {19, 20},
+            {5, 9},  {9, 13}, {13, 17},
+        };
+        for (const auto& e : kHandEdges)
+            dest.emplace_back(toCanon(e[0]), toCanon(e[1]));
+    };
+
+    // Finger tips on the PoseIK FK skeleton (yellow). Prefer 21-point Hands;
+    // BlazePose's 3 tips barely articulate.
+    struct HandTips {
+        int handRole;
+        int wristLm;
+        int thumbLm;
+        int indexLm;
+        int pinkyLm;
+        const HandLandmarks* hands;
+    };
+    const HandTips kHands[] = {
+        {PoseIK::RHand, 16, 22, 20, 18, &body.hands.right},
+        {PoseIK::LHand, 15, 21, 19, 17, &body.hands.left},
+    };
+    for (const HandTips& h : kHands) {
+        if (h.hands->valid) {
+            appendHand21(ikLines, *h.hands, h.handRole, h.wristLm);
+            continue;
+        }
+        if (!handResolved(body.resolvedMask, h.handRole))
+            continue;
+        const Vec3 handJ = joints[static_cast<size_t>(h.handRole)];
+        const auto& handQuat =
+            body.quats[static_cast<size_t>(h.handRole)];
+        const Ogre::Quaternion wristQ(handQuat[3], handQuat[0], handQuat[1],
+                                      handQuat[2]);
+        for (int tipLm : {h.thumbLm, h.indexLm, h.pinkyLm}) {
+            if (!visible(tipLm))
+                continue;
+            const Vec3 wrist = canonLm(canon, h.wristLm);
+            const Vec3 tip = MocapPoseIkFk::fingerTipFromScreenCrop(
+                wrist, body.screenCrop.data(), h.wristLm, tipLm, wristQ);
+            ikLines.emplace_back(handJ, tip);
+        }
+    }
+
+    std::vector<std::pair<Vec3, Vec3>> fingerLines;
+    appendHand21(fingerLines, body.hands.right, PoseIK::RHand, 16);
+    appendHand21(fingerLines, body.hands.left, PoseIK::LHand, 15);
+    if (fingerLines.empty()) {
+        std::array<std::array<float, 3>, AnimationMerger::kFingerSlots>
+            fingerDirs{};
+        AnimationMerger::collectFingerDirsFromPoseLandmarks(
+            body.world.data(), body.visibility.data(), fingerDirs,
+            body.screenCrop.data(), nullptr, &body.quats, body.resolvedMask);
+        struct FingerRay {
+            int side;
+            int finger;
+            int handRole;
+            int wristLm;
+            int tipLm;
+        };
+        static const FingerRay kFingerRays[] = {
+            {0, 0, PoseIK::RHand, 16, 22}, {0, 1, PoseIK::RHand, 16, 20},
+            {0, 4, PoseIK::RHand, 16, 18},
+            {1, 0, PoseIK::LHand, 15, 21}, {1, 1, PoseIK::LHand, 15, 19},
+            {1, 4, PoseIK::LHand, 15, 17},
+        };
+        constexpr float kRayLen = 0.085f;
+        for (const FingerRay& fr : kFingerRays) {
+            if (!visible(fr.wristLm) || !visible(fr.tipLm))
+                continue;
+            const Vec3 w = canonLm(canon, fr.wristLm);
+            Vec3 tip = canonLm(canon, fr.tipLm);
+            if (handResolved(body.resolvedMask, fr.handRole)) {
+                const auto& hq = body.quats[static_cast<size_t>(fr.handRole)];
+                const Ogre::Quaternion wristQ(hq[3], hq[0], hq[1], hq[2]);
+                tip = MocapPoseIkFk::fingerTipFromScreenCrop(
+                    w, body.screenCrop.data(), fr.wristLm, fr.tipLm, wristQ);
+            }
+            fingerLines.emplace_back(w, tip);
+            const int slot = AnimationMerger::fingerSlot(fr.side, fr.finger, 0);
+            if (slot < 0)
+                continue;
+            const auto& d = fingerDirs[static_cast<size_t>(slot)];
+            if (d[0] == 0.f && d[1] == 0.f && d[2] == 0.f)
+                continue;
+            fingerLines.emplace_back(w, add(w, mul(d, kRayLen)));
+        }
+    }
+
     m_landmarks->clear();
     m_landmarks->begin("MocapPoseDebug/Unlit", Ogre::RenderOperation::OT_LINE_LIST);
     appendLines(m_landmarks, lmLines, scale,
@@ -212,6 +346,12 @@ void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeight
     appendLines(m_poseIk, ikLines, scale,
                 Ogre::ColourValue(1.f, 0.85f, 0.1f, 0.95f));
     m_poseIk->end();
+
+    m_fingers->clear();
+    m_fingers->begin("MocapPoseDebug/Unlit", Ogre::RenderOperation::OT_LINE_LIST);
+    appendLines(m_fingers, fingerLines, scale,
+                Ogre::ColourValue(1.f, 0.2f, 0.95f, 0.95f));
+    m_fingers->end();
     m_lastScale = scale;
 }
 

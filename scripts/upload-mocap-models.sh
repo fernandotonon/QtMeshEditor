@@ -48,6 +48,16 @@ upload "$OUT_DIR/face/face_blendshapes.onnx" "mocap/face/face_blendshapes.onnx"
 upload "$OUT_DIR/pose/pose_detector.onnx"   "mocap/pose/pose_detector.onnx"
 upload "$OUT_DIR/pose/pose_landmarks.onnx"  "mocap/pose/pose_landmarks.onnx"
 
+# Hands (HandCapPredictor): MediaPipe Hands 21-landmark graph + BlazePalm detector.
+# Unity's Apache-2.0 ONNX conversion is accepted as a source
+# (hand_landmarks_detector.onnx → hand_landmarks.onnx).
+if [ -f "$OUT_DIR/hands/hand_landmarks.onnx" ]; then
+    upload "$OUT_DIR/hands/hand_landmarks.onnx" "mocap/hands/hand_landmarks.onnx"
+fi
+if [ -f "$OUT_DIR/hands/hand_detector.onnx" ]; then
+    upload "$OUT_DIR/hands/hand_detector.onnx" "mocap/hands/hand_detector.onnx"
+fi
+
 # Apache-2.0 notice next to the weights (MediaPipe attribution).
 NOTICE="$(mktemp)"
 cat > "$NOTICE" <<'EOF'

@@ -22,7 +22,8 @@ inline void swapMediaPipeLeftRightLandmarks(float* world33x3,
 {
     static constexpr int kPairs[][2] = {
         {7, 8},                             // ears
-        {11, 12}, {13, 14}, {15, 16},       // arms
+        {11, 12}, {13, 14}, {15, 16},       // arms + wrists
+        {17, 18}, {19, 20}, {21, 22},       // finger tips
         {23, 24}, {25, 26}, {27, 28},       // legs
         {31, 32},                           // feet
     };
@@ -31,6 +32,22 @@ inline void swapMediaPipeLeftRightLandmarks(float* world33x3,
             std::swap(world33x3[a * 3 + k], world33x3[b * 3 + k]);
         if (visibility33)
             std::swap(visibility33[a], visibility33[b]);
+    };
+    for (const auto& p : kPairs)
+        swapLm(p[0], p[1]);
+}
+
+inline void swapMediaPipeLeftRightScreenCrop(float* screenCrop33x3)
+{
+    static constexpr int kPairs[][2] = {
+        {11, 12}, {13, 14}, {15, 16},
+        {17, 18}, {19, 20}, {21, 22},
+        {23, 24}, {25, 26}, {27, 28},
+        {31, 32},
+    };
+    auto swapLm = [&](int a, int b) {
+        for (int k = 0; k < 3; ++k)
+            std::swap(screenCrop33x3[a * 3 + k], screenCrop33x3[b * 3 + k]);
     };
     for (const auto& p : kPairs)
         swapLm(p[0], p[1]);

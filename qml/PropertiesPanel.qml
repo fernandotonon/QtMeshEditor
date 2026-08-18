@@ -2395,6 +2395,52 @@ Rectangle {
                 }
             }
 
+            // One-Euro smoothing cutoff (Hz). Lower = smoother, less jitter.
+            Column {
+                width: parent.width - 16
+                spacing: 2
+                visible: mocapReady
+
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    Text {
+                        width: 72
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                        text: "Smoothing"
+                    }
+                    Slider {
+                        id: mocapSmoothSlider
+                        width: parent.width - 72 - 44
+                        height: 22
+                        from: 0.2
+                        to: 2.0
+                        stepSize: 0.1
+                        enabled: MocapController.state === 0
+                        value: MocapController.smoothingCutoff
+                        onMoved: MocapController.smoothingCutoff = value
+                    }
+                    Text {
+                        width: 38
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        text: mocapSmoothSlider.value.toFixed(1) + " Hz"
+                    }
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    opacity: 0.65
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9
+                    text: "Lower Hz = smoother (less shake). Raise if motion feels laggy."
+                }
+            }
+
             // device picker + preview toggle
             Row {
                 width: parent.width - 16
@@ -2459,10 +2505,11 @@ Rectangle {
                 opacity: 0.75
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 9
-                text: "Debug (beside character): cyan = MediaPipe landmarks, "
-                      + "yellow = PoseIK 22-bone FK. If cyan matches you but "
-                      + "the skinned mesh does not, retarget is wrong; if cyan "
-                      + "is wrong, capture or lighting is wrong."
+                text: "Debug (beside character): cyan = MediaPipe pose, "
+                      + "yellow = PoseIK body, magenta = 21-point Hands "
+                      + "(curl these, not the pose fingertips). The camera "
+                      + "preview also draws Hands — magenta right / orange "
+                      + "left. Recalibrate with open hands visible."
             }
 
             // Video-file source — the path for macOS where the camera is
