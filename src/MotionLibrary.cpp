@@ -357,9 +357,17 @@ bool MotionLibrary::saveCuration(const QSet<QString>& approved)
 QString MotionLibrary::ensureLibraryBlocking()
 {
     const QString dest = libraryPath();
-    if (QFileInfo::exists(dest)) return dest;
+    const bool haveLocal = QFileInfo::exists(dest);
+    // Already on the V2 library (libraryPath prefers it when present) — done.
+    if (haveLocal && dest.endsWith(QLatin1String(kLibraryFileV2)))
+        return dest;
+    // UPGRADE GAP: a pre-V2 install has only the legacy V1 file, and the old
+    // early-return here meant the V2 (52-joint, curated) library NEVER
+    // downloaded — those users kept the V1 side-channel finger path and its
+    // artifacts. When only V1 exists, still attempt the V2 download (once per
+    // process — see below); offline/404 keeps the local V1 working.
     if (!qEnvironmentVariableIsEmpty("QTMESH_MOTION_NO_DOWNLOAD"))
-        return {};
+        return haveLocal ? dest : QString();
 
     QString base;
     {
@@ -371,11 +379,18 @@ QString MotionLibrary::ensureLibraryBlocking()
                                  : QString::fromUtf8(env);
         }
     }
-    if (base.isEmpty()) return {};
+    if (base.isEmpty()) return haveLocal ? dest : QString();
     if (!base.endsWith('/')) base += '/';
 
     auto* dl = ModelDownloader::instance();
-    if (!dl) return {};
+    if (!dl) return haveLocal ? dest : QString();
+
+    // One V2-upgrade attempt per process: a v1-only install must not re-hit
+    // the network for every generate call in a session when offline.
+    static bool s_v2UpgradeAttempted = false;
+    if (haveLocal && s_v2UpgradeAttempted)
+        return dest;
+    s_v2UpgradeAttempted = true;
 
     // Try the V2 library (schema v4, fingers-as-joints — the curated shipped
     // set) FIRST; fall back to the V1 file so overridden base URLs / older
@@ -414,6 +429,8 @@ QString MotionLibrary::ensureLibraryBlocking()
     };
     const QString v2 = tryDownload(kLibraryFileV2);
     if (!v2.isEmpty()) return v2;
+    // V2 unavailable: keep the legacy local V1 when we have one.
+    if (haveLocal) return dest;
     // A TIMEOUT means the connection stalled, not that the V2 file is absent —
     // retrying the V1 name would block the (GUI/CLI) caller for up to another
     // 5 minutes for nothing. Only fall back on a fast failure (404 / older

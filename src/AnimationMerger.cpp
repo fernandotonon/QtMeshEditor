@@ -3249,6 +3249,136 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 const auto& q = clipQuats[frame][joint];
                 return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
             };
+            // FINGER PLAUSIBILITY GATE (V2). Some source rigs carry garbage
+            // finger data — e.g. "Animated Human Low Poly": the index chain
+            // articulates up to 176° RELATIVE TO THE HAND (folds through the
+            // palm; a full fist is ~100°), and the one-finger-drives-four
+            // replication copies it to every finger. Transporting impossible
+            // curls onto a realistic hand splays the fingers backwards, so
+            // when ANY segment of a chain exceeds the anatomical limit at any
+            // frame, HOLD THE WHOLE CHAIN AT BIND (neutral beats broken).
+            // Per-chain: a rig with a good thumb but bad fingers keeps the
+            // thumb animation.
+            std::vector<char> fingerChainUntrusted(
+                static_cast<size_t>(canonN), 0);
+            if (clipIsV2 && haveRestWorld) {
+                constexpr float kMaxFingerArticulationDeg = 120.0f;
+                int droppedChains = 0;
+                for (int side = 0; side < 2; ++side)
+                    for (int fgr = 0; fgr < 5; ++fgr) {
+                        float maxDeg = 0.0f;
+                        for (int seg = 0; seg < 3; ++seg) {
+                            const int c = MotionInbetween::fingerJointIndexV2(
+                                side, fgr, seg);
+                            const int pc =
+                                MotionInbetween::canonicalParentOfV2(c);
+                            if (c < 0 || c >= canonN || pc < 0) continue;
+                            const auto& rq =
+                                cmuRestWorld[static_cast<size_t>(c)];
+                            const auto& prq =
+                                cmuRestWorld[static_cast<size_t>(pc)];
+                            if (rq[0]*rq[0] + rq[1]*rq[1] + rq[2]*rq[2]
+                                    + rq[3]*rq[3] < 0.25f ||
+                                prq[0]*prq[0] + prq[1]*prq[1] + prq[2]*prq[2]
+                                    + prq[3]*prq[3] < 0.25f)
+                                continue;   // unpopulated → holds bind anyway
+                            const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
+                                                        rq[2]);
+                            const Ogre::Quaternion prefQ(prq[3], prq[0],
+                                                         prq[1], prq[2]);
+                            for (int f = 0; f < frames; ++f) {
+                                const auto& cq =
+                                    clipQuats[static_cast<size_t>(f)]
+                                             [static_cast<size_t>(c)];
+                                if (cq[0]*cq[0] + cq[1]*cq[1] + cq[2]*cq[2]
+                                        + cq[3]*cq[3] < 0.25f)
+                                    continue;
+                                const Ogre::Quaternion Df =
+                                    clipQ(f, c) * refQ.Inverse();
+                                const Ogre::Quaternion Dp =
+                                    clipQ(f, pc) * prefQ.Inverse();
+                                const Ogre::Quaternion Drel =
+                                    Dp.Inverse() * Df;
+                                const float deg = 2.0f * Ogre::Math::ACos(
+                                    std::min(1.0f, std::abs(Drel.w)))
+                                        .valueDegrees();
+                                if (deg > maxDeg) maxDeg = deg;
+                            }
+                        }
+                        if (maxDeg > kMaxFingerArticulationDeg) {
+                            ++droppedChains;
+                            for (int seg = 0; seg < 3; ++seg) {
+                                const int c =
+                                    MotionInbetween::fingerJointIndexV2(
+                                        side, fgr, seg);
+                                if (c >= 0 && c < canonN)
+                                    fingerChainUntrusted
+                                        [static_cast<size_t>(c)] = 1;
+                            }
+                        }
+                    }
+                if (droppedChains > 0)
+                    Ogre::LogManager::getSingleton().logMessage(
+                        "applyMotionClip: dropped " +
+                        std::to_string(droppedChains) +
+                        " implausible finger chain(s) (>120deg articulation)"
+                        " — holding bind");
+            }
+            // HAND-BASIS finger transport frames. The canonical-frame
+            // conjugation (Ct⁻¹·Drel·Ct) assumes the source's extraction
+            // frame C equals the target bind frame Ct; when they disagree
+            // (the documented C≠Ct class) the curl AXIS lands wrong on the
+            // target — fingers bend sideways/backward instead of toward the
+            // palm ("Animated Human Low Poly" jump). Fingers articulate
+            // relative to the HAND, so re-express the curl in each side's
+            // hand basis instead: d = hand/finger direction, p = palmward
+            // (thumb direction orthogonalized against d — the thumb is on
+            // the palm side in any bind), b = d×p. B = R_target·R_source⁻¹
+            // then replaces the Ct conjugation — no dependence on C at all.
+            // Falls back to the Ct conjugation when either basis degenerates.
+            Ogre::Quaternion fingerBasisMap[2] = {Ogre::Quaternion::IDENTITY,
+                                                  Ogre::Quaternion::IDENTITY};
+            bool fingerBasisOk[2] = {false, false};
+            if (clipIsV2 && !clipRestDir.empty()
+                && static_cast<int>(clipRestDir.size()) >= canonN) {
+                auto basisQuat = [](const Ogre::Vector3& dIn,
+                                    const Ogre::Vector3& tIn,
+                                    Ogre::Quaternion& out) -> bool {
+                    Ogre::Vector3 d = dIn, t = tIn;
+                    if (d.squaredLength() < 1e-8f || t.squaredLength() < 1e-8f)
+                        return false;
+                    d.normalise();
+                    Ogre::Vector3 p = t - d * t.dotProduct(d);
+                    if (p.squaredLength() < 1e-6f)
+                        return false;   // thumb ~parallel to hand: degenerate
+                    p.normalise();
+                    const Ogre::Vector3 b = d.crossProduct(p);
+                    Ogre::Matrix3 m;
+                    m.SetColumn(0, d);
+                    m.SetColumn(1, p);
+                    m.SetColumn(2, b);
+                    out = Ogre::Quaternion(m);
+                    return true;
+                };
+                for (int side = 0; side < 2; ++side) {
+                    const int hand = side == 0 ? 9 : 13;
+                    const int thumb0 =
+                        MotionInbetween::fingerJointIndexV2(side, 0, 0);
+                    const auto& hd = clipRestDir[static_cast<size_t>(hand)];
+                    const auto& td = clipRestDir[static_cast<size_t>(thumb0)];
+                    Ogre::Quaternion qs, qt;
+                    const bool okS = basisQuat(
+                        Ogre::Vector3(hd[0], hd[1], hd[2]),
+                        Ogre::Vector3(td[0], td[1], td[2]), qs);
+                    const bool okT = basisQuat(
+                        tb.tgtBindDir[static_cast<size_t>(hand)],
+                        tb.tgtBindDir[static_cast<size_t>(thumb0)], qt);
+                    if (okS && okT) {
+                        fingerBasisMap[side] = qt * qs.Inverse();
+                        fingerBasisOk[side] = true;
+                    }
+                }
+            }
             // #857: STABILIZED TWIST TRANSPORT. The aim above transports the
             // bone's DIRECTION but inherits the target bind's roll — gesture-
             // heavy clips (dance, wave) lose forearm/spine roll and read
@@ -3518,7 +3648,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             || std::abs(cq[0]) + std::abs(cq[1])
                                    + std::abs(cq[2]) > 1e-4f;
                         if (haveRestWorld && populated
-                            && rn > 0.25f && cn > 0.25f) {
+                            && rn > 0.25f && cn > 0.25f
+                            && !fingerChainUntrusted[static_cast<size_t>(c)]) {
                             const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
                                                         rq[2]);
                             const Ogre::Quaternion Df =
@@ -3551,8 +3682,21 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                                 : Ogre::Quaternion::IDENTITY;
                             const Ogre::Quaternion handDelta =
                                 Wp * WpBind.Inverse();
+                            // Re-express the curl in the target frame: prefer
+                            // the HAND-BASIS map (frame-independent, see
+                            // fingerBasisMap above); fall back to the
+                            // canonical Ct conjugation.
+                            const int fSide =
+                                (c - MotionInbetween::canonicalJointCount())
+                                    / 15;
+                            const Ogre::Quaternion DrelT =
+                                (fSide >= 0 && fSide < 2
+                                 && fingerBasisOk[fSide])
+                                    ? fingerBasisMap[fSide] * Drel
+                                          * fingerBasisMap[fSide].Inverse()
+                                    : CtInv * Drel * tb.Ct;
                             const Ogre::Quaternion Wt =
-                                handDelta * (CtInv * Drel * tb.Ct)
+                                handDelta * DrelT
                                 * tb.bindWorld[static_cast<size_t>(i)];
                             local = Wp.Inverse() * Wt;
                             W[static_cast<size_t>(i)] = Wt;
