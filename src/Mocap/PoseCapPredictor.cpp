@@ -361,7 +361,23 @@ PoseSample PoseCapPredictor::predict(const QImage& image, double timeSec)
             sample.world[i * 3 + 0] = wx * ca - wy * sa;
             sample.world[i * 3 + 1] = wx * sa + wy * ca;
             sample.world[i * 3 + 2] = rawWorld[i * 3 + 2];
+            sample.screenCrop[i * 3 + 0] = rawScreen[i * 5 + 0] / static_cast<float>(ls);
+            sample.screenCrop[i * 3 + 1] = rawScreen[i * 5 + 1] / static_cast<float>(ls);
+            sample.screenCrop[i * 3 + 2] = rawScreen[i * 5 + 2] / static_cast<float>(ls);
             sample.visibility[i] = stableSigmoid(rawScreen[i * 5 + 3]);
+        }
+        {
+            float pts[33 * 3];
+            for (int i = 0; i < 33; ++i) {
+                pts[i * 3 + 0] = sample.screenCrop[i * 3 + 0];
+                pts[i * 3 + 1] = sample.screenCrop[i * 3 + 1];
+                pts[i * 3 + 2] = sample.screenCrop[i * 3 + 2];
+            }
+            FaceCapGeom::projectLandmarks(pts, 33, 3, rect);
+            for (int i = 0; i < 33; ++i) {
+                sample.imageXy[i * 2 + 0] = pts[i * 3 + 0];
+                sample.imageXy[i * 2 + 1] = pts[i * 3 + 1];
+            }
         }
         sample.confidence = presence;
 

@@ -197,6 +197,7 @@ Mocap/MocapController.cpp
 Mocap/MocapCameraHints.cpp
 Mocap/MocapPoseDebugOverlay.cpp
 Mocap/MocapBodyDriveDebug.cpp
+Mocap/HandCapPredictor.cpp
 commands/RecordMocapClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp

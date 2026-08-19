@@ -62,7 +62,8 @@ std::vector<std::array<float, 2>> genSsdAnchors(int inputSize,
 std::vector<Detection> decodeDetections(
     const float* rawBoxes, const float* rawScores,
     const std::vector<std::array<float, 2>>& anchors, int inputSize,
-    int numKeypoints, float minScore = 0.5f, float iouThreshold = 0.3f);
+    int numKeypoints, float minScore = 0.5f, float iouThreshold = 0.3f,
+    bool reverseOutputOrder = false);
 
 // ---- ROI rects --------------------------------------------------------------
 
@@ -85,6 +86,27 @@ RotatedRect rectFromFaceLandmarks(const float* landmarksXyz, int count,
 // Pose: centre keypoint 0 (mid-hip), radius |kp1-kp0|, box 2*radius square,
 // target angle 90 deg, scaled 1.25x.
 RotatedRect rectFromPoseDetection(const Detection& det, int imgW, int imgH);
+
+// Hand crop from BlazePose image-space wrist + index + pinky (Holistic-style
+// pose-seeded ROI). Fingers are oriented up in the crop (wrist toward +Y).
+RotatedRect rectFromPoseHand(float wristX, float wristY, float indexX,
+                             float indexY, float pinkyX, float pinkyY);
+
+// MediaPipe BlazePalm → landmark ROI: wrist (kp0) → middle MCP (kp2),
+// target 90°, box × 2.6, shift_y −0.5 so fingertips stay in the crop.
+RotatedRect rectFromPalmDetection(const Detection& det, int imgW, int imgH);
+
+// Next-frame hand tracking ROI from the previous 21 image-space landmarks
+// (wrist → middle MCP, box = palm length × 2.6, shift_y −0.1 toward the
+// fingertips). Returns a zero-size rect when the palm span is degenerate.
+RotatedRect rectFromHandLandmarks(const float* imageXy21x2, int imgW, int imgH);
+
+// MediaPipe Hands: 21 landmarks. Flex at B of triangle A-B-C is π − angle
+// (0 = colinear/open, ~1.6 = tightly folded).
+constexpr int kHandLandmarkCount = 21;
+float handJointFlexRad(const float* xyz21, int a, int b, int c);
+// outFlex[finger][segment] for thumb..pinky × MCP/PIP/DIP (3 segments).
+void handFingerFlexRad(const float* xyz21, float outFlex[5][3]);
 
 // ---- crop + projection ------------------------------------------------------
 

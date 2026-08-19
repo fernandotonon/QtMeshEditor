@@ -15,6 +15,7 @@ TEST(FaceCapGeom, AnchorCountsMatchTheModels)
 {
     EXPECT_EQ(genSsdAnchors(128, {8, 16, 16, 16}).size(), 896u);   // BlazeFace
     EXPECT_EQ(genSsdAnchors(224, {8, 16, 32, 32, 32}).size(), 2254u);  // BlazePose
+    EXPECT_EQ(genSsdAnchors(192, {8, 16, 16, 16}).size(), 2016u);  // BlazePalm
 }
 
 TEST(FaceCapGeom, LetterboxPadsTheShortSideAndUnmapsBack)
@@ -189,6 +190,58 @@ TEST(FaceCapGeom, PoseRectFromAlignmentKeypoints)
     EXPECT_NEAR(r.cy, 50.f, 1e-3);
     EXPECT_NEAR(r.w, 2.f * 20.f * 1.25f, 1e-3);  // 2 * radius * 1.25
     EXPECT_NEAR(r.angle, 0.f, 1e-4);
+}
+
+TEST(FaceCapGeom, PoseHandRectOrientsFingersUpInCrop)
+{
+    // Wrist below fingers in the image (y down): fingers point "up" on screen.
+    const RotatedRect r = rectFromPoseHand(50.f, 80.f, 45.f, 40.f, 55.f, 40.f);
+    EXPECT_NEAR(r.cx, 50.f, 1e-2);
+    EXPECT_GT(r.w, 80.f);
+    EXPECT_NEAR(r.w, r.h, 1e-4);
+    EXPECT_NEAR(r.angle, 0.f, 0.08f);
+}
+
+TEST(FaceCapGeom, PalmDetectionRectOrientsFingersUp)
+{
+    Detection det;
+    det.score = 1.f;
+    det.box = {0.3f, 0.4f, 0.2f, 0.2f};  // centre (0.4, 0.5)
+    det.keypoints = {
+        {0.40f, 0.58f}, {0.35f, 0.50f}, {0.40f, 0.42f},
+        {0.45f, 0.50f}, {0.48f, 0.52f}, {0.40f, 0.55f}, {0.40f, 0.60f},
+    };
+    const RotatedRect r = rectFromPalmDetection(det, 100, 100);
+    EXPECT_GT(r.w, 40.f);
+    EXPECT_NEAR(r.w, r.h, 1e-4);
+    EXPECT_NEAR(r.angle, 0.f, 0.12f);
+}
+
+TEST(FaceCapGeom, HandJointFlexStraightIsNearZero)
+{
+    float xyz[21 * 3] = {};
+    // Wrist at origin, index chain along +Y (open/straight).
+    xyz[0] = 0.f;
+    xyz[1] = 0.f;
+    xyz[5 * 3 + 1] = 0.1f;
+    xyz[6 * 3 + 1] = 0.2f;
+    xyz[7 * 3 + 1] = 0.3f;
+    xyz[8 * 3 + 1] = 0.4f;
+    EXPECT_NEAR(handJointFlexRad(xyz, 0, 5, 6), 0.f, 1e-4);
+    EXPECT_NEAR(handJointFlexRad(xyz, 5, 6, 7), 0.f, 1e-4);
+}
+
+TEST(FaceCapGeom, HandJointFlexRightAngle)
+{
+    float xyz[21 * 3] = {};
+    xyz[5 * 3 + 0] = 0.f;
+    xyz[5 * 3 + 1] = 0.f;   // B
+    xyz[0] = 0.f;
+    xyz[1] = -0.1f;         // A below B
+    xyz[6 * 3 + 0] = 0.1f;  // C to the right of B
+    xyz[6 * 3 + 1] = 0.f;
+    EXPECT_NEAR(handJointFlexRad(xyz, 0, 5, 6), static_cast<float>(M_PI) / 2.f,
+                1e-3);
 }
 
 #endif  // ENABLE_MOCAP

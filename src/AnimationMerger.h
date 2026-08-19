@@ -7,6 +7,10 @@
 #include <array>
 #include <vector>
 
+#ifdef ENABLE_MOCAP
+#include "Mocap/PoseIKSolver.h"
+#endif
+
 // Stateful per-frame body retargeter for live mocap and clip baking. Construct
 // once from the target skeleton (bind frame, torso Ct, per-role bind directions,
 // harvested STANDING pose). evaluateFrame() per pose.
@@ -442,6 +446,67 @@ public:
         /// value). Kept in the signature so libraries carrying restDir keep a
         /// stable call site if a stored-rest path returns.
         const std::vector<std::array<float, 3>>& clipFingerRest = {});
+
+#ifdef ENABLE_MOCAP
+    /// Bind-pose finger rig data for live curl (build once after skel->reset).
+    struct FingerLiveDriveContext {
+        bool valid = false;
+        Ogre::Quaternion CtInv = Ogre::Quaternion::IDENTITY;
+        std::vector<Ogre::Quaternion> bindWorld;
+        std::vector<Ogre::Quaternion> bindLocal;
+        std::vector<Ogre::Vector3> tgtBindDir;
+        std::array<Ogre::Vector3, 2> flexAxis{};
+        /// (side×finger) → sorted (segment, bone handle).
+        std::vector<std::vector<std::pair<int, unsigned short>>> fingerBones;
+    };
+
+    /// Snapshot finger bind geometry + flex axes (skeleton must be at bind pose).
+    static FingerLiveDriveContext buildFingerLiveDriveContext(
+        Ogre::SkeletonInstance* skel);
+
+    /// MediaPipe pose landmarks 15–22. Prefers screen-crop deltas rotated by the
+    /// live wrist orientation in canonical space (world fingertip coords barely
+    /// move). Falls back to PoseIK hand quats when wrist quats are unavailable.
+    static void collectFingerDirsFromPoseLandmarks(
+        const float* world33, const float* visibility33,
+        std::array<std::array<float, 3>, kFingerSlots>& outDirs,
+        const float* screenCrop33x3 = nullptr,
+        const std::array<Ogre::Quaternion, 2>* wristCanonQuats = nullptr,
+        const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>* handQuats =
+            nullptr,
+        uint32_t handResolvedMask = 0);
+
+    static void captureFingerNeutralScreenDirs(
+        const float* screenCrop33x3,
+        std::array<std::array<float, 2>, kFingerSlots>& outDir2d);
+
+    /// Live mocap: 2D screen-crop curl about the bind flex axis (robust vs
+    /// transporting 3D landmark dirs across rigs). Requires neutral 2D dirs
+    /// from `captureFingerNeutralScreenDirs` at calibration.
+    static int driveFingersLiveFromScreenCrop(
+        Ogre::SkeletonInstance* skel,
+        const std::array<std::array<float, 2>, kFingerSlots>& neutralDir2d,
+        const std::array<std::array<float, 2>, kFingerSlots>& liveDir2d,
+        const FingerLiveDriveContext& ctx,
+        int sideMask = 3);
+
+    /// Live mocap: apply per-slot PIP/MCP/DIP flex (radians, 0=straight)
+    /// relative to a calibrated neutral. Missing slots are < 0 and skipped.
+    static int driveFingersLiveFromFlex(
+        Ogre::SkeletonInstance* skel,
+        const std::array<float, kFingerSlots>& liveFlexRad,
+        const std::array<float, kFingerSlots>& neutralFlexRad,
+        const FingerLiveDriveContext& ctx);
+
+    /// Live mocap: relative 3D curl from wrist→tip landmark dirs (15–22).
+    /// Requires `neutralDirs` (calibration frame) and bind snapshot `ctx`.
+    static int driveFingersLive(
+        Ogre::SkeletonInstance* skel,
+        const std::array<std::array<float, 3>, kFingerSlots>& frameDirs,
+        const FingerLiveDriveContext& ctx,
+        const std::array<std::array<float, 3>, kFingerSlots>* neutralDirs =
+            nullptr);
+#endif
 
     /// Sample every (or one) skeletal animation of `entity` at `fps` and
     /// express each canonical joint's world orientation per frame. Bone→role

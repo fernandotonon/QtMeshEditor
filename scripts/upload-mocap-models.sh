@@ -26,9 +26,8 @@ OUT_DIR="${OUT_DIR:?set OUT_DIR to the export output dir (face/*.onnx + pose/*.o
 
 upload() {  # <local> <repo-path>
     local src="$1" dst="$2"
-    # Every mocap graph is REQUIRED — a partial upload produces a broken
-    # model release (the app downloads all five). Fail hard rather than
-    # skipping, so `set -e` aborts before a half-published set goes live.
+    # Face (3) + pose (2) graphs are REQUIRED. Hands models below are
+    # optional (the app falls back to pose-seeded crops without them).
     if [ ! -f "$src" ]; then
         echo "!! ABORT: required model missing: $src" >&2
         exit 1
@@ -47,6 +46,20 @@ upload "$OUT_DIR/face/face_blendshapes.onnx" "mocap/face/face_blendshapes.onnx"
 # Pose bundle (PoseCapPredictor): detector + landmarks.
 upload "$OUT_DIR/pose/pose_detector.onnx"   "mocap/pose/pose_detector.onnx"
 upload "$OUT_DIR/pose/pose_landmarks.onnx"  "mocap/pose/pose_landmarks.onnx"
+
+# Hands (HandCapPredictor): optional MediaPipe Hands 21-landmark graph +
+# BlazePalm detector. Unity's Apache-2.0 ONNX conversion is accepted
+# (hand_landmarks_detector.onnx → hand_landmarks.onnx).
+if [ -f "$OUT_DIR/hands/hand_landmarks.onnx" ]; then
+    upload "$OUT_DIR/hands/hand_landmarks.onnx" "mocap/hands/hand_landmarks.onnx"
+else
+    echo ">> skip optional $OUT_DIR/hands/hand_landmarks.onnx (not present)"
+fi
+if [ -f "$OUT_DIR/hands/hand_detector.onnx" ]; then
+    upload "$OUT_DIR/hands/hand_detector.onnx" "mocap/hands/hand_detector.onnx"
+else
+    echo ">> skip optional $OUT_DIR/hands/hand_detector.onnx (not present)"
+fi
 
 # Apache-2.0 notice next to the weights (MediaPipe attribution).
 NOTICE="$(mktemp)"

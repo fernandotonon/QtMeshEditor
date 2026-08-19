@@ -4,13 +4,16 @@
 #include "MocapRecorder.h"
 #include "OneEuroFilter.h"
 #include "PoseCapPredictor.h"
+#include "HandCapPredictor.h"
 #include "PoseIKSolver.h"
 #include "VideoFrameSource.h"
 #include "MocapCameraHints.h"
 #include "MocapLiveTypes.h"
 #include "MocapPoseDebugOverlay.h"
+#include "MocapPoseIkFk.h"
 #include "MocapBodyDriveDebug.h"
 #include "MocapPoseFix.h"
+#include "FaceCapGeom.h"
 #include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
 #include "../Manager.h"
@@ -30,12 +33,16 @@
 
 #include <memory>
 #include <cmath>
+#include <algorithm>
 
+#include <QHash>
 #include <QSettings>
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QThread>
 #include <QTimer>
+#include <QPainter>
+#include <QPen>
 #endif
 
 #include <QApplication>
@@ -154,6 +161,7 @@ struct BodyDriveBone {
 struct BodyManualBoneSnapshot {
     std::string boneName;
     Ogre::Quaternion bindLocal = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3 bindPosition = Ogre::Vector3::ZERO;
     bool wasManuallyControlled = false;
 };
 
@@ -162,6 +170,89 @@ struct BodyAnimMaskEntry {
     unsigned short boneHandle = 0;
     float weight = 1.f;
 };
+}  // namespace
+
+namespace {
+
+void paintMocapPreviewHud(QImage& preview, const BodyLiveFrame& body, int srcW,
+                          int srcH)
+{
+    if (preview.isNull() || srcW <= 0 || srcH <= 0)
+        return;
+    if (preview.format() != QImage::Format_RGB32
+        && preview.format() != QImage::Format_ARGB32)
+        preview = preview.convertToFormat(QImage::Format_RGB32);
+    const float sx = static_cast<float>(preview.width())
+                     / static_cast<float>(srcW);
+    const float sy = static_cast<float>(preview.height())
+                     / static_cast<float>(srcH);
+    auto toPt = [&](float x, float y) {
+        return QPointF(x * sx, y * sy);
+    };
+    QPainter p(&preview);
+    p.setRenderHint(QPainter::Antialiasing, false);
+
+    static const int kPoseEdges[][2] = {
+        {11, 12}, {11, 13}, {13, 15}, {12, 14}, {14, 16},
+        {11, 23}, {12, 24}, {23, 24}, {23, 25}, {25, 27},
+        {24, 26}, {26, 28}, {15, 19}, {15, 17}, {15, 21},
+        {16, 20}, {16, 18}, {16, 22},
+    };
+    p.setPen(QPen(QColor(20, 230, 255), 1));
+    for (const auto& e : kPoseEdges) {
+        if (body.visibility[static_cast<size_t>(e[0])] < 0.2f
+            || body.visibility[static_cast<size_t>(e[1])] < 0.2f)
+            continue;
+        p.drawLine(toPt(body.imageXy[static_cast<size_t>(e[0] * 2)],
+                        body.imageXy[static_cast<size_t>(e[0] * 2 + 1)]),
+                   toPt(body.imageXy[static_cast<size_t>(e[1] * 2)],
+                        body.imageXy[static_cast<size_t>(e[1] * 2 + 1)]));
+    }
+
+    static const int kHandEdges[][2] = {
+        {0, 1},  {1, 2},  {2, 3},  {3, 4},  {0, 5},  {5, 6},  {6, 7},  {7, 8},
+        {0, 9},  {9, 10}, {10, 11}, {11, 12}, {0, 13}, {13, 14}, {14, 15},
+        {15, 16}, {0, 17}, {17, 18}, {18, 19}, {19, 20}, {5, 9}, {9, 13},
+        {13, 17},
+    };
+    auto drawHand = [&](const HandLandmarks& h, const QColor& col) {
+        if (!h.valid)
+            return;
+        p.setPen(QPen(col, 2));
+        for (const auto& e : kHandEdges) {
+            p.drawLine(toPt(h.imageXy[static_cast<size_t>(e[0] * 2)],
+                            h.imageXy[static_cast<size_t>(e[0] * 2 + 1)]),
+                       toPt(h.imageXy[static_cast<size_t>(e[1] * 2)],
+                            h.imageXy[static_cast<size_t>(e[1] * 2 + 1)]));
+        }
+    };
+    drawHand(body.hands.right, QColor(255, 40, 220));
+    drawHand(body.hands.left, QColor(255, 180, 40));
+}
+
+void fillFingerFlexFromHands(
+    const HandsLiveFrame& hands,
+    std::array<float, AnimationMerger::kFingerSlots>& out)
+{
+    out.fill(-1.f);
+    auto pack = [&](const HandLandmarks& h, int side) {
+        if (!h.valid)
+            return;
+        float flex[5][3];
+        FaceCapGeom::handFingerFlexRad(h.cropXyz.data(), flex);
+        for (int fgr = 0; fgr < 5; ++fgr) {
+            for (int seg = 0; seg < 3; ++seg) {
+                const int slot =
+                    AnimationMerger::fingerSlot(side, fgr, seg);
+                if (slot >= 0)
+                    out[static_cast<size_t>(slot)] = flex[fgr][seg];
+            }
+        }
+    };
+    pack(hands.right, 0);
+    pack(hands.left, 1);
+}
+
 }  // namespace
 
 class MocapInferenceWorker : public QObject
@@ -177,8 +268,10 @@ public:
     // body (optional; created only when the Body channel is enabled)
     bool bodyEnabled = false;
     std::shared_ptr<PoseCapPredictor> posePredictor;
+    std::shared_ptr<HandCapPredictor> handPredictor;
     PoseIK::Solver poseSolver;
     std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
+    std::array<std::array<OneEuroFilter, 3>, PoseIK::kLandmarkCount> worldFilters;
     bool requestPoseReset = false;
 
 public slots:
@@ -218,13 +311,37 @@ public slots:
                     body.resolvedMask = fr.resolvedMask;
                     body.world = ps.world;
                     body.visibility = ps.visibility;
+                    body.screenCrop = ps.screenCrop;
+                    body.imageXy = ps.imageXy;
+                    if (handPredictor && handPredictor->isAvailable())
+                        body.hands = handPredictor->predict(
+                            frame.image, ps.imageXy.data(),
+                            ps.visibility.data(), frame.timeSec);
+                    if (smooth) {
+                        for (int lm = 0; lm < PoseIK::kLandmarkCount; ++lm) {
+                            // BlazePose world coords for fingertip LMs (17–22) barely
+                            // move; screen-crop deltas carry the motion instead.
+                            if (lm >= 17 && lm <= 22)
+                                continue;
+                            for (int axis = 0; axis < 3; ++axis) {
+                                const size_t idx =
+                                    static_cast<size_t>(lm * 3 + axis);
+                                body.world[idx] = static_cast<float>(
+                                    worldFilters[static_cast<size_t>(lm)]
+                                                [static_cast<size_t>(axis)]
+                                        .filter(body.world[idx], frame.timeSec));
+                            }
+                        }
+                    }
                 }
             }
 
-            // downscale sparsely for the HUD preview (payload stays small)
+            // HUD preview — every frame, small + smooth scale to avoid flicker
             QImage preview;
-            if (frame.frameIndex % 3 == 0)
-                preview = frame.image.scaledToWidth(240, Qt::FastTransformation);
+            preview = frame.image.scaledToWidth(200, Qt::SmoothTransformation);
+            if (body.valid)
+                paintMocapPreviewHud(preview, body, frame.image.width(),
+                                     frame.image.height());
             emit sampleReady(s, body, preview);
         }
     }
@@ -234,11 +351,162 @@ signals:
                      const QImage& preview);
 };
 
+namespace {
+
+int countFingerScreen2dSlots(
+    const std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>& dirs)
+{
+    int n = 0;
+    for (const auto& dir : dirs) {
+        if (dir[0] != 0.f || dir[1] != 0.f)
+            ++n;
+    }
+    return n;
+}
+
+bool tryCaptureFingerNeutralScreen(
+    const BodyLiveFrame& body,
+    std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>& out)
+{
+    out.fill({0.f, 0.f});
+    AnimationMerger::captureFingerNeutralScreenDirs(
+        body.screenCrop.data(), out);
+    return countFingerScreen2dSlots(out) >= 4;
+}
+
+bool flexReadyForSide(
+    const std::array<float, AnimationMerger::kFingerSlots>& flex, int side)
+{
+    int n = 0;
+    for (int fgr = 0; fgr < 5; ++fgr) {
+        for (int seg = 0; seg < 3; ++seg) {
+            const int slot = AnimationMerger::fingerSlot(side, fgr, seg);
+            if (slot >= 0 && flex[static_cast<size_t>(slot)] >= 0.f)
+                ++n;
+        }
+    }
+    return n >= 6;
+}
+
+void mergeMissingFingerFlexFromHands(
+    const HandsLiveFrame& hands,
+    std::array<float, AnimationMerger::kFingerSlots>& inout,
+    bool skipRight, bool skipLeft)
+{
+    std::array<float, AnimationMerger::kFingerSlots> live{};
+    fillFingerFlexFromHands(hands, live);
+    for (int side = 0; side < 2; ++side) {
+        if ((side == 0 && skipRight) || (side == 1 && skipLeft))
+            continue;
+        for (int fgr = 0; fgr < 5; ++fgr) {
+            for (int seg = 0; seg < 3; ++seg) {
+                const int slot = AnimationMerger::fingerSlot(side, fgr, seg);
+                if (slot < 0)
+                    continue;
+                const float v = live[static_cast<size_t>(slot)];
+                if (v >= 0.f)
+                    inout[static_cast<size_t>(slot)] = v;
+            }
+        }
+    }
+}
+
+void collectLiveFingerScreen2d(
+    const BodyLiveFrame& body,
+    std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>& out)
+{
+    AnimationMerger::captureFingerNeutralScreenDirs(body.screenCrop.data(), out);
+}
+
+void smoothFingerScreen2d(
+    std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>& dirs,
+    std::array<std::array<OneEuroFilter, 2>, AnimationMerger::kFingerSlots>&
+        filters,
+    double timeSec)
+{
+    for (int s = 0; s < AnimationMerger::kFingerSlots; ++s) {
+        auto& d = dirs[static_cast<size_t>(s)];
+        if (d[0] == 0.f && d[1] == 0.f)
+            continue;
+        for (int ax = 0; ax < 2; ++ax)
+            d[static_cast<size_t>(ax)] = static_cast<float>(
+                filters[static_cast<size_t>(s)][static_cast<size_t>(ax)].filter(
+                    d[static_cast<size_t>(ax)], timeSec));
+    }
+}
+
+void smoothFingerLandmarkDirs(
+    std::array<std::array<float, 3>, AnimationMerger::kFingerSlots>& dirs,
+    std::array<std::array<OneEuroFilter, 3>, AnimationMerger::kFingerSlots>&
+        filters,
+    double timeSec)
+{
+    for (int s = 0; s < AnimationMerger::kFingerSlots; ++s) {
+        auto& d = dirs[static_cast<size_t>(s)];
+        if (d[0] == 0.f && d[1] == 0.f && d[2] == 0.f)
+            continue;
+        for (int ax = 0; ax < 3; ++ax)
+            d[static_cast<size_t>(ax)] = static_cast<float>(
+                filters[static_cast<size_t>(s)][static_cast<size_t>(ax)].filter(
+                    d[static_cast<size_t>(ax)], timeSec));
+        Ogre::Vector3 v(d[0], d[1], d[2]);
+        if (v.squaredLength() > 1e-9f) {
+            v.normalise();
+            d = {v.x, v.y, v.z};
+        } else {
+            d = {0.f, 0.f, 0.f};
+        }
+    }
+}
+
+}  // namespace
+
+OneEuroFilter::Params faceSmoothParams(double cutoffHz)
+{
+    OneEuroFilter::Params p;
+    p.minCutoff = cutoffHz;
+    p.beta = 0.05;
+    return p;
+}
+
+OneEuroFilter::Params landmarkSmoothParams(double cutoffHz)
+{
+    OneEuroFilter::Params p;
+    p.minCutoff = std::max(0.15, cutoffHz * 0.45);
+    p.beta = 0.02;
+    p.dCutoff = 0.8;
+    return p;
+}
+
+OneEuroFilter::Params boneOutputSmoothParams(double cutoffHz)
+{
+    OneEuroFilter::Params p;
+    p.minCutoff = std::max(0.15, cutoffHz * 0.65);
+    p.beta = 0.025;
+    return p;
+}
+
+void configureWorkerSmoothing(MocapInferenceWorker* worker, double cutoffHz)
+{
+    if (!worker)
+        return;
+    const auto face = faceSmoothParams(cutoffHz);
+    const auto landmarks = landmarkSmoothParams(cutoffHz);
+    for (auto& f : worker->weightFilters)
+        f = OneEuroFilter(face);
+    worker->headFilter = OneEuroQuatFilter(face);
+    for (auto& f : worker->roleFilters)
+        f = OneEuroQuatFilter(face);
+    for (auto& lm : worker->worldFilters)
+        for (auto& axis : lm)
+            axis = OneEuroFilter(landmarks);
+}
+
 struct MocapController::Impl {
     State state = Idle;
     QString status;
     QString clipName = QStringLiteral("FaceCap");
-    double smoothingCutoff = 1.0;
+    double smoothingCutoff = 0.5;
     QVariantList cachedDevices;  // [{id, description}] — populated by refreshDevices()
 
     // The live source feeding the worker: a CameraFrameSource (webcam) OR a
@@ -275,6 +543,7 @@ struct MocapController::Impl {
     // body live-drive: landmark-direction retarget (BodyRetargeter) + restore list.
     std::unique_ptr<BodyRetargeter> bodyRetargeter;
     std::vector<BodyDriveBone> bodyBones;
+    QHash<unsigned short, OneEuroQuatFilter> bodyBoneFilters;
     std::vector<BodyManualBoneSnapshot> bodyManualRestore;
     std::vector<BodyAnimMaskEntry> bodyAnimMaskRestore;
     bool bodyDetected = false;
@@ -284,6 +553,23 @@ struct MocapController::Impl {
     static constexpr int kBodyTorsoStableFrames = 3;
     static constexpr uint32_t kTorsoResolvedMask =
         (1u << 0) | (1u << 1) | (1u << 2);  // hip, abdomen, chest
+    // Live vertical shift on the entity node (world Y), not hip bone local Y —
+    // hip rotation must not skew the translation axis.
+    Ogre::Vector3 entityBindPosition = Ogre::Vector3::ZERO;
+    bool haveEntityBindPosition = false;
+    float bodyRigLegLen = 0.f;
+    float bodyNeutralLegSpan = -1.f;
+    OneEuroFilter bodyHipHeightFilter;
+    std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>
+        fingerNeutralScreen2d{};
+    std::array<float, AnimationMerger::kFingerSlots> fingerNeutralFlex{};
+    bool haveFingerNeutralFlex = false;
+    bool haveFingerNeutralFlexRight = false;
+    bool haveFingerNeutralFlexLeft = false;
+    bool haveFingerNeutralScreen = false;
+    AnimationMerger::FingerLiveDriveContext fingerLiveCtx;
+    std::array<std::array<OneEuroFilter, 2>, AnimationMerger::kFingerSlots>
+        fingerScreenFilters{};
 
     // recording
     bool recordPending = false;
@@ -365,6 +651,11 @@ struct MocapController::Impl {
 MocapController::MocapController(QObject* parent)
     : QObject(parent), d(new Impl)
 {
+    QSettings settings;
+    d->smoothingCutoff =
+        settings.value(QStringLiteral("mocap/smoothingCutoff"), 0.5).toDouble();
+    if (d->smoothingCutoff <= 0.0)
+        d->smoothingCutoff = 0.5;
     // Keep the channel availability (Face/Head/Body checkboxes) in sync with
     // whatever is selected, WITHOUT running a preview — otherwise the boxes
     // stay disabled until the first Preview builds the mapping, and never
@@ -423,8 +714,8 @@ QString MocapController::bodyCalibrationHint() const
         return {};
     if (!d->bodyDetected)
         return tr("Stand in frame so your hips and shoulders are visible…");
-    return tr("Calibrating body drive — face the camera with arms relaxed at "
-              "your sides…");
+    return tr("Calibrating body drive — stand relaxed, arms at your sides, "
+              "feet visible for sit/stand height…");
 }
 bool MocapController::faceEnabled() const { return d->faceEnabled; }
 void MocapController::setFaceEnabled(bool on)
@@ -461,6 +752,10 @@ void MocapController::setSmoothingCutoff(double hz)
     if (hz <= 0 || hz == d->smoothingCutoff)
         return;
     d->smoothingCutoff = hz;
+    QSettings settings;
+    settings.setValue(QStringLiteral("mocap/smoothingCutoff"), hz);
+    configureWorkerSmoothing(d->worker, d->smoothingCutoff);
+    d->bodyBoneFilters.clear();
     emit smoothingChanged();
 }
 
@@ -493,6 +788,16 @@ void MocapController::resetLiveCaptureCalibration()
     d->bodyTorsoStableFrames = 0;
     d->bodyNeutralReady = false;
     d->bodyNeutralCapturedMask = 0;
+    d->bodyNeutralLegSpan = -1.f;
+    d->bodyHipHeightFilter = OneEuroFilter();
+    d->haveFingerNeutralScreen = false;
+    d->haveFingerNeutralFlex = false;
+    d->haveFingerNeutralFlexRight = false;
+    d->haveFingerNeutralFlexLeft = false;
+    d->fingerNeutralScreen2d.fill({0.f, 0.f});
+    d->fingerNeutralFlex.fill(-1.f);
+    d->fingerLiveCtx = {};
+    d->fingerScreenFilters = {};
     if (d->bodyRetargeter)
         d->bodyRetargeter->resetLiveNeutral();
 }
@@ -769,6 +1074,7 @@ bool MocapController::beginPreviewWithLiveSource(
                 BodyManualBoneSnapshot snap;
                 snap.boneName = bone->getName();
                 snap.bindLocal = bone->getOrientation();
+                snap.bindPosition = bone->getPosition();
                 snap.wasManuallyControlled = bone->isManuallyControlled();
                 d->bodyManualRestore.push_back(std::move(snap));
             }
@@ -787,6 +1093,22 @@ bool MocapController::beginPreviewWithLiveSource(
     d->bodyRetargeter.reset();
     d->bodyBones.clear();
     d->bodyAnimMaskRestore.clear();
+    d->haveEntityBindPosition = false;
+    d->bodyRigLegLen = 0.f;
+    d->bodyNeutralLegSpan = -1.f;
+    d->bodyHipHeightFilter = OneEuroFilter();
+    d->fingerLiveCtx = {};
+    d->fingerScreenFilters = {};
+    d->haveFingerNeutralScreen = false;
+    d->haveFingerNeutralFlex = false;
+    d->haveFingerNeutralFlexRight = false;
+    d->haveFingerNeutralFlexLeft = false;
+    d->fingerNeutralScreen2d.fill({0.f, 0.f});
+    d->fingerNeutralFlex.fill(-1.f);
+    if (Ogre::SceneNode* node = entity->getParentSceneNode()) {
+        d->entityBindPosition = node->getPosition();
+        d->haveEntityBindPosition = true;
+    }
     if (bodyDrivable && entity->hasSkeleton()) {
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
         const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
@@ -829,6 +1151,29 @@ bool MocapController::beginPreviewWithLiveSource(
                     }
                 }
             }
+            Ogre::Bone* hipBone = nullptr;
+            Ogre::Bone* footBone = nullptr;
+            for (Ogre::Bone* root : skel->getRootBones())
+                root->_update(true, true);
+            skel->_updateTransforms();
+            d->fingerLiveCtx =
+                AnimationMerger::buildFingerLiveDriveContext(skel);
+            for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+                Ogre::Bone* bone = skel->getBone(i);
+                const int role = MotionInbetween::canonicalIndexForBone(
+                    QString::fromStdString(bone->getName()));
+                if (role == 0)
+                    hipBone = bone;
+                else if (role == 17)
+                    footBone = bone;
+                else if (role == 21 && !footBone)
+                    footBone = bone;
+            }
+            if (hipBone && footBone) {
+                const Ogre::Vector3 hipW = hipBone->_getDerivedPosition();
+                const Ogre::Vector3 footW = footBone->_getDerivedPosition();
+                d->bodyRigLegLen = (hipW - footW).length();
+            }
         }
     } else {
         d->bodyBones.clear();
@@ -863,13 +1208,14 @@ bool MocapController::beginPreviewWithLiveSource(
     }
     d->worker = new MocapInferenceWorker();
     d->worker->mailbox = &d->camera->mailbox();
-    OneEuroFilter::Params params;
-    params.minCutoff = d->smoothingCutoff;
-    for (auto& f : d->worker->weightFilters)
-        f = OneEuroFilter(params);
-    d->worker->headFilter = OneEuroQuatFilter(params);
-    for (auto& f : d->worker->roleFilters)
-        f = OneEuroQuatFilter(params);
+    configureWorkerSmoothing(d->worker, d->smoothingCutoff);
+    {
+        const auto fingerSmooth = landmarkSmoothParams(d->smoothingCutoff);
+        for (auto& slot : d->fingerScreenFilters)
+            for (auto& ax : slot)
+                ax = OneEuroFilter(fingerSmooth);
+    }
+    d->bodyBoneFilters.clear();
     if (!d->worker->predictor.load()) {
         const QString msg = d->worker->predictor.lastError();
         delete d->worker;
@@ -893,6 +1239,28 @@ bool MocapController::beginPreviewWithLiveSource(
         if (pose->load()) {
             d->worker->posePredictor = pose;
             d->worker->bodyEnabled = true;
+            if (!HandCapPredictor::modelsPresent()) {
+                setStatusMessage(tr("Downloading hand capture model…"));
+                QCoreApplication::processEvents();
+            }
+            const QString handDir = HandCapPredictor::ensureModelsBlocking();
+            SentryReporter::addBreadcrumb(
+                "ai.assist.mocap_live",
+                handDir.isEmpty() ? "hand models missing"
+                                  : "hand models ready");
+            auto hands = std::make_shared<HandCapPredictor>();
+            if (hands->load()) {
+                d->worker->handPredictor = hands;
+                SentryReporter::addBreadcrumb("ai.assist.mocap_live",
+                                              "hand model loaded");
+            } else {
+                SentryReporter::addBreadcrumb("ai.assist.mocap_live",
+                                              "hand model fallback");
+                setStatusMessage(
+                    tr("Hand capture model not loaded (%1) — fingers will use "
+                       "the coarse pose fallback.")
+                        .arg(hands->lastError()));
+            }
         } else {
             // body models unavailable: keep face/head live, drop body cleanly
             setStatusMessage(tr("Body capture unavailable (%1) — driving "
@@ -1113,6 +1481,24 @@ void MocapController::onSample(const FaceSample& sample,
                     canonQuats, body.resolvedMask, body.world.data(),
                     body.visibility.data());
                 d->bodyNeutralCapturedMask = body.resolvedMask;
+                const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
+                    body.world.data(), body.visibility.data());
+                if (span > 1e-4f) {
+                    d->bodyNeutralLegSpan = span;
+                    d->bodyHipHeightFilter =
+                        OneEuroFilter(landmarkSmoothParams(d->smoothingCutoff));
+                }
+                tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
+                d->haveFingerNeutralScreen =
+                    countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
+                mergeMissingFingerFlexFromHands(body.hands, d->fingerNeutralFlex,
+                                                false, false);
+                d->haveFingerNeutralFlexRight =
+                    flexReadyForSide(d->fingerNeutralFlex, 0);
+                d->haveFingerNeutralFlexLeft =
+                    flexReadyForSide(d->fingerNeutralFlex, 1);
+                d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                           || d->haveFingerNeutralFlexLeft;
             } else if ((d->bodyNeutralCapturedMask & Impl::kTorsoResolvedMask)
                        != Impl::kTorsoResolvedMask) {
                 // First neutral was captured before hip/chest were visible —
@@ -1122,6 +1508,42 @@ void MocapController::onSample(const FaceSample& sample,
                     canonQuats, body.resolvedMask, body.world.data(),
                     body.visibility.data());
                 d->bodyNeutralCapturedMask = body.resolvedMask;
+                const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
+                    body.world.data(), body.visibility.data());
+                if (span > 1e-4f) {
+                    d->bodyNeutralLegSpan = span;
+                    d->bodyHipHeightFilter =
+                        OneEuroFilter(landmarkSmoothParams(d->smoothingCutoff));
+                }
+                tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
+                d->haveFingerNeutralScreen =
+                    countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
+                mergeMissingFingerFlexFromHands(body.hands, d->fingerNeutralFlex,
+                                                false, false);
+                d->haveFingerNeutralFlexRight =
+                    flexReadyForSide(d->fingerNeutralFlex, 0);
+                d->haveFingerNeutralFlexLeft =
+                    flexReadyForSide(d->fingerNeutralFlex, 1);
+                d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                           || d->haveFingerNeutralFlexLeft;
+            } else {
+                if (!d->haveFingerNeutralScreen
+                    && tryCaptureFingerNeutralScreen(body,
+                                                     d->fingerNeutralScreen2d))
+                    d->haveFingerNeutralScreen = true;
+                if (!d->haveFingerNeutralFlexRight
+                    || !d->haveFingerNeutralFlexLeft) {
+                    mergeMissingFingerFlexFromHands(
+                        body.hands, d->fingerNeutralFlex,
+                        d->haveFingerNeutralFlexRight,
+                        d->haveFingerNeutralFlexLeft);
+                    d->haveFingerNeutralFlexRight =
+                        flexReadyForSide(d->fingerNeutralFlex, 0);
+                    d->haveFingerNeutralFlexLeft =
+                        flexReadyForSide(d->fingerNeutralFlex, 1);
+                    d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                               || d->haveFingerNeutralFlexLeft;
+                }
             }
         }
         d->bodyNeutralReady = d->bodyRetargeter->hasNeutralReference();
@@ -1134,11 +1556,76 @@ void MocapController::onSample(const FaceSample& sample,
             canonQuats, body.resolvedMask, skipHead, body.world.data(),
             body.visibility.data());
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        const auto boneSmooth = boneOutputSmoothParams(d->smoothingCutoff);
         for (const auto& [handle, local] : locals) {
             Ogre::Bone* bone = skel->getBone(handle);
             bone->setManuallyControlled(true);
-            bone->setOrientation(local);
+            std::array<float, 4> q{
+                local.x, local.y, local.z, local.w};
+            auto it = d->bodyBoneFilters.find(handle);
+            if (it == d->bodyBoneFilters.end())
+                it = d->bodyBoneFilters.insert(
+                    handle, OneEuroQuatFilter(boneSmooth));
+            const std::array<float, 4> smoothed =
+                it->filter(q, sample.timeSec);
+            bone->setOrientation(Ogre::Quaternion(
+                smoothed[3], smoothed[0], smoothed[1], smoothed[2]));
             bone->needUpdate(true);
+        }
+        for (Ogre::Bone* root : skel->getRootBones())
+            root->_update(true, false);
+        skel->_updateTransforms();
+        if (d->haveEntityBindPosition && d->bodyNeutralLegSpan > 1e-4f
+            && d->bodyRigLegLen > 1e-4f) {
+            const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
+                body.world.data(), body.visibility.data());
+            if (Ogre::SceneNode* node = entity->getParentSceneNode()) {
+                float offsetY = 0.f;
+                if (span > 1e-4f) {
+                    offsetY = (span - d->bodyNeutralLegSpan)
+                              * (d->bodyRigLegLen / d->bodyNeutralLegSpan);
+                    const float maxShift = d->bodyRigLegLen * 0.45f;
+                    offsetY = std::clamp(offsetY, -maxShift, maxShift);
+                }
+                offsetY = static_cast<float>(d->bodyHipHeightFilter.filter(
+                    static_cast<double>(offsetY), sample.timeSec));
+                Ogre::Vector3 pos = d->entityBindPosition;
+                pos.y += offsetY;
+                node->setPosition(pos);
+            }
+        }
+        std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>
+            fingerLive2d{};
+        int fingerDriven = 0;
+        if (d->fingerLiveCtx.valid) {
+            int flexMask = 0;
+            if (d->haveFingerNeutralFlexRight && body.hands.right.valid)
+                flexMask |= 1;
+            if (d->haveFingerNeutralFlexLeft && body.hands.left.valid)
+                flexMask |= 2;
+            if (flexMask != 0) {
+                std::array<float, AnimationMerger::kFingerSlots> liveFlex{};
+                fillFingerFlexFromHands(body.hands, liveFlex);
+                fingerDriven = AnimationMerger::driveFingersLiveFromFlex(
+                    skel, liveFlex, d->fingerNeutralFlex, d->fingerLiveCtx);
+            }
+            int cropMask = 0;
+            if (d->haveFingerNeutralScreen) {
+                if ((flexMask & 1) == 0)
+                    cropMask |= 1;
+                if ((flexMask & 2) == 0)
+                    cropMask |= 2;
+            }
+            if (cropMask != 0) {
+                collectLiveFingerScreen2d(body, fingerLive2d);
+                smoothFingerScreen2d(fingerLive2d, d->fingerScreenFilters,
+                                     sample.timeSec);
+                fingerDriven += AnimationMerger::driveFingersLiveFromScreenCrop(
+                    skel, d->fingerNeutralScreen2d, fingerLive2d,
+                    d->fingerLiveCtx, cropMask);
+            }
+            if (fingerDriven > 0)
+                skeletonDriven = true;
         }
         for (Ogre::Bone* root : skel->getRootBones())
             root->_update(true, true);
@@ -1178,7 +1665,8 @@ void MocapController::calibrateNeutral()
     // Next frame with a stable full torso will capture neutral immediately.
     d->bodyTorsoStableFrames = Impl::kBodyTorsoStableFrames;
     setStatusMessage(
-        tr("Hold a relaxed neutral pose (face the camera, arms at your sides)…"));
+        tr("Hold a relaxed neutral pose — face the camera, arms at your sides, "
+           "hands open with fingers visible…"));
 }
 
 bool MocapController::startRecording()
@@ -1287,6 +1775,11 @@ void MocapController::restoreEntityState()
     Ogre::Entity* entity = d->entity();
     if (!entity)
         return;
+    if (d->haveEntityBindPosition) {
+        if (Ogre::SceneNode* node = entity->getParentSceneNode())
+            node->setPosition(d->entityBindPosition);
+        d->haveEntityBindPosition = false;
+    }
     auto* morphMgr = MorphAnimationManager::instance();
     for (auto it = d->savedWeights.begin(); it != d->savedWeights.end(); ++it)
         morphMgr->setWeight(entity, it.key(), it.value());
@@ -1307,6 +1800,7 @@ void MocapController::restoreEntityState()
         for (const auto& snap : d->bodyManualRestore) {
             Ogre::Bone* bone = skel->getBone(snap.boneName);
             bone->setOrientation(snap.bindLocal);
+            bone->setPosition(snap.bindPosition);
             bone->setManuallyControlled(snap.wasManuallyControlled);
         }
         if (auto* states = entity->getAllAnimationStates()) {
