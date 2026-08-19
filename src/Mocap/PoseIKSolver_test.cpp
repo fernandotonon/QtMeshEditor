@@ -233,6 +233,35 @@ TEST(PoseIKSolver, LimbSegmentDirectionMatchesRaise)
     EXPECT_LT(rDir[1], refDir[1] + 0.05f);  // right arm stayed level
 }
 
+TEST(PoseIKSolver, OccludedFootIndexFallsBackToShin)
+{
+    Landmarks pose = tPose();
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(pose.data(), canon);
+    std::array<float, PoseIK::kLandmarkCount> vis;
+    vis.fill(1.f);
+    vis[32] = 0.05f;  // right foot index occluded
+    std::array<float, 3> dir{};
+    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+        PoseIK::RFoot, canon, vis.data(), 0.3f, dir));
+    // shin = knee(26) → ankle(28); after canonicalize, +Y is up so shin is -Y
+    EXPECT_LT(dir[1], -0.7f);
+    vis[31] = 0.05f;
+    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+        PoseIK::LFoot, canon, vis.data(), 0.3f, dir));
+    EXPECT_LT(dir[1], -0.7f);
+}
+
+TEST(PoseIKSolver, SwapScreenCropMirrorsLeftRight)
+{
+    std::array<float, PoseIK::kLandmarkCount * 3> crop{};
+    crop[15 * 3 + 0] = 1.f;
+    crop[16 * 3 + 0] = 2.f;
+    MocapPoseFix::swapMediaPipeLeftRightScreenCrop(crop.data());
+    EXPECT_FLOAT_EQ(crop[15 * 3 + 0], 2.f);
+    EXPECT_FLOAT_EQ(crop[16 * 3 + 0], 1.f);
+}
+
 TEST(PoseIKSolver, WebcamMirrorSwapFixesRightArmRaise)
 {
     PoseIK::Solver solver;

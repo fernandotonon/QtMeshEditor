@@ -3527,7 +3527,8 @@ int AnimationMerger::driveFingersLiveFromScreenCrop(
     Ogre::SkeletonInstance* skel,
     const std::array<std::array<float, 2>, kFingerSlots>& neutralDir2d,
     const std::array<std::array<float, 2>, kFingerSlots>& liveDir2d,
-    const FingerLiveDriveContext& ctx)
+    const FingerLiveDriveContext& ctx,
+    int sideMask)
 {
     if (!skel || !ctx.valid)
         return 0;
@@ -3559,6 +3560,20 @@ int AnimationMerger::driveFingersLiveFromScreenCrop(
     };
 
     int animated = 0;
+    auto resetToBind = [&](int side, int finger) {
+        const auto& segs = ctx.fingerBones[static_cast<size_t>(
+            side * MotionInbetween::kFingerCount + finger)];
+        for (const auto& [seg, handle] : segs) {
+            (void)seg;
+            if (handle >= static_cast<unsigned short>(nBones))
+                continue;
+            Ogre::Bone* b = skel->getBone(handle);
+            b->setManuallyControlled(true);
+            b->setOrientation(ctx.bindLocal[static_cast<size_t>(handle)]);
+            b->needUpdate(true);
+            ++animated;
+        }
+    };
     auto applyCurl = [&](int side, int finger, float curl) {
         const auto& segs = ctx.fingerBones[static_cast<size_t>(
             side * MotionInbetween::kFingerCount + finger)];
@@ -3599,6 +3614,8 @@ int AnimationMerger::driveFingersLiveFromScreenCrop(
             curlByFinger[s][f] = -1.f;
 
     for (const FingerLm& m : map) {
+        if ((sideMask & (1 << m.side)) == 0)
+            continue;
         const int slot0 = fingerSlot(m.side, m.finger, 0);
         if (slot0 < 0)
             continue;
@@ -3608,8 +3625,10 @@ int AnimationMerger::driveFingersLiveFromScreenCrop(
             std::sqrt(n2[0] * n2[0] + n2[1] * n2[1]);
         const float llen =
             std::sqrt(l2[0] * l2[0] + l2[1] * l2[1]);
-        if (nlen < 1e-5f || llen < 1e-5f)
+        if (nlen < 1e-5f || llen < 1e-5f) {
+            resetToBind(m.side, m.finger);
             continue;
+        }
         // Facing the camera, curling shortens wrist→tip in 2D much more than
         // it rotates the 2D direction. Use length as the primary curl signal.
         const float shorten =
@@ -3626,10 +3645,15 @@ int AnimationMerger::driveFingersLiveFromScreenCrop(
         applyCurl(m.side, m.finger, curl);
     }
     for (int side = 0; side < 2; ++side) {
+        if ((sideMask & (1 << side)) == 0)
+            continue;
         const float idx = curlByFinger[side][1];
         const float pnk = curlByFinger[side][4];
-        if (idx < 0.f || pnk < 0.f)
+        if (idx < 0.f || pnk < 0.f) {
+            resetToBind(side, 2);
+            resetToBind(side, 3);
             continue;
+        }
         applyCurl(side, 2, 0.60f * idx + 0.40f * pnk);
         applyCurl(side, 3, 0.35f * idx + 0.65f * pnk);
     }

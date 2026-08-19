@@ -97,7 +97,8 @@ RotatedRect rectFromPoseHand(float wristX, float wristY, float indexX,
 RotatedRect rectFromPalmDetection(const Detection& det, int imgW, int imgH);
 
 // Next-frame hand tracking ROI from the previous 21 image-space landmarks
-// (wrist → middle MCP, scale 2.0).
+// (wrist → middle MCP, box = palm length × 2.6, shift_y −0.1 toward the
+// fingertips). Returns a zero-size rect when the palm span is degenerate.
 RotatedRect rectFromHandLandmarks(const float* imageXy21x2, int imgW, int imgH);
 
 // MediaPipe Hands: 21 landmarks. Flex at B of triangle A-B-C is π − angle

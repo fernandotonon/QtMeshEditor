@@ -239,11 +239,7 @@ void fillFingerFlexFromHands(
         if (!h.valid)
             return;
         float flex[5][3];
-        const bool haveWorld = std::any_of(
-            h.worldXyz.begin(), h.worldXyz.end(),
-            [](float v) { return std::abs(v) > 1e-6f; });
-        FaceCapGeom::handFingerFlexRad(
-            haveWorld ? h.worldXyz.data() : h.cropXyz.data(), flex);
+        FaceCapGeom::handFingerFlexRad(h.cropXyz.data(), flex);
         for (int fgr = 0; fgr < 5; ++fgr) {
             for (int seg = 0; seg < 3; ++seg) {
                 const int slot =
@@ -378,17 +374,41 @@ bool tryCaptureFingerNeutralScreen(
     return countFingerScreen2dSlots(out) >= 4;
 }
 
-bool tryCaptureFingerNeutralFlex(
-    const BodyLiveFrame& body,
-    std::array<float, AnimationMerger::kFingerSlots>& out)
+bool flexReadyForSide(
+    const std::array<float, AnimationMerger::kFingerSlots>& flex, int side)
 {
-    fillFingerFlexFromHands(body.hands, out);
     int n = 0;
-    for (float v : out) {
-        if (v >= 0.f)
-            ++n;
+    for (int fgr = 0; fgr < 5; ++fgr) {
+        for (int seg = 0; seg < 3; ++seg) {
+            const int slot = AnimationMerger::fingerSlot(side, fgr, seg);
+            if (slot >= 0 && flex[static_cast<size_t>(slot)] >= 0.f)
+                ++n;
+        }
     }
     return n >= 6;
+}
+
+void mergeMissingFingerFlexFromHands(
+    const HandsLiveFrame& hands,
+    std::array<float, AnimationMerger::kFingerSlots>& inout,
+    bool skipRight, bool skipLeft)
+{
+    std::array<float, AnimationMerger::kFingerSlots> live{};
+    fillFingerFlexFromHands(hands, live);
+    for (int side = 0; side < 2; ++side) {
+        if ((side == 0 && skipRight) || (side == 1 && skipLeft))
+            continue;
+        for (int fgr = 0; fgr < 5; ++fgr) {
+            for (int seg = 0; seg < 3; ++seg) {
+                const int slot = AnimationMerger::fingerSlot(side, fgr, seg);
+                if (slot < 0)
+                    continue;
+                const float v = live[static_cast<size_t>(slot)];
+                if (v >= 0.f)
+                    inout[static_cast<size_t>(slot)] = v;
+            }
+        }
+    }
 }
 
 void collectLiveFingerScreen2d(
@@ -544,6 +564,8 @@ struct MocapController::Impl {
         fingerNeutralScreen2d{};
     std::array<float, AnimationMerger::kFingerSlots> fingerNeutralFlex{};
     bool haveFingerNeutralFlex = false;
+    bool haveFingerNeutralFlexRight = false;
+    bool haveFingerNeutralFlexLeft = false;
     bool haveFingerNeutralScreen = false;
     AnimationMerger::FingerLiveDriveContext fingerLiveCtx;
     std::array<std::array<OneEuroFilter, 2>, AnimationMerger::kFingerSlots>
@@ -770,6 +792,8 @@ void MocapController::resetLiveCaptureCalibration()
     d->bodyHipHeightFilter = OneEuroFilter();
     d->haveFingerNeutralScreen = false;
     d->haveFingerNeutralFlex = false;
+    d->haveFingerNeutralFlexRight = false;
+    d->haveFingerNeutralFlexLeft = false;
     d->fingerNeutralScreen2d.fill({0.f, 0.f});
     d->fingerNeutralFlex.fill(-1.f);
     d->fingerLiveCtx = {};
@@ -1077,6 +1101,8 @@ bool MocapController::beginPreviewWithLiveSource(
     d->fingerScreenFilters = {};
     d->haveFingerNeutralScreen = false;
     d->haveFingerNeutralFlex = false;
+    d->haveFingerNeutralFlexRight = false;
+    d->haveFingerNeutralFlexLeft = false;
     d->fingerNeutralScreen2d.fill({0.f, 0.f});
     d->fingerNeutralFlex.fill(-1.f);
     if (Ogre::SceneNode* node = entity->getParentSceneNode()) {
@@ -1146,9 +1172,7 @@ bool MocapController::beginPreviewWithLiveSource(
             if (hipBone && footBone) {
                 const Ogre::Vector3 hipW = hipBone->_getDerivedPosition();
                 const Ogre::Vector3 footW = footBone->_getDerivedPosition();
-                d->bodyRigLegLen = hipW.y - footW.y;
-                if (d->bodyRigLegLen < 1e-4f)
-                    d->bodyRigLegLen = (hipW - footW).length();
+                d->bodyRigLegLen = (hipW - footW).length();
             }
         }
     } else {
@@ -1218,16 +1242,25 @@ bool MocapController::beginPreviewWithLiveSource(
             if (!HandCapPredictor::modelsPresent()) {
                 setStatusMessage(tr("Downloading hand capture model…"));
                 QCoreApplication::processEvents();
-                HandCapPredictor::ensureModelsBlocking();
             }
+            const QString handDir = HandCapPredictor::ensureModelsBlocking();
+            SentryReporter::addBreadcrumb(
+                "ai.assist.mocap_live",
+                handDir.isEmpty() ? "hand models missing"
+                                  : "hand models ready");
             auto hands = std::make_shared<HandCapPredictor>();
-            if (hands->load())
+            if (hands->load()) {
                 d->worker->handPredictor = hands;
-            else
+                SentryReporter::addBreadcrumb("ai.assist.mocap_live",
+                                              "hand model loaded");
+            } else {
+                SentryReporter::addBreadcrumb("ai.assist.mocap_live",
+                                              "hand model fallback");
                 setStatusMessage(
                     tr("Hand capture model not loaded (%1) — fingers will use "
                        "the coarse pose fallback.")
                         .arg(hands->lastError()));
+            }
         } else {
             // body models unavailable: keep face/head live, drop body cleanly
             setStatusMessage(tr("Body capture unavailable (%1) — driving "
@@ -1458,8 +1491,14 @@ void MocapController::onSample(const FaceSample& sample,
                 tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
                 d->haveFingerNeutralScreen =
                     countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
-                d->haveFingerNeutralFlex =
-                    tryCaptureFingerNeutralFlex(body, d->fingerNeutralFlex);
+                mergeMissingFingerFlexFromHands(body.hands, d->fingerNeutralFlex,
+                                                false, false);
+                d->haveFingerNeutralFlexRight =
+                    flexReadyForSide(d->fingerNeutralFlex, 0);
+                d->haveFingerNeutralFlexLeft =
+                    flexReadyForSide(d->fingerNeutralFlex, 1);
+                d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                           || d->haveFingerNeutralFlexLeft;
             } else if ((d->bodyNeutralCapturedMask & Impl::kTorsoResolvedMask)
                        != Impl::kTorsoResolvedMask) {
                 // First neutral was captured before hip/chest were visible —
@@ -1479,16 +1518,32 @@ void MocapController::onSample(const FaceSample& sample,
                 tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
                 d->haveFingerNeutralScreen =
                     countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
-                d->haveFingerNeutralFlex =
-                    tryCaptureFingerNeutralFlex(body, d->fingerNeutralFlex);
+                mergeMissingFingerFlexFromHands(body.hands, d->fingerNeutralFlex,
+                                                false, false);
+                d->haveFingerNeutralFlexRight =
+                    flexReadyForSide(d->fingerNeutralFlex, 0);
+                d->haveFingerNeutralFlexLeft =
+                    flexReadyForSide(d->fingerNeutralFlex, 1);
+                d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                           || d->haveFingerNeutralFlexLeft;
             } else {
                 if (!d->haveFingerNeutralScreen
                     && tryCaptureFingerNeutralScreen(body,
                                                      d->fingerNeutralScreen2d))
                     d->haveFingerNeutralScreen = true;
-                if (!d->haveFingerNeutralFlex
-                    && tryCaptureFingerNeutralFlex(body, d->fingerNeutralFlex))
-                    d->haveFingerNeutralFlex = true;
+                if (!d->haveFingerNeutralFlexRight
+                    || !d->haveFingerNeutralFlexLeft) {
+                    mergeMissingFingerFlexFromHands(
+                        body.hands, d->fingerNeutralFlex,
+                        d->haveFingerNeutralFlexRight,
+                        d->haveFingerNeutralFlexLeft);
+                    d->haveFingerNeutralFlexRight =
+                        flexReadyForSide(d->fingerNeutralFlex, 0);
+                    d->haveFingerNeutralFlexLeft =
+                        flexReadyForSide(d->fingerNeutralFlex, 1);
+                    d->haveFingerNeutralFlex = d->haveFingerNeutralFlexRight
+                                               || d->haveFingerNeutralFlexLeft;
+                }
             }
         }
         d->bodyNeutralReady = d->bodyRetargeter->hasNeutralReference();
@@ -1531,9 +1586,9 @@ void MocapController::onSample(const FaceSample& sample,
                               * (d->bodyRigLegLen / d->bodyNeutralLegSpan);
                     const float maxShift = d->bodyRigLegLen * 0.45f;
                     offsetY = std::clamp(offsetY, -maxShift, maxShift);
-                    offsetY = static_cast<float>(d->bodyHipHeightFilter.filter(
-                        static_cast<double>(offsetY), sample.timeSec));
                 }
+                offsetY = static_cast<float>(d->bodyHipHeightFilter.filter(
+                    static_cast<double>(offsetY), sample.timeSec));
                 Ogre::Vector3 pos = d->entityBindPosition;
                 pos.y += offsetY;
                 node->setPosition(pos);
@@ -1543,20 +1598,31 @@ void MocapController::onSample(const FaceSample& sample,
             fingerLive2d{};
         int fingerDriven = 0;
         if (d->fingerLiveCtx.valid) {
-            if (d->haveFingerNeutralFlex
-                && (body.hands.left.valid || body.hands.right.valid)) {
+            int flexMask = 0;
+            if (d->haveFingerNeutralFlexRight && body.hands.right.valid)
+                flexMask |= 1;
+            if (d->haveFingerNeutralFlexLeft && body.hands.left.valid)
+                flexMask |= 2;
+            if (flexMask != 0) {
                 std::array<float, AnimationMerger::kFingerSlots> liveFlex{};
                 fillFingerFlexFromHands(body.hands, liveFlex);
                 fingerDriven = AnimationMerger::driveFingersLiveFromFlex(
                     skel, liveFlex, d->fingerNeutralFlex, d->fingerLiveCtx);
             }
-            if (fingerDriven == 0 && d->haveFingerNeutralScreen) {
+            int cropMask = 0;
+            if (d->haveFingerNeutralScreen) {
+                if ((flexMask & 1) == 0)
+                    cropMask |= 1;
+                if ((flexMask & 2) == 0)
+                    cropMask |= 2;
+            }
+            if (cropMask != 0) {
                 collectLiveFingerScreen2d(body, fingerLive2d);
                 smoothFingerScreen2d(fingerLive2d, d->fingerScreenFilters,
                                      sample.timeSec);
-                fingerDriven = AnimationMerger::driveFingersLiveFromScreenCrop(
+                fingerDriven += AnimationMerger::driveFingersLiveFromScreenCrop(
                     skel, d->fingerNeutralScreen2d, fingerLive2d,
-                    d->fingerLiveCtx);
+                    d->fingerLiveCtx, cropMask);
             }
             if (fingerDriven > 0)
                 skeletonDriven = true;

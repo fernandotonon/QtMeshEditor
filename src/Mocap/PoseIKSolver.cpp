@@ -125,15 +125,16 @@ bool Solver::limbSegmentDirection(
     for (const Segment& seg : segments) {
         if (static_cast<int>(seg.r) != role)
             continue;
-        if (!visible(seg.from) || !visible(seg.to))
-            return false;
-        const Vec3& a = p[static_cast<size_t>(seg.from)];
-        const Vec3& b = p[static_cast<size_t>(seg.to)];
-        Vec3 dir = sub(b, a);
-        if (!normalize(dir))
-            return false;
-        outDir = dir;
-        return true;
+        if (visible(seg.from) && visible(seg.to)) {
+            const Vec3& a = p[static_cast<size_t>(seg.from)];
+            const Vec3& b = p[static_cast<size_t>(seg.to)];
+            Vec3 dir = sub(b, a);
+            if (normalize(dir)) {
+                outDir = dir;
+                return true;
+            }
+        }
+        break;
     }
     // Foot-index landmarks are often occluded — aim the foot bone along the shin.
     if (role == RFoot && visible(26) && visible(28)) {

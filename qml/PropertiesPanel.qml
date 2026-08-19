@@ -2421,6 +2421,14 @@ Rectangle {
                         enabled: MocapController.state === 0
                         value: MocapController.smoothingCutoff
                         onMoved: MocapController.smoothingCutoff = value
+                        Connections {
+                            target: MocapController
+                            function onSmoothingChanged() {
+                                if (!mocapSmoothSlider.pressed)
+                                    mocapSmoothSlider.value =
+                                        MocapController.smoothingCutoff
+                            }
+                        }
                     }
                     Text {
                         width: 38

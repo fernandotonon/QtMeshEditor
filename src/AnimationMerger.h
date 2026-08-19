@@ -487,7 +487,8 @@ public:
         Ogre::SkeletonInstance* skel,
         const std::array<std::array<float, 2>, kFingerSlots>& neutralDir2d,
         const std::array<std::array<float, 2>, kFingerSlots>& liveDir2d,
-        const FingerLiveDriveContext& ctx);
+        const FingerLiveDriveContext& ctx,
+        int sideMask = 3);
 
     /// Live mocap: apply per-slot PIP/MCP/DIP flex (radians, 0=straight)
     /// relative to a calibrated neutral. Missing slots are < 0 and skipped.

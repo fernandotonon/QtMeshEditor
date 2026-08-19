@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
@@ -128,10 +129,15 @@ QString HandCapPredictor::ensureModelsBlocking()
 #ifndef ENABLE_ONNX
     return {};
 #else
-    if (modelsPresent())
+    const QDir dir(modelDir());
+    const QString lmkDest = dir.filePath(QLatin1String(kLandmarksFile));
+    const QString detDest = dir.filePath(QLatin1String(kDetectorFile));
+    const bool haveLmk = QFileInfo::exists(lmkDest);
+    const bool haveDet = QFileInfo::exists(detDest);
+    if (haveLmk && haveDet)
         return modelDir();
     if (!qEnvironmentVariableIsEmpty("QTMESH_MOCAP_NO_DOWNLOAD"))
-        return {};
+        return haveLmk ? modelDir() : QString{};
 
     QString base;
     {
@@ -145,10 +151,6 @@ QString HandCapPredictor::ensureModelsBlocking()
     }
     if (!base.isEmpty() && !base.endsWith('/'))
         base += '/';
-
-    const QDir dir(modelDir());
-    const QString lmkDest = dir.filePath(QLatin1String(kLandmarksFile));
-    const QString detDest = dir.filePath(QLatin1String(kDetectorFile));
 
     QStringList lmkUrls;
     if (!base.isEmpty())
@@ -252,9 +254,18 @@ bool HandCapPredictor::load(const QString& dirIn)
         }
         d->lmkInput.resize(static_cast<size_t>(d->landmarksSize)
                            * d->landmarksSize * 3);
+        d->available = true;
+        d->error.clear();
+    } catch (const Ort::Exception& e) {
+        d->error = QStringLiteral("failed to load hand capture model: %1")
+                       .arg(QString::fromUtf8(e.what()));
+        d->available = false;
+        return false;
+    }
 
-        const QString det = dir.filePath(QLatin1String(kDetectorFile));
-        if (QFileInfo::exists(det)) {
+    const QString det = dir.filePath(QLatin1String(kDetectorFile));
+    if (QFileInfo::exists(det)) {
+        try {
             d->detector = d->openSession(det);
             const auto info = d->detector->GetInputTypeInfo(0);
             const auto shape = info.GetTensorTypeAndShapeInfo().GetShape();
@@ -266,16 +277,16 @@ bool HandCapPredictor::load(const QString& dirIn)
                 FaceCapGeom::genSsdAnchors(d->detectorSize, {8, 16, 16, 16});
             d->detInput.resize(static_cast<size_t>(d->detectorSize)
                                * d->detectorSize * 3);
+        } catch (const Ort::Exception& e) {
+            d->detector.reset();
+            d->anchors.clear();
+            d->error = QStringLiteral(
+                "hand palm detector unavailable (%1) — using pose-seeded "
+                "hand crops")
+                           .arg(QString::fromUtf8(e.what()));
         }
-        d->available = true;
-        d->error.clear();
-        return true;
-    } catch (const Ort::Exception& e) {
-        d->error = QStringLiteral("failed to load hand capture model: %1")
-                       .arg(QString::fromUtf8(e.what()));
-        d->available = false;
-        return false;
     }
+    return d->available;
 }
 
 bool HandCapPredictor::isAvailable() const { return d->available; }
@@ -436,15 +447,22 @@ HandsLiveFrame HandCapPredictor::predict(const QImage& image,
             auto outs = runSession(d->detector.get(), std::move(input));
             const float* rawBoxes = nullptr;
             const float* rawScores = nullptr;
+            size_t boxElems = 0, scoreElems = 0;
             for (auto& o : outs) {
                 const auto info = o.GetTensorTypeAndShapeInfo();
                 const auto s = info.GetShape();
-                if (s.size() == 3 && s[2] > 1)
+                const size_t n = info.GetElementCount();
+                if (s.size() == 3 && s[2] > 1) {
                     rawBoxes = o.GetTensorData<float>();
-                else if (s.size() == 3 && s[2] == 1)
+                    boxElems = n;
+                } else if (s.size() == 3 && s[2] == 1) {
                     rawScores = o.GetTensorData<float>();
+                    scoreElems = n;
+                }
             }
-            if (rawBoxes && rawScores && !d->anchors.empty()) {
+            if (rawBoxes && rawScores && !d->anchors.empty()
+                && boxElems >= d->anchors.size() * 18u
+                && scoreElems >= d->anchors.size()) {
                 auto decodePalm = [&](bool reverse) {
                     return FaceCapGeom::decodeDetections(
                         rawBoxes, rawScores, d->anchors, ds, 7, 0.5f, 0.3f,

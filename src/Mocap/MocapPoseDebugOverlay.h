@@ -13,8 +13,9 @@ class SceneNode;
 
 // Live debug draw: what PoseIK / MediaPipe think the body looks like (canonical
 // +Y up, +Z forward frame), scaled beside the driven entity. Cyan = raw
-// landmark stick figure; yellow = 22-joint FK from PoseIK quats; magenta =
-// finger aim rays (wrist → thumb/index/pinky tips + retarget directions).
+// landmark stick figure; yellow = 22-joint FK from PoseIK quats (coarse
+// pose tips only when 21-pt Hands is missing); magenta = 21-point Hands
+// skeleton, with pose-ray fallback per missing hand.
 class MocapPoseDebugOverlay {
 public:
     void attach(Ogre::SceneManager* sceneMgr, Ogre::SceneNode* entityNode);
