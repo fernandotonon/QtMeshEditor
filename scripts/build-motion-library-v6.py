@@ -585,23 +585,40 @@ def main():
     # to let user curation override heuristic drops during extraction).
     def _find_curation():
         if args.curation:
+            # Fail CLOSED: an explicit path that doesn't exist is an operator
+            # error — silently building with an empty approval set would drop
+            # approved clips unnoticed.
+            if not os.path.exists(args.curation):
+                sys.exit(f"--curation: file not found: {args.curation}")
             return args.curation
         home = os.path.expanduser("~")
+        xdg = os.environ.get("XDG_DATA_HOME",
+                             os.path.join(home, ".local/share"))
+        local_appdata = os.environ.get("LOCALAPPDATA",
+                                       os.path.join(home, "AppData/Local"))
+        # Mirror MotionLibrary::curationPath()'s AppDataLocation resolution
+        # per platform (macOS nested org/app layout first, then Linux XDG,
+        # then Windows LOCALAPPDATA).
         for cand in (
             os.path.join(home, "Library/Application Support/QtMeshEditor/"
                                "QtMeshEditor/ai_models/motion/curation.json"),
             os.path.join(home, "Library/Application Support/QtMeshEditor/"
                                "ai_models/motion/curation.json"),
-            os.path.join(home, ".local/share/QtMeshEditor/QtMeshEditor/"
-                               "ai_models/motion/curation.json"),
+            os.path.join(xdg, "QtMeshEditor/QtMeshEditor/"
+                              "ai_models/motion/curation.json"),
+            os.path.join(xdg, "QtMeshEditor/ai_models/motion/curation.json"),
+            os.path.join(local_appdata, "QtMeshEditor/QtMeshEditor/"
+                                        "ai_models/motion/curation.json"),
         ):
             if os.path.exists(cand):
                 return cand
         return None
     _cur_path = _find_curation()
     user_approved = set()
-    if _cur_path and os.path.exists(_cur_path):
-        user_approved = set(json.load(open(_cur_path)).get("approved", []))
+    if _cur_path:
+        raw = json.load(open(_cur_path)).get("approved", [])
+        # keep only string entries (the MotionLibrary::loadCuration schema)
+        user_approved = {v for v in raw if isinstance(v, str)}
         print(f"curation: {len(user_approved)} approved sources "
               f"(heuristic-drop override) from {_cur_path}")
 

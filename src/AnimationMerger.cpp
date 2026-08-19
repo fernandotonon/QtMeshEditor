@@ -1,5 +1,6 @@
 #include "AnimationMerger.h"
 #include "AutoRig.h"
+#include "SentryReporter.h"
 #include "FootContact.h"
 #include "MotionInbetween.h"
 #include <OgreSkeleton.h>
@@ -3317,12 +3318,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             }
                         }
                     }
-                if (droppedChains > 0)
+                if (droppedChains > 0) {
                     Ogre::LogManager::getSingleton().logMessage(
                         "applyMotionClip: dropped " +
                         std::to_string(droppedChains) +
                         " implausible finger chain(s) (>120deg articulation)"
                         " — holding bind");
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("ai.assist.text_to_motion"),
+                        QStringLiteral("finger plausibility gate: %1 chain(s)"
+                                       " held at bind")
+                            .arg(droppedChains));
+                }
             }
             // HAND-BASIS finger transport frames. The canonical-frame
             // conjugation (Ct⁻¹·Drel·Ct) assumes the source's extraction
