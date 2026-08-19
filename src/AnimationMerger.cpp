@@ -3387,12 +3387,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             const int pc =
                                 MotionInbetween::canonicalParentOfV2(c);
                             if (c < 0 || c >= canonN || pc < 0) continue;
+                            // Chains the plausibility gate rejected must not
+                            // calibrate the axis either.
+                            if (fingerChainUntrusted[static_cast<size_t>(c)])
+                                continue;
                             const auto& rq =
                                 cmuRestWorld[static_cast<size_t>(c)];
                             const auto& prq =
                                 cmuRestWorld[static_cast<size_t>(pc)];
                             if (rq[0]*rq[0] + rq[1]*rq[1] + rq[2]*rq[2]
-                                    + rq[3]*rq[3] < 0.25f) continue;
+                                    + rq[3]*rq[3] < 0.25f ||
+                                prq[0]*prq[0] + prq[1]*prq[1] + prq[2]*prq[2]
+                                    + prq[3]*prq[3] < 0.25f) continue;
                             const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
                                                         rq[2]);
                             const Ogre::Quaternion prefQ(prq[3], prq[0],
@@ -3436,12 +3442,17 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                                 const int pc =
                                     MotionInbetween::canonicalParentOfV2(c);
                                 if (c < 0 || c >= canonN || pc < 0) continue;
+                                if (fingerChainUntrusted
+                                        [static_cast<size_t>(c)]) continue;
                                 const auto& rq =
                                     cmuRestWorld[static_cast<size_t>(c)];
                                 const auto& prq =
                                     cmuRestWorld[static_cast<size_t>(pc)];
                                 if (rq[0]*rq[0] + rq[1]*rq[1] + rq[2]*rq[2]
-                                        + rq[3]*rq[3] < 0.25f) continue;
+                                        + rq[3]*rq[3] < 0.25f ||
+                                    prq[0]*prq[0] + prq[1]*prq[1]
+                                        + prq[2]*prq[2] + prq[3]*prq[3]
+                                        < 0.25f) continue;
                                 const Ogre::Quaternion refQ(rq[3], rq[0],
                                                             rq[1], rq[2]);
                                 const Ogre::Quaternion prefQ(prq[3], prq[0],
