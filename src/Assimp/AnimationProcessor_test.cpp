@@ -2,11 +2,25 @@
 #include <gmock/gmock.h>
 #include "AnimationProcessor.h"
 
-// Test if processAnimations processes all animations
+// Test if processAnimations processes all animations. Each animation must carry
+// a channel targeting a REAL bone: processAnimation skips channel-less clips
+// (glTF morph-weight anims — issue #517 skeletal+morph) and drops clips that
+// resolve to zero node tracks (non-bone / node-transform channels — issue #517
+// reimport hygiene). So a bone "Root" is created and each clip keys it, keeping
+// both alive to prove the loop visits every aiAnimation.
 TEST(AnimationProcessorTest, ProcessAllAnimations) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     auto mockSkeleton= Ogre::SkeletonManager::getSingleton().create("MockSkeleton",Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+    mockSkeleton->createBone("Root");
     AnimationProcessor processor(mockSkeleton);
+
+    auto makeBoneChannel = []() {
+        auto* ch = new aiNodeAnim;
+        ch->mNodeName = aiString(std::string("Root"));
+        ch->mNumPositionKeys = 1;
+        ch->mPositionKeys = new aiVectorKey[1]{ aiVectorKey(0.0, aiVector3D(0, 0, 0)) };
+        return ch;
+    };
 
     aiScene scene;
     scene.mNumAnimations = 2;
@@ -15,14 +29,16 @@ TEST(AnimationProcessorTest, ProcessAllAnimations) {
     scene.mAnimations[1] = new aiAnimation;
     scene.mAnimations[0]->mName = aiString( std::string( "Animation1"));
     scene.mAnimations[1]->mName = aiString( std::string( "Animation2"));
-    scene.mAnimations[0]->mNumChannels=0;
-    scene.mAnimations[1]->mNumChannels=0;
+    scene.mAnimations[0]->mNumChannels=1;
+    scene.mAnimations[0]->mChannels = new aiNodeAnim*[1]{ makeBoneChannel() };
+    scene.mAnimations[1]->mNumChannels=1;
+    scene.mAnimations[1]->mChannels = new aiNodeAnim*[1]{ makeBoneChannel() };
 
     processor.processAnimations(&scene);
 
     EXPECT_EQ(mockSkeleton->getNumAnimations(), 2);
-    EXPECT_EQ(mockSkeleton->getAnimation(0)->getName(), "Animation1");
-    EXPECT_EQ(mockSkeleton->getAnimation(1)->getName(), "Animation2");
+    EXPECT_TRUE(mockSkeleton->hasAnimation("Animation1"));
+    EXPECT_TRUE(mockSkeleton->hasAnimation("Animation2"));
 }
 
 // #936: scale keys must be stored RELATIVE to the channel node's bind scale.

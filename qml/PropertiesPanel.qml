@@ -731,16 +731,10 @@ Rectangle {
                 Component.onCompleted: content = uvEditComponent
             }
 
-            CollapsibleSection {
-                title: "Workspace Panels"
-                sectionVisible: root.currentTab === root.modeToolsTab
-                    && (root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.AnimationMode
-                        || EditorModeController.currentMode === EditorModeController.MaterialMode)
-                expanded: false
-
-                Component.onCompleted: content = workspacePanelsComponent
-            }
+            // "Workspace Panels" group removed (#517 UX — inspector was too
+            // packed). The Dope Sheet + Curve Editor now open by default and
+            // all three docks (incl. Asset Browser) stay toggleable from the
+            // top View menu.
 
             // ---- Scene Outliner ----
             CollapsibleSection {
@@ -798,19 +792,37 @@ Rectangle {
             // ---- Animation Control (keyframe editor) ----
             // Gated on a skeletal animation OR any mesh/vertex animation
             // (morph + Alembic vertex clips surface as AnimationStates, which
-            // PropertiesPanelController.hasAnimations picks up). Without the
-            // hasAnimations clause the dope sheet / curve editor never appeared
-            // for a morph-only mesh, so a freshly-authored morph target had no
-            // timeline to key/scrub — even though allMorphRows() enumerates it.
+            // PropertiesPanelController.hasAnimations picks up) OR simply having
+            // a selection — the last clause is for #517 node-transform
+            // animation, which authors clips on UNRIGGED objects (props, doors,
+            // lights) that have no existing animation. Without it the "Node
+            // Transform Animation" subsection (and its dope-sheet band) never
+            // appeared for exactly the meshes it's meant for. The dope sheet /
+            // curve editor already handle the no-clip case with a placeholder.
             CollapsibleSection {
                 title: "Animation Control"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
                     AnimationControlController.hasAnimation
-                        || PropertiesPanelController.hasAnimations)
+                        || PropertiesPanelController.hasAnimations
+                        || PropertiesPanelController.hasSelection)
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent
+            }
+
+            // ---- Node Transform Animation (#517 — own group) ----
+            // TRS animation on non-skinned scene nodes (props/doors/machinery).
+            // Shown in Animation Mode whenever an object is selected (node clips
+            // target unrigged meshes that have no existing animation).
+            CollapsibleSection {
+                title: "Node Transform Animation"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    PropertiesPanelController.hasSelection)
+                expanded: false
+
+                Component.onCompleted: content = nodeAnimComponent
             }
 
             // ---- Lighting (preset rigs + ambient/background, Slice E #487) ----
@@ -4517,6 +4529,10 @@ Rectangle {
             property int layerCount: TexturePaintController.layerCount
             property int activeLayerIndex: TexturePaintController.activeLayerIndex
             property var paintLayers: TexturePaintController.paintLayers
+            // Paint v2 Slice D — PBR channel painting (#547).
+            property int activeChannel: TexturePaintController.activeChannel
+            property var paintChannels: TexturePaintController.paintChannels
+            property var paintPresetNames: PaintChannelPresets.presetNames
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4529,6 +4545,11 @@ Rectangle {
                 function onSessionChanged() {
                     texPaintCol.hasSession = TexturePaintController.hasActiveSession
                     texPaintCol.sessionRes = TexturePaintController.textureResolution
+                    // A new/torn-down session changes which channels have layers
+                    // (and can force-reset the active channel) — refresh the
+                    // picker model so its hasLayers badges + selection stay live.
+                    texPaintCol.activeChannel = TexturePaintController.activeChannel
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
                 function onSlotsChanged() {
                     texPaintCol.slots = TexturePaintController.textureSlots
@@ -4542,6 +4563,10 @@ Rectangle {
                 }
                 function onPaintTargetChanged() {
                     texPaintCol.paintTarget = TexturePaintController.paintTarget
+                }
+                function onActiveChannelChanged() {
+                    texPaintCol.activeChannel = TexturePaintController.activeChannel
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
                 function onHoveredUVChanged(u, v) {
                     texPaintCol.hoverU = u
@@ -4557,6 +4582,9 @@ Rectangle {
                     texPaintCol.layerCount = TexturePaintController.layerCount
                     texPaintCol.activeLayerIndex = TexturePaintController.activeLayerIndex
                     texPaintCol.paintLayers = TexturePaintController.paintLayers
+                    // Layer add/remove changes which channels have layers — keep
+                    // the channel picker's hasLayers badges in sync.
+                    texPaintCol.paintChannels = TexturePaintController.paintChannels
                 }
             }
 
@@ -4741,7 +4769,113 @@ Rectangle {
                 }
             }
 
-            // Texture slot picker \u2014 populated by selection
+            // ---- PBR channel picker (Paint v2 Slice D #547) ----
+            // Seven buttons \u2014 Base Color / Normal / Roughness / Metallic / AO /
+            // Emissive / Height. Selecting a channel switches the paint session
+            // to that channel's own layer stack (auto-creating the material
+            // slot if the asset never shipped it).
+            Text {
+                text: "Channel"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Flow {
+                id: channelPicker
+                width: parent.width - 16
+                spacing: 4
+                Repeater {
+                    model: texPaintCol.paintChannels
+                    delegate: Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: 74; height: 24; radius: 4
+                        color: texPaintCol.activeChannel === index
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.width: modelData.hasLayers ? 2 : 1
+                        border.color: modelData.hasLayers
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
+                            width: parent.width - 6
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.activeChannel = index
+                        }
+                        ToolTip.visible: false
+                    }
+                }
+            }
+            // Scalar channels are painted grayscale (bright = high); "Bake"
+            // collapses the active channel into its real PBR slot under IBL.
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: (texPaintCol.paintChannels[texPaintCol.activeChannel]
+                           && texPaintCol.paintChannels[texPaintCol.activeChannel].scalar)
+                        ? "Grayscale (bright = high)"
+                        : "Colour channel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9
+                    opacity: 0.7
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Item { width: 1; height: 1 }
+                Rectangle {
+                    width: 60; height: 22; radius: 4
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent; text: "Bake"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: texPaintCol.hasSession
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.bakeChannel(texPaintCol.activeChannel)
+                    }
+                }
+            }
+
+            // ---- Channel-aware presets (Paint v2 Slice D #547) ----
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Preset:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
+                ThemedComboBox {
+                    id: paintPresetCombo
+                    width: 200
+                    model: texPaintCol.paintPresetNames
+                    currentIndex: -1
+                    displayText: currentIndex < 0 ? "Choose a preset\u2026" : currentText
+                    onActivated: function(index) {
+                        if (index >= 0 && index < texPaintCol.paintPresetNames.length)
+                            PaintChannelPresets.applyPreset(texPaintCol.paintPresetNames[index])
+                    }
+                }
+            }
+
+            // Texture slot picker \u2014 populated by selection (advanced override:
+            // lets the user target a specific TUS regardless of channel mapping)
             Row {
                 spacing: 6
                 width: parent.width - 16
@@ -5329,45 +5463,6 @@ Rectangle {
         }
     }
 
-    Component {
-        id: workspacePanelsComponent
-
-        Column {
-            width: parent ? parent.width : 200
-            padding: 8
-            spacing: 6
-
-            Flow {
-                width: parent.width - 16
-                spacing: 6
-
-                ModeToolShortcutButton {
-                    objectName: "workspaceAssetBrowserButton"
-                    visible: root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.MaterialMode
-                        || EditorModeController.currentMode === EditorModeController.ValidationMode
-                    text: "Asset Browser"
-                    onClicked: root.revealBottomTool("assetBrowser")
-                }
-
-                ModeToolShortcutButton {
-                    objectName: "workspaceDopeSheetButton"
-                    visible: root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.AnimationMode
-                    text: "Dope Sheet"
-                    onClicked: root.revealBottomTool("dopeSheet")
-                }
-
-                ModeToolShortcutButton {
-                    objectName: "workspaceCurveEditorButton"
-                    visible: root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.AnimationMode
-                    text: "Curve Editor"
-                    onClicked: root.revealBottomTool("curveEditor")
-                }
-            }
-        }
-    }
 
     // ---- Transform Content ----
     Component {
@@ -9734,6 +9829,16 @@ Rectangle {
         }
     }
 
+    // ---- Node Transform Animation Content (#517, own group) ----
+    Component {
+        id: nodeAnimComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/NodeAnimationPanel.qml"
+        }
+    }
+
     // ---- Animation Content ----
     Component {
         id: animationComponent
@@ -9790,6 +9895,13 @@ Rectangle {
             Connections {
                 target: MorphAnimationManager
                 function onMorphClipsChanged() { refreshAnimData() }
+            }
+            // Node-transform clips (#517): a committed clip (endEdit) appears in
+            // this list, a deleted one leaves it — refresh on both.
+            Connections {
+                target: NodeAnimationManager
+                function onClipsChanged() { refreshAnimData() }
+                function onEditingClipChanged() { refreshAnimData() }
             }
             // #838: the animation picker applied a clip. Handle it HERE (in the
             // animation component scope) so lastGeneratedAnim / setArmSpaceTarget
@@ -10926,6 +11038,19 @@ Rectangle {
                               + "only; a poor fit is rejected."
                             : "Select a face mesh first."
                     }
+                }
+
+                // Experimental-feature disclaimer for ARKit blendshape generation.
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "⚠ Experimental: ARKit blendshape generation is a work in "
+                          + "progress. Results vary by mesh; review before relying on it."
+                    color: Qt.rgba(PropertiesPanelController.textColor.r,
+                                   PropertiesPanelController.textColor.g,
+                                   PropertiesPanelController.textColor.b, 0.6)
+                    font.pixelSize: 9
+                    font.italic: true
                 }
 
                 // ── Face markers (auto-seed, user adjusts) — the reliable path

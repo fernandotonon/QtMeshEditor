@@ -1,4 +1,6 @@
 #include "MeshProcessor.h"
+#include "BoneProcessor.h"
+#include <cstdlib>
 
 // Binds a float3 vertex buffer (bitangent, etc.) to the given source index.
 static void bindVector3Buffer(Ogre::VertexData* vertexData, unsigned short source,
@@ -37,14 +39,39 @@ static void bindVector4Buffer(Ogre::VertexData* vertexData, unsigned short sourc
     vertexData->vertexBufferBinding->setBinding(source, buf);
 }
 
-MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup)
-    : skeleton(skeleton), m_isZup(isZup) {}
+MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup,
+                             const Ogre::Quaternion& bakeRotation)
+    : skeleton(skeleton), m_isZup(isZup)
+{
+    // Z-up metadata keeps its historical +90°X; otherwise an explicit bake
+    // rotation (#933 Blender-style node orientation) applies. Never both.
+    m_bakeRot = m_isZup ? Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X)
+                        : bakeRotation;
+    m_hasBake = m_isZup ||
+        !bakeRotation.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f));
+}
 
 void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
+    if (!node || !scene)
+        return;
+
+    // Reference frame = the FIRST (by scene index) skinned mesh's node world —
+    // the same convention BoneProcessor uses for the re-rooted bind (#936), so
+    // skeleton and geometry agree.
+    if (!m_haveRef && skeleton && scene->mRootNode) {
+        for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+            if (scene->mMeshes[i]->mNumBones == 0) continue;
+            if (const aiNode* refNode = BoneProcessor::findMeshNode(scene->mRootNode, i))
+                m_refWorldInv = BoneProcessor::nodeWorldTransform(refNode).inverse();
+            break;
+        }
+        m_haveRef = true;
+    }
+
     // Process each mesh located at the current node
     for(auto i = 0u; i < node->mNumMeshes; i++) {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        subMeshesData.push_back(processMesh(mesh, scene));
+        subMeshesData.push_back(processMesh(mesh, scene, node));
     }
 
     // After we've processed all of the meshes (if any) we then recursively process each of the children nodes
@@ -53,26 +80,45 @@ void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
     }
 }
 
-SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
+SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene,
+                                        const aiNode* node) {
     SubMeshData* subMeshData = new SubMeshData();
     if (mesh->mName.length > 0)
         subMeshData->name = mesh->mName.C_Str();
 
-    // Rotation applied to vertex data when the source file uses a Z-up coordinate system.
-    // Baking it here avoids a scene-node rotation and keeps the entity in its natural pose.
-    const Ogre::Quaternion R_x90(m_isZup ? Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X)
-                                         : Ogre::Quaternion::IDENTITY);
+    // Rest-pose rotation baked into the vertex data (Z-up conversion or the
+    // #933 Blender-style node orientation) — avoids a scene-node rotation and
+    // keeps the entity in its natural pose.
+    // #933: a RIGID mesh (no bones) inside a skinned model gets its full
+    // placement transform (bind-of-parent-bone x node chain) baked below in
+    // bindRigidMeshToParentBone — the plain rest-pose bake must not ALSO
+    // apply (the parent bone's bind already carries it).
+    const bool rigidUnderSkeleton = skeleton && mesh->mNumBones == 0 && node;
+    const Ogre::Quaternion R_x90(m_hasBake ? m_bakeRot : Ogre::Quaternion::IDENTITY);
+    const bool applyBake = m_hasBake && !rigidUnderSkeleton;
+    // Frame alignment for SKINNED meshes beyond the reference one (#933):
+    // exact when the rig's bind matches the node pose (the Blender export
+    // convention). Identity for single-skinned-mesh scenes (Mixamo).
+    Ogre::Matrix4 frameAlign = Ogre::Matrix4::IDENTITY;
+    Ogre::Matrix3 frameAlignLinear = Ogre::Matrix3::IDENTITY;
+    Ogre::Matrix3 frameAlignNormal = Ogre::Matrix3::IDENTITY;
+    const bool hasFrameAlign =
+        (skeleton && mesh->mNumBones > 0 && node)
+            ? computeFrameAlign(node, frameAlign, frameAlignLinear, frameAlignNormal)
+            : false;
 
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
         // Process vertices
         Ogre::Vector3 v(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
-        subMeshData->vertices.push_back(m_isZup ? R_x90 * v : v);
+        if (hasFrameAlign) v = frameAlign * v;
+        subMeshData->vertices.push_back(applyBake ? R_x90 * v : v);
 
         // Process normals
         if(mesh->HasNormals()) {
             Ogre::Vector3 n(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
-            subMeshData->normals.push_back(m_isZup ? R_x90 * n : n);
+            if (hasFrameAlign) n = (frameAlignNormal * n).normalisedCopy();
+            subMeshData->normals.push_back(applyBake ? R_x90 * n : n);
         }
 
         // Process texture coordinates
@@ -116,7 +162,14 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
             Ogre::Vector3 T(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z);
             Ogre::Vector3 B(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z);
             Ogre::Vector3 N(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
-            if (m_isZup) { T = R_x90 * T; B = R_x90 * B; N = R_x90 * N; }
+            if (hasFrameAlign) {
+                // Tangent-space directions take the LINEAR part; the normal
+                // takes the inverse-transpose (non-uniform-scale correct).
+                T = (frameAlignLinear * T).normalisedCopy();
+                B = (frameAlignLinear * B).normalisedCopy();
+                N = (frameAlignNormal * N).normalisedCopy();
+            }
+            if (applyBake) { T = R_x90 * T; B = R_x90 * B; N = R_x90 * N; }
             // Compute handedness: if cross(N,T) is opposite to B, the tangent space is left-handed
             float handedness = (N.crossProduct(T).dotProduct(B) < 0.0f) ? -1.0f : 1.0f;
             subMeshData->tangents.push_back(Ogre::Vector4(T.x, T.y, T.z, handedness));
@@ -161,10 +214,21 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
         target.positions.reserve(anim->mNumVertices);
         for (auto i = 0u; i < anim->mNumVertices; i++) {
             Ogre::Vector3 v(anim->mVertices[i].x, anim->mVertices[i].y, anim->mVertices[i].z);
-            target.positions.push_back(m_isZup ? R_x90 * v : v);
+            if (hasFrameAlign) v = frameAlign * v;
+            target.positions.push_back(applyBake ? R_x90 * v : v);
         }
         subMeshData->morphTargets.push_back(std::move(target));
     }
+
+    // #933: Blender bone-parented rigid parts (Quaternius Robot) have no
+    // vertex weights — Ogre's software vertex blend then asserts on ANY
+    // render ("srcElemPos && srcElemBlendIndices && srcElemBlendWeights").
+    // Bind the whole submesh to its nearest ancestor bone with weight 1 and
+    // bake its node-chain placement into the vertices: renders assembled and
+    // follows the bone during animation. Runs LAST so tangents and morph
+    // targets (filled above) receive the placement transform too.
+    if (rigidUnderSkeleton)
+        bindRigidMeshToParentBone(subMeshData, node);
 
     return subMeshData;
 }
@@ -409,4 +473,102 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     subMeshesData.clear();
 
     return ogreMesh;
+}
+
+bool MeshProcessor::computeFrameAlign(const aiNode* node, Ogre::Matrix4& frameAlign,
+                                      Ogre::Matrix3& frameAlignLinear,
+                                      Ogre::Matrix3& frameAlignNormal) const
+{
+    frameAlign = m_refWorldInv * BoneProcessor::nodeWorldTransform(node);
+    frameAlign.extract3x3Matrix(frameAlignLinear);
+    // A singular linear part (zero-scale node) has no valid normal matrix —
+    // Matrix3::Inverse() would return ZERO and null every normal. Skip the
+    // alignment entirely (identity outputs).
+    if (std::abs(frameAlignLinear.Determinant()) < 1e-10f) {
+        frameAlign = Ogre::Matrix4::IDENTITY;
+        frameAlignLinear = Ogre::Matrix3::IDENTITY;
+        frameAlignNormal = Ogre::Matrix3::IDENTITY;
+        return false;
+    }
+    // Normal matrix = inverse-transpose of the linear part — equals the
+    // rotation for rigid/uniform-scale frames, correct for non-uniform ones.
+    frameAlignNormal = frameAlignLinear.Inverse().Transpose();
+    Ogre::Vector3 faPos;
+    Ogre::Vector3 faScale;
+    Ogre::Quaternion faRot;
+    Ogre::Affine3(frameAlign).decomposition(faPos, faScale, faRot);
+    return !faPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
+           !faRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
+           !faScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
+}
+
+void MeshProcessor::bindRigidMeshToParentBone(SubMeshData* data, const aiNode* node)
+{
+    if (!skeleton || !data || !node)
+        return;
+
+    // Nearest ancestor node that exists as a skeleton bone (start at the
+    // PARENT — Blender names the mesh object after the bone it is parented
+    // to, so the mesh node itself may share the bone's name).
+    Ogre::Bone* bone = nullptr;
+    const aiNode* boneNode = nullptr;
+    for (const aiNode* n = node->mParent; n; n = n->mParent) {
+        if (n->mName.length && skeleton->hasBone(n->mName.C_Str())) {
+            bone = skeleton->getBone(n->mName.C_Str());
+            boneNode = n;
+            break;
+        }
+    }
+    if (!bone) {
+        // Not under any bone: fall back to the first root bone so software
+        // blending has data (the part then rides the root rigidly).
+        const auto& roots = skeleton->getRootBones();
+        if (roots.empty())
+            return;
+        bone = roots.front();
+    }
+
+    // Node chain from the bone's node (exclusive) down to the mesh node
+    // (inclusive) — the part's placement relative to the bone.
+    Ogre::Matrix4 chain = Ogre::Matrix4::IDENTITY;
+    for (const aiNode* n = node; n && n != boneNode; n = n->mParent) {
+        const aiMatrix4x4& m = n->mTransformation;
+        chain = Ogre::Matrix4(m.a1, m.a2, m.a3, m.a4,
+                              m.b1, m.b2, m.b3, m.b4,
+                              m.c1, m.c2, m.c3, m.c4,
+                              m.d1, m.d2, m.d3, m.d4) * chain;
+    }
+
+    // Placement in mesh space: the bone's BIND world (post-bake — the
+    // skeleton is at its binding pose during import) times the node chain.
+    skeleton->reset(true);
+    skeleton->_updateTransforms();
+    Ogre::Matrix4 bindFull = Ogre::Matrix4::IDENTITY;
+    bindFull.makeTransform(bone->_getDerivedPosition(),
+                           bone->_getDerivedScale(),
+                           bone->_getDerivedOrientation());
+    const Ogre::Matrix4 placement = bindFull * chain;
+    // Rotation part for normals/tangents (assumes near-uniform scale).
+    Ogre::Vector3 pPos;
+    Ogre::Vector3 pScale;
+    Ogre::Quaternion pRot;
+    Ogre::Affine3(placement).decomposition(pPos, pScale, pRot);
+
+    for (auto& v : data->vertices) v = placement * v;
+    for (auto& n : data->normals)  n = (pRot * n).normalisedCopy();
+    for (auto& t : data->tangents) {
+        const Ogre::Vector3 dir = pRot * Ogre::Vector3(t.x, t.y, t.z);
+        t = Ogre::Vector4(dir.x, dir.y, dir.z, t.w);
+    }
+    for (auto& mt : data->morphTargets)
+        for (auto& v : mt.positions) v = placement * v;
+
+    data->boneAssignments.reserve(data->vertices.size());
+    for (unsigned i = 0; i < data->vertices.size(); ++i) {
+        Ogre::VertexBoneAssignment vba;
+        vba.vertexIndex = i;
+        vba.boneIndex = bone->getHandle();
+        vba.weight = 1.0f;
+        data->boneAssignments.push_back(vba);
+    }
 }

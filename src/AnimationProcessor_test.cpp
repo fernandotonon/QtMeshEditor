@@ -81,13 +81,20 @@ aiScene* makeSceneWithChannel(const std::string& animName,
 // ---------------------------------------------------------------------------
 
 // mTicksPerSecond == 0 → length should be mDuration / 24.
+// NB the channel must target a REAL bone: AnimationProcessor now drops a clip
+// that resolves to zero node tracks (a node-transform / non-bone channel would
+// otherwise leak a phantom skeletal clip — issue #517). So we add a bone named
+// "B0" and key it, keeping the clip alive for the length assertion.
 TEST(AnimationProcessorChannelTest, TicksPerSecondDefaultsTo24WhenZero) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     auto skeleton = Ogre::SkeletonManager::getSingleton().create(
         "TicksZeroSkel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+    skeleton->createBone("B0");
     AnimationProcessor processor(skeleton);
 
-    aiScene* scene = makeSceneWithChannel("ZeroTicks", /*duration*/48.0, /*ticks*/0.0, nullptr);
+    std::vector<aiVectorKey> posKeys = { aiVectorKey(0.0, aiVector3D(0, 0, 0)) };
+    aiNodeAnim* channel = makeNodeAnim("B0", posKeys, {}, {});
+    aiScene* scene = makeSceneWithChannel("ZeroTicks", /*duration*/48.0, /*ticks*/0.0, channel);
     processor.processAnimations(scene);
 
     ASSERT_EQ(skeleton->getNumAnimations(), 1u);
@@ -100,9 +107,12 @@ TEST(AnimationProcessorChannelTest, TicksPerSecondUsedWhenNonZero) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     auto skeleton = Ogre::SkeletonManager::getSingleton().create(
         "TicksNonZeroSkel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+    skeleton->createBone("B0");
     AnimationProcessor processor(skeleton);
 
-    aiScene* scene = makeSceneWithChannel("NonZeroTicks", /*duration*/60.0, /*ticks*/30.0, nullptr);
+    std::vector<aiVectorKey> posKeys = { aiVectorKey(0.0, aiVector3D(0, 0, 0)) };
+    aiNodeAnim* channel = makeNodeAnim("B0", posKeys, {}, {});
+    aiScene* scene = makeSceneWithChannel("NonZeroTicks", /*duration*/60.0, /*ticks*/30.0, channel);
     processor.processAnimations(scene);
 
     ASSERT_EQ(skeleton->getNumAnimations(), 1u);
@@ -134,7 +144,12 @@ TEST(AnimationProcessorChannelTest, ZeroAnimationsLeavesSkeletonEmpty) {
 // Bone-not-in-skeleton early return
 // ---------------------------------------------------------------------------
 
-// A channel referencing an unknown bone adds no track to the animation.
+// A channel referencing an unknown bone yields no node track, so the whole clip
+// resolves to zero tracks. AnimationProcessor now DROPS such a clip (previously
+// it was kept as an empty animation): an all-non-bone aiAnimation is a node-
+// transform clip whose empty skeletal twin would otherwise leak into the
+// Inspector list / dope sheet and get auto-selected (issue #517). Node clips are
+// rebuilt separately by reconstructNodeClipsFrom*.
 TEST(AnimationProcessorChannelTest, UnknownBoneAddsNoTrack) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     auto skeleton = Ogre::SkeletonManager::getSingleton().create(
@@ -148,9 +163,9 @@ TEST(AnimationProcessorChannelTest, UnknownBoneAddsNoTrack) {
 
     processor.processAnimations(scene);
 
-    ASSERT_EQ(skeleton->getNumAnimations(), 1u);
-    Ogre::Animation* anim = skeleton->getAnimation("GhostAnim");
-    EXPECT_EQ(anim->getNumNodeTracks(), 0u);
+    // The zero-track clip is dropped entirely.
+    EXPECT_EQ(skeleton->getNumAnimations(), 0u);
+    EXPECT_FALSE(skeleton->hasAnimation("GhostAnim"));
 }
 
 // ---------------------------------------------------------------------------

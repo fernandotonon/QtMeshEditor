@@ -24,6 +24,10 @@
 #include "LightManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "NodeAnimationManager.h"
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 #include "EditableMesh.h"
 #include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
@@ -530,6 +534,65 @@ TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFil
     EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/1)...")));
     EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Building scene data...")));
     EXPECT_EQ(progressValues.last(), 100);
+}
+
+// #517 C5 — node-transform animation must survive scene export to glTF.
+// Author a NodeAnimationManager clip on a scene node, export to glb, then
+// re-read the file with Assimp and confirm the animation + its node channel
+// + keyframe values round-trip.
+TEST_F(MeshImporterExporterTest, SceneExporter_NodeTransformAnimation_RoundTripsToGltf)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("node_anim.scene.glb");
+
+    Ogre::SceneNode* node = createSceneNodeWithEntity("AnimNode", "AnimSceneMesh");
+    ASSERT_NE(node, nullptr);
+    const std::string nodeName = node->getName();  // may be uniquified
+
+    // Author a 2-keyframe node clip: node slides +5 on X and rotates.
+    auto* nam = NodeAnimationManager::instance();
+    ASSERT_TRUE(nam->createClip(QStringLiteral("SlideClip"), 2.0));
+    ASSERT_TRUE(nam->addKeyframe(QStringLiteral("SlideClip"),
+                                 QString::fromStdString(nodeName), 0.0,
+                                 Ogre::Vector3(0, 0, 0),
+                                 Ogre::Quaternion::IDENTITY,
+                                 Ogre::Vector3(1, 1, 1)));
+    ASSERT_TRUE(nam->addKeyframe(QStringLiteral("SlideClip"),
+                                 QString::fromStdString(nodeName), 2.0,
+                                 Ogre::Vector3(5, 0, 0),
+                                 Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_Y),
+                                 Ogre::Vector3(1, 1, 1)));
+
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(scenePath, nullptr), 0);
+    ASSERT_TRUE(QFileInfo::exists(scenePath));
+
+    // Re-read the exported glb and verify the node animation is present.
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(
+        scenePath.toStdString(), aiProcess_ValidateDataStructure);
+    ASSERT_NE(scene, nullptr) << importer.GetErrorString();
+    ASSERT_GE(scene->mNumAnimations, 1u);
+
+    // Find our clip + its channel targeting the node.
+    const aiNodeAnim* channel = nullptr;
+    for (unsigned int a = 0; a < scene->mNumAnimations && !channel; ++a) {
+        const aiAnimation* anim = scene->mAnimations[a];
+        for (unsigned int c = 0; c < anim->mNumChannels; ++c) {
+            if (std::string(anim->mChannels[c]->mNodeName.C_Str()) == nodeName) {
+                channel = anim->mChannels[c];
+                break;
+            }
+        }
+    }
+    ASSERT_NE(channel, nullptr) << "no node-transform channel targeting " << nodeName;
+    ASSERT_GE(channel->mNumPositionKeys, 2u);
+
+    // Last position key should carry the +5 X translation we authored.
+    const aiVector3D lastPos = channel->mPositionKeys[channel->mNumPositionKeys - 1].mValue;
+    EXPECT_NEAR(lastPos.x, 5.0, 1e-3);
+
+    nam->deleteClip(QStringLiteral("SlideClip"));
 }
 
 TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCountsEntitiesInProgress)

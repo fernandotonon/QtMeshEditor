@@ -866,3 +866,434 @@ TEST_F(TexturePaintControllerSceneTest, ChangingResolutionAfterCloseProducesNewB
     ASSERT_TRUE(ctrl->ensurePaintableTexture(48));
     EXPECT_EQ(ctrl->textureResolution(), 48);
 }
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice D — PBR channel painting (#547)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Does the entity's first material's first pass carry a TUS named `slot`
+// (optionally with a non-empty texture bound)?
+bool passHasSlot(Ogre::Entity* ent, const char* slot, bool needTexture = false)
+{
+    if (!ent || ent->getNumSubEntities() == 0) return false;
+    auto mat = ent->getSubEntity(0)->getMaterial();
+    if (!mat || mat->getNumTechniques() == 0) return false;
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slot)
+            return !needTexture || !tus->getTextureName().empty();
+    }
+    return false;
+}
+} // namespace
+
+TEST_F(TexturePaintControllerSceneTest, PaintChannelsModelExcludesHeight) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanModel")));
+    auto* ctrl = TexturePaintController::instance();
+    const QVariantList chans = ctrl->paintChannels();
+    // Height is not a selectable channel — it has no slot of its own and is
+    // baked via the Normal channel. So the picker shows one fewer than the
+    // painter-channel count (which itself already excludes VertexColor).
+    ASSERT_EQ(chans.size(), PaintChannelNS::kTexturePaintChannelCount - 1);
+    for (const auto& v : chans)
+        EXPECT_NE(v.toMap().value("id").toString(), QStringLiteral("height"))
+            << "Height must not appear in the channel picker";
+    // First entry is BaseColor → albedo; a scalar entry reports scalar=true.
+    EXPECT_EQ(chans.at(0).toMap().value("slot").toString(), QStringLiteral("albedo"));
+    EXPECT_TRUE(chans.at(static_cast<int>(PaintChannelNS::Channel::Roughness))
+                    .toMap().value("scalar").toBool());
+    EXPECT_FALSE(chans.at(static_cast<int>(PaintChannelNS::Channel::BaseColor))
+                     .toMap().value("scalar").toBool());
+}
+
+TEST_F(TexturePaintControllerSceneTest, SwitchingChannelAutoCreatesCanonicalSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanSlot")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    // The fixture material only ships `diffuse_map`. Switching to Roughness
+    // must create a `roughness` TUS so the channel is paintable.
+    EXPECT_FALSE(passHasSlot(m_fix.entity, "roughness"));
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "roughness"));
+}
+
+TEST_F(TexturePaintControllerSceneTest, ScalarChannelBakeBindsMetallicOrmSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ScalarBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    // Paint a stroke, then bake — scalar channels collapse into the packed ORM
+    // texture bound to the `metallic` slot the Cook-Torrance SRS reads.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.55, 0.55);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Roughness)));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "metallic", /*needTexture*/true));
+}
+
+TEST_F(TexturePaintControllerSceneTest, NormalChannelBakeBindsNormalMapSlot) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("NormalBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.5);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    // The Normal channel Sobel-bakes the painted grayscale into normal_map.
+    EXPECT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Normal)));
+    EXPECT_TRUE(passHasSlot(m_fix.entity, "normal_map", /*needTexture*/true));
+}
+
+// Height is not a selectable channel: setActiveChannel(Height) redirects to
+// Normal (they share the normal_map slot), and Height is absent from the picker.
+TEST_F(TexturePaintControllerSceneTest, HeightChannelRedirectsToNormal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("HeightRedirect")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Normal));
+}
+
+TEST_F(TexturePaintControllerSceneTest, ChannelSessionsAreIsolated) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanIsolate")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    // Add a layer on BaseColor.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    const int baseLayers = ctrl->layerCount();
+    ctrl->addPaintLayer(QStringLiteral("bc-extra"));
+    const int baseAfter = ctrl->layerCount();
+    EXPECT_GT(baseAfter, baseLayers);
+
+    // Switch to Emissive — its own (fresh) session shouldn't inherit the
+    // BaseColor layer we just added.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Emissive));
+    EXPECT_LT(ctrl->layerCount(), baseAfter);
+
+    // Switch back to BaseColor — the stashed stack is restored.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    EXPECT_EQ(ctrl->layerCount(), baseAfter);
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeUnpaintedChannelReturnsFalse) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeEmpty")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    // Metallic never painted → nothing to bake.
+    EXPECT_FALSE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Metallic)));
+}
+
+// Undo must survive a channel switch (#547): a stroke on BaseColor, then switch
+// to another channel, then Ctrl+Z restores BaseColor — the undo command keys on
+// (entity, channel), NOT the transient GPU texture name that changes on switch.
+TEST_F(TexturePaintControllerSceneTest, UndoSurvivesChannelSwitch) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("UndoAcrossChannel")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Snapshot BaseColor before, paint a stroke, snapshot after.
+    const QImage before = ctrl->snapshotBufferImage();
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.5);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    const QImage afterPaint = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(before.isNull());
+    ASSERT_FALSE(afterPaint.isNull());
+    ASSERT_NE(before, afterPaint) << "stroke should have changed the buffer";
+
+    // Switch to Roughness — a different session with a fresh GPU texture name.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Roughness));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Roughness));
+
+    // Undo: must reactivate BaseColor and restore its pre-stroke pixels
+    // (before the fix this no-oped because the texture name had changed).
+    UndoManager::getSingleton()->undo();
+    pumpEventsFor(150);
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    const QImage afterUndo = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(afterUndo.isNull());
+    EXPECT_EQ(afterUndo, before) << "undo across a channel switch must restore BaseColor";
+}
+
+namespace {
+// Read the texture bound to a named (alias-aware for diffuse) slot on sub 0.
+QString slotTextureName(Ogre::Entity* ent, const char* slot)
+{
+    if (!ent || ent->getNumSubEntities() == 0) return {};
+    auto mat = ent->getSubEntity(0)->getMaterial();
+    if (!mat || mat->getNumTechniques() == 0) return {};
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slot)
+            return QString::fromStdString(tus->getTextureName());
+    }
+    return {};
+}
+} // namespace
+
+// #547 bug: clicking Bake on the BaseColor channel must overwrite the model's
+// EXISTING diffuse TUS (named "diffuse_map" on a typical import — NOT the
+// canonical "albedo"). The pre-fix code created a brand-new "albedo" TUS,
+// leaving the real diffuse_map still bound to the transient paint texture; when
+// closeSession() then restored diffuse_map to its pre-paint texture and removed
+// the paint texture, the model "lost" the painted result. The baked texture
+// must survive closeSession() on the slot the model actually samples, and the
+// plain material must NOT be silently promoted to Cook-Torrance.
+TEST_F(TexturePaintControllerSceneTest, BaseColorBakeSurvivesCloseSession) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BaseColorBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.6, 0.55);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+
+    // The baked file lands on the model's existing diffuse_map slot (alias of
+    // BaseColor's canonical "albedo"), not a new stray albedo TUS.
+    const QString baked = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_FALSE(baked.isEmpty()) << "diffuse_map must carry the baked texture";
+    EXPECT_TRUE(baked.startsWith(QStringLiteral("paint_basecolor_")))
+        << "expected the baked file, got '" << baked.toStdString() << "'";
+    EXPECT_FALSE(passHasSlot(m_fix.entity, "albedo"))
+        << "bake must not create a duplicate albedo TUS on a diffuse_map model";
+
+    // The plain (non-PBR) material must not be promoted to Cook-Torrance.
+    {
+        const auto& b = m_fix.mat->getTechnique(0)->getPass(0)->getUserObjectBindings();
+        EXPECT_FALSE(b.getUserAny("pbr_workflow").has_value())
+            << "a BaseColor bake must not add a PBR workflow tag";
+    }
+
+    // The crux: ending the session must NOT revert diffuse_map to its pre-paint
+    // texture — the bake is permanent, so the model keeps the painted result.
+    ctrl->closeSession();
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"), baked)
+        << "closeSession() lost the baked BaseColor texture (the #547 bug)";
+}
+
+// #547 bug: merely NAVIGATING channels (without painting) must not swap the
+// model's real slot textures for blank paint textures. The pre-fix code
+// rebound a manual (blank/white) paint texture onto the active channel's slot
+// at session-create, so switching to an unpainted Normal/Roughness/etc. slot
+// washed the surface out or made it render untextured. The rebind is now
+// deferred to the first painted stroke, so a channel switch alone leaves every
+// existing slot texture untouched.
+TEST_F(TexturePaintControllerSceneTest, ChannelSwitchWithoutPaintingKeepsSlotTextures) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("ChanSwitchKeepTex")));
+    // Give the fixture's diffuse a stable texture name we can watch.
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName("orig_diffuse.png");
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Walk every channel WITHOUT painting a single stroke.
+    for (int c = 0; c < PaintChannelNS::kTexturePaintChannelCount; ++c)
+        ctrl->setActiveChannel(c);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+
+    // The model's diffuse must still point at its original texture — no blank
+    // paint texture was ever bound because nothing was painted.
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"),
+              QStringLiteral("orig_diffuse.png"))
+        << "navigating channels without painting must not rebind the diffuse";
+
+    ctrl->closeSession();
+    EXPECT_EQ(slotTextureName(m_fix.entity, "diffuse_map"),
+              QStringLiteral("orig_diffuse.png"));
+}
+
+// #547 bug: baking BaseColor must PRESERVE the model's existing diffuse where
+// the user didn't paint. The paint session's base buffer is transparent when
+// its source texture couldn't be seeded, so a raw save would bind a mostly-
+// transparent diffuse and "lose" the base colour. bakeChannel composites the
+// painted strokes OVER the slot's underlying texture — so untouched texels keep
+// the original colour. This test binds a known solid-red diffuse, paints, bakes,
+// and verifies a corner texel (unlikely to be painted at UV 0.5) stays red.
+TEST_F(TexturePaintControllerSceneTest, BaseColorBakePreservesUnpaintedDiffuse) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BaseColorPreserve")));
+
+    // Write a solid-red base diffuse to a temp dir and register it so the
+    // controller's loadImageAcrossGroups can read it back.
+    static QTemporaryDir s_tmp;  // outlive the resource-location registration
+    ASSERT_TRUE(s_tmp.isValid());
+    const QString baseName = QStringLiteral("preserve_base.png");
+    const QString basePath = s_tmp.path() + "/" + baseName;
+    QImage red(64, 64, QImage::Format_RGBA8888);
+    red.fill(QColor(220, 20, 20, 255));
+    ASSERT_TRUE(red.save(basePath));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Paint a small stroke near the centre; the corners stay unpainted.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+
+    // The freshly-bound diffuse must be the composited bake, and its corner
+    // (unpainted) must still be the original red — not transparent/black/white.
+    const QString baked = slotTextureName(m_fix.entity, "diffuse_map");
+    ASSERT_TRUE(baked.startsWith(QStringLiteral("paint_basecolor_")));
+    // Re-read the baked file through Ogre's resource system — bakeChannel
+    // already registered its generatedTexDir as a resource location.
+    Ogre::Image ogreImg;
+    bool haveImg = false;
+    try {
+        ogreImg.load(baked.toStdString(),
+                     Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        haveImg = ogreImg.getWidth() > 0 && ogreImg.getHeight() > 0;
+    } catch (...) { haveImg = false; }
+    ASSERT_TRUE(haveImg) << "baked diffuse '" << baked.toStdString()
+                         << "' should be loadable";
+    const Ogre::ColourValue corner = ogreImg.getColourAt(0, 0, 0);
+    EXPECT_GT(corner.r, 0.6f) << "unpainted corner lost its red base colour";
+    EXPECT_LT(corner.g, 0.4f);
+    EXPECT_LT(corner.b, 0.4f);
+    EXPECT_GT(corner.a, 0.9f) << "baked diffuse must be opaque, not transparent";
+
+    ctrl->closeSession();
+}
+
+// #547 bug: the SECOND bake wiped the texture. bindBakedChannelTexture used to
+// flushDirtyToOgre() at the end, which re-uploaded the stale paint buffer and —
+// after pruning m_boundSlots — re-bound the transient paint texture straight
+// over the just-baked file. So the first bake changed the render and the second
+// bake left the slot pointing at an empty paint texture. bakeChannel now tears
+// the live session down cleanly instead, and each bake produces a fresh, valid
+// file bound into the slot. This test bakes BaseColor twice and asserts the slot
+// still carries a real baked diffuse (never a QMEPaint_* / empty binding).
+TEST_F(TexturePaintControllerSceneTest, RepeatedBaseColorBakeKeepsValidTexture) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("RepeatBake")));
+    static QTemporaryDir s_tmp2;
+    ASSERT_TRUE(s_tmp2.isValid());
+    const QString baseName = QStringLiteral("repeat_base.png");
+    QImage base(64, 64, QImage::Format_RGBA8888);
+    base.fill(QColor(30, 120, 200, 255));
+    ASSERT_TRUE(base.save(s_tmp2.path() + "/" + baseName));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp2.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+    m_fix.mat->getTechnique(0)->getPass(0)
+        ->getTextureUnitState(0)->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    auto paintAndBake = [&](double u, double v) {
+        ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+        ASSERT_TRUE(ctrl->hasActiveSession());
+        ASSERT_TRUE(ctrl->beginStrokeUV(u, v));
+        ctrl->updateStrokeUV(u + 0.02, v + 0.02);
+        ctrl->endStrokeUV();
+        pumpEventsFor(150);
+        ASSERT_TRUE(ctrl->bakeChannel(
+            static_cast<int>(PaintChannelNS::Channel::BaseColor)));
+    };
+
+    paintAndBake(0.4, 0.4);
+    const QString first = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_TRUE(first.startsWith(QStringLiteral("paint_basecolor_")))
+        << "first bake bound '" << first.toStdString() << "'";
+
+    // Second round: the session was torn down by the first bake; painting
+    // rebuilds it seeded from the baked result. The slot must end on a real
+    // baked file, NOT a transient paint texture or empty name.
+    paintAndBake(0.6, 0.6);
+    const QString second = slotTextureName(m_fix.entity, "diffuse_map");
+    EXPECT_TRUE(second.startsWith(QStringLiteral("paint_basecolor_")))
+        << "second bake bound '" << second.toStdString() << "' (the #547 bug)";
+    EXPECT_FALSE(second.startsWith(QStringLiteral("QMEPaint_")))
+        << "second bake left the slot on the transient paint texture";
+    EXPECT_FALSE(second.isEmpty());
+
+    ctrl->closeSession();
+}
+
+// #547: a Normal bake must COMBINE with the model's existing normal map, not
+// replace it. It generates a detail normal from the painted grayscale and
+// whiteout-blends it onto the base normal; untouched texels (flat detail normal
+// 0,0,1) keep the base normal exactly. This test binds a tilted base normal,
+// paints a small stroke, bakes, and asserts an unpainted corner still carries
+// the tilted base (not a flat 128,128,255 wipe).
+TEST_F(TexturePaintControllerSceneTest, NormalBakeCombinesWithExistingNormal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("NormalCombine")));
+    static QTemporaryDir s_tmp3;
+    ASSERT_TRUE(s_tmp3.isValid());
+    const QString baseName = QStringLiteral("base_normal.png");
+    // A distinctly tilted tangent-space normal: +X lean → R high, G mid, B mid.
+    QImage baseN(64, 64, QImage::Format_RGBA8888);
+    baseN.fill(QColor(220, 128, 150, 255));
+    ASSERT_TRUE(baseN.save(s_tmp3.path() + "/" + baseName));
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        s_tmp3.path().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+
+    // Give the fixture material a normal_map slot holding the tilted base.
+    auto* pass = m_fix.mat->getTechnique(0)->getPass(0);
+    auto* ntus = pass->createTextureUnitState();
+    ntus->setName("normal_map");
+    ntus->setTextureName(baseName.toStdString());
+
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Normal));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    ASSERT_TRUE(ctrl->bakeChannel(static_cast<int>(PaintChannelNS::Channel::Normal)));
+
+    const QString baked = slotTextureName(m_fix.entity, "normal_map");
+    ASSERT_TRUE(baked.startsWith(QStringLiteral("paint_normal_")));
+    Ogre::Image img;
+    bool ok = false;
+    try {
+        img.load(baked.toStdString(),
+                 Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        ok = img.getWidth() > 0;
+    } catch (...) { ok = false; }
+    ASSERT_TRUE(ok);
+    // Unpainted corner must retain the tilted base (R clearly > B), NOT a flat
+    // (128,128,255) normal that a plain overwrite would have produced.
+    const Ogre::ColourValue corner = img.getColourAt(0, 0, 0);
+    EXPECT_GT(corner.r, 0.65f) << "corner lost the base normal's +X tilt";
+    EXPECT_GT(corner.r, corner.b) << "flat-wiped normal (base normal replaced)";
+
+    ctrl->closeSession();
+}

@@ -23,6 +23,7 @@ SkeletonDebug.cpp
 SkeletonTransform.cpp
 SkeletonEditor.cpp
 MeshImporterExporter.cpp
+MeshDracoEncoder.cpp
 EditorViewport.cpp
 ViewportTitleBar.cpp
 RotationGizmo.cpp
@@ -109,6 +110,7 @@ SceneTreeModel.cpp
 ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
+PaintChannelPresets.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
@@ -285,6 +287,7 @@ SkeletonDebug.h
 SkeletonTransform.h
 SkeletonEditor.h
 MeshImporterExporter.h
+MeshDracoEncoder.h
 EditorViewport.h
 ViewportTitleBar.h
 RotationGizmo.h
@@ -340,6 +343,7 @@ SceneTreeModel.h
 ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
+PaintChannelPresets.h
 MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
@@ -376,6 +380,7 @@ TextureAtlasPacker.h
 PaintBufferImageProvider.h
 PaintLayerBlend.h
 PaintLayerStack.h
+PaintChannel.h
 PaintSelectionMask.h
 GradientRamp.h
 BrushEngine.h
@@ -774,6 +779,10 @@ if(ENABLE_ALEMBIC)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_alembic)
 endif()
 
+if(ENABLE_DRACO AND QTMESH_DRACO_FOUND)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_draco)
+endif()
+
 if(ENABLE_ONNX)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_onnx)
     if(QTMESH_ONNX_LIB_DIR)
@@ -941,6 +950,10 @@ if(BUILD_TESTS)
 
     if(ENABLE_ALEMBIC)
         target_link_libraries(UnitTests qtmesh_alembic)
+    endif()
+
+    if(ENABLE_DRACO AND QTMESH_DRACO_FOUND)
+        target_link_libraries(UnitTests qtmesh_draco)
     endif()
 
     # Link ONNX Runtime for tests if enabled (#404)

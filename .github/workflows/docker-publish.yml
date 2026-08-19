@@ -33,7 +33,8 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Download .deb from release
+      - name: Download .deb(s) from release
+        id: debs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -43,23 +44,40 @@ jobs:
           else
             gh release download "$TAG" --pattern "*.deb" --dir .
           fi
-          # Ensure exactly one .deb and rename to deterministic filename
+          ls -la ./*.deb 2>/dev/null || true
+
+          # The Dockerfile expects qtmesheditor_${TARGETARCH}.deb. Recent
+          # releases ship both amd64 + arm64; older releases only amd64. Build a
+          # multi-arch image when both are present, else fall back to amd64-only.
           shopt -s nullglob
-          debs=(./*.deb)
-          if [ "${#debs[@]}" -ne 1 ]; then
-            echo "Expected exactly one .deb, found ${#debs[@]}" >&2
-            ls -la ./*.deb 2>/dev/null || true
-            exit 1
+          # Normalise whatever names the release used into the canonical ones.
+          for f in ./*.deb; do
+            case "$f" in
+              *_amd64.deb|*amd64*.deb) [ -f ./qtmesheditor_amd64.deb ] || cp "$f" ./qtmesheditor_amd64.deb ;;
+              *_arm64.deb|*arm64*.deb) [ -f ./qtmesheditor_arm64.deb ] || cp "$f" ./qtmesheditor_arm64.deb ;;
+            esac
+          done
+          # If no amd64-named deb matched but there's a single deb, treat it as amd64.
+          if [ ! -f ./qtmesheditor_amd64.deb ]; then
+            only=(./*.deb)
+            if [ "${#only[@]}" -ge 1 ]; then cp "${only[0]}" ./qtmesheditor_amd64.deb; fi
           fi
-          mv "${debs[0]}" ./qtmesheditor.deb
-          ls -la ./qtmesheditor.deb
+          if [ -f ./qtmesheditor_arm64.deb ]; then
+            echo "platforms=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No arm64 .deb in release ${TAG}; building amd64-only image."
+            echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract version from downloaded package
         id: version
         run: |
-          VERSION=$(dpkg-deb -f ./qtmesheditor.deb Version | sed 's/-.*//')
+          VERSION=$(dpkg-deb -f ./qtmesheditor_amd64.deb Version | sed 's/-.*//')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Extracted version: $VERSION"
+
+      - name: Set up QEMU (arm64 emulation for the arm64 image layer)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -91,11 +109,13 @@ jobs:
           TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:${VERSION}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (multi-arch when arm64 .deb present)
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: ${{ steps.debs.outputs.platforms }}
           push: true
+          provenance: false
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -107,4 +127,6 @@ jobs:
 
       - name: Verify image
         run: |
-          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}" --help
+          IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
+          docker buildx imagetools inspect "$IMAGE" | awk '/Platform:/ {print $2}' || true
+          docker run --rm --platform linux/amd64 "$IMAGE" --help

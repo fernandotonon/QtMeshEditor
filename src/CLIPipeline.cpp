@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "MeshDracoEncoder.h"
 #include "AlembicImporter.h"
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
@@ -617,6 +618,7 @@ void CLIPipeline::printUsage()
         "  info <file> [--json]              Show mesh information\n"
         "  fix <file> [-o <output>] [flags]   Fix/optimize a mesh (overwrites input if no -o)\n"
         "  convert <file> -o <output>        Convert between 3D formats\n"
+        "  convert <file> -o <output.glb> --compress draco   Convert + Draco-compress glTF\n"
         "  anim <file> --list [--json]       List animations\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
@@ -885,8 +887,11 @@ void CLIPipeline::printUsage()
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
-        "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
-        "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
+        "                                    animated lights — anything non-skeletal).\n"
+        "  nodeanim <file> --add <node>:<position|rotation|scale> --keyframes \"0:0,0,0;1:5,0,0\"\n"
+        "                  [--clip NAME] [--length S] -o out\n"
+        "                                    Author a node-transform clip and export it (rotation values are\n"
+        "                                    Euler degrees; repeat --add/--keyframes for more channels/nodes).\n"
         "  mocap <video> [--face] [--body] --mesh <meshfile> [-o out.glb] [--clip-name NAME]\n"
         "              [--fps N] [--smooth-cutoff HZ] [--no-smooth] [--map overrides.json]\n"
         "              [--no-head] [--algo sam3dbody|pose-ik] [--no-model] [--frames-dir DIR] [--json]\n"
@@ -1517,10 +1522,18 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
 int CLIPipeline::run(int argc, char* argv[])
 {
     // Pre-scan for --verbose and --no-telemetry before anything else
+    // QTMESH_NO_TELEMETRY: SESSION-ONLY environment opt-out (CI / unit tests /
+    // containers) — suppresses all telemetry for this process WITHOUT
+    // persisting a preference or printing the opt-out notice. Without it the
+    // first-launch auto-enable made the TEST SUITE send real Sentry
+    // transactions from CI — e.g. the CLIPipelineRun.UnknownCommand fixture
+    // showed up in production telemetry as "cli.not-a-command".
+    const bool envNoTelemetry = qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY");
+    bool flagNoTelemetry = false;
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "--verbose") s_verbose = true;
-        if (arg == "--no-telemetry") s_noTelemetry = true;
+        if (arg == "--no-telemetry") flagNoTelemetry = true;
     }
 
     // Find the subcommand (skip executable name and --cli flag)
@@ -1574,6 +1587,7 @@ int CLIPipeline::run(int argc, char* argv[])
     // --no-telemetry also suppresses gamification events at every call site
     // for this process — without this, operation notes inside the subcommands
     // would land in the persistent queue and flush on a later run (#796).
+    s_noTelemetry = envNoTelemetry || flagNoTelemetry;
     if (s_noTelemetry)
         GamificationManager::setEmissionSuspended(true);
 
@@ -1581,9 +1595,14 @@ int CLIPipeline::run(int argc, char* argv[])
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
     // suppresses the notice to avoid printing it on every container run.
-    if (s_noTelemetry) {
+    if (flagNoTelemetry) {
+        // The explicit flag persists — even when the session env var is also
+        // set (the user asked for the permanent preference).
         SentryReporter::setEnabled(false);
         err() << "Telemetry disabled. This preference is stored permanently." << Qt::endl;
+    } else if (envNoTelemetry) {
+        // Session-only: no QSettings write, no notice — the init below is
+        // simply skipped for this process.
     } else if (SentryReporter::isFirstLaunch()) {
         SentryReporter::setEnabled(true);
         if (!qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY_NOTICE"))
@@ -1591,7 +1610,7 @@ int CLIPipeline::run(int argc, char* argv[])
                      "Use --no-telemetry to disable." << Qt::endl;
     }
 
-    if (SentryReporter::isEnabled()) {
+    if (!s_noTelemetry && SentryReporter::isEnabled()) {
         SentryReporter::configureSession(QStringLiteral("cli"));
         SentryReporter::initialize();
     }
@@ -1646,6 +1665,11 @@ int CLIPipeline::run(int argc, char* argv[])
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
+        // Keep the attempted command visible in telemetry (sanitized — path/
+        // file-looking tokens are redacted) so typo patterns can inform
+        // aliases/suggestions. The transaction name carries it too.
+        SentryReporter::addBreadcrumb("cli",
+            QString("Unknown command: %1").arg(cmd));
         printUsage();
         rc = 2;
     }
@@ -1834,8 +1858,8 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
 int CLIPipeline::cmdConvert(int argc, char* argv[])
 {
-    // Parse: convert <file> -o <output> [--format fmt]
-    QString inputPath, outputPath, format;
+    // Parse: convert <file> -o <output> [--format fmt] [--compress draco]
+    QString inputPath, outputPath, format, compress;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1848,6 +1872,10 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
             format = QString(argv[++i]);
             continue;
         }
+        if (arg == "--compress" && i + 1 < argc) {
+            compress = QString(argv[++i]).toLower();
+            continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -1856,8 +1884,32 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     if (inputPath.isEmpty() || outputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt]" << Qt::endl;
+        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt] [--compress draco]" << Qt::endl;
         return 2;
+    }
+
+    // Validate --compress up front (before the expensive import/export) so the
+    // user gets a clear error immediately.
+    if (!compress.isEmpty()) {
+        if (compress != "draco") {
+            err() << "Error: unknown --compress value '" << compress
+                  << "' (supported: draco)." << Qt::endl;
+            return 2;
+        }
+        const QString outSuffix = QFileInfo(outputPath).suffix().toLower();
+        if (outSuffix != "glb" && outSuffix != "glb2" && outSuffix != "gltf"
+            && outSuffix != "gltf2" && outSuffix != "vrm") {
+            err() << "Error: --compress draco requires a glTF output (.glb or .gltf), got ."
+                  << outSuffix << Qt::endl;
+            return 2;
+        }
+        if (!MeshDracoEncoder::isSupported()) {
+            err() << "Error: Draco compression is not available in this build. "
+                     "Rebuild with -DENABLE_DRACO=ON (needs the Draco library — "
+                     "build the vendored contrib/draco standalone, or pass "
+                     "-DDRACO_ROOT=<dir>)." << Qt::endl;
+            return 1;
+        }
     }
 
     QFileInfo fi(inputPath);
@@ -1892,6 +1944,59 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
         SentryReporter::captureMessage(QString("CLI convert: export failed (.%1 -> .%2)").arg(fi.suffix(), QFileInfo(outputPath).suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
         return 1;
+    }
+
+    // Optional Draco mesh compression on the written glTF/glb (#506). Runs as a
+    // post-process because Assimp's glTF2 exporter cannot write Draco itself.
+    if (compress == "draco") {
+        SentryReporter::addBreadcrumb("cli.convert",
+            QString("Draco compress %1").arg(outFi.fileName()));
+        MeshDracoEncoder::Result dr = MeshDracoEncoder::compressFile(absOutput);
+        if (dr.nothingEligible) {
+            // Not a failure: the conversion succeeded, there was just nothing
+            // safe to compress (e.g. an all-skinned Mixamo character). Keep the
+            // valid uncompressed export and exit 0 with a clear warning.
+            err() << "Warning: " << dr.error << Qt::endl;
+            cliWrite(QString("Converted: %1 -> %2 (uncompressed; no primitive "
+                             "eligible for Draco)\n")
+                     .arg(fi.fileName(), outFi.fileName()));
+            return 0;
+        }
+        if (!dr.ok) {
+            SentryReporter::captureMessage(
+                QString("CLI convert: Draco compression failed: %1").arg(dr.error), "error");
+            err() << "Error: Draco compression failed: " << dr.error << Qt::endl;
+            // The uncompressed export was already written to absOutput and is a
+            // valid file — say so, so a caller treating exit 1 as "no output"
+            // doesn't act on a stale/uncompressed file unknowingly.
+            err() << "Note: an uncompressed " << outFi.fileName()
+                  << " was written before compression failed." << Qt::endl;
+            return 1;
+        }
+        // Report the on-disk file-size change (what the user actually cares
+        // about), plus the geometry-only ratio. For a .gltf output the buffer
+        // is re-embedded as base64 (~+33%), so the geometry ratio alone can
+        // read "smaller" while the file grew — show both.
+        const double geoRatio = dr.originalBinBytes > 0
+            ? 100.0 * (1.0 - double(dr.compressedBinBytes) / double(dr.originalBinBytes))
+            : 0.0;
+        const double fileRatio = dr.originalFileBytes > 0
+            ? 100.0 * (1.0 - double(dr.outputFileBytes) / double(dr.originalFileBytes))
+            : 0.0;
+        // Build the "%" strings first so the literal percent sign never sits
+        // next to a QString::arg placeholder (QString has no printf %%-escape).
+        const QString geoPct = QString::number(geoRatio, 'f', 1) + "%";
+        const QString filePct = QString::number(fileRatio, 'f', 1) + "%";
+        cliWrite(QString("Converted: %1 -> %2 (Draco: %3/%4 primitives; "
+                         "geometry %5 -> %6 bytes, %7 smaller; "
+                         "file %8 -> %9 bytes, %10 smaller)\n")
+                 .arg(fi.fileName(), outFi.fileName())
+                 .arg(dr.primitivesCompressed).arg(dr.primitivesTotal)
+                 .arg(dr.originalBinBytes).arg(dr.compressedBinBytes)
+                 .arg(geoPct)
+                 .arg(dr.originalFileBytes).arg(dr.outputFileBytes)
+                 .arg(filePct));
+        return 0;
     }
 
     cliWrite(QString("Converted: %1 -> %2\n").arg(fi.fileName(), outFi.fileName()));
@@ -4487,6 +4592,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     QString animationName;          // #936: sample a clip over time
     bool orbitWithAnimation = false;   // #936: combine rotation + animation
     float atSeconds = -1.0f;           // #936: single posed frame, normal orbit
+    bool studioLighting = false;       // #933: three-point studio preset
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -4581,6 +4687,10 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
             orbitWithAnimation = true;
             continue;
         }
+        if (arg == "--studio") {
+            studioLighting = true;
+            continue;
+        }
         if (arg == "--at") {
             if (i + 1 >= argc ||
                 !parseCliFloat(QString(argv[++i]), &atSeconds) || atSeconds < 0.0f) {
@@ -4651,6 +4761,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     options.animationName = animationName;       // #936
     options.orbitWithAnimation = orbitWithAnimation;
     options.atSeconds = atSeconds;
+    options.studio = studioLighting;             // #933
 
     QList<QImage> frames;
     QString renderError;
@@ -11238,28 +11349,76 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
 
 int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
 {
-    // Parse: nodeanim <file> --list [--json]
-    QString filePath;
+    // Parse:
+    //   nodeanim <file> --list [--json]
+    //   nodeanim <file> --add <node>:<channel> --keyframes "t:v,v,v;t:v,v,v"
+    //                   [--clip NAME] [--length SECONDS] -o out
+    // <channel> is position | rotation | scale. rotation values are Euler
+    // degrees (x,y,z). Multiple --add/--keyframes pairs may be given to author
+    // several channels/nodes into one clip. (#520)
+    QString filePath, outputPath, clipName;
     bool listMode = false;
     bool jsonOutput = false;
+    double clipLength = 0.0;
+    struct AddSpec { QString node; QString channel; QString keyframes; };
+    std::vector<AddSpec> adds;
+    QString pendingAddSpec;   // "<node>:<channel>" awaiting its --keyframes
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "nodeanim" || arg == "--cli") continue;
         if (arg == "--list") { listMode = true; continue; }
         if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--add" && i + 1 < argc) { pendingAddSpec = QString::fromUtf8(argv[++i]); continue; }
+        if (arg == "--keyframes" && i + 1 < argc) {
+            const QString kf = QString::fromUtf8(argv[++i]);
+            const int colon = pendingAddSpec.indexOf(':');
+            if (pendingAddSpec.isEmpty() || colon < 0) {
+                err() << "Error: --keyframes must follow --add <node>:<channel>." << Qt::endl;
+                return 2;
+            }
+            adds.push_back({pendingAddSpec.left(colon), pendingAddSpec.mid(colon + 1), kf});
+            pendingAddSpec.clear();
+            continue;
+        }
+        if (arg == "--clip" && i + 1 < argc) { clipName = QString::fromUtf8(argv[++i]); continue; }
+        if (arg == "--length" && i + 1 < argc) {
+            bool okLen = false;
+            clipLength = QString::fromUtf8(argv[++i]).toDouble(&okLen);
+            if (!okLen || clipLength <= 0.0) {
+                err() << "Error: --length must be a positive number." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) { outputPath = QString::fromUtf8(argv[++i]); continue; }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
         }
     }
 
+    // An --add with no following --keyframes leaves pendingAddSpec unconsumed —
+    // it would otherwise be silently dropped (and a lone --add would misreport as
+    // "requires --list or --add").
+    if (!pendingAddSpec.isEmpty()) {
+        err() << "Error: --add " << pendingAddSpec << " has no matching --keyframes." << Qt::endl;
+        return 2;
+    }
+
+    const bool addMode = !adds.empty();
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh nodeanim <file> --list [--json]" << Qt::endl;
+        err() << "       qtmesh nodeanim <file> --add <node>:<position|rotation|scale> "
+                 "--keyframes \"0:0,0,0;1:5,0,0\" [--clip NAME] [--length S] -o out" << Qt::endl;
         return 2;
     }
-    if (!listMode) {
-        err() << "Error: nodeanim subcommand requires --list (other modes need C5 exporter round-trip)." << Qt::endl;
+    if (!listMode && !addMode) {
+        err() << "Error: nodeanim requires --list or --add." << Qt::endl;
+        return 2;
+    }
+    if (addMode && outputPath.isEmpty()) {
+        err() << "Error: --add requires -o <output>." << Qt::endl;
         return 2;
     }
 
@@ -11272,11 +11431,163 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.nodeanim",
-        QString("NodeAnim list .%1").arg(fi.suffix()));
+        QString("NodeAnim %1 .%2").arg(addMode ? "add" : "list", fi.suffix()));
     SentryReporter::addBreadcrumb("file.import",
-        QString("Importing %1 for nodeanim list").arg(fi.absoluteFilePath()));
+        QString("Importing %1 for nodeanim").arg(fi.absoluteFilePath()));
 
-    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    // Import path depends on the mode:
+    //  - --list (glTF/glb): sceneImporter retains the aiScene and reconstructs
+    //    node clips reliably (the flag-less re-read in importer() can miss them
+    //    on rigged multi-anim files). FBX/.mesh fall through to importer(), which
+    //    also reads the .nodeanim.json sidecar.
+    //  - --add: importer() names the scene node after the entity (e.g. "out_body")
+    //    so `--add <node>` resolves to the name the user sees; sceneImporter uses
+    //    a different internal node naming that wouldn't match. (#520)
+    const QString suffix = fi.suffix().toLower();
+    const bool sceneCapable = (suffix == "glb" || suffix == "gltf" || suffix == "gltf2");
+    if (!addMode && sceneCapable)
+        MeshImporterExporter::sceneImporter(fi.absoluteFilePath());
+    else
+        MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    // ── Authoring path: create a clip, add keyframes, export ──────────────
+    if (addMode) {
+        auto* nam = NodeAnimationManager::instance();
+        if (!nam) { err() << "Error: node-animation subsystem unavailable." << Qt::endl; return 1; }
+
+        // Parse a "t:v,v,v;t:v,v,v" spec into (time, [values]) pairs.
+        auto parseKeyframes = [](const QString& spec, QString& parseErr)
+            -> std::vector<std::pair<double, QVector<double>>> {
+            std::vector<std::pair<double, QVector<double>>> out;
+            const auto keys = spec.split(';', Qt::SkipEmptyParts);
+            for (const QString& k : keys) {
+                const int c = k.indexOf(':');
+                if (c < 0) { parseErr = QStringLiteral("keyframe '%1' missing ':'").arg(k); return {}; }
+                bool okT = false;
+                const double t = k.left(c).toDouble(&okT);
+                if (!okT || t < 0.0) { parseErr = QStringLiteral("bad time in '%1'").arg(k); return {}; }
+                QVector<double> vals;
+                for (const QString& v : k.mid(c + 1).split(',', Qt::SkipEmptyParts)) {
+                    bool okV = false; const double d = v.toDouble(&okV);
+                    if (!okV) { parseErr = QStringLiteral("bad value in '%1'").arg(k); return {}; }
+                    vals.push_back(d);
+                }
+                out.emplace_back(t, vals);
+            }
+            return out;
+        };
+
+        // Determine the clip length: max keyframe time across all --add specs,
+        // unless the user pinned it with --length.
+        double maxT = 0.0;
+        for (const AddSpec& a : adds) {
+            QString perr;
+            for (const auto& [t, vals] : parseKeyframes(a.keyframes, perr)) maxT = std::max(maxT, t);
+        }
+        const double length = clipLength > 0.0 ? clipLength : (maxT > 0.0 ? maxT : 1.0);
+        if (clipName.isEmpty()) clipName = QStringLiteral("NodeClip");
+        if (!nam->createClip(clipName, length)) {
+            err() << "Error: could not create clip '" << clipName << "'." << Qt::endl;
+            return 1;
+        }
+
+        // Accumulate all channels per (node, time) BEFORE writing, so multiple
+        // --add specs on the same node/time (e.g. position AND rotation) MERGE
+        // into one keyframe instead of the later spec clobbering the earlier
+        // one's channels. Each keyframe starts from the node's current TRS, then
+        // every spec touching that (node,time) overrides its own channel.
+        struct TRS { Ogre::Vector3 pos; Ogre::Quaternion rot; Ogre::Vector3 scl; };
+        // node → (time → TRS). Ordered by time within a node via std::map.
+        std::map<QString, std::map<double, TRS>> pending;
+        auto* mgr = Manager::getSingletonPtr();
+        auto* scene = mgr ? mgr->getSceneMgr() : nullptr;
+
+        int channelsWritten = 0;
+        for (const AddSpec& a : adds) {
+            const QString ch = a.channel.toLower();
+            if (ch != "position" && ch != "rotation" && ch != "scale") {
+                err() << "Error: channel must be position|rotation|scale (got '" << a.channel << "')." << Qt::endl;
+                return 2;
+            }
+            Ogre::SceneNode* node =
+                (scene && scene->hasSceneNode(a.node.toStdString()))
+                    ? scene->getSceneNode(a.node.toStdString()) : nullptr;
+            if (!node) {
+                err() << "Error: node '" << a.node << "' not found in scene." << Qt::endl;
+                return 1;
+            }
+            QString perr;
+            auto kfs = parseKeyframes(a.keyframes, perr);
+            if (!perr.isEmpty()) { err() << "Error: " << perr << Qt::endl; return 2; }
+
+            auto& nodeMap = pending[a.node];
+            for (const auto& [t, vals] : kfs) {
+                // Seed this (node,time) from the node's current TRS the first
+                // time it's touched; later specs mutate the accumulated entry.
+                // Coalesce by the SAME 1ms epsilon NodeAnimationManager::addKeyframe
+                // uses to merge keyframes — otherwise two spec times within 1ms
+                // stay separate here but collapse in the manager, so the later
+                // full-TRS write would drop the earlier channel. (#520 review)
+                constexpr double kMergeEps = 1e-3;
+                auto it = nodeMap.end();
+                for (auto cand = nodeMap.begin(); cand != nodeMap.end(); ++cand) {
+                    if (std::abs(cand->first - t) < kMergeEps) { it = cand; break; }
+                }
+                if (it == nodeMap.end())
+                    it = nodeMap.emplace(t, TRS{ node->getPosition(),
+                                                 node->getOrientation(),
+                                                 node->getScale() }).first;
+                TRS& trs = it->second;
+                if (ch == "position") {
+                    if (vals.size() < 3) { err() << "Error: position needs 3 values." << Qt::endl; return 2; }
+                    trs.pos = Ogre::Vector3(vals[0], vals[1], vals[2]);
+                } else if (ch == "scale") {
+                    if (vals.size() < 3) { err() << "Error: scale needs 3 values." << Qt::endl; return 2; }
+                    trs.scl = Ogre::Vector3(vals[0], vals[1], vals[2]);
+                } else { // rotation: Euler degrees x,y,z → quaternion (XYZ order)
+                    if (vals.size() < 3) { err() << "Error: rotation needs 3 Euler-degree values." << Qt::endl; return 2; }
+                    Ogre::Quaternion qx, qy, qz;
+                    qx.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[0])), Ogre::Vector3::UNIT_X);
+                    qy.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[1])), Ogre::Vector3::UNIT_Y);
+                    qz.FromAngleAxis(Ogre::Degree(static_cast<Ogre::Real>(vals[2])), Ogre::Vector3::UNIT_Z);
+                    trs.rot = qx * qy * qz;
+                    trs.rot.normalise();
+                }
+            }
+            ++channelsWritten;
+        }
+
+        // Write the merged keyframes.
+        for (const auto& [nodeName, nodeMap] : pending) {
+            for (const auto& [t, trs] : nodeMap) {
+                if (!nam->addKeyframe(clipName, nodeName, t, trs.pos, trs.rot, trs.scl)) {
+                    err() << "Error: failed to add keyframe at t=" << t << " on '" << nodeName << "'." << Qt::endl;
+                    return 1;
+                }
+            }
+        }
+
+        // Export the whole scene (node clips ride sceneExporter — glTF native,
+        // FBX/.mesh via the .nodeanim.json sidecar).
+        const QFileInfo outFi(outputPath);
+        if (MeshImporterExporter::sceneExporter(outFi.absoluteFilePath()) != 0) {
+            err() << "Error: export failed: " << outputPath << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["ok"] = true;
+            root["clip"] = clipName;
+            root["length"] = length;
+            root["channels"] = channelsWritten;
+            root["output"] = outputPath;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            cliWrite(QStringLiteral("Wrote clip '%1' (%2 channel(s), %3s) to %4\n")
+                     .arg(clipName).arg(channelsWritten).arg(length, 0, 'f', 3).arg(outputPath));
+        }
+        return 0;
+    }
 
     // The NodeAnimationManager reads from the SceneManager's animation
     // table, which is what `importer()` populated. Round-trip the

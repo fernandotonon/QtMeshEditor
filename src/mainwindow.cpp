@@ -133,6 +133,7 @@
 #include "SkeletonEditor.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
+#include "PaintChannelPresets.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
@@ -147,6 +148,7 @@
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
 #include <QDockWidget>
@@ -873,6 +875,7 @@ MainWindow::~MainWindow()
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
+        PaintChannelPresets::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
         ShadowController::kill();
@@ -1145,6 +1148,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<PaintChannelPresets>("PropertiesPanel", 1, 0, "PaintChannelPresets",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PaintChannelPresets::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return HdrEnvironmentController::qmlInstance(engine, nullptr);
@@ -1264,6 +1271,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<VertexAnimationManager>("PropertiesPanel", 1, 0, "VertexAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VertexAnimationManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<NodeAnimationManager>("PropertiesPanel", 1, 0, "NodeAnimationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return NodeAnimationManager::qmlInstance(engine, nullptr);
             });
 
         // Same image provider the detached editor window uses — serves the
@@ -1432,7 +1443,13 @@ void MainWindow::initToolBar()
         m_dopeSheetDock->setObjectName("DopeSheetDock");
         configureBottomToolDock(m_dopeSheetDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_dopeSheetDock);
-        m_dopeSheetDock->hide();
+        // Shown by default (#517 UX): the Dope Sheet is core to the animation
+        // workflow, and the Workspace Panels shortcut group that used to reveal
+        // it was removed. Still toggleable from the View menu. Its QML is
+        // lazy-loaded — the reveal path (revealBottomTool) normally triggers
+        // ensureLazyDockQml, so we must call it here or the dock stays blank.
+        m_dopeSheetDock->show();
+        ensureLazyDockQml(m_dopeSheetDock);
         connect(m_dopeSheetDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Dope Sheet shown" : "Dope Sheet hidden");
@@ -1471,7 +1488,12 @@ void MainWindow::initToolBar()
         // they want via the View menu. tabifyDockWidget runs after both docks
         // exist so we don't open two empty bottom strips.
         if (m_dopeSheetDock) tabifyDockWidget(m_dopeSheetDock, m_curveEditorDock);
-        m_curveEditorDock->hide();
+        // Shown by default (#517 UX), tabbed behind the Dope Sheet. Toggleable
+        // from the View menu. raise() the Dope Sheet so it's the front tab.
+        // Lazy QML must be forced (see the Dope Sheet note above) or blank.
+        m_curveEditorDock->show();
+        ensureLazyDockQml(m_curveEditorDock);
+        if (m_dopeSheetDock) m_dopeSheetDock->raise();
         connect(m_curveEditorDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Curve Editor shown" : "Curve Editor hidden");
@@ -4362,7 +4384,15 @@ void MainWindow::startCloudPackageUpload(QtMeshCloudSession* session,
 }
 
 void MainWindow::setPlaying(bool playing)
-{   isPlaying = playing;    }
+{
+    // Node-transform clips (#517) are SceneManager-level and play from the main
+    // transport. Their "armed to play" state is the AnimationState enabled
+    // flag, controlled solely by the Animations-list Enable checkbox — we must
+    // NOT force it here (doing so fought the checkbox: unchecking appeared to
+    // do nothing). The frame loop advances enabled node states only while
+    // isPlaying; an enabled clip poses its node (locked) — uncheck it to edit.
+    isPlaying = playing;
+}
 
 void MainWindow::createModeSurfaces()
 {
@@ -4671,19 +4701,45 @@ void advanceEntityStates(Ogre::Entity* ent, bool isActiveEntity,
 
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
-    // Advance time for every entity that has enabled animation states.
-    // Speed is global (scales dt for all states). The loop region applies only
-    // to the entity+animation selected in the Animation Control panel.
-    if (!isPlaying) return true;
-
+    // This fires on every rendered frame, including frames that sneak in while a
+    // MainWindow is still being constructed / torn down (e.g. MainWindowTest
+    // rebuilds it many times under Xvfb). Guard the singletons before use — a
+    // null AnimationControlController / Manager here would segfault the render
+    // thread. (#517: the SceneManager-state advance below is new, so this path
+    // now runs earlier in the frame than before.)
     const auto* animCtrl = AnimationControlController::instance();
-    auto*       blender  = AnimationBlender::instance();
-    const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
-    const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
+    auto* manager = Manager::getSingletonPtr();
+    if (!animCtrl || !manager) return true;
     const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
     const double scaledDt = dt * animCtrl->playbackSpeed();
 
-    for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+    // Advance SceneManager-level animation states — the NodeAnimationManager's
+    // transform clips (animated props/doors, #517 slice C) live here. They now
+    // play from the MAIN transport like skeletal/vertex clips: setPlaying()
+    // enables the selected node clip's state on Play and disables all node
+    // states on pause, so gating the advance on `isPlaying` keeps a scrubbed
+    // (paused-but-enabled-for-preview) clip from drifting off its frame. Entity
+    // states are handled in the per-mesh loop below (also isPlaying-gated).
+    if (isPlaying) {
+        if (auto* sm = manager->getSceneMgr()) {
+            for (const auto& [key, state] : sm->getAnimationStates()) {
+                if (state && state->getEnabled())
+                    state->addTime(static_cast<float>(scaledDt));
+            }
+        }
+    }
+
+    // Advance time for every entity that has enabled animation states.
+    // Speed is global (scales dt for all states). The loop region applies only
+    // to the entity+animation selected in the Animation Control panel. Gated on
+    // the global Play button.
+    if (!isPlaying) return true;
+
+    auto*       blender  = AnimationBlender::instance();
+    const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
+    const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
+
+    for (Ogre::SceneNode* node : manager->getSceneNodes()) {
         if (!node) continue;
         for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
             Ogre::MovableObject* obj = node->getAttachedObject(i);

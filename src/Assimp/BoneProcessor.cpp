@@ -64,10 +64,16 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
 
 void BoneProcessor::bakeZupToYup(const Ogre::SkeletonPtr& skeleton)
 {
-    // Bake Z-up → Y-up into root bone rest poses so no scene-node rotation is needed.
-    // Only root bones (no parent in the Ogre skeleton) need to be rotated; child bones'
-    // local transforms are relative to their parent and are correct as-is.
-    const Ogre::Quaternion R_x90(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
+    bakeRootRotation(skeleton, Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X));
+}
+
+void BoneProcessor::bakeRootRotation(const Ogre::SkeletonPtr& skeleton,
+                                     const Ogre::Quaternion& rotation)
+{
+    // Bake a rest-pose rotation into the root bones so no scene-node rotation
+    // is needed. Only root bones (no parent in the Ogre skeleton) need it;
+    // child bones' local transforms are parent-relative and correct as-is.
+    const Ogre::Quaternion R_x90 = rotation;
     for (unsigned short i = 0; i < skeleton->getNumBones(); ++i) {
         Ogre::Bone* bone = skeleton->getBone(i);
         if (bone->getParent() == nullptr) {
@@ -113,7 +119,7 @@ void BoneProcessor::createBone(const std::string& boneName) {
     }
 }
 
-Ogre::Matrix4 BoneProcessor::nodeWorldTransform(const aiNode* node) const {
+Ogre::Matrix4 BoneProcessor::nodeWorldTransform(const aiNode* node) {
     Ogre::Matrix4 world = Ogre::Matrix4::IDENTITY;
     for (const aiNode* n = node; n; n = n->mParent)
         world = Ogre::Matrix4(
