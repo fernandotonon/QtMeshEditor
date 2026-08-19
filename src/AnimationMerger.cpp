@@ -3808,25 +3808,44 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         // HANDS via the self-calibrated hand-basis map. The
                         // aim+twist path transports the hand's DIRECTION but
                         // its ROLL rides the C≠Ct frame mismatch — the raised
-                        // arm renders palm-out ("rotated arm"). The hand-basis
-                        // map M (validated by the finger transport) carries
-                        // the FULL source hand orientation frame-safely:
-                        //     Wt(f) = M · [clipQ(f,c)·restQ(c)⁻¹] · M⁻¹ · Wbind
-                        // ABSOLUTE (not parent-relative) on purpose: the palm
-                        // must land where the source intended even when the
-                        // forearm chain carries residual roll — the wrist
-                        // skinning absorbs the difference, exactly like real
-                        // forearm-twist rigs do. Fingers (below) ride this
-                        // corrected hand as their parent.
+                        // arm renders palm-out ("rotated arm"). Transport the
+                        // hand's WRIST articulation (delta RELATIVE to the
+                        // forearm) through the basis map M, riding the
+                        // target's animated forearm — the same pattern the
+                        // fingers use one level down:
+                        //   Drel = Dp(forearm)⁻¹·Df(hand)     (source wrist)
+                        //   Wt   = forearmDelta·(M·Drel·M⁻¹)·Wbind
+                        // Parent-RELATIVE on purpose: an absolute palm pins
+                        // the hand to the source's world orientation and
+                        // fights the target's arm as it moves (broken wrists
+                        // in mid-motion frames). Relative keeps the wrist
+                        // faithful and smooth; fingers ride this hand.
                         const int side = (c == 9) ? 0 : 1;
                         const auto& rq = cmuRestWorld[static_cast<size_t>(c)];
                         const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
                                                     rq[2]);
-                        const Ogre::Quaternion Dsrc =
+                        const Ogre::Quaternion Df =
                             clipQ(f, c) * refQ.Inverse();
+                        Ogre::Quaternion Dp = Ogre::Quaternion::IDENTITY;
+                        const int pcArm = (c == 9) ? 8 : 12;   // elbow
+                        const auto& prq =
+                            cmuRestWorld[static_cast<size_t>(pcArm)];
+                        if (prq[0]*prq[0] + prq[1]*prq[1] + prq[2]*prq[2]
+                                + prq[3]*prq[3] > 0.25f) {
+                            const Ogre::Quaternion prefQ(prq[3], prq[0],
+                                                         prq[1], prq[2]);
+                            Dp = clipQ(f, pcArm) * prefQ.Inverse();
+                        }
+                        const Ogre::Quaternion Drel = Dp.Inverse() * Df;
+                        const Ogre::Quaternion WpBind = (pi >= 0)
+                            ? tb.bindWorld[static_cast<size_t>(pi)]
+                            : Ogre::Quaternion::IDENTITY;
+                        const Ogre::Quaternion forearmDelta =
+                            Wp * WpBind.Inverse();
                         const Ogre::Quaternion Wt =
-                            fingerBasisMap[side] * Dsrc
-                            * fingerBasisMap[side].Inverse()
+                            forearmDelta
+                            * (fingerBasisMap[side] * Drel
+                               * fingerBasisMap[side].Inverse())
                             * tb.bindWorld[static_cast<size_t>(i)];
                         local = Wp.Inverse() * Wt;
                         W[static_cast<size_t>(i)] = Wt;
