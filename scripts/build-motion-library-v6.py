@@ -581,6 +581,30 @@ def main():
     ap.add_argument("--max-per-action", type=int, default=12)
     args = ap.parse_args()
 
+    # Approved clip sources (used BOTH for the --approved-only ship gate and
+    # to let user curation override heuristic drops during extraction).
+    def _find_curation():
+        if args.curation:
+            return args.curation
+        home = os.path.expanduser("~")
+        for cand in (
+            os.path.join(home, "Library/Application Support/QtMeshEditor/"
+                               "QtMeshEditor/ai_models/motion/curation.json"),
+            os.path.join(home, "Library/Application Support/QtMeshEditor/"
+                               "ai_models/motion/curation.json"),
+            os.path.join(home, ".local/share/QtMeshEditor/QtMeshEditor/"
+                               "ai_models/motion/curation.json"),
+        ):
+            if os.path.exists(cand):
+                return cand
+        return None
+    _cur_path = _find_curation()
+    user_approved = set()
+    if _cur_path and os.path.exists(_cur_path):
+        user_approved = set(json.load(open(_cur_path)).get("approved", []))
+        print(f"curation: {len(user_approved)} approved sources "
+              f"(heuristic-drop override) from {_cur_path}")
+
     qtmesh = find_qtmesh(args.qtmesh)
     corpus = os.path.expanduser(args.corpus)
     manifest = {}
@@ -685,6 +709,18 @@ def main():
                             action, w, rest_world, rest_dir,
                             c.get("resolvedRoles", 0),
                             sum(e) / max(1, len(e)), args.min_energy)
+                        # USER CURATION OVERRIDES HEURISTICS: a clip the user
+                        # explicitly approved in the app must not be dropped
+                        # by a style/quality guess (the arm-hanging gate
+                        # rejected 4 approved clips after the importer fixes
+                        # changed the measured posture). License drops
+                        # (_excluded, earlier) still apply.
+                        src_key = f"{title} — {c.get('animation')}"
+                        if drop and src_key in user_approved:
+                            print(f"  ~ {action:<10} {title[:38]:<40}"
+                                  f" {c.get('animation')} KEPT (user-approved;"
+                                  f" heuristic said: {drop})")
+                            quality, drop = max(quality, 0.5), None
                         if drop:
                             print(f"  - {action:<10} {title[:38]:<40}"
                                   f" {c.get('animation')} DROPPED: {drop}")
