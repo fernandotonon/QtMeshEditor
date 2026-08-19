@@ -3793,6 +3793,43 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             srcDelta * Qbase[static_cast<size_t>(i)];
                         local = Wp.Inverse() * Wt;   // Wp == identity (root)
                         W[static_cast<size_t>(i)] = Wt;
+                    } else if (clipIsV2 && (c == 9 || c == 13)
+                        && fingerBasisOk[c == 9 ? 0 : 1]
+                        && haveRestWorld
+                        && cmuRestWorld[static_cast<size_t>(c)][0]
+                                * cmuRestWorld[static_cast<size_t>(c)][0]
+                            + cmuRestWorld[static_cast<size_t>(c)][1]
+                                * cmuRestWorld[static_cast<size_t>(c)][1]
+                            + cmuRestWorld[static_cast<size_t>(c)][2]
+                                * cmuRestWorld[static_cast<size_t>(c)][2]
+                            + cmuRestWorld[static_cast<size_t>(c)][3]
+                                * cmuRestWorld[static_cast<size_t>(c)][3]
+                            > 0.25f) {
+                        // HANDS via the self-calibrated hand-basis map. The
+                        // aim+twist path transports the hand's DIRECTION but
+                        // its ROLL rides the C≠Ct frame mismatch — the raised
+                        // arm renders palm-out ("rotated arm"). The hand-basis
+                        // map M (validated by the finger transport) carries
+                        // the FULL source hand orientation frame-safely:
+                        //     Wt(f) = M · [clipQ(f,c)·restQ(c)⁻¹] · M⁻¹ · Wbind
+                        // ABSOLUTE (not parent-relative) on purpose: the palm
+                        // must land where the source intended even when the
+                        // forearm chain carries residual roll — the wrist
+                        // skinning absorbs the difference, exactly like real
+                        // forearm-twist rigs do. Fingers (below) ride this
+                        // corrected hand as their parent.
+                        const int side = (c == 9) ? 0 : 1;
+                        const auto& rq = cmuRestWorld[static_cast<size_t>(c)];
+                        const Ogre::Quaternion refQ(rq[3], rq[0], rq[1],
+                                                    rq[2]);
+                        const Ogre::Quaternion Dsrc =
+                            clipQ(f, c) * refQ.Inverse();
+                        const Ogre::Quaternion Wt =
+                            fingerBasisMap[side] * Dsrc
+                            * fingerBasisMap[side].Inverse()
+                            * tb.bindWorld[static_cast<size_t>(i)];
+                        local = Wp.Inverse() * Wt;
+                        W[static_cast<size_t>(i)] = Wt;
                     } else if (clipIsV2
                         && c >= MotionInbetween::canonicalJointCount()) {
                         // #838 V2 FINGERS: STANDARD HIERARCHICAL bind-referenced
