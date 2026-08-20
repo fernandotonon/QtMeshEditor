@@ -3715,50 +3715,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     dref[static_cast<size_t>(c)] = CtInv * v;
                 }
             }
-            // LIMB STANCE CORRECTION (#951): collars/arms/legs/feet (6..21)
-            // pre-rotate the transported direction trajectory by a constant
-            // per-bone offset S so the clip's REST direction lands on the
-            // TARGET's bind direction:
-            //     S      = slerp(w; I → arc(dref → dt_bind))   (once per bone)
-            //     dir(f) = S · ds(f)
-            // Aiming a wide-shouldered/wide-hipped rig at a narrow rig's raw
-            // ABSOLUTE limb directions splays the arms and crosses the legs
-            // (user-reported on the low-poly jump → Rumba). But the source's
-            // restDir is its RIG BIND, which is NOT guaranteed to be a
-            // T-pose: game assets are sometimes authored with an action-pose
-            // bind (Gregorio's rig binds crouched — the buildloop legs stay
-            // 0–3° from rest for the whole clip), and anchoring that rest to
-            // the target bind would cancel the pose itself. The reliable
-            // per-bone separator is the clip's own ARTICULATION RANGE from
-            // rest: a bone that HOLDS near its rest is showing a pose (keep
-            // absolute aim — w→0 below kStanceHoldDeg), while a bone that
-            // swings far away treats rest as a stance reference (anchor it —
-            // w→1 above kStanceMoveDeg). Spine/neck/head (0..5) always keep
-            // absolute aim: torso posture and lean must be faithful to the
-            // clip.
-            auto isLimbRole = [](int c) { return c >= 6 && c <= 21; };
-            constexpr float kStanceHoldDeg = 15.0f;
-            constexpr float kStanceMoveDeg = 40.0f;
-            std::vector<Ogre::Quaternion> stanceS(
-                static_cast<size_t>(Jc), Ogre::Quaternion::IDENTITY);
-            std::vector<float> roleMaxDevDeg(static_cast<size_t>(Jc), 0.0f);
-            for (int c = 0; c < Jc; ++c) {
-                if (!isLimbRole(c)
-                    || srcLocalAxis[static_cast<size_t>(c)].squaredLength()
-                           <= 1e-8f)
-                    continue;
-                const auto& sd = clipRestDir[static_cast<size_t>(c)];
-                Ogre::Vector3 rest(sd[0], sd[1], sd[2]);
-                rest.normalise();
-                float maxDev = 0.0f;
-                for (int f = 0; f < frames; ++f) {
-                    const Ogre::Vector3 d =
-                        clipQ(f, c) * srcLocalAxis[static_cast<size_t>(c)];
-                    maxDev = std::max(
-                        maxDev, d.angleBetween(rest).valueDegrees());
-                }
-                roleMaxDevDeg[static_cast<size_t>(c)] = maxDev;
-            }
             std::vector<Ogre::Quaternion> Qbase(static_cast<size_t>(nBones),
                                                 Ogre::Quaternion::IDENTITY);
             for (int i = 0; i < nBones; ++i) {
@@ -3770,23 +3726,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         tb.tgtBindDir[static_cast<size_t>(c)]
                             .getRotationTo(dref[static_cast<size_t>(c)])
                         * tb.bindWorld[static_cast<size_t>(i)];
-                    if (isLimbRole(c)) {
-                        const float w = std::clamp(
-                            (roleMaxDevDeg[static_cast<size_t>(c)]
-                             - kStanceHoldDeg)
-                                / (kStanceMoveDeg - kStanceHoldDeg),
-                            0.0f, 1.0f);
-                        if (w > 1e-4f)
-                            stanceS[static_cast<size_t>(c)] =
-                                Ogre::Quaternion::Slerp(
-                                    w, Ogre::Quaternion::IDENTITY,
-                                    dref[static_cast<size_t>(c)]
-                                        .getRotationTo(
-                                            tb.tgtBindDir
-                                                [static_cast<size_t>(c)]
-                                                    .normalisedCopy()),
-                                    true);
-                    }
                     // NOTE (2026-08-02 investigation): this minimal-arc baseline
                     // keeps the TARGET-BIND's roll about the bone axis, dropping
                     // the roll of the source's bind→reference rotation — the
@@ -4027,13 +3966,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                              * srcLocalAxis[static_cast<size_t>(c)]);
                         const Ogre::Quaternion R =
                             dref[static_cast<size_t>(c)].getRotationTo(ds);
-                        // Limb stance correction (see stanceS above): the
-                        // graded offset composes OUTSIDE the matched-pole
-                        // swing, so dir = S·ds and S=I degrades to the plain
-                        // absolute aim.
                         Ogre::Quaternion Wt =
-                            stanceS[static_cast<size_t>(c)] * R
-                            * Qbase[static_cast<size_t>(i)];
+                            R * Qbase[static_cast<size_t>(i)];
                         // #857: re-apply the source's roll about the aimed
                         // direction (the swing above deliberately dropped it).
                         // (A hierarchical "exact twist" hybrid and a source-
@@ -4047,11 +3981,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                                                    [static_cast<size_t>(c)]
                                          * twistGainAt(c);
                         if (std::abs(th) > 1e-5f) {
-                            // Limb stance correction: the bone's actual
-                            // direction is S·ds — twist about the real axis
-                            // (S is identity for non-limb roles).
-                            Ogre::Vector3 axis =
-                                stanceS[static_cast<size_t>(c)] * ds;
+                            Ogre::Vector3 axis = ds;
                             axis.normalise();
                             Wt = Ogre::Quaternion(Ogre::Radian(th), axis) * Wt;
                         }
