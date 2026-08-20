@@ -12,6 +12,8 @@ The MIT License
 #define POSELIBRARY_H
 
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QQmlEngine>
 #include <QSet>
@@ -118,6 +120,40 @@ public:
     /// Selection wrappers — same pattern as save/apply/delete.
     Q_INVOKABLE bool savePoseLibraryForSelection(const QString& filePath) const;
     Q_INVOKABLE bool loadPoseLibraryForSelection(const QString& filePath);
+
+    /// Scene-level persistence (#521 follow-up). A `.poselib` written
+    /// by `savePoseLibrary` holds ONE entity's poses; a scene export
+    /// has many entities, so the scene sidecar nests each entity's
+    /// library under the name of the SCENE NODE it hangs from:
+    ///
+    ///   { "schema": "qtmesheditor.poselib.v1",
+    ///     "entities": [ { "node": "Hero", "poses": [ ... ] },
+    ///                   { "node": "Guard", "poses": [ ... ] } ] }
+    ///
+    /// The node name is the key because that is what `sceneExporter`
+    /// writes into the glTF and what `sceneImporter` recreates — the
+    /// Entity POINTER obviously can't survive a reload, and entity
+    /// names are not guaranteed unique across a scene the way node
+    /// names are.
+    ///
+    /// `entities` and the single-entity `poses` are BOTH optional and
+    /// may coexist, so the two writers share one schema version and an
+    /// old single-entity sidecar still loads (see `loadPoseLibrary`).
+    ///
+    /// `nodesToEntities` maps scene-node name → the entity to read
+    /// from / write to. Returns false on write error or when no
+    /// entity in the map has any poses (nothing to persist).
+    bool saveSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                            const QString& filePath) const;
+
+    /// Read a scene sidecar and restore each named node's library onto
+    /// the matching entity. Nodes present in the file but absent from
+    /// `nodesToEntities` are skipped (the scene changed since export);
+    /// entities present in the map but absent from the file are left
+    /// untouched. Returns the number of entities whose library was
+    /// restored, or -1 on read/parse/schema error.
+    int loadSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                           const QString& filePath);
 
     /// Mirror a saved pose across the YZ plane (X = symmetry axis,
     /// the convention every common rig follows). Reads `srcName`
@@ -375,6 +411,27 @@ private:
     bool storePose(Ogre::Entity* entity,
                    const QString& name,
                    const PoseSnapshot& snapshot);
+
+    /// Serialise one entity's library to the `poses` JSON array shape
+    /// shared by the single-entity and scene sidecars. Empty array
+    /// when the entity has nothing saved.
+    QJsonArray posesToJson(Ogre::Entity* entity) const;
+
+    /// Inverse of `posesToJson`. Returns the parsed library; the
+    /// caller decides whether to commit it (so a partly-bad file
+    /// can't half-overwrite an existing library).
+    static EntityPoses posesFromJson(const QJsonArray& poses);
+
+    /// Swap `staging` in as `entity`'s library, drop that entity's
+    /// stale thumbnails + any in-flight blend, and emit posesChanged.
+    /// Shared by the single-entity and scene loaders so both get the
+    /// same all-or-nothing replacement semantics.
+    void commitLoadedLibrary(Ogre::Entity* entity, const EntityPoses& staging);
+
+    /// Read + parse a sidecar and verify its schema. Returns false
+    /// (leaving `root` untouched) on any read/parse/schema failure so
+    /// callers can bail before mutating in-memory state.
+    static bool readSidecarRoot(const QString& filePath, QJsonObject& root);
 
     /// Read the live skeleton into a snapshot. Returns an empty
     /// snapshot when the entity has no skeleton.

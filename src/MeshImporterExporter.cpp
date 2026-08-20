@@ -2745,6 +2745,38 @@ static void loadPoseLibrarySidecar(const QString& meshPath, Ogre::Entity* en)
     lib->loadPoseLibrary(en, sidecarPath);
 }
 
+// Scene variants (#521 follow-up). A scene export has many entities and
+// one file, so the sidecar nests each entity's library under its SCENE
+// NODE name (see PoseLibrary::saveSceneLibraries). Same path convention
+// as the single-entity sidecar: `foo.scene.glb` -> `foo.scene.poselib`.
+static void writeScenePoseLibrarySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty()) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(scenePath);
+    // saveSceneLibraries returns false when NO entity has poses; drop any
+    // stale sidecar in that case so a cleared library doesn't resurrect.
+    if (!lib->saveSceneLibraries(nodesToEntities, sidecarPath))
+        QFile::remove(sidecarPath);
+}
+
+static void loadScenePoseLibrarySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty() || nodesToEntities.isEmpty()) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(scenePath);
+    if (!QFileInfo::exists(sidecarPath)) return;
+    // Validates schema + payload before touching any in-memory library,
+    // so a malformed sidecar is a no-op rather than a wipe.
+    lib->loadSceneLibraries(nodesToEntities, sidecarPath);
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -5183,6 +5215,20 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
                                             /*isBinary=*/formatId == "glb2");
         }
 
+        // Pose libraries have no representation in any mesh format, and a
+        // scene has many entities, so they go in a sidecar keyed by scene
+        // node name (#521). Written unconditionally: the helper removes a
+        // stale sidecar when nothing has poses.
+        {
+            QHash<QString, Ogre::Entity*> nodesToEntities;
+            for (const auto& [snPair, entityPair] : entities) {
+                if (snPair && entityPair)
+                    nodesToEntities.insert(QString::fromStdString(snPair->getName()),
+                                           entityPair);
+            }
+            writeScenePoseLibrarySidecar(_uri, nodesToEntities);
+        }
+
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
         // (same strategy as FBX export) so user-added lights always round-trip.
         if (!SceneLightsIO::writeLightsSidecar(_uri))
@@ -5246,6 +5292,9 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     emit manager->sceneClearing();  // let listeners clean up before nodes are destroyed
     if (auto* lights = LightManager::getSingletonPtr())
         lights->deleteAllUserLights();
+    // node name -> entity, filled as we build the scene; consumed by the
+    // pose-library sidecar load after the loop (#521).
+    QHash<QString, Ogre::Entity*> sceneNodeEntities;
     auto sceneNodesCopy = manager->getSceneNodes();
     for (auto* sn : sceneNodesCopy)
         manager->destroySceneNode(sn);
@@ -5609,10 +5658,20 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             // Select the entity so a reconstructed node clip appears in the
             // Animations list / dope sheet without a manual select (#517).
             selectEntityIfHasNodeClip(sn);
+
+            // Collect for the pose-library sidecar below — it keys each
+            // entity's library by SCENE NODE name (#521).
+            if (nodeEnt) sceneNodeEntities.insert(nodeName, nodeEnt);
         }
 
         if (!SceneLightsIO::importLightsSidecar(_uri, true))
             SceneLightsIO::importFromAssimpScene(scene, true);
+
+        // Restore each entity's named-pose library from the scene's
+        // `.poselib` sidecar (#521). No mesh format can carry a pose
+        // library, so this is what makes Save Scene / Open Scene keep
+        // them. Missing sidecar returns -1 and is a silent no-op.
+        loadScenePoseLibrarySidecar(_uri, sceneNodeEntities);
 
         return true;
     } catch (Ogre::Exception& e) {

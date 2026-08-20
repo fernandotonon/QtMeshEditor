@@ -611,15 +611,13 @@ constexpr const char* kPoseLibSchemaV1 = "qtmesheditor.poselib.v1";
 
 } // namespace
 
-bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath) const
+QJsonArray PoseLibrary::posesToJson(Ogre::Entity* entity) const
 {
-    assertMainThread();
-    if (!entity || filePath.isEmpty()) return false;
-    auto entIt = m_byEntity.constFind(entity);
-    if (entIt == m_byEntity.constEnd()) return false;
-    if (entIt->order.isEmpty()) return false;
-
     QJsonArray poses;
+    auto entIt = m_byEntity.constFind(entity);
+    if (entIt == m_byEntity.constEnd()) return poses;
+    // Iterate `order`, not `byName`, so the file preserves the
+    // author's save order rather than hash-bucket order.
     for (const QString& name : entIt->order) {
         auto poseIt = entIt->byName.constFind(name);
         if (poseIt == entIt->byName.constEnd()) continue;
@@ -638,6 +636,60 @@ bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath)
         poseObj["bones"] = bones;
         poses.append(poseObj);
     }
+    return poses;
+}
+
+PoseLibrary::EntityPoses PoseLibrary::posesFromJson(const QJsonArray& poses)
+{
+    auto readVec3 = [](const QJsonArray& a, const Ogre::Vector3& def) -> Ogre::Vector3 {
+        if (a.size() != 3) return def;
+        return Ogre::Vector3(static_cast<Ogre::Real>(a[0].toDouble()),
+                             static_cast<Ogre::Real>(a[1].toDouble()),
+                             static_cast<Ogre::Real>(a[2].toDouble()));
+    };
+    auto readQuat = [](const QJsonArray& a, const Ogre::Quaternion& def) -> Ogre::Quaternion {
+        if (a.size() != 4) return def;
+        return Ogre::Quaternion(static_cast<Ogre::Real>(a[0].toDouble()),
+                                static_cast<Ogre::Real>(a[1].toDouble()),
+                                static_cast<Ogre::Real>(a[2].toDouble()),
+                                static_cast<Ogre::Real>(a[3].toDouble()));
+    };
+
+    EntityPoses staging;
+    for (const QJsonValue& p : poses) {
+        if (!p.isObject()) continue;
+        const QJsonObject pObj = p.toObject();
+        const QString name = pObj.value("name").toString();
+        if (name.isEmpty()) continue;
+        PoseSnapshot snapshot;
+        const QJsonObject bones = pObj.value("bones").toObject();
+        for (auto it = bones.constBegin(); it != bones.constEnd(); ++it) {
+            const QJsonObject boneObj = it.value().toObject();
+            BonePoseSnapshot trs;
+            trs.translate = readVec3(boneObj.value("t").toArray(), Ogre::Vector3::ZERO);
+            trs.rotation = readQuat(boneObj.value("r").toArray(), Ogre::Quaternion::IDENTITY);
+            trs.scale = readVec3(boneObj.value("s").toArray(), Ogre::Vector3(1, 1, 1));
+            snapshot.insert(it.key(), trs);
+        }
+        // Only append `order` on first sighting so duplicate entries in
+        // the file don't leave phantom names that survive a deletePose
+        // (Codex P2 on PR #602). Later duplicates overwrite the snapshot.
+        const bool isFirstSighting = !staging.byName.contains(name);
+        staging.byName.insert(name, snapshot);
+        if (isFirstSighting) staging.order.append(name);
+    }
+    return staging;
+}
+
+bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath) const
+{
+    assertMainThread();
+    if (!entity || filePath.isEmpty()) return false;
+    auto entIt = m_byEntity.constFind(entity);
+    if (entIt == m_byEntity.constEnd()) return false;
+    if (entIt->order.isEmpty()) return false;
+
+    const QJsonArray poses = posesToJson(entity);
 
     QJsonObject root;
     root["schema"] = kPoseLibSchemaV1;
@@ -660,81 +712,15 @@ bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath)
     return true;
 }
 
-bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
+void PoseLibrary::commitLoadedLibrary(Ogre::Entity* entity,
+                                      const EntityPoses& staging)
 {
-    assertMainThread();
-    if (!entity || filePath.isEmpty()) return false;
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) return false;
-    const QByteArray bytes = file.readAll();
-    file.close();
-    QJsonParseError parseError{};
-    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
-    if (parseError.error != QJsonParseError::NoError) return false;
-    if (!doc.isObject()) return false;
-    const QJsonObject root = doc.object();
-    if (root.value("schema").toString() != QString::fromLatin1(kPoseLibSchemaV1))
-        return false;
-    // Codex P1 on PR #602: validate the payload shape BEFORE wiping
-    // the in-memory library. A schema-matching file with `poses`
-    // missing or non-array would otherwise silently drop the user's
-    // existing data and return success.
-    const QJsonValue posesV = root.value("poses");
-    if (!posesV.isArray()) return false;
-    const QJsonArray poses = posesV.toArray();
-
-    auto readVec3 = [](const QJsonArray& a, const Ogre::Vector3& def) -> Ogre::Vector3 {
-        if (a.size() != 3) return def;
-        return Ogre::Vector3(static_cast<Ogre::Real>(a[0].toDouble()),
-                             static_cast<Ogre::Real>(a[1].toDouble()),
-                             static_cast<Ogre::Real>(a[2].toDouble()));
-    };
-    auto readQuat = [](const QJsonArray& a, const Ogre::Quaternion& def) -> Ogre::Quaternion {
-        if (a.size() != 4) return def;
-        return Ogre::Quaternion(static_cast<Ogre::Real>(a[0].toDouble()),
-                                static_cast<Ogre::Real>(a[1].toDouble()),
-                                static_cast<Ogre::Real>(a[2].toDouble()),
-                                static_cast<Ogre::Real>(a[3].toDouble()));
-    };
-
-    // Build the new library entry off to the side so any parse
-    // failure leaves the in-memory store untouched.
-    EntityPoses staging;
-    for (const QJsonValue& p : poses) {
-        if (!p.isObject()) continue;
-        const QJsonObject pObj = p.toObject();
-        const QString name = pObj.value("name").toString();
-        if (name.isEmpty()) continue;
-        PoseSnapshot snapshot;
-        const QJsonObject bones = pObj.value("bones").toObject();
-        for (auto it = bones.constBegin(); it != bones.constEnd(); ++it) {
-            const QJsonObject boneObj = it.value().toObject();
-            BonePoseSnapshot trs;
-            trs.translate = readVec3(boneObj.value("t").toArray(),
-                                      Ogre::Vector3::ZERO);
-            trs.rotation = readQuat(boneObj.value("r").toArray(),
-                                     Ogre::Quaternion::IDENTITY);
-            trs.scale = readVec3(boneObj.value("s").toArray(),
-                                  Ogre::Vector3(1, 1, 1));
-            snapshot.insert(it.key(), trs);
-        }
-        // Codex P2 on PR #602: only append `order` on first sighting
-        // of the name so duplicate entries in the file don't leave
-        // `order` with phantom names that survive a `deletePose`.
-        // Later occurrences of the same name overwrite the snapshot
-        // (last-write-wins) like a regular `savePose` does.
-        const bool isFirstSighting = !staging.byName.contains(name);
-        staging.byName.insert(name, snapshot);
-        if (isFirstSighting) staging.order.append(name);
-    }
-
-    // All-or-nothing replacement: now we know the file parsed
-    // cleanly, swap the per-entity entry. Partial overlay would be
-    // confusing UX (which pose wins on name collision?), so we go
-    // with replacement.
+    // All-or-nothing replacement: the caller has already parsed
+    // successfully. Partial overlay would be confusing UX (which pose
+    // wins on name collision?), so we replace.
     m_byEntity.insert(entity, staging);
-    // Every pose on this entity just changed content, so every
-    // cached render of it is stale.
+    // Every pose on this entity just changed content, so every cached
+    // render of it is stale.
     const QString thumbPrefix = QStringLiteral("%1/")
         .arg(reinterpret_cast<quintptr>(entity));
     for (auto it = m_thumbCache.begin(); it != m_thumbCache.end(); ) {
@@ -743,12 +729,134 @@ bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
     }
     // A blend targeting the old library's pose is meaningless now.
     m_blends.remove(entity);
+    emit posesChanged(entity);
+}
+
+// Read + parse a sidecar down to its root object. Returns false (and
+// leaves `root` untouched) on any read / parse / schema failure, so
+// callers can bail BEFORE mutating in-memory state.
+bool PoseLibrary::readSidecarRoot(const QString& filePath, QJsonObject& root)
+{
+    if (filePath.isEmpty()) return false;
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    file.close();
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError) return false;
+    if (!doc.isObject()) return false;
+    const QJsonObject obj = doc.object();
+    if (obj.value("schema").toString() != QString::fromLatin1(kPoseLibSchemaV1))
+        return false;
+    root = obj;
+    return true;
+}
+
+bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
+{
+    assertMainThread();
+    if (!entity) return false;
+    QJsonObject root;
+    if (!readSidecarRoot(filePath, root)) return false;
+    // Codex P1 on PR #602: validate the payload shape BEFORE wiping the
+    // in-memory library. A schema-matching file with `poses` missing or
+    // non-array would otherwise silently drop the user's existing data
+    // and return success.
+    const QJsonValue posesV = root.value("poses");
+    if (!posesV.isArray()) return false;
+
+    const EntityPoses staging = posesFromJson(posesV.toArray());
+    commitLoadedLibrary(entity, staging);
 
     SentryReporter::addBreadcrumb("file.import",
         QStringLiteral("load library from '%1' (%2 poses)")
             .arg(filePath).arg(staging.order.size()));
-    emit posesChanged(entity);
     return true;
+}
+
+bool PoseLibrary::saveSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                                     const QString& filePath) const
+{
+    assertMainThread();
+    if (filePath.isEmpty()) return false;
+
+    // Sort the node names so the file is byte-stable across runs —
+    // QHash iteration order is randomised per process, and an
+    // export that reshuffles its own sidecar every time is hostile
+    // to version control.
+    QStringList nodeNames = nodesToEntities.keys();
+    nodeNames.sort();
+
+    QJsonArray entitiesJson;
+    int totalPoses = 0;
+    for (const QString& nodeName : nodeNames) {
+        Ogre::Entity* entity = nodesToEntities.value(nodeName, nullptr);
+        if (!entity) continue;
+        const QJsonArray poses = posesToJson(entity);
+        if (poses.isEmpty()) continue;   // nothing saved on this entity
+        QJsonObject entry;
+        entry["node"] = nodeName;
+        entry["poses"] = poses;
+        entitiesJson.append(entry);
+        totalPoses += poses.size();
+    }
+    // Nothing to persist — report failure so the caller can remove a
+    // stale sidecar rather than writing an empty one.
+    if (entitiesJson.isEmpty()) return false;
+
+    QJsonObject root;
+    root["schema"] = kPoseLibSchemaV1;
+    root["entities"] = entitiesJson;
+
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    if (file.write(QJsonDocument(root).toJson(QJsonDocument::Indented)) < 0) {
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) return false;
+
+    SentryReporter::addBreadcrumb("file.export",
+        QStringLiteral("save scene libraries to '%1' (%2 entities, %3 poses)")
+            .arg(filePath).arg(entitiesJson.size()).arg(totalPoses));
+    return true;
+}
+
+int PoseLibrary::loadSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                                    const QString& filePath)
+{
+    assertMainThread();
+    QJsonObject root;
+    if (!readSidecarRoot(filePath, root)) return -1;
+    const QJsonValue entitiesV = root.value("entities");
+    if (!entitiesV.isArray()) return -1;
+    const QJsonArray entityEntries = entitiesV.toArray();
+
+    // Parse EVERYTHING first, then commit. A malformed entry halfway
+    // through must not leave some entities restored and others not.
+    QList<QPair<Ogre::Entity*, EntityPoses>> pending;
+    for (const QJsonValue& ev : entityEntries) {
+        if (!ev.isObject()) continue;
+        const QJsonObject entry = ev.toObject();
+        const QString nodeName = entry.value("node").toString();
+        if (nodeName.isEmpty()) continue;
+        Ogre::Entity* entity = nodesToEntities.value(nodeName, nullptr);
+        // Node in the file but not in this scene — the scene changed
+        // since export. Skip rather than fail the whole load.
+        if (!entity) continue;
+        const QJsonValue posesV = entry.value("poses");
+        if (!posesV.isArray()) continue;
+        pending.append({entity, posesFromJson(posesV.toArray())});
+    }
+
+    for (const auto& [entity, staging] : pending)
+        commitLoadedLibrary(entity, staging);
+
+    SentryReporter::addBreadcrumb("file.import",
+        QStringLiteral("load scene libraries from '%1' (%2 of %3 entities matched)")
+            .arg(filePath).arg(pending.size()).arg(entityEntries.size()));
+    return static_cast<int>(pending.size());
 }
 
 namespace {

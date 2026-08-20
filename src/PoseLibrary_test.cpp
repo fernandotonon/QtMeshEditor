@@ -1186,3 +1186,172 @@ TEST_F(PoseLibrarySceneTest, LoadingLibraryDropsInFlightBlend) {
     EXPECT_FALSE(lib->isBlending(entity));
     EXPECT_EQ(lib->tickBlend(1.0f), 0);
 }
+
+// =============================================================================
+// Scene-level sidecar — per-entity libraries in ONE file (#521 follow-up)
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, SceneLibrariesRoundTripPerEntity) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/scene.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Distinct libraries on the two entities.
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(1, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(2, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A2")));
+    b->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+    map.insert(QStringLiteral("NodeB"), b);
+    ASSERT_TRUE(lib->saveSceneLibraries(map, path));
+
+    // Simulate reopen.
+    lib->clearAll();
+    ASSERT_TRUE(lib->listPoses(a).isEmpty());
+    ASSERT_TRUE(lib->listPoses(b).isEmpty());
+
+    EXPECT_EQ(lib->loadSceneLibraries(map, path), 2);
+    // Each entity got ITS OWN poses back — not a merged pile.
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"A1", "A2"}));
+    EXPECT_EQ(lib->listPoses(b), (QStringList{"B1"}));
+
+    // And the values are right, not just the names.
+    ASSERT_TRUE(lib->applyPose(b, QStringLiteral("B1")));
+    EXPECT_NEAR(b->getSkeleton()->getBone(0)->getPosition().x, 7.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, SceneSaveRefusesWhenNoEntityHasPoses) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/empty.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneEmpty");
+    ASSERT_NE(a, nullptr);
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+
+    // Nothing saved -> refuse, so the caller can drop a stale sidecar
+    // instead of writing an empty one.
+    EXPECT_FALSE(PoseLibrary::instance()->saveSceneLibraries(map, path));
+    EXPECT_FALSE(QFile::exists(path));
+}
+
+TEST_F(PoseLibrarySceneTest, SceneLoadSkipsNodesMissingFromScene) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/scene.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneKeepA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneDropB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> full;
+    full.insert(QStringLiteral("NodeA"), a);
+    full.insert(QStringLiteral("NodeB"), b);
+    ASSERT_TRUE(lib->saveSceneLibraries(full, path));
+    lib->clearAll();
+
+    // Reopen a scene that no longer has NodeB — the load must restore
+    // what it can rather than failing outright.
+    QHash<QString, Ogre::Entity*> partial;
+    partial.insert(QStringLiteral("NodeA"), a);
+    EXPECT_EQ(lib->loadSceneLibraries(partial, path), 1);
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"A1"}));
+    EXPECT_TRUE(lib->listPoses(b).isEmpty());
+}
+
+TEST_F(PoseLibrarySceneTest, SceneLoadRejectsMalformedAndMissingFiles) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneBad");
+    ASSERT_NE(a, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("Keep")));
+
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+
+    EXPECT_EQ(lib->loadSceneLibraries(map, tmp.path() + "/nope.poselib"), -1);
+    {   // malformed JSON
+        const QString p = tmp.path() + "/bad.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{ not json"); f.close();
+        EXPECT_EQ(lib->loadSceneLibraries(map, p), -1);
+    }
+    {   // right schema, `entities` not an array
+        const QString p = tmp.path() + "/shape.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(R"({"schema":"qtmesheditor.poselib.v1","entities":42})");
+        f.close();
+        EXPECT_EQ(lib->loadSceneLibraries(map, p), -1);
+    }
+    // Every failure left the existing library untouched.
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"Keep"}));
+}
+
+TEST_F(PoseLibrarySceneTest, SceneSidecarIsByteStableAcrossRuns) {
+    // QHash iteration order is randomised per process; an export that
+    // reshuffles its own sidecar every run is hostile to version control.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneStableA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneStableB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> m1;
+    m1.insert(QStringLiteral("Zeta"), a);
+    m1.insert(QStringLiteral("Alpha"), b);
+    const QString p1 = tmp.path() + "/one.poselib";
+    ASSERT_TRUE(lib->saveSceneLibraries(m1, p1));
+
+    // Same content, keys inserted in the opposite order.
+    QHash<QString, Ogre::Entity*> m2;
+    m2.insert(QStringLiteral("Alpha"), b);
+    m2.insert(QStringLiteral("Zeta"), a);
+    const QString p2 = tmp.path() + "/two.poselib";
+    ASSERT_TRUE(lib->saveSceneLibraries(m2, p2));
+
+    QFile f1(p1), f2(p2);
+    ASSERT_TRUE(f1.open(QIODevice::ReadOnly));
+    ASSERT_TRUE(f2.open(QIODevice::ReadOnly));
+    EXPECT_EQ(f1.readAll(), f2.readAll());
+}
+
+TEST_F(PoseLibrarySceneTest, SingleEntitySidecarStillLoadsAfterSchemaShare) {
+    // The scene writer added an `entities` block under the SAME schema
+    // string. An old single-entity file (only `poses`) must still load.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/legacy.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_Legacy");
+    ASSERT_NE(a, nullptr);
+    auto* lib = PoseLibrary::instance();
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("Old")));
+    ASSERT_TRUE(lib->savePoseLibrary(a, path));
+
+    lib->clearAll();
+    ASSERT_TRUE(lib->loadPoseLibrary(a, path));
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"Old"}));
+    ASSERT_TRUE(lib->applyPose(a, QStringLiteral("Old")));
+    EXPECT_NEAR(a->getSkeleton()->getBone(0)->getPosition().x, 3.0f, 1e-4f);
+}
