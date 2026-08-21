@@ -470,22 +470,22 @@ TexturePaintController::TexturePaintController(QObject* parent)
         reloadActiveRamp();
     }
 
-    // Restore Paint v2 Slice E (#548) symmetry + stabilizer preferences.
+    // Restore Paint v2 Slice E (#548) symmetry axis sub-preferences. Symmetry
+    // itself is ALWAYS OFF at startup — it's a transient painting mode, not a
+    // sticky preference, so it never persists across sessions (the enabled flag
+    // is deliberately not restored). Local/World and the stabilizer no longer
+    // have UI; they keep sane defaults (local space, stabilizer off).
     {
         QSettings s;
-        m_symmetryEnabled = s.value(AppSettingsKeys::paintSymmetryEnabled(), false).toBool();
-        m_symmetrySpace = (s.value(AppSettingsKeys::paintSymmetrySpace(),
-                                   static_cast<int>(SymLocal)).toInt() == static_cast<int>(SymWorld))
-                              ? SymWorld : SymLocal;
+        m_symmetryEnabled = false;
+        m_symmetrySpace = SymLocal;
         m_symmetryAxes = s.value(AppSettingsKeys::paintSymmetryAxes(),
                                  static_cast<int>(SymAxisX)).toInt()
                          & (SymAxisX | SymAxisY | SymAxisZ);
+        if (m_symmetryAxes == SymAxisNone) m_symmetryAxes = SymAxisX;
         m_topologyMirror = s.value(AppSettingsKeys::paintTopologyMirror(), true).toBool();
-        m_stabilizerMode = (s.value(AppSettingsKeys::paintStabilizerMode(),
-                                    static_cast<int>(StabAverage)).toInt() == static_cast<int>(StabTrail))
-                               ? StabTrail : StabAverage;
-        m_stabilizerAmount = std::clamp(
-            s.value(AppSettingsKeys::paintStabilizerAmount(), 0.0).toDouble(), 0.0, 100.0);
+        m_stabilizerMode = StabAverage;
+        m_stabilizerAmount = 0.0;
     }
 
     {
@@ -659,7 +659,7 @@ void TexturePaintController::setSymmetryEnabled(bool on)
     m_symmetryEnabled = on;
     // Enabling with no axes set defaults to local X (the modelling convention).
     if (on && m_symmetryAxes == SymAxisNone) m_symmetryAxes = SymAxisX;
-    QSettings().setValue(AppSettingsKeys::paintSymmetryEnabled(), m_symmetryEnabled);
+    // Deliberately NOT persisted — symmetry always starts OFF each session.
     SentryReporter::addBreadcrumb("paint.symmetry",
         QStringLiteral("enabled=%1 space=%2 axes=%3 topo=%4")
             .arg(m_symmetryEnabled).arg(static_cast<int>(m_symmetrySpace))
