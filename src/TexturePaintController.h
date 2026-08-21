@@ -183,7 +183,9 @@ public:
         SymAxisY = 2,
         SymAxisZ = 4,
     };
-    Q_FLAG(SymmetryAxis)
+    Q_DECLARE_FLAGS(SymmetryAxes, SymmetryAxis)
+    Q_FLAG(SymmetryAxes)
+    Q_ENUM(SymmetryAxis)
 
     /// Paint v2 Slice E (#548) — line-stabilizer smoothing mode.
     enum StabilizerMode {

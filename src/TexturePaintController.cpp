@@ -482,7 +482,10 @@ TexturePaintController::TexturePaintController(QObject* parent)
         m_symmetryAxes = s.value(AppSettingsKeys::paintSymmetryAxes(),
                                  static_cast<int>(SymAxisX)).toInt()
                          & (SymAxisX | SymAxisY | SymAxisZ);
-        if (m_symmetryAxes == SymAxisNone) m_symmetryAxes = SymAxisX;
+        if (m_symmetryAxes == SymAxisNone) {
+            m_symmetryAxes = SymAxisX;   // persist the default so it round-trips
+            s.setValue(AppSettingsKeys::paintSymmetryAxes(), m_symmetryAxes);
+        }
         m_topologyMirror = s.value(AppSettingsKeys::paintTopologyMirror(), true).toBool();
         m_stabilizerMode = StabAverage;
         m_stabilizerAmount = 0.0;
@@ -723,6 +726,8 @@ void TexturePaintController::setStabilizerAmount(double amount)
     if (std::abs(amount - m_stabilizerAmount) < 1e-6) return;
     m_stabilizerAmount = amount;
     QSettings().setValue(AppSettingsKeys::paintStabilizerAmount(), m_stabilizerAmount);
+    SentryReporter::addBreadcrumb("paint.stabilizer",
+        QStringLiteral("amount=%1").arg(m_stabilizerAmount, 0, 'f', 0));
     emit stabilizerChanged();
 }
 
@@ -5011,9 +5016,10 @@ bool TexturePaintController::uvForLocalPoint(const Ogre::Vector3& local,
                                              float* outBary) const
 {
     if (!m_paintMesh) return false;
-    const float maxExtent = std::max({m_paintMesh->calculateBounds().getSize().x,
-                                      m_paintMesh->calculateBounds().getSize().y,
-                                      m_paintMesh->calculateBounds().getSize().z, 1e-4f});
+    // calculateBounds() is O(V); call it once (not thrice) — this runs per
+    // mirror dab on the stroke path (CodeRabbit perf).
+    const Ogre::Vector3 boundsSize = m_paintMesh->calculateBounds().getSize();
+    const float maxExtent = std::max({boundsSize.x, boundsSize.y, boundsSize.z, 1e-4f});
     // Accept a triangle whose plane the point is within `planeTol` of; among all
     // such (and their in-triangle projections) keep the closest 3D distance.
     const float planeTol = maxExtent * 5e-2f;   // generous — mirror point rarely on-surface
@@ -5082,14 +5088,22 @@ TexturePaintController::mirrorLocalPoints(const Ogre::Vector3& primaryLocal) con
 
     // For WORLD space, reflect about the plane through the entity's derived
     // origin: local → world, reflect world coord, world → local.
-    Ogre::Matrix4 toWorld, toLocal;
+    Ogre::Matrix4 toWorld = Ogre::Matrix4::IDENTITY;
+    Ogre::Matrix4 toLocal = Ogre::Matrix4::IDENTITY;
     Ogre::Vector3 worldPivot = m_symmetryPivotLocal;
-    const bool world = (m_symmetrySpace == SymWorld);
-    if (world && m_paintMeshEntity && m_paintMeshEntity->getParentSceneNode()) {
-        auto* node = m_paintMeshEntity->getParentSceneNode();
-        toWorld = node->_getFullTransform();
-        toLocal = toWorld.inverse();
-        worldPivot = node->_getDerivedPosition();
+    // World space needs the entity's transform; if it (or its node) is missing
+    // fall back to LOCAL so we never reflect through an uninitialized matrix
+    // (which would send dabs to arbitrary UVs) — CodeRabbit.
+    bool world = (m_symmetrySpace == SymWorld);
+    if (world) {
+        auto* node = m_paintMeshEntity ? m_paintMeshEntity->getParentSceneNode() : nullptr;
+        if (node) {
+            toWorld = node->_getFullTransform();
+            toLocal = toWorld.inverse();
+            worldPivot = node->_getDerivedPosition();
+        } else {
+            world = false;   // fall back to local reflection about the mesh pivot
+        }
     }
 
     const Ogre::Vector3 basis = world
@@ -5221,6 +5235,20 @@ void TexturePaintController::applyBrushSymmetryDabs(const Ogre::Vector2& primary
     }
     const bool canSegment = m_tool != ToolFill && m_tool != ToolColorPicker
                             && m_tool != ToolSmartSelect;
+
+    // The mirror dabs go through paintBrushAlongSegment/applyBrushAtUV, which
+    // advance the PRIMARY stroke-path state (m_strokePathLength / dir / prevUV /
+    // stamp-dab length) from the mirror UV — those UVs are far from the primary,
+    // so without isolation the gradient-along-stroke colour, stamp spacing and
+    // direction-following stamp rotation of the *primary* path would corrupt
+    // (CodeRabbit). Snapshot that state, let the mirror dabs run, then restore —
+    // each mirror subset keeps its own continuity via m_mirrorPrevUV instead.
+    const float          savedPathLen   = m_strokePathLength;
+    const float          savedStampLen  = m_lastStampDabPathLength;
+    const Ogre::Vector2  savedDir       = m_strokeDirSmoothed;
+    const Ogre::Vector2  savedPrevUV    = m_strokePrevUV;
+    const bool           savedHavePrev  = m_strokeHavePrevUV;
+
     int idx = 0;
     for (int subset = 1; subset <= (SymAxisX | SymAxisY | SymAxisZ); ++subset) {
         if ((subset & m_symmetryAxes) != subset) continue;
@@ -5238,6 +5266,13 @@ void TexturePaintController::applyBrushSymmetryDabs(const Ogre::Vector2& primary
         }
         ++idx;
     }
+
+    // Restore the primary stroke-path state the mirror dabs perturbed.
+    m_strokePathLength        = savedPathLen;
+    m_lastStampDabPathLength  = savedStampLen;
+    m_strokeDirSmoothed       = savedDir;
+    m_strokePrevUV            = savedPrevUV;
+    m_strokeHavePrevUV        = savedHavePrev;
 }
 
 void TexturePaintController::invalidateSymmetryMaps()

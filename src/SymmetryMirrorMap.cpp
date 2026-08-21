@@ -62,6 +62,12 @@ bool SymmetryMirrorMap::build(const EditableMesh& mesh, int axisBit,
     m_faceByVerts.clear();
     m_submeshBase.clear();
 
+    // Reject anything but a single canonical axis bit. reflect() is a no-op for
+    // 0 or a combined mask (e.g. X|Y=3), which would map every vertex to itself
+    // → coverage 1.0, valid true, and mirrorDab returning the primary triangle
+    // as its own mirror (painting the primary twice). CodeRabbit.
+    if (axisBit != 1 && axisBit != 2 && axisBit != 4) return false;
+
     const auto& subs = mesh.subMeshes();
     if (subs.empty()) return false;
     if (weldTol <= 0.0f) weldTol = 1e-4f;
@@ -74,6 +80,10 @@ bool SymmetryMirrorMap::build(const EditableMesh& mesh, int axisBit,
         total += static_cast<int>(subs[s].vertices.size());
     }
     if (total == 0) return false;
+    // triKey() packs each global id into 21 bits; beyond that, two triangles can
+    // collide and mirrorDab would return the wrong face. Decline rather than
+    // silently mis-mirror (CodeRabbit).
+    if (total > 0x1FFFFF) return false;
 
     // Spatial hash of every vertex position (cell = weldTol).
     struct Cand { int submesh; int index; Ogre::Vector3 pos; };
@@ -126,10 +136,19 @@ bool SymmetryMirrorMap::build(const EditableMesh& mesh, int axisBit,
     // verify the correspondence topologically: the mirror of a neighbour must
     // be a neighbour of the mirror vertex. This rejects spurious position
     // collisions on dense meshes.
+    // A triangle is usable only if all three indices are in range for its
+    // submesh — EditableMesh::readIndexData copies indices unchecked and callers
+    // can mutate subMeshes(), so a stray triangle would index adj/vertices out
+    // of bounds (CodeRabbit).
+    auto triInRange = [&](size_t s, const EditableTriangle& tri) {
+        const size_t n = subs[s].vertices.size();
+        return tri.indices[0] < n && tri.indices[1] < n && tri.indices[2] < n;
+    };
     std::vector<std::unordered_set<int>> adj(static_cast<size_t>(total));
     for (size_t s = 0; s < subs.size(); ++s) {
         const auto& sub = subs[s];
         for (const auto& tri : sub.triangles) {
+            if (!triInRange(s, tri)) continue;
             const int g0 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[0]));
             const int g1 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[1]));
             const int g2 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[2]));
@@ -171,9 +190,13 @@ bool SymmetryMirrorMap::build(const EditableMesh& mesh, int axisBit,
     m_faceCorners.resize(subs.size());
     for (size_t s = 0; s < subs.size(); ++s) {
         const auto& sub = subs[s];
-        m_faceCorners[s].resize(sub.triangles.size());
+        // Keep m_faceCorners[s] indexed 1:1 with triangles (mirrorDab looks up
+        // by triangle id); out-of-range triangles get a sentinel and are not
+        // registered in m_faceByVerts.
+        m_faceCorners[s].assign(sub.triangles.size(), {-1, -1, -1});
         for (size_t t = 0; t < sub.triangles.size(); ++t) {
             const auto& tri = sub.triangles[t];
+            if (!triInRange(s, tri)) continue;
             const int g0 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[0]));
             const int g1 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[1]));
             const int g2 = globalId(static_cast<int>(s), static_cast<int>(tri.indices[2]));

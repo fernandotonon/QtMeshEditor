@@ -90,6 +90,7 @@ TEST(TexturePaintStabilizerTest, AmountZeroIsPassthrough) {
 
 TEST(TexturePaintStabilizerTest, SettersClampAndPersistState) {
     auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
     ctrl->setStabilizerAmount(150.0);   // over max
     EXPECT_LE(ctrl->stabilizerAmount(), 100.0);
     ctrl->setStabilizerAmount(-5.0);    // under min

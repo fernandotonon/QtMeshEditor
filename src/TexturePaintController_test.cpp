@@ -130,6 +130,12 @@ void hardResetController()
     ctrl->setBrushTool(TexturePaintController::ToolPaint);
     ctrl->setPaintTarget(TexturePaintController::TargetTexture);
     ctrl->setUvOverlayVisible(false);
+    // Paint v2 Slice E (#548): reset symmetry + stabilizer so a test that
+    // enabled them can't leak persisted state into later tests (order-independent).
+    ctrl->setSymmetryEnabled(false);
+    ctrl->setSymmetryAxes(static_cast<int>(TexturePaintController::SymAxisX));
+    ctrl->setStabilizerMode(static_cast<int>(TexturePaintController::StabAverage));
+    ctrl->setStabilizerAmount(0.0);
     if (auto* sel = SelectionSet::getSingleton()) sel->clear();
 }
 
