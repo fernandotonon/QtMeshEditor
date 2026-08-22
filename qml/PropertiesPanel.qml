@@ -4537,6 +4537,13 @@ Rectangle {
             property bool symmetryEnabled: TexturePaintController.symmetryEnabled
             property int  symmetryAxes: TexturePaintController.symmetryAxes
             property bool topologyMirror: TexturePaintController.topologyMirror
+            // Paint v2 Slice F — projection / stencil painting (#549).
+            property int  projectionMode: TexturePaintController.projectionMode
+            property string stencilImagePath: TexturePaintController.stencilImagePath
+            property bool projBackfaceCull: TexturePaintController.projBackfaceCull
+            property bool projUseOcclusion: TexturePaintController.projUseOcclusion
+            property real projDepthLimit: TexturePaintController.projDepthLimit
+            property bool cameraLocked: TexturePaintController.cameraLocked
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4594,6 +4601,14 @@ Rectangle {
                     texPaintCol.symmetryEnabled = TexturePaintController.symmetryEnabled
                     texPaintCol.symmetryAxes = TexturePaintController.symmetryAxes
                     texPaintCol.topologyMirror = TexturePaintController.topologyMirror
+                }
+                function onProjectionChanged() {
+                    texPaintCol.projectionMode = TexturePaintController.projectionMode
+                    texPaintCol.stencilImagePath = TexturePaintController.stencilImagePath
+                    texPaintCol.projBackfaceCull = TexturePaintController.projBackfaceCull
+                    texPaintCol.projUseOcclusion = TexturePaintController.projUseOcclusion
+                    texPaintCol.projDepthLimit = TexturePaintController.projDepthLimit
+                    texPaintCol.cameraLocked = TexturePaintController.cameraLocked
                 }
             }
 
@@ -4911,6 +4926,107 @@ Rectangle {
                         enabled: texPaintCol.symmetryEnabled
                         cursorShape: Qt.PointingHandCursor
                         onClicked: TexturePaintController.topologyMirror = !texPaintCol.topologyMirror }
+                }
+            }
+
+            // ---- Projection / stencil painting (Paint v2 Slice F #549) ----
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor; opacity: 0.4 }
+            Text { text: "Projection"; color: PropertiesPanelController.textColor
+                   font.pixelSize: 11; font.bold: true }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                // Off / Stencil brush / Camera-locked.
+                Repeater {
+                    model: [{ label: "Off", m: 0 }, { label: "Stencil", m: 1 }, { label: "Locked", m: 2 }]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 58; height: 22; radius: 4
+                        color: texPaintCol.projectionMode === modelData.m
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.projectionMode = modelData.m }
+                    }
+                }
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                opacity: texPaintCol.projectionMode > 0 ? 1.0 : 0.4
+                Rectangle {
+                    width: 100; height: 22; radius: 4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent
+                        text: texPaintCol.stencilImagePath === "" ? "Stencil\u2026"
+                              : "Stencil \u2713"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.projectionMode > 0
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.chooseStencilImage() }
+                }
+                Rectangle {
+                    width: 60; height: 22; radius: 4
+                    color: texPaintCol.cameraLocked
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Snap"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.projectionMode === 2
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.snapProjectionCamera() }
+                }
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                opacity: texPaintCol.projectionMode > 0 ? 1.0 : 0.4
+                Rectangle {
+                    width: 78; height: 22; radius: 4
+                    color: texPaintCol.projBackfaceCull
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Backface"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.projectionMode > 0
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.projBackfaceCull = !texPaintCol.projBackfaceCull }
+                }
+                Rectangle {
+                    width: 78; height: 22; radius: 4
+                    color: texPaintCol.projUseOcclusion
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Occlude"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.projectionMode > 0
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.projUseOcclusion = !texPaintCol.projUseOcclusion }
+                }
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: 130; height: 22; radius: 4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Project from photo\u2026"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.chooseAndProjectPhoto() }
                 }
             }
 

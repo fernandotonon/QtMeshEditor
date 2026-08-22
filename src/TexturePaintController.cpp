@@ -18,6 +18,15 @@
 #include "NormalMapGenerator.h"
 #include "TextureChannelPacker.h"
 #include "MeshImporterExporter.h"
+#include "ProjectionPainter.h"
+#include "MultiViewTextureBaker.h"
+#include "MeshDepthRenderer.h"
+#include "PaintLayerStack.h"
+#include "TransformOperator.h"
+
+#include <OgreCamera.h>
+#include <OgreEntity.h>
+#include <OgreSceneNode.h>
 
 #include <QApplication>
 #include <QBuffer>
@@ -729,6 +738,215 @@ void TexturePaintController::setStabilizerAmount(double amount)
     SentryReporter::addBreadcrumb("paint.stabilizer",
         QStringLiteral("amount=%1").arg(m_stabilizerAmount, 0, 'f', 0));
     emit stabilizerChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice F (#549) — projection / stencil painting
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::setProjectionMode(int mode)
+{
+    const int m = (mode < 0 || mode > 2) ? 0 : mode;
+    if (m == m_projectionMode) return;
+    m_projectionMode = m;
+    if (m_projectionMode != 2) { m_cameraLocked = false; m_haveLockedView = false; }
+    SentryReporter::addBreadcrumb("paint.projection",
+        QStringLiteral("mode=%1").arg(m_projectionMode));
+    emit projectionChanged();
+}
+
+void TexturePaintController::setStencilImagePath(const QString& path)
+{
+    if (path == m_stencilImagePath) return;
+    m_stencilImagePath = path;
+    m_stencilImage = path.isEmpty() ? QImage() : QImage(path);
+    if (!m_stencilImage.isNull())
+        m_stencilImage = m_stencilImage.convertToFormat(QImage::Format_RGBA8888);
+    SentryReporter::addBreadcrumb("paint.projection",
+        QStringLiteral("stencil=%1 (%2)").arg(path).arg(m_stencilImage.isNull() ? "load-failed" : "ok"));
+    emit projectionChanged();
+}
+
+void TexturePaintController::setProjBackfaceCull(bool on)
+{
+    if (on == m_projBackfaceCull) return;
+    m_projBackfaceCull = on; emit projectionChanged();
+}
+
+void TexturePaintController::setProjUseOcclusion(bool on)
+{
+    if (on == m_projUseOcclusion) return;
+    m_projUseOcclusion = on; emit projectionChanged();
+}
+
+void TexturePaintController::setProjDepthLimit(double v)
+{
+    v = std::clamp(v, 0.0, 2.0);
+    if (std::abs(v - m_projDepthLimit) < 1e-6) return;
+    m_projDepthLimit = v; emit projectionChanged();
+}
+
+void TexturePaintController::ensureProjTris()
+{
+    if (m_haveProjTris) return;
+    auto* entity = activeEntity();
+    if (!entity) return;
+    m_projTris = MultiViewTextureBaker::fromEntity(entity, nullptr);
+    m_haveProjTris = !m_projTris.empty();
+}
+
+bool TexturePaintController::currentProjectionView(OgreWidget* widget,
+                                                   ProjectionPainter::View& out) const
+{
+    if (m_projectionMode == 2 && m_haveLockedView) { out = m_lockedView; return true; }
+    if (!widget || !widget->getSpaceCamera()) return false;
+    Ogre::Camera* cam = widget->getSpaceCamera()->getCamera();
+    if (!cam) return false;
+    out.viewProj = cam->getProjectionMatrixWithRSDepth() * cam->getViewMatrix();
+    out.camDirection = cam->getRealDirection();
+    out.camPosition = cam->getRealPosition();
+    return true;
+}
+
+bool TexturePaintController::buildOcclusionForView(const ProjectionPainter::View& view,
+                                                   ProjectionPainter::OcclusionMap& occ) const
+{
+    auto* entity = activeEntity();
+    if (!entity) return false;
+    MeshDepthRenderer::View dv;
+    dv.dir = view.camDirection;
+    // Any up not parallel to dir; the renderer re-frames the camera itself.
+    dv.up = (std::abs(view.camDirection.dotProduct(Ogre::Vector3::UNIT_Y)) > 0.95f)
+                ? Ogre::Vector3(0, 0, 1) : Ogre::Vector3::UNIT_Y;
+    dv.name = "projection";
+    QString err;
+    MeshDepthRenderer::RenderResult r =
+        MeshDepthRenderer::renderDepthMapView(entity, 512, dv, &err);
+    if (r.depth.isNull()) return false;
+    occ.depth = r.depth;
+    occ.viewProj = r.projMatrix * r.viewMatrix;
+    occ.camPosition = r.camPosition;
+    occ.camDirection = r.camDirection;
+    occ.depthNear = r.depthNear;
+    occ.depthFar = r.depthFar;
+    // Bias must exceed the 8-bit fog quantisation (1/255 of the range).
+    occ.biasWorld = std::max((r.depthFar - r.depthNear) / 255.0f * 2.0f,
+                             (r.depthFar - r.depthNear) * 3e-3f);
+    return true;
+}
+
+ProjectionPainter::Options TexturePaintController::projectionOptions() const
+{
+    ProjectionPainter::Options opts;
+    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    opts.backfaceCull = m_projBackfaceCull;
+    opts.useOcclusion = m_projUseOcclusion;
+    // depthLimit is a fraction of the bounds radius → world units.
+    if (m_projDepthLimit > 0.0 && m_haveProjOcc) {
+        const float range = m_projOcc.depthFar - m_projOcc.depthNear;
+        opts.depthLimit = static_cast<float>(m_projDepthLimit) * range * 0.5f;
+    }
+    return opts;
+}
+
+int TexturePaintController::commitProjectedLayer(const TexturePaintBuffer& projected,
+                                                 const QString& name)
+{
+    if (!hasActiveSession()) return -1;
+    const auto before = m_layerStack.snapshot();
+    const int idx = m_layerStack.addFromBuffer(projected, name,
+                                               PaintLayerStack::LayerType::Generated);
+    if (idx < 0) return -1;
+    m_layerStack.setActiveIndex(idx);
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(name, before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
+    ++m_layerPreviewVersion;
+    emit layersChanged();
+    emit fullResPreviewChanged();
+    return idx;
+}
+
+void TexturePaintController::snapProjectionCamera()
+{
+    auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
+                       : (TransformOperator::getSingletonPtr() ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
+    ProjectionPainter::View v;
+    if (!currentProjectionView(widget, v)) {
+        // No live camera (e.g. mode 2 requested before any paint) — try the
+        // stored one; otherwise bail.
+        if (!m_haveLockedView) return;
+        v = m_lockedView;
+    }
+    m_lockedView = v;
+    m_haveLockedView = true;
+    m_cameraLocked = true;
+    m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
+    SentryReporter::addBreadcrumb("paint.projection.snap",
+        QStringLiteral("occlusion=%1").arg(m_haveProjOcc));
+    emit projectionChanged();
+}
+
+bool TexturePaintController::projectFromPhoto(const QString& path)
+{
+    if (!hasActiveSession()) {
+        if (auto* e = activeEntity()) ensurePaintableTexture(1024);
+        if (!hasActiveSession()) return false;
+    }
+    QImage src(path);
+    if (src.isNull()) return false;
+    src = src.convertToFormat(QImage::Format_RGBA8888);
+
+    m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
+    if (!m_haveProjTris) return false;
+
+    ProjectionPainter::View v;
+    auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
+                       : (TransformOperator::getSingletonPtr() ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
+    if (m_haveLockedView) v = m_lockedView;
+    else if (!currentProjectionView(widget, v)) return false;
+
+    m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
+    ProjectionPainter::Options opts = projectionOptions();
+    opts.useOcclusion = m_haveProjOcc;   // photo always occludes when we have a map
+
+    TexturePaintBuffer scratch;
+    scratch.resize(opts.resolution, opts.resolution);
+    const auto rep = ProjectionPainter::project(
+        m_projTris, v, src, scratch, opts, m_haveProjOcc ? &m_projOcc : nullptr);
+    if (!rep.ok || rep.texelsWritten == 0) return false;
+
+    SentryReporter::addBreadcrumb("paint.projection.photo",
+        QStringLiteral("texels=%1 occluded=%2").arg(rep.texelsWritten).arg(rep.texelsOccluded));
+    return commitProjectedLayer(scratch, QStringLiteral("Projected photo")) >= 0;
+}
+
+void TexturePaintController::chooseStencilImage()
+{
+    QApplication::processEvents();
+    const QString path = QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        QStringLiteral("Choose stencil image"),
+        QDir::currentPath(),
+        QStringLiteral("Image files (*.png *.jpg *.jpeg *.tga *.bmp);;All files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+    if (!path.isEmpty()) setStencilImagePath(path);
+}
+
+bool TexturePaintController::chooseAndProjectPhoto()
+{
+    QApplication::processEvents();
+    const QString path = QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        QStringLiteral("Project photo onto mesh"),
+        QDir::currentPath(),
+        QStringLiteral("Image files (*.png *.jpg *.jpeg *.tga *.bmp);;All files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+    if (path.isEmpty()) return false;
+    return projectFromPhoto(path);
 }
 
 void TexturePaintController::setColorSource(int source)
@@ -1526,6 +1744,31 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
 {
     noteStrokeSample(uv, m_strokeJustBegan);
     m_strokeJustBegan = false;
+
+    // Paint v2 Slice F (#549): stencil / camera-locked projection brush. Instead
+    // of a flat footprint, splat the brush footprint's texels through the camera,
+    // each masked by the projected stencil image's alpha + occlusion. Painted
+    // into the active layer → captured by the normal stroke undo.
+    if (m_projectionMode == 1 || m_projectionMode == 2) {
+        ensureProjTris();
+        if (!m_haveProjTris) return false;
+        ProjectionPainter::View v;
+        auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
+                       : (TransformOperator::getSingletonPtr()
+                              ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
+        if (!currentProjectionView(widget, v)) return false;
+        ProjectionPainter::Options opts = projectionOptions();
+        const ProjectionPainter::OcclusionMap* occ =
+            (m_haveProjOcc && (opts.useOcclusion || opts.depthLimit > 0.0f)) ? &m_projOcc : nullptr;
+        const QColor c = texturePaintColor();
+        const Ogre::ColourValue brush(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        const int n = ProjectionPainter::projectDab(
+            m_projTris, v, m_stencilImage, uv, radiusUv, brush,
+            strength * static_cast<float>(c.alphaF()), activePaintBuffer(), opts, occ);
+        return n > 0;
+    }
+
+
     const float falloff = static_cast<float>(texturePaintFalloff());
     const TexturePaintBuffer::BrushShape shape = currentBrushShape();
     const float wavelength = std::max(radiusUv * 4.0f, 0.05f);
@@ -3237,6 +3480,19 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
     resetStrokePaintState();
     m_wandStartScreenPos = screenPos;
     m_hitCache.valid = false;
+
+    // Paint v2 Slice F (#549): a projection stroke caches the mesh's world
+    // triangles once, and (mode 1, unlocked) refreshes the occlusion depth map
+    // from the current camera at stroke start — never per dab.
+    if (m_projectionMode == 1 || m_projectionMode == 2) {
+        m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
+        if (m_projectionMode == 1 && (m_projUseOcclusion || m_projDepthLimit > 0.0)) {
+            ProjectionPainter::View v;
+            if (currentProjectionView(widget, v))
+                m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
+        }
+    }
+
     if (m_colorSource == ColorGradient) {
         SentryReporter::addBreadcrumb(
             "paint.brush.gradient",

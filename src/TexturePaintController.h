@@ -10,6 +10,7 @@
 #include "PaintLayerStack.h"
 #include "PaintChannel.h"
 #include "SymmetryMirrorMap.h"
+#include "ProjectionPainter.h"
 
 #include <QColor>
 #include <QObject>
@@ -134,6 +135,14 @@ class TexturePaintController : public QObject
     // Paint v2 Slice E (#548) — line stabilizer.
     Q_PROPERTY(int    stabilizerMode   READ stabilizerMode   WRITE setStabilizerMode   NOTIFY stabilizerChanged)
     Q_PROPERTY(double stabilizerAmount READ stabilizerAmount WRITE setStabilizerAmount NOTIFY stabilizerChanged)
+
+    // Paint v2 Slice F (#549) — projection / stencil painting. WRITE-backed.
+    Q_PROPERTY(int    projectionMode    READ projectionMode    WRITE setProjectionMode    NOTIFY projectionChanged) // 0 off / 1 stencil-brush / 2 camera-locked
+    Q_PROPERTY(QString stencilImagePath READ stencilImagePath  WRITE setStencilImagePath  NOTIFY projectionChanged)
+    Q_PROPERTY(bool   projBackfaceCull  READ projBackfaceCull  WRITE setProjBackfaceCull  NOTIFY projectionChanged)
+    Q_PROPERTY(bool   projUseOcclusion  READ projUseOcclusion  WRITE setProjUseOcclusion  NOTIFY projectionChanged)
+    Q_PROPERTY(double projDepthLimit    READ projDepthLimit    WRITE setProjDepthLimit    NOTIFY projectionChanged) // fraction of bounds radius; 0 = off
+    Q_PROPERTY(bool   cameraLocked      READ cameraLocked      NOTIFY projectionChanged)  // read-only status
 
 public:
     enum BrushTool {
@@ -413,6 +422,32 @@ public:
     /// Step a lagging trail position toward `raw`, keeping distance `lag` px.
     static QPointF stabilizeTrailPoint(const QPointF& trail, const QPointF& raw,
                                        double lag);
+    /// @}
+
+    /// @name Paint v2 Slice F — projection / stencil painting (#549)
+    /// @{
+    int  projectionMode() const { return m_projectionMode; }
+    void setProjectionMode(int mode);
+    QString stencilImagePath() const { return m_stencilImagePath; }
+    void setStencilImagePath(const QString& path);
+    bool projBackfaceCull() const { return m_projBackfaceCull; }
+    void setProjBackfaceCull(bool on);
+    bool projUseOcclusion() const { return m_projUseOcclusion; }
+    void setProjUseOcclusion(bool on);
+    double projDepthLimit() const { return m_projDepthLimit; }
+    void setProjDepthLimit(double v);
+    bool cameraLocked() const { return m_cameraLocked; }
+
+    /// Capture the live viewport camera (+ occlusion depth map) as the locked
+    /// projection frame for camera-locked mode. No-op without an active widget.
+    Q_INVOKABLE void snapProjectionCamera();
+    /// One-shot: load `path`, project it through the current camera onto the
+    /// mesh, and commit the result as a NEW layer (one undo step).
+    Q_INVOKABLE bool projectFromPhoto(const QString& path);
+    /// Open a file dialog to pick the stencil image (sets stencilImagePath).
+    Q_INVOKABLE void chooseStencilImage();
+    /// Open a file dialog to pick a photo, then projectFromPhoto() it.
+    Q_INVOKABLE bool chooseAndProjectPhoto();
     /// @}
 
     /// @name Paint v2 Slice D — PBR channel painting (#547)
@@ -703,6 +738,8 @@ signals:
     /// Paint v2 Slice E (#548): symmetry / stabilizer settings changed.
     void symmetryChanged();
     void stabilizerChanged();
+    /// Paint v2 Slice F (#549): projection mode / stencil / lock state changed.
+    void projectionChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -1083,6 +1120,35 @@ private:
     bool    m_stabHaveTrail = false;
     QPointF m_stabLastRaw;                // true last cursor (for end catch-up)
     bool    m_stabHaveLastRaw = false;
+
+    // --- Paint v2 Slice F (#549): projection / stencil painting ---
+    int     m_projectionMode = 0;         // 0 off / 1 stencil-brush / 2 camera-locked
+    QString m_stencilImagePath;
+    QImage  m_stencilImage;               // loaded stencil (alpha-masks each dab)
+    bool    m_projBackfaceCull = true;
+    bool    m_projUseOcclusion = false;
+    double  m_projDepthLimit = 0.0;       // fraction of bounds radius; 0 = off
+    bool    m_cameraLocked = false;
+    ProjectionPainter::View m_lockedView; // captured on snap (mode 2)
+    bool    m_haveLockedView = false;
+    ProjectionPainter::OcclusionMap m_projOcc;
+    bool    m_haveProjOcc = false;
+    std::vector<ProjectionPainter::Triangle> m_projTris;  // world tris cached per stroke
+    bool    m_haveProjTris = false;
+
+    /// Cache the entity's world triangles for the projection stroke (once).
+    void ensureProjTris();
+    /// Build the projection View from the live viewport camera (mode 1) or the
+    /// locked view (mode 2). Returns false if no camera is available.
+    bool currentProjectionView(OgreWidget* widget, ProjectionPainter::View& out) const;
+    /// Render an occlusion depth map for `view` from the live entity; returns
+    /// false (and leaves *occ untouched) if depth rendering is unavailable.
+    bool buildOcclusionForView(const ProjectionPainter::View& view,
+                               ProjectionPainter::OcclusionMap& occ) const;
+    /// Fill Options from the current projection settings (bounds-scaled depth limit).
+    ProjectionPainter::Options projectionOptions() const;
+    /// Commit a fully-projected buffer as a NEW active layer (one undo step).
+    int commitProjectedLayer(const TexturePaintBuffer& projected, const QString& name);
 
     // Preview PNG cache.
     QString m_previewUri;
