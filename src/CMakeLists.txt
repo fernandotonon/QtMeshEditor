@@ -111,6 +111,7 @@ ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
 PaintChannelPresets.cpp
+SymmetryMirrorMap.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
@@ -381,6 +382,7 @@ PaintBufferImageProvider.h
 PaintLayerBlend.h
 PaintLayerStack.h
 PaintChannel.h
+SymmetryMirrorMap.h
 PaintSelectionMask.h
 GradientRamp.h
 BrushEngine.h

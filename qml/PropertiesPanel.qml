@@ -4532,7 +4532,11 @@ Rectangle {
             // Paint v2 Slice D — PBR channel painting (#547).
             property int activeChannel: TexturePaintController.activeChannel
             property var paintChannels: TexturePaintController.paintChannels
-            property var paintPresetNames: PaintChannelPresets.presetNames
+            // Paint v2 Slice E — symmetry (#548). Stabilizer + Local/World +
+            // channel presets were removed from the UI (backend retained).
+            property bool symmetryEnabled: TexturePaintController.symmetryEnabled
+            property int  symmetryAxes: TexturePaintController.symmetryAxes
+            property bool topologyMirror: TexturePaintController.topologyMirror
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4585,6 +4589,11 @@ Rectangle {
                     // Layer add/remove changes which channels have layers — keep
                     // the channel picker's hasLayers badges in sync.
                     texPaintCol.paintChannels = TexturePaintController.paintChannels
+                }
+                function onSymmetryChanged() {
+                    texPaintCol.symmetryEnabled = TexturePaintController.symmetryEnabled
+                    texPaintCol.symmetryAxes = TexturePaintController.symmetryAxes
+                    texPaintCol.topologyMirror = TexturePaintController.topologyMirror
                 }
             }
 
@@ -4850,27 +4859,58 @@ Rectangle {
                 }
             }
 
-            // ---- Channel-aware presets (Paint v2 Slice D #547) ----
+            // ---- Symmetry (Paint v2 Slice E #548) ----
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor; opacity: 0.4 }
             Row {
                 spacing: 6
                 width: parent.width - 16
-                Text {
-                    text: "Preset:"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 44
+                Rectangle {
+                    width: 90; height: 22; radius: 4
+                    color: texPaintCol.symmetryEnabled
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Symmetry"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.symmetryEnabled = !texPaintCol.symmetryEnabled }
                 }
-                ThemedComboBox {
-                    id: paintPresetCombo
-                    width: 200
-                    model: texPaintCol.paintPresetNames
-                    currentIndex: -1
-                    displayText: currentIndex < 0 ? "Choose a preset\u2026" : currentText
-                    onActivated: function(index) {
-                        if (index >= 0 && index < texPaintCol.paintPresetNames.length)
-                            PaintChannelPresets.applyPreset(texPaintCol.paintPresetNames[index])
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                opacity: texPaintCol.symmetryEnabled ? 1.0 : 0.4
+                // X / Y / Z axis toggles (OR into the bitmask).
+                Repeater {
+                    model: [{ label: "X", bit: 1 }, { label: "Y", bit: 2 }, { label: "Z", bit: 4 }]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 34; height: 22; radius: 4
+                        color: (texPaintCol.symmetryAxes & modelData.bit)
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent
+                            enabled: texPaintCol.symmetryEnabled
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.symmetryAxes =
+                                       (texPaintCol.symmetryAxes ^ modelData.bit) }
                     }
+                }
+                Rectangle {
+                    width: 92; height: 22; radius: 4
+                    color: texPaintCol.topologyMirror
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Topology"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.symmetryEnabled
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.topologyMirror = !texPaintCol.topologyMirror }
                 }
             }
 

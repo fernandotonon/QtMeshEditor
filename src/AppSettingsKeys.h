@@ -309,6 +309,43 @@ inline const QString& paintGradientMode()
     return k;
 }
 
+/** @brief Paint v2 Slice E (#548) — symmetry enabled. */
+inline const QString& paintSymmetryEnabled()
+{
+    static const QString k(QStringLiteral("Paint/symmetryEnabled"));
+    return k;
+}
+/** @brief Paint symmetry space: 0=local, 1=world. */
+inline const QString& paintSymmetrySpace()
+{
+    static const QString k(QStringLiteral("Paint/symmetrySpace"));
+    return k;
+}
+/** @brief Paint symmetry axis bitmask (X=1|Y=2|Z=4). */
+inline const QString& paintSymmetryAxes()
+{
+    static const QString k(QStringLiteral("Paint/symmetryAxes"));
+    return k;
+}
+/** @brief Paint symmetry topology-aware mirror toggle. */
+inline const QString& paintTopologyMirror()
+{
+    static const QString k(QStringLiteral("Paint/topologyMirror"));
+    return k;
+}
+/** @brief Paint stabilizer mode: 0=average, 1=trail. */
+inline const QString& paintStabilizerMode()
+{
+    static const QString k(QStringLiteral("Paint/stabilizerMode"));
+    return k;
+}
+/** @brief Paint stabilizer amount (0..100). */
+inline const QString& paintStabilizerAmount()
+{
+    static const QString k(QStringLiteral("Paint/stabilizerAmount"));
+    return k;
+}
+
 /** @brief Paint footprint type (Paint v2 Slice B / #545). */
 inline const QString& paintFootprintType()
 {

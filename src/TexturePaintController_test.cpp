@@ -130,6 +130,12 @@ void hardResetController()
     ctrl->setBrushTool(TexturePaintController::ToolPaint);
     ctrl->setPaintTarget(TexturePaintController::TargetTexture);
     ctrl->setUvOverlayVisible(false);
+    // Paint v2 Slice E (#548): reset symmetry + stabilizer so a test that
+    // enabled them can't leak persisted state into later tests (order-independent).
+    ctrl->setSymmetryEnabled(false);
+    ctrl->setSymmetryAxes(static_cast<int>(TexturePaintController::SymAxisX));
+    ctrl->setStabilizerMode(static_cast<int>(TexturePaintController::StabAverage));
+    ctrl->setStabilizerAmount(0.0);
     if (auto* sel = SelectionSet::getSingleton()) sel->clear();
 }
 
@@ -1295,5 +1301,39 @@ TEST_F(TexturePaintControllerSceneTest, NormalBakeCombinesWithExistingNormal) {
     EXPECT_GT(corner.r, 0.65f) << "corner lost the base normal's +X tilt";
     EXPECT_GT(corner.r, corner.b) << "flat-wiped normal (base normal replaced)";
 
+    ctrl->closeSession();
+}
+
+// #548 Slice E: a symmetric stroke (primary + mirror dabs) must remain ONE undo
+// step, and enabling symmetry must never crash the stroke path even when a
+// mirror point falls off the mesh. Uses the standard single-triangle fixture;
+// the mirror across local X lands off-mesh (so only the primary paints), which
+// still exercises the mirror dispatch + the single-command undo guarantee.
+TEST_F(TexturePaintControllerSceneTest, SymmetricStrokeIsOneUndoStep) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("SymUndo")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ctrl->setSymmetryEnabled(true);
+    ctrl->setSymmetryAxes(static_cast<int>(TexturePaintController::SymAxisX));
+
+    const QImage before = ctrl->snapshotBufferImage();
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.4, 0.4));
+    ctrl->updateStrokeUV(0.45, 0.45);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    const QImage afterPaint = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(before.isNull());
+    ASSERT_NE(before, afterPaint) << "the primary dab should have painted";
+
+    // A single undo restores the pre-stroke buffer — the mirror dabs were
+    // captured by the same command, not a second one.
+    UndoManager::getSingleton()->undo();
+    pumpEventsFor(150);
+    const QImage afterUndo = ctrl->snapshotBufferImage();
+    EXPECT_EQ(afterUndo, before) << "one undo must revert the whole symmetric stroke";
+
+    ctrl->setSymmetryEnabled(false);
     ctrl->closeSession();
 }
