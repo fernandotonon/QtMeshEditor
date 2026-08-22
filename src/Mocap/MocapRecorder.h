@@ -81,7 +81,10 @@ struct BodyRecordOptions {
     bool replaceExisting = true;
     QString algorithmUsed = QStringLiteral("pose-ik");  // for the report
     QString fallbackReason;                             // why not sam3dbody
-    uint32_t skipRolesMask = 0;  // e.g. Head role when head bone is driven separately
+    // Roles body bake must not write (FaceCap owns the head chain when Head
+    // is enabled — typically Neck | Neck1 | Head so webcam look-down does not
+    // stack with the face solve).
+    uint32_t skipRolesMask = 0;
 };
 
 struct BodyRecordReport {

@@ -1051,7 +1051,8 @@ bool MocapController::beginPreviewWithLiveSource(
     d->savedAlwaysUpdateMainSkeleton = entity->getAlwaysUpdateMainSkeleton();
     entity->setAlwaysUpdateMainSkeleton(true);
     // Head-bone drive uses FaceCap (dense landmarks) even when Body is on —
-    // PoseIK's head role is coarse and fights the face solve.
+    // PoseIK's Neck/Head roles aim at the nose and tip the head down if
+    // left enabled alongside FaceCap.
     const bool headBoneDrive =
         d->headEnabled && !d->headBone.isEmpty();
     const std::string headBoneStd =
@@ -1548,12 +1549,17 @@ void MocapController::onSample(const FaceSample& sample,
         }
         d->bodyNeutralReady = d->bodyRetargeter->hasNeutralReference();
 
-        const uint32_t skipHead =
+        // FaceCap owns Head. Body must not also aim Neck/Neck1 at the nose —
+        // that webcam look-down stacks with FaceCap and leaves the head tipped
+        // after calibration (head-only mode stays fine because Neck stays bind).
+        const uint32_t skipFaceHeadChain =
             (d->headEnabled && !d->headBone.isEmpty())
-                ? (1u << static_cast<unsigned>(PoseIK::Head))
+                ? ((1u << static_cast<unsigned>(PoseIK::Neck))
+                   | (1u << static_cast<unsigned>(PoseIK::Neck1))
+                   | (1u << static_cast<unsigned>(PoseIK::Head)))
                 : 0u;
         const auto locals = d->bodyRetargeter->evaluateFrame(
-            canonQuats, body.resolvedMask, skipHead, body.world.data(),
+            canonQuats, body.resolvedMask, skipFaceHeadChain, body.world.data(),
             body.visibility.data());
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
         const auto boneSmooth = boneOutputSmoothParams(d->smoothingCutoff);
@@ -1740,7 +1746,9 @@ void MocapController::stopRecording()
             bopts.algorithmUsed = QStringLiteral("pose-ik-landmarks");
             if (d->headEnabled && !d->headBone.isEmpty())
                 bopts.skipRolesMask =
-                    (1u << static_cast<unsigned>(PoseIK::Head));
+                    (1u << static_cast<unsigned>(PoseIK::Neck))
+                    | (1u << static_cast<unsigned>(PoseIK::Neck1))
+                    | (1u << static_cast<unsigned>(PoseIK::Head));
             const int fps =
                 (d->liveFps >= 5.0)
                     ? std::max(1, static_cast<int>(std::lround(d->liveFps)))
