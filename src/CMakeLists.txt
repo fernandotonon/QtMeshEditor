@@ -149,6 +149,7 @@ MotionGenerator.cpp
 MeshSegmenter.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
+ProjectionPainter.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -376,6 +377,8 @@ MotionGenerator.h
 MeshSegmenter.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
+ProjectionPainter.h
+ProjectionMath.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h

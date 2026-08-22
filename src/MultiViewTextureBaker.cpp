@@ -2,6 +2,7 @@
 
 #include "VertexColorBaker.h"  // for dilate()
 #include "EditableMesh.h"
+#include "ProjectionMath.h"    // shared projectToViewportUV / sampleImage / Projected
 
 #include <OgreEntity.h>
 #include <OgreNode.h>
@@ -14,60 +15,12 @@
 
 namespace {
 
-// Project a world point through view*proj (clip space) and return the
-// viewport UV in [0..1] (top-left origin, V down to match QImage). Sets
-// `behind` when the point is at/behind the camera (clip w <= 0). The depth
-// (NDC z) is returned for optional occlusion use later.
-struct Projected {
-    Ogre::Vector2 uv;   // [0..1], may be outside on off-screen verts
-    float ndcZ = 0.0f;
-    bool behind = false;
-};
-
-Projected projectToViewportUV(const Ogre::Vector3& worldP,
-                              const Ogre::Matrix4& viewProj)
-{
-    Projected out;
-    const Ogre::Vector4 clip = viewProj * Ogre::Vector4(worldP.x, worldP.y, worldP.z, 1.0f);
-    if (clip.w <= 1e-6f) {        // at or behind the camera plane
-        out.behind = true;
-        return out;
-    }
-    const float invW = 1.0f / clip.w;
-    const float ndcX = clip.x * invW;   // [-1..1]
-    const float ndcY = clip.y * invW;   // [-1..1], +Y up
-    out.ndcZ = clip.z * invW;
-    // NDC -> viewport UV. Flip Y so v=0 is the top of the image (QImage row 0).
-    out.uv = Ogre::Vector2(ndcX * 0.5f + 0.5f, 1.0f - (ndcY * 0.5f + 0.5f));
-    return out;
-}
-
-// Bilinear sample of a QImage at uv in [0..1] (top-left origin). Returns the
-// colour as ColourValue (0..1). Out-of-range uv is clamped to the edge.
-Ogre::ColourValue sampleImage(const QImage& img, const Ogre::Vector2& uv)
-{
-    const int w = img.width();
-    const int h = img.height();
-    if (w <= 0 || h <= 0) return Ogre::ColourValue(0, 0, 0, 1);
-    const float fx = std::clamp(uv.x, 0.0f, 1.0f) * (w - 1);
-    const float fy = std::clamp(uv.y, 0.0f, 1.0f) * (h - 1);
-    const int x0 = static_cast<int>(std::floor(fx));
-    const int y0 = static_cast<int>(std::floor(fy));
-    const int x1 = std::min(x0 + 1, w - 1);
-    const int y1 = std::min(y0 + 1, h - 1);
-    const float tx = fx - x0;
-    const float ty = fy - y0;
-    auto px = [&](int x, int y) {
-        const QRgb c = img.pixel(x, y);
-        return Ogre::ColourValue(qRed(c) / 255.0f, qGreen(c) / 255.0f,
-                                 qBlue(c) / 255.0f, qAlpha(c) / 255.0f);
-    };
-    const Ogre::ColourValue c00 = px(x0, y0), c10 = px(x1, y0);
-    const Ogre::ColourValue c01 = px(x0, y1), c11 = px(x1, y1);
-    const Ogre::ColourValue top = c00 * (1 - tx) + c10 * tx;
-    const Ogre::ColourValue bot = c01 * (1 - tx) + c11 * tx;
-    return top * (1 - ty) + bot * ty;
-}
+// The projection/sampling math is shared with ProjectionPainter (#549); it now
+// lives in ProjectionMath.h. Alias the names so the rest of this file (and its
+// tests) is unchanged.
+using ProjectionMath::Projected;
+using ProjectionMath::projectToViewportUV;
+using ProjectionMath::sampleImage;
 
 // Per-channel mean of a view image over reasonably-opaque, non-near-white
 // pixels (near-white is usually the generator's empty background, which would
