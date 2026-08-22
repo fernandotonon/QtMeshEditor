@@ -67,6 +67,12 @@ public:
         Ogre::Matrix4 projMatrix;
         Ogre::Vector3 camPosition = Ogre::Vector3::ZERO;
         Ogre::Vector3 camDirection = Ogre::Vector3::ZERO;  // normalised view dir
+        // Linear world-distance range the depth grayscale spans (near=bright/
+        // far=dark). Lets a consumer reconstruct the surface distance at a pixel
+        // as near + (1-g)*(far-near) — used by ProjectionPainter's per-texel
+        // occlusion test (#549). 0/0 when unset.
+        float         depthNear = 0.0f;
+        float         depthFar  = 0.0f;
     };
 
     // Render `entity`'s depth map at `size` x `size` from `view`. Returns a

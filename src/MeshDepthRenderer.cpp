@@ -206,6 +206,11 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
                0.0f, dist - radius, dist + radius);
     sm->setAmbientLight(Ogre::ColourValue::White);
 
+    // Expose the linear world-distance range the grayscale spans so a consumer
+    // can reconstruct surface distance per pixel (#549 occlusion test).
+    result.depthNear = static_cast<float>(dist - radius);
+    result.depthFar  = static_cast<float>(dist + radius);
+
     // Hide everything that isn't the target mesh, so the depth map is
     // a clean silhouette. The viewport visibility mask does NOT cover
     // these:

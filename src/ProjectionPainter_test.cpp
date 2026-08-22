@@ -121,6 +121,81 @@ TEST(ProjectionPainterTest, StencilAlphaGatesWrite) {
     EXPECT_LT(out.pixel(48, 32).a, 0.5f);
 }
 
+// --- F-B: occlusion + depth-limit (hand-built OcclusionMap, no GL) ---
+
+namespace {
+// A depth map (near=bright/far=dark) where every pixel encodes the SAME world
+// distance `surfaceDist`, over the range [depthNear, depthFar]. Simulates a
+// flat occluder at surfaceDist filling the view.
+QImage flatDepthMap(int size, float surfaceDist, float depthNear, float depthFar) {
+    const float g = 1.0f - (surfaceDist - depthNear) / (depthFar - depthNear); // near→1
+    const int v = std::clamp(static_cast<int>(g * 255.0f + 0.5f), 0, 255);
+    QImage img(size, size, QImage::Format_RGBA8888);
+    img.fill(QColor(v, v, v, 255));
+    return img;
+}
+} // namespace
+
+TEST(ProjectionPainterTest, OccludedFarSurfaceRejected) {
+    // Camera at +Z=5 looking -Z. Depth map says the nearest visible surface is
+    // at distance 5 (the z=0 plane). A quad at z=-1 is at distance 6 → behind →
+    // must be rejected as occluded; a quad at z=0 (distance 5) writes through.
+    const float near = 4.0f, far = 6.0f;
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1), Ogre::Vector3(0, 0, 5) };
+    ProjectionPainter::OcclusionMap occ;
+    occ.viewProj = orthoViewProj();
+    occ.camPosition = Ogre::Vector3(0, 0, 5);
+    occ.camDirection = Ogre::Vector3(0, 0, -1);
+    occ.depthNear = near; occ.depthFar = far;
+    occ.depth = flatDepthMap(64, /*surfaceDist*/5.0f, near, far);  // z=0 plane
+    occ.biasWorld = 0.05f;
+
+    ProjectionPainter::Options opts; opts.resolution = 64; opts.useOcclusion = true;
+
+    // Far quad (z=-1, distance 6) — occluded.
+    { TexturePaintBuffer out; out.resize(64, 64);
+      auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
+      ASSERT_TRUE(rep.ok);
+      EXPECT_EQ(rep.texelsWritten, 0);
+      EXPECT_GT(rep.texelsOccluded, 0);
+      EXPECT_EQ(opaqueTexels(out), 0); }
+
+    // Near quad (z=0, distance 5 == surface) — writes through (within bias).
+    { TexturePaintBuffer out; out.resize(64, 64);
+      auto rep = ProjectionPainter::project(frontQuad(0.0f, true), v, solid(32, Qt::red), out, opts, &occ);
+      ASSERT_TRUE(rep.ok);
+      EXPECT_GT(rep.texelsWritten, 0);
+      EXPECT_EQ(rep.texelsOccluded, 0) << "self-projection should not acne-occlude"; }
+}
+
+TEST(ProjectionPainterTest, DepthLimitCullsBeyondNearestSurface) {
+    // useOcclusion off, depthLimit on: reject texels more than `depthLimit`
+    // world units behind the nearest visible surface. Surface at distance 5;
+    // a quad at distance 6 with depthLimit 0.5 → culled; with depthLimit 2 → kept.
+    const float near = 4.0f, far = 7.0f;
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1), Ogre::Vector3(0, 0, 5) };
+    ProjectionPainter::OcclusionMap occ;
+    occ.viewProj = orthoViewProj();
+    occ.camPosition = Ogre::Vector3(0, 0, 5);
+    occ.camDirection = Ogre::Vector3(0, 0, -1);
+    occ.depthNear = near; occ.depthFar = far;
+    occ.depth = flatDepthMap(64, 5.0f, near, far);
+    occ.biasWorld = 1e6f;  // disable the occlusion reject; isolate depth-limit
+
+    ProjectionPainter::Options opts; opts.resolution = 64; opts.useOcclusion = false;
+
+    { opts.depthLimit = 0.5f; TexturePaintBuffer out; out.resize(64, 64);
+      auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
+      ASSERT_TRUE(rep.ok);
+      EXPECT_GT(rep.texelsDepthCulled, 0);
+      EXPECT_EQ(rep.texelsWritten, 0); }
+
+    { opts.depthLimit = 2.0f; TexturePaintBuffer out; out.resize(64, 64);
+      auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
+      ASSERT_TRUE(rep.ok);
+      EXPECT_GT(rep.texelsWritten, 0); }
+}
+
 TEST(ProjectionPainterTest, DabPaintsWithinFootprintAndAccumulates) {
     auto tris = frontQuad(0.0f, true);
     ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1), Ogre::Vector3(0, 0, 5) };

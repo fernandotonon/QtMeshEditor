@@ -54,6 +54,7 @@ public:
         QImage        depth;
         Ogre::Matrix4 viewProj;      ///< proj*view used to render `depth`
         Ogre::Vector3 camPosition;   ///< eye the depth map was rendered from
+        Ogre::Vector3 camDirection;  ///< normalised dir the depth camera looks ALONG
         float         depthNear = 0.0f;
         float         depthFar  = 0.0f;
         float         biasWorld = 0.0f;   ///< slop (world units) to avoid depth acne

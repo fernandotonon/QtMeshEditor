@@ -38,7 +38,16 @@ int classifyDepth(const Ogre::Vector3& wp,
     const Ogre::ColourValue d = sampleImage(occ.depth, p.uv);
     const float g = d.r;                          // grayscale → any channel
     const float dMap = occ.depthNear + (1.0f - g) * (occ.depthFar - occ.depthNear);
-    const float dTexel = (wp - occ.camPosition).length();
+    // Ogre FOG_LINEAR (which the depth map uses) measures CAMERA-AXIS distance —
+    // the projection of (wp - eye) onto the view direction — NOT Euclidean
+    // distance. Match it, else off-axis texels read farther than the fog encoded
+    // them and self-occlude (depth acne). Fall back to Euclidean if camDirection
+    // is unset.
+    float dTexel;
+    if (!occ.camDirection.isZeroLength())
+        dTexel = (wp - occ.camPosition).dotProduct(occ.camDirection);
+    else
+        dTexel = (wp - occ.camPosition).length();
     if (dTexel > dMap + occ.biasWorld) return 1;  // something nearer occludes it
     if (depthLimit > 0.0f && dTexel > dMap + depthLimit) return 2;  // too far behind
     return 0;
