@@ -2343,11 +2343,16 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     // --smooth-fps N tunes): bake sparse -> re-bake at clip rate. A temporal
     // low-pass that removes retarget trembling; runs BEFORE arm-space and
     // foot pinning so the pin targets stay exact.
+    if (qEnvironmentVariableIsSet("QTMESH_T2M_DEBUG"))
+        AnimationMerger::debugDumpAnatomy(skel.get(), animName, "pre-post");
     if (smoothFps > 0) {
         if (AnimationMerger::smoothBakeAnimation(skel.get(), animName,
                                                  smoothFps, fps) > 0)
             err() << "(smooth-bake: " << smoothFps << " -> " << fps
                   << " fps)" << Qt::endl;
+        if (qEnvironmentVariableIsSet("QTMESH_T2M_DEBUG"))
+            AnimationMerger::debugDumpAnatomy(skel.get(), animName,
+                                              "post-smooth");
     }
 
     // #838: ground crouch/kneel/work clips (drop the root so the lowest foot
@@ -2376,6 +2381,8 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                   << Qt::endl;
     }
 
+    if (qEnvironmentVariableIsSet("QTMESH_T2M_DEBUG"))
+        AnimationMerger::debugDumpAnatomy(skel.get(), animName, "pre-footpin");
     // #856: foot-contact cleanup — ON by default (--no-foot-pin disables).
     if (footPin) {
         const auto fp = AnimationMerger::pinFeet(skel.get(), animName);

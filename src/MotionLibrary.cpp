@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include "ModelDownloader.h"
+#include "SentryReporter.h"
 
 #include <QDir>
 #include <QEventLoop>
@@ -357,9 +358,17 @@ bool MotionLibrary::saveCuration(const QSet<QString>& approved)
 QString MotionLibrary::ensureLibraryBlocking()
 {
     const QString dest = libraryPath();
-    if (QFileInfo::exists(dest)) return dest;
+    const bool haveLocal = QFileInfo::exists(dest);
+    // Already on the V2 library (libraryPath prefers it when present) — done.
+    if (haveLocal && dest.endsWith(QLatin1String(kLibraryFileV2)))
+        return dest;
+    // UPGRADE GAP: a pre-V2 install has only the legacy V1 file, and the old
+    // early-return here meant the V2 (52-joint, curated) library NEVER
+    // downloaded — those users kept the V1 side-channel finger path and its
+    // artifacts. When only V1 exists, still attempt the V2 download (once per
+    // process — see below); offline/404 keeps the local V1 working.
     if (!qEnvironmentVariableIsEmpty("QTMESH_MOTION_NO_DOWNLOAD"))
-        return {};
+        return haveLocal ? dest : QString();
 
     QString base;
     {
@@ -371,18 +380,29 @@ QString MotionLibrary::ensureLibraryBlocking()
                                  : QString::fromUtf8(env);
         }
     }
-    if (base.isEmpty()) return {};
+    if (base.isEmpty()) return haveLocal ? dest : QString();
     if (!base.endsWith('/')) base += '/';
 
     auto* dl = ModelDownloader::instance();
-    if (!dl) return {};
+    if (!dl) return haveLocal ? dest : QString();
+
+    // One V2-upgrade attempt per process: a v1-only install must not re-hit
+    // the network for every generate call in a session when offline.
+    static bool s_v2UpgradeAttempted = false;
+    if (haveLocal && s_v2UpgradeAttempted)
+        return dest;
+    s_v2UpgradeAttempted = true;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.motion_library"),
+        haveLocal ? QStringLiteral("attempt V2 upgrade from local V1 library")
+                  : QStringLiteral("download V2 motion library"));
 
     // Try the V2 library (schema v4, fingers-as-joints — the curated shipped
     // set) FIRST; fall back to the V1 file so overridden base URLs / older
     // hosted repos keep working. Old app builds only request the V1 name and
     // their loader rejects the v4 schema, so hosting both is non-breaking.
     bool stalled = false;
-    auto tryDownload = [&](const char* fileName) -> QString {
+    auto tryDownload = [&](const char* fileName, int timeoutMs) -> QString {
         const QDir dir(QFileInfo(libraryPath()).absolutePath());
         const QString fdest = dir.filePath(QString::fromLatin1(fileName));
         const QString url = base + QString::fromLatin1(fileName);
@@ -401,7 +421,7 @@ QString MotionLibrary::ensureLibraryBlocking()
         timeout.setSingleShot(true);
         QObject::connect(&timeout, &QTimer::timeout, &loop,
                          [&]() { timedOut = true; loop.quit(); });
-        timeout.start(300000);   // 5 min — the library is small (~8 MB)
+        timeout.start(timeoutMs);
         dl->startDownload(url, fdest, label);
         loop.exec();
         QObject::disconnect(onDone);
@@ -412,14 +432,27 @@ QString MotionLibrary::ensureLibraryBlocking()
         QFile::remove(fdest);   // don't leave a partial/404 body behind
         return QString();
     };
-    const QString v2 = tryDownload(kLibraryFileV2);
+    // The UPGRADE attempt (a working V1 exists) uses a SHORT timeout: the
+    // caller blocks synchronously (GUI generate / listMotionClips), and a
+    // stalled connection must not freeze a functional V1 user for the full
+    // 5 minutes — 20s covers the ~8 MB file on a sane connection, and the
+    // attempt runs only once per process. Fresh installs (no local library)
+    // keep the long timeout since there is nothing to fall back to.
+    const QString v2 = tryDownload(kLibraryFileV2, haveLocal ? 20000 : 300000);
     if (!v2.isEmpty()) return v2;
+    // V2 unavailable: keep the legacy local V1 when we have one.
+    if (haveLocal) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ai.motion_library"),
+            QStringLiteral("V2 upgrade unavailable — keeping local V1"));
+        return dest;
+    }
     // A TIMEOUT means the connection stalled, not that the V2 file is absent —
     // retrying the V1 name would block the (GUI/CLI) caller for up to another
     // 5 minutes for nothing. Only fall back on a fast failure (404 / older
     // hosted repo without the V2 file).
     if (stalled) return {};
-    return tryDownload(kLibraryFile);
+    return tryDownload(kLibraryFile, 300000);
 }
 
 std::vector<std::array<float, 3>> MotionLibrary::referenceDirsForPrompt(
