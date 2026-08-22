@@ -251,6 +251,15 @@ public:
         // anatomically — leave this false for qtmesh mocap / live drive.
         bool cmuLibraryHandedness = true);
 
+    /// Debug (#951): print raw world anatomy (forearm vs hip-line forward)
+    /// of an animation at a few sampled frames — env-gated by the caller
+    /// (QTMESH_T2M_DEBUG). The instrument that diagnosed #954: sample the
+    /// SAME quantities on the source rig and on the retargeted output and
+    /// the fore-dot-fwd sequences must match.
+    static void debugDumpAnatomy(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 const char* tag);
+
     /// One skeletal animation extracted onto the 22-joint canonical skeleton
     /// (#839, the REVERSE of applyMotionClip's world-frame path): per frame,
     /// per canonical role, the source bone's WORLD orientation — exactly the

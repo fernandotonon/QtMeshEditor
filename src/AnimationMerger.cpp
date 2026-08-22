@@ -1013,6 +1013,98 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         }
     }
 
+    // ── NAME-vs-ANATOMY chirality check (#951) ─────────────────────────
+    // Some rigs ship with MIRRORED bone naming (Blender FBX −X-scale
+    // exports: bones named "Left*" sit on the anatomical RIGHT — the
+    // Quaternius "Animated Human" is the canonical case). The extraction
+    // trusts names for the L/R roles AND derives its facing from the
+    // named hip line (left = rhip→lhip), so a mirrored rig yields clips
+    // canonically yawed 180°: invisible on self-retarget (rigid whole-clip
+    // yaw) but cross-rig every punch goes backward-overhead and arm swings
+    // mirror (user-reported). Detect chirality NAME-INDEPENDENTLY from the
+    // TOES: toes point forward, so for correct naming the signed volume
+    // det[named-left, up, toe-forward] = hipLine·(up×toe) is POSITIVE
+    // (left×up=fwd convention ⇒ up×fwd=left). The toe is found
+    // STRUCTURALLY (the foot bone's child with the largest horizontal
+    // offset — no names), and the test is averaged over sampled frames of
+    // every animation so a single odd pose can't flip it. (A knee-hinge
+    // test was tried first and REVERTED: thigh turnout — dance! — rotates
+    // the flexion axis, flipping the sign even on correctly-named rigs.)
+    // Negative ⇒ names are mirrored ⇒ swap every L/R role and finger side,
+    // making names match anatomy for everything downstream.
+    {
+        double chirality = 0.0;
+        Ogre::Bone* feet[2] = {roleBone[17], roleBone[21]};
+        Ogre::Bone* hipsLR[2] = {roleBone[15], roleBone[19]};
+        Ogre::Bone* hipB = roleBone[0];
+        Ogre::Bone* headB = roleBone[5] ? roleBone[5] : roleBone[3];
+        if (hipsLR[0] && hipsLR[1] && hipB && headB
+            && (feet[0] || feet[1])) {
+            auto accumulate = [&]() {
+                Ogre::Vector3 up = headB->_getDerivedPosition()
+                                   - hipB->_getDerivedPosition();
+                Ogre::Vector3 hipLine = hipsLR[1]->_getDerivedPosition()
+                                        - hipsLR[0]->_getDerivedPosition();
+                if (up.squaredLength() < 1e-12f
+                    || hipLine.squaredLength() < 1e-12f)
+                    return;
+                up.normalise();
+                hipLine.normalise();
+                for (Ogre::Bone* foot : feet) {
+                    if (!foot || foot->numChildren() == 0) continue;
+                    // structural toe: the child with the largest offset
+                    // component perpendicular to up
+                    Ogre::Vector3 best = Ogre::Vector3::ZERO;
+                    float bestH = 0.0f;
+                    for (unsigned short ci = 0; ci < foot->numChildren();
+                         ++ci) {
+                        auto* ch = static_cast<Ogre::Bone*>(
+                            foot->getChild(ci));
+                        Ogre::Vector3 off = ch->_getDerivedPosition()
+                                            - foot->_getDerivedPosition();
+                        const Ogre::Vector3 h =
+                            off - up * off.dotProduct(up);
+                        if (h.squaredLength() > bestH) {
+                            bestH = h.squaredLength();
+                            best = h;
+                        }
+                    }
+                    if (bestH < 1e-12f) continue;
+                    best.normalise();
+                    chirality += up.crossProduct(best).dotProduct(hipLine);
+                }
+            };
+            for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+                Ogre::Animation* anim = skel->getAnimation(a);
+                if (!anim || anim->getLength() <= 0.0f) continue;
+                const int nS = 8;
+                for (int f = 0; f < nS; ++f) {
+                    skel->reset(true);
+                    anim->apply(skel, anim->getLength()
+                                          * static_cast<float>(f)
+                                          / static_cast<float>(nS - 1));
+                    skel->_updateTransforms();
+                    accumulate();
+                }
+            }
+            skel->reset(true);
+            skel->_updateTransforms();
+        }
+        // MEASUREMENT RESULT (2026-08-20): every tested rig (Mixamo Rumba,
+        // Quaternius lowpoly, Gregorio) measures NEGATIVE — the Ogre import
+        // presents ALL humanoids with the same mirrored named-left/anatomy
+        // relationship, so naming is CONSISTENT across rigs and cancels in
+        // cross-rig retargets. A one-sided swap here would therefore BREAK
+        // retargets (source mirrored vs target) — keep this as a
+        // diagnostic-only check that flags a rig whose chirality DIFFERS
+        // from the fleet norm (positive = odd one out).
+        if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG"))
+            fprintf(stderr,
+                    "[extract] toe chirality %.3f (fleet norm: negative; "
+                    "positive would mean this rig mirrors differently)\n",
+                    chirality);
+    }
+
     // ── source-frame → canonical-frame conjugation ─────────────────────
     // Scraped rigs live in arbitrary file frames (Blender FBX armatures are
     // commonly Z-up), while the motion library's world convention is Y-up,
@@ -1365,6 +1457,34 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 }
             }
         }
+        if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG")) {
+            // RAW world anatomy at a few frames — no canonical conjugation.
+            for (int f : {0, frames / 3, frames / 2, (2 * frames) / 3}) {
+                skel->reset(true);
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(f) / static_cast<float>(fps)));
+                skel->_updateTransforms();
+                auto pos = [&](int role) -> Ogre::Vector3 {
+                    Ogre::Bone* b = roleBone[static_cast<size_t>(role)];
+                    return b ? b->_getDerivedPosition() : Ogre::Vector3::ZERO;
+                };
+                const Ogre::Vector3 relbow = pos(8), rhand = pos(9);
+                const Ogre::Vector3 lhip = pos(19), rhip = pos(15);
+                const Ogre::Vector3 hip = pos(0), head = pos(5);
+                Ogre::Vector3 fore = (rhand - relbow).normalisedCopy();
+                Ogre::Vector3 hl = (lhip - rhip).normalisedCopy();
+                Ogre::Vector3 up = (head - hip).normalisedCopy();
+                const Ogre::Vector3 fwd = hl.crossProduct(up).normalisedCopy();
+                fprintf(stderr,
+                        "[extract-raw] %s f=%d foreW=(%5.2f %5.2f %5.2f) "
+                        "hipL=(%5.2f %5.2f %5.2f) up=(%5.2f %5.2f %5.2f) "
+                        "fore-dot-fwd=%5.2f fore-dot-up=%5.2f\n",
+                        anim->getName().c_str(), f,
+                        fore.x, fore.y, fore.z, hl.x, hl.y, hl.z,
+                        up.x, up.y, up.z,
+                        fore.dotProduct(fwd), fore.dotProduct(up));
+            }
+        }
         // re-pose at the reference frame for the restWorld/restDir sampling below
         skel->reset(true);
         if (refFrame >= 0)
@@ -1645,6 +1765,48 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
     skel->reset(true);
     skel->_updateTransforms();
     return out;
+}
+
+void AnimationMerger::debugDumpAnatomy(Ogre::Skeleton* skel,
+                                       const std::string& animName,
+                                       const char* tag)
+{
+    if (!skel || !skel->hasAnimation(animName)) return;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    const float len = anim->getLength();
+    if (len <= 0.0f) return;
+    Ogre::Bone* role[22] = {nullptr};
+    for (auto* b : skel->getBones()) {
+        const int c = MotionInbetween::canonicalIndexForBone(
+            QString::fromStdString(b->getName()));
+        if (c >= 0 && c < 22 && !role[c]) role[c] = b;
+    }
+    if (!role[8] || !role[9] || !role[15] || !role[19] || !role[0]
+        || !(role[5] || role[3]))
+        return;
+    Ogre::Bone* headB = role[5] ? role[5] : role[3];
+    for (int k = 0; k < 4; ++k) {
+        skel->reset(true);
+        anim->apply(skel, len * (0.05f + 0.3f * k));
+        skel->_updateTransforms();
+        const Ogre::Vector3 fore =
+            (role[9]->_getDerivedPosition() - role[8]->_getDerivedPosition())
+                .normalisedCopy();
+        const Ogre::Vector3 hl =
+            (role[19]->_getDerivedPosition()
+             - role[15]->_getDerivedPosition()).normalisedCopy();
+        const Ogre::Vector3 up =
+            (headB->_getDerivedPosition() - role[0]->_getDerivedPosition())
+                .normalisedCopy();
+        const Ogre::Vector3 fwd = hl.crossProduct(up).normalisedCopy();
+        fprintf(stderr,
+                "[anat:%s] t=%.2f foreW=(%5.2f %5.2f %5.2f) "
+                "fore-dot-fwd=%5.2f fore-dot-up=%5.2f\n",
+                tag, len * (0.05f + 0.3f * k), fore.x, fore.y, fore.z,
+                fore.dotProduct(fwd), fore.dotProduct(up));
+    }
+    skel->reset(true);
+    skel->_updateTransforms();
 }
 
 bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
