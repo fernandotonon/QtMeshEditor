@@ -4544,6 +4544,9 @@ Rectangle {
             property bool projUseOcclusion: TexturePaintController.projUseOcclusion
             property real projDepthLimit: TexturePaintController.projDepthLimit
             property bool cameraLocked: TexturePaintController.cameraLocked
+            // Projection group collapse state (UI density — the group is off by
+            // default so it starts collapsed).
+            property bool projExpanded: false
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -4930,9 +4933,33 @@ Rectangle {
             }
 
             // ---- Projection / stencil painting (Paint v2 Slice F #549) ----
-            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor; opacity: 0.4 }
-            Text { text: "Projection"; color: PropertiesPanelController.textColor
-                   font.pixelSize: 11; font.bold: true }
+            // Collapsible header (keeps the Paint panel compact — starts collapsed).
+            Rectangle {
+                width: parent.width - 16; height: 24; radius: 4
+                color: projHeaderMouse.containsMouse
+                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.1)
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor; border.width: 1
+                Row {
+                    anchors.fill: parent; anchors.leftMargin: 6; spacing: 4
+                    Text { anchors.verticalCenter: parent.verticalCenter
+                        text: texPaintCol.projExpanded ? "▼" : "▶"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                    Text { anchors.verticalCenter: parent.verticalCenter
+                        text: texPaintCol.projectionMode > 0 ? "Projection •" : "Projection"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true }
+                }
+                MouseArea {
+                    id: projHeaderMouse
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: texPaintCol.projExpanded = !texPaintCol.projExpanded
+                }
+            }
+            Column {
+                width: parent.width
+                spacing: 8
+                visible: texPaintCol.projExpanded
             Row {
                 spacing: 6
                 width: parent.width - 16
@@ -5029,6 +5056,7 @@ Rectangle {
                         onClicked: TexturePaintController.chooseAndProjectPhoto() }
                 }
             }
+            } // end collapsible Projection body
 
             // Texture slot picker \u2014 populated by selection (advanced override:
             // lets the user target a specific TUS regardless of channel mapping)

@@ -150,6 +150,7 @@ MeshSegmenter.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 ProjectionPainter.cpp
+DecalSession.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -378,6 +379,7 @@ MeshSegmenter.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 ProjectionPainter.h
+DecalSession.h
 ProjectionMath.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
