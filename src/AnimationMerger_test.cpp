@@ -1355,6 +1355,131 @@ TEST_F(AnimationMergerTest, BodyRetargeterLandmarkDirectionMovesArm)
 
     EXPECT_GT(raisedMotion, 25.0f);
 }
+
+TEST_F(AnimationMergerTest, BodyRetargeterHighKneeDoesNotFlipThigh)
+{
+    // High knee: MediaPipe thigh can aim antiparallel to the standing neutral
+    // (knee above the hip in world-up). Landmark getRotationTo then flips the
+    // Mixamo thigh 180° up the back. Prefer PoseIK quats + reject unsafe
+    // direction aims so the thigh stays forward/down, matching the capture.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "body_rt_knee_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* parent) {
+        auto* b = skel->createBone(n, h++);
+        b->setPosition(p);
+        if (parent) parent->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.2f, 0}, hips);
+    auto* chest = bone("Spine2", {0, 0.25f, 0}, spine);
+    bone("Neck", {0, 0.15f, 0}, chest);
+    bone("Head", {0, 0.15f, 0}, chest);
+    auto* lArm = bone("LeftArm", {0.25f, 0.05f, 0}, chest);
+    bone("LeftForeArm", {0.25f, 0, 0}, lArm);
+    bone("LeftHand", {0.15f, 0, 0}, lArm);
+    auto* rArm = bone("RightArm", {-0.25f, 0.05f, 0}, chest);
+    bone("RightForeArm", {-0.25f, 0, 0}, rArm);
+    bone("RightHand", {-0.15f, 0, 0}, rArm);
+    auto* lUp = bone("LeftUpLeg", {0.12f, -0.05f, 0}, hips);
+    auto* lKnee = bone("LeftLeg", {0, -0.40f, 0}, lUp);
+    bone("LeftFoot", {0, -0.40f, 0.05f}, lKnee);
+    auto* rUp = bone("RightUpLeg", {-0.12f, -0.05f, 0}, hips);
+    auto* rKnee = bone("RightLeg", {0, -0.40f, 0}, rUp);
+    bone("RightFoot", {0, -0.40f, 0.05f}, rKnee);
+    skel->setBindingPose();
+    auto mesh = createInMemoryMesh("body_rt_knee_mesh", skel);
+    Ogre::Entity* ent = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "body_rt_knee_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skelInst = ent->getSkeleton();
+    BodyRetargeter rt(skelInst);
+    ASSERT_TRUE(rt.valid());
+
+    using Landmarks = std::array<float, PoseIK::kLandmarkCount * 3>;
+    auto setLm = [](Landmarks& l, int lm, float x, float y, float z) {
+        l[lm * 3 + 0] = x;
+        l[lm * 3 + 1] = y;
+        l[lm * 3 + 2] = z;
+    };
+    auto standLm = [&]() {
+        Landmarks l{};
+        setLm(l, 11, 0.18f, -0.45f, 0.f);
+        setLm(l, 12, -0.18f, -0.45f, 0.f);
+        setLm(l, 13, 0.45f, -0.45f, 0.f);
+        setLm(l, 14, -0.45f, -0.45f, 0.f);
+        setLm(l, 15, 0.70f, -0.45f, 0.f);
+        setLm(l, 16, -0.70f, -0.45f, 0.f);
+        setLm(l, 23, 0.10f, 0.f, 0.f);
+        setLm(l, 24, -0.10f, 0.f, 0.f);
+        setLm(l, 25, 0.10f, 0.40f, 0.f);
+        setLm(l, 26, -0.10f, 0.40f, 0.f);
+        setLm(l, 27, 0.10f, 0.80f, 0.f);
+        setLm(l, 28, -0.10f, 0.80f, 0.f);
+        setLm(l, 0, 0.f, -0.65f, -0.10f);
+        setLm(l, 7, 0.08f, -0.62f, 0.02f);
+        setLm(l, 8, -0.08f, -0.62f, 0.02f);
+        return l;
+    };
+
+    auto thighDir = [&]() -> Ogre::Vector3 {
+        skelInst->_updateTransforms();
+        return (skelInst->getBone("LeftLeg")->_getDerivedPosition()
+                - skelInst->getBone("LeftUpLeg")->_getDerivedPosition())
+            .normalisedCopy();
+    };
+    auto applyLocals =
+        [&](const std::vector<std::pair<unsigned short, Ogre::Quaternion>>&
+                locals) {
+            skelInst->reset(true);
+            for (const auto& [handle, local] : locals) {
+                Ogre::Bone* b = skelInst->getBone(handle);
+                b->setManuallyControlled(true);
+                b->setOrientation(local);
+            }
+            for (Ogre::Bone* root : skelInst->getRootBones())
+                root->_update(true, true);
+        };
+
+    std::array<float, PoseIK::kLandmarkCount> vis{};
+    vis.fill(1.f);
+
+    PoseIK::Solver solver;
+    Landmarks neutralLm = standLm();
+    const auto neutralFr = solver.solveFrame(neutralLm.data(), vis.data());
+    ASSERT_TRUE(neutralFr.resolved(PoseIK::LHip));
+    ASSERT_TRUE(neutralFr.resolved(PoseIK::LKnee));
+
+    rt.setNeutralReference(neutralFr.quats, neutralFr.resolvedMask,
+                           neutralLm.data(), vis.data());
+    applyLocals(rt.evaluateFrame(neutralFr.quats, neutralFr.resolvedMask, 0,
+                                 neutralLm.data(), vis.data()));
+    const Ogre::Vector3 standThigh = thighDir();
+    EXPECT_LT(standThigh.y, -0.5f);  // standing thigh points down
+
+    // Extreme high left knee: knee nearly straight above the hip (image-y up)
+    // with a tiny forward offset. After canonicalize the live thigh is nearly
+    // antiparallel to the standing-down neutral — landmark getRotationTo then
+    // picks an arbitrary 180° axis and folds the Mixamo thigh up the back.
+    Landmarks highKnee = standLm();
+    setLm(highKnee, 25, 0.10f, -0.35f, 0.05f);  // knee almost above hip
+    setLm(highKnee, 27, 0.10f, -0.10f, 0.10f);  // ankle still above hip line
+    const auto highFr = solver.solveFrame(highKnee.data(), vis.data());
+    ASSERT_TRUE(highFr.resolved(PoseIK::LHip));
+    applyLocals(rt.evaluateFrame(highFr.quats, highFr.resolvedMask, 0,
+                                 highKnee.data(), vis.data()));
+    const Ogre::Vector3 lifted = thighDir();
+
+    // The upside-down bug is a ~180° flip: thigh ≈ -standThigh (straight up
+    // the spine / shoe behind the head). Clamped landmark aim must not.
+    EXPECT_LT(lifted.dotProduct(-standThigh), 0.85f)
+        << "thigh flipped antiparallel to standing: lifted=" << lifted
+        << " stand=" << standThigh;
+    // Still a real high-knee: leave the standing-down pose.
+    EXPECT_GT(degBetween(standThigh, lifted), 20.0f) << lifted;
+}
 #endif  // ENABLE_MOCAP
 
 // ── #857: twist transport in the bind-referenced direction retarget ─────────

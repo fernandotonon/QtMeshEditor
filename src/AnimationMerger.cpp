@@ -2139,6 +2139,33 @@ bool legLandmarksReliable(int role, const float* visibility33)
     }
 }
 
+// Clamp an aim direction to a max swing from `from` (radians). When `to` is
+// nearly antiparallel, getRotationTo's axis is arbitrary and Mixamo thighs
+// fold up the back — prefer swinging toward `fallbackAxis` (torso forward).
+Ogre::Vector3 clampAimSwing(const Ogre::Vector3& from,
+                            const Ogre::Vector3& to,
+                            float maxAngleRad,
+                            const Ogre::Vector3& fallbackAxis)
+{
+    if (from.squaredLength() < 1e-12f || to.squaredLength() < 1e-12f)
+        return from;
+    Ogre::Vector3 a = from.normalisedCopy();
+    Ogre::Vector3 b = to.normalisedCopy();
+    float cosA = a.dotProduct(b);
+    cosA = std::max(-1.f, std::min(1.f, cosA));
+    const float angle = std::acos(cosA);
+    if (angle <= maxAngleRad + 1e-4f)
+        return b;
+    Ogre::Vector3 axis = a.crossProduct(b);
+    if (axis.squaredLength() < 1e-10f) {
+        axis = a.crossProduct(fallbackAxis);
+        if (axis.squaredLength() < 1e-10f)
+            axis = a.perpendicular();
+    }
+    axis.normalise();
+    return Ogre::Quaternion(Ogre::Radian(maxAngleRad), axis) * a;
+}
+
 void collectFingerDirsFromPoseLandmarks(
     const float* world33, const float* visibility33,
     std::array<std::array<float, 3>, AnimationMerger::kFingerSlots>& out,
@@ -2506,10 +2533,9 @@ BodyRetargeter::evaluateFrame(
                 continue;
             }
             Ogre::Quaternion local;
-            // Leg landmark directions are often wrong (standing hallucination when
-            // knees are occluded). Prefer PoseIK quats for legs when resolved.
-            // Hip stays on bind/direction path — quat hip rotation breaks W
-            // propagation and distorts arms/torso direction retarget.
+            // Legs: clamp landmark aims (avoids 180° thigh flips on high knee)
+            // and fall back to PoseIK quats when landmarks look stuck at
+            // neutral. Hip stays on bind/direction — quat hip breaks W.
             const bool isLegRole =
                 (c >= PoseIK::RButtock && c <= PoseIK::LFoot);
             const bool isHandRole =
@@ -2549,19 +2575,60 @@ BodyRetargeter::evaluateFrame(
                 }
                 local = localDir;
             } else if (isLegRole) {
+                // High-knee / occlusion: raw landmark getRotationTo can swing
+                // ~180° and fold Mixamo thighs up the back. Prefer clamped
+                // landmark aims for real leg motion; when the landmark looks
+                // stuck at neutral (seated occlusion), use PoseIK quats — but
+                // refuse a quat that would invert the thigh.
+                const Ogre::Vector3& dref =
+                    d->neutralDref[static_cast<size_t>(c)];
+                Ogre::Vector3 dsLeg = Ogre::Vector3::ZERO;
+                bool haveLmAim = false;
                 if (legDirOk) {
-                    Ogre::Vector3 ds =
-                        CtInv * liveCanon[static_cast<size_t>(c)];
-                    ds.normalise();
-                    const Ogre::Quaternion R =
-                        d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
+                    dsLeg = CtInv * liveCanon[static_cast<size_t>(c)];
+                    if (dsLeg.squaredLength() > 1e-12f) {
+                        dsLeg.normalise();
+                        haveLmAim = true;
+                    }
+                }
+                const bool dirNearNeutral =
+                    haveLmAim && dref.dotProduct(dsLeg) > 0.9995f;
+                const Ogre::Vector3 torsoFwd =
+                    (CtInv * Ogre::Vector3::UNIT_Z).normalisedCopy();
+                constexpr float kMaxLegSwing = 115.f * (Ogre::Math::PI / 180.f);
+
+                auto applyClampedDir = [&](const Ogre::Vector3& aim) {
+                    const Ogre::Vector3 clamped =
+                        clampAimSwing(dref, aim, kMaxLegSwing, torsoFwd);
+                    const Ogre::Quaternion R = dref.getRotationTo(clamped);
                     const Ogre::Quaternion Wt =
                         R * d->dirQbase[static_cast<size_t>(i)];
                     local = Wp.Inverse() * Wt;
                     W[static_cast<size_t>(i)] = Wt;
+                };
+
+                if (haveLmAim && !dirNearNeutral) {
+                    applyClampedDir(dsLeg);
                 } else if (legQuatResolved) {
                     local = quatDeltaArtic(i, c, base);
                     W[static_cast<size_t>(i)] = Wp * local;
+                    if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                        > 1e-12f) {
+                        const Ogre::Vector3 thigh =
+                            (W[static_cast<size_t>(i)]
+                             * tb.tgtBindDir[static_cast<size_t>(c)])
+                                .normalisedCopy();
+                        if (dref.dotProduct(thigh) < -0.15f) {
+                            if (haveLmAim)
+                                applyClampedDir(dsLeg);
+                            else {
+                                local = base;
+                                W[static_cast<size_t>(i)] = Wp * local;
+                            }
+                        }
+                    }
+                } else if (haveLmAim) {
+                    applyClampedDir(dsLeg);
                 } else {
                     local = base;
                     W[static_cast<size_t>(i)] = Wp * local;
