@@ -1412,9 +1412,61 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 ? (Cbind * u.normalisedCopy()) : Ogre::Vector3::ZERO;
             const bool animUpright =
                 leveled.squaredLength() > 1e-9f && leveled.y > 0.82f;  // ~35°
-            if (!animUpright) {
+            // #954: uprightness alone can't detect a bind whose FACING
+            // differs from the animation's (post-import-fix the up axes
+            // agree, but e.g. the Quaternius Woman's bind faces ~90° off her
+            // clips — referencing bind then yaws the whole canonical clip
+            // sideways: Run/Sit rendered facing right while Walk was fine).
+            // Compare the HIP LINE at bind vs at the sampled animated frame,
+            // both leveled by the bind-derived frame and projected
+            // horizontal: > ~40° apart ⇒ bind is NOT a usable reference.
+            bool animFacingSquare = true;
+            if (roleBone[15] && roleBone[19]) {
+                const Ogre::Vector3 hlAnim =
+                    roleBone[19]->_getDerivedPosition()
+                    - roleBone[15]->_getDerivedPosition();
+                skel->reset(true);
+                skel->_updateTransforms();
+                const Ogre::Vector3 hlBind =
+                    roleBone[19]->_getDerivedPosition()
+                    - roleBone[15]->_getDerivedPosition();
+                // restore the sampled animated pose for any later reads
+                skel->reset(true);
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(fStar) / static_cast<float>(fps)));
+                skel->_updateTransforms();
+                Ogre::Vector3 a = Cbind * hlAnim;
+                Ogre::Vector3 b = Cbind * hlBind;
+                a.y = 0.0f; b.y = 0.0f;
+                if (a.squaredLength() > 1e-9f && b.squaredLength() > 1e-9f)
+                    animFacingSquare =
+                        a.normalisedCopy().dotProduct(b.normalisedCopy())
+                        > 0.766f;
+            }
+            if (!animUpright || !animFacingSquare) {
                 // case (b): bind ≠ animation frame. Reference the most-upright
-                // ANIMATED frame (torso-up closest to the bind torso-up).
+                // ANIMATED frame (torso-up closest to the bind torso-up) that
+                // is ALSO facing-square: a reference whose pelvis is bladed
+                // (running mid-stride, seated twist) poisons everything
+                // measured against it — the hip's per-frame twist and the
+                // descent root transport inject the reference's yaw as a
+                // constant whole-body rotation (#954: Woman Run/Sit faced 90°
+                // sideways while Walk was fine). Squareness = alignment of
+                // the frame's hip line with the CLIP-MEAN hip line, both
+                // projected perpendicular to the frame's torso-up.
+                Ogre::Vector3 meanHipLine = Ogre::Vector3::ZERO;
+                if (roleBone[15] && roleBone[19]) {
+                    for (int f = 0; f < frames; ++f) {
+                        skel->reset(true);
+                        anim->apply(skel, std::min(length,
+                            static_cast<float>(f) / static_cast<float>(fps)));
+                        skel->_updateTransforms();
+                        meanHipLine += roleBone[19]->_getDerivedPosition()
+                                       - roleBone[15]->_getDerivedPosition();
+                    }
+                    if (meanHipLine.squaredLength() > 1e-9f)
+                        meanHipLine.normalise();
+                }
                 float best = -2.f; int bestF = fStar;
                 for (int f = 0; f < frames; ++f) {
                     skel->reset(true);
@@ -1423,10 +1475,92 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                     skel->_updateTransforms();
                     const Ogre::Vector3 uf = torsoUpNow();
                     if (uf.squaredLength() < 1e-9f) continue;
-                    const float d = bindUp.dotProduct(uf.normalisedCopy());
+                    float d = bindUp.dotProduct(uf.normalisedCopy());
+                    if (meanHipLine.squaredLength() > 0.5f
+                        && roleBone[15] && roleBone[19]) {
+                        Ogre::Vector3 hl =
+                            roleBone[19]->_getDerivedPosition()
+                            - roleBone[15]->_getDerivedPosition();
+                        const Ogre::Vector3 un = uf.normalisedCopy();
+                        hl -= un * hl.dotProduct(un);
+                        Ogre::Vector3 mh =
+                            meanHipLine - un * meanHipLine.dotProduct(un);
+                        if (hl.squaredLength() > 1e-9f
+                            && mh.squaredLength() > 1e-9f) {
+                            const float sq = hl.normalisedCopy().dotProduct(
+                                mh.normalisedCopy());
+                            d *= 0.5f + 0.5f * std::max(0.0f, sq);
+                        }
+                    }
                     if (d > best) { best = d; bestF = f; }
                 }
                 refFrame = bestF;
+            }
+        }
+        // FACING-SQUARENESS AUDIT (#954, applies to EVERY animated-reference
+        // path, not just case (b) — the Woman's clips are fStar-path): if the
+        // chosen reference frame's hip line deviates >~40° from the CLIP-MEAN
+        // hip line, the reference caught a bladed pelvis (running mid-stride,
+        // seated twist) and everything measured against it inherits its yaw
+        // (hip twist channel, descent root transport → whole body renders
+        // sideways). Re-pick across all frames with a combined
+        // uprightness × squareness score.
+        if (refFrame >= 0 && roleBone[15] && roleBone[19]) {
+            Ogre::Vector3 meanHL = Ogre::Vector3::ZERO;
+            for (int f = 0; f < frames; ++f) {
+                skel->reset(true);
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(f) / static_cast<float>(fps)));
+                skel->_updateTransforms();
+                meanHL += roleBone[19]->_getDerivedPosition()
+                          - roleBone[15]->_getDerivedPosition();
+            }
+            if (meanHL.squaredLength() > 1e-9f) {
+                meanHL.normalise();
+                auto hipSquareness = [&](int f) -> float {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    Ogre::Vector3 hl = roleBone[19]->_getDerivedPosition()
+                                       - roleBone[15]->_getDerivedPosition();
+                    const Ogre::Vector3 un = torsoUpNow();
+                    if (un.squaredLength() > 1e-9f) {
+                        hl -= un * hl.dotProduct(un);
+                        Ogre::Vector3 mh = meanHL
+                                           - un * meanHL.dotProduct(un);
+                        if (hl.squaredLength() > 1e-9f
+                            && mh.squaredLength() > 1e-9f)
+                            return hl.normalisedCopy().dotProduct(
+                                mh.normalisedCopy());
+                    }
+                    return 1.0f;   // indeterminate → don't penalise
+                };
+                if (hipSquareness(refFrame) < 0.766f) {   // >~40° bladed
+                    float best = -2.f; int bestF = refFrame;
+                    for (int f = 0; f < frames; ++f) {
+                        skel->reset(true);
+                        anim->apply(skel, std::min(length,
+                            static_cast<float>(f) / static_cast<float>(fps)));
+                        skel->_updateTransforms();
+                        const Ogre::Vector3 uf = torsoUpNow();
+                        if (uf.squaredLength() < 1e-9f) continue;
+                        const float up =
+                            (bindUp.squaredLength() > 1e-9f)
+                                ? bindUp.dotProduct(uf.normalisedCopy())
+                                : 1.0f;
+                        const float d =
+                            up * (0.5f + 0.5f
+                                  * std::max(0.0f, hipSquareness(f)));
+                        if (d > best) { best = d; bestF = f; }
+                    }
+                    if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG"))
+                        fprintf(stderr,
+                                "[extract] %s: bladed reference f=%d "
+                                "re-picked → f=%d\n",
+                                anim->getName().c_str(), refFrame, bestF);
+                    refFrame = bestF;
+                }
             }
         }
         skel->reset(true);
