@@ -2610,7 +2610,21 @@ BodyRetargeter::evaluateFrame(
                 if (haveLmAim && !dirNearNeutral) {
                     applyClampedDir(dsLeg);
                 } else if (legQuatResolved) {
-                    local = quatDeltaArtic(i, c, base);
+                    // Near-neutral landmarks: compose the PoseIK delta onto the
+                    // calibrated landmark aim, not bind `base`. Otherwise a
+                    // seated/raised-leg calibration (live ≈ dref → identity
+                    // delta) snaps the leg back to standing bind.
+                    Ogre::Quaternion articBase = base;
+                    if (haveLmAim) {
+                        const Ogre::Vector3 clamped = clampAimSwing(
+                            dref, dsLeg, kMaxLegSwing, torsoFwd);
+                        const Ogre::Quaternion R =
+                            dref.getRotationTo(clamped);
+                        const Ogre::Quaternion Wt =
+                            R * d->dirQbase[static_cast<size_t>(i)];
+                        articBase = Wp.Inverse() * Wt;
+                    }
+                    local = quatDeltaArtic(i, c, articBase);
                     W[static_cast<size_t>(i)] = Wp * local;
                     if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
                         > 1e-12f) {

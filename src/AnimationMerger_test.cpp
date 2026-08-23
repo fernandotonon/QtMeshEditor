@@ -1480,6 +1480,116 @@ TEST_F(AnimationMergerTest, BodyRetargeterHighKneeDoesNotFlipThigh)
     // Still a real high-knee: leave the standing-down pose.
     EXPECT_GT(degBetween(standThigh, lifted), 20.0f) << lifted;
 }
+
+TEST_F(AnimationMergerTest, BodyRetargeterSeatedNeutralDoesNotSnapToStanding)
+{
+    // Calibrate while seated (thighs forward). Replaying the same pose used to
+    // hit the near-neutral quat path with identity delta on bind `base`, which
+    // snapped the legs back to standing. Landmark-aligned articBase must keep
+    // the calibrated seated aim.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "body_rt_seat_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* parent) {
+        auto* b = skel->createBone(n, h++);
+        b->setPosition(p);
+        if (parent) parent->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.2f, 0}, hips);
+    auto* chest = bone("Spine2", {0, 0.25f, 0}, spine);
+    bone("Neck", {0, 0.15f, 0}, chest);
+    bone("Head", {0, 0.15f, 0}, chest);
+    auto* lArm = bone("LeftArm", {0.25f, 0.05f, 0}, chest);
+    bone("LeftForeArm", {0.25f, 0, 0}, lArm);
+    bone("LeftHand", {0.15f, 0, 0}, lArm);
+    auto* rArm = bone("RightArm", {-0.25f, 0.05f, 0}, chest);
+    bone("RightForeArm", {-0.25f, 0, 0}, rArm);
+    bone("RightHand", {-0.15f, 0, 0}, rArm);
+    auto* lUp = bone("LeftUpLeg", {0.12f, -0.05f, 0}, hips);
+    auto* lKnee = bone("LeftLeg", {0, -0.40f, 0}, lUp);
+    bone("LeftFoot", {0, -0.40f, 0.05f}, lKnee);
+    auto* rUp = bone("RightUpLeg", {-0.12f, -0.05f, 0}, hips);
+    auto* rKnee = bone("RightLeg", {0, -0.40f, 0}, rUp);
+    bone("RightFoot", {0, -0.40f, 0.05f}, rKnee);
+    skel->setBindingPose();
+    auto mesh = createInMemoryMesh("body_rt_seat_mesh", skel);
+    Ogre::Entity* ent = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "body_rt_seat_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skelInst = ent->getSkeleton();
+    BodyRetargeter rt(skelInst);
+    ASSERT_TRUE(rt.valid());
+
+    using Landmarks = std::array<float, PoseIK::kLandmarkCount * 3>;
+    auto setLm = [](Landmarks& l, int lm, float x, float y, float z) {
+        l[lm * 3 + 0] = x;
+        l[lm * 3 + 1] = y;
+        l[lm * 3 + 2] = z;
+    };
+    auto seatedLm = [&]() {
+        Landmarks l{};
+        setLm(l, 11, 0.18f, -0.45f, 0.f);
+        setLm(l, 12, -0.18f, -0.45f, 0.f);
+        setLm(l, 13, 0.45f, -0.45f, 0.f);
+        setLm(l, 14, -0.45f, -0.45f, 0.f);
+        setLm(l, 15, 0.70f, -0.45f, 0.f);
+        setLm(l, 16, -0.70f, -0.45f, 0.f);
+        setLm(l, 23, 0.10f, 0.f, 0.f);
+        setLm(l, 24, -0.10f, 0.f, 0.f);
+        // Knees forward of the hips (seated), not below (standing).
+        setLm(l, 25, 0.10f, 0.05f, 0.40f);
+        setLm(l, 26, -0.10f, 0.05f, 0.40f);
+        setLm(l, 27, 0.10f, 0.40f, 0.45f);
+        setLm(l, 28, -0.10f, 0.40f, 0.45f);
+        setLm(l, 0, 0.f, -0.65f, -0.10f);
+        setLm(l, 7, 0.08f, -0.62f, 0.02f);
+        setLm(l, 8, -0.08f, -0.62f, 0.02f);
+        return l;
+    };
+
+    auto thighDir = [&]() -> Ogre::Vector3 {
+        skelInst->_updateTransforms();
+        return (skelInst->getBone("LeftLeg")->_getDerivedPosition()
+                - skelInst->getBone("LeftUpLeg")->_getDerivedPosition())
+            .normalisedCopy();
+    };
+    auto applyLocals =
+        [&](const std::vector<std::pair<unsigned short, Ogre::Quaternion>>&
+                locals) {
+            skelInst->reset(true);
+            for (const auto& [handle, local] : locals) {
+                Ogre::Bone* b = skelInst->getBone(handle);
+                b->setManuallyControlled(true);
+                b->setOrientation(local);
+            }
+            for (Ogre::Bone* root : skelInst->getRootBones())
+                root->_update(true, true);
+        };
+
+    std::array<float, PoseIK::kLandmarkCount> vis{};
+    vis.fill(1.f);
+
+    PoseIK::Solver solver;
+    Landmarks neutralLm = seatedLm();
+    const auto neutralFr = solver.solveFrame(neutralLm.data(), vis.data());
+    ASSERT_TRUE(neutralFr.resolved(PoseIK::LHip));
+
+    rt.setNeutralReference(neutralFr.quats, neutralFr.resolvedMask,
+                           neutralLm.data(), vis.data());
+    applyLocals(rt.evaluateFrame(neutralFr.quats, neutralFr.resolvedMask, 0,
+                                 neutralLm.data(), vis.data()));
+    const Ogre::Vector3 seatedThigh = thighDir();
+
+    // Must not snap to standing (thigh straight down). Seated calib keeps a
+    // forward-ish thigh when replaying the neutral frame.
+    EXPECT_GT(seatedThigh.z, 0.25f)
+        << "seated neutral snapped toward standing: " << seatedThigh;
+    EXPECT_GT(seatedThigh.y, -0.75f)
+        << "seated thigh collapsed to standing-down: " << seatedThigh;
+}
 #endif  // ENABLE_MOCAP
 
 // ── #857: twist transport in the bind-referenced direction retarget ─────────
