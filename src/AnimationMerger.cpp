@@ -4727,8 +4727,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 // bind→reference roll per role, parent-relative/O-free), add
                 // it so θ is zero at the SOURCE BIND instead — reference
                 // choice cancels. Only body roles; fingers keep zero gain.
+                // NB: role 0 (hip) is EXCLUDED — its "roll" about the
+                // vertical axis is whole-body FACING, which the retarget
+                // deliberately anchors to the TARGET's own bind (a walk must
+                // not yaw). Re-basing it injected the source armature's yaw
+                // convention as a constant ~90° hip twist (user-reported on
+                // the Woman clips: torso forward, hips/legs sideways).
                 if (static_cast<int>(clipRefRoll.size()) >= 22) {
-                    for (int c = 0; c < Jc && c < 22; ++c) {
+                    for (int c = 1; c < Jc && c < 22; ++c) {
                         const float base = clipRefRoll[static_cast<size_t>(c)];
                         if (std::abs(base) < 1e-5f) continue;
                         for (int f = 0; f < frames; ++f)
