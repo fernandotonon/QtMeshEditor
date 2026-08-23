@@ -1982,62 +1982,6 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
     return true;
 }
 
-bool AnimationControlController::adjustArmElevation(const QString& animName,
-                                                    double degrees,
-                                                    const QString& entityName)
-{
-    Manager* mgr = Manager::getSingletonPtr();
-    if (!mgr) return false;
-    const std::string want = entityName.isEmpty()
-        ? m_selectedEntityName : entityName.toStdString();
-    Ogre::Entity* entity = nullptr;
-    for (auto* e : mgr->getEntities()) {
-        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
-        if (want.empty() || e->getName() == want) { entity = e; break; }
-    }
-    if (!entity) return false;
-    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
-    const std::string an = animName.toStdString();
-    if (!skel || !skel->hasAnimation(an)) return false;
-
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("GUI arm_elevation %1 deg").arg(degrees));
-    if (!AnimationMerger::adjustArmElevation(skel.get(), an,
-                                             static_cast<float>(degrees)))
-        return false;
-
-    // Same paused-clip live refresh as adjustArmSpace.
-    entity->refreshAvailableAnimationState();
-    if (auto* states = entity->getAllAnimationStates()) {
-        states->_notifyDirty();
-        if (states->hasAnimationState(an)) {
-            auto* st = states->getAnimationState(an);
-            if (st->getEnabled())
-                st->setTimePosition(st->getTimePosition());
-        }
-    }
-    notifyExternalAnimationEdit();
-    return true;
-}
-
-double AnimationControlController::currentArmElevation(
-    const QString& animName, const QString& entityName)
-{
-    Manager* mgr = Manager::getSingletonPtr();
-    if (!mgr) return 0.0;
-    const std::string want = entityName.isEmpty()
-        ? m_selectedEntityName : entityName.toStdString();
-    for (auto* e : mgr->getEntities()) {
-        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
-        if (want.empty() || e->getName() == want) {
-            Ogre::SkeletonPtr skel = e->getMesh()->getSkeleton();
-            return skel ? AnimationMerger::currentArmElevation(
-                              skel.get(), animName.toStdString()) : 0.0;
-        }
-    }
-    return 0.0;
-}
-
 double AnimationControlController::currentArmSpace(const QString& animName,
                                                    const QString& entityName)
 {
@@ -2161,7 +2105,6 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
-    std::vector<float> clipRefRoll;   // #954
     std::vector<float> clipRootY;
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
     std::vector<std::array<float, 3>> clipFingerRest;             // #838
@@ -2226,7 +2169,6 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
-        clipRefRoll = clip.refRoll;   // #954 bind-anchored roll
         clipRootY = clip.rootY;
         // V2 (schema v4, 52 joints): fingers retarget as canonical joints via
         // the body path — don't ALSO fire the applyFingerCurl side-channel
@@ -2272,9 +2214,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
                                                       clipSource == QStringLiteral("model"),
-                                                      clipRootY, doDescent,
-                                                      /*cmuLibraryHandedness=*/true,
-                                                      clipRefRoll);
+                                                      clipRootY, doDescent);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

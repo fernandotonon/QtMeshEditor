@@ -386,15 +386,6 @@ public:
     Q_INVOKABLE double currentArmSpace(const QString& animName,
                                        const QString& entityName = QString());
 
-    /// #957 "Arm elevation": pitch the arm chains up (+) / down (−) about the
-    /// torso LATERAL axis — the knob that lowers forward-raised arms, which
-    /// sit on arm-space's swing axis and don't respond to it. Same absolute +
-    /// idempotent slider contract as adjustArmSpace.
-    Q_INVOKABLE bool adjustArmElevation(const QString& animName, double degrees,
-                                        const QString& entityName = QString());
-    Q_INVOKABLE double currentArmElevation(
-        const QString& animName, const QString& entityName = QString());
-
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope

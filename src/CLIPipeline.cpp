@@ -2165,8 +2165,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                  float duration, const QString& outputPath,
                                  bool jsonOutput, bool useModel,
-                                 float armSpaceDeg, float armElevDeg,
-                                 bool footPin,
+                                 float armSpaceDeg, bool footPin,
                                  int smoothFps, int variantIndex,
                                  bool verticalDescent)
 {
@@ -2385,17 +2384,6 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             err() << "Note: arm-space adjustment skipped (no arm roles)."
                   << Qt::endl;
     }
-    if (std::abs(armElevDeg) > 1e-4f) {
-        if (AnimationMerger::adjustArmElevation(skel.get(), animName,
-                                                armElevDeg)) {
-            SentryReporter::addBreadcrumb(
-                QStringLiteral("ai.tool_call"),
-                QStringLiteral("arm_elevation %1 deg").arg(armElevDeg));
-            err() << "(arm-elevation: " << armElevDeg << " deg)" << Qt::endl;
-        } else
-            err() << "Note: arm-elevation adjustment skipped (no arm roles)."
-                  << Qt::endl;
-    }
 
     if (qEnvironmentVariableIsSet("QTMESH_T2M_DEBUG"))
         AnimationMerger::debugDumpAnatomy(skel.get(), animName, "pre-footpin");
@@ -2469,8 +2457,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
     int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
-    float armElevDeg = 0.0f;          // #957: arm elevation pitch (degrees)
-    bool armElevSet = false;
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
     bool footPinSet = false;          // --foot-pin given (standalone post-process)
@@ -2603,11 +2589,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             armSpaceSet = true;
             continue;
         }
-        if (arg == "--arm-elevation" && i + 1 < argc) {
-            armElevDeg = QString(argv[++i]).toFloat();
-            armElevSet = true;
-            continue;
-        }
         // #856 foot-contact cleanup: ON by default during --generate
         // (--no-foot-pin opts out); --foot-pin alone post-processes an
         // EXISTING animation (standalone, needs --animation).
@@ -2718,8 +2699,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
                                outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
-                               generateUseModel, armSpaceDeg, armElevDeg,
-                               generateFootPin,
+                               generateUseModel, armSpaceDeg, generateFootPin,
                                generateSmoothFps, generateVariant, generateDescent);
     }
 
@@ -2988,7 +2968,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
     // (no --generate). `qtmesh anim <file> --arm-space <deg> --animation <name> -o out`.
-    if (armSpaceSet || armElevSet) {
+    if (armSpaceSet) {
         if (animationFilter.isEmpty()) {
             err() << "Error: --arm-space (standalone) requires --animation <name>."
                   << Qt::endl;
@@ -3010,30 +2990,21 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                   << Qt::endl;
             return 1;
         }
-        if (armSpaceSet
-            && !AnimationMerger::adjustArmSpace(skel.get(), an, armSpaceDeg)) {
+        if (!AnimationMerger::adjustArmSpace(skel.get(), an, armSpaceDeg)) {
             err() << "Error: arm-space adjustment failed (no arm roles on this rig)."
                   << Qt::endl;
             return 1;
         }
-        if (armElevSet
-            && !AnimationMerger::adjustArmElevation(skel.get(), an,
-                                                    armElevDeg)) {
-            err() << "Error: arm-elevation adjustment failed (no arm roles on this rig)."
-                  << Qt::endl;
-            return 1;
-        }
         SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-            QStringLiteral("arm_space %1 / elevation %2 deg")
-                .arg(armSpaceDeg).arg(armElevDeg));
+            QStringLiteral("arm_space %1 deg").arg(armSpaceDeg));
         const QString out = outputPath.isEmpty() ? filePath : outputPath;
         auto* node = entity->getParentSceneNode();
         if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
                                            formatForExtension(out)) != 0) {
             err() << "Error: export failed." << Qt::endl; return 1;
         }
-        cliWrite(QString("Adjusted arms of '%1' (space %2 / elevation %3 deg) → %4\n")
-                     .arg(animationFilter).arg(armSpaceDeg).arg(armElevDeg)
+        cliWrite(QString("Adjusted arm space of '%1' to %2 deg → %3\n")
+                     .arg(animationFilter).arg(armSpaceDeg)
                      .arg(QFileInfo(out).fileName()));
         return 0;
     }

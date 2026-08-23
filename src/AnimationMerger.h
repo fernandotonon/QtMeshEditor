@@ -382,17 +382,6 @@ public:
     static float currentArmSpace(Ogre::Skeleton* skel,
                                  const std::string& animName);
 
-    /// #957 "Arm elevation": pitch the arm chains about the torso LATERAL
-    /// axis — positive raises, negative lowers toward hanging. The knob for
-    /// clips whose arms point FORWARD (arm-space's swing axis), e.g. the 2017
-    /// Quaternius packs' raised-arm walks. Same absolute + idempotent
-    /// contract as adjustArmSpace; tracked per skeleton instance.
-    static bool adjustArmElevation(Ogre::Skeleton* skel,
-                                   const std::string& animName,
-                                   float degrees);
-    static float currentArmElevation(Ogre::Skeleton* skel,
-                                     const std::string& animName);
-
     /// Move the tracked arm-space angle from oldAnim to newAnim on the given
     /// skeleton. Call from every animation-rename path so a renamed clip keeps
     /// its widen/tuck value (the keyframes carry over; the tracked angle must
