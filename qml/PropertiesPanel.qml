@@ -9913,12 +9913,17 @@ Rectangle {
                 var cur = AnimationControlController.currentArmSpace(animName, entity)
                 armSpaceSlider.value = cur
                 armSpaceSlider.lastApplied = cur
+                var curE = AnimationControlController.currentArmElevation(animName, entity)
+                armElevSlider.value = curE
+                armElevSlider.lastApplied = curE
             }
             function detachArmSpace() {
                 armSpaceAnim = ""
                 armSpaceEntity = ""
                 armSpaceSlider.value = 0
                 armSpaceSlider.lastApplied = 0
+                armElevSlider.value = 0
+                armElevSlider.lastApplied = 0
             }
 
             Connections {
@@ -10206,6 +10211,45 @@ Rectangle {
                 Text {
                     text: (armSpaceSlider.value > 0 ? "+" : "")
                           + Math.round(armSpaceSlider.value) + "°"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 42; horizontalAlignment: Text.AlignRight
+                }
+            }
+            // ── Arm elevation (#957): pitch the arms up/down about the torso
+            // LATERAL axis. Arm space above swings about the FORWARD axis, so
+            // clips whose arms point forward (raised-arm walks: 2017
+            // Quaternius packs) sit ON that axis and don't respond — this is
+            // the slider that lowers them. Same absolute+idempotent contract.
+            Row {
+                width: parent.width - 16; spacing: 6
+                visible: armSpaceAnim.length > 0
+                Text {
+                    text: "Arm height"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 62
+                    elide: Text.ElideRight
+                }
+                Slider {
+                    id: armElevSlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 62 - 42 - 12
+                    from: -90; to: 30; value: 0; stepSize: 1
+                    property real lastApplied: 0
+                    onValueChanged: {
+                        if (armSpaceAnim.length > 0
+                            && Math.round(value) !== Math.round(lastApplied)) {
+                            lastApplied = value
+                            AnimationControlController.adjustArmElevation(
+                                armSpaceAnim, value, armSpaceEntity)
+                        }
+                    }
+                    onPressedChanged: { if (!pressed) refreshAnimData() }
+                }
+                Text {
+                    text: (armElevSlider.value > 0 ? "+" : "")
+                          + Math.round(armElevSlider.value) + "°"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                     width: 42; horizontalAlignment: Text.AlignRight

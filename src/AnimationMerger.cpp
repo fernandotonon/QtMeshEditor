@@ -52,6 +52,24 @@ void setStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName,
     skel->getBone(0)->getUserObjectBindings().setUserAny(
         armSpaceKey(animName), Ogre::Any(degrees));
 }
+std::string armElevKey(const std::string& animName)
+{
+    return "qtme.armelev." + animName;
+}
+float getStoredArmElevation(Ogre::Skeleton* skel, const std::string& animName)
+{
+    if (!skel || skel->getNumBones() == 0) return 0.0f;
+    const Ogre::Any& a = skel->getBone(0)->getUserObjectBindings()
+                             .getUserAny(armElevKey(animName));
+    return a.has_value() ? Ogre::any_cast<float>(a) : 0.0f;
+}
+void setStoredArmElevation(Ogre::Skeleton* skel, const std::string& animName,
+                           float degrees)
+{
+    if (!skel || skel->getNumBones() == 0) return;
+    skel->getBone(0)->getUserObjectBindings().setUserAny(
+        armElevKey(animName), Ogre::Any(degrees));
+}
 } // namespace
 
 void AnimationMerger::registerSkeletonUpAxis(const std::string& name, int upAxis) {
@@ -285,6 +303,11 @@ void AnimationMerger::migrateArmSpaceKey(Ogre::Skeleton* skel,
     if (a.has_value()) {
         setStoredArmSpace(skel, newAnim, Ogre::any_cast<float>(a));
         uob.eraseUserAny(armSpaceKey(oldAnim));
+    }
+    const Ogre::Any& e = uob.getUserAny(armElevKey(oldAnim));
+    if (e.has_value()) {
+        setStoredArmElevation(skel, newAnim, Ogre::any_cast<float>(e));
+        uob.eraseUserAny(armElevKey(oldAnim));
     }
 }
 
@@ -2852,6 +2875,107 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     return true;
 }
 
+float AnimationMerger::currentArmElevation(Ogre::Skeleton* skel,
+                                           const std::string& animName)
+{
+    return getStoredArmElevation(skel, animName);
+}
+
+bool AnimationMerger::adjustArmElevation(Ogre::Skeleton* skel,
+                                         const std::string& animName,
+                                         float degrees)
+{
+    // #957: "Arm elevation" — PITCH the arm chains about the torso's LATERAL
+    // axis: positive raises the arms, negative lowers them toward hanging.
+    // Complements adjustArmSpace (which swings about the torso FORWARD axis
+    // and thus can only open/close LATERAL arms): clips whose arms point
+    // forward (e.g. the 2017 Quaternius packs animate walks with raised
+    // horizontal arms) sit ON the forward axis, where arm-space has no
+    // effect — this knob is the one that lowers them. Same contract as
+    // adjustArmSpace: absolute + idempotent per skeleton instance, tracked
+    // on bone[0]'s UserObjectBindings, export bakes the final keyframes.
+    if (!skel || !skel->hasAnimation(animName))
+        return false;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim)
+        return false;
+
+    const float stored = getStoredArmElevation(skel, animName);
+    const float delta = degrees - stored;
+    if (std::abs(delta) < 1e-4f)
+        return true;
+
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(static_cast<size_t>(nBones), -1);
+    for (int i = 0; i < nBones; ++i)
+        boneToCanon[static_cast<size_t>(i)] =
+            MotionInbetween::canonicalIndexForBone(QString::fromStdString(
+                skel->getBone(static_cast<unsigned short>(i))->getName()));
+
+    const TargetBindFrame tb = readTargetBindFrame(skel, boneToCanon);
+
+    // Torso LATERAL axis (canonical +X = left) in the rig's world. Rotating
+    // about it pitches a forward-pointing arm: −angle lowers, +angle raises
+    // (right-hand rule with +Z forward, +Y up: rot(+left)·fwd → −up).
+    const Ogre::Vector3 lat =
+        (tb.Ct.Inverse() * Ogre::Vector3::UNIT_X).normalisedCopy();
+    const Ogre::Radian ang = Ogre::Radian(Ogre::Degree(-delta));
+    const float kCollarShare = 0.25f;
+    const Ogre::Quaternion swing(ang, lat);
+    const Ogre::Quaternion swingC(ang * kCollarShare, lat);
+
+    std::vector<int> canonDup(
+        static_cast<size_t>(MotionInbetween::canonicalJointCount()), 0);
+    for (int i = 0; i < nBones; ++i)
+        if (boneToCanon[static_cast<size_t>(i)] >= 0)
+            ++canonDup[static_cast<size_t>(boneToCanon[static_cast<size_t>(i)])];
+
+    auto worldSwingForRole = [&](int c) -> const Ogre::Quaternion* {
+        switch (c) {
+            case 7:  case 11: return &swing;    // shoulders (both sides)
+            case 6:  case 10: return &swingC;   // collars (fractional)
+            default: return nullptr;
+        }
+    };
+
+    bool touchedAny = false;
+    for (int i = 0; i < nBones; ++i) {
+        const int c = boneToCanon[static_cast<size_t>(i)];
+        const Ogre::Quaternion* Sworld = worldSwingForRole(c);
+        if (!Sworld)
+            continue;
+        Ogre::NodeAnimationTrack* trk = nullptr;
+        if (anim->hasNodeTrack(static_cast<unsigned short>(i)))
+            trk = anim->getNodeTrack(static_cast<unsigned short>(i));
+        if (!trk || trk->getNumKeyFrames() == 0)
+            continue;
+
+        const int dup = std::max(1, canonDup[static_cast<size_t>(c)]);
+        Ogre::Quaternion S = *Sworld;
+        if (dup > 1)
+            S = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                        Ogre::Quaternion::IDENTITY, S,
+                                        /*shortestPath=*/true);
+
+        const Ogre::Quaternion Wbind = tb.bindWorld[static_cast<size_t>(i)];
+        const Ogre::Quaternion L = Wbind.Inverse() * S * Wbind;
+
+        const unsigned short nk = trk->getNumKeyFrames();
+        for (unsigned short k = 0; k < nk; ++k) {
+            Ogre::TransformKeyFrame* kf = trk->getNodeKeyFrame(k);
+            kf->setRotation(L * kf->getRotation());
+        }
+        trk->_keyFrameDataChanged();   // see adjustArmSpace: cache invalidation
+        touchedAny = true;
+    }
+
+    if (!touchedAny)
+        return false;
+
+    setStoredArmElevation(skel, animName, degrees);
+    return true;
+}
+
 int AnimationMerger::smoothBakeAnimation(Ogre::Skeleton* skel,
                                           const std::string& animName,
                                           int sparseFps, int targetFps)
@@ -4059,6 +4183,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     if (skel->getNumBones() > 0) {
         skel->getBone(0)->getUserObjectBindings().eraseUserAny(
             armSpaceKey(animName));
+        skel->getBone(0)->getUserObjectBindings().eraseUserAny(
+            armElevKey(animName));
         // #856: same for the foot-pin marker — a regenerated clip is unpinned.
         skel->getBone(0)->getUserObjectBindings().eraseUserAny(
             "qtme.footpin." + animName);
