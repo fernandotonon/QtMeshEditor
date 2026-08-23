@@ -2741,6 +2741,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             rd.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
                           float(a[2].toDouble())});
         }
+        // #954: carry the bind-anchored roll baseline through the parity
+        // harness so a self-retarget exercises the same twist path as the
+        // library retarget (review: the dump writes refRoll, the reader
+        // must consume it).
+        std::vector<float> rr;
+        for (const QJsonValue& v : clip.value("refRoll").toArray())
+            rr.push_back(float(v.toDouble()));
+        if (rr.size() < 22) rr.clear();
         const int cfps = root.value("fps").toInt(30);
         MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
         Ogre::Entity* ent = nullptr;
@@ -2751,7 +2759,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         const auto res = AnimationMerger::applyMotionClip(
             skel.get(), "generated_parity", q, cfps,
             /*worldFrame=*/true, rw, /*refineWithModel=*/false,
-            /*refineStride=*/8, /*yaw180=*/false, rd);
+            /*refineStride=*/8, /*yaw180=*/false, rd,
+            /*modelClip=*/false, /*clipRootY=*/{},
+            /*verticalDescent=*/false, /*cmuLibraryHandedness=*/true, rr);
         if (!res.ok) { err() << "Error: " << res.error << Qt::endl; return 1; }
         // GROUND-TRUTH self-parity: when the applied json names a source
         // animation that exists on THIS entity (self-retarget), play BOTH the
