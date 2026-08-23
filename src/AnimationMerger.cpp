@@ -1200,11 +1200,28 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         // "standing" fails for always-low actions (a crawl never stands, so
         // relative-to-max reads ~0); the bind pose is the true upright height.
         Ogre::Vector3 bindHip = Ogre::Vector3::ZERO, bindFoot = Ogre::Vector3::ZERO;
+        // #954: bind-pose PARENT-RELATIVE orientation per role bone. Parent-
+        // relative quantities are immune to the constant armature rotation O
+        // that offsets bind vs animation WORLDS on scraped rigs (O cancels in
+        // Wp⁻¹·Wb), so bind↔reference comparisons built on these are safe —
+        // unlike world-space ones (see the restWorld comment).
+        std::vector<Ogre::Quaternion> bindRel(
+            static_cast<size_t>(J), Ogre::Quaternion::ZERO);
         {
             skel->reset(true);
             skel->_updateTransforms();
             if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
             if (footBone) bindFoot = footBone->_getDerivedPosition();
+            for (int j = 0; j < J; ++j) {
+                Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+                if (!b) continue;
+                auto* pb = dynamic_cast<Ogre::Bone*>(b->getParent());
+                const Ogre::Quaternion pw = pb
+                    ? pb->_getDerivedOrientation()
+                    : Ogre::Quaternion::IDENTITY;
+                bindRel[static_cast<size_t>(j)] =
+                    pw.Inverse() * b->_getDerivedOrientation();
+            }
         }
         // Finger transfer uses DIRECTIONS (body-retarget style), NOT rotations:
         // the Biped finger bones have large, wildly-varying per-segment bind
@@ -1578,6 +1595,51 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         clip.frames = static_cast<int>(clip.quats.size());
         clip.restWorld = std::move(restWorld);
         clip.restDir = std::move(restDir);
+        // #954: bind→reference ROLL per role, about the bone's own axis —
+        // the quantity the retarget's twist channel loses when it zeroes θ at
+        // the reference frame. Computed PARENT-RELATIVE (O-free, see bindRel):
+        //     R      = L_ref · L_bind⁻¹          (parent-frame bind→ref)
+        //     θ_c    = signed twist of R about the bone's ref direction
+        // The retarget adds θ_c to its per-frame twist so the roll baseline
+        // anchors to the SOURCE BIND regardless of which reference frame the
+        // extraction picked — the #954 reference-sensitivity fix.
+        {
+            skel->reset(true);
+            if (refFrame >= 0)
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(refFrame) / static_cast<float>(fps)));
+            skel->_updateTransforms();
+            clip.refRoll.assign(static_cast<size_t>(J), 0.0f);
+            for (int j = 0; j < J && j < 22; ++j) {
+                Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+                const Ogre::Quaternion& lb = bindRel[static_cast<size_t>(j)];
+                if (!b || (lb.w == 0.0f && lb.x == 0.0f && lb.y == 0.0f
+                           && lb.z == 0.0f))
+                    continue;
+                const auto& sd = clip.restDir[static_cast<size_t>(j)];
+                Ogre::Vector3 dirW(sd[0], sd[1], sd[2]);   // canonical frame
+                if (dirW.squaredLength() < 1e-8f) continue;
+                auto* pb = dynamic_cast<Ogre::Bone*>(b->getParent());
+                const Ogre::Quaternion pw = pb
+                    ? pb->_getDerivedOrientation()
+                    : Ogre::Quaternion::IDENTITY;
+                const Ogre::Quaternion lref =
+                    pw.Inverse() * b->_getDerivedOrientation();
+                const Ogre::Quaternion R = lref * lb.Inverse();
+                // Bone direction at ref, in the PARENT frame (the frame R
+                // lives in): parent⁻¹ · worldDir; worldDir = C⁻¹ · restDir.
+                Ogre::Vector3 dRefParent =
+                    pw.Inverse() * (Cinv * dirW);
+                if (dRefParent.squaredLength() < 1e-8f) continue;
+                dRefParent.normalise();
+                // signed twist of R about dRefParent
+                const Ogre::Vector3 axis(R.x, R.y, R.z);
+                const float proj = axis.dotProduct(dRefParent);
+                const float th = 2.0f * std::atan2(proj, R.w);
+                clip.refRoll[static_cast<size_t>(j)] =
+                    std::remainder(th, 2.0f * static_cast<float>(M_PI));
+            }
+        }
 
         // #838 finger REST pointing direction per slot, at the reference pose
         // (the skeleton is still posed there — restWorld/restDir were just read
@@ -3903,7 +3965,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool modelClip,
     const std::vector<float>& clipRootY,
     bool verticalDescent,
-    bool cmuLibraryHandedness)
+    bool cmuLibraryHandedness,
+    const std::vector<float>& clipRefRoll)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -4527,6 +4590,24 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             twistTheta[static_cast<size_t>(f)]
                                       [static_cast<size_t>(c)] = acc / wsum;
                         }
+                    }
+                }
+                // #954: BIND-ANCHORED roll baseline. θ above is zero at the
+                // extraction's REFERENCE frame, so the roll baseline follows
+                // whatever frame the extractor picked — two extractions of
+                // the same clip with different references render arms rolled
+                // apart by the reference roll (the "arms 90° too wide"
+                // regression). When the clip ships refRoll (the source's
+                // bind→reference roll per role, parent-relative/O-free), add
+                // it so θ is zero at the SOURCE BIND instead — reference
+                // choice cancels. Only body roles; fingers keep zero gain.
+                if (static_cast<int>(clipRefRoll.size()) >= 22) {
+                    for (int c = 0; c < Jc && c < 22; ++c) {
+                        const float base = clipRefRoll[static_cast<size_t>(c)];
+                        if (std::abs(base) < 1e-5f) continue;
+                        for (int f = 0; f < frames; ++f)
+                            twistTheta[static_cast<size_t>(f)]
+                                      [static_cast<size_t>(c)] += base;
                     }
                 }
             }

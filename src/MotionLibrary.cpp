@@ -171,6 +171,13 @@ bool MotionLibrary::parse(const QByteArray& json)
                     static_cast<float>(v.at(2).toDouble())});
             }
         }
+        // #954: bind-anchored roll baseline (22 body roles).
+        const QJsonArray rrArr = co.value("refRoll").toArray();
+        if (rrArr.size() >= 22) {
+            clip.refRoll.reserve(rrArr.size());
+            for (const auto& v : rrArr)
+                clip.refRoll.push_back(static_cast<float>(v.toDouble()));
+        }
         const QJsonArray rootYArr = co.value("rootY").toArray();
         if (rootYArr.size() == clip.frames) {
             clip.rootY.reserve(clip.frames);

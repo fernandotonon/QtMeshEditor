@@ -253,7 +253,11 @@ public:
         // CMU BVH / motion-library clips store LEFT at +X; Ogre rigs with LEFT
         // at −X need L/R bone-index swap. Pose-ik mocap already labels L/R
         // anatomically — leave this false for qtmesh mocap / live drive.
-        bool cmuLibraryHandedness = true);
+        bool cmuLibraryHandedness = true,
+        // #954: per-role bind→reference roll (CanonicalClip::refRoll). Added
+        // to the twist channel so the roll baseline anchors to the source
+        // BIND instead of the extraction's reference frame. Empty → legacy.
+        const std::vector<float>& clipRefRoll = {});
 
     /// Debug (#951): print raw world anatomy (forearm vs hip-line forward)
     /// of an animation at a few sampled frames — env-gated by the caller
@@ -316,6 +320,13 @@ public:
         /// (restDir→frameDir) onto the target bind instead. Size == kFingerSlots
         /// (or empty for older libraries → falls back to absolute aim).
         std::vector<std::array<float, 3>> fingerRestDir;
+        /// #954: per-role bind→reference ROLL (radians, about the bone's own
+        /// axis, parent-relative/O-free). The retarget adds it to the twist
+        /// channel so the roll baseline anchors to the source BIND instead of
+        /// the extraction's (arbitrary) reference frame. 22 body roles; 0 for
+        /// unresolved. Empty on older extractions → legacy reference-zeroed
+        /// twist.
+        std::vector<float> refRoll;
         /// V2 (schema v4): true when quats/restWorld/restDir are 52-wide
         /// (fingers folded in as joints 22..51) rather than 22-wide body-only.
         /// The CLI dump writes schema "qtmesh-motion-library-v4" when set.

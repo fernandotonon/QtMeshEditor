@@ -67,6 +67,10 @@ public:
         /// convention doesn't over-bend the target; absent → legacy absolute
         /// aim (older libraries).
         std::vector<std::array<float, 3>> fingerRestDir;
+        /// #954: per-role bind→reference roll (radians, 22 body roles) — the
+        /// retarget adds it to the twist channel so roll anchors to the
+        /// source bind. Empty on older libraries.
+        std::vector<float> refRoll;
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;
