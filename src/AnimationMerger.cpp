@@ -1497,6 +1497,43 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                     C = meanUp.getRotationTo(Ogre::Vector3::UNIT_Y) * C;
                 }
             }
+            // CLIP-AVERAGED FACING (#954 follow-up). The facing (canonical
+            // +X = left) comes from the HIP LINE at the single reference
+            // frame — a reference that catches the pelvis BLADED (a running
+            // mid-stride, a seated twist) yaws the whole canonical frame,
+            // so the retargeted character faces ~90° sideways (user-reported
+            // on the Woman Run/Sit). Like the up-leveling above, average
+            // the hip line over ALL frames (horizontal component, weighted
+            // by its magnitude so twisted frames contribute less) and
+            // yaw-correct C so the mean lands on +X. A clip with genuine
+            // constant pelvis rotation averages to its dominant facing —
+            // the right reference for it.
+            const Ogre::Bone* lHipB = roleBone[19];
+            const Ogre::Bone* rHipB = roleBone[15];
+            if (lHipB && rHipB) {
+                Ogre::Vector3 meanLeft = Ogre::Vector3::ZERO;
+                for (int f = 0; f < frames; ++f) {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    Ogre::Vector3 l = lHipB->_getDerivedPosition()
+                                      - rHipB->_getDerivedPosition();
+                    if (l.squaredLength() < 1e-12f) continue;
+                    l = C * l;
+                    l.y = 0.0f;                     // horizontal component
+                    meanLeft += l;                  // magnitude-weighted
+                }
+                if (meanLeft.squaredLength() > 1e-6f) {
+                    meanLeft.normalise();
+                    // Yaw-only correction about +Y (up stays leveled).
+                    const float yaw =
+                        std::atan2(meanLeft.z, meanLeft.x);   // 0 when +X
+                    if (std::abs(yaw) > 1e-3f)
+                        C = Ogre::Quaternion(Ogre::Radian(yaw),
+                                             Ogre::Vector3::UNIT_Y) * C;
+                }
+            }
         }
         if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG")) {
             // RAW world anatomy at a few frames — no canonical conjugation.
