@@ -253,124 +253,40 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
             channelNode->mTransformation.Decompose(ns, nr, np);
             nodeBindScale = Ogre::Vector3(ns.x, ns.y, ns.z);
 
-            // #954: the correction must map the key from the NODE parent
-            // frame into the OGRE parent frame:
-            //     C = OgreParentWorldBind⁻¹ · NodeParentWorldBind
-            // (An earlier form used the bone's OWN local-bind mismatch,
-            // C = OgreBindLocal · NodeBindLocal⁻¹ — correct for ROOT bones,
-            // where the two coincide, but wrong for deep bones: per-bone
-            // bind mismatches accumulate along the ancestor chain, so on
-            // Blender-FBX rigs whose skin binds differ from node binds by
-            // per-bone PreRotations the arm chains played ~90° raised while
-            // the legs stayed near-correct — verified against Blender's own
-            // import of the Quaternius Woman.) Identity whenever node binds
-            // and skin binds agree chain-wide (Mixamo-class rigs), so the
-            // common case is untouched.
-            // ROOT bones keep the OWN-BIND form (their re-rooting is a bone-
-            // local convention, #936 — verified); deep bones need the parent-
-            // chain form (per-bone bind mismatches accumulate along the
-            // ancestors — a first all-parent-chain version double-corrected
-            // the ROOT and tipped the whole body).
+            // #954: the space-change applies to ROOT bones ONLY. For a bone
+            // with an Ogre parent, induction over the chain (E_parent ==
+            // W_true_parent) makes the correct keyframe simply
+            // ogreBindLocal⁻¹·rawKey — applying the own-bind mismatch C to
+            // deep bones DOUBLE-corrects every bone whose skin bind differs
+            // from its node bind, which on Blender-FBX rigs (per-bone
+            // PreRotations) rotated whole ARM CHAINS ~90° into the air while
+            // legs (bind-consistent) stayed right (verified against
+            // Blender's own import of the Quaternius Woman). The ROOT is the
+            // one bone whose Ogre parent chain (nothing) differs from its
+            // node ancestors: #936's re-rooting bakes those ancestors into
+            // the root bind (G = ancestors·N), making the own-bind form
+            // C = G·N⁻¹ EXACT there — final = G·(G⁻¹·C·raw) = ancestors·raw.
             const bool isRootBone = bone->getParent() == nullptr;
-            if (isRootBone) {
-                const bool invertible = std::abs(ns.x) > 1e-8f &&
-                                        std::abs(ns.y) > 1e-8f &&
-                                        std::abs(ns.z) > 1e-8f;
-                if (invertible) {
-                    Ogre::Affine3 nodeBind;
-                    nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
-                                           Ogre::Vector3(ns.x, ns.y, ns.z),
-                                           Ogre::Quaternion(nr.w, nr.x, nr.y, nr.z));
-                    Ogre::Affine3 ogreBind;
-                    ogreBind.makeTransform(bone->getPosition(), bone->getScale(),
-                                           bone->getOrientation());
-                    const Ogre::Affine3 c = ogreBind * nodeBind.inverse();
-                    c.decomposition(cPos, cScale, cRot);
-                    haveSpaceChange =
-                        !cPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
-                        !cRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
-                        !cScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
-                }
-            } else {
-            Ogre::Affine3 nodeParent = Ogre::Affine3::IDENTITY;
-            {
-                std::vector<const aiNode*> chain;
-                for (const aiNode* n = channelNode->mParent; n; n = n->mParent)
-                    chain.push_back(n);
-                for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-                    aiVector3D ps, pp; aiQuaternion pr;
-                    (*it)->mTransformation.Decompose(ps, pr, pp);
-                    Ogre::Affine3 t;
-                    t.makeTransform(Ogre::Vector3(pp.x, pp.y, pp.z),
-                                    Ogre::Vector3(ps.x, ps.y, ps.z),
-                                    Ogre::Quaternion(pr.w, pr.x, pr.y, pr.z));
-                    nodeParent = nodeParent * t;
-                }
-            }
-            // The Ogre parent chain composes bone binds only (bones live
-            // under the skeleton, no scene nodes in between). The NODE chain
-            // above however includes the armature/scene ancestors, which the
-            // OGRE side handles at the entity level — composing them here
-            // would double-apply the armature transform on non-root bones.
-            // So the node chain must be taken RELATIVE to the node that
-            // corresponds to the Ogre root's PARENT, i.e. drop the ancestors
-            // above the skeleton's root node: find the aiNode of the Ogre
-            // ROOT bone and rebase both chains there.
-            const Ogre::Node* ogreRoot = bone;
-            while (ogreRoot->getParent()) ogreRoot = ogreRoot->getParent();
-            const aiNode* rootNode =
-                scene->mRootNode->FindNode(ogreRoot->getName().c_str());
-            Ogre::Affine3 nodeAboveRoot = Ogre::Affine3::IDENTITY;
-            if (rootNode) {
-                std::vector<const aiNode*> chain;
-                for (const aiNode* n = rootNode->mParent; n; n = n->mParent)
-                    chain.push_back(n);
-                for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-                    aiVector3D ps, pp; aiQuaternion pr;
-                    (*it)->mTransformation.Decompose(ps, pr, pp);
-                    Ogre::Affine3 t;
-                    t.makeTransform(Ogre::Vector3(pp.x, pp.y, pp.z),
-                                    Ogre::Vector3(ps.x, ps.y, ps.z),
-                                    Ogre::Quaternion(pr.w, pr.x, pr.y, pr.z));
-                    nodeAboveRoot = nodeAboveRoot * t;
-                }
-            }
-            Ogre::Affine3 ogreParent = Ogre::Affine3::IDENTITY;
-            {
-                std::vector<const Ogre::Node*> chain;
-                for (const Ogre::Node* n = bone->getParent(); n;
-                     n = n->getParent())
-                    chain.push_back(n);
-                for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-                    Ogre::Affine3 t;
-                    t.makeTransform((*it)->getPosition(), (*it)->getScale(),
-                                    (*it)->getOrientation());
-                    ogreParent = ogreParent * t;
-                }
-            }
-            const Ogre::Matrix4 opm(ogreParent);
-            const Ogre::Matrix4 narm(nodeAboveRoot);
-            const bool invertible =
-                std::abs(opm.determinant()) > 1e-12f &&
-                std::abs(narm.determinant()) > 1e-12f;
-            if (invertible) {
-                // Node parent chain RELATIVE to the skeleton root's parent
-                // node (rebase): nodeParentRel = nodeAboveRoot⁻¹·nodeParent.
-                // Then C maps node-parent-relative keys into the Ogre parent
-                // frame. For rigs whose node binds equal their skin binds
-                // this telescopes to identity (Mixamo unchanged).
-                // Full node-ancestor chain on the node side: skin binds
-                // (the Ogre side) are MESH-space, i.e. they already include
-                // the armature/scene ancestors — rebasing them out
-                // reintroduced the armature transform conjugated (lying
-                // body). For consistent rigs C telescopes to identity.
-                const Ogre::Affine3 c = ogreParent.inverse() * nodeParent;
+            // A zero bind-scale component makes the node transform singular —
+            // skip the space-change mapping rather than invert it (keys then
+            // apply in node space, the pre-#936 behavior for that bone).
+            const bool invertible = std::abs(ns.x) > 1e-8f &&
+                                    std::abs(ns.y) > 1e-8f &&
+                                    std::abs(ns.z) > 1e-8f;
+            if (isRootBone && invertible) {
+                Ogre::Affine3 nodeBind;
+                nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
+                                       Ogre::Vector3(ns.x, ns.y, ns.z),
+                                       Ogre::Quaternion(nr.w, nr.x, nr.y, nr.z));
+                Ogre::Affine3 ogreBind;
+                ogreBind.makeTransform(bone->getPosition(), bone->getScale(),
+                                       bone->getOrientation());
+                const Ogre::Affine3 c = ogreBind * nodeBind.inverse();
                 c.decomposition(cPos, cScale, cRot);
                 haveSpaceChange =
                     !cPos.positionEquals(Ogre::Vector3::ZERO, 1e-5f) ||
                     !cRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f)) ||
                     !cScale.positionEquals(Ogre::Vector3::UNIT_SCALE, 1e-4f);
-            }
             }
         }
     }
