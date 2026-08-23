@@ -949,6 +949,176 @@ bool TexturePaintController::chooseAndProjectPhoto()
     return projectFromPhoto(path);
 }
 
+// ---------------------------------------------------------------------------
+// Paint v2 Slice F (#549) — decal tool
+// ---------------------------------------------------------------------------
+
+bool TexturePaintController::beginDecal(const QString& imagePath)
+{
+    if (!hasActiveSession()) {
+        if (activeEntity()) ensurePaintableTexture(1024);
+        if (!hasActiveSession()) return false;
+    }
+    QImage img(imagePath);
+    if (img.isNull()) return false;
+    m_decal.begin(img);
+    m_haveDecalDragPos = false;
+    setBrushTool(ToolDecal);
+    SentryReporter::addBreadcrumb("paint.decal.begin", imagePath);
+    refreshDecalOverlay();
+    emit projectionChanged();
+    return true;
+}
+
+bool TexturePaintController::beginDecalInteractive()
+{
+    QApplication::processEvents();
+    const QString path = QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        QStringLiteral("Choose decal image"),
+        QDir::currentPath(),
+        QStringLiteral("Image files (*.png *.jpg *.jpeg *.tga *.bmp);;All files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+    if (path.isEmpty()) return false;
+    return beginDecal(path);
+}
+
+bool TexturePaintController::decalSessionActive() const { return m_decal.active(); }
+int  TexturePaintController::decalState() const { return static_cast<int>(m_decal.state()); }
+
+void TexturePaintController::placeDecalAt(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (m_decal.state() != DecalSession::State::Placing) return;
+    Ogre::Vector3 localPos, localNormal;
+    if (!hitTestLocalPoint(widget, screenPos, localPos, localNormal)) return;
+    auto* entity = m_paintMeshEntity;
+    auto* node = entity ? entity->getParentSceneNode() : nullptr;
+    if (!node) return;
+    const Ogre::Affine3 world = node->_getFullTransform();
+    const Ogre::Vector3 worldPos = world * localPos;
+    Ogre::Vector3 worldN = world.linear() * localNormal;
+    if (worldN.isZeroLength()) worldN = Ogre::Vector3::UNIT_Z;
+    worldN.normalise();
+    Ogre::Vector3 camUp = Ogre::Vector3::UNIT_Y;
+    if (widget && widget->getSpaceCamera() && widget->getSpaceCamera()->getCamera())
+        camUp = widget->getSpaceCamera()->getCamera()->getRealUp();
+    // Initial half-size ~ 15% of the mesh bounds radius.
+    float halfSize = 0.5f;
+    if (m_paintMesh) halfSize = m_paintMesh->calculateBounds().getHalfSize().length() * 0.15f;
+    m_decal.place(worldPos, worldN, camUp, std::max(halfSize, 1e-3f));
+    SentryReporter::addBreadcrumb("paint.decal.place",
+        QStringLiteral("half=%1").arg(halfSize, 0, 'f', 3));
+    refreshDecalOverlay();
+    emit projectionChanged();
+}
+
+bool TexturePaintController::decalPlaneHit(OgreWidget* widget, const QPoint& screenPos,
+                                           Ogre::Vector3& outWorld) const
+{
+    if (!widget || !widget->getSpaceCamera() || !widget->getSpaceCamera()->getCamera())
+        return false;
+    Ogre::Camera* cam = widget->getSpaceCamera()->getCamera();
+    int vw = 0, vh = 0; widget->pixelSizeForCameraPicking(vw, vh);
+    if (vw <= 0 || vh <= 0) return false;
+    const float nx = static_cast<float>(screenPos.x()) / vw;
+    const float ny = static_cast<float>(screenPos.y()) / vh;
+    const Ogre::Ray ray = cam->getCameraToViewportRay(nx, ny);
+    const Ogre::Plane plane(m_decal.rect().normal, m_decal.rect().center);
+    const auto hit = ray.intersects(plane);
+    if (!hit.first) return false;
+    outWorld = ray.getPoint(hit.second);
+    return true;
+}
+
+int TexturePaintController::decalHitTest(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (m_decal.state() != DecalSession::State::Editing) return static_cast<int>(DecalSession::Handle::None);
+    Ogre::Vector3 world;
+    if (!decalPlaneHit(widget, screenPos, world))
+        return static_cast<int>(DecalSession::Handle::None);
+    const Ogre::Vector2 uv = m_decal.worldToRectUv(world);
+    const DecalSession::Handle h = m_decal.hitTest(uv.x, uv.y);
+    m_decalDragLastPos = screenPos;
+    m_haveDecalDragPos = (h != DecalSession::Handle::None);
+    return static_cast<int>(h);
+}
+
+void TexturePaintController::dragDecal(OgreWidget* widget, const QPoint& screenPos, int handle)
+{
+    if (m_decal.state() != DecalSession::State::Editing) return;
+    Ogre::Vector3 world;
+    if (!decalPlaneHit(widget, screenPos, world)) return;
+    Ogre::Vector3 prevWorld;
+    const bool havePrev = m_haveDecalDragPos
+        && decalPlaneHit(widget, m_decalDragLastPos, prevWorld);
+    const DecalSession::Handle h = static_cast<DecalSession::Handle>(handle);
+    const DecalSession::Rect& r = m_decal.rect();
+
+    if (h == DecalSession::Handle::Body) {
+        if (havePrev) m_decal.translate(world - prevWorld);
+    } else if (h == DecalSession::Handle::RotateCorner) {
+        if (havePrev) {
+            const Ogre::Vector3 a = (prevWorld - r.center);
+            const Ogre::Vector3 b = (world - r.center);
+            if (!a.isZeroLength() && !b.isZeroLength()) {
+                Ogre::Vector3 an = a; an.normalise();
+                Ogre::Vector3 bn = b; bn.normalise();
+                float ang = std::atan2(an.crossProduct(bn).dotProduct(r.normal),
+                                       an.dotProduct(bn));
+                m_decal.rotate(ang);
+            }
+        }
+    } else if (h == DecalSession::Handle::ScaleEdge) {
+        // Scale so the dragged edge follows the cursor (uniform-ish via UV).
+        const Ogre::Vector2 uv = m_decal.worldToRectUv(world);
+        const float su = std::abs(uv.x) > 0.2f ? std::abs(uv.x) : 1.0f;
+        const float sv = std::abs(uv.y) > 0.2f ? std::abs(uv.y) : 1.0f;
+        // Only scale the axis being dragged (whichever |uv| is larger).
+        if (std::abs(uv.x) >= std::abs(uv.y)) m_decal.scale(su, 1.0f);
+        else m_decal.scale(1.0f, sv);
+    }
+    m_decalDragLastPos = screenPos;
+    m_haveDecalDragPos = true;
+    refreshDecalOverlay();
+}
+
+bool TexturePaintController::commitDecal()
+{
+    if (m_decal.state() != DecalSession::State::Editing) { cancelDecal(); return false; }
+    if (!hasActiveSession()) { cancelDecal(); return false; }
+    m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
+    if (!m_haveProjTris) { cancelDecal(); return false; }
+
+    const auto ci = m_decal.buildCommit(/*softEdge*/0.15f);
+    // Occlusion for the decal projection (front arc only).
+    ProjectionPainter::OcclusionMap occ;
+    const bool haveOcc = buildOcclusionForView(ci.view, occ);
+    ProjectionPainter::Options opts;
+    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    opts.backfaceCull = true;
+    opts.useOcclusion = haveOcc;
+
+    TexturePaintBuffer scratch;
+    scratch.resize(opts.resolution, opts.resolution);
+    const auto rep = ProjectionPainter::project(
+        m_projTris, ci.view, ci.source, scratch, opts, haveOcc ? &occ : nullptr);
+    const bool ok = rep.ok && rep.texelsWritten > 0
+        && commitProjectedLayer(scratch, QStringLiteral("Decal")) >= 0;
+    SentryReporter::addBreadcrumb("paint.decal.commit",
+        QStringLiteral("texels=%1 ok=%2").arg(rep.texelsWritten).arg(ok));
+    cancelDecal();
+    return ok;
+}
+
+void TexturePaintController::cancelDecal()
+{
+    m_decal.cancel();
+    m_haveDecalDragPos = false;
+    refreshDecalOverlay();
+    emit projectionChanged();
+}
+
 void TexturePaintController::setColorSource(int source)
 {
     const ColorSource s = (source == static_cast<int>(ColorGradient))
@@ -4153,16 +4323,27 @@ void TexturePaintController::closeSession()
                 }
                 if (m_symPlaneObj)
                     sceneMgr->destroyManualObject(m_symPlaneObj);
+                // Paint v2 Slice F (#549): tear down the decal overlay.
+                if (m_decalNode) {
+                    m_decalNode->detachAllObjects();
+                    sceneMgr->getRootSceneNode()->removeChild(m_decalNode);
+                    sceneMgr->destroySceneNode(m_decalNode);
+                }
+                if (m_decalObj)
+                    sceneMgr->destroyManualObject(m_decalObj);
             } catch (...) {}
         }
         m_ringNode = nullptr;
         m_ringObj = nullptr;
         m_symPlaneNode = nullptr;
         m_symPlaneObj = nullptr;
+        m_decalNode = nullptr;
+        m_decalObj = nullptr;
     }
     // Paint v2 Slice E (#548): the topology mirror maps are per-entity/per-mesh;
     // drop them so a rebuilt session (or a different entity) rebuilds fresh.
     invalidateSymmetryMaps();
+    m_decal.cancel();
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
     m_layerStack = PaintLayerStack();
@@ -5672,6 +5853,82 @@ void TexturePaintController::refreshSymmetryPlaneOverlay()
              Ogre::ColourValue(0.3f, 0.3f, 1, alpha));
     m_symPlaneObj->end();
     m_symPlaneNode->setVisible(true);
+}
+
+void TexturePaintController::refreshDecalOverlay()
+{
+    auto* entity = m_paintMeshEntity;
+    auto* sceneMgr = entity ? entity->_getManager() : nullptr;
+    if (!sceneMgr) sceneMgr = Manager::getSingletonPtr()
+                       ? Manager::getSingletonPtr()->getSceneMgr() : nullptr;
+    if (!sceneMgr) return;
+
+    const bool show = m_decal.state() == DecalSession::State::Editing;
+    if (!show) {
+        if (m_decalObj) m_decalObj->clear();
+        if (m_decalNode) m_decalNode->setVisible(false);
+        return;
+    }
+
+    static const char* kMat = "TexturePaint/DecalRect";
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    if (!matMgr.getByName(kMat)) {
+        auto mat = matMgr.create(kMat, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+        pass->setDepthCheckEnabled(false);         // draw on top so handles are grabbable
+        pass->setCullingMode(Ogre::CULL_NONE);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    }
+    if (!m_decalNode)
+        m_decalNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    if (!m_decalObj) {
+        m_decalObj = sceneMgr->createManualObject("TexturePaint_DecalRect");
+        m_decalObj->setDynamic(true);
+        m_decalObj->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+        m_decalNode->attachObject(m_decalObj);
+    }
+    // The overlay is in WORLD space (the rect stores world corners).
+    m_decalNode->setPosition(Ogre::Vector3::ZERO);
+    m_decalNode->setOrientation(Ogre::Quaternion::IDENTITY);
+    m_decalNode->setScale(Ogre::Vector3::UNIT_SCALE);
+
+    Ogre::Vector3 c[4];
+    m_decal.corners(c);
+    const Ogre::ColourValue line(1.0f, 0.9f, 0.2f, 0.9f);   // yellow outline
+    const Ogre::ColourValue fill(1.0f, 0.9f, 0.2f, 0.12f);
+    const Ogre::ColourValue hCol(0.2f, 0.8f, 1.0f, 0.95f);  // cyan handles
+
+    m_decalObj->clear();
+    // Translucent body (two tris).
+    m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+    for (int k : {0, 1, 2, 0, 2, 3}) { m_decalObj->position(c[k]); m_decalObj->colour(fill); }
+    m_decalObj->end();
+    // Outline (line strip).
+    m_decalObj->begin(kMat, Ogre::RenderOperation::OT_LINE_STRIP);
+    for (int k : {0, 1, 2, 3, 0}) { m_decalObj->position(c[k]); m_decalObj->colour(line); }
+    m_decalObj->end();
+    // Handle squares at the 4 corners (rotate) + 4 edge midpoints (scale).
+    const Ogre::Vector3 hu = m_decal.rect().tangentU;
+    const Ogre::Vector3 hv = m_decal.rect().tangentV;
+    const float hs = 0.06f * (hu.length() + hv.length());   // handle half-size
+    auto drawHandle = [&](const Ogre::Vector3& ctr) {
+        const Ogre::Vector3 du = (hu.length() > 1e-6f ? hu.normalisedCopy() : Ogre::Vector3::UNIT_X) * hs;
+        const Ogre::Vector3 dv = (hv.length() > 1e-6f ? hv.normalisedCopy() : Ogre::Vector3::UNIT_Y) * hs;
+        const Ogre::Vector3 q0 = ctr - du - dv, q1 = ctr + du - dv,
+                            q2 = ctr + du + dv, q3 = ctr - du + dv;
+        m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+        for (const auto& v : {q0, q1, q2, q0, q2, q3}) { m_decalObj->position(v); m_decalObj->colour(hCol); }
+        m_decalObj->end();
+    };
+    for (int k = 0; k < 4; ++k) drawHandle(c[k]);                       // corners
+    drawHandle(m_decal.rect().center + hu);                             // +U edge
+    drawHandle(m_decal.rect().center - hu);                             // -U edge
+    drawHandle(m_decal.rect().center + hv);                             // +V edge
+    drawHandle(m_decal.rect().center - hv);                             // -V edge
+    m_decalNode->setVisible(true);
 }
 
 void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,

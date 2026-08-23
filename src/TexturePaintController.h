@@ -11,6 +11,7 @@
 #include "PaintChannel.h"
 #include "SymmetryMirrorMap.h"
 #include "ProjectionPainter.h"
+#include "DecalSession.h"
 
 #include <QColor>
 #include <QObject>
@@ -143,6 +144,9 @@ class TexturePaintController : public QObject
     Q_PROPERTY(bool   projUseOcclusion  READ projUseOcclusion  WRITE setProjUseOcclusion  NOTIFY projectionChanged)
     Q_PROPERTY(double projDepthLimit    READ projDepthLimit    WRITE setProjDepthLimit    NOTIFY projectionChanged) // fraction of bounds radius; 0 = off
     Q_PROPERTY(bool   cameraLocked      READ cameraLocked      NOTIFY projectionChanged)  // read-only status
+    // Paint v2 Slice F (#549) — decal tool (read-only status for the panel).
+    Q_PROPERTY(bool   decalSessionActive READ decalSessionActive NOTIFY projectionChanged)
+    Q_PROPERTY(int    decalState         READ decalState         NOTIFY projectionChanged)
 
 public:
     enum BrushTool {
@@ -152,6 +156,7 @@ public:
         ToolColorPicker = 3,  ///< Sample color at hit UV into the brush color.
         ToolSmudge      = 4,  ///< Drag pixels in the brush direction.
         ToolSmartSelect = 5,  ///< Fuzzy / magic-wand region select by color.
+        ToolDecal       = 6,  ///< Paint v2 Slice F (#549): place an image decal.
     };
     Q_ENUM(BrushTool)
 
@@ -448,6 +453,28 @@ public:
     Q_INVOKABLE void chooseStencilImage();
     /// Open a file dialog to pick a photo, then projectFromPhoto() it.
     Q_INVOKABLE bool chooseAndProjectPhoto();
+    /// @}
+
+    /// @name Paint v2 Slice F — decal tool (#549)
+    /// @{
+    /// Open a file dialog, begin a decal session with that image, and switch to
+    /// the Decal tool (the next viewport click places the rectangle).
+    Q_INVOKABLE bool beginDecalInteractive();
+    /// Begin a decal session with an already-loaded image path (no dialog).
+    Q_INVOKABLE bool beginDecal(const QString& imagePath);
+    bool decalSessionActive() const;
+    int  decalState() const;   ///< DecalSession::State as int (0 idle/1 placing/2 editing)
+    /// Place the decal rectangle at the surface point under `screenPos`.
+    void placeDecalAt(OgreWidget* widget, const QPoint& screenPos);
+    /// Classify the handle a viewport click at `screenPos` grabbed (int cast of
+    /// DecalSession::Handle); also records the drag anchor.
+    int  decalHitTest(OgreWidget* widget, const QPoint& screenPos);
+    /// Drag the active decal handle to `screenPos` (translate/rotate/scale).
+    void dragDecal(OgreWidget* widget, const QPoint& screenPos, int handle);
+    /// Commit the decal onto the mesh as a NEW layer (one undo step). ESC/Enter
+    /// path calls cancelDecal/commitDecal from mainwindow.
+    Q_INVOKABLE bool commitDecal();
+    Q_INVOKABLE void cancelDecal();
     /// @}
 
     /// @name Paint v2 Slice D — PBR channel painting (#547)
@@ -1135,6 +1162,18 @@ private:
     bool    m_haveProjOcc = false;
     std::vector<ProjectionPainter::Triangle> m_projTris;  // world tris cached per stroke
     bool    m_haveProjTris = false;
+
+    // --- Paint v2 Slice F (#549): decal tool ---
+    DecalSession m_decal;
+    Ogre::SceneNode* m_decalNode = nullptr;
+    Ogre::ManualObject* m_decalObj = nullptr;
+    QPoint  m_decalDragLastPos;           // last screen pos during a handle drag
+    bool    m_haveDecalDragPos = false;
+    /// Rebuild the decal rectangle + handle overlay (or hide it when inactive).
+    void refreshDecalOverlay();
+    /// Ray-pick the decal rect plane at `screenPos` → world hit (on the plane).
+    bool decalPlaneHit(OgreWidget* widget, const QPoint& screenPos,
+                       Ogre::Vector3& outWorld) const;
 
     /// Cache the entity's world triangles for the projection stroke (once).
     void ensureProjTris();

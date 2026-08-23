@@ -1374,3 +1374,42 @@ TEST_F(TexturePaintControllerSceneTest, ProjectionModeSettersAndGracefulNoCamera
     ctrl->setProjectionMode(0);
     ctrl->closeSession();
 }
+
+// #549 F-D: the decal session transitions correctly through the controller
+// (begin → placing; cancel → idle) and cancelDecal is safe. The full
+// place/drag/commit needs a viewport camera the headless fixture lacks, so the
+// geometry is covered pure-data in DecalSession_test; here we prove the
+// controller session plumbing + graceful teardown.
+TEST_F(TexturePaintControllerSceneTest, DecalSessionBeginCancelPlumbing) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DecalPlumbing")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    EXPECT_FALSE(ctrl->decalSessionActive());
+
+    QTemporaryDir tmp; ASSERT_TRUE(tmp.isValid());
+    const QString img = tmp.path() + "/decal.png";
+    QImage di(24, 24, QImage::Format_RGBA8888); di.fill(QColor(255, 0, 0, 255));
+    ASSERT_TRUE(di.save(img));
+
+    ASSERT_TRUE(ctrl->beginDecal(img));
+    EXPECT_TRUE(ctrl->decalSessionActive());
+    EXPECT_EQ(ctrl->decalState(), 1);   // Placing (awaiting the placing click)
+    EXPECT_EQ(ctrl->brushTool(), static_cast<int>(TexturePaintController::ToolDecal));
+
+    // Commit before placing → session ends, no layer added, no crash.
+    const int before = ctrl->layerCount();
+    ctrl->commitDecal();
+    EXPECT_FALSE(ctrl->decalSessionActive());
+    EXPECT_EQ(ctrl->layerCount(), before);
+
+    // Begin again then cancel.
+    ASSERT_TRUE(ctrl->beginDecal(img));
+    EXPECT_TRUE(ctrl->decalSessionActive());
+    ctrl->cancelDecal();
+    EXPECT_FALSE(ctrl->decalSessionActive());
+
+    ctrl->closeSession();
+}

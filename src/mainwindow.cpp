@@ -4919,6 +4919,25 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         return;
     }
 
+    // Paint v2 Slice F (#549): decal session — Enter commits, Esc cancels,
+    // everything else is swallowed while placing/editing (mirrors the knife).
+    if (TexturePaintController::instance()->decalSessionActive()) {
+        if (event->key() == Qt::Key_Escape) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel decal");
+            TexturePaintController::instance()->cancelDecal();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Enter — commit decal");
+            TexturePaintController::instance()->commitDecal();
+            event->accept();
+            return;
+        }
+        event->accept();
+        return;
+    }
+
     if (editCtrl->isEditModeActive()) {
         switch (event->key()) {
         case Qt::Key_1:

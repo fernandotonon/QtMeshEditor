@@ -4544,6 +4544,8 @@ Rectangle {
             property bool projUseOcclusion: TexturePaintController.projUseOcclusion
             property real projDepthLimit: TexturePaintController.projDepthLimit
             property bool cameraLocked: TexturePaintController.cameraLocked
+            property bool decalActive: TexturePaintController.decalSessionActive
+            property int  decalState: TexturePaintController.decalState
             // Projection group collapse state (UI density — the group is off by
             // default so it starts collapsed).
             property bool projExpanded: false
@@ -4612,6 +4614,8 @@ Rectangle {
                     texPaintCol.projUseOcclusion = TexturePaintController.projUseOcclusion
                     texPaintCol.projDepthLimit = TexturePaintController.projDepthLimit
                     texPaintCol.cameraLocked = TexturePaintController.cameraLocked
+                    texPaintCol.decalActive = TexturePaintController.decalSessionActive
+                    texPaintCol.decalState = TexturePaintController.decalState
                 }
             }
 
@@ -5057,6 +5061,57 @@ Rectangle {
                 }
             }
             } // end collapsible Projection body
+
+            // ---- Decal tool (Paint v2 Slice F #549) ----
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    width: 96; height: 22; radius: 4
+                    color: texPaintCol.decalActive
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent
+                        text: texPaintCol.decalActive ? "Decal (active)" : "Place decal\u2026"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.beginDecalInteractive() }
+                }
+                Rectangle {
+                    width: 54; height: 22; radius: 4
+                    opacity: texPaintCol.decalActive ? 1.0 : 0.4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Commit"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.decalActive
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.commitDecal() }
+                }
+                Rectangle {
+                    width: 54; height: 22; radius: 4
+                    opacity: texPaintCol.decalActive ? 1.0 : 0.4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Cancel"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                        enabled: texPaintCol.decalActive
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.cancelDecal() }
+                }
+            }
+            Text {
+                width: parent.width - 16
+                visible: texPaintCol.decalActive
+                text: texPaintCol.decalState === 1
+                    ? "Click the mesh to place the decal."
+                    : "Drag body to move \u00b7 corners to rotate \u00b7 edges to scale \u00b7 Enter commits \u00b7 Esc cancels."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9; opacity: 0.7; wrapMode: Text.Wrap
+            }
 
             // Texture slot picker \u2014 populated by selection (advanced override:
             // lets the user target a specific TUS regardless of channel mapping)
