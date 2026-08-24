@@ -57,6 +57,59 @@ def aim_y(w, roles):
     return float("nan")
 
 
+def torso_world_up(w):
+    """World up-component of the HIP->HEAD axis, via the same FK the retarget
+    uses. This is what catches a whole-body forward PITCH about the root.
+
+    `spineY` (the per-joint aim's up-component) does NOT: the spine can aim
+    "up" within its own canonical frame while the entire body is rotated
+    toward horizontal. A render-verified diving sample scored spineY 0.97
+    yet was pitched near-horizontal, which is why this term exists.
+
+    Returns the mean over frames of dot(normalize(head - hip), +Y).
+    1.0 = perfectly upright, 0.0 = horizontal, <0 = inverted/head-down.
+    """
+    T = len(w)
+    PAR = prep6.PAR
+
+    def pos(role):
+        p = np.zeros((T, 3), np.float32)
+        r = role
+        while PAR[r] >= 0:
+            p = p + prep6.qrot(w[:, PAR[r]], np.broadcast_to(D_CANON[r], (T, 3)))
+            r = PAR[r]
+        return p
+
+    axis = pos(5) - pos(0)                      # head - hip
+    n = np.linalg.norm(axis, axis=-1, keepdims=True)
+    axis = axis / (n + 1e-12)
+    return float(axis[:, 1].mean())
+
+
+def ankle_spread(w):
+    """Mean world distance between the two ankles (roles 17/21), in unit bone
+    lengths, over the window.
+
+    Catches the COLLAPSED-LEGS failure that the aim-based metrics miss: a
+    render-verified bad draw showed both legs fused into one tapering mass
+    while torsoUp/spineY/fwd_side all still looked healthy. A real stride
+    separates the ankles for most of the cycle.
+    """
+    T = len(w)
+    PAR = prep6.PAR
+
+    def pos(role):
+        p = np.zeros((T, 3), np.float32)
+        r = role
+        while PAR[r] >= 0:
+            p = p + prep6.qrot(w[:, PAR[r]], np.broadcast_to(D_CANON[r], (T, 3)))
+            r = PAR[r]
+        return p
+
+    d = np.linalg.norm(pos(17) - pos(21), axis=-1)
+    return float(d.mean())
+
+
 def score_window(action, w):
     """Posture metrics for one [T,J,4] canonical window."""
     spine = aim_y(w, (0,))
@@ -64,6 +117,8 @@ def score_window(action, w):
     head = aim_y(w, (4,))
     arms = [prep6.mean_dir_y(w, r) for r in (7, 11)]
     out = {
+        "torsoUp": torso_world_up(w),
+        "ankleSpread": ankle_spread(w),
         "spineY": spine,
         "chestY": chest,
         "headY": head,
@@ -84,7 +139,8 @@ def quat_from_motion(motion):
 
 
 def fmt(d):
-    keys = ["spineY", "chestY", "headY", "armY_worst", "fwd_side"]
+    keys = ["torsoUp", "ankleSpread", "spineY", "headY", "armY_worst",
+            "fwd_side"]
     return "  ".join(f"{k}={d[k]:+.3f}" for k in keys if k in d)
 
 
@@ -156,7 +212,8 @@ def main():
             scores.append(score_window(act, quat_from_motion(out)))
         # rank the way the shipped scorer does: upright + arms hanging
         def rank(s):
-            r = s["spineY"] + s["headY"] - s["armY_worst"]
+            # torsoUp dominates: a pitched-forward body must never win best-of-N
+            r = 3.0 * s["torsoUp"] + s["spineY"] + s["headY"] - s["armY_worst"]
             if "fwd_side" in s:
                 r += min(s["fwd_side"], 4.0)
             return r
