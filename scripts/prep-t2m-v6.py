@@ -32,6 +32,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -59,6 +60,15 @@ for a, b in LR:
 
 LOCOMOTION = {"walk", "run", "march"}
 HORIZONTAL_OK = {"death", "crawl", "roll", "swim", "fall", "sleep", "sit"}
+
+# Source-exclusion (v6.2): some corpus characters carry a deliberately
+# NON-HUMAN gait that the flow model faithfully reproduces on human prompts.
+# Zombies shamble (bent spine, dragging/splayed stride, arms forward) and were
+# 27% of the curated library incl. 5 walks + 1 run; "fruit"/produce characters
+# (avocado etc.) are legless blobs whose canonical limbs are placeholders.
+# Both poison locomotion. Matched case-insensitively against the clip's source
+# string (asset title + animation name).
+DEFAULT_EXCLUDE = r"zombie|avacado|avocado|fruit|banana|melon|undead|ghoul"
 
 
 def qrot(q, v):
@@ -166,7 +176,20 @@ def main():
     ap.add_argument("--T", type=int, default=60)
     ap.add_argument("--min-roles", type=int, default=12)
     ap.add_argument("--min-action-windows", type=int, default=16)
+    ap.add_argument("--exclude-sources", default=DEFAULT_EXCLUDE,
+                    help="regex; clips whose source matches are DROPPED "
+                         "(default: non-human gaits — zombies, produce). "
+                         "Pass '' to disable.")
     a = ap.parse_args()
+
+    excl = re.compile(a.exclude_sources, re.I) if a.exclude_sources else None
+    dropped_src = [0]
+
+    def excluded(src):
+        if excl is None or not src or not excl.search(str(src)):
+            return False
+        dropped_src[0] += 1
+        return True
 
     T = a.T
     mo, msk, acts = [], [], []
@@ -202,8 +225,10 @@ def main():
 
     if a.corpus:
         n = 0
-        for action, cq, valid, _src in prep5.corpus_clips(
+        for action, cq, valid, src in prep5.corpus_clips(
                 os.path.expanduser(a.corpus), a.min_roles):
+            if excluded(src):
+                continue
             windows(action, cq, valid)
             n += 1
         print(f"corpus: {n} clips → {len(mo)} windows (cum)")
@@ -214,6 +239,8 @@ def main():
             rw, rd = c.get("restWorld"), c.get("restDir")
             if not rw or not rd:
                 continue
+            if excluded(c.get("source", "")):
+                continue
             cq, valid = prep5.canonicalize(
                 np.asarray(c["quats"], np.float32), rw, rd)
             windows(c["action"], cq, valid)
@@ -221,12 +248,16 @@ def main():
         print(f"library: {n} takes → {len(mo)} windows (cum)")
     if a.bvh and a.index:
         n = 0
-        for action, cq, valid, _src in prep5.cmu_clips(a.bvh, a.index):
+        for action, cq, valid, src in prep5.cmu_clips(a.bvh, a.index):
+            if excluded(src):
+                continue
             windows(action, cq, valid)
             n += 1
         print(f"cmu: {n} trials → {len(mo)} windows (cum)")
 
     print(f"quality gates dropped {gated[0]} base windows")
+    print(f"source exclusion dropped {dropped_src[0]} clips "
+          f"(pattern: {a.exclude_sources or None})")
     if not mo:
         sys.exit("no windows")
     from collections import Counter
