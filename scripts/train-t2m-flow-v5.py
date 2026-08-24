@@ -93,6 +93,79 @@ def d6_to_quat(d):
     return F.normalize(q, dim=-1, eps=1e-6)
 
 
+# ---------- gait-phase supervision (#837 orientation correctness) ----------
+# Canonical parent chain + rest directions, mirroring prep-t2m-v5/v6 exactly.
+PAR_CANON = [-1, 0, 1, 2, 3, 4, 2, 6, 7, 8, 2, 10, 11, 12,
+             0, 14, 15, 16, 0, 18, 19, 20]
+DIR_CANON = [
+    [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
+    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
+    [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
+    [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
+    [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
+]
+# roles whose Z trajectory defines the gait phase
+L_ANKLE, R_ANKLE, L_WRIST, R_WRIST = 17, 21, 9, 13
+
+
+def qrot_t(q, v):
+    """Rotate v[...,3] by quat q[...,4] (x,y,z,w). Differentiable."""
+    qv, qw = q[..., :3], q[..., 3:]
+    uv = torch.cross(qv, v, dim=-1)
+    uuv = torch.cross(qv, uv, dim=-1)
+    return v + 2.0 * (qw * uv + uuv)
+
+
+def fk_pos(q, role, dirs):
+    """World position of `role` by walking the canonical parent chain.
+
+    q: [B,T,J,4]. Mirrors the numpy FK in prep-t2m-v6/eval-t2m-posture, so the
+    quantity supervised here is the same one the metrics and the retarget read.
+    """
+    p = torch.zeros(q.shape[0], q.shape[1], 3, device=q.device, dtype=q.dtype)
+    r = role
+    while PAR_CANON[r] >= 0:
+        d = dirs[r].expand(q.shape[0], q.shape[1], 3)
+        p = p + qrot_t(q[:, :, PAR_CANON[r]], d)
+        r = PAR_CANON[r]
+    return p
+
+
+def _centred_z(p):
+    z = p[..., 2]
+    return z - z.mean(dim=1, keepdim=True)
+
+
+def gait_phase_corr(q, dirs):
+    """Per-sample contralateral gait correlation, in [-1, 1].
+
+    A correct walk pairs LEFT leg forward with RIGHT arm forward, so
+    corr(Lankle_z, Rwrist_z) > 0 and corr(Lankle_z, Lwrist_z) < 0. The
+    training data measures +0.63 / -0.58 (92% correct sign) but the v6.1 and
+    v6.2 models emit only 67% / 75% correct — samples with the arms swinging
+    on the wrong side, which renders as "limbs moving as if facing backwards"
+    (user-reported). Nothing in the flow-matching loss constrained this, so
+    this term supervises it directly.
+
+    Returns the mean of (contralateral - ipsilateral)/2, averaged over both
+    body sides so the term is itself mirror-symmetric.
+    """
+    la = _centred_z(fk_pos(q, L_ANKLE, dirs))
+    ra = _centred_z(fk_pos(q, R_ANKLE, dirs))
+    lw = _centred_z(fk_pos(q, L_WRIST, dirs))
+    rw = _centred_z(fk_pos(q, R_WRIST, dirs))
+
+    def corr(x, y):
+        xs = x / (x.std(dim=1, keepdim=True) + 1e-4)
+        ys = y / (y.std(dim=1, keepdim=True) + 1e-4)
+        return (xs * ys).mean(dim=1)
+
+    # both sides, so the objective cannot prefer one chirality
+    contra = 0.5 * (corr(la, rw) + corr(ra, lw))
+    ipsi = 0.5 * (corr(la, lw) + corr(ra, rw))
+    return 0.5 * (contra - ipsi)
+
+
 # ---------- model ----------
 class Block(nn.Module):
     def __init__(self, dim, heads):
@@ -192,6 +265,13 @@ def main():
                     help="class-balance exponent: 1.0 = inverse-frequency "
                          "(equal per action), 0.5 = sqrt-tempered (favours "
                          "the data-rich actions like walk), 0.0 = raw")
+    ap.add_argument("--phase-weight", type=float, default=0.0,
+                    help="weight of the contralateral gait-phase loss "
+                         "(#837 orientation correctness). 0 = off. Applied to "
+                         "LOCOMOTION actions only, on the reconstructed clean "
+                         "sample. 0.05-0.2 is a sane range.")
+    ap.add_argument("--phase-actions", default="walk,run,march",
+                    help="comma list the phase loss applies to")
     ap.add_argument("--resume", action="store_true",
                     help="resume from <out>/ckpt.pt (long runs survive "
                          "sleep/restarts)")
@@ -212,6 +292,18 @@ def main():
     x1 = quat_to_6d(torch.from_numpy(mo)).reshape(N, T, C6)      # data
     m6 = torch.from_numpy(msk).repeat_interleave(D6, -1)         # [N,C6]
     tok = torch.from_numpy(tk)
+
+    # gait-phase loss plumbing (#837): a per-action gate + the canonical rest
+    # directions as a device tensor for the differentiable FK.
+    dirs_t = torch.tensor(DIR_CANON, dtype=torch.float32, device=dev)
+    phase_acts = {w for w in a.phase_actions.split(",") if w}
+    loco_idx = [i for i, w in enumerate(vocab) if w in phase_acts]
+    loco_mask_v = torch.zeros(V, device=dev)
+    for i in loco_idx:
+        loco_mask_v[i] = 1.0
+    if a.phase_weight > 0:
+        print(f"gait-phase loss ON (w={a.phase_weight}) for "
+              f"{[vocab[i] for i in loco_idx]}", flush=True)
 
     # Class-balanced sampling — walk dominates the window count (v4 lesson).
     # `--balance-power` tempers it: 1.0 = pure inverse-frequency (every action
@@ -264,6 +356,7 @@ def main():
             x0 = torch.randn_like(xb)
             # classifier-free guidance: drop the action condition 10% of the
             # time so the sampler can extrapolate cond vs uncond at export.
+            tb_raw = tb
             drop = (torch.rand(tb.shape[0], device=dev) < 0.1).float()
             tb = tb * (1.0 - drop)[:, None]
             t = torch.rand(xb.shape[0], device=dev)
@@ -272,6 +365,21 @@ def main():
             tgt = xb - x0
             mask = mb[:, None, :]                       # [B,1,C6]
             loss = ((v - tgt) ** 2 * mask).sum() / mask.sum() / T
+            if a.phase_weight > 0:
+                # Flow matching predicts a VELOCITY, so reconstruct the clean
+                # sample the model implies at this t before measuring gait:
+                #   x_t = (1-t)x0 + t*x1  and  v* = x1 - x0  =>  x1 = x_t + (1-t)v
+                x1_hat = xt + (1.0 - t[:, None, None]) * v
+                q_hat = d6_to_quat(x1_hat.reshape(-1, T, J, D6))
+                ph = gait_phase_corr(q_hat, dirs_t)          # [B], want -> +1
+                # gate to locomotion rows only (tb is the CFG-dropped token, so
+                # use the pre-drop labels for the gate)
+                g = (tb_raw * loco_mask_v).sum(-1).clamp(0, 1)
+                denom = g.sum().clamp_min(1.0)
+                # hinge: only penalise below a firm-but-not-saturating target,
+                # so well-phased samples are left alone
+                loss = loss + a.phase_weight * (
+                    (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
