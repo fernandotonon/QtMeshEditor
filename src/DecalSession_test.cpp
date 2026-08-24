@@ -167,3 +167,88 @@ TEST(DecalSessionTest, CommitUvOrientationMatchesPreviewMapping) {
         EXPECT_NEAR(p.uv.y, expect[k][1], 1e-4f) << "corner " << k << " v";
     }
 }
+
+TEST(DecalSessionTest, FeatherSourceMatchesCommitSource) {
+    // The viewport preview textures its quad with featherSource(img,
+    // kDefaultSoftEdge); commit bakes buildCommit(kDefaultSoftEdge).source.
+    // Those must be the same pixels, or the preview shows a hard border that
+    // only softens after committing (the WYSIWYG bug this pins down).
+    QImage img(16, 16, QImage::Format_RGBA8888);
+    img.fill(QColor(10, 200, 30, 255));      // fully opaque to the very edge
+
+    DecalSession d;
+    d.begin(img);
+    d.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, 1.0f);
+
+    const QImage baked = d.buildCommit(DecalSession::kDefaultSoftEdge).source;
+    const QImage preview =
+        DecalSession::featherSource(img, DecalSession::kDefaultSoftEdge);
+
+    ASSERT_EQ(baked.size(), preview.size());
+    ASSERT_EQ(baked.format(), preview.format());
+    EXPECT_EQ(baked, preview) << "preview pixels must equal the committed pixels";
+
+    // And the feather must actually do something: the border is transparent
+    // while the centre stays opaque. Guards against a no-op softEdge silently
+    // making both sides "match" by both being unfeathered.
+    EXPECT_EQ(qAlpha(preview.pixel(0, 0)), 0);
+    EXPECT_EQ(qAlpha(preview.pixel(8, 8)), 255);
+}
+
+TEST(DecalSessionTest, ReseatFollowsSurfaceKeepingSizeAndRotation) {
+    // Dragging the decal body across curved geometry re-seats it onto the surface
+    // under the cursor. The new plane must be adopted, but the user's size and
+    // in-plane rotation must ride along — a fresh place() would reset both, which
+    // is the bug this guards.
+    DecalSession d;
+    d.begin(solid(8, Qt::white));
+    d.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, 1.0f);
+
+    // User resizes + rotates in-plane.
+    d.scale(2.0f, 3.0f);
+    d.rotate(0.7f);
+    const float lenU = d.rect().tangentU.length();
+    const float lenV = d.rect().tangentV.length();
+
+    // Drag onto a face whose normal points +X.
+    const Ogre::Vector3 newHit(5.0f, 1.0f, -2.0f);
+    const Ogre::Vector3 newNormal(1.0f, 0.0f, 0.0f);
+    d.reseat(newHit, newNormal);
+
+    // Plane + position adopted.
+    EXPECT_NEAR(d.rect().normal.dotProduct(newNormal), 1.0f, 1e-4f);
+    EXPECT_NEAR((d.rect().center - newHit).length(), 0.0f, 1e-4f);
+    // Size preserved.
+    EXPECT_NEAR(d.rect().tangentU.length(), lenU, 1e-4f);
+    EXPECT_NEAR(d.rect().tangentV.length(), lenV, 1e-4f);
+    // Basis stays orthogonal to the new normal (still a valid flush rect).
+    EXPECT_NEAR(d.rect().tangentU.dotProduct(d.rect().normal), 0.0f, 1e-4f);
+    EXPECT_NEAR(d.rect().tangentV.dotProduct(d.rect().normal), 0.0f, 1e-4f);
+}
+
+TEST(DecalSessionTest, ReseatHandlesFlippedNormalAndIsIdleSafe) {
+    // A ~180 degree flip (dragging around to the back face) must still yield a
+    // finite, orthogonal basis rather than NaNs from a degenerate rotation.
+    DecalSession d;
+    d.begin(solid(8, Qt::white));
+    d.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, 1.0f);
+    const float lenU = d.rect().tangentU.length();
+
+    d.reseat(Ogre::Vector3(0, 0, -1), Ogre::Vector3(0, 0, -1));
+    EXPECT_NEAR(d.rect().normal.z, -1.0f, 1e-4f);
+    EXPECT_TRUE(std::isfinite(d.rect().tangentU.x));
+    EXPECT_TRUE(std::isfinite(d.rect().tangentU.y));
+    EXPECT_TRUE(std::isfinite(d.rect().tangentU.z));
+    EXPECT_NEAR(d.rect().tangentU.length(), lenU, 1e-4f);
+    EXPECT_NEAR(d.rect().tangentU.dotProduct(d.rect().normal), 0.0f, 1e-4f);
+
+    // A zero normal is ignored (keeps the old plane) rather than corrupting it.
+    const Ogre::Vector3 keep = d.rect().normal;
+    d.reseat(Ogre::Vector3(9, 9, 9), Ogre::Vector3::ZERO);
+    EXPECT_NEAR(d.rect().normal.dotProduct(keep), 1.0f, 1e-4f);
+
+    // Idle session: reseat must be a no-op, not a crash.
+    DecalSession idle;
+    idle.reseat(Ogre::Vector3(1, 2, 3), Ogre::Vector3::UNIT_X);
+    EXPECT_EQ(idle.state(), DecalSession::State::Idle);
+}

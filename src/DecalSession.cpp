@@ -88,6 +88,33 @@ void DecalSession::translate(const Ogre::Vector3& worldDelta)
     m_rect.center += worldDelta;
 }
 
+void DecalSession::reseat(const Ogre::Vector3& worldHit, const Ogre::Vector3& worldNormal)
+{
+    if (m_state != State::Editing) return;
+    Ogre::Vector3 n = worldNormal;
+    if (n.isZeroLength()) return;            // no usable normal — keep the old plane
+    n.normalise();
+
+    Ogre::Vector3 oldN = m_rect.normal;
+    if (oldN.isZeroLength()) oldN = Ogre::Vector3::UNIT_Z;
+    oldN.normalise();
+
+    // Rotate the existing tangent basis by the MINIMAL arc old->new normal, so the
+    // decal's size and in-plane orientation ride along instead of being rebuilt
+    // (a fresh place() would snap rotation back to camera-up and reset extents).
+    // getRotationTo handles the near-180 degree case by picking a perpendicular axis.
+    const Ogre::Quaternion q = oldN.getRotationTo(n);
+    if (!std::isfinite(q.w) || !std::isfinite(q.x)
+        || !std::isfinite(q.y) || !std::isfinite(q.z)) {
+        m_rect.center = worldHit;            // degenerate rotation: move only
+        return;
+    }
+    m_rect.tangentU = q * m_rect.tangentU;
+    m_rect.tangentV = q * m_rect.tangentV;
+    m_rect.normal   = n;
+    m_rect.center   = worldHit;
+}
+
 void DecalSession::rotate(float deltaRad)
 {
     if (m_state != State::Editing) return;
@@ -123,17 +150,18 @@ void DecalSession::corners(Ogre::Vector3 out[4]) const
     out[3] = m_rect.center - m_rect.tangentU + m_rect.tangentV; // (-,+)
 }
 
-DecalSession::CommitInputs DecalSession::buildCommit(float softEdge) const
+// Convert to RGBA8888 and feather the outer `softEdge` fraction of the alpha
+// toward the border. Shared by buildCommit() (what actually gets baked) and the
+// viewport preview, so the preview shows the SAME pixels as the commit — a
+// preview built from the raw source would show a hard opaque border that only
+// softens after committing. A null image yields an opaque 1x1 white pixel,
+// matching the old buildCommit behaviour.
+QImage DecalSession::featherSource(const QImage& image, float softEdge)
 {
-    CommitInputs out;
-    if (m_state == State::Idle) return out;
-
-    // Soft-edge alpha: feather the image's alpha toward the border so the decal
-    // blends onto the surface instead of a hard rectangle cut.
-    QImage src = m_image.isNull()
+    QImage src = image.isNull()
                      ? QImage(1, 1, QImage::Format_RGBA8888)
-                     : m_image.convertToFormat(QImage::Format_RGBA8888);
-    if (m_image.isNull()) src.fill(QColor(255, 255, 255, 255));
+                     : image.convertToFormat(QImage::Format_RGBA8888);
+    if (image.isNull()) src.fill(QColor(255, 255, 255, 255));
     if (softEdge > 0.0f) {
         const int w = src.width(), h = src.height();
         for (int y = 0; y < h; ++y) {
@@ -146,7 +174,17 @@ DecalSession::CommitInputs DecalSession::buildCommit(float softEdge) const
             }
         }
     }
-    out.source = src;
+    return src;
+}
+
+DecalSession::CommitInputs DecalSession::buildCommit(float softEdge) const
+{
+    CommitInputs out;
+    if (m_state == State::Idle) return out;
+
+    // Soft-edge alpha: feather the image's alpha toward the border so the decal
+    // blends onto the surface instead of a hard rectangle cut.
+    out.source = featherSource(m_image, softEdge);
 
     // Orthographic View framing the quad: build world->clip directly as a
     // change of basis. A world point P maps to NDC (u, v, 0) where

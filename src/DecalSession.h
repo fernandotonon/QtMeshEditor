@@ -71,6 +71,13 @@ public:
 
     // --- edits (Editing state) ---
     void translate(const Ogre::Vector3& worldDelta);
+    /// Re-seat the rect onto a new surface point + normal while PRESERVING the
+    /// current half-extents and the user's in-plane rotation. Used while dragging
+    /// the decal body across curved geometry so it stays flush with the surface
+    /// instead of keeping the plane it was first placed on. A plain place() would
+    /// reset size and rotation, so this rotates the existing basis by the minimal
+    /// arc from the old normal to the new one.
+    void reseat(const Ogre::Vector3& worldHit, const Ogre::Vector3& worldNormal);
     void rotate(float deltaRad);          ///< about the rect normal
     void scale(float su, float sv);       ///< multiply half-extents (clamped > 0)
 
@@ -83,6 +90,17 @@ public:
     /// Build the ProjectionPainter inputs (ortho View + soft-edge source image).
     /// `softEdge` is the border feather fraction (0..1). Empty on Idle.
     CommitInputs buildCommit(float softEdge) const;
+
+    /// Border feather fraction used by the decal tool. ONE definition shared by
+    /// commitDecal() and the viewport preview — if these drift, the preview stops
+    /// matching what gets baked.
+    static constexpr float kDefaultSoftEdge = 0.15f;
+
+    /// Convert to RGBA8888 and feather the outer `softEdge` fraction of the alpha.
+    /// Shared by buildCommit() and the viewport preview so both show the SAME
+    /// pixels (a preview of the raw source would have a hard border that only
+    /// softens after commit). A null image yields an opaque 1x1 white pixel.
+    static QImage featherSource(const QImage& image, float softEdge);
 
 private:
     State  m_state = State::Idle;

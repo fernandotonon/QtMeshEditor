@@ -1073,16 +1073,42 @@ int TexturePaintController::decalHitTest(OgreWidget* widget, const QPoint& scree
 void TexturePaintController::dragDecal(OgreWidget* widget, const QPoint& screenPos, int handle)
 {
     if (m_decal.state() != DecalSession::State::Editing) return;
+    // NB: a failed plane hit must NOT abort a Body drag. Re-seating can leave the
+    // rect's plane nearly edge-on to the camera, and then the plane ray misses and
+    // the gesture would die mid-drag; the Body branch re-hits the surface directly
+    // and only needs `world`/`prevWorld` for its fallback.
     Ogre::Vector3 world;
-    if (!decalPlaneHit(widget, screenPos, world)) return;
+    const bool haveWorld = decalPlaneHit(widget, screenPos, world);
     Ogre::Vector3 prevWorld;
-    const bool havePrev = m_haveDecalDragPos
+    const bool havePrev = haveWorld && m_haveDecalDragPos
         && decalPlaneHit(widget, m_decalDragLastPos, prevWorld);
     const DecalSession::Handle h = static_cast<DecalSession::Handle>(handle);
     const DecalSession::Rect& r = m_decal.rect();
+    if (!haveWorld && h != DecalSession::Handle::Body) return;
 
     if (h == DecalSession::Handle::Body) {
-        if (havePrev) m_decal.translate(world - prevWorld);
+        // Re-seat onto the SURFACE under the cursor so the decal follows the
+        // model's curvature while it is dragged, instead of sliding along the
+        // plane it was first placed on. Falls back to the plane-slide translate
+        // when the cursor is off the mesh (dragging out over empty space), which
+        // also keeps the decal usable on the far side of a silhouette edge.
+        Ogre::Vector3 localPos, localNormal;
+        auto* node = m_paintMeshEntity ? m_paintMeshEntity->getParentSceneNode() : nullptr;
+        if (node && hitTestLocalPoint(widget, screenPos, localPos, localNormal)) {
+            const Ogre::Affine3 wm = node->_getFullTransform();
+            // Normals need the inverse transpose (non-uniform scale would tilt a
+            // linear-mapped normal off the surface) — same as placeDecalAt.
+            const Ogre::Matrix3 normalMat = wm.linear().Inverse().Transpose();
+            Ogre::Vector3 worldN = normalMat * localNormal;
+            if (!worldN.isZeroLength()) {
+                worldN.normalise();
+                m_decal.reseat(wm * localPos, worldN);
+            } else if (havePrev) {
+                m_decal.translate(world - prevWorld);
+            }
+        } else if (havePrev) {
+            m_decal.translate(world - prevWorld);
+        }
     } else if (h == DecalSession::Handle::RotateCorner) {
         if (havePrev) {
             const Ogre::Vector3 a = (prevWorld - r.center);
@@ -1116,7 +1142,7 @@ bool TexturePaintController::commitDecal()
     m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
     if (!m_haveProjTris) { cancelDecal(); return false; }
 
-    const auto ci = m_decal.buildCommit(/*softEdge*/0.15f);
+    const auto ci = m_decal.buildCommit(DecalSession::kDefaultSoftEdge);
     // Occlusion for the decal projection (front arc only).
     ProjectionPainter::OcclusionMap occ;
     const bool haveOcc = buildOcclusionForView(ci.view, occ);
@@ -5909,15 +5935,20 @@ std::string TexturePaintController::ensureDecalPreviewMaterial()
             + std::to_string(reinterpret_cast<uintptr_t>(this));
     }
 
-    const QImage rgba = img.convertToFormat(QImage::Format_RGBA8888);
-    const int W = rgba.width(), H = rgba.height();
+    // Key the cache on the SOURCE image, before any conversion. convertToFormat()
+    // returns a NEW QImage (hence a new cacheKey) whenever the source is not
+    // already RGBA8888, so keying on the converted copy would miss the cache on
+    // every refresh and re-upload the whole texture on every drag frame — exactly
+    // the per-mouse-move upload this cache exists to avoid.
+    const qint64 srcKey = img.cacheKey();
+    const int W = img.width(), H = img.height();
     if (W <= 0 || H <= 0) return {};
 
     auto& texMgr = Ogre::TextureManager::getSingleton();
     const std::string texName = "QMEDecalPreview_"
         + std::to_string(reinterpret_cast<uintptr_t>(this));
 
-    // Recreate when the image identity or the dimensions change.
+    // Recreate when the dimensions change.
     const bool sizeChanged = m_decalPreviewTex
         && (static_cast<int>(m_decalPreviewTex->getWidth()) != W
          || static_cast<int>(m_decalPreviewTex->getHeight()) != H);
@@ -5925,8 +5956,7 @@ std::string TexturePaintController::ensureDecalPreviewMaterial()
         try { texMgr.remove(m_decalPreviewTex); } catch (...) {}
         m_decalPreviewTex.reset();
     }
-    const bool needUpload = !m_decalPreviewTex
-        || m_decalPreviewImageKey != rgba.cacheKey();
+    const bool needUpload = !m_decalPreviewTex || m_decalPreviewImageKey != srcKey;
     if (!m_decalPreviewTex) {
         try {
             m_decalPreviewTex = texMgr.createManual(
@@ -5937,17 +5967,31 @@ std::string TexturePaintController::ensureDecalPreviewMaterial()
     }
     if (!m_decalPreviewTex) return {};
     if (needUpload) {
+        // Preview the SAME pixels commitDecal() will bake: it feathers the outer
+        // kDecalSoftEdge of the image, so previewing the raw source would show a
+        // hard opaque border that softens only after commit — defeating WYSIWYG.
+        // Only the conversion + feather happen here, gated by the cache above.
+        const QImage feathered =
+            DecalSession::featherSource(img, DecalSession::kDefaultSoftEdge);
+        if (feathered.isNull()) return {};
+        bool uploaded = false;
         try {
             auto buf = m_decalPreviewTex->getBuffer();
             if (buf) {
-                // QImage rows are already top-down RGBA8888 and tightly packed at
-                // this point; blit straight in.
+                // Rows are top-down RGBA8888 and tightly packed; blit straight in.
                 Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA,
-                                  const_cast<uchar*>(rgba.constBits()));
+                                  const_cast<uchar*>(feathered.constBits()));
                 buf->blitFromMemory(pb);
+                uploaded = true;
             }
-            m_decalPreviewImageKey = rgba.cacheKey();
-        } catch (...) { /* keep the stale texture rather than dropping the preview */ }
+        } catch (...) { uploaded = false; }
+        if (!uploaded) {
+            // Leave m_decalPreviewImageKey untouched so the next refresh retries,
+            // and fall back to the flat tint for this frame rather than showing a
+            // blank/stale quad.
+            return {};
+        }
+        m_decalPreviewImageKey = srcKey;
     }
 
     auto& matMgr = Ogre::MaterialManager::getSingleton();
