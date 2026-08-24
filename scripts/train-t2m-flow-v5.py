@@ -238,7 +238,14 @@ def main():
         print(f"resumed from epoch {start_ep}", flush=True)
 
     for ep in range(start_ep, a.epochs):
-        tot, nb = 0.0, 0
+        # Accumulate the epoch loss ON DEVICE. A per-batch `loss.item()` is a
+        # GPU->CPU sync (`_local_scalar_dense_mps` -> `waitUntilCompleted`)
+        # that drains the whole MPS queue ~97x/epoch; on long runs the MPS
+        # allocator degrades until each sync parks the process in
+        # uninterruptible wait and throughput collapses ~11x (observed at
+        # ep84: 84s/epoch -> ~16min/epoch). One sync per EPOCH instead.
+        tot = torch.zeros((), device=dev)
+        nb = 0
         for xb, mb, tb in dl:
             xb, mb, tb = xb.to(dev), mb.to(dev), tb.to(dev)
             x0 = torch.randn_like(xb)
@@ -257,8 +264,9 @@ def main():
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             opt.step()
             sched.step()
-            tot += loss.item(); nb += 1
-        print(f"ep {ep + 1}/{a.epochs} loss {tot / max(1, nb):.4f}", flush=True)
+            tot += loss.detach(); nb += 1
+        print(f"ep {ep + 1}/{a.epochs} "
+              f"loss {tot.item() / max(1, nb):.4f}", flush=True)
         torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "epoch": ep}, ckpt_path)
 
