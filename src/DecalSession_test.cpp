@@ -142,3 +142,28 @@ TEST(DecalSessionTest, PlacePreservesImageAspectRatio) {
     EXPECT_NEAR(square.rect().tangentU.length(), halfSize, 1e-5f);
     EXPECT_NEAR(square.rect().tangentV.length(), halfSize, 1e-5f);
 }
+
+TEST(DecalSessionTest, CommitUvOrientationMatchesPreviewMapping) {
+    // The viewport preview textures the overlay quad with a fixed UV table
+    // (see TexturePaintController::refreshDecalOverlay). That table MUST agree
+    // with what buildCommit() actually bakes, or the preview would show the
+    // artwork flipped relative to the committed result. Pin the convention:
+    // project each corner through the commit View and assert the resulting UV.
+    DecalSession d;
+    d.begin(solid(8, Qt::white));
+    d.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, 1.0f);
+
+    const auto ci = d.buildCommit(0.0f);
+    Ogre::Vector3 c[4];
+    d.corners(c);   // (-,-), (+,-), (+,+), (-,+)
+
+    // Expected UVs, identical to the preview's kUv table.
+    const float expect[4][2] = {{0.0f, 1.0f}, {1.0f, 1.0f},
+                                {1.0f, 0.0f}, {0.0f, 0.0f}};
+    for (int k = 0; k < 4; ++k) {
+        const auto p = ProjectionMath::projectToViewportUV(c[k], ci.view.viewProj);
+        ASSERT_FALSE(p.behind) << "corner " << k;
+        EXPECT_NEAR(p.uv.x, expect[k][0], 1e-4f) << "corner " << k << " u";
+        EXPECT_NEAR(p.uv.y, expect[k][1], 1e-4f) << "corner " << k << " v";
+    }
+}

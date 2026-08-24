@@ -4376,6 +4376,7 @@ void TexturePaintController::closeSession()
     invalidateSymmetryMaps();
     m_decal.cancel();
     m_haveDecalDragPos = false;   // else a stale drag anchor leaks into the next session
+    destroyDecalPreview();        // drop the preview texture/material with the session
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
     m_layerStack = PaintLayerStack();
@@ -5892,6 +5893,106 @@ void TexturePaintController::refreshSymmetryPlaneOverlay()
     m_symPlaneNode->setVisible(true);
 }
 
+// Paint v2 Slice F follow-up: WYSIWYG decal preview.
+// Uploads the decal image to a GPU texture and returns an unlit,
+// alpha-blended material that samples it, so the overlay quad shows the ACTUAL
+// artwork (correctly oriented + aspect-correct) instead of a flat tint. The
+// upload is keyed on QImage::cacheKey() so dragging/rotating/scaling the decal
+// re-draws geometry only — the texture is uploaded once per image.
+std::string TexturePaintController::ensureDecalPreviewMaterial()
+{
+    const QImage& img = m_decal.image();
+    if (img.isNull()) return {};
+
+    if (m_decalPreviewMatName.empty()) {
+        m_decalPreviewMatName = "QMEDecalPreview_Mat_"
+            + std::to_string(reinterpret_cast<uintptr_t>(this));
+    }
+
+    const QImage rgba = img.convertToFormat(QImage::Format_RGBA8888);
+    const int W = rgba.width(), H = rgba.height();
+    if (W <= 0 || H <= 0) return {};
+
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    const std::string texName = "QMEDecalPreview_"
+        + std::to_string(reinterpret_cast<uintptr_t>(this));
+
+    // Recreate when the image identity or the dimensions change.
+    const bool sizeChanged = m_decalPreviewTex
+        && (static_cast<int>(m_decalPreviewTex->getWidth()) != W
+         || static_cast<int>(m_decalPreviewTex->getHeight()) != H);
+    if (sizeChanged) {
+        try { texMgr.remove(m_decalPreviewTex); } catch (...) {}
+        m_decalPreviewTex.reset();
+    }
+    const bool needUpload = !m_decalPreviewTex
+        || m_decalPreviewImageKey != rgba.cacheKey();
+    if (!m_decalPreviewTex) {
+        try {
+            m_decalPreviewTex = texMgr.createManual(
+                texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                Ogre::TEX_TYPE_2D, W, H, 0, Ogre::PF_BYTE_RGBA,
+                Ogre::TU_DYNAMIC_WRITE_ONLY);
+        } catch (...) { return {}; }
+    }
+    if (!m_decalPreviewTex) return {};
+    if (needUpload) {
+        try {
+            auto buf = m_decalPreviewTex->getBuffer();
+            if (buf) {
+                // QImage rows are already top-down RGBA8888 and tightly packed at
+                // this point; blit straight in.
+                Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA,
+                                  const_cast<uchar*>(rgba.constBits()));
+                buf->blitFromMemory(pb);
+            }
+            m_decalPreviewImageKey = rgba.cacheKey();
+        } catch (...) { /* keep the stale texture rather than dropping the preview */ }
+    }
+
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    Ogre::MaterialPtr mat = matMgr.getByName(m_decalPreviewMatName);
+    if (!mat) {
+        try {
+            mat = matMgr.create(m_decalPreviewMatName,
+                Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+            auto* pass = mat->getTechnique(0)->getPass(0);
+            pass->setLightingEnabled(false);
+            pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+            pass->setDepthWriteEnabled(false);
+            // Depth CHECK stays on for the artwork: the preview should be
+            // occluded by geometry in front of it (it is pinned to a surface),
+            // unlike the outline/handles which draw on top to stay grabbable.
+            pass->setDepthCheckEnabled(true);
+            pass->setCullingMode(Ogre::CULL_NONE);
+            auto* tus = pass->createTextureUnitState(m_decalPreviewTex->getName());
+            tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+        } catch (...) { return {}; }
+    } else {
+        // Keep the TUS pointed at the current texture (it may have been recreated).
+        try {
+            auto* pass = mat->getTechnique(0)->getPass(0);
+            if (pass->getNumTextureUnitStates() > 0)
+                pass->getTextureUnitState(0)->setTextureName(m_decalPreviewTex->getName());
+        } catch (...) {}
+    }
+    return m_decalPreviewMatName;
+}
+
+void TexturePaintController::destroyDecalPreview()
+{
+    if (!m_decalPreviewMatName.empty()) {
+        try { Ogre::MaterialManager::getSingleton().remove(m_decalPreviewMatName,
+                  Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME); } catch (...) {}
+        m_decalPreviewMatName.clear();
+    }
+    if (m_decalPreviewTex) {
+        try { Ogre::TextureManager::getSingleton().remove(m_decalPreviewTex); } catch (...) {}
+        m_decalPreviewTex.reset();
+    }
+    m_decalPreviewImageKey = 0;
+}
+
 void TexturePaintController::refreshDecalOverlay()
 {
     auto* entity = m_paintMeshEntity;
@@ -5939,10 +6040,25 @@ void TexturePaintController::refreshDecalOverlay()
     const Ogre::ColourValue hCol(0.2f, 0.8f, 1.0f, 0.95f);  // cyan handles
 
     m_decalObj->clear();
-    // Translucent body (two tris).
-    m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
-    for (int k : {0, 1, 2, 0, 2, 3}) { m_decalObj->position(c[k]); m_decalObj->colour(fill); }
-    m_decalObj->end();
+    // Body: the actual decal artwork when we can texture it (WYSIWYG preview),
+    // else the old flat translucent tint. UVs follow the commit convention:
+    // projectToViewportUV maps NDC y=+1 (the +tangentV corner) to v=0, so +V is
+    // image-UP. corners() order is (-,-), (+,-), (+,+), (-,+).
+    const std::string previewMat = ensureDecalPreviewMaterial();
+    if (!previewMat.empty()) {
+        static const float kUv[4][2] = {{0.0f, 1.0f}, {1.0f, 1.0f},
+                                        {1.0f, 0.0f}, {0.0f, 0.0f}};
+        m_decalObj->begin(previewMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+        for (int k : {0, 1, 2, 0, 2, 3}) {
+            m_decalObj->position(c[k]);
+            m_decalObj->textureCoord(kUv[k][0], kUv[k][1]);
+        }
+        m_decalObj->end();
+    } else {
+        m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+        for (int k : {0, 1, 2, 0, 2, 3}) { m_decalObj->position(c[k]); m_decalObj->colour(fill); }
+        m_decalObj->end();
+    }
     // Outline (line strip).
     m_decalObj->begin(kMat, Ogre::RenderOperation::OT_LINE_STRIP);
     for (int k : {0, 1, 2, 3, 0}) { m_decalObj->position(c[k]); m_decalObj->colour(line); }
