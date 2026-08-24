@@ -1200,11 +1200,28 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         // "standing" fails for always-low actions (a crawl never stands, so
         // relative-to-max reads ~0); the bind pose is the true upright height.
         Ogre::Vector3 bindHip = Ogre::Vector3::ZERO, bindFoot = Ogre::Vector3::ZERO;
+        // #954: bind-pose PARENT-RELATIVE orientation per role bone. Parent-
+        // relative quantities are immune to the constant armature rotation O
+        // that offsets bind vs animation WORLDS on scraped rigs (O cancels in
+        // Wp⁻¹·Wb), so bind↔reference comparisons built on these are safe —
+        // unlike world-space ones (see the restWorld comment).
+        std::vector<Ogre::Quaternion> bindRel(
+            static_cast<size_t>(J), Ogre::Quaternion::ZERO);
         {
             skel->reset(true);
             skel->_updateTransforms();
             if (hipBone)  bindHip  = hipBone->_getDerivedPosition();
             if (footBone) bindFoot = footBone->_getDerivedPosition();
+            for (int j = 0; j < J; ++j) {
+                Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+                if (!b) continue;
+                auto* pb = dynamic_cast<Ogre::Bone*>(b->getParent());
+                const Ogre::Quaternion pw = pb
+                    ? pb->_getDerivedOrientation()
+                    : Ogre::Quaternion::IDENTITY;
+                bindRel[static_cast<size_t>(j)] =
+                    pw.Inverse() * b->_getDerivedOrientation();
+            }
         }
         // Finger transfer uses DIRECTIONS (body-retarget style), NOT rotations:
         // the Biped finger bones have large, wildly-varying per-segment bind
@@ -1372,9 +1389,61 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 ? (Cbind * u.normalisedCopy()) : Ogre::Vector3::ZERO;
             const bool animUpright =
                 leveled.squaredLength() > 1e-9f && leveled.y > 0.82f;  // ~35°
-            if (!animUpright) {
+            // #954: uprightness alone can't detect a bind whose FACING
+            // differs from the animation's (post-import-fix the up axes
+            // agree, but e.g. the Quaternius Woman's bind faces ~90° off her
+            // clips — referencing bind then yaws the whole canonical clip
+            // sideways: Run/Sit rendered facing right while Walk was fine).
+            // Compare the HIP LINE at bind vs at the sampled animated frame,
+            // both leveled by the bind-derived frame and projected
+            // horizontal: > ~40° apart ⇒ bind is NOT a usable reference.
+            bool animFacingSquare = true;
+            if (roleBone[15] && roleBone[19]) {
+                const Ogre::Vector3 hlAnim =
+                    roleBone[19]->_getDerivedPosition()
+                    - roleBone[15]->_getDerivedPosition();
+                skel->reset(true);
+                skel->_updateTransforms();
+                const Ogre::Vector3 hlBind =
+                    roleBone[19]->_getDerivedPosition()
+                    - roleBone[15]->_getDerivedPosition();
+                // restore the sampled animated pose for any later reads
+                skel->reset(true);
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(fStar) / static_cast<float>(fps)));
+                skel->_updateTransforms();
+                Ogre::Vector3 a = Cbind * hlAnim;
+                Ogre::Vector3 b = Cbind * hlBind;
+                a.y = 0.0f; b.y = 0.0f;
+                if (a.squaredLength() > 1e-9f && b.squaredLength() > 1e-9f)
+                    animFacingSquare =
+                        a.normalisedCopy().dotProduct(b.normalisedCopy())
+                        > 0.766f;
+            }
+            if (!animUpright || !animFacingSquare) {
                 // case (b): bind ≠ animation frame. Reference the most-upright
-                // ANIMATED frame (torso-up closest to the bind torso-up).
+                // ANIMATED frame (torso-up closest to the bind torso-up) that
+                // is ALSO facing-square: a reference whose pelvis is bladed
+                // (running mid-stride, seated twist) poisons everything
+                // measured against it — the hip's per-frame twist and the
+                // descent root transport inject the reference's yaw as a
+                // constant whole-body rotation (#954: Woman Run/Sit faced 90°
+                // sideways while Walk was fine). Squareness = alignment of
+                // the frame's hip line with the CLIP-MEAN hip line, both
+                // projected perpendicular to the frame's torso-up.
+                Ogre::Vector3 meanHipLine = Ogre::Vector3::ZERO;
+                if (roleBone[15] && roleBone[19]) {
+                    for (int f = 0; f < frames; ++f) {
+                        skel->reset(true);
+                        anim->apply(skel, std::min(length,
+                            static_cast<float>(f) / static_cast<float>(fps)));
+                        skel->_updateTransforms();
+                        meanHipLine += roleBone[19]->_getDerivedPosition()
+                                       - roleBone[15]->_getDerivedPosition();
+                    }
+                    if (meanHipLine.squaredLength() > 1e-9f)
+                        meanHipLine.normalise();
+                }
                 float best = -2.f; int bestF = fStar;
                 for (int f = 0; f < frames; ++f) {
                     skel->reset(true);
@@ -1383,10 +1452,92 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                     skel->_updateTransforms();
                     const Ogre::Vector3 uf = torsoUpNow();
                     if (uf.squaredLength() < 1e-9f) continue;
-                    const float d = bindUp.dotProduct(uf.normalisedCopy());
+                    float d = bindUp.dotProduct(uf.normalisedCopy());
+                    if (meanHipLine.squaredLength() > 0.5f
+                        && roleBone[15] && roleBone[19]) {
+                        Ogre::Vector3 hl =
+                            roleBone[19]->_getDerivedPosition()
+                            - roleBone[15]->_getDerivedPosition();
+                        const Ogre::Vector3 un = uf.normalisedCopy();
+                        hl -= un * hl.dotProduct(un);
+                        Ogre::Vector3 mh =
+                            meanHipLine - un * meanHipLine.dotProduct(un);
+                        if (hl.squaredLength() > 1e-9f
+                            && mh.squaredLength() > 1e-9f) {
+                            const float sq = hl.normalisedCopy().dotProduct(
+                                mh.normalisedCopy());
+                            d *= 0.5f + 0.5f * std::max(0.0f, sq);
+                        }
+                    }
                     if (d > best) { best = d; bestF = f; }
                 }
                 refFrame = bestF;
+            }
+        }
+        // FACING-SQUARENESS AUDIT (#954, applies to EVERY animated-reference
+        // path, not just case (b) — the Woman's clips are fStar-path): if the
+        // chosen reference frame's hip line deviates >~40° from the CLIP-MEAN
+        // hip line, the reference caught a bladed pelvis (running mid-stride,
+        // seated twist) and everything measured against it inherits its yaw
+        // (hip twist channel, descent root transport → whole body renders
+        // sideways). Re-pick across all frames with a combined
+        // uprightness × squareness score.
+        if (refFrame >= 0 && roleBone[15] && roleBone[19]) {
+            Ogre::Vector3 meanHL = Ogre::Vector3::ZERO;
+            for (int f = 0; f < frames; ++f) {
+                skel->reset(true);
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(f) / static_cast<float>(fps)));
+                skel->_updateTransforms();
+                meanHL += roleBone[19]->_getDerivedPosition()
+                          - roleBone[15]->_getDerivedPosition();
+            }
+            if (meanHL.squaredLength() > 1e-9f) {
+                meanHL.normalise();
+                auto hipSquareness = [&](int f) -> float {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    Ogre::Vector3 hl = roleBone[19]->_getDerivedPosition()
+                                       - roleBone[15]->_getDerivedPosition();
+                    const Ogre::Vector3 un = torsoUpNow();
+                    if (un.squaredLength() > 1e-9f) {
+                        hl -= un * hl.dotProduct(un);
+                        Ogre::Vector3 mh = meanHL
+                                           - un * meanHL.dotProduct(un);
+                        if (hl.squaredLength() > 1e-9f
+                            && mh.squaredLength() > 1e-9f)
+                            return hl.normalisedCopy().dotProduct(
+                                mh.normalisedCopy());
+                    }
+                    return 1.0f;   // indeterminate → don't penalise
+                };
+                if (hipSquareness(refFrame) < 0.766f) {   // >~40° bladed
+                    float best = -2.f; int bestF = refFrame;
+                    for (int f = 0; f < frames; ++f) {
+                        skel->reset(true);
+                        anim->apply(skel, std::min(length,
+                            static_cast<float>(f) / static_cast<float>(fps)));
+                        skel->_updateTransforms();
+                        const Ogre::Vector3 uf = torsoUpNow();
+                        if (uf.squaredLength() < 1e-9f) continue;
+                        const float up =
+                            (bindUp.squaredLength() > 1e-9f)
+                                ? bindUp.dotProduct(uf.normalisedCopy())
+                                : 1.0f;
+                        const float d =
+                            up * (0.5f + 0.5f
+                                  * std::max(0.0f, hipSquareness(f)));
+                        if (d > best) { best = d; bestF = f; }
+                    }
+                    if (qEnvironmentVariableIsSet("QTMESH_EXTRACT_DEBUG"))
+                        fprintf(stderr,
+                                "[extract] %s: bladed reference f=%d "
+                                "re-picked → f=%d\n",
+                                anim->getName().c_str(), refFrame, bestF);
+                    refFrame = bestF;
+                }
             }
         }
         skel->reset(true);
@@ -1455,6 +1606,43 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
                 if (meanUp.squaredLength() > 1e-6f) {
                     meanUp.normalise();
                     C = meanUp.getRotationTo(Ogre::Vector3::UNIT_Y) * C;
+                }
+            }
+            // CLIP-AVERAGED FACING (#954 follow-up). The facing (canonical
+            // +X = left) comes from the HIP LINE at the single reference
+            // frame — a reference that catches the pelvis BLADED (a running
+            // mid-stride, a seated twist) yaws the whole canonical frame,
+            // so the retargeted character faces ~90° sideways (user-reported
+            // on the Woman Run/Sit). Like the up-leveling above, average
+            // the hip line over ALL frames (horizontal component, weighted
+            // by its magnitude so twisted frames contribute less) and
+            // yaw-correct C so the mean lands on +X. A clip with genuine
+            // constant pelvis rotation averages to its dominant facing —
+            // the right reference for it.
+            const Ogre::Bone* lHipB = roleBone[19];
+            const Ogre::Bone* rHipB = roleBone[15];
+            if (lHipB && rHipB) {
+                Ogre::Vector3 meanLeft = Ogre::Vector3::ZERO;
+                for (int f = 0; f < frames; ++f) {
+                    skel->reset(true);
+                    anim->apply(skel, std::min(length,
+                        static_cast<float>(f) / static_cast<float>(fps)));
+                    skel->_updateTransforms();
+                    Ogre::Vector3 l = lHipB->_getDerivedPosition()
+                                      - rHipB->_getDerivedPosition();
+                    if (l.squaredLength() < 1e-12f) continue;
+                    l = C * l;
+                    l.y = 0.0f;                     // horizontal component
+                    meanLeft += l;                  // magnitude-weighted
+                }
+                if (meanLeft.squaredLength() > 1e-6f) {
+                    meanLeft.normalise();
+                    // Yaw-only correction about +Y (up stays leveled).
+                    const float yaw =
+                        std::atan2(meanLeft.z, meanLeft.x);   // 0 when +X
+                    if (std::abs(yaw) > 1e-3f)
+                        C = Ogre::Quaternion(Ogre::Radian(yaw),
+                                             Ogre::Vector3::UNIT_Y) * C;
                 }
             }
         }
@@ -1578,6 +1766,51 @@ AnimationMerger::extractCanonicalClips(Ogre::Entity* entity, int fps,
         clip.frames = static_cast<int>(clip.quats.size());
         clip.restWorld = std::move(restWorld);
         clip.restDir = std::move(restDir);
+        // #954: bind→reference ROLL per role, about the bone's own axis —
+        // the quantity the retarget's twist channel loses when it zeroes θ at
+        // the reference frame. Computed PARENT-RELATIVE (O-free, see bindRel):
+        //     R      = L_ref · L_bind⁻¹          (parent-frame bind→ref)
+        //     θ_c    = signed twist of R about the bone's ref direction
+        // The retarget adds θ_c to its per-frame twist so the roll baseline
+        // anchors to the SOURCE BIND regardless of which reference frame the
+        // extraction picked — the #954 reference-sensitivity fix.
+        {
+            skel->reset(true);
+            if (refFrame >= 0)
+                anim->apply(skel, std::min(length,
+                    static_cast<float>(refFrame) / static_cast<float>(fps)));
+            skel->_updateTransforms();
+            clip.refRoll.assign(static_cast<size_t>(J), 0.0f);
+            for (int j = 0; j < J && j < 22; ++j) {
+                Ogre::Bone* b = roleBone[static_cast<size_t>(j)];
+                const Ogre::Quaternion& lb = bindRel[static_cast<size_t>(j)];
+                if (!b || (lb.w == 0.0f && lb.x == 0.0f && lb.y == 0.0f
+                           && lb.z == 0.0f))
+                    continue;
+                const auto& sd = clip.restDir[static_cast<size_t>(j)];
+                Ogre::Vector3 dirW(sd[0], sd[1], sd[2]);   // canonical frame
+                if (dirW.squaredLength() < 1e-8f) continue;
+                auto* pb = dynamic_cast<Ogre::Bone*>(b->getParent());
+                const Ogre::Quaternion pw = pb
+                    ? pb->_getDerivedOrientation()
+                    : Ogre::Quaternion::IDENTITY;
+                const Ogre::Quaternion lref =
+                    pw.Inverse() * b->_getDerivedOrientation();
+                const Ogre::Quaternion R = lref * lb.Inverse();
+                // Bone direction at ref, in the PARENT frame (the frame R
+                // lives in): parent⁻¹ · worldDir; worldDir = C⁻¹ · restDir.
+                Ogre::Vector3 dRefParent =
+                    pw.Inverse() * (Cinv * dirW);
+                if (dRefParent.squaredLength() < 1e-8f) continue;
+                dRefParent.normalise();
+                // signed twist of R about dRefParent
+                const Ogre::Vector3 axis(R.x, R.y, R.z);
+                const float proj = axis.dotProduct(dRefParent);
+                const float th = 2.0f * std::atan2(proj, R.w);
+                clip.refRoll[static_cast<size_t>(j)] =
+                    std::remainder(th, 2.0f * static_cast<float>(M_PI));
+            }
+        }
 
         // #838 finger REST pointing direction per slot, at the reference pose
         // (the skeleton is still posed there — restWorld/restDir were just read
@@ -3984,7 +4217,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool modelClip,
     const std::vector<float>& clipRootY,
     bool verticalDescent,
-    bool cmuLibraryHandedness)
+    bool cmuLibraryHandedness,
+    const std::vector<float>& clipRefRoll)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -4608,6 +4842,30 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                             twistTheta[static_cast<size_t>(f)]
                                       [static_cast<size_t>(c)] = acc / wsum;
                         }
+                    }
+                }
+                // #954: BIND-ANCHORED roll baseline. θ above is zero at the
+                // extraction's REFERENCE frame, so the roll baseline follows
+                // whatever frame the extractor picked — two extractions of
+                // the same clip with different references render arms rolled
+                // apart by the reference roll (the "arms 90° too wide"
+                // regression). When the clip ships refRoll (the source's
+                // bind→reference roll per role, parent-relative/O-free), add
+                // it so θ is zero at the SOURCE BIND instead — reference
+                // choice cancels. Only body roles; fingers keep zero gain.
+                // NB: role 0 (hip) is EXCLUDED — its "roll" about the
+                // vertical axis is whole-body FACING, which the retarget
+                // deliberately anchors to the TARGET's own bind (a walk must
+                // not yaw). Re-basing it injected the source armature's yaw
+                // convention as a constant ~90° hip twist (user-reported on
+                // the Woman clips: torso forward, hips/legs sideways).
+                if (static_cast<int>(clipRefRoll.size()) >= 22) {
+                    for (int c = 1; c < Jc && c < 22; ++c) {
+                        const float base = clipRefRoll[static_cast<size_t>(c)];
+                        if (std::abs(base) < 1e-5f) continue;
+                        for (int f = 0; f < frames; ++f)
+                            twistTheta[static_cast<size_t>(f)]
+                                      [static_cast<size_t>(c)] += base;
                     }
                 }
             }

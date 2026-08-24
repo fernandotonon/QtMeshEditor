@@ -759,6 +759,9 @@ def main():
                             clip["restWorld"] = rest_world
                         if rest_dir:
                             clip["restDir"] = rest_dir
+                        ref_roll = c.get("refRoll")
+                        if ref_roll and len(ref_roll) >= 22:
+                            clip["refRoll"] = ref_roll
                         # #838 vertical descent: carry the per-frame hip Y
                         # offset, sliced to the SAME active window as the quats
                         # and re-based so frame 0 of the window reads ~0 (the

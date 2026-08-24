@@ -2189,6 +2189,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
     std::vector<std::array<float, 3>> clipDirs;
+    std::vector<float> clipRefRoll;   // #954
     std::vector<float> clipRootY;              // #838 non-locomotion hip drop
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838 fingers
     std::vector<std::array<float, 3>> clipFingerRest;            // #838
@@ -2272,6 +2273,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRefRoll = clip.refRoll;   // #954 bind-anchored roll
         clipRootY = clip.rootY;
         // V2 (schema v4, 52 joints): fingers are canonical joints 22..51 and
         // retarget via the body path in applyMotionClip — the separate
@@ -2333,7 +2335,9 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 clipSource == QStringLiteral("model"),
                                                 clipRootY,
                                                 verticalDescent
-                                                && MotionLibrary::isVerticalDescentAction(action));
+                                                && MotionLibrary::isVerticalDescentAction(action),
+                                                /*cmuLibraryHandedness=*/true,
+                                                clipRefRoll);
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
@@ -2737,6 +2741,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             rd.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
                           float(a[2].toDouble())});
         }
+        // #954: carry the bind-anchored roll baseline through the parity
+        // harness so a self-retarget exercises the same twist path as the
+        // library retarget (review: the dump writes refRoll, the reader
+        // must consume it).
+        std::vector<float> rr;
+        for (const QJsonValue& v : clip.value("refRoll").toArray())
+            rr.push_back(float(v.toDouble()));
+        if (rr.size() < 22) rr.clear();
         const int cfps = root.value("fps").toInt(30);
         MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
         Ogre::Entity* ent = nullptr;
@@ -2747,7 +2759,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         const auto res = AnimationMerger::applyMotionClip(
             skel.get(), "generated_parity", q, cfps,
             /*worldFrame=*/true, rw, /*refineWithModel=*/false,
-            /*refineStride=*/8, /*yaw180=*/false, rd);
+            /*refineStride=*/8, /*yaw180=*/false, rd,
+            /*modelClip=*/false, /*clipRootY=*/{},
+            /*verticalDescent=*/false, /*cmuLibraryHandedness=*/true, rr);
         if (!res.ok) { err() << "Error: " << res.error << Qt::endl; return 1; }
         // GROUND-TRUTH self-parity: when the applied json names a source
         // animation that exists on THIS entity (self-retarget), play BOTH the
@@ -3203,6 +3217,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 dirs.append(vec);
             }
             co["restDir"] = dirs;
+            // #954: bind→reference roll per role (bind-anchored twist).
+            if (!c.refRoll.empty()) {
+                QJsonArray rr;
+                for (float v : c.refRoll)
+                    rr.append(static_cast<double>(
+                        std::round(v * 100000.0f) / 100000.0f));
+                co["refRoll"] = rr;
+            }
             // #838 vertical root descent: per-frame normalised hip Y offset.
             if (!c.rootY.empty()) {
                 QJsonArray ry;

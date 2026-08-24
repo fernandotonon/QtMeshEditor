@@ -253,13 +253,27 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
             channelNode->mTransformation.Decompose(ns, nr, np);
             nodeBindScale = Ogre::Vector3(ns.x, ns.y, ns.z);
 
+            // #954: the space-change applies to ROOT bones ONLY. For a bone
+            // with an Ogre parent, induction over the chain (E_parent ==
+            // W_true_parent) makes the correct keyframe simply
+            // ogreBindLocal⁻¹·rawKey — applying the own-bind mismatch C to
+            // deep bones DOUBLE-corrects every bone whose skin bind differs
+            // from its node bind, which on Blender-FBX rigs (per-bone
+            // PreRotations) rotated whole ARM CHAINS ~90° into the air while
+            // legs (bind-consistent) stayed right (verified against
+            // Blender's own import of the Quaternius Woman). The ROOT is the
+            // one bone whose Ogre parent chain (nothing) differs from its
+            // node ancestors: #936's re-rooting bakes those ancestors into
+            // the root bind (G = ancestors·N), making the own-bind form
+            // C = G·N⁻¹ EXACT there — final = G·(G⁻¹·C·raw) = ancestors·raw.
+            const bool isRootBone = bone->getParent() == nullptr;
             // A zero bind-scale component makes the node transform singular —
             // skip the space-change mapping rather than invert it (keys then
             // apply in node space, the pre-#936 behavior for that bone).
             const bool invertible = std::abs(ns.x) > 1e-8f &&
                                     std::abs(ns.y) > 1e-8f &&
                                     std::abs(ns.z) > 1e-8f;
-            if (invertible) {
+            if (isRootBone && invertible) {
                 Ogre::Affine3 nodeBind;
                 nodeBind.makeTransform(Ogre::Vector3(np.x, np.y, np.z),
                                        Ogre::Vector3(ns.x, ns.y, ns.z),
