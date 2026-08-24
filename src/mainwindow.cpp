@@ -3082,6 +3082,20 @@ void MainWindow::initToolBar()
                 smear.cubicTo(5, 12, 7, 16, 9, 14);
                 p.drawPath(smear);
             }
+        },
+        {
+            static_cast<int>(TexturePaintController::ToolDecal),
+            "Decal", "modeMaterialDecalAction",
+            [](QPainter& p, const QColor& c) {
+                // Decal: a rectangle with small corner handle squares.
+                p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p.setBrush(Qt::NoBrush);
+                p.drawRect(QRectF(4.5, 5.5, 9, 7));
+                p.setBrush(c); p.setPen(Qt::NoPen);
+                for (const QPointF& corner : { QPointF(4.5, 5.5), QPointF(13.5, 5.5),
+                                               QPointF(13.5, 12.5), QPointF(4.5, 12.5) })
+                    p.drawRect(QRectF(corner.x() - 1.2, corner.y() - 1.2, 2.4, 2.4));
+            }
         }
     };
 
@@ -3123,7 +3137,12 @@ void MainWindow::initToolBar()
         connect(btn, &QToolButton::clicked, this, [targetTool, label = tdef.label]() {
             SentryReporter::addBreadcrumb("ui.action",
                 QStringLiteral("Toolbar: tool = %1").arg(label));
-            TexturePaintController::instance()->setBrushTool(targetTool);
+            // Decal isn't a plain brush: selecting it starts the image-pick +
+            // placement session (Paint v2 Slice F #549). Other tools just switch.
+            if (targetTool == static_cast<int>(TexturePaintController::ToolDecal))
+                TexturePaintController::instance()->beginDecalInteractive();
+            else
+                TexturePaintController::instance()->setBrushTool(targetTool);
         });
 
         QAction* act = ui->objectsToolbar->addWidget(btn);
@@ -4915,6 +4934,25 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             return;
         }
         // Swallow everything else so fall-through handlers don't fire.
+        event->accept();
+        return;
+    }
+
+    // Paint v2 Slice F (#549): decal session — Enter commits, Esc cancels,
+    // everything else is swallowed while placing/editing (mirrors the knife).
+    if (TexturePaintController::instance()->decalSessionActive()) {
+        if (event->key() == Qt::Key_Escape) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel decal");
+            TexturePaintController::instance()->cancelDecal();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Enter — commit decal");
+            TexturePaintController::instance()->commitDecal();
+            event->accept();
+            return;
+        }
         event->accept();
         return;
     }

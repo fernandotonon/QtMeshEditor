@@ -172,6 +172,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushAssetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectionPainter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DecalSession.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MultiViewTextureBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBakerController.cpp

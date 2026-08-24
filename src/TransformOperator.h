@@ -234,6 +234,9 @@ private:
     // Vertex paint drag state (edit mode only).
     bool                                    mVertexPaintDragActive = false;
     bool                                    mTexturePaintDragActive = false;
+    // Paint v2 Slice F (#549): decal-handle drag state.
+    bool                                    mDecalDragActive = false;
+    int                                     mDecalDragHandle = 0;  // DecalSession::Handle
 
     // Bone-gizmo drag state. Active when a bone is the current selection
     // (per AnimationControlController::selectedBonePtr) and the user

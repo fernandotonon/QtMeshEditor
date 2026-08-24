@@ -209,7 +209,13 @@ under IBL. **Symmetry** mirrors every stroke in real time across the local or
 world X/Y/Z planes (combine axes for 4- or 8-way mirroring; a topology-aware
 mode keeps mirrors correct on meshes with an asymmetric UV unwrap), and a
 **line stabilizer** (moving-average or trailing) smooths mouse jitter for clean
-strokes.
+strokes. **Projection painting** projects an image onto the mesh through the
+camera — brush through a **stencil**, lock the projection to a camera pose, or
+**project a photo** straight onto the visible surface (with backface culling,
+depth-limit and per-texel occlusion so it only lands where the camera can see);
+and the **decal** tool drops a placeable image rectangle (drag to move / rotate
+/ scale, Enter to commit) onto the surface. Each projection lands in its own
+layer.
 
 **Quick start (texture paint, GUI):**
 

@@ -1192,6 +1192,26 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         // Texture paint takes priority over selection/box pick: it works
         // in Material Mode without entering Edit Mode, so we handle it
         // before the Edit-Mode-gated branch below.
+        // Paint v2 Slice F (#549): a decal session consumes clicks — place the
+        // rect (Placing) or grab a handle to drag (Editing) — before the normal
+        // texture-paint stroke branch, mirroring the knife/bevel priority.
+        {
+            auto* texPaint = TexturePaintController::instance();
+            if (texPaint->decalSessionActive()) {
+                if (texPaint->decalState() == 1 /*Placing*/) {
+                    texPaint->placeDecalAt(m_pActiveWidget, e->pos());
+                    return;
+                }
+                const int h = texPaint->decalHitTest(m_pActiveWidget, e->pos());
+                if (h != 0 /*None*/) {
+                    mDecalDragActive = true;
+                    mDecalDragHandle = h;
+                    SentryReporter::addBreadcrumb("paint.decal",
+                        QStringLiteral("drag start (handle=%1)").arg(h));
+                }
+                return;   // clicks are owned by the decal session while editing
+            }
+        }
         {
             auto* texPaint = TexturePaintController::instance();
             if (texPaint->texturePaintEnabled() && mTransformState == TS_SELECT) {
@@ -1507,6 +1527,12 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         Ogre::Ray dragRay = rayFromScreenPoint(e->pos());
         EditModeController::instance()->updateBevelFromDrag(
             mBevelDragStartRay, dragRay, mBevelDragStartWidth);
+        return;
+    }
+
+    // Paint v2 Slice F (#549): decal handle drag (translate/rotate/scale).
+    if (mDecalDragActive && (e->buttons() & Qt::LeftButton) && m_pActiveWidget) {
+        TexturePaintController::instance()->dragDecal(m_pActiveWidget, e->pos(), mDecalDragHandle);
         return;
     }
 
@@ -2036,6 +2062,14 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         TexturePaintController::instance()->endStroke();
         mTexturePaintDragActive = false;
         SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke end");
+        return;
+    }
+
+    // Paint v2 Slice F (#549): end a decal handle drag (session stays open —
+    // user keeps editing until Enter commits / ESC cancels).
+    if (mDecalDragActive && e->button() == Qt::LeftButton) {
+        mDecalDragActive = false;
+        SentryReporter::addBreadcrumb("paint.decal", "drag end");
         return;
     }
 
