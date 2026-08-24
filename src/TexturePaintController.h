@@ -1180,6 +1180,14 @@ private:
     /// Upload `m_decal.image()` into m_decalPreviewTex + ensure the sampling
     /// material exists. Returns the material name, or "" if unavailable.
     std::string ensureDecalPreviewMaterial();
+    /// Create/resize m_decalPreviewTex to (W,H). False if unavailable.
+    bool ensureDecalPreviewTexture(int W, int H);
+    /// Feather `img` to match the commit and blit it into m_decalPreviewTex.
+    /// False if the blit could not run — the caller must then NOT stamp the
+    /// cache key, so the next refresh retries.
+    bool uploadDecalPreviewPixels(const QImage& img, int W, int H);
+    /// Build (once) or re-point the material that samples the preview texture.
+    bool ensureDecalPreviewPass();
     /// Destroy the decal preview texture/material (called from closeSession).
     void destroyDecalPreview();
     /// Rebuild the decal rectangle + handle overlay (or hide it when inactive).

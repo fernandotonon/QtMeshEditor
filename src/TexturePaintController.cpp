@@ -5925,10 +5925,122 @@ void TexturePaintController::refreshSymmetryPlaneOverlay()
 // artwork (correctly oriented + aspect-correct) instead of a flat tint. The
 // upload is keyed on QImage::cacheKey() so dragging/rotating/scaling the decal
 // re-draws geometry only — the texture is uploaded once per image.
+namespace {
+
+// Ogre resource teardown is best-effort: a manager may already be gone during
+// shutdown. Swallow *only* Ogre's own exception type here (a bare `catch (...)`
+// would also hide std::bad_alloc and logic errors) and note why it is ignored.
+template <typename Fn>
+bool tryOgre(Fn&& fn)
+{
+    try {
+        fn();
+        return true;
+    } catch (const Ogre::Exception&) {
+        // Expected: the resource/manager is unavailable (e.g. mid-shutdown, or a
+        // name collision). Callers treat `false` as "unavailable" and degrade.
+        return false;
+    }
+}
+
+} // namespace
+
+// Ensure m_decalPreviewTex exists and matches (W,H); returns false if it could
+// not be created. Split out of ensureDecalPreviewMaterial to keep that function
+// under the cognitive-complexity limit.
+bool TexturePaintController::ensureDecalPreviewTexture(int W, int H)
+{
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    // Recreate when the dimensions change.
+    if (m_decalPreviewTex
+        && (static_cast<int>(m_decalPreviewTex->getWidth()) != W
+         || static_cast<int>(m_decalPreviewTex->getHeight()) != H)) {
+        tryOgre([&] { texMgr.remove(m_decalPreviewTex); });
+        m_decalPreviewTex.reset();
+    }
+    if (m_decalPreviewTex) return true;
+
+    const std::string texName = "QMEDecalPreview_"
+        + std::to_string(reinterpret_cast<uintptr_t>(this));
+    tryOgre([&] {
+        m_decalPreviewTex = texMgr.createManual(
+            texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, W, H, 0, Ogre::PF_BYTE_RGBA,
+            Ogre::TU_DYNAMIC_WRITE_ONLY);
+    });
+    return static_cast<bool>(m_decalPreviewTex);
+}
+
+// Upload the decal image (feathered to match the commit) into the preview
+// texture. Returns false if the blit could not be performed, in which case the
+// caller must NOT stamp the cache key so the next refresh retries.
+bool TexturePaintController::uploadDecalPreviewPixels(const QImage& img, int W, int H)
+{
+    // Preview the SAME pixels commitDecal() will bake: it feathers the outer
+    // kDefaultSoftEdge of the image, so previewing the raw source would show a
+    // hard opaque border that softens only after commit — defeating WYSIWYG.
+    // Non-const so the PixelBox can take bits() without casting away constness.
+    QImage feathered =
+        DecalSession::featherSource(img, DecalSession::kDefaultSoftEdge);
+    if (feathered.isNull()) return false;
+
+    bool uploaded = false;
+    tryOgre([&] {
+        const Ogre::HardwarePixelBufferSharedPtr buf = m_decalPreviewTex->getBuffer();
+        if (!buf) return;
+        // Rows are top-down RGBA8888 and tightly packed; blit straight in.
+        const Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, feathered.bits());
+        buf->blitFromMemory(pb);
+        uploaded = true;
+    });
+    return uploaded;
+}
+
+// Build (once) or re-point the material that samples the preview texture.
+bool TexturePaintController::ensureDecalPreviewPass()
+{
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    const Ogre::MaterialPtr mat = matMgr.getByName(m_decalPreviewMatName);
+    if (mat) {
+        // Keep the TUS pointed at the current texture (it may have been recreated).
+        return tryOgre([&] {
+            Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+            if (pass->getNumTextureUnitStates() > 0)
+                pass->getTextureUnitState(0)->setTextureName(m_decalPreviewTex->getName());
+        });
+    }
+    return tryOgre([&] {
+        const Ogre::MaterialPtr created = matMgr.create(m_decalPreviewMatName,
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        Ogre::Pass* pass = created->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+        // Depth CHECK stays on for the artwork: the preview should be occluded by
+        // geometry in front of it (it is pinned to a surface), unlike the
+        // outline/handles which draw on top to stay grabbable.
+        pass->setDepthCheckEnabled(true);
+        pass->setCullingMode(Ogre::CULL_NONE);
+        Ogre::TextureUnitState* tus =
+            pass->createTextureUnitState(m_decalPreviewTex->getName());
+        tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+    });
+}
+
+// Paint v2 Slice F follow-up: WYSIWYG decal preview.
+// Uploads the decal image to a GPU texture and returns an unlit, alpha-blended
+// material that samples it, so the overlay quad shows the ACTUAL artwork
+// (correctly oriented + aspect-correct) instead of a flat tint. The upload is
+// keyed on the SOURCE QImage::cacheKey() so dragging/rotating/scaling the decal
+// re-draws geometry only — the texture is uploaded once per image.
 std::string TexturePaintController::ensureDecalPreviewMaterial()
 {
     const QImage& img = m_decal.image();
     if (img.isNull()) return {};
+
+    const int W = img.width();
+    const int H = img.height();
+    if (W <= 0 || H <= 0) return {};
 
     if (m_decalPreviewMatName.empty()) {
         m_decalPreviewMatName = "QMEDecalPreview_Mat_"
@@ -5941,51 +6053,11 @@ std::string TexturePaintController::ensureDecalPreviewMaterial()
     // every refresh and re-upload the whole texture on every drag frame — exactly
     // the per-mouse-move upload this cache exists to avoid.
     const qint64 srcKey = img.cacheKey();
-    const int W = img.width(), H = img.height();
-    if (W <= 0 || H <= 0) return {};
-
-    auto& texMgr = Ogre::TextureManager::getSingleton();
-    const std::string texName = "QMEDecalPreview_"
-        + std::to_string(reinterpret_cast<uintptr_t>(this));
-
-    // Recreate when the dimensions change.
-    const bool sizeChanged = m_decalPreviewTex
-        && (static_cast<int>(m_decalPreviewTex->getWidth()) != W
-         || static_cast<int>(m_decalPreviewTex->getHeight()) != H);
-    if (sizeChanged) {
-        try { texMgr.remove(m_decalPreviewTex); } catch (...) {}
-        m_decalPreviewTex.reset();
-    }
     const bool needUpload = !m_decalPreviewTex || m_decalPreviewImageKey != srcKey;
-    if (!m_decalPreviewTex) {
-        try {
-            m_decalPreviewTex = texMgr.createManual(
-                texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                Ogre::TEX_TYPE_2D, W, H, 0, Ogre::PF_BYTE_RGBA,
-                Ogre::TU_DYNAMIC_WRITE_ONLY);
-        } catch (...) { return {}; }
-    }
-    if (!m_decalPreviewTex) return {};
+
+    if (!ensureDecalPreviewTexture(W, H)) return {};
     if (needUpload) {
-        // Preview the SAME pixels commitDecal() will bake: it feathers the outer
-        // kDecalSoftEdge of the image, so previewing the raw source would show a
-        // hard opaque border that softens only after commit — defeating WYSIWYG.
-        // Only the conversion + feather happen here, gated by the cache above.
-        const QImage feathered =
-            DecalSession::featherSource(img, DecalSession::kDefaultSoftEdge);
-        if (feathered.isNull()) return {};
-        bool uploaded = false;
-        try {
-            auto buf = m_decalPreviewTex->getBuffer();
-            if (buf) {
-                // Rows are top-down RGBA8888 and tightly packed; blit straight in.
-                Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA,
-                                  const_cast<uchar*>(feathered.constBits()));
-                buf->blitFromMemory(pb);
-                uploaded = true;
-            }
-        } catch (...) { uploaded = false; }
-        if (!uploaded) {
+        if (!uploadDecalPreviewPixels(img, W, H)) {
             // Leave m_decalPreviewImageKey untouched so the next refresh retries,
             // and fall back to the flat tint for this frame rather than showing a
             // blank/stale quad.
@@ -5993,45 +6065,22 @@ std::string TexturePaintController::ensureDecalPreviewMaterial()
         }
         m_decalPreviewImageKey = srcKey;
     }
-
-    auto& matMgr = Ogre::MaterialManager::getSingleton();
-    Ogre::MaterialPtr mat = matMgr.getByName(m_decalPreviewMatName);
-    if (!mat) {
-        try {
-            mat = matMgr.create(m_decalPreviewMatName,
-                Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
-            auto* pass = mat->getTechnique(0)->getPass(0);
-            pass->setLightingEnabled(false);
-            pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
-            pass->setDepthWriteEnabled(false);
-            // Depth CHECK stays on for the artwork: the preview should be
-            // occluded by geometry in front of it (it is pinned to a surface),
-            // unlike the outline/handles which draw on top to stay grabbable.
-            pass->setDepthCheckEnabled(true);
-            pass->setCullingMode(Ogre::CULL_NONE);
-            auto* tus = pass->createTextureUnitState(m_decalPreviewTex->getName());
-            tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
-        } catch (...) { return {}; }
-    } else {
-        // Keep the TUS pointed at the current texture (it may have been recreated).
-        try {
-            auto* pass = mat->getTechnique(0)->getPass(0);
-            if (pass->getNumTextureUnitStates() > 0)
-                pass->getTextureUnitState(0)->setTextureName(m_decalPreviewTex->getName());
-        } catch (...) {}
-    }
+    if (!ensureDecalPreviewPass()) return {};
     return m_decalPreviewMatName;
 }
 
 void TexturePaintController::destroyDecalPreview()
 {
     if (!m_decalPreviewMatName.empty()) {
-        try { Ogre::MaterialManager::getSingleton().remove(m_decalPreviewMatName,
-                  Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME); } catch (...) {}
+        tryOgre([&] {
+            Ogre::MaterialManager::getSingleton().remove(
+                m_decalPreviewMatName,
+                Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        });
         m_decalPreviewMatName.clear();
     }
     if (m_decalPreviewTex) {
-        try { Ogre::TextureManager::getSingleton().remove(m_decalPreviewTex); } catch (...) {}
+        tryOgre([&] { Ogre::TextureManager::getSingleton().remove(m_decalPreviewTex); });
         m_decalPreviewTex.reset();
     }
     m_decalPreviewImageKey = 0;
