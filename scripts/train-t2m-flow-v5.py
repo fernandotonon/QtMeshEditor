@@ -188,6 +188,10 @@ def main():
     ap.add_argument("--guidance", type=float, default=1.0,
                     help="CFG scale baked into the exported sampler")
     ap.add_argument("--device", default="mps")
+    ap.add_argument("--balance-power", type=float, default=1.0,
+                    help="class-balance exponent: 1.0 = inverse-frequency "
+                         "(equal per action), 0.5 = sqrt-tempered (favours "
+                         "the data-rich actions like walk), 0.0 = raw")
     ap.add_argument("--resume", action="store_true",
                     help="resume from <out>/ckpt.pt (long runs survive "
                          "sleep/restarts)")
@@ -209,9 +213,18 @@ def main():
     m6 = torch.from_numpy(msk).repeat_interleave(D6, -1)         # [N,C6]
     tok = torch.from_numpy(tk)
 
-    # class-balanced sampling — walk is 64% of windows (v4 lesson)
+    # Class-balanced sampling — walk dominates the window count (v4 lesson).
+    # `--balance-power` tempers it: 1.0 = pure inverse-frequency (every action
+    # drawn equally often), 0.5 = sqrt-tempered, 0.0 = raw distribution.
+    #
+    # Pure inverse-frequency badly starves the actions that matter most. On the
+    # v6.2 cache walk is 30.85% of windows but only 4.35% of draws (0.14x its
+    # share) while 16-window curiosities like `confession` get 67x oversampling
+    # — equal capacity spent memorising 16 windows as on 7688 walk windows.
+    # Measured effect: walk fwd/side plateaued at ~2.6 by ep167 while the loss
+    # kept falling. sqrt-tempering gives walk 16.1% and still leaves run 2.8%.
     freq = tk.sum(0)
-    w = (tk @ (1.0 / np.maximum(freq, 1.0))).astype(np.float64)
+    w = (tk @ (1.0 / np.maximum(freq, 1.0) ** a.balance_power)).astype(np.float64)
     sampler = torch.utils.data.WeightedRandomSampler(
         torch.from_numpy(w), num_samples=N, replacement=True)
     ds = torch.utils.data.TensorDataset(x1, m6, tok)
