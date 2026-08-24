@@ -5046,6 +5046,31 @@ Rectangle {
                         onClicked: TexturePaintController.projUseOcclusion = !texPaintCol.projUseOcclusion }
                 }
             }
+            // Depth limit: reject texels farther than this fraction of the
+            // bounds radius BEHIND the nearest visible surface (the
+            // sphere-with-hole case). 0 = off; independent of Occlude.
+            Row {
+                spacing: 6
+                opacity: texPaintCol.projectionMode > 0 ? 1.0 : 0.4
+                Text {
+                    text: "Depth limit"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 110
+                    enabled: texPaintCol.projectionMode > 0
+                    from: 0.0; to: 2.0; stepSize: 0.01
+                    value: texPaintCol.projDepthLimit
+                    onMoved: TexturePaintController.projDepthLimit = value
+                }
+                Text {
+                    text: texPaintCol.projDepthLimit > 0
+                        ? texPaintCol.projDepthLimit.toFixed(2) : "off"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
             Row {
                 spacing: 6
                 width: parent.width - 16

@@ -79,11 +79,17 @@ collapsed; a "•" next to the header means a projection mode is active).
   (through a hole, or a far wall behind a near one). Backface handles *facing*;
   Occlude handles *hidden-behind-something*. Slightly slower (a depth render), so
   it's off by default.
-- **Depth limit** (`projDepthLimit`, backend value as a fraction of the mesh
-  bounds radius; 0 = off) — even among visible surfaces, reject anything more
-  than this distance *behind* the nearest visible surface. Useful to paint only
-  the front shell, not a far surface seen edge-on. This is what makes the
+- **Depth limit** (`projDepthLimit`, slider; backend value as a fraction of the
+  mesh bounds radius; 0 = off) — even among visible surfaces, reject anything
+  more than this distance *behind* the nearest visible surface. Useful to paint
+  only the front shell, not a far surface seen edge-on. This is what makes the
   "sphere-with-hole" case paint only the near rim, not the inner back wall.
+  Depth limit is **independent of Occlude**: `classifyDepth` tests the
+  user-scale depth limit *before* the occlusion rejection, and applies the
+  occlusion test only when Occlude is on. Ordering matters — testing the
+  anti-acne `biasWorld` slop first would both make the depth-limit branch
+  unreachable (it would need `depthLimit < biasWorld`) and silently force full
+  occlusion culling with Occlude off.
 - **Project from photo…** — a one-shot action: pick an image and it's projected
   through the **current camera** onto the whole visible mesh at once and
   committed as a **new layer** (one undo step). Line the model up to a reference

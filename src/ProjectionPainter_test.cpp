@@ -180,7 +180,11 @@ TEST(ProjectionPainterTest, DepthLimitCullsBeyondNearestSurface) {
     occ.camDirection = Ogre::Vector3(0, 0, -1);
     occ.depthNear = near; occ.depthFar = far;
     occ.depth = flatDepthMap(64, 5.0f, near, far);
-    occ.biasWorld = 1e6f;  // disable the occlusion reject; isolate depth-limit
+    // A REALISTIC anti-acne bias (not a 1e6 sentinel): with `useOcclusion` off
+    // the occlusion reject must not fire at all, so the depth limit alone
+    // decides. A large bias here would hide an ordering regression in
+    // classifyDepth instead of catching it.
+    occ.biasWorld = 0.05f;
 
     ProjectionPainter::Options opts; opts.resolution = 64; opts.useOcclusion = false;
 
@@ -188,12 +192,39 @@ TEST(ProjectionPainterTest, DepthLimitCullsBeyondNearestSurface) {
       auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
       ASSERT_TRUE(rep.ok);
       EXPECT_GT(rep.texelsDepthCulled, 0);
+      EXPECT_EQ(rep.texelsOccluded, 0);  // Occlude is OFF — must not cull
       EXPECT_EQ(rep.texelsWritten, 0); }
 
     { opts.depthLimit = 2.0f; TexturePaintBuffer out; out.resize(64, 64);
       auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
       ASSERT_TRUE(rep.ok);
+      EXPECT_EQ(rep.texelsOccluded, 0);  // Occlude is OFF — must not cull
       EXPECT_GT(rep.texelsWritten, 0); }
+}
+
+TEST(ProjectionPainterTest, DepthLimitOffAndOcclusionOffWritesThrough) {
+    // Both toggles off: a texel 1 unit behind the nearest visible surface must
+    // write through untouched. Guards against either test reintroducing an
+    // unconditional occlusion reject.
+    const float near = 4.0f, far = 7.0f;
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1), Ogre::Vector3(0, 0, 5) };
+    ProjectionPainter::OcclusionMap occ;
+    occ.viewProj = orthoViewProj();
+    occ.camPosition = Ogre::Vector3(0, 0, 5);
+    occ.camDirection = Ogre::Vector3(0, 0, -1);
+    occ.depthNear = near; occ.depthFar = far;
+    occ.depth = flatDepthMap(64, 5.0f, near, far);
+    occ.biasWorld = 0.05f;
+
+    ProjectionPainter::Options opts; opts.resolution = 64;
+    opts.useOcclusion = false; opts.depthLimit = 0.0f;
+
+    TexturePaintBuffer out; out.resize(64, 64);
+    auto rep = ProjectionPainter::project(frontQuad(-1.0f, true), v, solid(32, Qt::red), out, opts, &occ);
+    ASSERT_TRUE(rep.ok);
+    EXPECT_EQ(rep.texelsOccluded, 0);
+    EXPECT_EQ(rep.texelsDepthCulled, 0);
+    EXPECT_GT(rep.texelsWritten, 0);
 }
 
 TEST(ProjectionPainterTest, DabPaintsWithinFootprintAndAccumulates) {

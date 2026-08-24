@@ -1177,6 +1177,10 @@ private:
 
     /// Cache the entity's world triangles for the projection stroke (once).
     void ensureProjTris();
+    /// Read the View straight off the live viewport camera, ignoring any locked
+    /// pose. `snapProjectionCamera` uses this so a re-snap re-pins to where the
+    /// camera is NOW instead of copying the stored pose onto itself.
+    bool liveCameraView(OgreWidget* widget, ProjectionPainter::View& out) const;
     /// Build the projection View from the live viewport camera (mode 1) or the
     /// locked view (mode 2). Returns false if no camera is available.
     bool currentProjectionView(OgreWidget* widget, ProjectionPainter::View& out) const;

@@ -49,9 +49,17 @@ void DecalSession::place(const Ogre::Vector3& worldHit, const Ogre::Vector3& wor
     right.normalise();
 
     if (halfSize <= 0.0f) halfSize = 0.5f;
+    // Preserve the source image's aspect ratio: commit maps the WHOLE image onto
+    // this rect, so equal U/V extents would stretch any non-square logo/label
+    // until the user hand-guessed the correction. `halfSize` stays the V (height)
+    // extent and U widens/narrows with the image aspect.
+    float aspect = 1.0f;
+    if (!m_image.isNull() && m_image.height() > 0)
+        aspect = static_cast<float>(m_image.width()) / static_cast<float>(m_image.height());
+    if (!std::isfinite(aspect) || aspect <= 0.0f) aspect = 1.0f;
     m_rect.center   = worldHit;
     m_rect.normal   = n;
-    m_rect.tangentU = right * halfSize;
+    m_rect.tangentU = right * (halfSize * aspect);
     m_rect.tangentV = up * halfSize;
     m_state = State::Editing;
 }

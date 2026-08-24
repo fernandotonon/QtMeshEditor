@@ -762,28 +762,39 @@ void TexturePaintController::setStencilImagePath(const QString& path)
     m_stencilImage = path.isEmpty() ? QImage() : QImage(path);
     if (!m_stencilImage.isNull())
         m_stencilImage = m_stencilImage.convertToFormat(QImage::Format_RGBA8888);
+    // File NAME only — a full path embeds the OS account name (/Users/<name>/…).
     SentryReporter::addBreadcrumb("paint.projection",
-        QStringLiteral("stencil=%1 (%2)").arg(path).arg(m_stencilImage.isNull() ? "load-failed" : "ok"));
+        QStringLiteral("stencil=%1 (%2)").arg(QFileInfo(path).fileName())
+            .arg(m_stencilImage.isNull() ? "load-failed" : "ok"));
     emit projectionChanged();
 }
 
 void TexturePaintController::setProjBackfaceCull(bool on)
 {
     if (on == m_projBackfaceCull) return;
-    m_projBackfaceCull = on; emit projectionChanged();
+    m_projBackfaceCull = on;
+    SentryReporter::addBreadcrumb("paint.projection",
+        QStringLiteral("backfaceCull=%1").arg(on));
+    emit projectionChanged();
 }
 
 void TexturePaintController::setProjUseOcclusion(bool on)
 {
     if (on == m_projUseOcclusion) return;
-    m_projUseOcclusion = on; emit projectionChanged();
+    m_projUseOcclusion = on;
+    SentryReporter::addBreadcrumb("paint.projection",
+        QStringLiteral("useOcclusion=%1").arg(on));
+    emit projectionChanged();
 }
 
 void TexturePaintController::setProjDepthLimit(double v)
 {
     v = std::clamp(v, 0.0, 2.0);
     if (std::abs(v - m_projDepthLimit) < 1e-6) return;
-    m_projDepthLimit = v; emit projectionChanged();
+    m_projDepthLimit = v;
+    SentryReporter::addBreadcrumb("paint.projection",
+        QStringLiteral("depthLimit=%1").arg(v, 0, 'f', 3));
+    emit projectionChanged();
 }
 
 void TexturePaintController::ensureProjTris()
@@ -795,10 +806,9 @@ void TexturePaintController::ensureProjTris()
     m_haveProjTris = !m_projTris.empty();
 }
 
-bool TexturePaintController::currentProjectionView(OgreWidget* widget,
-                                                   ProjectionPainter::View& out) const
+bool TexturePaintController::liveCameraView(OgreWidget* widget,
+                                           ProjectionPainter::View& out) const
 {
-    if (m_projectionMode == 2 && m_haveLockedView) { out = m_lockedView; return true; }
     if (!widget || !widget->getSpaceCamera()) return false;
     Ogre::Camera* cam = widget->getSpaceCamera()->getCamera();
     if (!cam) return false;
@@ -806,6 +816,13 @@ bool TexturePaintController::currentProjectionView(OgreWidget* widget,
     out.camDirection = cam->getRealDirection();
     out.camPosition = cam->getRealPosition();
     return true;
+}
+
+bool TexturePaintController::currentProjectionView(OgreWidget* widget,
+                                                   ProjectionPainter::View& out) const
+{
+    if (m_projectionMode == 2 && m_haveLockedView) { out = m_lockedView; return true; }
+    return liveCameraView(widget, out);
 }
 
 bool TexturePaintController::buildOcclusionForView(const ProjectionPainter::View& view,
@@ -873,8 +890,11 @@ void TexturePaintController::snapProjectionCamera()
     auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
                        : (TransformOperator::getSingletonPtr() ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
     ProjectionPainter::View v;
-    if (!currentProjectionView(widget, v)) {
-        // No live camera (e.g. mode 2 requested before any paint) — try the
+    // Deliberately NOT currentProjectionView(): in locked mode that returns the
+    // already-stored pose, so re-snapping after moving the viewport camera would
+    // copy the stale pose back onto itself and never re-pin.
+    if (!liveCameraView(widget, v)) {
+        // No live camera (e.g. mode 2 requested before any paint) — keep the
         // stored one; otherwise bail.
         if (!m_haveLockedView) return;
         v = m_lockedView;
@@ -964,7 +984,8 @@ bool TexturePaintController::beginDecal(const QString& imagePath)
     m_decal.begin(img);
     m_haveDecalDragPos = false;
     setBrushTool(ToolDecal);
-    SentryReporter::addBreadcrumb("paint.decal.begin", imagePath);
+    // File NAME only — a full path embeds the OS account name.
+    SentryReporter::addBreadcrumb("paint.decal.begin", QFileInfo(imagePath).fileName());
     refreshDecalOverlay();
     emit projectionChanged();
     return true;
@@ -997,7 +1018,12 @@ void TexturePaintController::placeDecalAt(OgreWidget* widget, const QPoint& scre
     if (!node) return;
     const Ogre::Affine3 world = node->_getFullTransform();
     const Ogre::Vector3 worldPos = world * localPos;
-    Ogre::Vector3 worldN = world.linear() * localNormal;
+    // Normals need the INVERSE TRANSPOSE, not the linear block: under non-uniform
+    // scale the linear map does not preserve perpendicularity, which would tilt
+    // the decal plane off the real surface and skew backface/occlusion on commit.
+    // Matches MultiViewTextureBaker::fromEntity's normalMat.
+    const Ogre::Matrix3 normalMat = world.linear().Inverse().Transpose();
+    Ogre::Vector3 worldN = normalMat * localNormal;
     if (worldN.isZeroLength()) worldN = Ogre::Vector3::UNIT_Z;
     worldN.normalise();
     Ogre::Vector3 camUp = Ogre::Vector3::UNIT_Y;
@@ -3855,6 +3881,11 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
         smartSelectAtUV(static_cast<double>(uv.x), static_cast<double>(uv.y), /*mode=*/0);
         return false;  // smart-select doesn't dirty pixels
     }
+    case ToolDecal:
+        // Paint v2 Slice F (#549): the decal tool paints nothing per-dab — the
+        // world-anchored quad is placed/dragged via the DecalSession and only
+        // rasterizes once, on commit. Explicit case so -Wswitch stays clean.
+        return false;
     }
     return false;
 }
@@ -4344,6 +4375,7 @@ void TexturePaintController::closeSession()
     // drop them so a rebuilt session (or a different entity) rebuilds fresh.
     invalidateSymmetryMaps();
     m_decal.cancel();
+    m_haveDecalDragPos = false;   // else a stale drag anchor leaks into the next session
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
     m_layerStack = PaintLayerStack();
@@ -4385,6 +4417,11 @@ void TexturePaintController::closeSession()
     m_previewUri.clear();
     emit previewChanged();
     emit sessionChanged();
+    // `m_decal.cancel()` above flipped decalSessionActive/decalState, whose NOTIFY
+    // is projectionChanged — without this the panel keeps showing an active decal
+    // session after the session closes (entity delete, channel switch, bake,
+    // sceneClearing) until some unrelated projection change happens to fire.
+    emit projectionChanged();
 }
 
 // ---------------------------------------------------------------------------

@@ -27,7 +27,8 @@ namespace {
 // MeshDepthRenderer encodes distance via fog (not NDC-z).
 int classifyDepth(const Ogre::Vector3& wp,
                   const ProjectionPainter::OcclusionMap& occ,
-                  float depthLimit)
+                  float depthLimit,
+                  bool useOcclusion)
 {
     const Projected p = projectToViewportUV(wp, occ.viewProj);
     if (p.behind) return 1;                       // behind the depth camera → hide
@@ -48,8 +49,13 @@ int classifyDepth(const Ogre::Vector3& wp,
         dTexel = (wp - occ.camPosition).dotProduct(occ.camDirection);
     else
         dTexel = (wp - occ.camPosition).length();
-    if (dTexel > dMap + occ.biasWorld) return 1;  // something nearer occludes it
+    // Depth limit FIRST: it is the coarser, user-scale rejection. Testing the
+    // anti-acne `biasWorld` occlusion slop before it would make `return 2`
+    // reachable only when depthLimit < biasWorld (i.e. never in practice), and
+    // would apply full occlusion culling even with `useOcclusion` off — the two
+    // panel toggles are documented as independent controls.
     if (depthLimit > 0.0f && dTexel > dMap + depthLimit) return 2;  // too far behind
+    if (useOcclusion && dTexel > dMap + occ.biasWorld) return 1;    // something nearer occludes it
     return 0;
 }
 
@@ -150,7 +156,7 @@ ProjectionPainter::Report ProjectionPainter::project(
                 // Occlusion / depth-limit (F-B).
                 if (occ && (opts.useOcclusion || opts.depthLimit > 0.0f)) {
                     const Ogre::Vector3 wp = t.p[0] * l0 + t.p[1] * l1 + t.p[2] * l2;
-                    const int cls = classifyDepth(wp, *occ, opts.depthLimit);
+                    const int cls = classifyDepth(wp, *occ, opts.depthLimit, opts.useOcclusion);
                     if (cls == 1) { ++rep.texelsOccluded; continue; }
                     if (cls == 2) { ++rep.texelsDepthCulled; continue; }
                 }
@@ -235,7 +241,7 @@ int ProjectionPainter::projectDab(
 
                 if (occ && (opts.useOcclusion || opts.depthLimit > 0.0f)) {
                     const Ogre::Vector3 wp = t.p[0] * l0 + t.p[1] * l1 + t.p[2] * l2;
-                    const int cls = classifyDepth(wp, *occ, opts.depthLimit);
+                    const int cls = classifyDepth(wp, *occ, opts.depthLimit, opts.useOcclusion);
                     if (cls != 0) continue;
                 }
 

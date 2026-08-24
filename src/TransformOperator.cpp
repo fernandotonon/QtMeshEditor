@@ -1206,6 +1206,8 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 if (h != 0 /*None*/) {
                     mDecalDragActive = true;
                     mDecalDragHandle = h;
+                    SentryReporter::addBreadcrumb("paint.decal",
+                        QStringLiteral("drag start (handle=%1)").arg(h));
                 }
                 return;   // clicks are owned by the decal session while editing
             }
@@ -2067,6 +2069,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
     // user keeps editing until Enter commits / ESC cancels).
     if (mDecalDragActive && e->button() == Qt::LeftButton) {
         mDecalDragActive = false;
+        SentryReporter::addBreadcrumb("paint.decal", "drag end");
         return;
     }
 

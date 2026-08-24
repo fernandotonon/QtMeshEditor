@@ -22,6 +22,7 @@ The MIT License — see other project sources for the full header.
 
 namespace {
 QImage solid(int s, QColor c) { QImage i(s, s, QImage::Format_RGBA8888); i.fill(c); return i; }
+QImage solidWH(int w, int h, QColor c) { QImage i(w, h, QImage::Format_RGBA8888); i.fill(c); return i; }
 } // namespace
 
 TEST(DecalSessionTest, BeginPlaceEditCancelTransitions) {
@@ -115,4 +116,29 @@ TEST(DecalSessionTest, SoftEdgeFeathersAlpha) {
     // Border texel alpha reduced; centre stays opaque.
     EXPECT_LT(qAlpha(ci.source.pixel(0, 0)), 128);
     EXPECT_GT(qAlpha(ci.source.pixel(16, 16)), 250);
+}
+
+TEST(DecalSessionTest, PlacePreservesImageAspectRatio) {
+    // Commit maps the WHOLE image onto the rect, so a 2:1 image must get a 2:1
+    // rect — equal U/V extents would stretch it. halfSize is the V extent.
+    const float halfSize = 0.5f;
+
+    DecalSession wide;
+    wide.begin(solidWH(64, 32, Qt::white));           // aspect 2.0
+    wide.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, halfSize);
+    EXPECT_NEAR(wide.rect().tangentV.length(), halfSize, 1e-5f);
+    EXPECT_NEAR(wide.rect().tangentU.length(), halfSize * 2.0f, 1e-5f);
+
+    DecalSession tall;
+    tall.begin(solidWH(32, 64, Qt::white));           // aspect 0.5
+    tall.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, halfSize);
+    EXPECT_NEAR(tall.rect().tangentV.length(), halfSize, 1e-5f);
+    EXPECT_NEAR(tall.rect().tangentU.length(), halfSize * 0.5f, 1e-5f);
+
+    // Square stays square (and a null image must not divide by zero).
+    DecalSession square;
+    square.begin(solid(32, Qt::white));
+    square.place(Ogre::Vector3::ZERO, Ogre::Vector3(0, 0, 1), Ogre::Vector3::UNIT_Y, halfSize);
+    EXPECT_NEAR(square.rect().tangentU.length(), halfSize, 1e-5f);
+    EXPECT_NEAR(square.rect().tangentV.length(), halfSize, 1e-5f);
 }
