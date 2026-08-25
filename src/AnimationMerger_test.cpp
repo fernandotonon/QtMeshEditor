@@ -1590,6 +1590,151 @@ TEST_F(AnimationMergerTest, BodyRetargeterSeatedNeutralDoesNotSnapToStanding)
     EXPECT_GT(seatedThigh.y, -0.75f)
         << "seated thigh collapsed to standing-down: " << seatedThigh;
 }
+
+TEST_F(AnimationMergerTest, BodyRetargeterOccludedToePlantarflexesNotCeiling)
+{
+    // Foot_index drops out on high knees. Leaving Foot at bind-local is wrong:
+    // Mixamo rest is ~90° from the shin, so a raised shin points toes at the
+    // ceiling (soles at the camera). Expect plantarflexion toward ground.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "body_rt_foot_skel",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* parent) {
+        auto* b = skel->createBone(n, h++);
+        b->setPosition(p);
+        if (parent) parent->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.2f, 0}, hips);
+    auto* chest = bone("Spine2", {0, 0.25f, 0}, spine);
+    bone("Neck", {0, 0.15f, 0}, chest);
+    bone("Head", {0, 0.15f, 0}, chest);
+    auto* lArm = bone("LeftArm", {0.25f, 0.05f, 0}, chest);
+    bone("LeftForeArm", {0.25f, 0, 0}, lArm);
+    bone("LeftHand", {0.15f, 0, 0}, lArm);
+    auto* rArm = bone("RightArm", {-0.25f, 0.05f, 0}, chest);
+    bone("RightForeArm", {-0.25f, 0, 0}, rArm);
+    bone("RightHand", {-0.15f, 0, 0}, rArm);
+    auto* lUp = bone("LeftUpLeg", {0.12f, -0.05f, 0}, hips);
+    auto* lKnee = bone("LeftLeg", {0, -0.40f, 0}, lUp);
+    auto* lFoot = bone("LeftFoot", {0, -0.40f, 0.05f}, lKnee);
+    bone("LeftToeBase", {0, 0, 0.12f}, lFoot);
+    auto* rUp = bone("RightUpLeg", {-0.12f, -0.05f, 0}, hips);
+    auto* rKnee = bone("RightLeg", {0, -0.40f, 0}, rUp);
+    auto* rFoot = bone("RightFoot", {0, -0.40f, 0.05f}, rKnee);
+    bone("RightToeBase", {0, 0, 0.12f}, rFoot);
+    skel->setBindingPose();
+    auto mesh = createInMemoryMesh("body_rt_foot_mesh", skel);
+    Ogre::Entity* ent = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "body_rt_foot_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skelInst = ent->getSkeleton();
+    BodyRetargeter rt(skelInst);
+    ASSERT_TRUE(rt.valid());
+
+    using Landmarks = std::array<float, PoseIK::kLandmarkCount * 3>;
+    auto setLm = [](Landmarks& l, int lm, float x, float y, float z) {
+        l[lm * 3 + 0] = x;
+        l[lm * 3 + 1] = y;
+        l[lm * 3 + 2] = z;
+    };
+    auto standLm = [&]() {
+        Landmarks l{};
+        setLm(l, 11, 0.18f, -0.45f, 0.f);
+        setLm(l, 12, -0.18f, -0.45f, 0.f);
+        setLm(l, 13, 0.45f, -0.45f, 0.f);
+        setLm(l, 14, -0.45f, -0.45f, 0.f);
+        setLm(l, 15, 0.70f, -0.45f, 0.f);
+        setLm(l, 16, -0.70f, -0.45f, 0.f);
+        setLm(l, 23, 0.10f, 0.f, 0.f);
+        setLm(l, 24, -0.10f, 0.f, 0.f);
+        setLm(l, 25, 0.10f, 0.40f, 0.f);
+        setLm(l, 26, -0.10f, 0.40f, 0.f);
+        setLm(l, 27, 0.10f, 0.80f, 0.f);
+        setLm(l, 28, -0.10f, 0.80f, 0.f);
+        setLm(l, 29, 0.10f, 0.88f, -0.05f);  // left heel
+        setLm(l, 30, -0.10f, 0.88f, -0.05f);
+        setLm(l, 31, 0.10f, 0.85f, 0.12f);
+        setLm(l, 32, -0.10f, 0.85f, 0.12f);
+        setLm(l, 0, 0.f, -0.65f, -0.10f);
+        setLm(l, 7, 0.08f, -0.62f, 0.02f);
+        setLm(l, 8, -0.08f, -0.62f, 0.02f);
+        return l;
+    };
+
+    auto thighDir = [&]() -> Ogre::Vector3 {
+        skelInst->_updateTransforms();
+        return (skelInst->getBone("LeftLeg")->_getDerivedPosition()
+                - skelInst->getBone("LeftUpLeg")->_getDerivedPosition())
+            .normalisedCopy();
+    };
+    auto footAim = [&]() -> Ogre::Vector3 {
+        skelInst->_updateTransforms();
+        return (skelInst->getBone("LeftToeBase")->_getDerivedPosition()
+                - skelInst->getBone("LeftFoot")->_getDerivedPosition())
+            .normalisedCopy();
+    };
+    auto shinDir = [&]() -> Ogre::Vector3 {
+        skelInst->_updateTransforms();
+        return (skelInst->getBone("LeftFoot")->_getDerivedPosition()
+                - skelInst->getBone("LeftLeg")->_getDerivedPosition())
+            .normalisedCopy();
+    };
+    auto applyLocals =
+        [&](const std::vector<std::pair<unsigned short, Ogre::Quaternion>>&
+                locals) {
+            skelInst->reset(true);
+            for (const auto& [handle, local] : locals) {
+                Ogre::Bone* b = skelInst->getBone(handle);
+                b->setManuallyControlled(true);
+                b->setOrientation(local);
+            }
+            for (Ogre::Bone* root : skelInst->getRootBones())
+                root->_update(true, true);
+        };
+
+    std::array<float, PoseIK::kLandmarkCount> vis{};
+    vis.fill(1.f);
+
+    PoseIK::Solver solver;
+    Landmarks neutralLm = standLm();
+    const auto neutralFr = solver.solveFrame(neutralLm.data(), vis.data());
+    ASSERT_TRUE(neutralFr.resolved(PoseIK::LHip));
+
+    rt.setNeutralReference(neutralFr.quats, neutralFr.resolvedMask,
+                           neutralLm.data(), vis.data());
+    applyLocals(rt.evaluateFrame(neutralFr.quats, neutralFr.resolvedMask, 0,
+                                 neutralLm.data(), vis.data()));
+    const Ogre::Vector3 standThigh = thighDir();
+
+    // High knee, toe tip occluded (heel also dropped — forces plantar path).
+    Landmarks highKnee = standLm();
+    setLm(highKnee, 25, 0.10f, -0.20f, 0.30f);
+    setLm(highKnee, 27, 0.10f, 0.05f, 0.35f);
+    setLm(highKnee, 29, 0.10f, 0.10f, 0.30f);
+    setLm(highKnee, 31, 0.10f, 0.0f, 0.40f);
+    vis[31] = 0.05f;
+    vis[29] = 0.05f;
+    const auto highFr = solver.solveFrame(highKnee.data(), vis.data());
+    ASSERT_TRUE(highFr.resolved(PoseIK::LHip));
+    applyLocals(rt.evaluateFrame(highFr.quats, highFr.resolvedMask, 0,
+                                 highKnee.data(), vis.data()));
+
+    const Ogre::Vector3 aim = footAim();
+    const Ogre::Vector3 shin = shinDir();
+    // With ToeBase as Foot's bind aim, occluded-toe + hanging shin should
+    // stay plantigrade (mostly +Z forward) — not toes-up-the-shin / ceiling.
+    EXPECT_LT(aim.dotProduct((-shin).normalisedCopy()), 0.5f)
+        << "toes aimed up the shin; aim=" << aim << " shin=" << shin;
+    EXPECT_LT(aim.y, 0.45f)
+        << "toes should not point at the ceiling; aim=" << aim;
+    EXPECT_GT(aim.z, 0.5f)
+        << "plantigrade: keep a strong forward toe component; aim=" << aim;
+    EXPECT_GT(degBetween(standThigh, thighDir()), 35.0f)
+        << "thigh should lift strongly on high knee";
+}
 #endif  // ENABLE_MOCAP
 
 // ── #857: twist transport in the bind-referenced direction retarget ─────────

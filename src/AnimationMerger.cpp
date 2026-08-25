@@ -2190,6 +2190,30 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
                 if (v.squaredLength() > 1e-12f) return v;
             }
         }
+        // Feet have no canonical child — Mixamo ToeBase isn't a CMU role.
+        // Prefer a real Ogre toe child so Foot aims along the toes, NOT back
+        // along the shin (parent fallback). Hands/head keep the parent-leaf
+        // contract (finger children must not redefine Hand bind aim).
+        // Roles 17/21 = RFoot/LFoot (CMU / PoseIK::Role) — numeric so this
+        // path compiles when ENABLE_MOCAP is off (Windows MinGW).
+        if (a >= 0 && (role == 17 || role == 21)) {
+            Ogre::Bone* bone =
+                skel->getBone(static_cast<unsigned short>(a));
+            if (bone) {
+                for (unsigned short ci = 0; ci < bone->numChildren(); ++ci) {
+                    auto* ch = dynamic_cast<Ogre::Bone*>(bone->getChild(ci));
+                    if (!ch)
+                        continue;
+                    const unsigned short chH = ch->getHandle();
+                    if (chH >= static_cast<unsigned short>(nBones))
+                        continue;
+                    Ogre::Vector3 v = tb.bindPos[chH]
+                                      - tb.bindPos[static_cast<size_t>(a)];
+                    if (v.squaredLength() > 1e-12f)
+                        return v;
+                }
+            }
+        }
         if (a >= 0 && parent >= 0) {
             const int pIdx = tb.roleBoneIdx[static_cast<size_t>(parent)];
             if (pIdx >= 0) {
@@ -2360,16 +2384,100 @@ bool legLandmarksReliable(int role, const float* visibility33)
     case PoseIK::RKnee:
         return vis(26) && vis(28);
     case PoseIK::RFoot:
-        return vis(28);
+        // Toe tip preferred; heel+ankle is enough for a flat-foot guess.
+        // Never treat ankle-only as OK — PoseIK's shin fallback aims Foot
+        // bones up the leg.
+        return (vis(28) && vis(32)) || (vis(28) && vis(30));
     case PoseIK::LHip:
         return vis(23) && vis(25);
     case PoseIK::LKnee:
         return vis(25) && vis(27);
     case PoseIK::LFoot:
-        return vis(27);
+        return (vis(27) && vis(31)) || (vis(27) && vis(29));
     default:
         return false;
     }
+}
+
+// Plantarflexion aim: direction ⊥ shin toward ground. When shin ‖ ground
+// (standing / hanging), fall back to torso forward so feet stay plantigrade.
+// Prefer the torso-forward hemisphere when the cross product is nearly
+// antiparallel to forward — avoids ±torsoFwd snaps from vertical shin noise
+// without an early-return threshold that mis-classifies hanging shins.
+Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
+                             const Ogre::Vector3& groundDown,
+                             const Ogre::Vector3& torsoFwd)
+{
+    Ogre::Vector3 f = torsoFwd;
+    if (f.squaredLength() > 1e-12f)
+        f.normalise();
+    else
+        f = Ogre::Vector3::UNIT_Z;
+
+    Ogre::Vector3 s = shin;
+    if (s.squaredLength() < 1e-12f)
+        return f;
+    s.normalise();
+    Ogre::Vector3 g = groundDown;
+    if (g.squaredLength() < 1e-12f)
+        g = -Ogre::Vector3::UNIT_Y;
+    else
+        g.normalise();
+    Ogre::Vector3 axis = s.crossProduct(g);
+    if (axis.squaredLength() < 1e-6f)
+        return f;
+    Ogre::Vector3 plantar = axis.crossProduct(s);
+    if (plantar.squaredLength() < 1e-12f)
+        return f;
+    plantar.normalise();
+    if (plantar.dotProduct(f) < -0.5f)
+        plantar = -plantar;
+    return plantar;
+}
+
+// Foot aim in canonical (+Y up) space. Never returns the shin — that is what
+// made Mixamo Foot bones point toes at the ceiling.
+bool footAimCanonical(int role, const float* world33, const float* visibility33,
+                      Ogre::Vector3& outDir)
+{
+    if (!world33 || (role != PoseIK::RFoot && role != PoseIK::LFoot))
+        return false;
+    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(world33, canon);
+    auto vis = [&](int lm) {
+        return !visibility33 || visibility33[lm] >= 0.2f;
+    };
+    auto pt = [&](int lm) {
+        return Ogre::Vector3(canon[static_cast<size_t>(lm)][0],
+                             canon[static_cast<size_t>(lm)][1],
+                             canon[static_cast<size_t>(lm)][2]);
+    };
+    const int ankle = (role == PoseIK::RFoot) ? 28 : 27;
+    const int heel = (role == PoseIK::RFoot) ? 30 : 29;
+    const int toe = (role == PoseIK::RFoot) ? 32 : 31;
+    auto tryDir = [&](const Ogre::Vector3& a, const Ogre::Vector3& b) {
+        Ogre::Vector3 v = b - a;
+        if (v.squaredLength() < 1e-10f)
+            return false;
+        v.normalise();
+        outDir = v;
+        return true;
+    };
+    if (vis(ankle) && vis(toe) && tryDir(pt(ankle), pt(toe)))
+        return true;
+    if (vis(heel) && vis(toe) && tryDir(pt(heel), pt(toe)))
+        return true;
+    // Heel → ankle leans up the Achilles; keep the horizontal (sole) part.
+    if (vis(heel) && vis(ankle)) {
+        Ogre::Vector3 v = pt(ankle) - pt(heel);
+        v.y = 0.f;
+        if (v.squaredLength() > 1e-10f) {
+            v.normalise();
+            outDir = v;
+            return true;
+        }
+    }
+    return false;
 }
 
 // Clamp an aim direction to a max swing from `from` (radians). When `to` is
@@ -2648,6 +2756,17 @@ void BodyRetargeter::setNeutralReference(
             static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
         collectCanonicalLiveDirections(
             mediaPipeWorld33, mediaPipeVisibility33, Jc, neutralCanon);
+        // Replace shin-fallback foot dirs with ankle/heel→toe (or skip).
+        for (int footRole : {PoseIK::RFoot, PoseIK::LFoot}) {
+            Ogre::Vector3 footDir = Ogre::Vector3::ZERO;
+            if (footAimCanonical(footRole, mediaPipeWorld33,
+                                 mediaPipeVisibility33, footDir))
+                neutralCanon[static_cast<size_t>(footRole)] = footDir;
+            else
+                // Standing plantar ≈ +Z forward — never leave shin here.
+                neutralCanon[static_cast<size_t>(footRole)] =
+                    Ogre::Vector3::UNIT_Z;
+        }
         d->neutralDref.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
         d->dirQbase.assign(static_cast<size_t>(d->nBones),
                            Ogre::Quaternion::IDENTITY);
@@ -2813,11 +2932,51 @@ BodyRetargeter::evaluateFrame(
                 // landmark aims for real leg motion; when the landmark looks
                 // stuck at neutral (seated occlusion), use PoseIK quats — but
                 // refuse a quat that would invert the thigh.
+                //
+                // Feet: never use PoseIK's shin-as-foot direction, and never
+                // leave Foot at bind-local when the shin lifts (Mixamo rest is
+                // ~90° from the shin → toes point at the ceiling). Prefer
+                // ankle/heel→toe; else plantarflex toward ground.
                 const Ogre::Vector3& dref =
                     d->neutralDref[static_cast<size_t>(c)];
+                const bool isFootRole =
+                    (c == PoseIK::RFoot || c == PoseIK::LFoot);
                 Ogre::Vector3 dsLeg = Ogre::Vector3::ZERO;
                 bool haveLmAim = false;
-                if (legDirOk) {
+                if (isFootRole
+                    && dref.squaredLength() > 1e-12f
+                    && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
+                           > 1e-12f) {
+                    Ogre::Vector3 footCanon = Ogre::Vector3::ZERO;
+                    if (footAimCanonical(c, mediaPipeWorld33,
+                                         mediaPipeVisibility33, footCanon)) {
+                        dsLeg = CtInv * footCanon;
+                        if (dsLeg.squaredLength() > 1e-12f) {
+                            dsLeg.normalise();
+                            haveLmAim = true;
+                        }
+                    }
+                    if (!haveLmAim) {
+                        const int kneeRole =
+                            (c == PoseIK::RFoot) ? PoseIK::RKnee
+                                                 : PoseIK::LKnee;
+                        Ogre::Vector3 shin = Ogre::Vector3::ZERO;
+                        if (liveCanon[static_cast<size_t>(kneeRole)]
+                                .squaredLength()
+                            > 1e-12f)
+                            shin = CtInv
+                                   * liveCanon[static_cast<size_t>(kneeRole)];
+                        const Ogre::Vector3 torsoFwd0 =
+                            (CtInv * Ogre::Vector3::UNIT_Z).normalisedCopy();
+                        const Ogre::Vector3 groundDown =
+                            (CtInv * (-Ogre::Vector3::UNIT_Y)).normalisedCopy();
+                        dsLeg = plantarFlexAim(shin, groundDown, torsoFwd0);
+                        if (dsLeg.squaredLength() > 1e-12f) {
+                            dsLeg.normalise();
+                            haveLmAim = true;
+                        }
+                    }
+                } else if (legDirOk) {
                     dsLeg = CtInv * liveCanon[static_cast<size_t>(c)];
                     if (dsLeg.squaredLength() > 1e-12f) {
                         dsLeg.normalise();
@@ -2828,7 +2987,13 @@ BodyRetargeter::evaluateFrame(
                     haveLmAim && dref.dotProduct(dsLeg) > 0.9995f;
                 const Ogre::Vector3 torsoFwd =
                     (CtInv * Ogre::Vector3::UNIT_Z).normalisedCopy();
-                constexpr float kMaxLegSwing = 115.f * (Ogre::Math::PI / 180.f);
+                // Keep the #957 115° thigh/shin clamp (stops antiparallel
+                // high-knee flips). Feet need ~90° from standing toe→down.
+                const float kMaxLegSwing =
+                    (isFootRole ? 100.f : 115.f) * (Ogre::Math::PI / 180.f);
+                // Never drive Foot from PoseIK foot quats (often unresolved or
+                // shin-derived).
+                const bool allowLegQuat = legQuatResolved && !isFootRole;
 
                 auto applyClampedDir = [&](const Ogre::Vector3& aim) {
                     const Ogre::Vector3 clamped =
@@ -2841,8 +3006,15 @@ BodyRetargeter::evaluateFrame(
                 };
 
                 if (haveLmAim && !dirNearNeutral) {
-                    applyClampedDir(dsLeg);
-                } else if (legQuatResolved) {
+                    Ogre::Vector3 aim = dsLeg;
+                    // Hanging-shin plantar is often ~antiparallel to the standing
+                    // toe aim (+Z vs −Z). clampAimSwing's axis then degenerates
+                    // (fallback ‖ dref) and a.perpendicular() can swing toes to
+                    // +Y (ceiling / sole-to-camera). Prefer plantigrade forward.
+                    if (isFootRole && dref.dotProduct(aim) < -0.5f)
+                        aim = torsoFwd;
+                    applyClampedDir(aim);
+                } else if (allowLegQuat) {
                     // Near-neutral landmarks: compose the PoseIK delta onto the
                     // calibrated landmark aim, not bind `base`. Otherwise a
                     // seated/raised-leg calibration (live ≈ dref → identity
@@ -2875,7 +3047,10 @@ BodyRetargeter::evaluateFrame(
                         }
                     }
                 } else if (haveLmAim) {
-                    applyClampedDir(dsLeg);
+                    Ogre::Vector3 aim = dsLeg;
+                    if (isFootRole && dref.dotProduct(aim) < -0.5f)
+                        aim = torsoFwd;
+                    applyClampedDir(aim);
                 } else {
                     local = base;
                     W[static_cast<size_t>(i)] = Wp * local;
