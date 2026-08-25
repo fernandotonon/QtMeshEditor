@@ -2194,8 +2194,9 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
         // Prefer a real Ogre toe child so Foot aims along the toes, NOT back
         // along the shin (parent fallback). Hands/head keep the parent-leaf
         // contract (finger children must not redefine Hand bind aim).
-        if (a >= 0
-            && (role == PoseIK::RFoot || role == PoseIK::LFoot)) {
+        // Roles 17/21 = RFoot/LFoot (CMU / PoseIK::Role) — numeric so this
+        // path compiles when ENABLE_MOCAP is off (Windows MinGW).
+        if (a >= 0 && (role == 17 || role == 21)) {
             Ogre::Bone* bone =
                 skel->getBone(static_cast<unsigned short>(a));
             if (bone) {
