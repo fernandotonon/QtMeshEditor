@@ -2407,12 +2407,12 @@ Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
         aim = s.crossProduct(g).crossProduct(s);
         if (aim.squaredLength() < 1e-6f)
             return f;
+        aim.normalise();
+        if (aim.dotProduct(g) < 0.f)
+            aim = -aim;
+        return aim;
     }
     aim.normalise();
-    // Never pick the hemisphere away from ground when the shin is clearly
-    // off-vertical (raised leg); standing (shin ‖ ground) keeps forward.
-    if (std::abs(s.dotProduct(g)) < 0.85f && aim.dotProduct(g) < 0.f)
-        aim = -aim;
     return aim;
 }
 
