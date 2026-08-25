@@ -1217,6 +1217,11 @@ private:
     std::map<int, DerivedMap> m_derivedMaps;
     QString m_derivedMapMeshHash;             // hash the cached maps belong to
 
+    /// Fill `mask` (sized W*H) from the active derived map, honouring
+    /// `invert`. Shared by the layer-mask action and the recipes so both write
+    /// the mask exactly the same way.
+    void fillMaskFromActiveMap(std::vector<uint8_t>& mask, int W, int H,
+                               bool invert, bool applyStrength) const;
     /// Mesh hash for the painted mesh, or empty when there is no mesh.
     QString currentMeshHash() const;
     /// Drop in-memory maps when the mesh geometry no longer matches them.

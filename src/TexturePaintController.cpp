@@ -7541,6 +7541,30 @@ bool TexturePaintController::recomputeDerivedMaps()
     return computeDerivedMap();
 }
 
+void TexturePaintController::fillMaskFromActiveMap(std::vector<uint8_t>& mask,
+                                                   int W, int H,
+                                                   bool invert,
+                                                   bool applyStrength) const
+{
+    const DerivedMap* map = activeDerivedMap();
+    if (!map || W <= 0 || H <= 0) return;
+    if (mask.size() != static_cast<size_t>(W) * static_cast<size_t>(H)) return;
+    // Sample by UV, not 1:1 texels: a map may be baked at a different
+    // resolution than the paint buffer.
+    const float strength = applyStrength ? static_cast<float>(m_derivedMapStrength) : 1.0f;
+    for (int y = 0; y < H; ++y) {
+        const float v = (y + 0.5f) / static_cast<float>(H);
+        for (int x = 0; x < W; ++x) {
+            const float u = (x + 0.5f) / static_cast<float>(W);
+            float m = map->sample(u, v);
+            if (invert) m = 1.0f - m;
+            m = std::clamp(1.0f + strength * (m - 1.0f), 0.0f, 1.0f);
+            mask[static_cast<size_t>(y) * W + x] =
+                static_cast<uint8_t>(std::lround(m * 255.0f));
+        }
+    }
+}
+
 bool TexturePaintController::applyDerivedMapToLayerMask()
 {
     if (!hasActiveSession()) {
@@ -7568,20 +7592,7 @@ bool TexturePaintController::applyDerivedMapToLayerMask()
         emit derivedMapChanged();
         return false;
     }
-    // The map may have been baked at a different resolution than the paint
-    // buffer, so sample by UV rather than assuming a 1:1 texel mapping.
-    for (int y = 0; y < H; ++y) {
-        const float v = (y + 0.5f) / static_cast<float>(H);
-        for (int x = 0; x < W; ++x) {
-            const float u = (x + 0.5f) / static_cast<float>(W);
-            float m = map->sample(u, v);
-            if (m_derivedMapInvert) m = 1.0f - m;
-            const float s = static_cast<float>(m_derivedMapStrength);
-            m = std::clamp(1.0f + s * (m - 1.0f), 0.0f, 1.0f);
-            mask[static_cast<size_t>(y) * W + x] =
-                static_cast<uint8_t>(std::lround(m * 255.0f));
-        }
-    }
+    fillMaskFromActiveMap(mask, W, H, m_derivedMapInvert, /*applyStrength=*/true);
 
     recomposeComposite(/*fullBuffer=*/true);
     flushDirtyToOgre();
@@ -7599,6 +7610,49 @@ bool TexturePaintController::applyDerivedMapToLayerMask()
     return true;
 }
 
+namespace {
+
+// One-click recipe presets (#550). Each is (which map, inverted?, fill colour,
+// blend, layer name); the MASK is what shapes the layer, so the user can paint
+// over it afterwards to refine.
+struct DerivedRecipe {
+    DerivedMapKind kind;
+    bool invert;
+    Ogre::ColourValue colour;
+    PaintLayerBlend::Mode blend;
+    const char* name;
+};
+
+bool derivedRecipeFor(int recipe, DerivedRecipe& out)
+{
+    switch (recipe) {
+    case 0:
+        // Edge wear: bare metal on CONVEX ridges. Curvature stores convex
+        // BELOW 0.5, so the mask must be inverted to select ridges rather
+        // than crevices.
+        out = {DerivedMapKind::Curvature, /*invert=*/true,
+               Ogre::ColourValue(0.78f, 0.78f, 0.80f, 1.0f),
+               PaintLayerBlend::Mode::Normal, "Edge wear"};
+        return true;
+    case 1:
+        // Crevice dirt: dark grime in concave areas => cavity as-is.
+        out = {DerivedMapKind::Cavity, /*invert=*/false,
+               Ogre::ColourValue(0.16f, 0.13f, 0.10f, 1.0f),
+               PaintLayerBlend::Mode::Normal, "Crevice dirt"};
+        return true;
+    case 2:
+        // AO darken: multiply the occlusion over BaseColor.
+        out = {DerivedMapKind::AmbientOcclusion, /*invert=*/false,
+               Ogre::ColourValue(0.0f, 0.0f, 0.0f, 1.0f),
+               PaintLayerBlend::Mode::Multiply, "AO darken"};
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
 bool TexturePaintController::applyDerivedMapRecipe(int recipe)
 {
     if (!hasActiveSession()) {
@@ -7610,35 +7664,8 @@ bool TexturePaintController::applyDerivedMapRecipe(int recipe)
         }
     }
 
-    // Each recipe = (which map, inverted?, fill colour, blend, layer name).
-    struct Recipe {
-        DerivedMapKind kind;
-        bool invert;
-        Ogre::ColourValue colour;
-        PaintLayerBlend::Mode blend;
-        const char* name;
-    };
-    Recipe r;
-    switch (recipe) {
-    case 0:  // Edge wear: bare metal on CONVEX edges => inverse curvature.
-        r = {DerivedMapKind::Curvature, false,
-             Ogre::ColourValue(0.78f, 0.78f, 0.80f, 1.0f),
-             PaintLayerBlend::Mode::Normal, "Edge wear"};
-        // Curvature stores convex BELOW 0.5, so the mask must be inverted to
-        // select ridges rather than crevices.
-        r.invert = true;
-        break;
-    case 1:  // Crevice dirt: dark grime in concave areas => cavity as-is.
-        r = {DerivedMapKind::Cavity, false,
-             Ogre::ColourValue(0.16f, 0.13f, 0.10f, 1.0f),
-             PaintLayerBlend::Mode::Normal, "Crevice dirt"};
-        break;
-    case 2:  // AO darken: multiply the occlusion over BaseColor.
-        r = {DerivedMapKind::AmbientOcclusion, false,
-             Ogre::ColourValue(0.0f, 0.0f, 0.0f, 1.0f),
-             PaintLayerBlend::Mode::Multiply, "AO darken"};
-        break;
-    default:
+    DerivedRecipe r;
+    if (!derivedRecipeFor(recipe, r)) {
         m_derivedMapStatus = QStringLiteral("Unknown recipe.");
         emit derivedMapChanged();
         return false;
@@ -7684,20 +7711,10 @@ bool TexturePaintController::applyDerivedMapRecipe(int recipe)
     m_layerStack.setActiveIndex(idx);
     m_layerStack.setBlendMode(idx, r.blend);
 
-    const DerivedMap* map = activeDerivedMap();
+    // A recipe uses its own map at FULL strength — the strength slider governs
+    // the interactive brush mask, not a preset's baked-in look.
     std::vector<uint8_t>& mask = m_layerStack.ensureLayerMask(idx);
-    if (map && mask.size() == static_cast<size_t>(W) * H) {
-        for (int y = 0; y < H; ++y) {
-            const float v = (y + 0.5f) / static_cast<float>(H);
-            for (int x = 0; x < W; ++x) {
-                const float u = (x + 0.5f) / static_cast<float>(W);
-                float m = map->sample(u, v);
-                if (r.invert) m = 1.0f - m;
-                mask[static_cast<size_t>(y) * W + x] =
-                    static_cast<uint8_t>(std::lround(std::clamp(m, 0.0f, 1.0f) * 255.0f));
-            }
-        }
-    }
+    fillMaskFromActiveMap(mask, W, H, r.invert, /*applyStrength=*/false);
 
     m_derivedMapKind = userKind;           // recipes must not hijack the picker
     m_derivedMapInvert = userInvert;
