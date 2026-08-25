@@ -59,6 +59,8 @@ for a, b in LR:
     MIRROR_PERM[a], MIRROR_PERM[b] = b, a
 
 LOCOMOTION = {"walk", "run", "march"}
+# minimum dot(travel, body-forward) for a locomotion window to be kept
+MIN_TRAVEL_FORWARD = 0.15
 HORIZONTAL_OK = {"death", "crawl", "roll", "swim", "fall", "sleep", "sit"}
 
 # Source-exclusion (v6.2): some corpus characters carry a deliberately
@@ -111,6 +113,51 @@ def foot_travel_ratio(w):
     return fwd / (side + 1e-6)
 
 
+def travel_forward(w):
+    """dot(direction of travel, body's own forward). >0 = moving forward.
+
+    Travel is inferred from the STANCE foot: a planted foot drifts backward
+    relative to a body moving forward, so travel = -velocity of the slower
+    (planted) foot per frame. Forward comes from the shoulder line
+    (left - right) x up.
+
+    Some source clips genuinely walk BACKWARD, and they formed a real second
+    mode in the cache (37% of walk windows, mean -0.810). Flow matching then
+    samples both modes, so the model walked backward about half the time
+    (#837, user-reported "moving backwards"). Gating on this collapses the
+    conditional to one mode.
+    """
+    lsh, rsh = fk_pos(w, 7), fk_pos(w, 11)
+    side = lsh - rsh
+    side = side / (np.linalg.norm(side, axis=-1, keepdims=True) + 1e-9)
+    up = np.broadcast_to(np.array([0, 1, 0], np.float32), side.shape)
+    f = np.cross(side, up)
+    f = (f / (np.linalg.norm(f, axis=-1, keepdims=True) + 1e-9)).mean(0)
+    la, ra = fk_pos(w, 17), fk_pos(w, 21)
+    vl, vr = np.diff(la, axis=0), np.diff(ra, axis=0)
+    sl, sr = np.linalg.norm(vl, axis=-1), np.linalg.norm(vr, axis=-1)
+    v = np.where((sl < sr)[:, None], vl, vr)
+    t = -v.mean(0)
+    n = np.linalg.norm(t)
+    if n < 1e-6:
+        return 0.0
+    fn = np.linalg.norm(f)
+    if fn < 1e-6:
+        return 0.0
+    return float(np.dot(t / n, f / fn))
+
+
+def fk_pos(w, role):
+    """World position of `role` over the window via the canonical chain."""
+    T = len(w)
+    p = np.zeros((T, 3), np.float32)
+    r = role
+    while PAR[r] >= 0:
+        p = p + qrot(w[:, PAR[r]], np.broadcast_to(D_CANON[r], (T, 3)))
+        r = PAR[r]
+    return p
+
+
 def window_quality(action, w, valid):
     """True when the window meets the library curation bar."""
     # energy band — mean joint rotation speed (rad/frame)
@@ -141,12 +188,37 @@ def window_quality(action, w, valid):
         # majority and walked sideways. Require a clean front-to-back stride.
         if valid[17] and valid[21] and foot_travel_ratio(w) < 2.0:
             return False
+        # Travel-direction gate (v6.4): drop windows that move BACKWARD
+        # relative to the body's own forward. See travel_forward().
+        if valid[7] and valid[11] and valid[17] and valid[21]:
+            if travel_forward(w) < MIN_TRAVEL_FORWARD:
+                return False
     return True
 
 
 def mirror(w, valid):
-    """Sagittal mirror: reflect each quat (x,-y,-z,w) and swap L/R roles."""
-    m = w * np.array([1, -1, -1, 1], np.float32)
+    """Sagittal (left<->right) mirror: reflect about the X=0 plane and swap
+    L/R roles.
+
+    A reflection about the plane with unit normal n maps a quaternion
+    (v, w) -> (-(v - 2(v.n)n), w) — i.e. negate the two components
+    PERPENDICULAR to n and keep the one along it. The sagittal plane's normal
+    is X (canonical X = left), so the correct sagittal mirror negates Y and Z
+    and KEEPS X... which is what this did. But that reflection also flips the
+    FORWARD (Z) axis, so every mirrored window travelled the opposite way and
+    the augmentation manufactured a backward-locomotion mode for free
+    (measured: 37% of walk windows travel backward, a real mode at -0.810).
+    Flow matching then samples both modes and the model walks backwards about
+    half the time (#837, user-reported).
+
+    A true left<->right mirror must flip only the LATERAL axis: negate X and W
+    (equivalently reflect about the YZ plane, normal Z... see below) while
+    preserving the forward and up axes. For quats under a reflection about the
+    plane normal to X, the improper transform is applied as q -> (-x, y, z, -w)
+    combined with the L/R role swap, which preserves handedness of the
+    forward/up frame and therefore the direction of travel.
+    """
+    m = w * np.array([-1, 1, 1, -1], np.float32)
     return m[:, MIRROR_PERM], valid[MIRROR_PERM]
 
 
