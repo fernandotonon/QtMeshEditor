@@ -1169,6 +1169,27 @@ private:
     Ogre::ManualObject* m_decalObj = nullptr;
     QPoint  m_decalDragLastPos;           // last screen pos during a handle drag
     bool    m_haveDecalDragPos = false;
+    /// Live WYSIWYG preview of the decal image on the quad (Slice F follow-up):
+    /// the decal image uploaded to a GPU texture + the unlit transparent material
+    /// that samples it. Built lazily on the first Editing refresh, re-uploaded
+    /// only when the image itself changes (NOT on every drag), torn down in
+    /// closeSession.
+    Ogre::TexturePtr m_decalPreviewTex;
+    std::string      m_decalPreviewMatName;
+    qint64           m_decalPreviewImageKey = 0;   // cacheKey() of the uploaded image
+    /// Upload `m_decal.image()` into m_decalPreviewTex + ensure the sampling
+    /// material exists. Returns the material name, or "" if unavailable.
+    std::string ensureDecalPreviewMaterial();
+    /// Create/resize m_decalPreviewTex to (W,H). False if unavailable.
+    bool ensureDecalPreviewTexture(int W, int H);
+    /// Feather `img` to match the commit and blit it into m_decalPreviewTex.
+    /// False if the blit could not run — the caller must then NOT stamp the
+    /// cache key, so the next refresh retries.
+    bool uploadDecalPreviewPixels(const QImage& img, int W, int H);
+    /// Build (once) or re-point the material that samples the preview texture.
+    bool ensureDecalPreviewPass();
+    /// Destroy the decal preview texture/material (called from closeSession).
+    void destroyDecalPreview();
     /// Rebuild the decal rectangle + handle overlay (or hide it when inactive).
     void refreshDecalOverlay();
     /// Ray-pick the decal rect plane at `screenPos` → world hit (on the plane).

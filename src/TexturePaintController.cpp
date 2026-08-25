@@ -1073,16 +1073,42 @@ int TexturePaintController::decalHitTest(OgreWidget* widget, const QPoint& scree
 void TexturePaintController::dragDecal(OgreWidget* widget, const QPoint& screenPos, int handle)
 {
     if (m_decal.state() != DecalSession::State::Editing) return;
+    // NB: a failed plane hit must NOT abort a Body drag. Re-seating can leave the
+    // rect's plane nearly edge-on to the camera, and then the plane ray misses and
+    // the gesture would die mid-drag; the Body branch re-hits the surface directly
+    // and only needs `world`/`prevWorld` for its fallback.
     Ogre::Vector3 world;
-    if (!decalPlaneHit(widget, screenPos, world)) return;
+    const bool haveWorld = decalPlaneHit(widget, screenPos, world);
     Ogre::Vector3 prevWorld;
-    const bool havePrev = m_haveDecalDragPos
+    const bool havePrev = haveWorld && m_haveDecalDragPos
         && decalPlaneHit(widget, m_decalDragLastPos, prevWorld);
     const DecalSession::Handle h = static_cast<DecalSession::Handle>(handle);
     const DecalSession::Rect& r = m_decal.rect();
+    if (!haveWorld && h != DecalSession::Handle::Body) return;
 
     if (h == DecalSession::Handle::Body) {
-        if (havePrev) m_decal.translate(world - prevWorld);
+        // Re-seat onto the SURFACE under the cursor so the decal follows the
+        // model's curvature while it is dragged, instead of sliding along the
+        // plane it was first placed on. Falls back to the plane-slide translate
+        // when the cursor is off the mesh (dragging out over empty space), which
+        // also keeps the decal usable on the far side of a silhouette edge.
+        Ogre::Vector3 localPos, localNormal;
+        auto* node = m_paintMeshEntity ? m_paintMeshEntity->getParentSceneNode() : nullptr;
+        if (node && hitTestLocalPoint(widget, screenPos, localPos, localNormal)) {
+            const Ogre::Affine3 wm = node->_getFullTransform();
+            // Normals need the inverse transpose (non-uniform scale would tilt a
+            // linear-mapped normal off the surface) — same as placeDecalAt.
+            const Ogre::Matrix3 normalMat = wm.linear().Inverse().Transpose();
+            Ogre::Vector3 worldN = normalMat * localNormal;
+            if (!worldN.isZeroLength()) {
+                worldN.normalise();
+                m_decal.reseat(wm * localPos, worldN);
+            } else if (havePrev) {
+                m_decal.translate(world - prevWorld);
+            }
+        } else if (havePrev) {
+            m_decal.translate(world - prevWorld);
+        }
     } else if (h == DecalSession::Handle::RotateCorner) {
         if (havePrev) {
             const Ogre::Vector3 a = (prevWorld - r.center);
@@ -1116,7 +1142,7 @@ bool TexturePaintController::commitDecal()
     m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
     if (!m_haveProjTris) { cancelDecal(); return false; }
 
-    const auto ci = m_decal.buildCommit(/*softEdge*/0.15f);
+    const auto ci = m_decal.buildCommit(DecalSession::kDefaultSoftEdge);
     // Occlusion for the decal projection (front arc only).
     ProjectionPainter::OcclusionMap occ;
     const bool haveOcc = buildOcclusionForView(ci.view, occ);
@@ -4376,6 +4402,7 @@ void TexturePaintController::closeSession()
     invalidateSymmetryMaps();
     m_decal.cancel();
     m_haveDecalDragPos = false;   // else a stale drag anchor leaks into the next session
+    destroyDecalPreview();        // drop the preview texture/material with the session
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
     m_layerStack = PaintLayerStack();
@@ -5892,6 +5919,173 @@ void TexturePaintController::refreshSymmetryPlaneOverlay()
     m_symPlaneNode->setVisible(true);
 }
 
+// Paint v2 Slice F follow-up: WYSIWYG decal preview.
+// Uploads the decal image to a GPU texture and returns an unlit,
+// alpha-blended material that samples it, so the overlay quad shows the ACTUAL
+// artwork (correctly oriented + aspect-correct) instead of a flat tint. The
+// upload is keyed on QImage::cacheKey() so dragging/rotating/scaling the decal
+// re-draws geometry only — the texture is uploaded once per image.
+namespace {
+
+// Ogre resource teardown is best-effort: a manager may already be gone during
+// shutdown. Swallow *only* Ogre's own exception type here (a bare `catch (...)`
+// would also hide std::bad_alloc and logic errors) and note why it is ignored.
+template <typename Fn>
+bool tryOgre(Fn&& fn)
+{
+    try {
+        fn();
+        return true;
+    } catch (const Ogre::Exception&) {
+        // Expected: the resource/manager is unavailable (e.g. mid-shutdown, or a
+        // name collision). Callers treat `false` as "unavailable" and degrade.
+        return false;
+    }
+}
+
+} // namespace
+
+// Ensure m_decalPreviewTex exists and matches (W,H); returns false if it could
+// not be created. Split out of ensureDecalPreviewMaterial to keep that function
+// under the cognitive-complexity limit.
+bool TexturePaintController::ensureDecalPreviewTexture(int W, int H)
+{
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    // Recreate when the dimensions change.
+    if (m_decalPreviewTex
+        && (static_cast<int>(m_decalPreviewTex->getWidth()) != W
+         || static_cast<int>(m_decalPreviewTex->getHeight()) != H)) {
+        tryOgre([&] { texMgr.remove(m_decalPreviewTex); });
+        m_decalPreviewTex.reset();
+    }
+    if (m_decalPreviewTex) return true;
+
+    const std::string texName = "QMEDecalPreview_"
+        + std::to_string(reinterpret_cast<uintptr_t>(this));
+    tryOgre([&] {
+        m_decalPreviewTex = texMgr.createManual(
+            texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, W, H, 0, Ogre::PF_BYTE_RGBA,
+            Ogre::TU_DYNAMIC_WRITE_ONLY);
+    });
+    return static_cast<bool>(m_decalPreviewTex);
+}
+
+// Upload the decal image (feathered to match the commit) into the preview
+// texture. Returns false if the blit could not be performed, in which case the
+// caller must NOT stamp the cache key so the next refresh retries.
+bool TexturePaintController::uploadDecalPreviewPixels(const QImage& img, int W, int H)
+{
+    // Preview the SAME pixels commitDecal() will bake: it feathers the outer
+    // kDefaultSoftEdge of the image, so previewing the raw source would show a
+    // hard opaque border that softens only after commit — defeating WYSIWYG.
+    // Non-const so the PixelBox can take bits() without casting away constness.
+    QImage feathered =
+        DecalSession::featherSource(img, DecalSession::kDefaultSoftEdge);
+    if (feathered.isNull()) return false;
+
+    bool uploaded = false;
+    tryOgre([&] {
+        const Ogre::HardwarePixelBufferSharedPtr buf = m_decalPreviewTex->getBuffer();
+        if (!buf) return;
+        // Rows are top-down RGBA8888 and tightly packed; blit straight in.
+        const Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, feathered.bits());
+        buf->blitFromMemory(pb);
+        uploaded = true;
+    });
+    return uploaded;
+}
+
+// Build (once) or re-point the material that samples the preview texture.
+bool TexturePaintController::ensureDecalPreviewPass()
+{
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    const Ogre::MaterialPtr mat = matMgr.getByName(m_decalPreviewMatName);
+    if (mat) {
+        // Keep the TUS pointed at the current texture (it may have been recreated).
+        return tryOgre([&] {
+            Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+            if (pass->getNumTextureUnitStates() > 0)
+                pass->getTextureUnitState(0)->setTextureName(m_decalPreviewTex->getName());
+        });
+    }
+    return tryOgre([&] {
+        const Ogre::MaterialPtr created = matMgr.create(m_decalPreviewMatName,
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        Ogre::Pass* pass = created->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+        // Depth CHECK stays on for the artwork: the preview should be occluded by
+        // geometry in front of it (it is pinned to a surface), unlike the
+        // outline/handles which draw on top to stay grabbable.
+        pass->setDepthCheckEnabled(true);
+        pass->setCullingMode(Ogre::CULL_NONE);
+        Ogre::TextureUnitState* tus =
+            pass->createTextureUnitState(m_decalPreviewTex->getName());
+        tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+    });
+}
+
+// Paint v2 Slice F follow-up: WYSIWYG decal preview.
+// Uploads the decal image to a GPU texture and returns an unlit, alpha-blended
+// material that samples it, so the overlay quad shows the ACTUAL artwork
+// (correctly oriented + aspect-correct) instead of a flat tint. The upload is
+// keyed on the SOURCE QImage::cacheKey() so dragging/rotating/scaling the decal
+// re-draws geometry only — the texture is uploaded once per image.
+std::string TexturePaintController::ensureDecalPreviewMaterial()
+{
+    const QImage& img = m_decal.image();
+    if (img.isNull()) return {};
+
+    const int W = img.width();
+    const int H = img.height();
+    if (W <= 0 || H <= 0) return {};
+
+    if (m_decalPreviewMatName.empty()) {
+        m_decalPreviewMatName = "QMEDecalPreview_Mat_"
+            + std::to_string(reinterpret_cast<uintptr_t>(this));
+    }
+
+    // Key the cache on the SOURCE image, before any conversion. convertToFormat()
+    // returns a NEW QImage (hence a new cacheKey) whenever the source is not
+    // already RGBA8888, so keying on the converted copy would miss the cache on
+    // every refresh and re-upload the whole texture on every drag frame — exactly
+    // the per-mouse-move upload this cache exists to avoid.
+    const qint64 srcKey = img.cacheKey();
+    const bool needUpload = !m_decalPreviewTex || m_decalPreviewImageKey != srcKey;
+
+    if (!ensureDecalPreviewTexture(W, H)) return {};
+    if (needUpload) {
+        if (!uploadDecalPreviewPixels(img, W, H)) {
+            // Leave m_decalPreviewImageKey untouched so the next refresh retries,
+            // and fall back to the flat tint for this frame rather than showing a
+            // blank/stale quad.
+            return {};
+        }
+        m_decalPreviewImageKey = srcKey;
+    }
+    if (!ensureDecalPreviewPass()) return {};
+    return m_decalPreviewMatName;
+}
+
+void TexturePaintController::destroyDecalPreview()
+{
+    if (!m_decalPreviewMatName.empty()) {
+        tryOgre([&] {
+            Ogre::MaterialManager::getSingleton().remove(
+                m_decalPreviewMatName,
+                Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        });
+        m_decalPreviewMatName.clear();
+    }
+    if (m_decalPreviewTex) {
+        tryOgre([&] { Ogre::TextureManager::getSingleton().remove(m_decalPreviewTex); });
+        m_decalPreviewTex.reset();
+    }
+    m_decalPreviewImageKey = 0;
+}
+
 void TexturePaintController::refreshDecalOverlay()
 {
     auto* entity = m_paintMeshEntity;
@@ -5939,10 +6133,25 @@ void TexturePaintController::refreshDecalOverlay()
     const Ogre::ColourValue hCol(0.2f, 0.8f, 1.0f, 0.95f);  // cyan handles
 
     m_decalObj->clear();
-    // Translucent body (two tris).
-    m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
-    for (int k : {0, 1, 2, 0, 2, 3}) { m_decalObj->position(c[k]); m_decalObj->colour(fill); }
-    m_decalObj->end();
+    // Body: the actual decal artwork when we can texture it (WYSIWYG preview),
+    // else the old flat translucent tint. UVs follow the commit convention:
+    // projectToViewportUV maps NDC y=+1 (the +tangentV corner) to v=0, so +V is
+    // image-UP. corners() order is (-,-), (+,-), (+,+), (-,+).
+    const std::string previewMat = ensureDecalPreviewMaterial();
+    if (!previewMat.empty()) {
+        static const float kUv[4][2] = {{0.0f, 1.0f}, {1.0f, 1.0f},
+                                        {1.0f, 0.0f}, {0.0f, 0.0f}};
+        m_decalObj->begin(previewMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+        for (int k : {0, 1, 2, 0, 2, 3}) {
+            m_decalObj->position(c[k]);
+            m_decalObj->textureCoord(kUv[k][0], kUv[k][1]);
+        }
+        m_decalObj->end();
+    } else {
+        m_decalObj->begin(kMat, Ogre::RenderOperation::OT_TRIANGLE_LIST);
+        for (int k : {0, 1, 2, 0, 2, 3}) { m_decalObj->position(c[k]); m_decalObj->colour(fill); }
+        m_decalObj->end();
+    }
     // Outline (line strip).
     m_decalObj->begin(kMat, Ogre::RenderOperation::OT_LINE_STRIP);
     for (int k : {0, 1, 2, 3, 0}) { m_decalObj->position(c[k]); m_decalObj->colour(line); }
