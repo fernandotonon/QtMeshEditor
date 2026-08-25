@@ -1724,13 +1724,14 @@ TEST_F(AnimationMergerTest, BodyRetargeterOccludedToePlantarflexesNotCeiling)
 
     const Ogre::Vector3 aim = footAim();
     const Ogre::Vector3 shin = shinDir();
-    // Ceiling / sole-to-camera failure: toes along −shin (up the leg) or +Y.
-    EXPECT_LT(aim.dotProduct((-shin).normalisedCopy()), 0.85f)
+    // With ToeBase as Foot's bind aim, occluded-toe + hanging shin should
+    // stay plantigrade (mostly +Z forward) — not toes-up-the-shin / ceiling.
+    EXPECT_LT(aim.dotProduct((-shin).normalisedCopy()), 0.5f)
         << "toes aimed up the shin; aim=" << aim << " shin=" << shin;
-    EXPECT_LT(aim.y, 0.5f)
+    EXPECT_LT(aim.y, 0.45f)
         << "toes should not point at the ceiling; aim=" << aim;
-    EXPECT_GT(aim.z, 0.3f)
-        << "plantigrade: keep a forward toe component; aim=" << aim;
+    EXPECT_GT(aim.z, 0.5f)
+        << "plantigrade: keep a strong forward toe component; aim=" << aim;
     EXPECT_GT(degBetween(standThigh, thighDir()), 35.0f)
         << "thigh should lift strongly on high knee";
 }

@@ -2190,6 +2190,26 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
                 if (v.squaredLength() > 1e-12f) return v;
             }
         }
+        // Feet (and other leaves) often have no canonical child — Mixamo
+        // ToeBase isn't a CMU role. Prefer a real Ogre child so Foot aims
+        // along the toes, NOT back along the shin (parent fallback).
+        if (a >= 0) {
+            Ogre::Bone* bone =
+                skel->getBone(static_cast<unsigned short>(a));
+            if (bone) {
+                for (unsigned short ci = 0; ci < bone->numChildren(); ++ci) {
+                    auto* ch = dynamic_cast<Ogre::Bone*>(bone->getChild(ci));
+                    if (!ch)
+                        continue;
+                    const unsigned short chH = ch->getHandle();
+                    if (chH >= static_cast<unsigned short>(nBones))
+                        continue;
+                    Ogre::Vector3 v = tb.bindPos[chH] - tb.bindPos[static_cast<size_t>(a)];
+                    if (v.squaredLength() > 1e-12f)
+                        return v;
+                }
+            }
+        }
         if (a >= 0 && parent >= 0) {
             const int pIdx = tb.roleBoneIdx[static_cast<size_t>(parent)];
             if (pIdx >= 0) {
@@ -2375,9 +2395,11 @@ bool legLandmarksReliable(int role, const float* visibility33)
     }
 }
 
-// Plantarflexion / plantigrade foot aim. Project torso-forward onto the plane
-// ⊥ shin so the result is continuous (no ±torsoFwd flip from a tiny vertical
-// cross product). When forward ‖ shin (raised calf), fall back toward ground.
+// Plantarflexion aim: direction ⊥ shin toward ground. When shin ‖ ground
+// (standing / hanging), fall back to torso forward so feet stay plantigrade.
+// Prefer the torso-forward hemisphere when the cross product is nearly
+// antiparallel to forward — avoids ±torsoFwd snaps from vertical shin noise
+// without an early-return threshold that mis-classifies hanging shins.
 Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
                              const Ogre::Vector3& groundDown,
                              const Ogre::Vector3& torsoFwd)
@@ -2392,28 +2414,21 @@ Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
     if (s.squaredLength() < 1e-12f)
         return f;
     s.normalise();
-
     Ogre::Vector3 g = groundDown;
     if (g.squaredLength() < 1e-12f)
         g = -Ogre::Vector3::UNIT_Y;
     else
         g.normalise();
-
-    // Plantigrade: keep as much torso-forward as possible while staying ⊥ shin.
-    Ogre::Vector3 aim = f - s * f.dotProduct(s);
-    if (aim.squaredLength() < 1e-6f) {
-        // Forward lies along the shin (e.g. calf kicked forward) — swing
-        // toward ground in the shin–ground plane.
-        aim = s.crossProduct(g).crossProduct(s);
-        if (aim.squaredLength() < 1e-6f)
-            return f;
-        aim.normalise();
-        if (aim.dotProduct(g) < 0.f)
-            aim = -aim;
-        return aim;
-    }
-    aim.normalise();
-    return aim;
+    Ogre::Vector3 axis = s.crossProduct(g);
+    if (axis.squaredLength() < 1e-6f)
+        return f;
+    Ogre::Vector3 plantar = axis.crossProduct(s);
+    if (plantar.squaredLength() < 1e-12f)
+        return f;
+    plantar.normalise();
+    if (plantar.dotProduct(f) < -0.5f)
+        plantar = -plantar;
+    return plantar;
 }
 
 // Foot aim in canonical (+Y up) space. Never returns the shin — that is what
@@ -2987,7 +3002,14 @@ BodyRetargeter::evaluateFrame(
                 };
 
                 if (haveLmAim && !dirNearNeutral) {
-                    applyClampedDir(dsLeg);
+                    Ogre::Vector3 aim = dsLeg;
+                    // Hanging-shin plantar is often ~antiparallel to the standing
+                    // toe aim (+Z vs −Z). clampAimSwing's axis then degenerates
+                    // (fallback ‖ dref) and a.perpendicular() can swing toes to
+                    // +Y (ceiling / sole-to-camera). Prefer plantigrade forward.
+                    if (isFootRole && dref.dotProduct(aim) < -0.5f)
+                        aim = torsoFwd;
+                    applyClampedDir(aim);
                 } else if (allowLegQuat) {
                     // Near-neutral landmarks: compose the PoseIK delta onto the
                     // calibrated landmark aim, not bind `base`. Otherwise a
@@ -3021,7 +3043,10 @@ BodyRetargeter::evaluateFrame(
                         }
                     }
                 } else if (haveLmAim) {
-                    applyClampedDir(dsLeg);
+                    Ogre::Vector3 aim = dsLeg;
+                    if (isFootRole && dref.dotProduct(aim) < -0.5f)
+                        aim = torsoFwd;
+                    applyClampedDir(aim);
                 } else {
                     local = base;
                     W[static_cast<size_t>(i)] = Wp * local;
