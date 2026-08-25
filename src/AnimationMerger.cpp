@@ -2375,9 +2375,9 @@ bool legLandmarksReliable(int role, const float* visibility33)
     }
 }
 
-// Plantarflexion aim: direction ⊥ shin toward ground. Near-vertical shins
-// (standing) must return a stable torso-forward — a tiny cross product from
-// forward/back noise would otherwise flip between ±torsoFwd (~180° snap).
+// Plantarflexion / plantigrade foot aim. Project torso-forward onto the plane
+// ⊥ shin so the result is continuous (no ±torsoFwd flip from a tiny vertical
+// cross product). When forward ‖ shin (raised calf), fall back toward ground.
 Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
                              const Ogre::Vector3& groundDown,
                              const Ogre::Vector3& torsoFwd)
@@ -2392,29 +2392,28 @@ Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
     if (s.squaredLength() < 1e-12f)
         return f;
     s.normalise();
+
     Ogre::Vector3 g = groundDown;
     if (g.squaredLength() < 1e-12f)
         g = -Ogre::Vector3::UNIT_Y;
     else
         g.normalise();
 
-    // |shin · ground| ≈ 1 → standing; prefer torso forward (no noisy cross).
-    const float align = std::abs(s.dotProduct(g));
-    if (align > 0.92f)
-        return f;
-
-    Ogre::Vector3 axis = s.crossProduct(g);
-    if (axis.squaredLength() < 1e-8f)
-        return f;
-    Ogre::Vector3 plantar = axis.crossProduct(s);
-    if (plantar.squaredLength() < 1e-12f)
-        return f;
-    plantar.normalise();
-    // Still mostly upright: keep the hemisphere toward torso forward so a
-    // shallow lean cannot pick −torsoFwd from noise.
-    if (align > 0.7f && plantar.dotProduct(f) < 0.f)
-        plantar = -plantar;
-    return plantar;
+    // Plantigrade: keep as much torso-forward as possible while staying ⊥ shin.
+    Ogre::Vector3 aim = f - s * f.dotProduct(s);
+    if (aim.squaredLength() < 1e-6f) {
+        // Forward lies along the shin (e.g. calf kicked forward) — swing
+        // toward ground in the shin–ground plane.
+        aim = s.crossProduct(g).crossProduct(s);
+        if (aim.squaredLength() < 1e-6f)
+            return f;
+    }
+    aim.normalise();
+    // Never pick the hemisphere away from ground when the shin is clearly
+    // off-vertical (raised leg); standing (shin ‖ ground) keeps forward.
+    if (std::abs(s.dotProduct(g)) < 0.85f && aim.dotProduct(g) < 0.f)
+        aim = -aim;
+    return aim;
 }
 
 // Foot aim in canonical (+Y up) space. Never returns the shin — that is what
