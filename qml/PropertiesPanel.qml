@@ -4546,6 +4546,15 @@ Rectangle {
             property bool cameraLocked: TexturePaintController.cameraLocked
             property bool decalActive: TexturePaintController.decalSessionActive
             property int  decalState: TexturePaintController.decalState
+            // Paint v2 Slice G — cavity / curvature / AO derived maps (#550).
+            property int  derivedKind: TexturePaintController.derivedMapKind
+            property bool derivedAsBrushMask: TexturePaintController.derivedMapAsBrushMask
+            property real derivedStrength: TexturePaintController.derivedMapStrength
+            property bool derivedInvert: TexturePaintController.derivedMapInvert
+            property real derivedContrast: TexturePaintController.derivedMapContrast
+            property bool derivedReady: TexturePaintController.derivedMapReady
+            property string derivedStatus: TexturePaintController.derivedMapStatus
+            property bool derivedExpanded: false
             // Projection group collapse state (UI density — the group is off by
             // default so it starts collapsed).
             property bool projExpanded: false
@@ -4616,6 +4625,15 @@ Rectangle {
                     texPaintCol.cameraLocked = TexturePaintController.cameraLocked
                     texPaintCol.decalActive = TexturePaintController.decalSessionActive
                     texPaintCol.decalState = TexturePaintController.decalState
+                }
+                function onDerivedMapChanged() {
+                    texPaintCol.derivedKind = TexturePaintController.derivedMapKind
+                    texPaintCol.derivedAsBrushMask = TexturePaintController.derivedMapAsBrushMask
+                    texPaintCol.derivedStrength = TexturePaintController.derivedMapStrength
+                    texPaintCol.derivedInvert = TexturePaintController.derivedMapInvert
+                    texPaintCol.derivedContrast = TexturePaintController.derivedMapContrast
+                    texPaintCol.derivedReady = TexturePaintController.derivedMapReady
+                    texPaintCol.derivedStatus = TexturePaintController.derivedMapStatus
                 }
             }
 
@@ -5137,6 +5155,188 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 9; opacity: 0.7; wrapMode: Text.Wrap
             }
+
+            // ---- Derived maps: cavity / curvature / AO (Paint v2 Slice G #550) ----
+            // Collapsible: this is an occasional-use group, and the panel is
+            // already dense.
+            Rectangle {
+                width: parent.width - 16
+                height: 22; radius: 4
+                color: PropertiesPanelController.controlBgColor
+                border.color: PropertiesPanelController.borderColor; border.width: 1
+                Text {
+                    anchors.left: parent.left; anchors.leftMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: (texPaintCol.derivedExpanded ? "\u25be  " : "\u25b8  ")
+                          + "Cavity / Curvature / AO"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: texPaintCol.derivedExpanded = !texPaintCol.derivedExpanded }
+            }
+
+            Column {
+                visible: texPaintCol.derivedExpanded
+                width: parent.width - 16
+                spacing: 6
+
+                // Map picker. Indices match DerivedMapKind, so the comparison
+                // below is index-based like the channel picker.
+                Row {
+                    spacing: 4
+                    Repeater {
+                        model: ["Cavity", "Curvature", "AO"]
+                        Rectangle {
+                            width: 62; height: 22; radius: 4
+                            color: texPaintCol.derivedKind === index
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Text { anchors.centerIn: parent; text: modelData
+                                color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: TexturePaintController.derivedMapKind = index }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 74; height: 22; radius: 4
+                        color: PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: "Bake"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.computeDerivedMap() }
+                    }
+                    Rectangle {
+                        width: 96; height: 22; radius: 4
+                        color: PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: "Recalculate"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.recomputeDerivedMaps() }
+                    }
+                    Rectangle {
+                        width: 16; height: 16; radius: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: texPaintCol.derivedReady ? "#4caf50" : "#8a8a8a"
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: texPaintCol.derivedStatus !== ""
+                    text: texPaintCol.derivedStatus
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9; opacity: 0.7; wrapMode: Text.Wrap
+                }
+
+                // Use the map to gate the brush.
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 108; height: 22; radius: 4
+                        color: texPaintCol.derivedAsBrushMask
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: "Mask the brush"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.derivedMapAsBrushMask =
+                                       !texPaintCol.derivedAsBrushMask }
+                    }
+                    Rectangle {
+                        width: 62; height: 22; radius: 4
+                        color: texPaintCol.derivedInvert
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: "Invert"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.derivedMapInvert =
+                                       !texPaintCol.derivedInvert }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    Text {
+                        text: "Strength"; width: 70
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        width: 110
+                        from: 0.0; to: 1.0; stepSize: 0.01
+                        value: texPaintCol.derivedStrength
+                        onMoved: TexturePaintController.derivedMapStrength = value
+                    }
+                    Text {
+                        text: texPaintCol.derivedStrength.toFixed(2)
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    Text {
+                        text: "Contrast"; width: 70
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        width: 110
+                        from: 0.1; to: 8.0; stepSize: 0.1
+                        value: texPaintCol.derivedContrast
+                        onMoved: TexturePaintController.derivedMapContrast = value
+                    }
+                    Text {
+                        text: texPaintCol.derivedContrast.toFixed(1)
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Rectangle {
+                    width: 150; height: 22; radius: 4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Mask active layer"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.applyDerivedMapToLayerMask() }
+                }
+
+                // One-click recipes: each adds its own masked layer.
+                Text {
+                    text: "One-click recipes"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9; opacity: 0.7
+                }
+                Row {
+                    spacing: 4
+                    Repeater {
+                        model: ["Edge wear", "Crevice dirt", "AO darken"]
+                        Rectangle {
+                            width: 76; height: 22; radius: 4
+                            color: PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Text { anchors.centerIn: parent; text: modelData
+                                color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: TexturePaintController.applyDerivedMapRecipe(index) }
+                        }
+                    }
+                }
+            } // end collapsible Derived maps body
 
             // Texture slot picker \u2014 populated by selection (advanced override:
             // lets the user target a specific TUS regardless of channel mapping)

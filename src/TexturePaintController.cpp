@@ -19,6 +19,9 @@
 #include "TextureChannelPacker.h"
 #include "MeshImporterExporter.h"
 #include "ProjectionPainter.h"
+#include "DerivedMapCache.h"
+#include "DerivedMapOcclusion.h"
+#include "HalfEdgeMesh.h"
 #include "MultiViewTextureBaker.h"
 #include "MeshDepthRenderer.h"
 #include "PaintLayerStack.h"
@@ -1996,7 +1999,32 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
     const float wavelength = std::max(radiusUv * 4.0f, 0.05f);
     const float strokeT = BrushEngine::linearStrokeT(
         m_strokePathLength, wavelength, m_strokePhaseJitter);
-    const auto colorAt = buildBrushColorAtFn(strokeT);
+    auto colorAt = buildBrushColorAtFn(strokeT);
+
+    // Paint v2 Slice G (#550): modulate the brush colour by the derived map at
+    // the painted UV, so a stroke lands only in crevices / on edges. Wrapping
+    // colorAt (rather than each branch) means the tiling, stamp and gradient
+    // paths all inherit it for free — the same shape as the TilingSource wrap
+    // just below.
+    const bool derivedMod = m_derivedMapAsBrushMask
+                            && m_derivedMapStrength > 0.0
+                            && activeDerivedMap() != nullptr;
+    if (derivedMod) {
+        const Ogre::Vector2 center = uv;
+        const float radiusCopy = radiusUv;
+        auto inner = colorAt;
+        colorAt = [this, inner, center, radiusCopy](float dx, float dy) {
+            float mu = 0.0f, mv = 0.0f;
+            BrushFootprint::brushOffsetToUv(center.x, center.y, radiusCopy, dx, dy, mu, mv);
+            const float f = derivedMapFactorAt(Ogre::Vector2(mu, mv));
+            Ogre::ColourValue c = inner(dx, dy);
+            // Scale ALPHA, not RGB: the map decides how much of the stroke
+            // lands, not what colour it is. Scaling RGB would darken the paint
+            // toward black in cavities instead of hiding it.
+            c.a *= f;
+            return c;
+        };
+    }
 
     if (m_footprintType == BrushFootprint::FootprintType::TilingSource) {
         if (m_tilingImage.empty())
@@ -2049,17 +2077,23 @@ bool TexturePaintController::paintColorFootprintAtUV(const Ogre::Vector2& uv, fl
             > 0;
     }
 
-    if (m_colorSource != ColorGradient) {
+    // NB both fast paths below collapse the brush to ONE colour and use the
+    // scalar paintBrush overload, which never calls colorAt — so they must be
+    // skipped while a derived map is modulating per-texel.
+    if (!derivedMod && m_colorSource != ColorGradient) {
         const QColor qc = texturePaintColor();
         const Ogre::ColourValue paint(qc.redF(), qc.greenF(), qc.blueF(), qc.alphaF());
         return activePaintBuffer().paintBrush(uv, radiusUv, paint, strength, falloff, shape) > 0;
     }
 
-    if (m_gradientMode == GradientLinear) {
+    if (!derivedMod && m_gradientMode == GradientLinear) {
         const auto sampled = colorAt(0.0f, 0.0f);
         return activePaintBuffer().paintBrush(uv, radiusUv, sampled, strength, falloff, shape) > 0;
     }
-    return activePaintBuffer().paintBrush(uv, radiusUv, colorAt, strength, falloff, shape) > 0;
+    // multiplyBlendByColorAlpha: the derived-map modulation lives in the colour's
+    // ALPHA, so the blend must honour it (same as the TilingSource path).
+    return activePaintBuffer().paintBrush(uv, radiusUv, colorAt, strength, falloff, shape,
+                                          /*multiplyBlendByColorAlpha=*/derivedMod) > 0;
 }
 
 void TexturePaintController::setPaintTarget(int target)
@@ -7244,4 +7278,439 @@ void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
         QStringLiteral("file.export"),
         QStringLiteral("Flushed %1-layer composite before export")
             .arg(m_layerStack.layerCount()));
+}
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice G (#550): cavity / curvature / AO derived maps
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::setDerivedMapKind(int kind)
+{
+    const int k = std::clamp(kind, 0, 2);
+    if (k == m_derivedMapKind) return;
+    m_derivedMapKind = k;
+    SentryReporter::addBreadcrumb("paint.derived_map",
+        QStringLiteral("kind=%1").arg(QLatin1String(
+            DerivedMapGenerator::kindName(static_cast<DerivedMapKind>(k)))));
+    emit derivedMapChanged();
+}
+
+void TexturePaintController::setDerivedMapAsBrushMask(bool on)
+{
+    if (on == m_derivedMapAsBrushMask) return;
+    m_derivedMapAsBrushMask = on;
+    SentryReporter::addBreadcrumb("paint.derived_map",
+        QStringLiteral("brushMask=%1").arg(on));
+    emit derivedMapChanged();
+}
+
+void TexturePaintController::setDerivedMapStrength(double v)
+{
+    const double c = std::clamp(v, 0.0, 1.0);
+    if (std::abs(c - m_derivedMapStrength) < 1e-6) return;
+    m_derivedMapStrength = c;
+    SentryReporter::addBreadcrumb("paint.derived_map",
+        QStringLiteral("strength=%1").arg(c, 0, 'f', 3));
+    emit derivedMapChanged();
+}
+
+void TexturePaintController::setDerivedMapInvert(bool on)
+{
+    if (on == m_derivedMapInvert) return;
+    m_derivedMapInvert = on;
+    SentryReporter::addBreadcrumb("paint.derived_map",
+        QStringLiteral("invert=%1").arg(on));
+    emit derivedMapChanged();
+}
+
+void TexturePaintController::setDerivedMapContrast(double v)
+{
+    const double c = std::clamp(v, 0.1, 8.0);
+    if (std::abs(c - m_derivedMapContrast) < 1e-6) return;
+    m_derivedMapContrast = c;
+    // Contrast feeds the GENERATOR, so any cached map is now stale.
+    m_derivedMaps.clear();
+    SentryReporter::addBreadcrumb("paint.derived_map",
+        QStringLiteral("contrast=%1").arg(c, 0, 'f', 2));
+    emit derivedMapChanged();
+}
+
+QString TexturePaintController::currentMeshHash() const
+{
+    if (!m_paintMesh) return {};
+    return DerivedMapCache::meshHash(*m_paintMesh);
+}
+
+void TexturePaintController::invalidateDerivedMapsIfMeshChanged()
+{
+    const QString h = currentMeshHash();
+    if (h == m_derivedMapMeshHash) return;
+    // The geometry changed (or the mesh went away): the maps no longer describe
+    // this surface. This is the content-hash invalidation that replaces the
+    // "EditableMesh revision counter" the issue proposed — EditableMesh has no
+    // such counter, and its public mutable subMeshes() accessor means one could
+    // be bypassed without incrementing.
+    m_derivedMaps.clear();
+    m_derivedMapMeshHash = h;
+}
+
+const DerivedMap* TexturePaintController::activeDerivedMap() const
+{
+    const auto it = m_derivedMaps.find(m_derivedMapKind);
+    if (it == m_derivedMaps.end() || it->second.empty()) return nullptr;
+    return &it->second;
+}
+
+bool TexturePaintController::derivedMapReady() const
+{
+    if (!m_paintMesh) return false;
+    // Only "ready" while the cached map still matches the live geometry.
+    if (m_derivedMapMeshHash != currentMeshHash()) return false;
+    return activeDerivedMap() != nullptr;
+}
+
+float TexturePaintController::derivedMapFactorAt(const Ogre::Vector2& uv) const
+{
+    const DerivedMap* map = activeDerivedMap();
+    if (!map) return 1.0f;      // no map => no modulation, callers need no branch
+    float v = map->sample(uv.x, uv.y);
+    if (m_derivedMapInvert) v = 1.0f - v;
+    // Blend toward 1 (unmodulated) by strength, so 0 is a true no-op.
+    const float s = static_cast<float>(m_derivedMapStrength);
+    return std::clamp(1.0f + s * (v - 1.0f), 0.0f, 1.0f);
+}
+
+std::vector<float> TexturePaintController::computeVertexOcclusion(QString* errorOut) const
+{
+    auto* entity = m_paintMeshEntity;
+    if (!entity || !m_paintMesh) {
+        if (errorOut) *errorOut = QStringLiteral("no painted mesh");
+        return {};
+    }
+
+    // Welded vertex positions/normals, in the SAME order DerivedMapGenerator
+    // rasterises, so the occlusion array lines up with its per-vertex input.
+    HalfEdgeMesh he;
+    if (!he.buildFromEditableMesh(*m_paintMesh)) {
+        if (errorOut) *errorOut = QStringLiteral("could not weld the mesh");
+        return {};
+    }
+    auto* node = entity->getParentSceneNode();
+    const Ogre::Affine3 world = node ? node->_getFullTransform() : Ogre::Affine3::IDENTITY;
+    const Ogre::Matrix3 normalMat = world.linear().Inverse().Transpose();
+
+    std::vector<Ogre::Vector3> pos, nrm;
+    pos.reserve(he.vertexCount());
+    nrm.reserve(he.vertexCount());
+    for (size_t i = 0; i < he.vertexCount(); ++i) {
+        const HEVertex& v = he.vertex(static_cast<int>(i));
+        pos.push_back(world * v.position);
+        Ogre::Vector3 n = v.hasNormal ? (normalMat * v.normal) : Ogre::Vector3::ZERO;
+        if (!n.isZeroLength()) n.normalise();
+        nrm.push_back(n);
+    }
+
+    // Render depth from evenly spread directions. 12 is enough to separate
+    // crevices from exposed surfaces without making the bake feel stalled;
+    // each render is a full RTT pass on the main thread.
+    constexpr int kViewCount = 12;
+    constexpr int kDepthSize = 256;
+    const auto dirs = DerivedMapOcclusion::sampleDirections(kViewCount);
+    const Ogre::AxisAlignedBox aabb = entity->getWorldBoundingBox(true);
+    const float radius = aabb.isNull() ? 1.0f : aabb.getHalfSize().length();
+
+    std::vector<DepthView> views;
+    views.reserve(dirs.size());
+    for (const Ogre::Vector3& d : dirs) {
+        MeshDepthRenderer::View mv;
+        mv.dir = d;
+        // Any up not parallel to dir; the renderer re-frames the camera itself.
+        mv.up = (std::abs(d.dotProduct(Ogre::Vector3::UNIT_Y)) > 0.95f)
+                    ? Ogre::Vector3(0, 0, 1) : Ogre::Vector3::UNIT_Y;
+        mv.name = "ao";
+        MeshDepthRenderer::RenderResult r =
+            MeshDepthRenderer::renderDepthMapView(entity, kDepthSize, mv, nullptr);
+        if (r.depth.isNull()) continue;     // skip a failed view rather than abort
+        DepthView dv;
+        dv.depth = r.depth;
+        dv.viewProj = r.projMatrix * r.viewMatrix;
+        dv.camPosition = r.camPosition;
+        dv.camDirection = r.camDirection;
+        dv.depthNear = r.depthNear;
+        dv.depthFar = r.depthFar;
+        // Bias must exceed one grayscale step of the encoded range, else
+        // quantisation alone makes a surface occlude itself (depth acne).
+        dv.biasWorld = std::max((r.depthFar - r.depthNear) / 255.0f * 2.0f,
+                                radius * 0.01f);
+        views.push_back(std::move(dv));
+    }
+    if (views.empty()) {
+        if (errorOut) *errorOut = QStringLiteral("depth rendering unavailable");
+        return {};
+    }
+    return DerivedMapOcclusion::occlusionForVertices(pos, nrm, views);
+}
+
+bool TexturePaintController::computeDerivedMap()
+{
+    if (!m_paintMesh) {
+        m_derivedMapStatus = QStringLiteral("Select a mesh and start painting first.");
+        emit derivedMapChanged();
+        return false;
+    }
+    invalidateDerivedMapsIfMeshChanged();
+
+    const auto kind = static_cast<DerivedMapKind>(m_derivedMapKind);
+    const QString kindStr = QLatin1String(DerivedMapGenerator::kindName(kind));
+
+    // Already in memory for this exact geometry.
+    if (activeDerivedMap()) {
+        m_derivedMapStatus = QStringLiteral("%1 map ready.").arg(kindStr);
+        emit derivedMapChanged();
+        return true;
+    }
+
+    const QString hash = currentMeshHash();
+
+    // Disk cache next — the whole point is not re-baking AO on every session.
+    {
+        DerivedMap cached;
+        QString err;
+        if (DerivedMapCache::load(hash, kind, cached, err) && !cached.empty()) {
+            m_derivedMaps[m_derivedMapKind] = std::move(cached);
+            m_derivedMapMeshHash = hash;
+            m_derivedMapStatus = QStringLiteral("%1 map loaded from cache.").arg(kindStr);
+            SentryReporter::addBreadcrumb("paint.derived_map.cache_hit", kindStr);
+            emit derivedMapChanged();
+            return true;
+        }
+    }
+
+    DerivedMapGenerator::Options opts;
+    opts.resolution = std::max(64, m_buffer.width() > 0 ? m_buffer.width() : 1024);
+    opts.contrast = static_cast<float>(m_derivedMapContrast);
+
+    DerivedMapGenerator::Report rep;
+    DerivedMap map;
+    if (kind == DerivedMapKind::AmbientOcclusion) {
+        QString err;
+        const std::vector<float> occ = computeVertexOcclusion(&err);
+        if (occ.empty()) {
+            m_derivedMapStatus = QStringLiteral("AO bake failed: %1").arg(
+                err.isEmpty() ? QStringLiteral("unknown error") : err);
+            SentryReporter::addBreadcrumb("paint.derived_map.error", m_derivedMapStatus);
+            emit derivedMapChanged();
+            return false;
+        }
+        map = DerivedMapGenerator::fromVertexOcclusion(*m_paintMesh, occ, opts, &rep);
+    } else {
+        map = DerivedMapGenerator::generate(*m_paintMesh, kind, opts, &rep);
+    }
+
+    if (!rep.ok || map.empty()) {
+        m_derivedMapStatus = QStringLiteral("%1 bake failed: %2").arg(kindStr,
+            rep.error.isEmpty() ? QStringLiteral("no output") : rep.error);
+        SentryReporter::addBreadcrumb("paint.derived_map.error", m_derivedMapStatus);
+        emit derivedMapChanged();
+        return false;
+    }
+
+    QString saveErr;
+    if (!DerivedMapCache::save(hash, kind, map, saveErr)) {
+        // A cache write failure must not fail the bake — the map is usable now.
+        SentryReporter::addBreadcrumb("paint.derived_map.cache_write_failed", saveErr);
+    }
+    m_derivedMaps[m_derivedMapKind] = std::move(map);
+    m_derivedMapMeshHash = hash;
+    m_derivedMapStatus = QStringLiteral("%1 map baked (%2 texels).")
+                             .arg(kindStr).arg(rep.texelsRasterised);
+    SentryReporter::addBreadcrumb("paint.derived_map.bake",
+        QStringLiteral("%1 texels=%2 dilated=%3")
+            .arg(kindStr).arg(rep.texelsRasterised).arg(rep.texelsDilated));
+    emit derivedMapChanged();
+    return true;
+}
+
+bool TexturePaintController::recomputeDerivedMaps()
+{
+    const QString hash = currentMeshHash();
+    if (!hash.isEmpty()) DerivedMapCache::invalidateAll(hash);
+    m_derivedMaps.clear();
+    m_derivedMapMeshHash.clear();
+    SentryReporter::addBreadcrumb("paint.derived_map.recalculate", hash);
+    return computeDerivedMap();
+}
+
+bool TexturePaintController::applyDerivedMapToLayerMask()
+{
+    if (!hasActiveSession()) {
+        m_derivedMapStatus = QStringLiteral("No paint session.");
+        emit derivedMapChanged();
+        return false;
+    }
+    if (!derivedMapReady() && !computeDerivedMap()) return false;
+    const DerivedMap* map = activeDerivedMap();
+    if (!map) return false;
+
+    const int idx = m_layerStack.activeIndex();
+    if (idx < 0) {
+        m_derivedMapStatus = QStringLiteral("No active layer.");
+        emit derivedMapChanged();
+        return false;
+    }
+
+    const auto before = m_layerStack.snapshot();
+    std::vector<uint8_t>& mask = m_layerStack.ensureLayerMask(idx);
+    const int W = m_buffer.width();
+    const int H = m_buffer.height();
+    if (W <= 0 || H <= 0 || mask.size() != static_cast<size_t>(W) * H) {
+        m_derivedMapStatus = QStringLiteral("Layer mask size mismatch.");
+        emit derivedMapChanged();
+        return false;
+    }
+    // The map may have been baked at a different resolution than the paint
+    // buffer, so sample by UV rather than assuming a 1:1 texel mapping.
+    for (int y = 0; y < H; ++y) {
+        const float v = (y + 0.5f) / static_cast<float>(H);
+        for (int x = 0; x < W; ++x) {
+            const float u = (x + 0.5f) / static_cast<float>(W);
+            float m = map->sample(u, v);
+            if (m_derivedMapInvert) m = 1.0f - m;
+            const float s = static_cast<float>(m_derivedMapStrength);
+            m = std::clamp(1.0f + s * (m - 1.0f), 0.0f, 1.0f);
+            mask[static_cast<size_t>(y) * W + x] =
+                static_cast<uint8_t>(std::lround(m * 255.0f));
+        }
+    }
+
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    const QString label = QStringLiteral("Mask from %1").arg(
+        QLatin1String(DerivedMapGenerator::kindName(
+            static_cast<DerivedMapKind>(m_derivedMapKind))));
+    pushLayerOpUndo(label, before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
+    ++m_layerPreviewVersion;
+    SentryReporter::addBreadcrumb("paint.derived_map.layer_mask", label);
+    m_derivedMapStatus = label + QStringLiteral(" applied.");
+    emit layersChanged();
+    emit fullResPreviewChanged();
+    emit derivedMapChanged();
+    return true;
+}
+
+bool TexturePaintController::applyDerivedMapRecipe(int recipe)
+{
+    if (!hasActiveSession()) {
+        if (auto* e = activeEntity()) { (void)e; ensurePaintableTexture(1024); }
+        if (!hasActiveSession()) {
+            m_derivedMapStatus = QStringLiteral("No paint session.");
+            emit derivedMapChanged();
+            return false;
+        }
+    }
+
+    // Each recipe = (which map, inverted?, fill colour, blend, layer name).
+    struct Recipe {
+        DerivedMapKind kind;
+        bool invert;
+        Ogre::ColourValue colour;
+        PaintLayerBlend::Mode blend;
+        const char* name;
+    };
+    Recipe r;
+    switch (recipe) {
+    case 0:  // Edge wear: bare metal on CONVEX edges => inverse curvature.
+        r = {DerivedMapKind::Curvature, false,
+             Ogre::ColourValue(0.78f, 0.78f, 0.80f, 1.0f),
+             PaintLayerBlend::Mode::Normal, "Edge wear"};
+        // Curvature stores convex BELOW 0.5, so the mask must be inverted to
+        // select ridges rather than crevices.
+        r.invert = true;
+        break;
+    case 1:  // Crevice dirt: dark grime in concave areas => cavity as-is.
+        r = {DerivedMapKind::Cavity, false,
+             Ogre::ColourValue(0.16f, 0.13f, 0.10f, 1.0f),
+             PaintLayerBlend::Mode::Normal, "Crevice dirt"};
+        break;
+    case 2:  // AO darken: multiply the occlusion over BaseColor.
+        r = {DerivedMapKind::AmbientOcclusion, false,
+             Ogre::ColourValue(0.0f, 0.0f, 0.0f, 1.0f),
+             PaintLayerBlend::Mode::Multiply, "AO darken"};
+        break;
+    default:
+        m_derivedMapStatus = QStringLiteral("Unknown recipe.");
+        emit derivedMapChanged();
+        return false;
+    }
+
+    // Bake/load the recipe's own map, which may differ from the UI selection.
+    const int userKind = m_derivedMapKind;
+    const bool userInvert = m_derivedMapInvert;
+    m_derivedMapKind = static_cast<int>(r.kind);
+    m_derivedMapInvert = r.invert;
+    const bool haveMap = derivedMapReady() || computeDerivedMap();
+    if (!haveMap) {
+        m_derivedMapKind = userKind;      // restore the user's selection
+        m_derivedMapInvert = userInvert;
+        emit derivedMapChanged();
+        return false;
+    }
+
+    const int W = m_buffer.width();
+    const int H = m_buffer.height();
+    if (W <= 0 || H <= 0) {
+        m_derivedMapKind = userKind;
+        m_derivedMapInvert = userInvert;
+        return false;
+    }
+
+    // A flat colour layer; the MASK is what shapes it, so the user can paint
+    // over it afterwards to refine.
+    TexturePaintBuffer fill;
+    fill.resize(W, H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            fill.setPixel(x, y, r.colour);
+
+    const auto before = m_layerStack.snapshot();
+    const int idx = m_layerStack.addFromBuffer(fill, QLatin1String(r.name),
+                                               PaintLayerStack::LayerType::Generated);
+    if (idx < 0) {
+        m_derivedMapKind = userKind;
+        m_derivedMapInvert = userInvert;
+        return false;
+    }
+    m_layerStack.setActiveIndex(idx);
+    m_layerStack.setBlendMode(idx, r.blend);
+
+    const DerivedMap* map = activeDerivedMap();
+    std::vector<uint8_t>& mask = m_layerStack.ensureLayerMask(idx);
+    if (map && mask.size() == static_cast<size_t>(W) * H) {
+        for (int y = 0; y < H; ++y) {
+            const float v = (y + 0.5f) / static_cast<float>(H);
+            for (int x = 0; x < W; ++x) {
+                const float u = (x + 0.5f) / static_cast<float>(W);
+                float m = map->sample(u, v);
+                if (r.invert) m = 1.0f - m;
+                mask[static_cast<size_t>(y) * W + x] =
+                    static_cast<uint8_t>(std::lround(std::clamp(m, 0.0f, 1.0f) * 255.0f));
+            }
+        }
+    }
+
+    m_derivedMapKind = userKind;           // recipes must not hijack the picker
+    m_derivedMapInvert = userInvert;
+
+    recomposeComposite(/*fullBuffer=*/true);
+    flushDirtyToOgre();
+    pushLayerOpUndo(QLatin1String(r.name), before, m_layerStack.snapshot());
+    invalidateLayerStrokeBaseline();
+    ++m_layerPreviewVersion;
+    SentryReporter::addBreadcrumb("paint.derived_map.recipe", QLatin1String(r.name));
+    m_derivedMapStatus = QStringLiteral("%1 layer added.").arg(QLatin1String(r.name));
+    emit layersChanged();
+    emit fullResPreviewChanged();
+    emit derivedMapChanged();
+    return true;
 }

@@ -12,6 +12,7 @@
 #include "SymmetryMirrorMap.h"
 #include "ProjectionPainter.h"
 #include "DecalSession.h"
+#include "DerivedMapGenerator.h"
 
 #include <QColor>
 #include <QObject>
@@ -33,6 +34,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 class EditableMesh;
 class OgreWidget;
@@ -147,6 +149,14 @@ class TexturePaintController : public QObject
     // Paint v2 Slice F (#549) — decal tool (read-only status for the panel).
     Q_PROPERTY(bool   decalSessionActive READ decalSessionActive NOTIFY projectionChanged)
     Q_PROPERTY(int    decalState         READ decalState         NOTIFY projectionChanged)
+    // Paint v2 Slice G (#550) — cavity / curvature / AO derived maps.
+    Q_PROPERTY(int    derivedMapKind     READ derivedMapKind     WRITE setDerivedMapKind     NOTIFY derivedMapChanged) // 0 cavity / 1 curvature / 2 AO
+    Q_PROPERTY(bool   derivedMapAsBrushMask READ derivedMapAsBrushMask WRITE setDerivedMapAsBrushMask NOTIFY derivedMapChanged)
+    Q_PROPERTY(double derivedMapStrength READ derivedMapStrength WRITE setDerivedMapStrength NOTIFY derivedMapChanged) // 0..1 blend of the modulation
+    Q_PROPERTY(bool   derivedMapInvert   READ derivedMapInvert   WRITE setDerivedMapInvert   NOTIFY derivedMapChanged)
+    Q_PROPERTY(double derivedMapContrast READ derivedMapContrast WRITE setDerivedMapContrast NOTIFY derivedMapChanged)
+    Q_PROPERTY(bool   derivedMapReady    READ derivedMapReady    NOTIFY derivedMapChanged)   // read-only status
+    Q_PROPERTY(QString derivedMapStatus  READ derivedMapStatus   NOTIFY derivedMapChanged)   // read-only, for the panel
 
 public:
     enum BrushTool {
@@ -475,6 +485,36 @@ public:
     /// path calls cancelDecal/commitDecal from mainwindow.
     Q_INVOKABLE bool commitDecal();
     Q_INVOKABLE void cancelDecal();
+
+    // --- Paint v2 Slice G (#550): cavity / curvature / AO derived maps ---
+    int    derivedMapKind() const { return m_derivedMapKind; }
+    void   setDerivedMapKind(int kind);
+    bool   derivedMapAsBrushMask() const { return m_derivedMapAsBrushMask; }
+    void   setDerivedMapAsBrushMask(bool on);
+    double derivedMapStrength() const { return m_derivedMapStrength; }
+    void   setDerivedMapStrength(double v);
+    bool   derivedMapInvert() const { return m_derivedMapInvert; }
+    void   setDerivedMapInvert(bool on);
+    double derivedMapContrast() const { return m_derivedMapContrast; }
+    void   setDerivedMapContrast(double v);
+    /// True when the ACTIVE kind's map is computed and matches the current mesh.
+    bool   derivedMapReady() const;
+    QString derivedMapStatus() const { return m_derivedMapStatus; }
+
+    /// Compute (or load from cache) the active kind's map for the painted mesh.
+    /// AO renders hemisphere depth views, so this must run on the main thread.
+    /// Returns false and sets derivedMapStatus on failure.
+    Q_INVOKABLE bool computeDerivedMap();
+    /// Drop cached maps for the painted mesh and recompute the active kind
+    /// ("Recalculate derived maps").
+    Q_INVOKABLE bool recomputeDerivedMaps();
+    /// Initialise the ACTIVE layer's mask from the active derived map, so the
+    /// user can then paint freely and have it show only in crevices / on edges.
+    /// Undoable. Returns false if there is no session/map.
+    Q_INVOKABLE bool applyDerivedMapToLayerMask();
+    /// One-click recipes (#550): create a new masked layer preloaded with a
+    /// sensible colour. 0 = edge wear, 1 = crevice dirt, 2 = AO darken.
+    Q_INVOKABLE bool applyDerivedMapRecipe(int recipe);
     /// @}
 
     /// @name Paint v2 Slice D — PBR channel painting (#547)
@@ -767,6 +807,8 @@ signals:
     void stabilizerChanged();
     /// Paint v2 Slice F (#549): projection mode / stencil / lock state changed.
     void projectionChanged();
+    /// Paint v2 Slice G (#550): derived-map settings / readiness / status changed.
+    void derivedMapChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -1162,6 +1204,31 @@ private:
     bool    m_haveProjOcc = false;
     std::vector<ProjectionPainter::Triangle> m_projTris;  // world tris cached per stroke
     bool    m_haveProjTris = false;
+
+    // --- Paint v2 Slice G (#550): derived maps ---
+    int     m_derivedMapKind = 0;             // DerivedMapKind as int
+    bool    m_derivedMapAsBrushMask = false;  // modulate brush colour by the map
+    double  m_derivedMapStrength = 1.0;       // 0..1 blend of the modulation
+    bool    m_derivedMapInvert = false;       // e.g. edge wear = inverse cavity
+    double  m_derivedMapContrast = 1.0;
+    QString m_derivedMapStatus;
+    /// Cached maps for the CURRENT mesh, keyed by kind. Cleared when the mesh
+    /// hash changes, so a topology edit cannot leave a stale map bound.
+    std::map<int, DerivedMap> m_derivedMaps;
+    QString m_derivedMapMeshHash;             // hash the cached maps belong to
+
+    /// Mesh hash for the painted mesh, or empty when there is no mesh.
+    QString currentMeshHash() const;
+    /// Drop in-memory maps when the mesh geometry no longer matches them.
+    void invalidateDerivedMapsIfMeshChanged();
+    /// The active kind's map, or nullptr when not computed.
+    const DerivedMap* activeDerivedMap() const;
+    /// Sample the active map at `uv` and fold in invert/strength. Returns 1.0
+    /// (no modulation) when no map is active, so callers need no special case.
+    float derivedMapFactorAt(const Ogre::Vector2& uv) const;
+    /// Render hemisphere depth views of the painted entity and reduce them to
+    /// per-welded-vertex occlusion. Main thread (touches the Ogre scene).
+    std::vector<float> computeVertexOcclusion(QString* errorOut) const;
 
     // --- Paint v2 Slice F (#549): decal tool ---
     DecalSession m_decal;
