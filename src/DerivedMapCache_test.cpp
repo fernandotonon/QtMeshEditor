@@ -20,6 +20,7 @@ The MIT License — see other project sources for the full header.
 
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
 
 namespace {
 
@@ -51,7 +52,23 @@ DerivedMap makeMap(int w, int h, float fill)
 
 } // namespace
 
-TEST(DerivedMapCacheTest, MeshHashIsStableAndGeometrySensitive) {
+// The cache writes under <AppData>, which is the USER's real data directory.
+// QStandardPaths test mode redirects it to a throwaway location (the same guard
+// BrushAssetLibrary_test / GamificationManager_test use), so running the suite
+// never pollutes — or reads stale entries from — a real install.
+class DerivedMapCacheTest : public ::testing::Test
+{
+protected:
+    void SetUp() override { QStandardPaths::setTestModeEnabled(true); }
+    void TearDown() override
+    {
+        const QString root = DerivedMapCache::cacheRootDirectory();
+        if (!root.isEmpty()) QDir(root).removeRecursively();
+        QStandardPaths::setTestModeEnabled(false);
+    }
+};
+
+TEST_F(DerivedMapCacheTest, MeshHashIsStableAndGeometrySensitive) {
     const QString a = DerivedMapCache::meshHash(triMesh(0.0f));
     const QString b = DerivedMapCache::meshHash(triMesh(0.0f));
     const QString c = DerivedMapCache::meshHash(triMesh(5.0f));
@@ -61,7 +78,7 @@ TEST(DerivedMapCacheTest, MeshHashIsStableAndGeometrySensitive) {
     EXPECT_NE(a, c) << "moved geometry must hash differently — this IS the invalidation";
 }
 
-TEST(DerivedMapCacheTest, HashIgnoresNonGeometricAttributes) {
+TEST_F(DerivedMapCacheTest, HashIgnoresNonGeometricAttributes) {
     // Vertex colour cannot change cavity/curvature/AO, so it must not force a
     // rebake. If this ever starts failing, painting a vertex colour would
     // silently invalidate every derived map for that mesh.
@@ -72,7 +89,7 @@ TEST(DerivedMapCacheTest, HashIgnoresNonGeometricAttributes) {
     EXPECT_EQ(DerivedMapCache::meshHash(m1), DerivedMapCache::meshHash(m2));
 }
 
-TEST(DerivedMapCacheTest, HashChangesWithUvAndNormals) {
+TEST_F(DerivedMapCacheTest, HashChangesWithUvAndNormals) {
     // UV and normals DO affect the output (UV decides where texels land,
     // normals decide the concavity sign), so both must be in the hash.
     EditableMesh uvChanged = triMesh();
@@ -84,7 +101,7 @@ TEST(DerivedMapCacheTest, HashChangesWithUvAndNormals) {
     EXPECT_NE(DerivedMapCache::meshHash(triMesh()), DerivedMapCache::meshHash(nChanged));
 }
 
-TEST(DerivedMapCacheTest, SaveLoadRoundTripsExactly) {
+TEST_F(DerivedMapCacheTest, SaveLoadRoundTripsExactly) {
     const QString key = DerivedMapCache::meshHash(triMesh());
     DerivedMapCache::invalidateAll(key);
 
@@ -104,7 +121,7 @@ TEST(DerivedMapCacheTest, SaveLoadRoundTripsExactly) {
     DerivedMapCache::invalidateAll(key);
 }
 
-TEST(DerivedMapCacheTest, KindsAreStoredSeparately) {
+TEST_F(DerivedMapCacheTest, KindsAreStoredSeparately) {
     const QString key = DerivedMapCache::meshHash(triMesh());
     DerivedMapCache::invalidateAll(key);
     QString err;
@@ -126,7 +143,7 @@ TEST(DerivedMapCacheTest, KindsAreStoredSeparately) {
     EXPECT_FALSE(DerivedMapCache::has(key, DerivedMapKind::Curvature));
 }
 
-TEST(DerivedMapCacheTest, MalformedKeysAreRejectedAsPaths) {
+TEST_F(DerivedMapCacheTest, MalformedKeysAreRejectedAsPaths) {
     // The key becomes a path component, so traversal attempts and wrong-length
     // keys must be structurally impossible rather than sanitised.
     for (const char* bad : {"../../etc/passwd", "not-hex-at-all", "", "abc",
@@ -144,7 +161,7 @@ TEST(DerivedMapCacheTest, MalformedKeysAreRejectedAsPaths) {
         QStringLiteral("0123456789abcdef0123456789abcdef01234567")).isEmpty());
 }
 
-TEST(DerivedMapCacheTest, RefusesToCacheEmptyMap) {
+TEST_F(DerivedMapCacheTest, RefusesToCacheEmptyMap) {
     const QString key = DerivedMapCache::meshHash(triMesh());
     QString err;
     // An empty map means the generator failed; caching it would poison every
@@ -153,7 +170,7 @@ TEST(DerivedMapCacheTest, RefusesToCacheEmptyMap) {
     EXPECT_FALSE(err.isEmpty());
 }
 
-TEST(DerivedMapCacheTest, CorruptEntryIsAMissNotACrash) {
+TEST_F(DerivedMapCacheTest, CorruptEntryIsAMissNotACrash) {
     const QString key = DerivedMapCache::meshHash(triMesh());
     DerivedMapCache::invalidateAll(key);
     QString err;
@@ -173,7 +190,7 @@ TEST(DerivedMapCacheTest, CorruptEntryIsAMissNotACrash) {
     DerivedMapCache::invalidateAll(key);
 }
 
-TEST(DerivedMapCacheTest, LoadOfMissingEntryFailsCleanly) {
+TEST_F(DerivedMapCacheTest, LoadOfMissingEntryFailsCleanly) {
     const QString key = QStringLiteral("abcdefabcdefabcdefabcdefabcdefabcdefabcd");
     DerivedMapCache::invalidateAll(key);
     DerivedMap out;

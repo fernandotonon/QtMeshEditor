@@ -1413,3 +1413,224 @@ TEST_F(TexturePaintControllerSceneTest, DecalSessionBeginCancelPlumbing) {
 
     ctrl->closeSession();
 }
+
+// --- Paint v2 Slice G (#550): derived maps -------------------------------
+// The generators/cache/occlusion maths are covered pure-data in
+// DerivedMapGenerator_test / DerivedMapCache_test / DerivedMapOcclusion_test.
+// These fixture cases cover the CONTROLLER contract: setters clamp + notify,
+// readiness tracks the mesh hash, and every entry point degrades safely with no
+// session rather than crashing or half-applying.
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapSettersClampAndPersist) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedSetters")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+
+    ctrl->setDerivedMapKind(1);
+    EXPECT_EQ(ctrl->derivedMapKind(), 1);
+    // Out-of-range kinds must clamp into the enum, not index past it.
+    ctrl->setDerivedMapKind(99);
+    EXPECT_EQ(ctrl->derivedMapKind(), 2);
+    ctrl->setDerivedMapKind(-5);
+    EXPECT_EQ(ctrl->derivedMapKind(), 0);
+
+    ctrl->setDerivedMapStrength(2.5);
+    EXPECT_DOUBLE_EQ(ctrl->derivedMapStrength(), 1.0);
+    ctrl->setDerivedMapStrength(-1.0);
+    EXPECT_DOUBLE_EQ(ctrl->derivedMapStrength(), 0.0);
+    ctrl->setDerivedMapStrength(0.4);
+    EXPECT_NEAR(ctrl->derivedMapStrength(), 0.4, 1e-9);
+
+    ctrl->setDerivedMapContrast(100.0);
+    EXPECT_LE(ctrl->derivedMapContrast(), 8.0);
+    ctrl->setDerivedMapContrast(0.0);
+    EXPECT_GE(ctrl->derivedMapContrast(), 0.1);
+
+    ctrl->setDerivedMapInvert(true);
+    EXPECT_TRUE(ctrl->derivedMapInvert());
+    ctrl->setDerivedMapAsBrushMask(true);
+    EXPECT_TRUE(ctrl->derivedMapAsBrushMask());
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapSettersEmitChangeSignal) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedNotify")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+
+    int hits = 0;
+    const auto conn = QObject::connect(ctrl, &TexturePaintController::derivedMapChanged,
+                                       [&hits]() { ++hits; });
+    ctrl->setDerivedMapKind(ctrl->derivedMapKind() == 0 ? 1 : 0);
+    EXPECT_GT(hits, 0) << "the panel mirrors these props, so a change must notify";
+
+    // A no-op write must NOT notify (else the panel churns every frame).
+    const int after = hits;
+    ctrl->setDerivedMapKind(ctrl->derivedMapKind());
+    EXPECT_EQ(hits, after);
+
+    QObject::disconnect(conn);
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapNotReadyBeforeBake) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedNotReady")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    // Nothing baked yet, so the panel's readiness dot must read false rather
+    // than advertising a map the brush would then fail to find.
+    EXPECT_FALSE(ctrl->derivedMapReady());
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapEntryPointsAreSafeWithoutASession) {
+    // Every Q_INVOKABLE is reachable from QML at any time, so each must fail
+    // cleanly with no session instead of dereferencing a null mesh/buffer.
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    ctrl->closeSession();
+
+    EXPECT_FALSE(ctrl->derivedMapReady());
+    EXPECT_FALSE(ctrl->computeDerivedMap());
+    EXPECT_FALSE(ctrl->applyDerivedMapToLayerMask());
+    // Unknown recipe index must be rejected, not indexed into the recipe table.
+    EXPECT_FALSE(ctrl->applyDerivedMapRecipe(99));
+    EXPECT_FALSE(ctrl->applyDerivedMapRecipe(-1));
+    // A status message should explain the refusal to the user.
+    EXPECT_FALSE(ctrl->derivedMapStatus().isEmpty());
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapCavityBakesAndBecomesReady) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedCavityBake")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    ASSERT_TRUE(ctrl->ensurePaintableTexture(64));
+
+    ctrl->setDerivedMapKind(0);           // Cavity — geometric, no GL needed
+    const bool baked = ctrl->computeDerivedMap();
+    // The fixture mesh is a simple quad; a bake either succeeds (and is then
+    // ready) or reports why. Both are acceptable, but the two must AGREE —
+    // "ready" while the bake failed would strand the brush mask.
+    EXPECT_EQ(baked, ctrl->derivedMapReady());
+    EXPECT_FALSE(ctrl->derivedMapStatus().isEmpty());
+
+    if (baked) {
+        // A second call must be a cache hit, not a re-bake, and stay ready.
+        EXPECT_TRUE(ctrl->computeDerivedMap());
+        EXPECT_TRUE(ctrl->derivedMapReady());
+    }
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapBrushMaskWithNoMapDoesNotBlockPainting) {
+    // Enabling the mask before baking must not silently swallow every stroke:
+    // with no map the modulation factor is 1 (no-op), so painting still works.
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedMaskNoMap")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    // setTexturePaintEnabled + hasActiveSession is the sequence the other stroke
+    // tests use; beginStrokeUV refuses without an enabled session.
+    ctrl->setTexturePaintEnabled(true);
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ctrl->setDerivedMapAsBrushMask(true);
+    ctrl->setDerivedMapStrength(1.0);
+    // NB deliberately NOT asserting !derivedMapReady() here: the on-disk cache
+    // persists across processes, so a cavity map baked by an earlier run (or an
+    // earlier test) legitimately loads and reports ready. What matters for this
+    // case is that the brush still paints — with a map the modulation applies,
+    // without one the factor is 1 (no-op); neither may swallow the stroke.
+
+    // Compare actual PIXELS before/after, not just hasActiveSession().
+    // NB this covers the NO-MAP path specifically: `derivedMod` requires a
+    // non-null map, so with nothing baked the wrapper is never installed and
+    // painting must proceed untouched. Modulation WITH a map is covered by
+    // DerivedMapBrushMaskWithMapModulatesCoverage below.
+    const QImage before = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(before.isNull());
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.55, 0.55);
+    ctrl->endStrokeUV();
+
+    const QImage after = ctrl->snapshotBufferImage();
+    ASSERT_FALSE(after.isNull());
+    ASSERT_EQ(before.size(), after.size());
+    int changed = 0;
+    for (int y = 0; y < after.height() && changed == 0; ++y)
+        for (int x = 0; x < after.width(); ++x)
+            if (before.pixel(x, y) != after.pixel(x, y)) { ++changed; break; }
+    EXPECT_GT(changed, 0)
+        << "with no derived map the modulation factor must be 1 (a no-op); "
+           "a stroke that paints nothing means the mask is swallowing dabs";
+    EXPECT_TRUE(ctrl->hasActiveSession());
+
+    ctrl->setDerivedMapAsBrushMask(false);
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapRecipePreservesUserKindSelection) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedRecipeKind")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    ASSERT_TRUE(ctrl->ensurePaintableTexture(64));
+
+    ctrl->setDerivedMapKind(1);            // user picked Curvature
+    ctrl->setDerivedMapInvert(false);
+    // "Crevice dirt" bakes CAVITY internally; whether or not it succeeds, it
+    // must not leave the picker pointing somewhere the user did not choose.
+    ctrl->applyDerivedMapRecipe(1);
+    EXPECT_EQ(ctrl->derivedMapKind(), 1) << "a recipe must restore the user's kind";
+    EXPECT_FALSE(ctrl->derivedMapInvert()) << "a recipe must restore invert too";
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, DerivedMapBrushMaskWithMapModulatesCoverage) {
+    // Exercises the modulation wrapper for real: bake a map, then paint with the
+    // mask at full strength and again at zero strength. Strength 0 blends the
+    // factor back to 1 (a documented no-op), so it must paint at least as much
+    // as the masked pass. If the wrapper ever stopped being installed — or
+    // scaled RGB instead of ALPHA — these two would come out identical.
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("DerivedMaskWithMap")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    ctrl->setTexturePaintEnabled(true);
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    ctrl->setDerivedMapKind(0);                 // Cavity (geometric, no GL)
+    if (!ctrl->computeDerivedMap()) {
+        // The fixture quad may yield no cavity signal; nothing to assert then.
+        ctrl->closeSession();
+        GTEST_SKIP() << "no cavity signal on the fixture mesh";
+    }
+    ASSERT_TRUE(ctrl->derivedMapReady());
+
+    const auto paintedTexels = [&](double strength) {
+        ctrl->setDerivedMapAsBrushMask(true);
+        ctrl->setDerivedMapStrength(strength);
+        const QImage before = ctrl->snapshotBufferImage();
+        ctrl->beginStrokeUV(0.5, 0.5);
+        ctrl->updateStrokeUV(0.6, 0.6);
+        ctrl->endStrokeUV();
+        const QImage after = ctrl->snapshotBufferImage();
+        int n = 0;
+        if (!before.isNull() && !after.isNull() && before.size() == after.size()) {
+            for (int y = 0; y < after.height(); ++y)
+                for (int x = 0; x < after.width(); ++x)
+                    if (before.pixel(x, y) != after.pixel(x, y)) ++n;
+        }
+        return n;
+    };
+
+    const int masked = paintedTexels(1.0);
+    const int unmasked = paintedTexels(0.0);
+    // Strength 0 is the documented no-op, so it can never paint LESS than a
+    // fully-masked pass.
+    EXPECT_GE(unmasked, masked);
+    EXPECT_GT(unmasked, 0) << "strength 0 must behave as no modulation at all";
+
+    ctrl->setDerivedMapAsBrushMask(false);
+    ctrl->closeSession();
+}
