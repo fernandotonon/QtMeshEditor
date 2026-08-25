@@ -164,6 +164,9 @@ BrushAssetLibrary.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
+DerivedMapGenerator.cpp
+DerivedMapCache.cpp
+DerivedMapOcclusion.cpp
 VATBaker.cpp
 VATBakerController.cpp
 VATShaderEmitter.cpp
@@ -395,6 +398,9 @@ TexturePaintBuffer.h
 UpdateVersion.h
 TexturePaintController.h
 VertexColorBaker.h
+DerivedMapGenerator.h
+DerivedMapCache.h
+DerivedMapOcclusion.h
 ApplyAtlas.h
 EmbeddedTextureCache.h
 NormalMapGenerator.h
