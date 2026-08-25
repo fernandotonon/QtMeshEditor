@@ -2190,10 +2190,12 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
                 if (v.squaredLength() > 1e-12f) return v;
             }
         }
-        // Feet (and other leaves) often have no canonical child — Mixamo
-        // ToeBase isn't a CMU role. Prefer a real Ogre child so Foot aims
-        // along the toes, NOT back along the shin (parent fallback).
-        if (a >= 0) {
+        // Feet have no canonical child — Mixamo ToeBase isn't a CMU role.
+        // Prefer a real Ogre toe child so Foot aims along the toes, NOT back
+        // along the shin (parent fallback). Hands/head keep the parent-leaf
+        // contract (finger children must not redefine Hand bind aim).
+        if (a >= 0
+            && (role == PoseIK::RFoot || role == PoseIK::LFoot)) {
             Ogre::Bone* bone =
                 skel->getBone(static_cast<unsigned short>(a));
             if (bone) {
@@ -2204,7 +2206,8 @@ TargetBindFrame readTargetBindFrame(Ogre::Skeleton* skel,
                     const unsigned short chH = ch->getHandle();
                     if (chH >= static_cast<unsigned short>(nBones))
                         continue;
-                    Ogre::Vector3 v = tb.bindPos[chH] - tb.bindPos[static_cast<size_t>(a)];
+                    Ogre::Vector3 v = tb.bindPos[chH]
+                                      - tb.bindPos[static_cast<size_t>(a)];
                     if (v.squaredLength() > 1e-12f)
                         return v;
                 }
