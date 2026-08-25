@@ -2375,30 +2375,46 @@ bool legLandmarksReliable(int role, const float* visibility33)
     }
 }
 
-// Plantarflexion aim: direction ⊥ shin toward ground. When shin ‖ ground
-// (standing), fall back to torso forward so standing feet stay flat.
+// Plantarflexion aim: direction ⊥ shin toward ground. Near-vertical shins
+// (standing) must return a stable torso-forward — a tiny cross product from
+// forward/back noise would otherwise flip between ±torsoFwd (~180° snap).
 Ogre::Vector3 plantarFlexAim(const Ogre::Vector3& shin,
                              const Ogre::Vector3& groundDown,
                              const Ogre::Vector3& torsoFwd)
 {
+    Ogre::Vector3 f = torsoFwd;
+    if (f.squaredLength() > 1e-12f)
+        f.normalise();
+    else
+        f = Ogre::Vector3::UNIT_Z;
+
     Ogre::Vector3 s = shin;
     if (s.squaredLength() < 1e-12f)
-        return torsoFwd;
+        return f;
     s.normalise();
     Ogre::Vector3 g = groundDown;
     if (g.squaredLength() < 1e-12f)
         g = -Ogre::Vector3::UNIT_Y;
     else
         g.normalise();
-    Ogre::Vector3 axis = s.crossProduct(g);
-    if (axis.squaredLength() < 1e-8f) {
-        Ogre::Vector3 f = torsoFwd;
-        if (f.squaredLength() < 1e-12f)
-            return g;
-        f.normalise();
+
+    // |shin · ground| ≈ 1 → standing; prefer torso forward (no noisy cross).
+    const float align = std::abs(s.dotProduct(g));
+    if (align > 0.92f)
         return f;
-    }
-    return axis.crossProduct(s).normalisedCopy();
+
+    Ogre::Vector3 axis = s.crossProduct(g);
+    if (axis.squaredLength() < 1e-8f)
+        return f;
+    Ogre::Vector3 plantar = axis.crossProduct(s);
+    if (plantar.squaredLength() < 1e-12f)
+        return f;
+    plantar.normalise();
+    // Still mostly upright: keep the hemisphere toward torso forward so a
+    // shallow lean cannot pick −torsoFwd from noise.
+    if (align > 0.7f && plantar.dotProduct(f) < 0.f)
+        plantar = -plantar;
+    return plantar;
 }
 
 // Foot aim in canonical (+Y up) space. Never returns the shin — that is what
@@ -2953,10 +2969,10 @@ BodyRetargeter::evaluateFrame(
                     haveLmAim && dref.dotProduct(dsLeg) > 0.9995f;
                 const Ogre::Vector3 torsoFwd =
                     (CtInv * Ogre::Vector3::UNIT_Z).normalisedCopy();
-                // Thighs/shins: wide cone for high knees. Feet: allow a full
-                // plantar swing from the standing toe aim down toward ground.
+                // Keep the #957 115° thigh/shin clamp (stops antiparallel
+                // high-knee flips). Feet need ~90° from standing toe→down.
                 const float kMaxLegSwing =
-                    (isFootRole ? 100.f : 140.f) * (Ogre::Math::PI / 180.f);
+                    (isFootRole ? 100.f : 115.f) * (Ogre::Math::PI / 180.f);
                 // Never drive Foot from PoseIK foot quats (often unresolved or
                 // shin-derived).
                 const bool allowLegQuat = legQuatResolved && !isFootRole;
