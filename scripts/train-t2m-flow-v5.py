@@ -97,10 +97,10 @@ def d6_to_quat(d):
 # Canonical parent chain + rest directions, mirroring prep-t2m-v5/v6 exactly.
 PAR_CANON = [-1, 0, 1, 2, 3, 4, 2, 6, 7, 8, 2, 10, 11, 12,
              0, 14, 15, 16, 0, 18, 19, 20]
-DIR_CANON = [
+DIR_CANON = [                       # keep in sync with prep-t2m-v5.D_CANON
     [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
-    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
-    [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
+    [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],       # LEFT arm = +X (#837)
+    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],   # RIGHT arm = -X
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
 ]
@@ -134,6 +134,34 @@ def fk_pos(q, role, dirs):
 def _centred_z(p):
     z = p[..., 2]
     return z - z.mean(dim=1, keepdim=True)
+
+
+def spine_twist_penalty(q):
+    """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
+
+    The phase term alone is satisfiable by a DEGENERATE shortcut: rotate the
+    torso ~180 deg so the existing swing reads as contralateral. Measured at
+    --phase-weight 0.15 without this guard: hip->chest twist went to 170 deg
+    (data 6.3 deg, v6.2 6.7 deg) — the user-visible "walk got all twisted".
+    Penalising the yaw closes that escape route so the only way to earn the
+    phase reward is to actually fix limb timing.
+    """
+    def conj(a):
+        return torch.cat([-a[..., :3], a[..., 3:]], -1)
+
+    def mul(a, b):
+        ax, ay, az, aw = a.unbind(-1)
+        bx, by, bz, bw = b.unbind(-1)
+        return torch.stack([aw * bx + ax * bw + ay * bz - az * by,
+                            aw * by - ax * bz + ay * bw + az * bx,
+                            aw * bz + ax * by - ay * bx + az * bw,
+                            aw * bw - ax * bx - ay * by - az * bz], -1)
+
+    rel = mul(conj(q[:, :, 0]), q[:, :, 2])          # hip -> chest
+    yaw = 2.0 * torch.atan2(rel[..., 1], rel[..., 3])
+    # wrap to [-pi, pi] so a 180 deg cheat is maximally penalised
+    yaw = torch.atan2(torch.sin(yaw), torch.cos(yaw))
+    return yaw.abs().mean(dim=1)
 
 
 def gait_phase_corr(q, dirs):
@@ -270,6 +298,10 @@ def main():
                          "(#837 orientation correctness). 0 = off. Applied to "
                          "LOCOMOTION actions only, on the reconstructed clean "
                          "sample. 0.05-0.2 is a sane range.")
+    ap.add_argument("--twist-weight", type=float, default=0.5,
+                    help="weight of the hip->chest yaw penalty that stops the "
+                         "phase loss from cheating by rotating the torso 180 "
+                         "deg. Only active when --phase-weight > 0.")
     ap.add_argument("--phase-actions", default="walk,run,march",
                     help="comma list the phase loss applies to")
     ap.add_argument("--resume", action="store_true",
@@ -378,8 +410,14 @@ def main():
                 denom = g.sum().clamp_min(1.0)
                 # hinge: only penalise below a firm-but-not-saturating target,
                 # so well-phased samples are left alone
+                # anatomy guard: free below ~20 deg of hip->chest yaw (the
+                # data sits at ~6 deg), then linearly penalised.
+                tw = spine_twist_penalty(q_hat)
+                tw_pen = (tw - 0.35).clamp_min(0.0)
                 loss = loss + a.phase_weight * (
                     (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
+                loss = loss + a.twist_weight * (
+                    (g * tw_pen).sum() / denom)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)

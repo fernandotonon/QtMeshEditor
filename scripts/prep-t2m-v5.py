@@ -79,10 +79,22 @@ for _c, _p in enumerate(PARENT):     # chain child = FIRST child (hip→abdomen,
 
 # FIXED canonical T-pose bone directions D (canonical axes: +Y up, +Z fwd,
 # +X left — the CMU frame convention every dump is normalized into).
+# CHIRALITY FIX (#837): roles 6-9 are the LEFT arm chain and 10-13 the RIGHT,
+# and the documented convention above (and AnimationMerger.cpp: "canonical axes
+# X=left, Y=up, Z=forward" / "canonical left joints expect +X") puts left on +X.
+# The table previously had left on -X and right on +X — inverted. That made every
+# clip's shoulder-derived forward point -Z while the runtime treats clips as
+# +Z-facing, so `detectBackwardFacing` compensated with a whole-clip 180 yaw:
+# the BODY then faced the right way but the LIMBS still moved backwards
+# (user-reported: "faces the camera, limbs move as if facing back").
+# Measured on the v6.2 cache, stance-foot travel vs the body's own forward:
+#   before  walk -0.209 (40% forward)  run -0.785 (7%)   march -0.334 (32%)
+#   after   walk +0.209 (60% forward)  run +0.785 (93%)  march +0.334 (68%)
+# An exact sign inversion — the signature of a swapped-chirality frame.
 D_CANON = np.array([
     [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],
-    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
     [1, 0, 0],  [1, 0, 0],  [1, 0, 0],  [1, 0, 0],
+    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
 ], np.float32)
