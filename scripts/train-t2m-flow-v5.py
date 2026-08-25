@@ -136,6 +136,39 @@ def _centred_z(p):
     return z - z.mean(dim=1, keepdim=True)
 
 
+def travel_forward_torch(q, dirs):
+    """dot(direction of travel, body forward), differentiable, per sample.
+
+    Same quantity as prep-t2m-v6.travel_forward and the eval: travel is
+    inferred from the STANCE (slower) foot, which drifts backward while the
+    body moves forward. Forward is (Lshoulder - Rshoulder) x up.
+
+    Even with a 100%-forward training set the model sat at ~50% forward
+    (measured at ep40 with foot motion at 73% of the data's magnitude, so this
+    is a real direction ambiguity and not measurement noise). Flow matching has
+    no term tying the emitted gait to a travel direction, so this supervises it
+    directly — the same reasoning as the gait-phase hinge.
+    """
+    lsh = fk_pos(q, 7, dirs)
+    rsh = fk_pos(q, 11, dirs)
+    side = F.normalize(lsh - rsh, dim=-1, eps=1e-6)
+    up = torch.zeros_like(side)
+    up[..., 1] = 1.0
+    fwd = F.normalize(torch.cross(side, up, dim=-1), dim=-1, eps=1e-6)
+    fwd = F.normalize(fwd.mean(dim=1), dim=-1, eps=1e-6)          # [B,3]
+
+    la = fk_pos(q, 17, dirs)
+    ra = fk_pos(q, 21, dirs)
+    vl = la[:, 1:] - la[:, :-1]
+    vr = ra[:, 1:] - ra[:, :-1]
+    sl = vl.norm(dim=-1, keepdim=True)
+    sr = vr.norm(dim=-1, keepdim=True)
+    v = torch.where(sl < sr, vl, vr)                              # stance foot
+    travel = -v.mean(dim=1)                                       # [B,3]
+    travel = F.normalize(travel, dim=-1, eps=1e-6)
+    return (travel * fwd).sum(-1)                                 # [B] in [-1,1]
+
+
 def spine_twist_penalty(q):
     """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
 
@@ -298,6 +331,10 @@ def main():
                          "(#837 orientation correctness). 0 = off. Applied to "
                          "LOCOMOTION actions only, on the reconstructed clean "
                          "sample. 0.05-0.2 is a sane range.")
+    ap.add_argument("--travel-weight", type=float, default=0.0,
+                    help="weight of the travel-DIRECTION hinge: the body must "
+                         "move along its own forward axis (#837). Locomotion "
+                         "rows only. 0 = off; 0.1-0.3 is a sane range.")
     ap.add_argument("--twist-weight", type=float, default=0.5,
                     help="weight of the hip->chest yaw penalty that stops the "
                          "phase loss from cheating by rotating the torso 180 "
@@ -418,6 +455,11 @@ def main():
                     (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
                 loss = loss + a.twist_weight * (
                     (g * tw_pen).sum() / denom)
+                if a.travel_weight > 0:
+                    tv = travel_forward_torch(q_hat, dirs_t)
+                    # hinge toward the data's level (~+0.75); no reward above it
+                    loss = loss + a.travel_weight * (
+                        (g * (0.5 - tv).clamp_min(0.0)).sum() / denom)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
