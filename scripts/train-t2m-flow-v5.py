@@ -169,6 +169,25 @@ def travel_forward_torch(q, dirs):
     return (travel * fwd).sum(-1)                                 # [B] in [-1,1]
 
 
+def amplitude_excess(q, dirs):
+    """How far the ankle/wrist fore-aft excursion EXCEEDS human range.
+
+    The phase + travel hinges reward motion and nothing bounded it, so the
+    model over-drove the limbs: measured stride 3.46 and armSwing 3.73 against
+    real Mixamo walk values of 0.765 and 1.718 - rendering as a knee-to-chest
+    exaggerated march instead of a walk. This penalises only the EXCESS above
+    generous ceilings, so normal motion is untouched.
+    """
+    def pk(role):
+        z = fk_pos(q, role, dirs)[..., 2]
+        return z.max(dim=1).values - z.min(dim=1).values
+
+    stride = 0.5 * (pk(17) + pk(21))
+    swing = 0.5 * (pk(9) + pk(13))
+    # ceilings ~2x the real-walk values, so only true over-drive is punished
+    return (stride - 1.6).clamp_min(0.0) + (swing - 3.0).clamp_min(0.0)
+
+
 def spine_twist_penalty(q):
     """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
 
@@ -335,6 +354,11 @@ def main():
                     help="weight of the travel-DIRECTION hinge: the body must "
                          "move along its own forward axis (#837). Locomotion "
                          "rows only. 0 = off; 0.1-0.3 is a sane range.")
+    ap.add_argument("--amp-weight", type=float, default=0.0,
+                    help="penalise limb excursion ABOVE human range (#837): "
+                         "the phase/travel hinges reward motion and otherwise "
+                         "over-drive the legs into a knee-to-chest march. "
+                         "0 = off; 0.3 is a sane start.")
     ap.add_argument("--twist-weight", type=float, default=0.5,
                     help="weight of the hip->chest yaw penalty that stops the "
                          "phase loss from cheating by rotating the torso 180 "
@@ -455,6 +479,10 @@ def main():
                     (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
                 loss = loss + a.twist_weight * (
                     (g * tw_pen).sum() / denom)
+                if a.amp_weight > 0:
+                    amp = amplitude_excess(q_hat, dirs_t)
+                    loss = loss + a.amp_weight * (
+                        (g * amp).sum() / denom)
                 if a.travel_weight > 0:
                     tv = travel_forward_torch(q_hat, dirs_t)
                     # hinge toward the data's level (~+0.75); no reward above it
