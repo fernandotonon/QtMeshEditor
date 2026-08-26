@@ -79,22 +79,23 @@ for _c, _p in enumerate(PARENT):     # chain child = FIRST child (hip→abdomen,
 
 # FIXED canonical T-pose bone directions D (canonical axes: +Y up, +Z fwd,
 # +X left — the CMU frame convention every dump is normalized into).
-# CHIRALITY FIX (#837): roles 6-9 are the LEFT arm chain and 10-13 the RIGHT,
-# and the documented convention above (and AnimationMerger.cpp: "canonical axes
-# X=left, Y=up, Z=forward" / "canonical left joints expect +X") puts left on +X.
-# The table previously had left on -X and right on +X — inverted. That made every
-# clip's shoulder-derived forward point -Z while the runtime treats clips as
-# +Z-facing, so `detectBackwardFacing` compensated with a whole-clip 180 yaw:
-# the BODY then faced the right way but the LIMBS still moved backwards
-# (user-reported: "faces the camera, limbs move as if facing back").
-# Measured on the v6.2 cache, stance-foot travel vs the body's own forward:
-#   before  walk -0.209 (40% forward)  run -0.785 (7%)   march -0.334 (32%)
-#   after   walk +0.209 (60% forward)  run +0.785 (93%)  march +0.334 (68%)
-# An exact sign inversion — the signature of a swapped-chirality frame.
+# ROLE ORDER (AnimationMerger.cpp kParentCanon comment — do NOT re-derive this
+# from the "X=left" axis note, which describes the AXES, not the role order):
+#   0-5   hip, abdomen, chest, neck, neck1, head
+#   6-9   RIGHT collar, shoulder, elbow, hand      <-- RIGHT side, so -X
+#   10-13 LEFT  collar, shoulder, elbow, hand      <-- LEFT  side, so +X
+#   14-17 RIGHT buttock, hip, knee, foot
+#   18-21 LEFT  buttock, hip, knee, foot
+# Confirmed independently by compensateCanonicalHandedness(), which reads
+# `lx = worldXForCanon(19)` (LEFT leg) vs `rx = worldXForCanon(15)` (RIGHT leg).
+# A previous "chirality fix" swapped 6-9 with 10-13 on the false premise that
+# 6-9 were the left arm; that INVERTED an already-correct table and produced a
+# ~119 deg shoulder-vs-hip yaw in the cache (real gait counter-rotates 10-20),
+# i.e. the anatomically twisted torso the user saw. Reverted.
 D_CANON = np.array([
     [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],
-    [1, 0, 0],  [1, 0, 0],  [1, 0, 0],  [1, 0, 0],
     [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
+    [1, 0, 0],  [1, 0, 0],  [1, 0, 0],  [1, 0, 0],
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
     [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
 ], np.float32)
