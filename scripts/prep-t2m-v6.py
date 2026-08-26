@@ -59,6 +59,9 @@ for a, b in LR:
     MIRROR_PERM[a], MIRROR_PERM[b] = b, a
 
 LOCOMOTION = {"walk", "run", "march"}
+# actions whose real-world joint speed exceeds the walk-tuned energy ceiling
+FAST_ACTIONS = {"run", "march", "jump", "kick", "punch", "boxing", "attack",
+                "throw", "dance"}
 # minimum dot(travel, body-forward) for a locomotion window to be kept
 MIN_TRAVEL_FORWARD = 0.15
 HORIZONTAL_OK = {"death", "crawl", "roll", "swim", "fall", "sleep", "sit"}
@@ -160,10 +163,16 @@ def fk_pos(w, role):
 
 def window_quality(action, w, valid):
     """True when the window meets the library curation bar."""
-    # energy band — mean joint rotation speed (rad/frame)
+    # Energy band — mean joint rotation speed (rad/frame). The upper bound is
+    # ACTION-AWARE: a real Mixamo run measures 0.187 and a real walk 0.059, so
+    # the single 0.11 ceiling (tuned on walk-dominated data) systematically
+    # excluded genuine running — 5 of the 12 curated `run` clips died on it
+    # (0.13-0.22), which is why run trained on 24-36 windows and rendered as a
+    # gentle walk. Fast actions get headroom; walk keeps the tight bound.
     dq = np.abs((w[1:] * w[:-1]).sum(-1)).clip(0, 1)
     e = float((2 * np.arccos(dq)).mean())
-    if not (0.004 <= e <= 0.11):
+    hi = 0.26 if action in FAST_ACTIONS else 0.11
+    if not (0.004 <= e <= hi):
         return False
     if action in HORIZONTAL_OK:
         return True
@@ -186,12 +195,26 @@ def window_quality(action, w, valid):
         # sideways. 59% of raw CMU walk windows are splayed/side-stepping
         # (measured fwd/side < 1.5) — the model faithfully learned that
         # majority and walked sideways. Require a clean front-to-back stride.
-        if valid[17] and valid[21] and foot_travel_ratio(w) < 2.0:
+        # Stride-directionality gate: catches splayed/sideways walking. EXEMPT
+        # march — marching lifts the knees in place, so its fore/aft travel is
+        # legitimately low (CMU march windows: median ratio 1.56, only 36% clear
+        # 2.0), and applying a walk gate to it discarded 64% of the data and
+        # left march with 136 windows.
+        if (action != "march" and valid[17] and valid[21]
+                and foot_travel_ratio(w) < 2.0):
             return False
         # Travel-direction gate (v6.4): drop windows that move BACKWARD
         # relative to the body's own forward. See travel_forward().
+        #
+        # The threshold is RELAXED for the data-poor actions. At 0.15 the gate
+        # left run with 24 windows and march 132 (from 192/308), and the ep45
+        # renders showed run and march too gentle to distinguish from a walk —
+        # the sampler cannot manufacture variety from 24 windows. Walk has 2704
+        # and can afford the strict gate; for run/march, merely NOT going
+        # backward (> 0) is the useful signal.
         if valid[7] and valid[11] and valid[17] and valid[21]:
-            if travel_forward(w) < MIN_TRAVEL_FORWARD:
+            floor = MIN_TRAVEL_FORWARD if action == "walk" else 0.0
+            if travel_forward(w) < floor:
                 return False
     return True
 
@@ -274,8 +297,19 @@ def main():
 
     def windows(action, cq, valid):
         nF = cq.shape[0]
+        # Admit clips shorter than T/2 WHEN THEY LOOP. Game run cycles are short
+        # loops: 11 of the 12 curated `run` clips are 20-27 frames, and the old
+        # T//2 (30-frame) floor discarded them before the cycle-repeat below
+        # could use them — leaving run with 24 training windows and a render too
+        # gentle to tell apart from a walk. Measured: 10 of those 11 loop
+        # cleanly (cyc <= 0.24, most exactly 0.000), so repeating them is sound.
+        # Non-looping short clips are still rejected (their repeat would jump).
         if nF < T // 2:
-            return
+            if nF < 16:
+                return
+            dq0 = np.abs((cq[-1] * cq[0]).sum(-1)).clip(0, 1)
+            if float((2 * np.arccos(dq0)).mean()) >= 0.25:
+                return
         if nF < T:
             dq = np.abs((cq[-1] * cq[0]).sum(-1)).clip(0, 1)
             cyc = float((2 * np.arccos(dq)).mean()) < 0.25
