@@ -188,6 +188,28 @@ def amplitude_excess(q, dirs):
     return (stride - 1.6).clamp_min(0.0) + (swing - 3.0).clamp_min(0.0)
 
 
+def jitter_excess(q):
+    """Per-frame angular speed ABOVE the training band = high-frequency jitter.
+
+    THE defect that made every amplitude metric lie. The ep90 model emitted a
+    mean joint speed of 0.266 rad/frame against the data's 0.0557 (band
+    0.032-0.099), and its worst joint (role 21) ran at 1.416 rad/frame — about
+    81 deg per frame, physically impossible. The retarget's smoothing then
+    damped it to 0.041, so the RENDER was nearly static while the canonical
+    ankle "scissor" measured LARGER than the real walk: the metrics were
+    reading jitter amplitude, not stride.
+
+    Penalise the mean per-joint speed above a ceiling just past the data band,
+    plus the worst single joint, which is where the impossible spikes live.
+    """
+    dot = (q[:, 1:] * q[:, :-1]).sum(-1).abs().clamp(0.0, 1.0)
+    speed = 2.0 * torch.acos(dot.clamp(max=1.0 - 1e-7))     # [B,T-1,J]
+    per_joint = speed.mean(dim=1)                            # [B,J]
+    mean_excess = (per_joint.mean(dim=-1) - 0.12).clamp_min(0.0)
+    worst_excess = (per_joint.max(dim=-1).values - 0.40).clamp_min(0.0)
+    return mean_excess + worst_excess
+
+
 def spine_twist_penalty(q):
     """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
 
@@ -354,6 +376,10 @@ def main():
                     help="weight of the travel-DIRECTION hinge: the body must "
                          "move along its own forward axis (#837). Locomotion "
                          "rows only. 0 = off; 0.1-0.3 is a sane range.")
+    ap.add_argument("--jitter-weight", type=float, default=0.0,
+                    help="penalise per-frame angular speed above the data band "
+                         "(#837). Applied to ALL actions — jitter is never "
+                         "wanted. 0 = off; 1.0 is a sane start.")
     ap.add_argument("--amp-weight", type=float, default=0.0,
                     help="penalise limb excursion ABOVE human range (#837): "
                          "the phase/travel hinges reward motion and otherwise "
@@ -458,6 +484,10 @@ def main():
             tgt = xb - x0
             mask = mb[:, None, :]                       # [B,1,C6]
             loss = ((v - tgt) ** 2 * mask).sum() / mask.sum() / T
+            if a.jitter_weight > 0:
+                q_all = d6_to_quat(
+                    (xt + (1.0 - t[:, None, None]) * v).reshape(-1, T, J, D6))
+                loss = loss + a.jitter_weight * jitter_excess(q_all).mean()
             if a.phase_weight > 0:
                 # Flow matching predicts a VELOCITY, so reconstruct the clean
                 # sample the model implies at this t before measuring gait:
