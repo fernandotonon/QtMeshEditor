@@ -64,6 +64,13 @@ FAST_ACTIONS = {"run", "march", "jump", "kick", "punch", "boxing", "attack",
                 "throw", "dance"}
 # minimum dot(travel, body-forward) for a locomotion window to be kept
 MIN_TRAVEL_FORWARD = 0.15
+# minimum ankle-scissor autocorrelation for a locomotion window (see
+# gait_periodicity); real Mixamo Walk.fbx scores 0.968
+MIN_PERIODICITY = 0.6
+# max tolerated BACKWARD bend (degrees) for the knee/elbow hinges; small
+# positive slack absorbs canonicalisation noise near full extension
+MAX_HYPEREXTEND_KNEE = 20.0
+MAX_HYPEREXTEND_ELBOW = 35.0
 HORIZONTAL_OK = {"death", "crawl", "roll", "swim", "fall", "sleep", "sit"}
 
 # Source-exclusion (v6.2): some corpus characters carry a deliberately
@@ -161,6 +168,105 @@ def fk_pos(w, role):
     return p
 
 
+def gait_periodicity(w):
+    """Strongest autocorrelation of the ankle-scissor signal at lag >= 8.
+
+    THE quality the other gates cannot see. A real gait is strongly cyclic —
+    real Mixamo Walk.fbx scores 0.968 — but every other metric here (energy,
+    stride ratio, travel, uprightness) is an average or a correlation that
+    NON-cyclic twitching satisfies just as well. The v6.8 model measured
+    healthy on all of them yet rendered as trembling in place, and its
+    periodicity was 0.26 against a data median of 0.446.
+
+    1.0 = perfect cycle, 0 = no repeat structure.
+    """
+    la = fk_pos(w, 17)[:, 2]
+    ra = fk_pos(w, 21)[:, 2]
+    sig = la - ra
+    sig = sig - sig.mean()
+    sd = float(sig.std())
+    if sd < 1e-6:
+        return 0.0
+    sig = sig / sd
+    n = len(sig)
+    best = 0.0
+    for lag in range(8, max(9, n // 2)):
+        c = float((sig[:-lag] * sig[lag:]).mean())
+        if c > best:
+            best = c
+    return best
+
+
+def joint_hinge_signs(w):
+    """(worst knee, worst elbow) hinge angle, degrees. NOT CURRENTLY GATED ON.
+
+    Requested as a guard against knees/elbows bending backwards, but it does
+    not work in the canonical frame and is left here documented rather than
+    silently enabled. Two sign conventions were tried and both FAILED against
+    real Mixamo clips:
+      - sign from the lateral axis (shoulder-left minus shoulder-right): that
+        axis flips between rigs, so 90% of the corpus read POSITIVE while the
+        real clip read negative — the gate would have dropped 90% of the data
+        (100% of march) on a convention mismatch alone.
+      - sign from "the shin swings backward relative to the thigh": false,
+        because mid-stride the shin legitimately swings AHEAD of the thigh; the
+        real walk then scored 75.7 and the real run 131.5, i.e. rejected.
+    An unsigned bound cannot work either: a real knee flexes 7..76 deg on a
+    walk and to 131 deg on a run, so "bent 75 forward" and "bent 75 backward"
+    are the same magnitude. A correct guard needs each rig's own bind-pose
+    hinge AXIS, which the canonical representation does not carry — it would
+    have to be computed in AnimationMerger against the target skeleton at
+    retarget time, not here.
+
+    Knees and elbows are HINGES — they bend one way only. A negative value is
+    natural flexion in this frame and a positive one is HYPEREXTENSION (the
+    joint bending backwards), which reads as a broken limb.
+
+    Convention measured on real Mixamo clips: knees run -75..-7 deg on a walk
+    and to -131 deg on a run (always negative = flexion); elbows sit near zero
+    while the arms hang. So the guard is on POSITIVE knee/elbow angles.
+    """
+    def wdir(role):
+        d = qrot(w[:, role], np.broadcast_to(D_CANON[role], (len(w), 3)))
+        return d / (np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9)
+
+    # RIG-INDEPENDENT sign. A first cut took the sign from the lateral axis
+    # (shoulder-left minus shoulder-right), but that axis flips between rigs:
+    # 90% of the corpus scored a POSITIVE worst-knee while the real Mixamo clip
+    # scored negative, so the gate would have rejected 90% of the data (100% of
+    # march) purely from a convention mismatch.
+    #
+    # Anatomy gives a frame-free reference instead: a knee flexes so the SHIN
+    # swings BACKWARD relative to the thigh, i.e. the lower segment gains a
+    # component OPPOSITE the body's forward direction. Same for the forearm at
+    # the elbow. Forward comes from the shoulder line crossed with up, which is
+    # sign-stable because it is defined by the canonical +Y, not by which
+    # shoulder is "left".
+    up = np.array([0, 1, 0], np.float32)
+    lsh = qrot(w[:, 11], np.broadcast_to(D_CANON[11], (len(w), 3)))
+    rsh = qrot(w[:, 7], np.broadcast_to(D_CANON[7], (len(w), 3)))
+    lat = lsh - rsh
+    lat = lat / (np.linalg.norm(lat, axis=-1, keepdims=True) + 1e-9)
+    fwd = np.cross(lat, np.broadcast_to(up, lat.shape))
+    fwd = fwd / (np.linalg.norm(fwd, axis=-1, keepdims=True) + 1e-9)
+
+    def hyperextension(upper, lower):
+        """Degrees the hinge opens the WRONG way (0 when flexing naturally)."""
+        u, l = wdir(upper), wdir(lower)
+        ang = np.degrees(np.arccos(np.clip((u * l).sum(-1), -1, 1)))
+        # component of the lower segment along +forward, relative to the upper:
+        # flexion moves it backward (negative), hyperextension forward.
+        rel = ((l - u) * fwd).sum(-1)
+        # only count the angle when the joint opens forward
+        return np.where(rel > 0.05, ang, 0.0)
+
+    knees = max(float(hyperextension(19, 20).max()),
+                float(hyperextension(15, 16).max()))
+    elbows = max(float(hyperextension(12, 13).max()),
+                 float(hyperextension(8, 9).max()))
+    return knees, elbows
+
+
 def window_quality(action, w, valid):
     """True when the window meets the library curation bar."""
     # Energy band — mean joint rotation speed (rad/frame). The upper bound is
@@ -202,6 +308,12 @@ def window_quality(action, w, valid):
         # left march with 136 windows.
         if (action != "march" and valid[17] and valid[21]
                 and foot_travel_ratio(w) < 2.0):
+            return False
+        # Periodicity gate (v7.3): locomotion must actually CYCLE. 814 of the
+        # cache's locomotion windows clear 0.6 (walk 692/2704, run 43/76,
+        # march 79/340); the rest teach non-cyclic motion, which is what the
+        # model reproduced as trembling.
+        if valid[17] and valid[21] and gait_periodicity(w) < MIN_PERIODICITY:
             return False
         # Travel-direction gate (v6.4): drop windows that move BACKWARD
         # relative to the body's own forward. See travel_forward().
