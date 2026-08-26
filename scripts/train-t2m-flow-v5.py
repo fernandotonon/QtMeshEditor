@@ -209,7 +209,7 @@ def amplitude_excess(q, dirs, lo_scale=None):
     return over + under
 
 
-def jitter_excess(q):
+def jitter_excess(q, hi=None, lo=None):
     """Per-frame angular speed ABOVE the training band = high-frequency jitter.
 
     THE defect that made every amplitude metric lie. The ep90 model emitted a
@@ -233,7 +233,15 @@ def jitter_excess(q):
     # to pull the speed TOWARD the data band (walk mean 0.056, real Walk.fbx
     # 0.059) rather than merely below a ceiling.
     m = per_joint.mean(dim=-1)
-    mean_excess = (m - 0.10).clamp_min(0.0) + (0.045 - m).clamp_min(0.0) * 4.0
+    # The band is PER-SAMPLE so it can be action-aware. A single band is
+    # action-blind, and after the run/march data recovery the cache's overall
+    # energy rose 0.0429 -> 0.0550 (p90 0.078 -> 0.113) while WALK-only energy
+    # stayed at 0.0510 — the faster fast-action windows pull the shared model
+    # and walk inherits the speed, which is what degraded the v7.2 walk render.
+    hi_t = 0.10 if hi is None else hi
+    lo_t = 0.045 if lo is None else lo
+    mean_excess = ((m - hi_t).clamp_min(0.0)
+                   + (lo_t - m).clamp_min(0.0) * 4.0)
     worst_excess = (per_joint.max(dim=-1).values - 0.45).clamp_min(0.0)
     return mean_excess + worst_excess
 
@@ -448,6 +456,16 @@ def main():
     loco_mask_v = torch.zeros(V, device=dev)
     for i in loco_idx:
         loco_mask_v[i] = 1.0
+    # actions whose real joint speed exceeds the walk band (mirrors
+    # prep-t2m-v6.FAST_ACTIONS)
+    # Measured mean-speed medians on the v72 cache: run 0.110, dance 0.095,
+    # punch 0.064, walk 0.055, march 0.050, jump 0.042. Only run and dance
+    # genuinely need a raised ceiling; march/jump are NOT fast by this metric.
+    fast_names = {"run", "dance"}
+    fast_mask_v = torch.zeros(V, device=dev)
+    for i, w in enumerate(vocab):
+        if w in fast_names:
+            fast_mask_v[i] = 1.0
     if a.phase_weight > 0:
         print(f"gait-phase loss ON (w={a.phase_weight}) for "
               f"{[vocab[i] for i in loco_idx]}", flush=True)
@@ -515,7 +533,19 @@ def main():
             if a.jitter_weight > 0:
                 q_all = d6_to_quat(
                     (xt + (1.0 - t[:, None, None]) * v).reshape(-1, T, J, D6))
-                loss = loss + a.jitter_weight * jitter_excess(q_all).mean()
+                # per-sample band: fast actions may legitimately move ~2.5x a
+                # walk (real Mixamo run 0.187 vs walk 0.059)
+                # Bands are set from the DATA's per-action p95, measured on the
+                # v72 cache. Note march's mean speed (median 0.050) is close to
+                # WALK's (0.055) — marching in place is not fast by this measure,
+                # so lumping it with run and raising its FLOOR to 0.10 penalised
+                # 96% of real march windows. Only genuinely fast actions (run,
+                # dance) get the raised ceiling, and the floor stays low for all.
+                is_fast = (tb_raw * fast_mask_v).sum(-1).clamp(0, 1)
+                hi = 0.10 + is_fast * 0.12          # walk 0.10, fast 0.22
+                lo = torch.full_like(hi, 0.035)     # low floor for every action
+                loss = loss + a.jitter_weight * jitter_excess(
+                    q_all, hi=hi, lo=lo).mean()
             if a.phase_weight > 0:
                 # Flow matching predicts a VELOCITY, so reconstruct the clean
                 # sample the model implies at this t before measuring gait:
