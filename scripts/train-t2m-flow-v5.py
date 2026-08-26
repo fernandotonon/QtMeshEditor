@@ -450,6 +450,10 @@ def main():
                     help="penalise per-frame angular speed above the data band "
                          "(#837). Applied to ALL actions — jitter is never "
                          "wanted. 0 = off; 1.0 is a sane start.")
+    ap.add_argument("--loco-boost", type=float, default=1.0,
+                    help="multiply walk/run/march sampling weight (#837). The "
+                         "periodicity gate leaves them ~7%% of batches, so the "
+                         "gait losses barely reach any rows. 6.0 gives ~33%%.")
     ap.add_argument("--period-weight", type=float, default=0.0,
                     help="reward a periodic GAIT CYCLE on locomotion rows "
                          "(#837). Data gating alone does not produce one. "
@@ -520,6 +524,23 @@ def main():
     # kept falling. sqrt-tempering gives walk 16.1% and still leaves run 2.8%.
     freq = tk.sum(0)
     w = (tk @ (1.0 / np.maximum(freq, 1.0) ** a.balance_power)).astype(np.float64)
+    # LOCOMOTION BOOST. The periodicity gate shrank walk/run/march to 467/39/41
+    # windows of 19693 while the other 21 actions kept theirs, so locomotion was
+    # only 7.1% of sampled batches (~18 rows of 256) — the gait losses reach
+    # only those rows, so they were weak in practice no matter their weight.
+    # balance-power alone caps locomotion at 12.5% (3 of 24 actions at bp=1.0),
+    # which is still far too little for the three actions that matter here.
+    if a.loco_boost > 1.0:
+        loco_names = {"walk", "run", "march"}
+        li = [i for i, n in enumerate(vocab) if n in loco_names]
+        if li:
+            boost = np.ones(len(vocab), np.float64)
+            for i in li:
+                boost[i] = a.loco_boost
+            w = w * (tk @ boost)
+            sh = w[(tk[:, li].sum(1) > 0)].sum() / w.sum()
+            print(f"locomotion sampling share: {100 * sh:.1f}% "
+                  f"(boost x{a.loco_boost})", flush=True)
     sampler = torch.utils.data.WeightedRandomSampler(
         torch.from_numpy(w), num_samples=N, replacement=True)
     ds = torch.utils.data.TensorDataset(x1, m6, tok)
