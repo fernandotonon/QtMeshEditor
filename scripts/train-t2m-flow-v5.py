@@ -205,8 +205,15 @@ def jitter_excess(q):
     dot = (q[:, 1:] * q[:, :-1]).sum(-1).abs().clamp(0.0, 1.0)
     speed = 2.0 * torch.acos(dot.clamp(max=1.0 - 1e-7))     # [B,T-1,J]
     per_joint = speed.mean(dim=1)                            # [B,J]
-    mean_excess = (per_joint.mean(dim=-1) - 0.12).clamp_min(0.0)
-    worst_excess = (per_joint.max(dim=-1).values - 0.40).clamp_min(0.0)
+    # TWO-SIDED band, not a ceiling. A pure ceiling removes the jitter AND the
+    # motion with it: at ep30 speed fell 0.353 -> 0.227 and the render went
+    # smooth but nearly STATIC (legs barely separating, contra dropped
+    # 0.345 -> 0.284). Jitter and stride were entangled, so the objective has
+    # to pull the speed TOWARD the data band (walk mean 0.056, real Walk.fbx
+    # 0.059) rather than merely below a ceiling.
+    m = per_joint.mean(dim=-1)
+    mean_excess = (m - 0.10).clamp_min(0.0) + (0.045 - m).clamp_min(0.0) * 4.0
+    worst_excess = (per_joint.max(dim=-1).values - 0.45).clamp_min(0.0)
     return mean_excess + worst_excess
 
 
