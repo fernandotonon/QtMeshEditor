@@ -169,7 +169,7 @@ def travel_forward_torch(q, dirs):
     return (travel * fwd).sum(-1)                                 # [B] in [-1,1]
 
 
-def amplitude_excess(q, dirs):
+def amplitude_excess(q, dirs, lo_scale=None):
     """How far the ankle/wrist fore-aft excursion EXCEEDS human range.
 
     The phase + travel hinges reward motion and nothing bounded it, so the
@@ -184,8 +184,29 @@ def amplitude_excess(q, dirs):
 
     stride = 0.5 * (pk(17) + pk(21))
     swing = 0.5 * (pk(9) + pk(13))
-    # ceilings ~2x the real-walk values, so only true over-drive is punished
-    return (stride - 1.6).clamp_min(0.0) + (swing - 3.0).clamp_min(0.0)
+    # TWO-SIDED, like the speed band. A ceiling-only amplitude term contributes
+    # exactly 0.0 once the model is under it, so nothing defends the limbs from
+    # COLLAPSING: measured at v6.7 ep45 the jitter term was 80% of the guard
+    # loss (0.1446/0.181) while amp was 0.0000, and armSwing/stride fell
+    # 1.481/1.126 -> 0.894/0.690, i.e. BELOW the real walk's 1.718/0.765. The
+    # limbs were collateral damage of jitter pushing speed down. Real-walk
+    # values anchor the floors (stride 0.765, swing 1.718); floors are set just
+    # under them and weighted 2x so shrinking is punished harder than growing.
+    # Ceilings sit above the ALL-ACTION p99 (stride 3.33, swing 3.54) so real
+    # data is never penalised. The original 1.6 stride ceiling was BELOW the
+    # data's p95 of 2.969 — it was clipping legitimate motion across march,
+    # climb and kick, which contributed to the amplitude collapse.
+    over = (stride - 3.5).clamp_min(0.0) + (swing - 3.7).clamp_min(0.0)
+    # Floors calibrated to the TRAINING data's 5th percentile (walk stride 0.741,
+    # swing 0.809) — NOT to the reference Mixamo clip, whose swing (1.718) sits
+    # well above this corpus's median (1.052). Floors above the data would
+    # penalise legitimate windows: at swing floor 1.50, 67% of real walk windows
+    # scored a penalty.
+    st_floor = 0.70 * (1.0 if lo_scale is None else lo_scale)
+    sw_floor = 0.75 * (1.0 if lo_scale is None else lo_scale)
+    under = ((st_floor - stride).clamp_min(0.0)
+             + (sw_floor - swing).clamp_min(0.0)) * 2.0
+    return over + under
 
 
 def jitter_excess(q):
@@ -517,7 +538,19 @@ def main():
                 loss = loss + a.twist_weight * (
                     (g * tw_pen).sum() / denom)
                 if a.amp_weight > 0:
-                    amp = amplitude_excess(q_hat, dirs_t)
+                    # Floors are calibrated to WALK's data p5; march/run have
+                    # legitimately larger excursion (march stride p5 1.174 vs
+                    # walk 0.741), so a global floor penalised 81% of real march
+                    # windows. Apply the floor only to walk rows; the others
+                    # keep the over-drive ceiling.
+                    walk_i = vocab.index("walk") if "walk" in vocab else -1
+                    if walk_i >= 0:
+                        gw = tb_raw[:, walk_i].clamp(0, 1)
+                    else:
+                        gw = torch.zeros_like(g)
+                    amp_ceil = amplitude_excess(q_hat, dirs_t, lo_scale=0.0)
+                    amp_full = amplitude_excess(q_hat, dirs_t)
+                    amp = amp_ceil + gw * (amp_full - amp_ceil)
                     loss = loss + a.amp_weight * (
                         (g * amp).sum() / denom)
                 if a.travel_weight > 0:
