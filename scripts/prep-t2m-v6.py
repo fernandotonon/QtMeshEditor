@@ -436,10 +436,18 @@ def main():
                 gated[0] += 1
                 continue
             add(action, w, valid)
+            # Augmented copies must clear the SAME gates as the base window.
+            # They previously bypassed window_quality entirely, so 18% of the
+            # "periodicity-gated" walk windows were actually below the 0.6 bar
+            # (min 0.200) — retime() resamples the window and can break the
+            # cycle at its edges, which is exactly the property being gated on.
             mw, mv = mirror(w, valid)
-            add(action, mw, mv)
+            if window_quality(action, mw, mv):
+                add(action, mw, mv)
             for f in (0.85, 1.15):
-                add(action, retime(w, f), valid)
+                rw_ = retime(w, f)
+                if window_quality(action, rw_, valid):
+                    add(action, rw_, valid)
 
     if a.corpus:
         n = 0

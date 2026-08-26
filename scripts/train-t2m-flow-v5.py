@@ -246,6 +246,40 @@ def jitter_excess(q, hi=None, lo=None):
     return mean_excess + worst_excess
 
 
+def gait_aperiodicity(q, dirs):
+    """1 - (best autocorrelation of the ankle-scissor signal), differentiable.
+
+    The property NO other term can see. A real Mixamo walk autocorrelates at
+    0.968; the v6.8 model measured 0.264 and rendered as trembling in place
+    while scoring healthy on travel, contra, twist, amplitude and speed — all
+    of which are averages or correlations that non-cyclic twitching satisfies.
+
+    Gating the DATA to >= 0.6 periodicity was not enough on its own: the model
+    still emitted 0.247-0.293, i.e. no better than before. Same lesson as travel
+    direction — flow matching does not inherit a property just because the data
+    has it. If it is not in the loss, it is not in the output.
+
+    Autocorrelation is evaluated at a fixed lag set spanning plausible gait
+    periods (10..29 frames at 30 fps = 0.33..0.97 s) and the best is taken, so
+    the term is agnostic to cadence.
+    """
+    la = fk_pos(q, 17, dirs)[..., 2]
+    ra = fk_pos(q, 21, dirs)[..., 2]
+    sig = la - ra
+    sig = sig - sig.mean(dim=1, keepdim=True)
+    sig = sig / (sig.std(dim=1, keepdim=True) + 1e-4)
+    T = sig.shape[1]
+    best = torch.full((sig.shape[0],), -1.0, device=q.device, dtype=sig.dtype)
+    # Lag range must MATCH prep-t2m-v6.gait_periodicity (8 .. T//2), otherwise
+    # the loss disagrees with the gate that selected the data: a narrower
+    # 10..29 window scored the >=0.6-periodic training set at 0.43-0.51
+    # aperiodicity because it missed the slower cadences.
+    for lag in range(8, max(9, T // 2)):
+        c = (sig[:, :-lag] * sig[:, lag:]).mean(dim=1)
+        best = torch.maximum(best, c)
+    return (1.0 - best).clamp_min(0.0)
+
+
 def spine_twist_penalty(q):
     """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
 
@@ -416,6 +450,10 @@ def main():
                     help="penalise per-frame angular speed above the data band "
                          "(#837). Applied to ALL actions — jitter is never "
                          "wanted. 0 = off; 1.0 is a sane start.")
+    ap.add_argument("--period-weight", type=float, default=0.0,
+                    help="reward a periodic GAIT CYCLE on locomotion rows "
+                         "(#837). Data gating alone does not produce one. "
+                         "0 = off; 0.5 is a sane start.")
     ap.add_argument("--amp-weight", type=float, default=0.0,
                     help="penalise limb excursion ABOVE human range (#837): "
                          "the phase/travel hinges reward motion and otherwise "
@@ -567,6 +605,10 @@ def main():
                     (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
                 loss = loss + a.twist_weight * (
                     (g * tw_pen).sum() / denom)
+                if a.period_weight > 0:
+                    ap = gait_aperiodicity(q_hat, dirs_t)
+                    loss = loss + a.period_weight * (
+                        (g * ap).sum() / denom)
                 if a.amp_weight > 0:
                     # Floors are calibrated to WALK's data p5; march/run have
                     # legitimately larger excursion (march stride p5 1.174 vs
