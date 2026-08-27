@@ -9,6 +9,10 @@
 #include <OgreKeyFrame.h>
 #include <QSet>
 #include <QMap>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStandardPaths>
 #include <QRegularExpression>
 #include <cctype>
 #include <unordered_map>
@@ -2043,12 +2047,46 @@ void AnimationMerger::debugDumpAnatomy(Ogre::Skeleton* skel,
     skel->_updateTransforms();
 }
 
+namespace {
+
+// Reads "yaw180" from the installed t2m vocab json, if present.
+// Returns 1 (flip), 0 (do not flip) or -1 (not declared).
+int declaredYaw180()
+{
+    static int cached = -2;
+    if (cached != -2) return cached;
+    cached = -1;
+    const QString path =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QLatin1String("/ai_models/motion/t2m-vocab.json");
+    QFile f(path);
+    if (f.open(QIODevice::ReadOnly)) {
+        const QJsonObject o =
+            QJsonDocument::fromJson(f.readAll()).object();
+        if (o.contains(QLatin1String("yaw180")))
+            cached = o.value(QLatin1String("yaw180")).toBool() ? 1 : 0;
+    }
+    return cached;
+}
+
+}  // namespace
+
 bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
 {
     // Escape hatch for exotic meshes where the foot-region heuristic guesses
     // wrong: QTMESH_T2M_YAW180=1 forces the flip, =0 disables it.
     const QByteArray force = qgetenv("QTMESH_T2M_YAW180");
     if (!force.isEmpty()) return force != "0";
+    // A MODEL-DECLARED flip wins over the geometry heuristic. The heuristic
+    // below reads the mesh's toe region, which is a property of the RIG alone —
+    // it therefore returns the same answer for every model, while different
+    // t2m generations can carry opposite canonical facing conventions and need
+    // opposite flips on the same mesh. Measured on the Rumba rig: the v7.7
+    // model's clip scores 0.535 rad from the real Mixamo walk unflipped and
+    // 0.371 flipped (below the 0.437 real-vs-real floor), i.e. the heuristic
+    // picks the wrong one. So let the vocab say, and fall back to geometry.
+    if (const int decl = declaredYaw180(); decl >= 0)
+        return decl != 0;
     if (!entity || !entity->hasSkeleton()) return false;
     Ogre::SkeletonInstance* skel = entity->getSkeleton();
     if (!skel) return false;
