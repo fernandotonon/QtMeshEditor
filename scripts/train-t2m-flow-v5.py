@@ -266,16 +266,22 @@ def gait_aperiodicity(q, dirs):
     la = fk_pos(q, 17, dirs)[..., 2]
     ra = fk_pos(q, 21, dirs)[..., 2]
     sig = la - ra
-    sig = sig - sig.mean(dim=1, keepdim=True)
-    sig = sig / (sig.std(dim=1, keepdim=True) + 1e-4)
     T = sig.shape[1]
     best = torch.full((sig.shape[0],), -1.0, device=q.device, dtype=sig.dtype)
     # Lag range must MATCH prep-t2m-v6.gait_periodicity (8 .. T//2), otherwise
     # the loss disagrees with the gate that selected the data: a narrower
     # 10..29 window scored the >=0.6-periodic training set at 0.43-0.51
     # aperiodicity because it missed the slower cadences.
-    for lag in range(8, max(9, T // 2)):
-        c = (sig[:, :-lag] * sig[:, lag:]).mean(dim=1)
+    # Match prep-t2m-v6's GAIT_LAG_MIN/MAX. Searching from lag 8 rewarded
+    # high-frequency wobble instead of a stride (see gait_periodicity).
+    # Pearson per overlap (bounded), matching prep-t2m-v6.gait_periodicity.
+    for lag in range(20, min(31, max(21, T // 2 + 1))):
+        a = sig[:, :-lag]
+        b = sig[:, lag:]
+        a = a - a.mean(dim=1, keepdim=True)
+        b = b - b.mean(dim=1, keepdim=True)
+        c = ((a * b).mean(dim=1)
+             / ((a.std(dim=1) * b.std(dim=1)) + 1e-4))
         best = torch.maximum(best, c)
     return (1.0 - best).clamp_min(0.0)
 
@@ -627,9 +633,16 @@ def main():
                 loss = loss + a.twist_weight * (
                     (g * tw_pen).sum() / denom)
                 if a.period_weight > 0:
-                    ap = gait_aperiodicity(q_hat, dirs_t)
-                    loss = loss + a.period_weight * (
-                        (g * ap).sum() / denom)
+                    # WALK rows only — see prep-t2m-v6's periodicity gate: the
+                    # real Mixamo run has no positive autocorrelation at any
+                    # lag, so demanding it of run/march asks for something real
+                    # running does not have.
+                    walk_j = vocab.index("walk") if "walk" in vocab else -1
+                    if walk_j >= 0:
+                        gp = tb_raw[:, walk_j].clamp(0, 1)
+                        ap = gait_aperiodicity(q_hat, dirs_t)
+                        loss = loss + a.period_weight * (
+                            (gp * ap).sum() / gp.sum().clamp_min(1.0))
                 if a.amp_weight > 0:
                     # Floors are calibrated to WALK's data p5; march/run have
                     # legitimately larger excursion (march stride p5 1.174 vs

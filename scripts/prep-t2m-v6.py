@@ -67,6 +67,9 @@ MIN_TRAVEL_FORWARD = 0.15
 # minimum ankle-scissor autocorrelation for a locomotion window (see
 # gait_periodicity); real Mixamo Walk.fbx scores 0.968
 MIN_PERIODICITY = 0.6
+# plausible gait-cycle lag window in frames at 30 fps (0.67 .. 1.0 s)
+GAIT_LAG_MIN = 20
+GAIT_LAG_MAX = 30
 # max tolerated BACKWARD bend (degrees) for the knee/elbow hinges; small
 # positive slack absorbs canonicalisation noise near full extension
 MAX_HYPEREXTEND_KNEE = 20.0
@@ -183,18 +186,32 @@ def gait_periodicity(w):
     la = fk_pos(w, 17)[:, 2]
     ra = fk_pos(w, 21)[:, 2]
     sig = la - ra
-    sig = sig - sig.mean()
-    sd = float(sig.std())
-    if sd < 1e-6:
-        return 0.0
-    sig = sig / sd
     n = len(sig)
-    best = 0.0
-    for lag in range(8, max(9, n // 2)):
-        c = float((sig[:-lag] * sig[lag:]).mean())
+    best = -1.0
+    # Search only PLAUSIBLE GAIT CADENCES. A lag floor of 8 frames (0.27 s) was
+    # a serious bug: the corpus's median best-lag came out at exactly 8, i.e.
+    # the gate was accepting high-frequency WOBBLE as "periodic" and the model
+    # dutifully learned it — the trembling the user reported. Restricted to
+    # 20..30 frames (0.67..1.0 s at 30 fps, one full stride) the real Mixamo
+    # walk scores 0.968 while the corpus median is -0.379: the data is
+    # ANTI-correlated at true gait cadence.
+    # Pearson correlation computed PER OVERLAP. Normalising by the whole
+    # window's std while averaging over the (n - lag)-sample overlap is not a
+    # correlation and is not bounded: it scored a model at 1.131, above the real
+    # walk's 0.968, because the signal happened to be larger inside the overlap.
+    # An unbounded score also lets a single large arc pass as a "cycle".
+    for lag in range(GAIT_LAG_MIN, min(GAIT_LAG_MAX + 1, n // 2 + 1)):
+        a = sig[:-lag]
+        b = sig[lag:]
+        a = a - a.mean()
+        b = b - b.mean()
+        da, db = float(a.std()), float(b.std())
+        if da < 1e-6 or db < 1e-6:
+            continue
+        c = float((a * b).mean() / (da * db))
         if c > best:
             best = c
-    return best
+    return max(best, 0.0)
 
 
 def joint_hinge_signs(w):
@@ -309,11 +326,14 @@ def window_quality(action, w, valid):
         if (action != "march" and valid[17] and valid[21]
                 and foot_travel_ratio(w) < 2.0):
             return False
-        # Periodicity gate (v7.3): locomotion must actually CYCLE. 814 of the
-        # cache's locomotion windows clear 0.6 (walk 692/2704, run 43/76,
-        # march 79/340); the rest teach non-cyclic motion, which is what the
-        # model reproduced as trembling.
-        if valid[17] and valid[21] and gait_periodicity(w) < MIN_PERIODICITY:
+        # Periodicity gate: WALK ONLY. A stride autocorrelates at 20-30 frames
+        # (real Mixamo Walk scores 0.968 there), but the real Mixamo RUNNING
+        # clip has NO positive autocorrelation at any lag in a 60-frame window —
+        # its best values are negative — so periodicity is a walk-specific
+        # property here, not a universal gait one. Applying it to run/march
+        # would reject real motion.
+        if (action == "walk" and valid[17] and valid[21]
+                and gait_periodicity(w) < MIN_PERIODICITY):
             return False
         # Travel-direction gate (v6.4): drop windows that move BACKWARD
         # relative to the body's own forward. See travel_forward().
