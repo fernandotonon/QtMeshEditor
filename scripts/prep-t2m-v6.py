@@ -496,6 +496,11 @@ def main():
     ap.add_argument("--T", type=int, default=60)
     ap.add_argument("--min-roles", type=int, default=12)
     ap.add_argument("--min-action-windows", type=int, default=16)
+    ap.add_argument("--library-repeat", type=int, default=1,
+                    help="emit each curated-library take N times (#837). The "
+                         "template clips face correctly and measure near real "
+                         "motion; repeating them stops the far larger CMU "
+                         "corpus from drowning them.")
     ap.add_argument("--exclude-sources", default=DEFAULT_EXCLUDE,
                     help="regex; clips whose source matches are DROPPED "
                          "(default: non-human gaits — zombies, produce). "
@@ -582,9 +587,19 @@ def main():
                 continue
             cq, valid = prep5.canonicalize(
                 np.asarray(c["quats"], np.float32), rw, rd)
-            windows(c["action"], cq, valid)
+            # The curated TEMPLATE clips are the only source that both renders
+            # with correct facing on real rigs and measures near real motion:
+            # refDist to the real Mixamo walk is 0.303-0.462 for the template
+            # walks (the real-vs-real floor is 0.437 and the corpus median is
+            # 2.07), and their shoulder-line lateral error is 0.519 vs the
+            # corpus's 0.665 and real motion's 0.483. --library-repeat emits
+            # each take that many times so this good data is not drowned by the
+            # much larger CMU corpus.
+            for _ in range(max(1, a.library_repeat)):
+                windows(c["action"], cq, valid)
             n += 1
-        print(f"library: {n} takes → {len(mo)} windows (cum)")
+        print(f"library: {n} takes x{max(1, a.library_repeat)} "
+              f"→ {len(mo)} windows (cum)")
     if a.bvh and a.index:
         n = 0
         for action, cq, valid, src in prep5.cmu_clips(a.bvh, a.index):
