@@ -654,9 +654,14 @@ def main():
     print(f"windows: {mo.shape[0]}  vocab({len(vocab)}):",
           {w: int(tk[:, vocab.index(w)].sum()) for w in vocab})
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    # Stamp the build command into the cache. The v7.8 npz recorded only
+    # fps/vocab/canonRestDir, so reproducing it later meant inferring the flags
+    # from action-overlap against the library files — slow and error-prone.
     np.savez_compressed(a.out, mo=mo, msk=msk, tk=tk,
                         vocab=np.array(vocab), fps=FPS,
-                        canonRestDir=D_CANON)
+                        canonRestDir=D_CANON,
+                        buildArgv=np.array(sys.argv, dtype=object),
+                        buildFlags=np.array(json.dumps(vars(a)), dtype=object))
     print(f"wrote {a.out}  mo{mo.shape}")
 
 
