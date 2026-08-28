@@ -513,6 +513,17 @@ def main():
                          "sleep/restarts)")
     a = ap.parse_args()
 
+    # The leg-chain/amplitude/travel/period terms live inside the phase-loss
+    # block (they all need the reconstructed clean sample q_hat), so with
+    # --phase-weight 0 they are silently DEAD. That class of bug already cost
+    # several runs via the amplitude term, so refuse rather than no-op.
+    if a.phase_weight <= 0 and max(a.legchain_weight, a.amp_weight,
+                                   a.travel_weight, a.period_weight) > 0:
+        raise SystemExit(
+            "--legchain/amp/travel/period-weight require --phase-weight > 0 "
+            "(they share its reconstructed-sample block)")
+
+
     d = np.load(a.data, allow_pickle=True)
     mo, msk, tk = d["mo"], d["msk"], d["tk"]
     vocab = [str(w) for w in d["vocab"]]
@@ -548,6 +559,9 @@ def main():
         if w in fast_names:
             fast_mask_v[i] = 1.0
     if a.phase_weight > 0:
+        if a.legchain_weight > 0:
+            print(f"leg-chain loss ON (w={a.legchain_weight}) — bend stays in "
+                  f"the knee, not the ankle")
         print(f"gait-phase loss ON (w={a.phase_weight}) for "
               f"{[vocab[i] for i in loco_idx]}", flush=True)
 
