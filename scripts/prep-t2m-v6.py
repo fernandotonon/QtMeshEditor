@@ -607,6 +607,7 @@ def main():
     if a.library:
         lib = json.load(open(os.path.expanduser(a.library)))
         n = 0
+        dropped_roles = [0]
         for c in lib.get("clips", []):
             rw, rd = c.get("restWorld"), c.get("restDir")
             if not rw or not rd:
@@ -615,6 +616,19 @@ def main():
                 continue
             cq, valid = prep5.canonicalize(
                 np.asarray(c["quats"], np.float32), rw, rd)
+            # --min-roles was only ever applied to the CORPUS loader, so with
+            # --library-repeat making the library the dominant source the flag
+            # was effectively inert (another silently-dead knob, same class as
+            # the amplitude term). It matters most here: the `hey` take resolves
+            # only 9 of 22 roles with ALL FOUR knee/ankle roles invalid, so the
+            # anatomical ankle gate cannot even run on it and the model has no
+            # leg data to learn from — it invents legs. Sorting the curated
+            # takes by valid-role count reproduces the user's verdict: `hey` 9
+            # and `confession` 14 are the two worst and the two they called
+            # "not that good", while everything they rated GOOD has >=16.
+            if int(valid.sum()) < a.min_roles:
+                dropped_roles[0] += 1
+                continue
             # The curated TEMPLATE clips are the only source that both renders
             # with correct facing on real rigs and measures near real motion:
             # refDist to the real Mixamo walk is 0.303-0.462 for the template
@@ -628,6 +642,9 @@ def main():
             n += 1
         print(f"library: {n} takes x{max(1, a.library_repeat)} "
               f"→ {len(mo)} windows (cum)")
+        if dropped_roles[0]:
+            print(f"library: dropped {dropped_roles[0]} takes below "
+                  f"--min-roles {a.min_roles}")
     if a.bvh and a.index:
         n = 0
         for action, cq, valid, src in prep5.cmu_clips(a.bvh, a.index):
