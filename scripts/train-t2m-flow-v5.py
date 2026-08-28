@@ -614,10 +614,19 @@ def main():
         # epoch — no pickled objects — so load safely (no code execution).
         ck = torch.load(ckpt_path, map_location=dev, weights_only=True)
         net.load_state_dict(ck["net"])
-        opt.load_state_dict(ck["opt"])
-        sched.load_state_dict(ck["sched"])
-        start_ep = ck["epoch"] + 1
-        print(f"resumed from epoch {start_ep}", flush=True)
+        # A WARM START (weights transplanted from a run with a different vocab)
+        # deliberately carries no optimizer/scheduler state: their moment
+        # buffers are shaped for the OLD act_emb and would be stale or
+        # shape-mismatched. Restore them only when present.
+        if "opt" in ck and "sched" in ck:
+            opt.load_state_dict(ck["opt"])
+            sched.load_state_dict(ck["sched"])
+            start_ep = ck["epoch"] + 1
+            print(f"resumed from epoch {start_ep}", flush=True)
+        else:
+            start_ep = ck.get("epoch", 0)
+            print(f"WARM START from transplanted weights at epoch {start_ep} "
+                  f"(fresh optimizer/scheduler)", flush=True)
 
     for ep in range(start_ep, a.epochs):
         # Accumulate the epoch loss ON DEVICE. A per-batch `loss.item()` is a
