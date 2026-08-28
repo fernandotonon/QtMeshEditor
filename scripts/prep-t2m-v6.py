@@ -367,6 +367,18 @@ def joint_hinge_signs(w):
     return knees, elbows
 
 
+def skip_ankle_check(action):
+    """Actions where a large ankle angle is legitimate (kneeling, ground work)."""
+    return action in HORIZONTAL_OK or action in ("sit", "crouch", "pray",
+                                                 "kick", "climb")
+
+
+def dir_of(w, role):
+    """World aim of `role` over the window, unit-normalised."""
+    d = qrot(w[:, role], np.broadcast_to(D_CANON[role], (len(w), 3)))
+    return d / (np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9)
+
+
 def window_quality(action, w, valid):
     """True when the window meets the library curation bar."""
     # Energy band — mean joint rotation speed (rad/frame). The upper bound is
@@ -380,6 +392,22 @@ def window_quality(action, w, valid):
     hi = 0.26 if action in FAST_ACTIONS else 0.11
     if not (0.004 <= e <= hi):
         return False
+    # ANATOMICAL ankle bound. The foot cannot fold perpendicular to the shin,
+    # yet 100% of the curated `march` windows measured a 104.5 deg ankle bend
+    # (knee a healthy 39.4 deg) — the source march templates are simply broken,
+    # which is exactly the "march is a twisted mess" the user reported. Left
+    # ungated it also poisons the trainer's leg-chain loss, since that term is
+    # masked to ALL locomotion and would be pulled toward this geometry.
+    # Real walk ankle 9.7 deg, real run 21.7 deg; 70 deg is generous headroom
+    # for a genuine high-knee march or kick while still rejecting a fold.
+    if not skip_ankle_check(action):
+        for knee, foot in ((20, 21), (16, 17)):
+            if valid[knee] and valid[foot]:
+                kd = dir_of(w, knee)
+                fd = dir_of(w, foot)
+                cos = np.clip((kd * fd).sum(-1), -1.0, 1.0)
+                if float(np.degrees(np.arccos(cos)).mean()) > 70.0:
+                    return False
     if action in HORIZONTAL_OK:
         return True
     floor = 0.7 if action in LOCOMOTION else 0.5
