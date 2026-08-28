@@ -286,6 +286,35 @@ def gait_aperiodicity(q, dirs):
     return (1.0 - best).clamp_min(0.0)
 
 
+def leg_chain_penalty(q, dirs):
+    """Keep the leg's bend in the KNEE, not the ankle.
+
+    User report on the v7.8 walk: "almost like a flat knee, slightly backwards,
+    then a second knee below on the correct orientation". Measured cause — the
+    bend is in the wrong joint:
+
+        thigh->shin (knee)   real 38.4 deg   model 24.9 deg   (UNDER-bent)
+        shin->foot  (ankle)  real  9.7 deg   model 31.5 deg   (3x OVER-bent)
+
+    The over-bent ankle is what reads as a false second knee. Penalise ankle
+    flexion above a generous ceiling and knee flexion below a floor, both
+    anchored on the real-walk values, so the bend moves back up the chain.
+    """
+    def wdir(role):
+        d = qrot_t(q[:, :, role], dirs[role].expand(q.shape[0], q.shape[1], 3))
+        return F.normalize(d, dim=-1, eps=1e-6)
+
+    pen = 0.0
+    for hip, knee, foot in ((19, 20, 21), (15, 16, 17)):
+        th, sh, ft = wdir(hip), wdir(knee), wdir(foot)
+        knee_ang = torch.acos(((th * sh).sum(-1)).clamp(-1 + 1e-6, 1 - 1e-6))
+        ankle_ang = torch.acos(((sh * ft).sum(-1)).clamp(-1 + 1e-6, 1 - 1e-6))
+        # radians: real walk knee 0.67, ankle 0.17
+        pen = pen + (ankle_ang.mean(dim=1) - 0.35).clamp_min(0.0)
+        pen = pen + (0.45 - knee_ang.mean(dim=1)).clamp_min(0.0)
+    return pen * 0.5
+
+
 def spine_twist_penalty(q):
     """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
 
@@ -464,6 +493,10 @@ def main():
                     help="reward a periodic GAIT CYCLE on locomotion rows "
                          "(#837). Data gating alone does not produce one. "
                          "0 = off; 0.5 is a sane start.")
+    ap.add_argument("--legchain-weight", type=float, default=0.0,
+                    help="keep the leg bend in the KNEE not the ankle (#837): "
+                         "an over-bent ankle reads as a false second knee. "
+                         "0 = off; 0.3 is a sane start.")
     ap.add_argument("--amp-weight", type=float, default=0.0,
                     help="penalise limb excursion ABOVE human range (#837): "
                          "the phase/travel hinges reward motion and otherwise "
@@ -643,6 +676,10 @@ def main():
                         ap = gait_aperiodicity(q_hat, dirs_t)
                         loss = loss + a.period_weight * (
                             (gp * ap).sum() / gp.sum().clamp_min(1.0))
+                if a.legchain_weight > 0:
+                    lc = leg_chain_penalty(q_hat, dirs_t)
+                    loss = loss + a.legchain_weight * (
+                        (g * lc).sum() / denom)
                 if a.amp_weight > 0:
                     # Floors are calibrated to WALK's data p5; march/run have
                     # legitimately larger excursion (march stride p5 1.174 vs
