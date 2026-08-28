@@ -15,7 +15,7 @@ shoulder-line facing metric measures FACING only and does NOT capture limb
 articulation, so it ranks actions unreliably. It informs the choice between
 checkpoints of the SAME model; it does not replace looking at renders.
 """
-import importlib.util,os,json,sys,glob,numpy as np,onnxruntime as ort,tempfile
+import importlib.util,os,json,sys,glob,numpy as np,onnxruntime as ort,tempfile,torch
 sp=importlib.util.spec_from_file_location("rd","/Users/fernandotonon/QtMeshEditor/scripts/eval-t2m-refdist.py")
 rd=importlib.util.module_from_spec(sp); sp.loader.exec_module(rd)
 HERE="/Users/fernandotonon/QtMeshEditor/scripts"
@@ -30,6 +30,20 @@ def lat_err(q):
     ls=p6.qrot(q[:,11],np.broadcast_to(D[11],(len(q),3))); rs=p6.qrot(q[:,7],np.broadcast_to(D[7],(len(q),3)))
     v=ls-rs; v/=(np.linalg.norm(v,axis=-1,keepdims=True)+1e-9)
     return float(np.sqrt(v[:,1]**2+v[:,2]**2).mean())
+sp3=importlib.util.spec_from_file_location("tr",os.path.join("/Users/fernandotonon/QtMeshEditor/scripts","train-t2m-flow-v5.py"))
+_tr=importlib.util.module_from_spec(sp3); sp3.loader.exec_module(_tr)
+_DIRS=torch.tensor(_tr.DIR_CANON,dtype=torch.float32)
+def legchain(q):
+    """The user's reported 'second knee': bend in the ankle instead of the knee.
+
+    Real Walk.fbx scores 0.014 and the training data 0.000, while v7.8 ep60 —
+    the checkpoint the user described as having 'almost a flat knee, slightly
+    backwards, then a second knee below' — scores 0.222. So this is the metric
+    that tracks the one defect the user named on the walk, and no other metric
+    here captures it (they all measure facing, phase or stride, never WHICH
+    joint bends).
+    """
+    return float(_tr.leg_chain_penalty(torch.from_numpy(q[None]).float(),_DIRS).item())
 def scissor(q):
     la,ra=pos(17,q),pos(21,q); return float(np.abs(la[:,2]-ra[:,2]).max())
 cache=os.path.join(tempfile.gettempdir(),"t2m_refcache")
@@ -39,9 +53,13 @@ refs=rd.windows_of(cqw)
 USER_GOOD=["walk","run","wave","cough","death","pickup","attack","crouch",
            "salute","working","shake","punch"]
 so=ort.SessionOptions(); so.log_severity_level=3
-print(f"{'ckpt':10s} {'walk refD':>10s} {'walk latE':>10s} {'walk sciss':>11s} {'good-act latE':>14s}")
+print(f"{'ckpt':10s} {'walk refD':>10s} {'walk latE':>10s} {'walk sciss':>11s} "
+      f"{'walk legchn':>12s} {'good-act latE':>14s}")
+print("           (lower)     (real .483)  (real ~1.0)   (real .014)      (lower)")
 rows=[]
-for d in sorted(glob.glob(os.path.expanduser("~/t2m_v78/e*"))):
+cands=sorted(glob.glob(os.path.expanduser("~/t2m_v78/e*"))
+             + glob.glob(os.path.expanduser("~/t2m_v78/ck*")))
+for d in cands:
     f=os.path.join(d,"t2m.onnx")
     if not os.path.exists(f): continue
     s=ort.InferenceSession(f,so,providers=["CPUExecutionProvider"])
@@ -59,13 +77,18 @@ for d in sorted(glob.glob(os.path.expanduser("~/t2m_v78/e*"))):
     wq=run("walk",24)
     wd=min(rd.best_distance(q,refs,vw) for q in wq)
     wl=float(np.mean([lat_err(q) for q in wq])); ws=float(np.mean([scissor(q) for q in wq]))
+    wlc=float(np.mean([legchain(q) for q in wq]))
     ls=[]
     for a in USER_GOOD:
         qs=run(a,8)
         if qs: ls.append(np.mean([lat_err(q) for q in qs]))
     gl=float(np.mean(ls))
-    print(f"{os.path.basename(d):10s} {wd:10.3f} {wl:10.3f} {ws:11.3f} {gl:14.3f}")
-    rows.append((gl,wd,os.path.basename(d)))
-print("\nreal walk: refD floor 0.437 | latErr 0.483 | scissor 0.652")
+    print(f"{os.path.basename(d):10s} {wd:10.3f} {wl:10.3f} {ws:11.3f} "
+          f"{wlc:12.3f} {gl:14.3f}")
+    rows.append((gl,wd,wlc,os.path.basename(d)))
+print("\nreal walk: refD floor 0.437 | latErr 0.483 | scissor 0.652 | legchain 0.014")
 rows.sort()
-print(f"BEST by good-action facing: {rows[0][2]}")
+print(f"BEST by good-action facing: {rows[0][3]}")
+print(f"BEST by walk refDist:      {sorted(rows,key=lambda r:r[1])[0][3]}")
+print(f"BEST by knee/ankle (the user's reported walk defect): "
+      f"{sorted(rows,key=lambda r:r[2])[0][3]}")
