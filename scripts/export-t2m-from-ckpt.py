@@ -45,10 +45,14 @@ def main():
     ap.add_argument("--data", required=True, help="npz (for vocab + canonRestDir)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--steps", type=int, default=24)
+    # 1.0 = the value the SHIPPED v8.0 model was exported with. A mismatch
+    # here silently changes generated motion and invalidates checkpoint
+    # comparisons against it, so keep all three defaults (this, the trainer
+    # flag, and Sampler.__init__) on 1.0.
     ap.add_argument("--guidance", type=float, default=1.0)
     a = ap.parse_args()
 
-    z = np.load(os.path.expanduser(a.data), allow_pickle=True)
+    z = np.load(os.path.expanduser(a.data), allow_pickle=False)
     vocab = [str(s) for s in z["vocab"]]
     fps = int(z["fps"]) if "fps" in z else 30
     canon_rd = z["canonRestDir"]

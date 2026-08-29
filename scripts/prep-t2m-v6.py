@@ -487,14 +487,18 @@ def mirror(w, valid):
     Flow matching then samples both modes and the model walks backwards about
     half the time (#837, user-reported).
 
-    A true left<->right mirror must flip only the LATERAL axis: negate X and W
-    (equivalently reflect about the YZ plane, normal Z... see below) while
-    preserving the forward and up axes. For quats under a reflection about the
-    plane normal to X, the improper transform is applied as q -> (-x, y, z, -w)
-    combined with the L/R role swap, which preserves handedness of the
-    forward/up frame and therefore the direction of travel.
+    A true left<->right mirror reflects about the YZ plane (negating the LATERAL
+    X axis) and swaps the L/R joint roles. Conjugating a rotation by that
+    reflection, S @ R(q) @ S with S = diag(-1, 1, 1), is exactly q -> (x, -y,
+    -z, w), which is what this does.
+
+    NB an earlier revision "fixed" this to (-x, y, z, -w). That is the NEGATION
+    of the same quaternion, and q and -q are the SAME rotation, so it changed
+    nothing — verified numerically against the conjugation above. The transform
+    below was correct all along; the note is kept so the no-op is not
+    reintroduced as a fix.
     """
-    m = w * np.array([-1, 1, 1, -1], np.float32)
+    m = w * np.array([1, -1, -1, 1], np.float32)
     return m[:, MIRROR_PERM], valid[MIRROR_PERM]
 
 
@@ -677,8 +681,11 @@ def main():
     np.savez_compressed(a.out, mo=mo, msk=msk, tk=tk,
                         vocab=np.array(vocab), fps=FPS,
                         canonRestDir=D_CANON,
-                        buildArgv=np.array(sys.argv, dtype=object),
-                        buildFlags=np.array(json.dumps(vars(a)), dtype=object))
+                        # Plain unicode arrays, NOT dtype=object: an object
+                        # array forces allow_pickle=True on every reader, and
+                        # a crafted npz could then execute code on load.
+                        buildArgv=np.array(sys.argv, dtype=np.str_),
+                        buildFlags=np.array(json.dumps(vars(a)), dtype=np.str_))
     print(f"wrote {a.out}  mo{mo.shape}")
 
 

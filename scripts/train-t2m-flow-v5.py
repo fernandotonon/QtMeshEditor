@@ -427,7 +427,11 @@ class FlowDiT(nn.Module):
 class Sampler(nn.Module):
     """Euler flow sampler UNROLLED for ONNX export — MotionGenerator contract."""
 
-    def __init__(self, net, V, T, steps, guidance=2.0):
+    # guidance default 1.0 — the value the shipped v8.0 model was trained
+    # and exported with. This used to default to 2.0 while both CLI flags
+    # defaulted to 1.0, so a caller constructing a Sampler directly got
+    # different motion than the CLI produced.
+    def __init__(self, net, V, T, steps, guidance=1.0):
         super().__init__()
         self.net, self.V, self.T, self.steps = net, V, T, steps
         self.guidance = guidance
@@ -524,7 +528,7 @@ def main():
             "(they share its reconstructed-sample block)")
 
 
-    d = np.load(a.data, allow_pickle=True)
+    d = np.load(a.data, allow_pickle=False)
     mo, msk, tk = d["mo"], d["msk"], d["tk"]
     vocab = [str(w) for w in d["vocab"]]
     fps = int(d["fps"])

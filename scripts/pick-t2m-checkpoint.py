@@ -15,11 +15,29 @@ shoulder-line facing metric measures FACING only and does NOT capture limb
 articulation, so it ranks actions unreliably. It informs the choice between
 checkpoints of the SAME model; it does not replace looking at renders.
 """
-import importlib.util,os,json,sys,glob,numpy as np,onnxruntime as ort,tempfile,torch
-sp=importlib.util.spec_from_file_location("rd","/Users/fernandotonon/QtMeshEditor/scripts/eval-t2m-refdist.py")
-rd=importlib.util.module_from_spec(sp); sp.loader.exec_module(rd)
-HERE="/Users/fernandotonon/QtMeshEditor/scripts"
-s2=importlib.util.spec_from_file_location("p6",os.path.join(HERE,"prep-t2m-v6.py")); p6=importlib.util.module_from_spec(s2); s2.loader.exec_module(p6)
+import argparse
+import glob
+import importlib.util
+import json
+import os
+import tempfile
+
+import numpy as np
+import onnxruntime as ort
+import torch
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load(name, fname):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, fname))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+rd = _load("rd", "eval-t2m-refdist.py")
+p6 = _load("p6", "prep-t2m-v6.py")
 D=rd.prep5.D_CANON; PAR=p6.PAR
 def pos(role,w):
     T=len(w); p=np.zeros((T,3),np.float32); r=role
@@ -30,8 +48,7 @@ def lat_err(q):
     ls=p6.qrot(q[:,11],np.broadcast_to(D[11],(len(q),3))); rs=p6.qrot(q[:,7],np.broadcast_to(D[7],(len(q),3)))
     v=ls-rs; v/=(np.linalg.norm(v,axis=-1,keepdims=True)+1e-9)
     return float(np.sqrt(v[:,1]**2+v[:,2]**2).mean())
-sp3=importlib.util.spec_from_file_location("tr",os.path.join("/Users/fernandotonon/QtMeshEditor/scripts","train-t2m-flow-v5.py"))
-_tr=importlib.util.module_from_spec(sp3); sp3.loader.exec_module(_tr)
+_tr = _load("tr", "train-t2m-flow-v5.py")
 _DIRS=torch.tensor(_tr.DIR_CANON,dtype=torch.float32)
 def legchain(q):
     """The user's reported 'second knee': bend in the ankle instead of the knee.
@@ -46,8 +63,19 @@ def legchain(q):
     return float(_tr.leg_chain_penalty(torch.from_numpy(q[None]).float(),_DIRS).item())
 def scissor(q):
     la,ra=pos(17,q),pos(21,q); return float(np.abs(la[:,2]-ra[:,2]).max())
+_ap = argparse.ArgumentParser(description=__doc__)
+_ap.add_argument("--roots", default=os.path.expanduser("~/t2m_v78"),
+                 help="comma-separated checkpoint roots to scan (each is "
+                      "globbed for e*/ and ck*/ subdirs holding t2m.onnx)")
+_ap.add_argument("--ref", default=os.path.expanduser("~/Downloads/Walk.fbx"),
+                 help="real reference walk clip to score against")
+_a = _ap.parse_args()
+
 cache=os.path.join(tempfile.gettempdir(),"t2m_refcache")
-cqw,vw=rd.canon_from_fbx(os.path.expanduser("~/Downloads/Walk.fbx"),cache)
+_ref = os.path.expanduser(_a.ref)
+if not os.path.exists(_ref):
+    raise SystemExit(f"reference clip not found: {_ref} (pass --ref)")
+cqw,vw=rd.canon_from_fbx(_ref,cache)
 refs=rd.windows_of(cqw)
 # actions the USER confirmed as good/usable on ep60 — these are what matter
 USER_GOOD=["walk","run","wave","cough","death","pickup","attack","crouch",
@@ -57,8 +85,13 @@ print(f"{'ckpt':10s} {'walk refD':>10s} {'walk latE':>10s} {'walk sciss':>11s} "
       f"{'walk legchn':>12s} {'good-act latE':>14s}")
 print("           (lower)     (real .483)  (real ~1.0)   (real .014)      (lower)")
 rows=[]
-cands=sorted(glob.glob(os.path.expanduser("~/t2m_v78/e*"))
-             + glob.glob(os.path.expanduser("~/t2m_v78/ck*")))
+cands = []
+for _root in _a.roots.split(","):
+    _root = os.path.expanduser(_root.strip())
+    cands += glob.glob(os.path.join(_root, "e*")) + glob.glob(os.path.join(_root, "ck*"))
+cands = sorted(set(cands))
+if not cands:
+    raise SystemExit(f"no checkpoint dirs under {_a.roots} (pass --roots)")
 for d in cands:
     f=os.path.join(d,"t2m.onnx")
     if not os.path.exists(f): continue

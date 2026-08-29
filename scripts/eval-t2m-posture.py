@@ -179,7 +179,7 @@ def main():
 
     # ---- data reference (what the model is trying to match) ----
     if a.data:
-        z = np.load(os.path.expanduser(a.data), allow_pickle=True)
+        z = np.load(os.path.expanduser(a.data), allow_pickle=False)
         mo, tk = z["mo"], z["tk"]
         dvocab = [str(s) for s in z["vocab"]]
         print("\n=== TRAINING DATA (reference) ===")
