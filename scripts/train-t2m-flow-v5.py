@@ -93,6 +93,289 @@ def d6_to_quat(d):
     return F.normalize(q, dim=-1, eps=1e-6)
 
 
+# ---------- gait-phase supervision (#837 orientation correctness) ----------
+# Canonical parent chain + rest directions, mirroring prep-t2m-v5/v6 exactly.
+PAR_CANON = [-1, 0, 1, 2, 3, 4, 2, 6, 7, 8, 2, 10, 11, 12,
+             0, 14, 15, 16, 0, 18, 19, 20]
+DIR_CANON = [                       # keep in sync with prep-t2m-v5.D_CANON
+    [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
+    [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],   # roles 6-9  = RIGHT arm
+    [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],       # roles 10-13 = LEFT arm
+    [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
+    [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, 0, 1],
+]
+# roles whose Z trajectory defines the gait phase
+L_ANKLE, R_ANKLE, L_WRIST, R_WRIST = 17, 21, 9, 13
+
+
+def qrot_t(q, v):
+    """Rotate v[...,3] by quat q[...,4] (x,y,z,w). Differentiable."""
+    qv, qw = q[..., :3], q[..., 3:]
+    uv = torch.cross(qv, v, dim=-1)
+    uuv = torch.cross(qv, uv, dim=-1)
+    return v + 2.0 * (qw * uv + uuv)
+
+
+def fk_pos(q, role, dirs):
+    """World position of `role` by walking the canonical parent chain.
+
+    q: [B,T,J,4]. Mirrors the numpy FK in prep-t2m-v6/eval-t2m-posture, so the
+    quantity supervised here is the same one the metrics and the retarget read.
+    """
+    p = torch.zeros(q.shape[0], q.shape[1], 3, device=q.device, dtype=q.dtype)
+    r = role
+    while PAR_CANON[r] >= 0:
+        d = dirs[r].expand(q.shape[0], q.shape[1], 3)
+        p = p + qrot_t(q[:, :, PAR_CANON[r]], d)
+        r = PAR_CANON[r]
+    return p
+
+
+def _centred_z(p):
+    z = p[..., 2]
+    return z - z.mean(dim=1, keepdim=True)
+
+
+def travel_forward_torch(q, dirs):
+    """dot(direction of travel, body forward), differentiable, per sample.
+
+    Same quantity as prep-t2m-v6.travel_forward and the eval: travel is
+    inferred from the STANCE (slower) foot, which drifts backward while the
+    body moves forward. Forward is (role7 - role11) x up, where role 7 is the
+    RIGHT shoulder and role 11 the LEFT (D_CANON[7] = -X, D_CANON[11] = +X) —
+    see the note in prep-t2m-v6.travel_forward: this operand order is what
+    yields the forward axis, and exchanging them inverts the sign.
+
+    Even with a 100%-forward training set the model sat at ~50% forward
+    (measured at ep40 with foot motion at 73% of the data's magnitude, so this
+    is a real direction ambiguity and not measurement noise). Flow matching has
+    no term tying the emitted gait to a travel direction, so this supervises it
+    directly — the same reasoning as the gait-phase hinge.
+    """
+    rsh = fk_pos(q, 7, dirs)          # role 7  = RIGHT shoulder
+    lsh = fk_pos(q, 11, dirs)         # role 11 = LEFT shoulder
+    side = F.normalize(rsh - lsh, dim=-1, eps=1e-6)
+    up = torch.zeros_like(side)
+    up[..., 1] = 1.0
+    fwd = F.normalize(torch.cross(side, up, dim=-1), dim=-1, eps=1e-6)
+    fwd = F.normalize(fwd.mean(dim=1), dim=-1, eps=1e-6)          # [B,3]
+
+    la = fk_pos(q, 17, dirs)
+    ra = fk_pos(q, 21, dirs)
+    vl = la[:, 1:] - la[:, :-1]
+    vr = ra[:, 1:] - ra[:, :-1]
+    sl = vl.norm(dim=-1, keepdim=True)
+    sr = vr.norm(dim=-1, keepdim=True)
+    v = torch.where(sl < sr, vl, vr)                              # stance foot
+    travel = -v.mean(dim=1)                                       # [B,3]
+    travel = F.normalize(travel, dim=-1, eps=1e-6)
+    return (travel * fwd).sum(-1)                                 # [B] in [-1,1]
+
+
+def amplitude_excess(q, dirs, lo_scale=None):
+    """How far the ankle/wrist fore-aft excursion EXCEEDS human range.
+
+    The phase + travel hinges reward motion and nothing bounded it, so the
+    model over-drove the limbs: measured stride 3.46 and armSwing 3.73 against
+    real Mixamo walk values of 0.765 and 1.718 - rendering as a knee-to-chest
+    exaggerated march instead of a walk. This penalises only the EXCESS above
+    generous ceilings, so normal motion is untouched.
+    """
+    def pk(role):
+        z = fk_pos(q, role, dirs)[..., 2]
+        return z.max(dim=1).values - z.min(dim=1).values
+
+    stride = 0.5 * (pk(17) + pk(21))
+    swing = 0.5 * (pk(9) + pk(13))
+    # TWO-SIDED, like the speed band. A ceiling-only amplitude term contributes
+    # exactly 0.0 once the model is under it, so nothing defends the limbs from
+    # COLLAPSING: measured at v6.7 ep45 the jitter term was 80% of the guard
+    # loss (0.1446/0.181) while amp was 0.0000, and armSwing/stride fell
+    # 1.481/1.126 -> 0.894/0.690, i.e. BELOW the real walk's 1.718/0.765. The
+    # limbs were collateral damage of jitter pushing speed down. Real-walk
+    # values anchor the floors (stride 0.765, swing 1.718); floors are set just
+    # under them and weighted 2x so shrinking is punished harder than growing.
+    # Ceilings sit above the ALL-ACTION p99 (stride 3.33, swing 3.54) so real
+    # data is never penalised. The original 1.6 stride ceiling was BELOW the
+    # data's p95 of 2.969 — it was clipping legitimate motion across march,
+    # climb and kick, which contributed to the amplitude collapse.
+    over = (stride - 3.5).clamp_min(0.0) + (swing - 3.7).clamp_min(0.0)
+    # Floors calibrated to the TRAINING data's 5th percentile (walk stride 0.741,
+    # swing 0.809) — NOT to the reference Mixamo clip, whose swing (1.718) sits
+    # well above this corpus's median (1.052). Floors above the data would
+    # penalise legitimate windows: at swing floor 1.50, 67% of real walk windows
+    # scored a penalty.
+    st_floor = 0.70 * (1.0 if lo_scale is None else lo_scale)
+    sw_floor = 0.75 * (1.0 if lo_scale is None else lo_scale)
+    under = ((st_floor - stride).clamp_min(0.0)
+             + (sw_floor - swing).clamp_min(0.0)) * 2.0
+    return over + under
+
+
+def jitter_excess(q, hi=None, lo=None):
+    """Per-frame angular speed ABOVE the training band = high-frequency jitter.
+
+    THE defect that made every amplitude metric lie. The ep90 model emitted a
+    mean joint speed of 0.266 rad/frame against the data's 0.0557 (band
+    0.032-0.099), and its worst joint (role 21) ran at 1.416 rad/frame — about
+    81 deg per frame, physically impossible. The retarget's smoothing then
+    damped it to 0.041, so the RENDER was nearly static while the canonical
+    ankle "scissor" measured LARGER than the real walk: the metrics were
+    reading jitter amplitude, not stride.
+
+    Penalise the mean per-joint speed above a ceiling just past the data band,
+    plus the worst single joint, which is where the impossible spikes live.
+    """
+    dot = (q[:, 1:] * q[:, :-1]).sum(-1).abs().clamp(0.0, 1.0)
+    speed = 2.0 * torch.acos(dot.clamp(max=1.0 - 1e-7))     # [B,T-1,J]
+    per_joint = speed.mean(dim=1)                            # [B,J]
+    # TWO-SIDED band, not a ceiling. A pure ceiling removes the jitter AND the
+    # motion with it: at ep30 speed fell 0.353 -> 0.227 and the render went
+    # smooth but nearly STATIC (legs barely separating, contra dropped
+    # 0.345 -> 0.284). Jitter and stride were entangled, so the objective has
+    # to pull the speed TOWARD the data band (walk mean 0.056, real Walk.fbx
+    # 0.059) rather than merely below a ceiling.
+    m = per_joint.mean(dim=-1)
+    # The band is PER-SAMPLE so it can be action-aware. A single band is
+    # action-blind, and after the run/march data recovery the cache's overall
+    # energy rose 0.0429 -> 0.0550 (p90 0.078 -> 0.113) while WALK-only energy
+    # stayed at 0.0510 — the faster fast-action windows pull the shared model
+    # and walk inherits the speed, which is what degraded the v7.2 walk render.
+    hi_t = 0.10 if hi is None else hi
+    lo_t = 0.045 if lo is None else lo
+    mean_excess = ((m - hi_t).clamp_min(0.0)
+                   + (lo_t - m).clamp_min(0.0) * 4.0)
+    worst_excess = (per_joint.max(dim=-1).values - 0.45).clamp_min(0.0)
+    return mean_excess + worst_excess
+
+
+def gait_aperiodicity(q, dirs):
+    """1 - (best autocorrelation of the ankle-scissor signal), differentiable.
+
+    The property NO other term can see. A real Mixamo walk autocorrelates at
+    0.968; the v6.8 model measured 0.264 and rendered as trembling in place
+    while scoring healthy on travel, contra, twist, amplitude and speed — all
+    of which are averages or correlations that non-cyclic twitching satisfies.
+
+    Gating the DATA to >= 0.6 periodicity was not enough on its own: the model
+    still emitted 0.247-0.293, i.e. no better than before. Same lesson as travel
+    direction — flow matching does not inherit a property just because the data
+    has it. If it is not in the loss, it is not in the output.
+
+    Autocorrelation is evaluated at a fixed lag set spanning plausible gait
+    periods (10..29 frames at 30 fps = 0.33..0.97 s) and the best is taken, so
+    the term is agnostic to cadence.
+    """
+    la = fk_pos(q, 17, dirs)[..., 2]
+    ra = fk_pos(q, 21, dirs)[..., 2]
+    sig = la - ra
+    T = sig.shape[1]
+    best = torch.full((sig.shape[0],), -1.0, device=q.device, dtype=sig.dtype)
+    # Lag range must MATCH prep-t2m-v6.gait_periodicity (8 .. T//2), otherwise
+    # the loss disagrees with the gate that selected the data: a narrower
+    # 10..29 window scored the >=0.6-periodic training set at 0.43-0.51
+    # aperiodicity because it missed the slower cadences.
+    # Match prep-t2m-v6's GAIT_LAG_MIN/MAX. Searching from lag 8 rewarded
+    # high-frequency wobble instead of a stride (see gait_periodicity).
+    # Pearson per overlap (bounded), matching prep-t2m-v6.gait_periodicity.
+    for lag in range(20, min(31, max(21, T // 2 + 1))):
+        a = sig[:, :-lag]
+        b = sig[:, lag:]
+        a = a - a.mean(dim=1, keepdim=True)
+        b = b - b.mean(dim=1, keepdim=True)
+        c = ((a * b).mean(dim=1)
+             / ((a.std(dim=1) * b.std(dim=1)) + 1e-4))
+        best = torch.maximum(best, c)
+    return (1.0 - best).clamp_min(0.0)
+
+
+def leg_chain_penalty(q, dirs):
+    """Keep the leg's bend in the KNEE, not the ankle.
+
+    User report on the v7.8 walk: "almost like a flat knee, slightly backwards,
+    then a second knee below on the correct orientation". Measured cause — the
+    bend is in the wrong joint:
+
+        thigh->shin (knee)   real 38.4 deg   model 24.9 deg   (UNDER-bent)
+        shin->foot  (ankle)  real  9.7 deg   model 31.5 deg   (3x OVER-bent)
+
+    The over-bent ankle is what reads as a false second knee. Penalise ankle
+    flexion above a generous ceiling and knee flexion below a floor, both
+    anchored on the real-walk values, so the bend moves back up the chain.
+    """
+    def wdir(role):
+        d = qrot_t(q[:, :, role], dirs[role].expand(q.shape[0], q.shape[1], 3))
+        return F.normalize(d, dim=-1, eps=1e-6)
+
+    pen = 0.0
+    for hip, knee, foot in ((19, 20, 21), (15, 16, 17)):
+        th, sh, ft = wdir(hip), wdir(knee), wdir(foot)
+        knee_ang = torch.acos(((th * sh).sum(-1)).clamp(-1 + 1e-6, 1 - 1e-6))
+        ankle_ang = torch.acos(((sh * ft).sum(-1)).clamp(-1 + 1e-6, 1 - 1e-6))
+        # radians: real walk knee 0.67, ankle 0.17
+        pen = pen + (ankle_ang.mean(dim=1) - 0.35).clamp_min(0.0)
+        pen = pen + (0.45 - knee_ang.mean(dim=1)).clamp_min(0.0)
+    return pen * 0.5
+
+
+def spine_twist_penalty(q):
+    """Mean |hip->chest yaw| in radians — an anatomy guard for the phase loss.
+
+    The phase term alone is satisfiable by a DEGENERATE shortcut: rotate the
+    torso ~180 deg so the existing swing reads as contralateral. Measured at
+    --phase-weight 0.15 without this guard: hip->chest twist went to 170 deg
+    (data 6.3 deg, v6.2 6.7 deg) — the user-visible "walk got all twisted".
+    Penalising the yaw closes that escape route so the only way to earn the
+    phase reward is to actually fix limb timing.
+    """
+    def conj(a):
+        return torch.cat([-a[..., :3], a[..., 3:]], -1)
+
+    def mul(a, b):
+        ax, ay, az, aw = a.unbind(-1)
+        bx, by, bz, bw = b.unbind(-1)
+        return torch.stack([aw * bx + ax * bw + ay * bz - az * by,
+                            aw * by - ax * bz + ay * bw + az * bx,
+                            aw * bz + ax * by - ay * bx + az * bw,
+                            aw * bw - ax * bx - ay * by - az * bz], -1)
+
+    rel = mul(conj(q[:, :, 0]), q[:, :, 2])          # hip -> chest
+    yaw = 2.0 * torch.atan2(rel[..., 1], rel[..., 3])
+    # wrap to [-pi, pi] so a 180 deg cheat is maximally penalised
+    yaw = torch.atan2(torch.sin(yaw), torch.cos(yaw))
+    return yaw.abs().mean(dim=1)
+
+
+def gait_phase_corr(q, dirs):
+    """Per-sample contralateral gait correlation, in [-1, 1].
+
+    A correct walk pairs LEFT leg forward with RIGHT arm forward, so
+    corr(Lankle_z, Rwrist_z) > 0 and corr(Lankle_z, Lwrist_z) < 0. The
+    training data measures +0.63 / -0.58 (92% correct sign) but the v6.1 and
+    v6.2 models emit only 67% / 75% correct — samples with the arms swinging
+    on the wrong side, which renders as "limbs moving as if facing backwards"
+    (user-reported). Nothing in the flow-matching loss constrained this, so
+    this term supervises it directly.
+
+    Returns the mean of (contralateral - ipsilateral)/2, averaged over both
+    body sides so the term is itself mirror-symmetric.
+    """
+    la = _centred_z(fk_pos(q, L_ANKLE, dirs))
+    ra = _centred_z(fk_pos(q, R_ANKLE, dirs))
+    lw = _centred_z(fk_pos(q, L_WRIST, dirs))
+    rw = _centred_z(fk_pos(q, R_WRIST, dirs))
+
+    def corr(x, y):
+        xs = x / (x.std(dim=1, keepdim=True) + 1e-4)
+        ys = y / (y.std(dim=1, keepdim=True) + 1e-4)
+        return (xs * ys).mean(dim=1)
+
+    # both sides, so the objective cannot prefer one chirality
+    contra = 0.5 * (corr(la, rw) + corr(ra, lw))
+    ipsi = 0.5 * (corr(la, lw) + corr(ra, rw))
+    return 0.5 * (contra - ipsi)
+
+
 # ---------- model ----------
 class Block(nn.Module):
     def __init__(self, dim, heads):
@@ -147,7 +430,11 @@ class FlowDiT(nn.Module):
 class Sampler(nn.Module):
     """Euler flow sampler UNROLLED for ONNX export — MotionGenerator contract."""
 
-    def __init__(self, net, V, T, steps, guidance=2.0):
+    # guidance default 1.0 — the value the shipped v8.0 model was trained
+    # and exported with. This used to default to 2.0 while both CLI flags
+    # defaulted to 1.0, so a caller constructing a Sampler directly got
+    # different motion than the CLI produced.
+    def __init__(self, net, V, T, steps, guidance=1.0):
         super().__init__()
         self.net, self.V, self.T, self.steps = net, V, T, steps
         self.guidance = guidance
@@ -188,12 +475,63 @@ def main():
     ap.add_argument("--guidance", type=float, default=1.0,
                     help="CFG scale baked into the exported sampler")
     ap.add_argument("--device", default="mps")
+    ap.add_argument("--balance-power", type=float, default=1.0,
+                    help="class-balance exponent: 1.0 = inverse-frequency "
+                         "(equal per action), 0.5 = sqrt-tempered (favours "
+                         "the data-rich actions like walk), 0.0 = raw")
+    ap.add_argument("--phase-weight", type=float, default=0.0,
+                    help="weight of the contralateral gait-phase loss "
+                         "(#837 orientation correctness). 0 = off. Applied to "
+                         "LOCOMOTION actions only, on the reconstructed clean "
+                         "sample. 0.05-0.2 is a sane range.")
+    ap.add_argument("--travel-weight", type=float, default=0.0,
+                    help="weight of the travel-DIRECTION hinge: the body must "
+                         "move along its own forward axis (#837). Locomotion "
+                         "rows only. 0 = off; 0.1-0.3 is a sane range.")
+    ap.add_argument("--jitter-weight", type=float, default=0.0,
+                    help="penalise per-frame angular speed above the data band "
+                         "(#837). Applied to ALL actions — jitter is never "
+                         "wanted. 0 = off; 1.0 is a sane start.")
+    ap.add_argument("--loco-boost", type=float, default=1.0,
+                    help="multiply walk/run/march sampling weight (#837). The "
+                         "periodicity gate leaves them ~7%% of batches, so the "
+                         "gait losses barely reach any rows. 6.0 gives ~33%%.")
+    ap.add_argument("--period-weight", type=float, default=0.0,
+                    help="reward a periodic GAIT CYCLE on locomotion rows "
+                         "(#837). Data gating alone does not produce one. "
+                         "0 = off; 0.5 is a sane start.")
+    ap.add_argument("--legchain-weight", type=float, default=0.0,
+                    help="keep the leg bend in the KNEE not the ankle (#837): "
+                         "an over-bent ankle reads as a false second knee. "
+                         "0 = off; 0.3 is a sane start.")
+    ap.add_argument("--amp-weight", type=float, default=0.0,
+                    help="penalise limb excursion ABOVE human range (#837): "
+                         "the phase/travel hinges reward motion and otherwise "
+                         "over-drive the legs into a knee-to-chest march. "
+                         "0 = off; 0.3 is a sane start.")
+    ap.add_argument("--twist-weight", type=float, default=0.5,
+                    help="weight of the hip->chest yaw penalty that stops the "
+                         "phase loss from cheating by rotating the torso 180 "
+                         "deg. Only active when --phase-weight > 0.")
+    ap.add_argument("--phase-actions", default="walk,run,march",
+                    help="comma list the phase loss applies to")
     ap.add_argument("--resume", action="store_true",
                     help="resume from <out>/ckpt.pt (long runs survive "
                          "sleep/restarts)")
     a = ap.parse_args()
 
-    d = np.load(a.data, allow_pickle=True)
+    # The leg-chain/amplitude/travel/period terms live inside the phase-loss
+    # block (they all need the reconstructed clean sample q_hat), so with
+    # --phase-weight 0 they are silently DEAD. That class of bug already cost
+    # several runs via the amplitude term, so refuse rather than no-op.
+    if a.phase_weight <= 0 and max(a.legchain_weight, a.amp_weight,
+                                   a.travel_weight, a.period_weight) > 0:
+        raise SystemExit(
+            "--legchain/amp/travel/period-weight require --phase-weight > 0 "
+            "(they share its reconstructed-sample block)")
+
+
+    d = np.load(a.data, allow_pickle=False)
     mo, msk, tk = d["mo"], d["msk"], d["tk"]
     vocab = [str(w) for w in d["vocab"]]
     fps = int(d["fps"])
@@ -209,9 +547,60 @@ def main():
     m6 = torch.from_numpy(msk).repeat_interleave(D6, -1)         # [N,C6]
     tok = torch.from_numpy(tk)
 
-    # class-balanced sampling — walk is 64% of windows (v4 lesson)
+    # gait-phase loss plumbing (#837): a per-action gate + the canonical rest
+    # directions as a device tensor for the differentiable FK.
+    dirs_t = torch.tensor(DIR_CANON, dtype=torch.float32, device=dev)
+    phase_acts = {w for w in a.phase_actions.split(",") if w}
+    loco_idx = [i for i, w in enumerate(vocab) if w in phase_acts]
+    loco_mask_v = torch.zeros(V, device=dev)
+    for i in loco_idx:
+        loco_mask_v[i] = 1.0
+    # actions whose real joint speed exceeds the walk band (mirrors
+    # prep-t2m-v6.FAST_ACTIONS)
+    # Measured mean-speed medians on the v72 cache: run 0.110, dance 0.095,
+    # punch 0.064, walk 0.055, march 0.050, jump 0.042. Only run and dance
+    # genuinely need a raised ceiling; march/jump are NOT fast by this metric.
+    fast_names = {"run", "dance"}
+    fast_mask_v = torch.zeros(V, device=dev)
+    for i, w in enumerate(vocab):
+        if w in fast_names:
+            fast_mask_v[i] = 1.0
+    if a.phase_weight > 0:
+        if a.legchain_weight > 0:
+            print(f"leg-chain loss ON (w={a.legchain_weight}) — bend stays in "
+                  f"the knee, not the ankle")
+        print(f"gait-phase loss ON (w={a.phase_weight}) for "
+              f"{[vocab[i] for i in loco_idx]}", flush=True)
+
+    # Class-balanced sampling — walk dominates the window count (v4 lesson).
+    # `--balance-power` tempers it: 1.0 = pure inverse-frequency (every action
+    # drawn equally often), 0.5 = sqrt-tempered, 0.0 = raw distribution.
+    #
+    # Pure inverse-frequency badly starves the actions that matter most. On the
+    # v6.2 cache walk is 30.85% of windows but only 4.35% of draws (0.14x its
+    # share) while 16-window curiosities like `confession` get 67x oversampling
+    # — equal capacity spent memorising 16 windows as on 7688 walk windows.
+    # Measured effect: walk fwd/side plateaued at ~2.6 by ep167 while the loss
+    # kept falling. sqrt-tempering gives walk 16.1% and still leaves run 2.8%.
     freq = tk.sum(0)
-    w = (tk @ (1.0 / np.maximum(freq, 1.0))).astype(np.float64)
+    w = (tk @ (1.0 / np.maximum(freq, 1.0) ** a.balance_power)).astype(np.float64)
+    # LOCOMOTION BOOST. The periodicity gate shrank walk/run/march to 467/39/41
+    # windows of 19693 while the other 21 actions kept theirs, so locomotion was
+    # only 7.1% of sampled batches (~18 rows of 256) — the gait losses reach
+    # only those rows, so they were weak in practice no matter their weight.
+    # balance-power alone caps locomotion at 12.5% (3 of 24 actions at bp=1.0),
+    # which is still far too little for the three actions that matter here.
+    if a.loco_boost > 1.0:
+        loco_names = {"walk", "run", "march"}
+        li = [i for i, n in enumerate(vocab) if n in loco_names]
+        if li:
+            boost = np.ones(len(vocab), np.float64)
+            for i in li:
+                boost[i] = a.loco_boost
+            w = w * (tk @ boost)
+            sh = w[(tk[:, li].sum(1) > 0)].sum() / w.sum()
+            print(f"locomotion sampling share: {100 * sh:.1f}% "
+                  f"(boost x{a.loco_boost})", flush=True)
     sampler = torch.utils.data.WeightedRandomSampler(
         torch.from_numpy(w), num_samples=N, replacement=True)
     ds = torch.utils.data.TensorDataset(x1, m6, tok)
@@ -232,18 +621,46 @@ def main():
         # epoch — no pickled objects — so load safely (no code execution).
         ck = torch.load(ckpt_path, map_location=dev, weights_only=True)
         net.load_state_dict(ck["net"])
-        opt.load_state_dict(ck["opt"])
-        sched.load_state_dict(ck["sched"])
-        start_ep = ck["epoch"] + 1
-        print(f"resumed from epoch {start_ep}", flush=True)
+        # A WARM START (weights transplanted from a run with a different vocab)
+        # deliberately carries no optimizer/scheduler state: their moment
+        # buffers are shaped for the OLD act_emb and would be stale or
+        # shape-mismatched. Restore them only when present.
+        if "opt" in ck and "sched" in ck:
+            opt.load_state_dict(ck["opt"])
+            sched.load_state_dict(ck["sched"])
+            start_ep = ck["epoch"] + 1
+            print(f"resumed from epoch {start_ep}", flush=True)
+        else:
+            start_ep = ck.get("epoch", 0)
+            print(f"WARM START from transplanted weights at epoch {start_ep} "
+                  f"(fresh optimizer/scheduler)", flush=True)
+
+    # `range(start_ep, a.epochs)` is EMPTY when --epochs is at or below the
+    # resume point, and the export block below would then happily write an
+    # ONNX of untrained (or, on a warm start, merely transplanted) weights —
+    # silently, and indistinguishable from a real result. Refuse instead.
+    if start_ep >= a.epochs:
+        raise SystemExit(
+            f"--epochs {a.epochs} is not beyond the checkpoint's epoch "
+            f"{start_ep}: there is nothing to train. Raise --epochs to export "
+            f"a trained model, or use export-t2m-from-ckpt.py to export the "
+            f"checkpoint as-is.")
 
     for ep in range(start_ep, a.epochs):
-        tot, nb = 0.0, 0
+        # Accumulate the epoch loss ON DEVICE. A per-batch `loss.item()` is a
+        # GPU->CPU sync (`_local_scalar_dense_mps` -> `waitUntilCompleted`)
+        # that drains the whole MPS queue ~97x/epoch; on long runs the MPS
+        # allocator degrades until each sync parks the process in
+        # uninterruptible wait and throughput collapses ~11x (observed at
+        # ep84: 84s/epoch -> ~16min/epoch). One sync per EPOCH instead.
+        tot = torch.zeros((), device=dev)
+        nb = 0
         for xb, mb, tb in dl:
             xb, mb, tb = xb.to(dev), mb.to(dev), tb.to(dev)
             x0 = torch.randn_like(xb)
             # classifier-free guidance: drop the action condition 10% of the
             # time so the sampler can extrapolate cond vs uncond at export.
+            tb_raw = tb
             drop = (torch.rand(tb.shape[0], device=dev) < 0.1).float()
             tb = tb * (1.0 - drop)[:, None]
             t = torch.rand(xb.shape[0], device=dev)
@@ -252,13 +669,87 @@ def main():
             tgt = xb - x0
             mask = mb[:, None, :]                       # [B,1,C6]
             loss = ((v - tgt) ** 2 * mask).sum() / mask.sum() / T
+            if a.jitter_weight > 0:
+                q_all = d6_to_quat(
+                    (xt + (1.0 - t[:, None, None]) * v).reshape(-1, T, J, D6))
+                # per-sample band: fast actions may legitimately move ~2.5x a
+                # walk (real Mixamo run 0.187 vs walk 0.059)
+                # Bands are set from the DATA's per-action p95, measured on the
+                # v72 cache. Note march's mean speed (median 0.050) is close to
+                # WALK's (0.055) — marching in place is not fast by this measure,
+                # so lumping it with run and raising its FLOOR to 0.10 penalised
+                # 96% of real march windows. Only genuinely fast actions (run,
+                # dance) get the raised ceiling, and the floor stays low for all.
+                is_fast = (tb_raw * fast_mask_v).sum(-1).clamp(0, 1)
+                hi = 0.10 + is_fast * 0.12          # walk 0.10, fast 0.22
+                lo = torch.full_like(hi, 0.035)     # low floor for every action
+                loss = loss + a.jitter_weight * jitter_excess(
+                    q_all, hi=hi, lo=lo).mean()
+            if a.phase_weight > 0:
+                # Flow matching predicts a VELOCITY, so reconstruct the clean
+                # sample the model implies at this t before measuring gait:
+                #   x_t = (1-t)x0 + t*x1  and  v* = x1 - x0  =>  x1 = x_t + (1-t)v
+                x1_hat = xt + (1.0 - t[:, None, None]) * v
+                q_hat = d6_to_quat(x1_hat.reshape(-1, T, J, D6))
+                ph = gait_phase_corr(q_hat, dirs_t)          # [B], want -> +1
+                # gate to locomotion rows only (tb is the CFG-dropped token, so
+                # use the pre-drop labels for the gate)
+                g = (tb_raw * loco_mask_v).sum(-1).clamp(0, 1)
+                denom = g.sum().clamp_min(1.0)
+                # hinge: only penalise below a firm-but-not-saturating target,
+                # so well-phased samples are left alone
+                # anatomy guard: free below ~20 deg of hip->chest yaw (the
+                # data sits at ~6 deg), then linearly penalised.
+                tw = spine_twist_penalty(q_hat)
+                tw_pen = (tw - 0.35).clamp_min(0.0)
+                loss = loss + a.phase_weight * (
+                    (g * (0.6 - ph).clamp_min(0.0)).sum() / denom)
+                loss = loss + a.twist_weight * (
+                    (g * tw_pen).sum() / denom)
+                if a.period_weight > 0:
+                    # WALK rows only — see prep-t2m-v6's periodicity gate: the
+                    # real Mixamo run has no positive autocorrelation at any
+                    # lag, so demanding it of run/march asks for something real
+                    # running does not have.
+                    walk_j = vocab.index("walk") if "walk" in vocab else -1
+                    if walk_j >= 0:
+                        gp = tb_raw[:, walk_j].clamp(0, 1)
+                        ap = gait_aperiodicity(q_hat, dirs_t)
+                        loss = loss + a.period_weight * (
+                            (gp * ap).sum() / gp.sum().clamp_min(1.0))
+                if a.legchain_weight > 0:
+                    lc = leg_chain_penalty(q_hat, dirs_t)
+                    loss = loss + a.legchain_weight * (
+                        (g * lc).sum() / denom)
+                if a.amp_weight > 0:
+                    # Floors are calibrated to WALK's data p5; march/run have
+                    # legitimately larger excursion (march stride p5 1.174 vs
+                    # walk 0.741), so a global floor penalised 81% of real march
+                    # windows. Apply the floor only to walk rows; the others
+                    # keep the over-drive ceiling.
+                    walk_i = vocab.index("walk") if "walk" in vocab else -1
+                    if walk_i >= 0:
+                        gw = tb_raw[:, walk_i].clamp(0, 1)
+                    else:
+                        gw = torch.zeros_like(g)
+                    amp_ceil = amplitude_excess(q_hat, dirs_t, lo_scale=0.0)
+                    amp_full = amplitude_excess(q_hat, dirs_t)
+                    amp = amp_ceil + gw * (amp_full - amp_ceil)
+                    loss = loss + a.amp_weight * (
+                        (g * amp).sum() / denom)
+                if a.travel_weight > 0:
+                    tv = travel_forward_torch(q_hat, dirs_t)
+                    # hinge toward the data's level (~+0.75); no reward above it
+                    loss = loss + a.travel_weight * (
+                        (g * (0.5 - tv).clamp_min(0.0)).sum() / denom)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             opt.step()
             sched.step()
-            tot += loss.item(); nb += 1
-        print(f"ep {ep + 1}/{a.epochs} loss {tot / max(1, nb):.4f}", flush=True)
+            tot += loss.detach(); nb += 1
+        print(f"ep {ep + 1}/{a.epochs} "
+              f"loss {tot.item() / max(1, nb):.4f}", flush=True)
         torch.save({"net": net.state_dict(), "opt": opt.state_dict(),
                     "sched": sched.state_dict(), "epoch": ep}, ckpt_path)
 

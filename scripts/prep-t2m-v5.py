@@ -79,6 +79,19 @@ for _c, _p in enumerate(PARENT):     # chain child = FIRST child (hip→abdomen,
 
 # FIXED canonical T-pose bone directions D (canonical axes: +Y up, +Z fwd,
 # +X left — the CMU frame convention every dump is normalized into).
+# ROLE ORDER (AnimationMerger.cpp kParentCanon comment — do NOT re-derive this
+# from the "X=left" axis note, which describes the AXES, not the role order):
+#   0-5   hip, abdomen, chest, neck, neck1, head
+#   6-9   RIGHT collar, shoulder, elbow, hand      <-- RIGHT side, so -X
+#   10-13 LEFT  collar, shoulder, elbow, hand      <-- LEFT  side, so +X
+#   14-17 RIGHT buttock, hip, knee, foot
+#   18-21 LEFT  buttock, hip, knee, foot
+# Confirmed independently by compensateCanonicalHandedness(), which reads
+# `lx = worldXForCanon(19)` (LEFT leg) vs `rx = worldXForCanon(15)` (RIGHT leg).
+# A previous "chirality fix" swapped 6-9 with 10-13 on the false premise that
+# 6-9 were the left arm; that INVERTED an already-correct table and produced a
+# ~119 deg shoulder-vs-hip yaw in the cache (real gait counter-rotates 10-20),
+# i.e. the anatomically twisted torso the user saw. Reverted.
 D_CANON = np.array([
     [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],  [0, 1, 0],
     [-1, 0, 0], [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],

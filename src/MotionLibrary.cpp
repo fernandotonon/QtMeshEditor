@@ -35,7 +35,14 @@ const Syn kSynonyms[] = {
     {"walking", "walk"}, {"stroll", "walk"}, {"step", "walk"},
     {"jumping", "jump"}, {"hop", "jump"}, {"leap", "jump"},
     {"dancing", "dance"}, {"spin", "dance"},
-    {"marching", "march"},
+    // "march"/"marching" resolve to WALK, not to a `march` action. The curated
+    // library has never contained a march clip, and the t2m model's march was
+    // trained on leftover CMU corpus whose ankle folds ~106 deg (the foot
+    // perpendicular to the shin in 100% of windows) — it rendered as a twisted
+    // mess and was dropped from the model vocab in #837. With no clip and no
+    // vocab entry, "marching" resolved to nothing and returned a hard error, so
+    // point it at the nearest good action instead: a marching gait IS a walk.
+    {"marching", "walk"}, {"march", "walk"},
     {"kicking", "kick"},
     {"punching", "punch"}, {"strike", "punch"}, {"hit", "punch"},
     {"waving", "wave"}, {"greet", "wave"}, {"hello", "wave"},
