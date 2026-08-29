@@ -2081,10 +2081,14 @@ bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
     // below reads the mesh's toe region, which is a property of the RIG alone —
     // it therefore returns the same answer for every model, while different
     // t2m generations can carry opposite canonical facing conventions and need
-    // opposite flips on the same mesh. Measured on the Rumba rig: the v7.7
-    // model's clip scores 0.535 rad from the real Mixamo walk unflipped and
-    // 0.371 flipped (below the 0.437 real-vs-real floor), i.e. the heuristic
-    // picks the wrong one. So let the vocab say, and fall back to geometry.
+    // opposite flips on the same mesh.
+    //
+    // No shipped vocab declares `yaw180` today: the v8.0 model is trained on
+    // the curated template clips, which already carry the correct facing, so
+    // the geometry heuristic agrees with it and this returns -1. The hook stays
+    // as forward compatibility for a future model trained on a corpus with the
+    // opposite convention — that is a property of the MODEL, and only the model
+    // can state it. Result is cached, so this costs one file read per process.
     if (const int decl = declaredYaw180(); decl >= 0)
         return decl != 0;
     if (!entity || !entity->hasSkeleton()) return false;
