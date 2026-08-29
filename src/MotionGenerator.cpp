@@ -42,7 +42,11 @@ const Syn kSynonyms[] = {
     {"walking", "walk"}, {"stroll", "walk"},
     {"leap", "jump"}, {"hop", "jump"},
     {"dancing", "dance"}, {"punching", "punch"}, {"kicking", "kick"},
-    {"waving", "wave"}, {"marching", "march"}, {"climbing", "climb"},
+    // "marching" -> walk: the march training data was broken (ankle folded
+    // ~106 deg) and was dropped from the vocab in #837, and no curated march
+    // clip exists either, so route it to the nearest good gait.
+    {"waving", "wave"}, {"marching", "walk"}, {"march", "walk"},
+    {"climbing", "climb"},
     {"idle", "idle"}, {"stand", "idle"}, {"standing", "idle"},
     {"sitting", "sit"}, {"seat", "sit"},
     {"throwing", "throw"}, {"toss", "throw"}, {"pitch", "throw"},
