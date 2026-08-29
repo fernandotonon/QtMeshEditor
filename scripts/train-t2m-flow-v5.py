@@ -141,7 +141,10 @@ def travel_forward_torch(q, dirs):
 
     Same quantity as prep-t2m-v6.travel_forward and the eval: travel is
     inferred from the STANCE (slower) foot, which drifts backward while the
-    body moves forward. Forward is (Lshoulder - Rshoulder) x up.
+    body moves forward. Forward is (role7 - role11) x up, where role 7 is the
+    RIGHT shoulder and role 11 the LEFT (D_CANON[7] = -X, D_CANON[11] = +X) —
+    see the note in prep-t2m-v6.travel_forward: this operand order is what
+    yields the forward axis, and exchanging them inverts the sign.
 
     Even with a 100%-forward training set the model sat at ~50% forward
     (measured at ep40 with foot motion at 73% of the data's magnitude, so this
@@ -149,9 +152,9 @@ def travel_forward_torch(q, dirs):
     no term tying the emitted gait to a travel direction, so this supervises it
     directly — the same reasoning as the gait-phase hinge.
     """
-    lsh = fk_pos(q, 7, dirs)
-    rsh = fk_pos(q, 11, dirs)
-    side = F.normalize(lsh - rsh, dim=-1, eps=1e-6)
+    rsh = fk_pos(q, 7, dirs)          # role 7  = RIGHT shoulder
+    lsh = fk_pos(q, 11, dirs)         # role 11 = LEFT shoulder
+    side = F.normalize(rsh - lsh, dim=-1, eps=1e-6)
     up = torch.zeros_like(side)
     up[..., 1] = 1.0
     fwd = F.normalize(torch.cross(side, up, dim=-1), dim=-1, eps=1e-6)
@@ -631,6 +634,17 @@ def main():
             start_ep = ck.get("epoch", 0)
             print(f"WARM START from transplanted weights at epoch {start_ep} "
                   f"(fresh optimizer/scheduler)", flush=True)
+
+    # `range(start_ep, a.epochs)` is EMPTY when --epochs is at or below the
+    # resume point, and the export block below would then happily write an
+    # ONNX of untrained (or, on a warm start, merely transplanted) weights —
+    # silently, and indistinguishable from a real result. Refuse instead.
+    if start_ep >= a.epochs:
+        raise SystemExit(
+            f"--epochs {a.epochs} is not beyond the checkpoint's epoch "
+            f"{start_ep}: there is nothing to train. Raise --epochs to export "
+            f"a trained model, or use export-t2m-from-ckpt.py to export the "
+            f"checkpoint as-is.")
 
     for ep in range(start_ep, a.epochs):
         # Accumulate the epoch loss ON DEVICE. A per-batch `loss.item()` is a

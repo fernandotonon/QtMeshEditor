@@ -149,8 +149,16 @@ def travel_forward(w):
     (#837, user-reported "moving backwards"). Gating on this collapses the
     conditional to one mode.
     """
-    lsh, rsh = fk_pos(w, 7), fk_pos(w, 11)
-    side = lsh - rsh
+    # NB roles 7/11 are RIGHT/LEFT respectively (D_CANON[7] = -X, D_CANON[11]
+    # = +X), so `side` below is right->left... which is why the cross product
+    # with +Y yields the FORWARD axis with these operands in this order. A
+    # review flagged the old `lsh, rsh = fk_pos(w, 7), fk_pos(w, 11)` naming as
+    # a swapped binding and proposed exchanging them; that would INVERT the sign
+    # and make the gate reject every genuine forward walk. Verified empirically:
+    # the real Mixamo walk scores +0.581 and 100% of cached walk/run windows are
+    # positive as written. Renamed to match reality rather than changing it.
+    rsh, lsh = fk_pos(w, 7), fk_pos(w, 11)
+    side = rsh - lsh
     side = side / (np.linalg.norm(side, axis=-1, keepdims=True) + 1e-9)
     up = np.broadcast_to(np.array([0, 1, 0], np.float32), side.shape)
     f = np.cross(side, up)
