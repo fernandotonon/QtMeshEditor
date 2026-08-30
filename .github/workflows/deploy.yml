@@ -775,6 +775,15 @@ jobs:
             sudo make install -j8
       
  build-linux:
+    # Explicit name: without it GitHub derives the check name from EVERY matrix
+    # parameter, so this job reported as
+    #   "build-linux (amd64, ubuntu-latest, linux, linux_gcc_64, gcc_64, x86_64-linux-gnu)".
+    # Branch protection required a context called plain "build-linux", which a
+    # matrix job never produces, so that context sat pending forever and every
+    # PR showed BLOCKED with nothing actually failing. Pinning a short stable
+    # name keeps the required contexts working even if the matrix gains or
+    # loses parameters later.
+    name: build-linux (${{ matrix.arch }})
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     # Matrix over both Linux arches → qtmesheditor_amd64.deb + qtmesheditor_arm64.deb.
     # The arm64 .deb is what lets the Docker image ship a native linux/arm64
