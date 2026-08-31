@@ -1983,17 +1983,6 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 width: parent.width - 16
             }
-            // Which runtime flavor is active (trellis.cpp / Python sidecar).
-            Text {
-                visible: mgBackendCombo.t2Selected && mgBackendCombo.t2Ready
-                text: "  " + MeshGenController.trellis2RuntimeHint()
-                      + "  Textures + PBR maps are baked natively by QtMeshEditor."
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 10
-                wrapMode: Text.WordWrap
-                width: parent.width - 16
-            }
-
             // ---- TRELLIS.2 options (only for the TRELLIS.2 backend) ----------
             Row {
                 spacing: 6
