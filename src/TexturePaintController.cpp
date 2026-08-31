@@ -1,4 +1,5 @@
 #include "TexturePaintController.h"
+#include "BrushPresetLibrary.h"
 
 #include "AppSettingsKeys.h"
 #include "EditModeController.h"
@@ -7244,4 +7245,187 @@ void TexturePaintController::flushPaintTextureForExport(Ogre::Entity* entity)
         QStringLiteral("file.export"),
         QStringLiteral("Flushed %1-layer composite before export")
             .arg(m_layerStack.layerCount()));
+}
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice H (#551): brush presets + colour palettes
+// ---------------------------------------------------------------------------
+
+bool TexturePaintController::applyBrushPreset(const QString& name)
+{
+    BrushPresetLibrary::Preset p;
+    if (!BrushPresetLibrary::findPreset(name.toStdString(), p)) return false;
+
+    // Order matters: set the footprint's ASSET before the footprint type, so a
+    // stamp footprint never briefly points at the previous preset's image.
+    if (!p.stamp.empty())  setActiveStampName(QString::fromStdString(p.stamp));
+    if (!p.tiling.empty()) setActiveTilingName(QString::fromStdString(p.tiling));
+    setFootprintType(p.footprint);
+
+    setBrushTool(p.tool);
+    setBrushRadius(p.radius);
+    setBrushStrength(p.strength);
+    setBrushFalloff(p.falloff);
+    setActiveChannel(p.channel);
+    if (auto* em = EditModeController::instance())
+        em->setVertexPaintShape(p.shape);
+
+    setStampSpacing(p.spacing);
+    setStampScatter(p.scatter);
+    setStampSizeJitter(p.sizeJitter);
+    setStampOpacityJitter(p.opacityJitter);
+    setStampRotation(p.stampRotation);
+    setStampFixedAngle(p.stampAngleDeg);
+
+    setColorSource(p.colorSource);
+    setGradientMode(p.gradientMode);
+    if (!p.rampName.empty()) setActiveRampName(QString::fromStdString(p.rampName));
+
+    // Deliberately NOT restored: the paint COLOUR. A preset describes the brush
+    // (its shape and dynamics), not what you are painting with — clobbering the
+    // user's colour on every preset click would be hostile.
+    SentryReporter::addBreadcrumb("paint.preset.apply", name);
+    return true;
+}
+
+bool TexturePaintController::saveBrushPreset(const QString& name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) return false;
+
+    BrushPresetLibrary::Preset p;
+    p.name = trimmed.toStdString();
+    p.tool = brushTool();
+    p.radius = texturePaintRadius();
+    p.strength = texturePaintStrength();
+    p.falloff = texturePaintFalloff();
+    p.shape = brushShape();
+    p.channel = activeChannel();
+    p.footprint = footprintType();
+    p.stamp = activeStampName().toStdString();
+    p.tiling = activeTilingName().toStdString();
+    p.spacing = stampSpacing();
+    p.scatter = stampScatter();
+    p.sizeJitter = stampSizeJitter();
+    p.opacityJitter = stampOpacityJitter();
+    p.stampRotation = stampRotation();
+    p.stampAngleDeg = stampFixedAngle();
+    p.colorSource = colorSource();
+    p.gradientMode = gradientMode();
+    p.rampName = activeRampName().toStdString();
+
+    if (BrushPresetLibrary::saveCustom(p).empty()) return false;
+    SentryReporter::addBreadcrumb("paint.preset.save", trimmed);
+    return true;
+}
+
+QStringList TexturePaintController::brushPresetNames() const
+{
+    QStringList out;
+    for (const auto& p : BrushPresetLibrary::allPresets())
+        out << QString::fromStdString(p.name);
+    return out;
+}
+
+bool TexturePaintController::isBundledBrushPreset(const QString& name) const
+{
+    return BrushPresetLibrary::isBundled(name.toStdString());
+}
+
+bool TexturePaintController::deleteBrushPreset(const QString& name)
+{
+    // Bundled presets are compiled in, so "deleting" one could only remove a
+    // user override — refuse rather than appear to delete something that comes
+    // straight back on restart.
+    if (isBundledBrushPreset(name)) return false;
+    const bool ok = BrushPresetLibrary::deleteCustom(name.toStdString());
+    if (ok) SentryReporter::addBreadcrumb("paint.preset.delete", name);
+    return ok;
+}
+
+bool TexturePaintController::exportBrushPreset(const QString& name, const QString& path)
+{
+    BrushPresetLibrary::Preset p;
+    if (!BrushPresetLibrary::findPreset(name.toStdString(), p)) return false;
+    return BrushPresetLibrary::exportToFile(p, path.toStdString());
+}
+
+QString TexturePaintController::importBrushPreset(const QString& path)
+{
+    BrushPresetLibrary::Preset p;
+    if (!BrushPresetLibrary::importFromFile(path.toStdString(), p)) return {};
+    if (BrushPresetLibrary::saveCustom(p).empty()) return {};
+    SentryReporter::addBreadcrumb("paint.preset.import",
+                                  QString::fromStdString(p.name));
+    return QString::fromStdString(p.name);
+}
+
+QStringList TexturePaintController::colorPaletteNames() const
+{
+    QStringList out;
+    for (const auto& p : ColorPaletteLibrary::allPalettes())
+        out << QString::fromStdString(p.name);
+    return out;
+}
+
+QStringList TexturePaintController::colorPaletteSwatches(const QString& paletteName) const
+{
+    QStringList out;
+    for (const auto& p : ColorPaletteLibrary::allPalettes()) {
+        if (QString::fromStdString(p.name) != paletteName) continue;
+        for (const auto& s : p.swatches)
+            out << QString::fromStdString(ColorPaletteLibrary::swatchToHex(s));
+        break;
+    }
+    return out;
+}
+
+QStringList TexturePaintController::recentPaintColors() const
+{
+    QStringList out;
+    for (const auto& s : m_recentColors)
+        out << QString::fromStdString(ColorPaletteLibrary::swatchToHex(s));
+    return out;
+}
+
+bool TexturePaintController::applyPaletteColor(const QString& hex, bool asBackground)
+{
+    ColorPaletteLibrary::Swatch s;
+    if (!ColorPaletteLibrary::swatchFromHex(hex.toStdString(), s)) return false;
+
+    auto* em = EditModeController::instance();
+    if (!em) return false;
+    const QColor c(s.r, s.g, s.b);
+    if (asBackground) em->setVertexPaintBackgroundColor(c);
+    else              em->setVertexPaintColor(c);
+
+    // Only the foreground feeds the recent ring: the background is a secondary
+    // slot the user changes rarely, and mixing it in would churn the history.
+    if (!asBackground) {
+        ColorPaletteLibrary::pushRecent(m_recentColors, s);
+        emit paletteChanged();
+    }
+    SentryReporter::addBreadcrumb("paint.palette.apply",
+        QStringLiteral("%1%2").arg(hex, asBackground ? QStringLiteral(" (bg)") : QString()));
+    return true;
+}
+
+bool TexturePaintController::savePaletteFromTexture(const QString& paletteName, int maxColours)
+{
+    const QString trimmed = paletteName.trimmed();
+    if (trimmed.isEmpty()) return false;
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0) return false;
+
+    const auto swatches = ColorPaletteLibrary::extractFromImage(
+        m_buffer.data().data(), m_buffer.width(), m_buffer.height(), maxColours);
+    if (swatches.empty()) return false;   // fully transparent buffer, nothing to take
+
+    ColorPaletteLibrary::Palette p;
+    p.name = trimmed.toStdString();
+    p.swatches = swatches;
+    if (ColorPaletteLibrary::saveCustom(p).empty()) return false;
+    SentryReporter::addBreadcrumb("paint.palette.save",
+        QStringLiteral("%1 (%2 colours)").arg(trimmed).arg(swatches.size()));
+    emit paletteChanged();
+    return true;
 }
