@@ -161,3 +161,5 @@ __pycache__/
 !docs/MOCAP_SPIKE.md
 .mocap_work/
 .venv-mocap/
+!docs/TRELLIS2.md
+!docs/trellis2-dependencies.md

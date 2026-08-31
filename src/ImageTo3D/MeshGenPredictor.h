@@ -50,10 +50,20 @@ public:
     // that the ONNX fp16 converters can't rewrite cleanly; int8 is smaller anyway.)
     enum class Quality { Fp32, Int8 };
 
-    // Generation backend. TripoSR = the fast single-pass LRM (default);
+    // Generation backend. TripoSR = the fast single-pass LRM;
     // TripoSG = the 1.5B rectified-flow model (higher-fidelity geometry,
     // slower, geometry-only — see TripoSGPredictor). Both MIT code+weights.
-    enum class Backend { TripoSR, TripoSG };
+    // Trellis2 = Microsoft TRELLIS.2 (MIT code+weights) via the out-of-process
+    // Python sidecar (ai/trellis2/, Linux + NVIDIA GPU) — the highest-quality
+    // tier and the DEFAULT whenever its runtime is installed (see
+    // Trellis2Predictor + defaultBackend()); mesh cleanup/UVs/PBR baking are
+    // done natively by Trellis2Bake, deliberately without NVIDIA
+    // nvdiffrast/nvdiffrec (docs/trellis2-dependencies.md).
+    enum class Backend { TripoSR, TripoSG, Trellis2 };
+
+    // The backend a surface should preselect when the user didn't choose one:
+    // Trellis2 when its runtime is available on this machine, else TripoSR.
+    static Backend defaultBackend();
 
     struct Options {
         Options();                    // out-of-line (same idiom as UniRig::Options)
@@ -95,6 +105,25 @@ public:
         Backend backend = Backend::TripoSR;
         int   flowSteps = 25;
         float guidanceScale = 7.0f;
+
+        // ---- TRELLIS.2-only options (Backend::Trellis2) -----------------------
+        unsigned seed = 42;                 // deterministic generation seed
+        QString  trellis2Preset =           // fast | balanced | high
+            QStringLiteral("balanced");
+        // Game-ready simplification target (Phase 8 presets: Low ~10k /
+        // Medium ~25k / High ~50k). 0 = keep the original TRELLIS.2 density.
+        int  targetTriangles = 0;
+        // Bake a tangent-space normal map carrying the full-res source detail
+        // (only meaningful when the target was simplified; needs bakeTexture).
+        bool bakeNormalMap = true;
+        // Test hook: drive the sidecar's --mock synthetic generation (no GPU,
+        // no TRELLIS.2 models) — used by the plumbing e2e tests.
+        bool trellis2Mock = false;
+        // Phase 9: where to persist the raw generation (QTM3D interchange) so
+        // textures/LODs can be re-baked later without re-running inference.
+        // Empty = don't keep. The kept path lands in Result::sourceInterchangePath.
+        QString trellis2SourceKeepDir;
+        QString trellis2SourceKeepBaseName;
     };
 
     struct Result {
@@ -107,6 +136,11 @@ public:
         // Baked-texture path (Options::bakeTexture): UV0 per vertex + the baked
         // diffuse image. Both empty/null when the bake was disabled or fell back.
         std::vector<float>    uvs;       // Nx2 in [0,1]
+        // Optional precomputed smooth shading normals (Nx3). When present,
+        // MeshGenBuilder uses them instead of recomputing from the (possibly
+        // seam-split) index buffer — the TRELLIS.2 bake provides
+        // position-welded ones so chart seams stay smooth.
+        std::vector<float>    normals;
         QImage                texture;
         int vertexCount   = 0;
         int triangleCount = 0;
@@ -116,6 +150,18 @@ public:
         // TripoSG's field is already +Y-up (upstream exports the marching-cubes
         // trimesh as-is), so its dispatch sets this false to skip the bake.
         bool bakeTripoSROrientation = true;
+
+        // ---- TRELLIS.2 extras (empty/null for the other backends) -------------
+        // Real baked PBR maps from the sparse attribute volume (Trellis2Bake).
+        // When present, MeshGenBuilder binds them into the canonical
+        // normal_map/roughness/metallic slots and SKIPS the #404 PbrMapSynth
+        // guess-from-albedo chain.
+        QImage normalMap;      // tangent-space, OpenGL +Y up
+        QImage roughnessMap;   // grayscale
+        QImage metallicMap;    // grayscale
+        // Phase 9: the preserved full-resolution generation (QTM3D interchange)
+        // so textures/LODs can be re-baked later without re-running inference.
+        QString sourceInterchangePath;
     };
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per call.)

@@ -154,6 +154,13 @@ int main(int argc, char *argv[])
                 freopen("CONOUT$", "w", stderr);
             }
 #endif
+        // Match the GUI's QSettings identity — without this the CLI reads a
+        // DIFFERENT preferences domain (com.qtmesheditor.* vs the GUI's
+        // com.none.*) and settings like ai/trellis2Cli written by one surface
+        // are invisible to the other.
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setOrganizationDomain("none");
+        QCoreApplication::setApplicationName("QtMeshEditor");
         return CLIPipeline::run(argc, argv);
     }
 

@@ -1915,6 +1915,9 @@ Rectangle {
             // higher = more detail but much slower. Labels flag the trade-off.
             Row {
                 spacing: 6
+                // Marching-cubes grid — local ONNX backends only (TRELLIS.2's
+                // resolution comes from its Quality preset instead).
+                visible: !mgBackendCombo.t2Selected
                 Text {
                     text: "Resolution"
                     color: PropertiesPanelController.textColor
@@ -1935,10 +1938,12 @@ Rectangle {
                 }
             }
 
-            // Backend: TripoSR (fast, textured) vs TripoSG (rectified flow —
-            // higher-fidelity geometry, geometry-only, slower; models download
-            // on first use). Declared BEFORE the Model row so the tier picker
-            // can react to it.
+            // Backend: TRELLIS.2 (Microsoft, out-of-process sidecar — the
+            // highest-quality tier and the DEFAULT whenever its runtime is
+            // installed), TripoSR (fast, textured, local ONNX) or TripoSG
+            // (rectified flow — higher-fidelity local geometry, geometry-only,
+            // slower). Declared BEFORE the Model row so the tier picker can
+            // react to it. Index map: 0 = TRELLIS.2, 1 = TripoSR, 2 = TripoSG.
             Row {
                 spacing: 6
                 Text {
@@ -1951,14 +1956,108 @@ Rectangle {
                     id: mgBackendCombo
                     width: 190
                     enabled: !MeshGenController.busy
-                    model: ["TripoSR (fast, textured)", "TripoSG (best geometry)"]
-                    currentIndex: 0
+                    // Runtime state read once at instantiation (an install
+                    // while the app runs is picked up on the next session /
+                    // section reopen).
+                    readonly property bool t2Ready: MeshGenController.trellis2Available()
+                    readonly property bool t2Selected: currentIndex === 0
+                    readonly property bool sgSelected: currentIndex === 2
+                    model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
+                            "TripoSR (fast, textured)",
+                            "TripoSG (best geometry)"]
+                    currentIndex: t2Ready ? 0 : 1
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
                     onCurrentIndexChanged: {
-                        if (currentIndex === 1)
+                        if (currentIndex === 2)
                             mgQualityCombo.currentIndex = 0
                     }
+                }
+            }
+            // Runtime hint when TRELLIS.2 is selected but not installed.
+            Text {
+                visible: mgBackendCombo.t2Selected && !mgBackendCombo.t2Ready
+                text: "  ⚠ " + MeshGenController.trellis2RuntimeHint()
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+            // Which runtime flavor is active (trellis.cpp / Python sidecar).
+            Text {
+                visible: mgBackendCombo.t2Selected && mgBackendCombo.t2Ready
+                text: "  " + MeshGenController.trellis2RuntimeHint()
+                      + "  Textures + PBR maps are baked natively by QtMeshEditor."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+
+            // ---- TRELLIS.2 options (only for the TRELLIS.2 backend) ----------
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Quality"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Preset
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    model: ["Fast (512)", "Balanced (default)", "High (1536, more VRAM)"]
+                    currentIndex: 1
+                    readonly property var presetValues: ["fast", "balanced", "high"]
+                    property string presetValue: presetValues[currentIndex]
+                }
+            }
+            Row {
+                spacing: 6
+                // ALL backends: game-ready weld + debris-cull + simplify (the
+                // raw generations are marching-cubes/voxel-dense — decimating
+                // them blind blobs out and skins badly; this path simplifies
+                // hard and re-bakes detail as diffuse + normal maps instead).
+                Text {
+                    text: "Mesh"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Mesh
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    // Targets are approximate — border locking can stop earlier.
+                    // "Maximum" still caps dense TRELLIS sources at ~150–300k
+                    // for the bake (an uncapped raw dual-grid mesh is
+                    // un-unwrappable); the raw source is preserved either way.
+                    model: ["Maximum detail (auto cap)", "Game Low (~10k tris)",
+                            "Game Medium (~25k tris)", "Game High (~50k tris)"]
+                    currentIndex: 2
+                    readonly property var triValues: [0, 10000, 25000, 50000]
+                    property int triValue: triValues[currentIndex]
+                }
+            }
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Texture"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Tex
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    model: ["1024 px", "2048 px (default)", "4096 px"]
+                    currentIndex: 1
+                    readonly property var sizeValues: [1024, 2048, 4096]
+                    property int sizeValue: sizeValues[currentIndex]
                 }
             }
 
@@ -1969,7 +2068,10 @@ Rectangle {
             // real option and locks.
             Row {
                 spacing: 6
-                property bool isSG: mgBackendCombo.currentIndex === 1
+                property bool isSG: mgBackendCombo.sgSelected
+                // The TRELLIS.2 sidecar manages its own weights — the local
+                // tier picker doesn't apply, so the row hides entirely.
+                visible: !mgBackendCombo.t2Selected
                 Text {
                     text: "Model"
                     color: PropertiesPanelController.textColor
@@ -2003,26 +2105,34 @@ Rectangle {
                 id: mgSmooth
                 text: "Smooth mesh (Taubin)"
                 checked: true
+                // Marching-cubes polish — local ONNX backends only (TRELLIS.2's
+                // dual-grid extraction has no stair-stepping to smooth).
+                visible: !mgBackendCombo.t2Selected
             }
             InspectorCheck {
                 id: mgRefine
                 text: "Refine surface (re-project)"
                 checked: true
+                visible: !mgBackendCombo.t2Selected
             }
             // ---- Colour / texture stages, in execution order ----------------
             // TripoSG (geometry-only) gets its colour SOLELY from the AI
             // texture pass — so when TripoSG is the backend, that checkbox
             // leads and the plain "Bake diffuse" (TripoSR field colour) is
             // hidden. TripoSR keeps the classic bake → PBR → upscale chain.
-            property bool sgSelected: mgBackendCombo.currentIndex === 1
+            property bool sgSelected: mgBackendCombo.sgSelected
+            property bool t2Selected: mgBackendCombo.t2Selected
 
             // AI texture (multi-view depth-ControlNet): front from the input
             // photo, back/sides SD-generated from the shape, then projected.
             // For TripoSG this is the only colour source; for TripoSR it's an
-            // optional higher-quality alternative to the field bake.
+            // optional higher-quality alternative to the field bake. TRELLIS.2
+            // doesn't need it — it generates real PBR attributes that
+            // QtMeshEditor bakes natively.
             InspectorCheck {
                 id: mgAiTexture
                 text: "Generate texture (AI, front photo + generated back)"
+                visible: !parent.t2Selected
                 checked: parent.sgSelected
                 enabled: !MeshGenController.busy
                     && MaterialEditorQML.stableDiffusionEnabled
@@ -2074,24 +2184,33 @@ Rectangle {
                 text: "Generate 3D"
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
+                    && (!mgBackendCombo.t2Selected || mgBackendCombo.t2Ready)
                 onClicked: {
-                    var sg = mgBackendCombo.currentIndex === 1   // TripoSG
+                    var t2 = mgBackendCombo.currentIndex === 0   // TRELLIS.2
+                    var sg = mgBackendCombo.currentIndex === 2   // TripoSG
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     // The worker only posts a "background" stage on the TripoSR
-                    // path; TripoSG removes the bg inside its predict() dispatch
-                    // without a discrete progress event, so a "background" row
-                    // there would never resolve and look stuck.
-                    if (mgRemoveBg.checked && !sg)
+                    // path; TripoSG/TRELLIS.2 remove the bg inside their
+                    // predict() dispatch without a discrete progress event, so
+                    // a "background" row there would never resolve.
+                    if (mgRemoveBg.checked && !sg && !t2)
                         steps.push({ key: "background", label: "Remove background" })
-                    steps.push({ key: "encode", label: "Encode image" })
+                    steps.push({ key: "encode",
+                                 label: t2 ? "Prepare subject + load model"
+                                           : "Encode image" })
                     if (sg)
                         steps.push({ key: "denoise", label: "Denoise (flow steps)" })
-                    steps.push({ key: "decode", label: "Reconstruct 3D" })
-                    if (mgRefine.checked)
+                    if (t2)
+                        steps.push({ key: "denoise", label: "Generate (TRELLIS.2)" })
+                    steps.push({ key: "decode",
+                                 label: t2 ? "Transfer + optimize mesh"
+                                           : "Reconstruct 3D" })
+                    if (mgRefine.checked && !t2)
                         steps.push({ key: "refine", label: "Refine surface" })
                     // AI texture requested + available? (TripoSG's ONLY colour
-                    // source; optional extra for TripoSR.)
-                    var aiTex = mgAiTexture.checked
+                    // source; optional extra for TripoSR. TRELLIS.2 never needs
+                    // it — its PBR attributes are baked natively.)
+                    var aiTex = mgAiTexture.checked && !t2
                         && MaterialEditorQML.stableDiffusionEnabled
 
                     // Colour stages. For TripoSG we do NOT bake colour at build
@@ -2130,16 +2249,23 @@ Rectangle {
                     mgRoot.mgActiveProgress = -1
                     mgRoot.mgAiPending = aiTex   // gate onCompleted's AI kickoff
 
+                    var genOptions = {
+                        "smooth": mgSmooth.checked,
+                        "refine": mgRefine.checked,
+                        "bake_texture": buildBake,
+                        "generate_pbr": buildPbr,
+                        "upscale_texture": mgUpscale.checked && buildBake,
+                        "backend": t2 ? "trellis2" : (sg ? "triposg" : "triposr"),
+                        // Game-ready simplification target (all backends).
+                        "target_tris": mgT2Mesh.triValue
+                    }
+                    if (t2) {
+                        genOptions["preset"] = mgT2Preset.presetValue
+                        genOptions["texture_size"] = mgT2Tex.sizeValue
+                    }
                     MeshGenController.generateSelected(
                         mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
-                        {
-                            "smooth": mgSmooth.checked,
-                            "refine": mgRefine.checked,
-                            "bake_texture": buildBake,
-                            "generate_pbr": buildPbr,
-                            "upscale_texture": mgUpscale.checked && buildBake,
-                            "backend": sg ? "triposg" : "triposr"
-                        })
+                        genOptions)
                 }
             }
 

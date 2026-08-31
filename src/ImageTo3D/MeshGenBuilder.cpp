@@ -89,7 +89,13 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         && !texturePngPath.isEmpty();
     const bool hasColor = !hasUv
         && result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
-    const std::vector<float> normals = computeNormals(result.positions, result.indices);
+    // Prefer the predictor's precomputed smooth normals (TRELLIS.2's bake
+    // supplies position-welded ones so xatlas chart seams stay smooth);
+    // otherwise accumulate from the index buffer as before.
+    const std::vector<float> normals =
+        result.normals.size() == result.positions.size()
+            ? result.normals
+            : computeNormals(result.positions, result.indices);
 
     auto& mm = Ogre::MeshManager::getSingleton();
     const std::string name = meshName.toStdString();
@@ -296,6 +302,7 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     // exporters resolve it from a registered resource location).
     QString texPath;
     QString normalPath, roughnessPath;   // optional #404 PBR stage outputs
+    QString metallicPath;                // TRELLIS.2 real baked metallic
     if (!result.texture.isNull()
         && result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2) {
         QString dir = opts.textureDir;
@@ -309,19 +316,41 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
         if (result.texture.save(candidate, "PNG")) {
             texPath = candidate;
 
+            // TRELLIS.2 path: the predictor baked REAL PBR maps from the
+            // generation's attribute volume (Trellis2Bake) — persist and bind
+            // those, and skip the #404 guess-from-albedo synthesis entirely.
+            auto saveMap = [&](const QImage& img, const char* suffix) {
+                if (img.isNull())
+                    return QString();
+                const QString p = QDir(dir).filePath(
+                    unique + QStringLiteral("_%1.png").arg(QLatin1String(suffix)));
+                return img.save(p, "PNG") ? p : QString();
+            };
+            normalPath   = saveMap(result.normalMap,   "normal");
+            roughnessPath = saveMap(result.roughnessMap, "roughness");
+            metallicPath = saveMap(result.metallicMap, "metallic");
+
             // Optional PBR stage (#404): synthesize normal + roughness from the
             // baked diffuse BEFORE the resource location is (re)indexed so the
             // new PNGs land in the index below. Height is skipped — nothing in
             // this material path consumes it. Fails soft: a missing model /
             // non-ONNX build just leaves the maps empty (diffuse-only result).
-            if (opts.generatePbrMaps) {
+            // Synthesize ONLY the maps the predictor didn't bake for real:
+            // TRELLIS.2 provides all three; the game-ready TripoSR path bakes
+            // a real detail normal but still wants the #404 roughness guess.
+            if (opts.generatePbrMaps
+                && (normalPath.isEmpty() || roughnessPath.isEmpty())) {
                 PbrMapSynth::Options po;
                 po.generateHeight = false;
+                po.generateNormal = normalPath.isEmpty();
+                po.generateRoughness = roughnessPath.isEmpty();
                 const PbrMapSynthResult pr =
                     AIAssistManager::instance()->synthesizePbrMaps(texPath, po);
                 if (pr.ok) {
-                    normalPath    = pr.normalPath;
-                    roughnessPath = pr.roughnessPath;
+                    if (normalPath.isEmpty())
+                        normalPath = pr.normalPath;
+                    if (roughnessPath.isEmpty())
+                        roughnessPath = pr.roughnessPath;
                 } else {
                     Ogre::LogManager::getSingleton().logWarning(
                         ("MeshGenBuilder: PBR map synthesis failed ("
@@ -374,7 +403,8 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     // button: canonical named slots + FFP wiring + the RTSS normal-map
     // sub-render-state (without applyNormalMap the bind is invisible in the
     // viewport), then recompile.
-    if (!normalPath.isEmpty() || !roughnessPath.isEmpty()) {
+    if (!normalPath.isEmpty() || !roughnessPath.isEmpty()
+        || !metallicPath.isEmpty()) {
         const std::string matName =
             (unique + QStringLiteral("_mesh")).toStdString() + "_mat";
         Ogre::MaterialPtr mat =
@@ -402,6 +432,7 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             };
             bindSlot("normal_map", normalPath);
             bindSlot("roughness",  roughnessPath);
+            bindSlot("metallic",   metallicPath);
             RTShaderHelper::wirePbrSlotsForFFP(mat.get());
             mat->compile();
             // NOTE: the RTSS SRS_NORMALMAP wiring is deferred to

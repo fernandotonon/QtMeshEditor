@@ -31,6 +31,7 @@
 #include "CLIPipeline.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
+#include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
@@ -2747,13 +2748,36 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     const bool upscaleTex  = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
+    // Default backend: TRELLIS.2 when its sidecar runtime is installed on
+    // this machine, else TripoSR. An explicit 'backend' arg always wins.
+    opts.backend = MeshGenPredictor::defaultBackend();
     if (args.contains("backend")) {
         const QString b = args["backend"].toString().toLower();
         if (b == "triposg")      opts.backend = MeshGenPredictor::Backend::TripoSG;
-        else if (b == "triposr" || b.isEmpty())
+        else if (b == "trellis2" || b == "trellis.2" || b == "trellis")
+            opts.backend = MeshGenPredictor::Backend::Trellis2;
+        else if (b == "triposr")
             opts.backend = MeshGenPredictor::Backend::TripoSR;
-        else return makeErrorResult("'backend' must be 'triposr' or 'triposg'.");
+        else if (!b.isEmpty())
+            return makeErrorResult("'backend' must be 'trellis2', 'triposr' or 'triposg'.");
     }
+    if (args.contains("seed")) {
+        const int s = args["seed"].toInt(42);
+        if (s < 0) return makeErrorResult("'seed' must be >= 0.");
+        opts.seed = static_cast<unsigned>(s);
+    }
+    if (args.contains("preset")) {
+        const QString p = args["preset"].toString().toLower();
+        if (p != "fast" && p != "balanced" && p != "high")
+            return makeErrorResult("'preset' must be 'fast', 'balanced' or 'high'.");
+        opts.trellis2Preset = p;
+    }
+    if (args.contains("target_tris")) {
+        opts.targetTriangles = args["target_tris"].toInt(0);
+        if (opts.targetTriangles < 0 || opts.targetTriangles > 10000000)
+            return makeErrorResult("'target_tris' must be in [0, 10000000] (0 = original).");
+    }
+    opts.bakeNormalMap = generatePbr && opts.bakeTexture;
     if (args.contains("flow_steps")) {
         opts.flowSteps = args["flow_steps"].toInt(25);
         if (opts.flowSteps < 1 || opts.flowSteps > 200)
@@ -2765,13 +2789,28 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             return makeErrorResult("'guidance' must be between 0 and 30.");
     }
 
+    const QString backendName =
+        opts.backend == MeshGenPredictor::Backend::Trellis2 ? QStringLiteral("trellis2")
+        : opts.backend == MeshGenPredictor::Backend::TripoSG ? QStringLiteral("triposg")
+                                                             : QStringLiteral("triposr");
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2 backend=%3")
             .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution)
-            .arg(opts.backend == MeshGenPredictor::Backend::TripoSG
-                     ? QStringLiteral("triposg") : QStringLiteral("triposr")));
+            .arg(backendName));
 
-    if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
+    if (opts.backend == MeshGenPredictor::Backend::Trellis2) {
+        if (!Trellis2Predictor::runtimeAvailable())
+            return makeErrorResult(Trellis2Predictor::runtimeDescription());
+        opts.removeBackground = true;   // trellis2 needs an alpha matte; the
+                                        // predictor skips it when the input
+                                        // already carries one
+        const QString outPath = args.value("output").toString();
+        if (!outPath.isEmpty()) {
+            // Phase 9: keep the raw full-res generation next to the export.
+            opts.trellis2SourceKeepDir = QFileInfo(outPath).absolutePath();
+            opts.trellis2SourceKeepBaseName = QFileInfo(outPath).completeBaseName();
+        }
+    } else if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
         // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
         // geometry, no ARM speed win); 'quality' still selects the TripoSR
         // tier used for the colour bake.
@@ -2849,6 +2888,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
+    result["backend"] = backendName;
+    // Phase 9 (trellis2): the preserved full-resolution generation.
+    if (!res.sourceInterchangePath.isEmpty())
+        result["sourcePath"] = res.sourceInterchangePath;
     // Surface non-fatal degradations (bake fell back to vertex colours, …) so
     // the MCP caller can tell a textured result from a fallback one.
     if (!res.warning.isEmpty()) result["warning"] = res.warning;
@@ -9844,18 +9887,24 @@ QJsonArray MCPServer::buildToolsList()
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
-        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"triposr", "triposg"}}, {"description", "Generation backend (default triposr). triposr = fast single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only (no texture bake). Both MIT. TripoSG models download on first use."}};
-        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by triposr."}};
-        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by triposr."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the Python sidecar (Linux + NVIDIA GPU) — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
+        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by the other backends."}};
+        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
+        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
+        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
         appendTool(
             "generate_mesh_from_image",
-            "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
-            "reconstruct a 3D mesh from a single image. Runs the TripoSR encoder "
-            "(image -> triplane) + decoder (density grid) and extracts the surface "
-            "with native marching cubes. Returns vertexCount/triangleCount and, when "
-            "'output' is given, the saved meshPath; otherwise the mesh is loaded into "
-            "the scene. The model downloads on first use; without it (or a non-ONNX "
-            "build) the call returns a clear error (no crash).",
+            "AI image-to-3D mesh generation (epic #764 + TRELLIS.2): reconstruct a "
+            "3D mesh from a single image. Backends: trellis2 (Microsoft TRELLIS.2-4B "
+            "sidecar — the default when installed; PBR-textured, game-ready "
+            "processing + native texture bake), triposr (local ONNX, fast, "
+            "color), triposg (local ONNX, best local geometry). Returns "
+            "vertexCount/triangleCount/backend and, when 'output' is given, the "
+            "saved meshPath (+ sourcePath for the preserved trellis2 full-res "
+            "generation); otherwise the mesh is loaded into the scene. Models "
+            "download on first use; a missing runtime/model returns a clear error "
+            "(no crash).",
             props,
             QJsonArray{"image_path"}
         );

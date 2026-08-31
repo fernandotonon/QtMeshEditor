@@ -255,20 +255,37 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
         // Top-left of the subject square within the padded output.
         const int sqOffX = (outSz - fgW) / 2, sqOffY = (outSz - fgH) / 2;
 
-        QImage composed(outSz, outSz, QImage::Format_RGB888);
-        composed.fill(qRgb(opts.bgR, opts.bgG, opts.bgB));
+        // keepAlpha (TRELLIS.2): carry the matte in a real alpha channel
+        // instead of blending it into the RGB — the consumer premultiplies
+        // itself and this is what keeps the upstream (non-commercial) rembg
+        // model from ever being needed.
+        QImage composed(outSz, outSz,
+                        opts.keepAlpha ? QImage::Format_RGBA8888
+                                       : QImage::Format_RGB888);
+        if (opts.keepAlpha)
+            composed.fill(QColor(opts.bgR, opts.bgG, opts.bgB, 0));
+        else
+            composed.fill(qRgb(opts.bgR, opts.bgG, opts.bgB));
+        const int bpp = opts.keepAlpha ? 4 : 3;
         for (int oy = 0; oy < outSz; ++oy) {
             uchar* dp = composed.scanLine(oy);
             const int sy = by0 + (oy - sqOffY);
             for (int ox = 0; ox < outSz; ++ox) {
                 const int sx = bx0 + (ox - sqOffX);
-                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;   // stays gray
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;   // stays bg
                 const float a = alphaAt(sx, sy);
                 if (a <= 0.0f) continue;
-                uchar* px = dp + ox * 3;
-                px[0] = uchar(srcAt(sx, sy, 0) * a + opts.bgR * (1 - a) + 0.5f);
-                px[1] = uchar(srcAt(sx, sy, 1) * a + opts.bgG * (1 - a) + 0.5f);
-                px[2] = uchar(srcAt(sx, sy, 2) * a + opts.bgB * (1 - a) + 0.5f);
+                uchar* px = dp + ox * bpp;
+                if (opts.keepAlpha) {
+                    px[0] = uchar(srcAt(sx, sy, 0) + 0.5f);
+                    px[1] = uchar(srcAt(sx, sy, 1) + 0.5f);
+                    px[2] = uchar(srcAt(sx, sy, 2) + 0.5f);
+                    px[3] = uchar(a * 255.0f + 0.5f);
+                } else {
+                    px[0] = uchar(srcAt(sx, sy, 0) * a + opts.bgR * (1 - a) + 0.5f);
+                    px[1] = uchar(srcAt(sx, sy, 1) * a + opts.bgG * (1 - a) + 0.5f);
+                    px[2] = uchar(srcAt(sx, sy, 2) * a + opts.bgB * (1 - a) + 0.5f);
+                }
             }
         }
 

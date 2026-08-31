@@ -116,3 +116,47 @@ TEST(CLIPipelineCmdGenerate3dCoverage, ValidImageWithoutModelOrOnnxFailsCleanly)
     const int rc = CLIPipeline::cmdGenerate3d(args.argc(), args.argv());
     EXPECT_NE(rc, 0);
 }
+
+// ── TRELLIS.2 backend flags (this integration) ───────────────────────────────
+
+TEST(CLIPipelineCmdGenerate3dCoverage, Trellis2BadPresetIsUsageError)
+{
+    Gen3dArgv args({"generate3d", kMissingImage, "--preset", "ultra"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+    Gen3dArgv missing({"generate3d", kMissingImage, "--preset"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, Trellis2BadTargetTrisIsUsageError)
+{
+    Gen3dArgv neg({"generate3d", kMissingImage, "--target-tris", "-5"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(neg.argc(), neg.argv()), 2);
+    Gen3dArgv nan({"generate3d", kMissingImage, "--target-tris", "many"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(nan.argc(), nan.argv()), 2);
+    Gen3dArgv missing({"generate3d", kMissingImage, "--seed"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, Trellis2BackendAcceptedButUnknownRejected)
+{
+    // Unknown backend name → usage error.
+    Gen3dArgv bad({"generate3d", kMissingImage, "--backend", "dreamfusion"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(bad.argc(), bad.argv()), 2);
+
+    // trellis2 is a valid backend; with a real image but a deliberately
+    // nonexistent runtime the command must fail at RUNTIME (1) with the
+    // install hint — never crash, never a usage error.
+    qputenv("QTMESH_TRELLIS2_ENV", "/nonexistent/qtmesh-trellis2-cli-ut");
+    qputenv("QTMESH_TRELLIS2_PYTHON", "/nonexistent/python-cli-ut");
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString png = QDir(tmp.path()).filePath("in.png");
+    QImage img(16, 16, QImage::Format_RGB888);
+    img.fill(Qt::red);
+    ASSERT_TRUE(img.save(png, "PNG"));
+    const QByteArray pngBytes = png.toLocal8Bit();
+    Gen3dArgv ok({"generate3d", pngBytes.constData(), "--backend", "trellis2"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(ok.argc(), ok.argv()), 1);
+    qunsetenv("QTMESH_TRELLIS2_ENV");
+    qunsetenv("QTMESH_TRELLIS2_PYTHON");
+}

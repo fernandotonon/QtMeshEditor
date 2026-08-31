@@ -1,0 +1,27 @@
+# QtMeshEditor TRELLIS.2 sidecar - base Python requirements.
+#
+# torch/torchvision (cu124) and the attention backend are installed by
+# install.py (they need the PyTorch index URL / --no-build-isolation), and the
+# pinned TRELLIS.2 / CuMesh / FlexGEMM / o-voxel checkouts are built from
+# source by install.py. See docs/trellis2-dependencies.md for the full audit.
+#
+# PROHIBITED - never add here (NVIDIA Source Code License, research-only;
+# enforced by scripts/check-trellis2-restricted-deps.sh and Trellis2GuardTest):
+#   nvdiffrast
+#   nvdiffrec
+#
+# Do NOT add `cumesh` either: the PyPI project of that name is an unrelated,
+# unlicensed package. CuMesh is built from the pinned JeffreyXiang/CuMesh
+# checkout by install.py.
+
+numpy>=1.26,<3
+pillow>=10
+# DINOv3ViTModel support landed in transformers 4.56
+transformers>=4.56,<5
+huggingface_hub>=0.27
+safetensors>=0.4
+# LGPL-3.0 (pure-Python, imported unmodified) - required by o_voxel.rasterize;
+# the only copyleft item in the runtime set, flagged in the audit doc.
+easydict==1.13
+ninja
+packaging
