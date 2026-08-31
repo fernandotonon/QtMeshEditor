@@ -159,6 +159,7 @@ PaintLayerStack.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 ColorPaletteLibrary.cpp
+BrushPresetLibrary.cpp
 BrushEngine.cpp
 BrushFootprint.cpp
 BrushAssetLibrary.cpp
@@ -392,6 +393,7 @@ SymmetryMirrorMap.h
 PaintSelectionMask.h
 GradientRamp.h
 ColorPaletteLibrary.h
+BrushPresetLibrary.h
 BrushEngine.h
 TexturePaintBuffer.h
 UpdateVersion.h
