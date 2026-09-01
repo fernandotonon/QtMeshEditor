@@ -7,6 +7,8 @@
 #include "BackgroundRemover.h"
 #include "OnnxRuntimeSettings.h"
 #include "TripoSGPredictor.h" // Backend::TripoSG dispatch
+#include "Trellis2Predictor.h" // Backend::Trellis2 dispatch (no ONNX needed)
+#include "Trellis2Bake.h"      // game-ready simplify + detail-normal bake (all backends)
 
 #include <QDir>
 #include <QFileInfo>
@@ -102,16 +104,109 @@ std::vector<float> MeshGenPredictor::buildGridPoints(int resolution, float radiu
     return pts;
 }
 
+MeshGenPredictor::Backend MeshGenPredictor::defaultBackend()
+{
+    // TRELLIS.2 becomes the default the moment its runtime is installed on
+    // this machine; otherwise the local ONNX TripoSR path stays the default.
+    return Trellis2Predictor::runtimeAvailable() ? Backend::Trellis2
+                                                 : Backend::TripoSR;
+}
+
+namespace {
+// Backend::Trellis2 dispatch, shared by the ONNX and non-ONNX builds — the
+// sidecar backend has no ONNX dependency (only the optional U²-Net matte
+// does, and Trellis2Predictor degrades that gracefully).
+MeshGenPredictor::Result predictTrellis2(
+    const QImage& image,
+    const MeshGenPredictor::Options& opts,
+    const MeshGenPredictor::ProgressFn& progress)
+{
+    Trellis2Predictor::Options t2;
+    t2.preset           = opts.trellis2Preset;
+    t2.seed             = opts.seed;
+    t2.targetTriangles  = opts.targetTriangles;
+    t2.bakeTexture      = opts.bakeTexture;
+    t2.textureSize      = opts.textureSize;
+    t2.bakeNormalMap    = opts.bakeNormalMap;
+    t2.removeBackground = opts.removeBackground;
+    t2.mock             = opts.trellis2Mock;
+    t2.sourceKeepDir    = opts.trellis2SourceKeepDir;
+    t2.sourceKeepBaseName = opts.trellis2SourceKeepBaseName;
+    MeshGenPredictor::Result r = Trellis2Predictor::predict(image, t2, progress);
+    // TRELLIS.2 decodes in a Z-up frame — in the viewer's Y-up world the
+    // model arrives face-down. Bake a -90° X rotation into the geometry:
+    // (x, y, z) -> (x, z, -y). Rigid (det +1), so winding, UVs and the
+    // tangent-space normal map are untouched; object-space vertex normals
+    // rotate with the positions. The kept .qtm3d source stays in the native
+    // frame (re-bakes come back through this same path).
+    if (r.ok) {
+        for (size_t v = 0; v + 2 < r.positions.size(); v += 3) {
+            const float y = r.positions[v + 1];
+            r.positions[v + 1] = r.positions[v + 2];
+            r.positions[v + 2] = -y;
+        }
+        for (size_t v = 0; v + 2 < r.normals.size(); v += 3) {
+            const float y = r.normals[v + 1];
+            r.normals[v + 1] = r.normals[v + 2];
+            r.normals[v + 2] = -y;
+        }
+    }
+    return r;
+}
+
+// Game-ready pass for the LOCAL backends (TripoSR/TripoSG): weld, drop
+// floating debris, simplify toward Options::targetTriangles. Marching-cubes
+// output decimated blind turns into a blob and skins terribly — the fix is
+// the standard high→low workflow: simplify hard here, then bake the lost
+// detail back as textures (diffuse via the field bake, relief via
+// bakeDetailNormal against the dense pre-simplify source kept in srcPos/Idx).
+// Returns false only on a hard failure (result untouched, warning appended).
+bool applyGameReady(MeshGenPredictor::Result& out,
+                    int targetTriangles,
+                    std::vector<float>* srcPosOut,
+                    std::vector<uint32_t>* srcIdxOut)
+{
+    if (targetTriangles <= 0 || out.vertexCount <= 0)
+        return false;
+    Trellis2Bake::GameReadyOptions gr;
+    gr.targetTriangles = targetTriangles;
+    const Trellis2Bake::GameReadyResult processed =
+        Trellis2Bake::makeGameReady(out.positions, out.indices, gr);
+    if (!processed.ok) {
+        if (!out.warning.isEmpty())
+            out.warning += QStringLiteral(" ");
+        out.warning += QStringLiteral("game-ready pass failed (%1) — keeping "
+                                      "the full-density mesh.")
+                           .arg(processed.error);
+        return false;
+    }
+    if (srcPosOut) *srcPosOut = std::move(out.positions);
+    if (srcIdxOut) *srcIdxOut = std::move(out.indices);
+    out.positions = processed.positions;
+    out.indices = processed.indices;
+    out.vertexCount = static_cast<int>(out.positions.size() / 3);
+    out.triangleCount = static_cast<int>(out.indices.size() / 3);
+    // Per-vertex colours (if any) belonged to the old vertices.
+    out.colors.clear();
+    out.uvs.clear();
+    return true;
+}
+} // namespace
+
 #ifndef ENABLE_ONNX
 
 bool MeshGenPredictor::isAvailable() { return false; }
 
 QString MeshGenPredictor::ensureModelBlocking(Quality) { return {}; }
 
-MeshGenPredictor::Result MeshGenPredictor::predict(const QImage&, const QString&,
-                                                   const QString&, const Options&,
-                                                   const ProgressFn&)
+MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+                                                   const QString&,
+                                                   const QString&,
+                                                   const Options& opts,
+                                                   const ProgressFn& progress)
 {
+    if (opts.backend == Backend::Trellis2)
+        return predictTrellis2(image, opts, progress);
     Result r;
     r.error = QStringLiteral(
         "Image-to-3D needs an ONNX-enabled build — rebuild with -DENABLE_ONNX.");
@@ -218,6 +313,10 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
     if (image.isNull())
         return fail(QStringLiteral("MeshGen: input image is empty."));
 
+    // ---- Backend dispatch: TRELLIS.2 (out-of-process sidecar) ----------------
+    if (opts.backend == Backend::Trellis2)
+        return predictTrellis2(image, opts, progress);
+
     // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------
     if (opts.backend == Backend::TripoSG) {
         QImage subject = image;
@@ -247,6 +346,11 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         Result r = TripoSGPredictor::predict(subject, sg, progress);
         // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
         r.bakeTripoSROrientation = false;
+        // Game-ready simplification (geometry-only backend — nothing to bake;
+        // the later GUI AI-texture pass unwraps/bakes the SIMPLIFIED mesh,
+        // which is exactly what you want for skinning-friendly assets).
+        if (r.ok)
+            applyGameReady(r, opts.targetTriangles, nullptr, nullptr);
         // TripoSG is geometry-only. Colour comes SOLELY from the AI image
         // generation pass (multi-view depth-ControlNet, run later in the GUI
         // layer) — no TripoSR field colouring. With no AI texture the mesh
@@ -472,6 +576,18 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
             MeshRefine::isoProjectStep(out.positions, f, grad, step);
         }
 
+        // ---- (4b) Game-ready simplification (Options::targetTriangles) --------
+        // The dense pre-simplify mesh is kept as the bake SOURCE: the diffuse
+        // below re-bakes on the simplified mesh straight from the decoder
+        // field (density-independent), and (5b) bakes the lost geometric
+        // detail into a tangent-space normal map — the standard high→low
+        // workflow that keeps a 10–50k mesh from reading as a blob.
+        std::vector<float>    gameReadySrcPos;
+        std::vector<uint32_t> gameReadySrcIdx;
+        const bool gameReady =
+            applyGameReady(out, opts.targetTriangles,
+                           &gameReadySrcPos, &gameReadySrcIdx);
+
         // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
         if (wantColor && out.vertexCount > 0 && opts.bakeTexture) {
             MeshGenBaker::Options bakeOpts;
@@ -502,6 +618,36 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
             } else {
                 out.warning = QStringLiteral("texture bake failed (%1) — using "
                                              "vertex colours").arg(baked.error);
+            }
+        }
+
+        // ---- (5b) Detail normal map (game-ready path only) ---------------------
+        // Bake the dense source's smooth normals into the SAME atlas the
+        // diffuse bake produced, expressed in the simplified target's tangent
+        // frame. This is what preserves the perceived detail after a hard
+        // simplification. Skipped when there's no baked diffuse to share an
+        // unwrap with (vertex-colour mode carries no UVs).
+        if (gameReady && opts.bakeNormalMap && !out.uvs.empty()
+            && !out.texture.isNull()) {
+            Trellis2Bake::BakeOptions nbo;
+            if (progress)
+                nbo.progress = [&](int done, int total) {
+                    return progress(Stage::Bake, done, total);
+                };
+            const Trellis2Bake::NormalBakeResult nb =
+                Trellis2Bake::bakeDetailNormal(
+                    out.positions, out.indices, out.uvs,
+                    out.texture.width(), out.texture.height(),
+                    gameReadySrcPos, gameReadySrcIdx, nbo);
+            if (nb.cancelled)
+                return fail(QStringLiteral("cancelled"));
+            if (nb.ok) {
+                out.normalMap = nb.normalMap;
+            } else {
+                if (!out.warning.isEmpty())
+                    out.warning += QStringLiteral(" ");
+                out.warning += QStringLiteral(
+                    "detail-normal bake failed (%1).").arg(nb.error);
             }
         }
 

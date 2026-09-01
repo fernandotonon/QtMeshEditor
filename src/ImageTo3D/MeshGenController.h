@@ -95,6 +95,13 @@ public:
 
     // ── Pre-download support (AI Settings modal) ────────────────────────────
     // Whether the decoder + the given tier's encoder are already on disk.
+    // TRELLIS.2 sidecar runtime probe (the backend combo preselects TRELLIS.2
+    // and enables its option rows only when this is true) + the install hint
+    // shown when it isn't. Invokables (not properties): the runtime can be
+    // installed while the app runs, so QML re-queries on section open.
+    Q_INVOKABLE bool trellis2Available() const;
+    Q_INVOKABLE QString trellis2RuntimeHint() const;
+
     Q_INVOKABLE bool modelsPresent(int quality = 0) const;
     // Download the decoder + the given tier's encoder (blocks on the caller's
     // event loop, driven by ModelDownloader → its progress bar updates in the

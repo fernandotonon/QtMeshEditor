@@ -45,6 +45,14 @@ public:
         // (default 0.85). Centering + tight framing is what stops the leftover
         // margin being reconstructed as background geometry. 0 disables cropping.
         float foregroundRatio = 0.85f;
+        // Emit an RGBA image carrying the segmentation as a real ALPHA MATTE
+        // instead of compositing over the solid background. The TRELLIS.2
+        // backend needs this: its pipeline consumes RGBA-with-alpha directly
+        // (and a genuine matte keeps the upstream default remover — the
+        // non-commercial briaai/RMBG-2.0 — from ever loading; see
+        // docs/trellis2-dependencies.md). Default off preserves the TripoSR
+        // behaviour.
+        bool keepAlpha = false;
     };
 
     struct Result {

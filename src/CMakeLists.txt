@@ -210,6 +210,9 @@ ImageTo3D/MeshRefine.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
 ImageTo3D/TripoSGPredictor.cpp
+ImageTo3D/Trellis2Interchange.cpp
+ImageTo3D/Trellis2Bake.cpp
+ImageTo3D/Trellis2Predictor.cpp
 ImageTo3D/MeshGenBuilder.cpp
 ImageTo3D/MeshGenController.cpp
 ImageTo3D/BackgroundRemover.cpp

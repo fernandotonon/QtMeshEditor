@@ -127,6 +127,49 @@ the binary). Attribution + licenses for the models and their training data:
   `scripts/upload-triposr-models.sh`). First use downloads them; if ever absent the
   feature reports a clean "not yet hosted" state (no crash) — the RigNet precedent.
 
+## TRELLIS.2 — image-to-3D generation, sidecar backend (default when installed)
+
+- **Model:** Microsoft TRELLIS.2 — sparse-voxel "O-Voxel" flexible-dual-grid
+  representation with volumetric PBR attributes (base color / metallic /
+  roughness / alpha), 4B-parameter flow stack. NOT an ONNX consumer: it runs as
+  an out-of-process **Python sidecar** (`ai/trellis2/`, Linux + NVIDIA CUDA,
+  ≥24 GB VRAM recommended) because the custom sparse CUDA kernels
+  (FlexGEMM/o-voxel/CuMesh) have no ONNX lowering. First runtime-Python
+  component in the project; nothing is bundled — the user installs the isolated
+  environment with `ai/trellis2/install.py`.
+- **Source:** Microsoft — *"Native and Compact Structured Latents for 3D
+  Generation"* (arXiv 2512.14692). https://github.com/microsoft/TRELLIS.2 —
+  code **MIT**, pinned `75fbf0183001ed9876c8dbb35de6b68552ee08bd`. Weights:
+  https://huggingface.co/microsoft/TRELLIS.2-4B — **MIT**, rev `af44b45f…`,
+  ≈18.9 GB, downloaded on first generation under the user's HF account (plus
+  the MIT `microsoft/TRELLIS-image-large` sparse-structure decoder).
+  Companion libs JeffreyXiang/CuMesh + FlexGEMM — **MIT**, pinned in install.py.
+- **License boundary (the deciding work of this integration):** upstream's
+  texture bake + preview renderers use NVIDIA **nvdiffrast/nvdiffrec** (NVIDIA
+  Source Code License — research/evaluation only) — both are **excluded
+  entirely** (not installed/imported/invoked; `install.py` patches the MIT file
+  `o_voxel/__init__.py` so the package imports without them; CI gate
+  `scripts/check-trellis2-restricted-deps.sh` + `Trellis2GuardTest`). Their
+  functionality is QtMeshEditor-native code: `src/ImageTo3D/Trellis2Bake.{h,cpp}`
+  (xatlas unwrap + UV-space barycentric rasterizer + Ericson closest-point +
+  trilinear sparse-volume sampling + meshoptimizer game-ready pipeline).
+  The upstream default background remover `briaai/RMBG-2.0` is **CC BY-NC** and
+  is never downloaded — the loader is stubbed and the alpha matte comes from
+  the project's own U²-Net (`BackgroundRemover` keepAlpha). The conditioning
+  encoder is **DINOv3** (`facebook/dinov3-vitl16-pretrain-lvd1689m`) under
+  Meta's custom **DINOv3 License** — commercial use permitted, gated download,
+  "Built with DINOv3" attribution; NOT MIT, so the stack must never be
+  described as "entirely MIT". Full audit table + pins:
+  `docs/trellis2-dependencies.md`; user guide: `docs/TRELLIS2.md`.
+- Sidecar contract: `generate.py` emits raw vertices/faces + the sparse
+  attribute volume as a **QTM3D interchange** file
+  (`src/ImageTo3D/Trellis2Interchange.{h,cpp}`); `Trellis2Predictor` drives the
+  process (JSON-line progress, cancellation, runtime discovery via
+  `QTMESH_TRELLIS2_ENV`/`ai/trellis2Env`, mock mode for GPU-less e2e tests) and
+  is the **default backend** (`MeshGenPredictor::defaultBackend()`) whenever
+  the runtime resolves; every surface reports a clean "runtime not installed"
+  message otherwise (no crash).
+
 ## U²-Net — background removal for image-to-3D (epic #764)
 
 - **Model:** U²-Net salient-object detection (`u2net.onnx`) — the default

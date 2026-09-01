@@ -56,6 +56,8 @@ jobs:
         run: ./scripts/sync-doc-versions-from-cmake.sh --check
       - name: File association packaging files present
         run: chmod +x ./scripts/verify-file-associations.sh && ./scripts/verify-file-associations.sh
+      - name: TRELLIS.2 restricted-dependency gate (no nvdiffrast/nvdiffrec)
+        run: chmod +x ./scripts/check-trellis2-restricted-deps.sh && ./scripts/check-trellis2-restricted-deps.sh
 
 ####################################################################
 # Asset Scan (runs first, before all builds)

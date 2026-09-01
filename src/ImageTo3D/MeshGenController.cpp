@@ -4,6 +4,7 @@
 
 #include "MeshGenPredictor.h"
 #include "TripoSGPredictor.h"
+#include "Trellis2Predictor.h"
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
 #include "MeshImporterExporter.h"
@@ -17,7 +18,9 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QFileDialog>
+#include <QDir>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QImage>
 #include <QCoreApplication>   // organizationName() — test-harness guard
 #include <QMetaObject>
@@ -82,7 +85,19 @@ bool MeshGenController::available() const
     // sets this org name) skips the surface. Pure-data pieces are covered directly.
     if (QCoreApplication::organizationName() == QLatin1String("QtMeshEditorTests"))
         return false;
-    return MeshGenPredictor::isAvailable();
+    // The TRELLIS.2 sidecar backend needs no ONNX build — a machine with its
+    // runtime installed gets the section even on a non-ONNX build.
+    return MeshGenPredictor::isAvailable() || Trellis2Predictor::runtimeAvailable();
+}
+
+bool MeshGenController::trellis2Available() const
+{
+    return Trellis2Predictor::runtimeAvailable();
+}
+
+QString MeshGenController::trellis2RuntimeHint() const
+{
+    return Trellis2Predictor::runtimeDescription();
 }
 
 void MeshGenController::setBusy(bool b)
@@ -266,13 +281,30 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
     const int  textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
-    // Backend: "triposr" (default, fast + textured) or "triposg" (rectified
-    // flow — higher-fidelity geometry, geometry-only, slower).
-    const bool useSG = options.value(QLatin1String("backend")).toString()
-                           .compare(QLatin1String("triposg"),
-                                    Qt::CaseInsensitive) == 0;
+    // Backend: "trellis2" (the default whenever its sidecar runtime is
+    // installed), "triposr" (fast + textured) or "triposg" (rectified flow —
+    // higher-fidelity geometry, geometry-only, slower). Empty/unknown values
+    // resolve through defaultBackend().
+    const QString backendStr =
+        options.value(QLatin1String("backend")).toString().toLower();
+    MeshGenPredictor::Backend backend = MeshGenPredictor::defaultBackend();
+    if (backendStr == QLatin1String("triposr"))
+        backend = MeshGenPredictor::Backend::TripoSR;
+    else if (backendStr == QLatin1String("triposg"))
+        backend = MeshGenPredictor::Backend::TripoSG;
+    else if (backendStr.startsWith(QLatin1String("trellis")))
+        backend = MeshGenPredictor::Backend::Trellis2;
+    const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
+    const bool useT2 = (backend == MeshGenPredictor::Backend::Trellis2);
     const int flowSteps = options.contains(QLatin1String("flow_steps"))
         ? options.value(QLatin1String("flow_steps")).toInt() : 25;
+    const unsigned t2Seed = options.contains(QLatin1String("seed"))
+        ? options.value(QLatin1String("seed")).toUInt() : 42u;
+    const QString t2Preset = options.contains(QLatin1String("preset"))
+        ? options.value(QLatin1String("preset")).toString().toLower()
+        : QStringLiteral("balanced");
+    const int t2TargetTris = options.contains(QLatin1String("target_tris"))
+        ? options.value(QLatin1String("target_tris")).toInt() : 0;
 
     GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
@@ -288,7 +320,16 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // must not run on the worker thread. Once present, the worker only reads
     // the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
-    if (useSG) {
+    if (useT2) {
+        if (!Trellis2Predictor::runtimeAvailable()) {
+            setBusy(false);
+            emit error(Trellis2Predictor::runtimeDescription());
+            return;
+        }
+        // The alpha-matte model must be ensured HERE (main thread — nested
+        // event loop); the worker-side predictor only reads it.
+        BackgroundRemover::ensureModelBlocking();
+    } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
         const QString enc = TripoSGPredictor::ensureModelBlocking(false);
@@ -350,7 +391,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // connection so the GUI thread updates the bar.
     m_pending->worker = std::thread([this, image, res, rembg,
                                      wantSmooth, wantRefine, wantBake,
-                                     textureSize, useSG, flowSteps]() {
+                                     textureSize, useSG, useT2, flowSteps,
+                                     backend, t2Seed, t2Preset, t2TargetTris,
+                                     imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
                 Q_ARG(QString, stage), Q_ARG(int, done), Q_ARG(int, total));
@@ -360,7 +403,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // worker started), so this thread only reads files — no event loop
         // needed. (The encode stage is reported by the predictor itself.)
         QImage subject = image;
-        if (rembg && !useSG) {
+        if (rembg && !useSG && !useT2) {
             // TripoSR path: composite over gray-128 (its training background).
             // The TripoSG path leaves removal to the predictor dispatch, which
             // composites over WHITE per its reference pipeline.
@@ -376,17 +419,36 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         MeshGenPredictor::Options opts;
         opts.sdfResolution   = res;
         opts.vertexColor     = true;
-        // TripoSR removal already ran above; TripoSG's white-background
-        // removal happens inside the predictor dispatch.
-        opts.removeBackground = rembg && useSG;
+        // TripoSR removal already ran above; TripoSG's white-background and
+        // TRELLIS.2's keep-alpha matte removal happen inside the predictor
+        // dispatch. TRELLIS.2 ALWAYS gets the matte (the CLI forces it too):
+        // its preprocess needs an alpha channel to keep the non-commercial
+        // rembg model unused, so the GUI checkbox only governs the Tripo
+        // backends.
+        opts.removeBackground = useT2 || (rembg && useSG);
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
         opts.textureSize     = textureSize;
-        opts.backend         = useSG ? MeshGenPredictor::Backend::TripoSG
-                                     : MeshGenPredictor::Backend::TripoSR;
+        opts.backend         = backend;
         opts.flowSteps       = flowSteps;
         opts.quality         = m_quality;
+        // Game-ready simplification target — ALL backends (TripoSR/TripoSG
+        // run the weld/debris/simplify + detail-normal-bake pass in the
+        // predictor; TRELLIS.2 does it natively in its own pipeline).
+        opts.targetTriangles = t2TargetTris;
+        opts.bakeNormalMap   = m_generatePbr;
+        if (useT2) {
+            opts.seed            = t2Seed;
+            opts.trellis2Preset  = t2Preset;
+            // Phase 9: keep the raw full-res generation in AppData so
+            // textures/LODs can be re-baked without re-running inference.
+            opts.trellis2SourceKeepDir =
+                QDir(QStandardPaths::writableLocation(
+                         QStandardPaths::AppDataLocation))
+                    .filePath(QStringLiteral("generated_sources"));
+            opts.trellis2SourceKeepBaseName = imageStem;
+        }
 
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
             Q_ARG(QString, tr("Reconstructing…")));

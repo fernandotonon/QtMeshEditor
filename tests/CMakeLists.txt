@@ -219,6 +219,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/TripoSGPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Interchange.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Bake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Predictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp

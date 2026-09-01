@@ -53,6 +53,7 @@
 #include "FaceRig/FaceRigLandmarks.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
+#include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
 #include "SubMeshOps.h"
@@ -10466,8 +10467,12 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int textureSize = 1024;
     int flowSteps = 25;         // TripoSG rectified-flow steps
     float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
+    unsigned seed = 42;         // TRELLIS.2 generation seed
+    QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
+    int targetTris = 0;         // TRELLIS.2 game-ready simplification target
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
     MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
+    bool backendSet = false;    // explicit --backend beats the auto default
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -10482,13 +10487,42 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-pbr") { generatePbr = false; continue; }
         if (arg == "--backend") {
             if (i + 1 >= argc) {
-                err() << "Error: --backend requires triposr or triposg." << Qt::endl;
+                err() << "Error: --backend requires trellis2, triposr or triposg." << Qt::endl;
                 return 2;
             }
             const QString b = QString::fromLocal8Bit(argv[++i]).toLower();
             if (b == "triposr")      backend = MeshGenPredictor::Backend::TripoSR;
             else if (b == "triposg") backend = MeshGenPredictor::Backend::TripoSG;
-            else { err() << "Error: --backend must be triposr or triposg." << Qt::endl; return 2; }
+            else if (b == "trellis2" || b == "trellis.2" || b == "trellis")
+                backend = MeshGenPredictor::Backend::Trellis2;
+            else { err() << "Error: --backend must be trellis2, triposr or triposg." << Qt::endl; return 2; }
+            backendSet = true;
+            continue;
+        }
+        if (arg == "--seed") {
+            if (i + 1 >= argc) { err() << "Error: --seed requires a number." << Qt::endl; return 2; }
+            bool ok = false;
+            seed = QString::fromLocal8Bit(argv[++i]).toUInt(&ok);
+            if (!ok) { err() << "Error: --seed must be a non-negative integer." << Qt::endl; return 2; }
+            continue;
+        }
+        if (arg == "--preset") {
+            if (i + 1 >= argc) { err() << "Error: --preset requires fast, balanced or high." << Qt::endl; return 2; }
+            preset = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (preset != "fast" && preset != "balanced" && preset != "high") {
+                err() << "Error: --preset must be fast, balanced or high." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--target-tris") {
+            if (i + 1 >= argc) { err() << "Error: --target-tris requires a number." << Qt::endl; return 2; }
+            bool ok = false;
+            targetTris = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || targetTris < 0 || targetTris > 10000000) {
+                err() << "Error: --target-tris must be in [0, 10000000] (0 = original)." << Qt::endl;
+                return 2;
+            }
             continue;
         }
         if (arg == "--flow-steps") {
@@ -10577,8 +10611,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
-                 "[--backend triposr|triposg] [--flow-steps 25] [--guidance 7.0]"
+                 "[--backend trellis2|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
+                 "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
               << Qt::endl;
+        err() << "  Default backend: trellis2 when its runtime is installed "
+                 "(ai/trellis2/install.py), else triposr. --seed/--preset "
+                 "apply to trellis2; --target-tris (game-ready simplify + "
+                 "detail-normal bake) applies to every backend." << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -10589,12 +10628,27 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (outputPath.isEmpty())
         outputPath = fi.absolutePath() + "/" + fi.completeBaseName() + ".glb";
 
+    // Resolve the default backend when none was requested: TRELLIS.2 when its
+    // sidecar runtime is installed on this machine, else TripoSR.
+    if (!backendSet) {
+        backend = MeshGenPredictor::defaultBackend();
+        if (backend == MeshGenPredictor::Backend::Trellis2)
+            err() << "Using backend: trellis2 (runtime detected; pass "
+                     "--backend triposr|triposg to override)." << Qt::endl;
+    }
+    const bool useTrellis2 = (backend == MeshGenPredictor::Backend::Trellis2);
+
 #ifndef ENABLE_ONNX
-    Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(noModel);
-    err() << "Error: this build was compiled without AI image-to-3D generation "
-             "(rebuild with -DENABLE_ONNX=ON)." << Qt::endl;
-    return 1;
-#else
+    // The TRELLIS.2 sidecar backend has no ONNX dependency; only the local
+    // TripoSR/TripoSG paths need the ONNX build.
+    if (!useTrellis2) {
+        Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(noModel);
+        err() << "Error: this build was compiled without AI image-to-3D generation "
+                 "(rebuild with -DENABLE_ONNX=ON, or install the TRELLIS.2 runtime "
+                 "and use --backend trellis2)." << Qt::endl;
+        return 1;
+    }
+#endif
     if (noModel) {
         err() << "Error: --no-model given but TripoSR has no non-model fallback "
                  "(unlike segmentation/in-betweening). Remove --no-model." << Qt::endl;
@@ -10606,14 +10660,21 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
 
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
+    const QString backendName = useTrellis2 ? QStringLiteral("trellis2")
+        : (useSG ? QStringLiteral("triposg") : QStringLiteral("triposr"));
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
         QString("generate3d .%1 res=%2 color=%3 backend=%4")
             .arg(fi.suffix()).arg(resolution).arg(vertexColor)
-            .arg(useSG ? QStringLiteral("triposg") : QStringLiteral("triposr")));
+            .arg(backendName));
 
     // Download the chosen backend's models on first use (blocks; clear
     // message when not hosted).
-    if (useSG) {
+    if (useTrellis2) {
+        if (!Trellis2Predictor::runtimeAvailable()) {
+            err() << "Error: " << Trellis2Predictor::runtimeDescription() << Qt::endl;
+            return 1;
+        }
+    } else if (useSG) {
         if (quality == MeshGenPredictor::Quality::Int8)
             err() << "Note: --quality int8 is not available for the triposg "
                      "backend (the quantized DiT degrades geometry); using fp32."
@@ -10665,6 +10726,18 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.backend         = backend;
     opts.flowSteps       = flowSteps;
     opts.guidanceScale   = guidance;
+    opts.seed            = seed;
+    opts.trellis2Preset  = preset;
+    opts.targetTriangles = targetTris;
+    opts.bakeNormalMap   = generatePbr && bake;
+    if (useTrellis2) {
+        opts.removeBackground = true;   // trellis2 needs an alpha matte; the
+                                        // predictor skips it when the input
+                                        // already carries one
+        // Phase 9: keep the raw full-res generation next to the export.
+        opts.trellis2SourceKeepDir = QFileInfo(outputPath).absolutePath();
+        opts.trellis2SourceKeepBaseName = QFileInfo(outputPath).completeBaseName();
+    }
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);
@@ -10684,6 +10757,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "upscale (was the bake disabled or did it fall back?)." << Qt::endl;
     }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+#ifdef ENABLE_ONNX
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (upModel.isEmpty()) {
             err() << "Warning: upscale model unavailable — keeping the "
@@ -10697,6 +10771,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Warning: texture upscale failed (" << ur.error
                       << ") — keeping the un-upscaled texture." << Qt::endl;
         }
+#else
+        // Reachable on non-ONNX builds via the TRELLIS.2 backend (which has
+        // no ONNX dependency) — the Real-ESRGAN upscaler is ONNX-only.
+        err() << "Warning: --upscale-texture requires an ONNX build "
+                 "(rebuild with -DENABLE_ONNX=ON) — keeping the un-upscaled "
+                 "texture." << Qt::endl;
+#endif
     }
 
     // Baked texture (+ synthesized PBR maps) land next to the exported mesh
@@ -10720,15 +10801,18 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         return 1;
     }
 
-    cliWrite(QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n")
+    cliWrite(QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n%5")
                  .arg(res.vertexCount).arg(res.triangleCount)
                  .arg(!res.uvs.empty()
                           ? QStringLiteral(" (+baked %1px diffuse texture)").arg(res.texture.width())
                           : (res.colors.empty() ? QString()
                                                 : QStringLiteral(" (+vertex color)")))
-                 .arg(QFileInfo(outputPath).fileName()));
+                 .arg(QFileInfo(outputPath).fileName())
+                 .arg(res.sourceInterchangePath.isEmpty()
+                          ? QString()
+                          : QStringLiteral("Kept full-res source: %1\n")
+                                .arg(QFileInfo(res.sourceInterchangePath).fileName())));
     return 0;
-#endif
 }
 
 int CLIPipeline::cmdSegment(int argc, char* argv[])
