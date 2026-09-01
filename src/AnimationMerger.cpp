@@ -4268,6 +4268,84 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!canonSeen[c]) { canonSeen[c] = 1; ++distinct; }
         }
     }
+    // ── #969 name-vs-anatomy side check ────────────────────────────────
+    // Rigs whose bone NAMES mirror their anatomy (UniRig/AutoRig outputs,
+    // Blender -X-scale exports whose chirality differs from the Mixamo-import
+    // fleet norm the motion library is calibrated against) retarget every
+    // clip with L/R swapped: the left-leg track lands on the anatomical
+    // right. Detect it name-independently from bind GEOMETRY: the character's
+    // TRUE left is up × forward (up = +Y; forward = ±Z from the caller's
+    // mesh-derived facing — the same yaw180 detectBackwardFacing() feeds us).
+    // Sum dot(namedLeft − namedRight, trueLeft) over the paired roles
+    // (weighted by separation, so a near-centred pair can't flip the vote).
+    // The expected sign is calibrated on the known-good Mixamo case
+    // (kExpectedSideSign below); the opposite sign ⇒ mirror every L/R role
+    // (and V2 finger side) so names match anatomy for the whole retarget.
+    {
+        const Ogre::Vector3 up(0, 1, 0);
+        const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
+        const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
+        // (left role, right role) pairs, most reliable first.
+        static const int kPairs[][2] = {
+            {19, 15},   // hips
+            {10, 6},    // collars
+            {11, 7},    // upper arms
+            {13, 9},    // hands
+            {21, 17},   // feet
+        };
+        Ogre::Vector3 rolePos[22];
+        bool roleHas[22] = {};
+        for (int i = 0; i < nBones; ++i) {
+            const int c = boneToCanon[i];
+            if (c < 0 || c >= 22 || roleHas[c]) continue;
+            rolePos[c] = skel->getBone(static_cast<unsigned short>(i))
+                             ->_getDerivedPosition();
+            roleHas[c] = true;
+        }
+        double side = 0.0;
+        for (const auto& pr : kPairs) {
+            if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
+            side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
+        }
+        // Calibrated on Mixamo Rumba as loaded by OUR importer (templates
+        // apply correctly there today): it measures side = -2.36, i.e. in
+        // Ogre's frame the fleet-norm rigs put named-left at MINUS up×fwd —
+        // the same "all imports mirror alike" #951 measured from the toes.
+        // A POSITIVE score is the odd one out (UniRig/AutoRig outputs) and
+        // triggers the swap.
+        constexpr double kExpectedSideSign = -1.0;
+        if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
+            fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
+                    side, kExpectedSideSign);
+        const QByteArray forceSwap = qgetenv("QTMESH_T2M_SIDE_SWAP");
+        const bool swap = !forceSwap.isEmpty()
+            ? (forceSwap != "0")
+            : (side != 0.0 && (side * kExpectedSideSign) < 0.0);
+        if (swap) {
+            auto mirrorRole = [canonN](int c) {
+                // V1 body pairs: 6..9 ↔ 10..13, 14..17 ↔ 18..21.
+                if (c >= 6 && c <= 9)   return c + 4;
+                if (c >= 10 && c <= 13) return c - 4;
+                if (c >= 14 && c <= 17) return c + 4;
+                if (c >= 18 && c <= 21) return c - 4;
+                // V2 finger slots: 22 + (side*5 + finger)*3 + seg — flip side.
+                if (c >= 22 && c < canonN) {
+                    const int f = c - 22;
+                    return 22 + (f < 15 ? f + 15 : f - 15);
+                }
+                return c;
+            };
+            for (int i = 0; i < nBones; ++i)
+                if (boneToCanon[i] >= 0)
+                    boneToCanon[i] = mirrorRole(boneToCanon[i]);
+            res.sideSwapApplied = true;
+            fprintf(stderr,
+                    "[t2m] bone naming is mirrored vs anatomy (side score "
+                    "%.3f) — swapped L/R canonical roles to match geometry\n",
+                    side);
+        }
+    }
+
     if (cmuLibraryHandedness)
         compensateCanonicalHandedness(skel, boneToCanon);
 

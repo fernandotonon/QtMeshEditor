@@ -23,9 +23,17 @@ protected:
 
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
+        // #969: the synthetic rigs in this suite historically place named-
+        // LEFT bones at +X, which the new name-vs-anatomy side check reads
+        // as mirror-named (the fleet norm is named-left at -X) and would
+        // silently swap the L/R canonical roles under the side-specific
+        // assertions below. Pin the check off for the suite; the dedicated
+        // ApplyMotionClipDetectsMirroredSideNaming test re-enables it.
+        qputenv("QTMESH_T2M_SIDE_SWAP", "0");
     }
 
     void TearDown() override {
+        qunsetenv("QTMESH_T2M_SIDE_SWAP");
         if (app)
             app->processEvents();
     }
@@ -1885,4 +1893,90 @@ TEST_F(AnimationMergerTest, VerticalDescentLowersRootDescentOnly)
         << "locomotion clip must keep a flat root";
 
     sm->destroyEntity(ent);
+}
+
+TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
+{
+    // #969: rigs whose bone NAMES mirror their anatomy (UniRig outputs) must
+    // have their L/R canonical roles swapped; fleet-norm rigs must not.
+    // The check is geometric: named-left vs named-right positions against
+    // trueLeft = up × forward. Build the same full humanoid twice, with the
+    // side names on opposite lateral signs.
+    auto build = [&](const char* prefix, float leftX) {
+        auto skelRes = Ogre::SkeletonManager::getSingleton().create(
+            std::string(prefix) + "_skel",
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        unsigned short h = 0;
+        auto bone = [&](const std::string& n, const Ogre::Vector3& p,
+                        Ogre::Bone* par) {
+            auto* b = skelRes->createBone(n, h++);
+            b->setPosition(p);
+            if (par) par->addChild(b);
+            return b;
+        };
+        auto* hips  = bone("Hips",  {0, 1.0f, 0}, nullptr);
+        auto* spine = bone("Spine", {0, 0.2f, 0}, hips);
+        auto* chest = bone("Spine1", {0, 0.2f, 0}, spine);
+        auto* neck  = bone("Neck",  {0, 0.2f, 0}, chest);
+        bone("Head", {0, 0.15f, 0}, neck);
+        const float lx = leftX, rx = -leftX;
+        auto* rsh = bone("RightShoulder", {rx * 0.05f, 0.1f, 0}, chest);
+        auto* rarm = bone("RightArm", {rx * 0.15f, 0, 0}, rsh);
+        auto* rfa = bone("RightForeArm", {rx * 0.25f, 0, 0}, rarm);
+        bone("RightHand", {rx * 0.2f, 0, 0}, rfa);
+        auto* lsh = bone("LeftShoulder", {lx * 0.05f, 0.1f, 0}, chest);
+        auto* larm = bone("LeftArm", {lx * 0.15f, 0, 0}, lsh);
+        auto* lfa = bone("LeftForeArm", {lx * 0.25f, 0, 0}, larm);
+        bone("LeftHand", {lx * 0.2f, 0, 0}, lfa);
+        auto* rleg = bone("RightUpLeg", {rx * 0.1f, -0.25f, 0}, hips);
+        auto* rknee = bone("RightLeg", {0, -0.25f, 0}, rleg);
+        bone("RightFoot", {0, -0.5f, 0}, rknee);
+        auto* lleg = bone("LeftUpLeg", {lx * 0.1f, -0.25f, 0}, hips);
+        auto* lknee = bone("LeftLeg", {0, -0.25f, 0}, lleg);
+        bone("LeftFoot", {0, -0.5f, 0}, lknee);
+        skelRes->setBindingPose();
+        auto mesh = createInMemoryMesh(std::string(prefix) + "_mesh", skelRes);
+        return Manager::getSingleton()->getSceneMgr()->createEntity(
+            std::string(prefix) + "_ent", mesh);
+    };
+
+    // The fixture pins the side check off for the legacy suite — this test
+    // is ABOUT the check, so re-enable real detection.
+    qunsetenv("QTMESH_T2M_SIDE_SWAP");
+
+    // Fleet norm (Mixamo-in-Ogre): named-left sits at MINUS up×fwd — with
+    // forward +Z (yaw180=false) that is negative X. No swap expected.
+    Ogre::Entity* norm = build("sidenorm", -1.0f);
+    ASSERT_NE(norm, nullptr);
+    const auto quats = identityClip(3);
+    const auto resNorm = AnimationMerger::applyMotionClip(
+        norm->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
+        srcRestWorld(), false, 8, false, canonRestDirs());
+    ASSERT_TRUE(resNorm.ok) << resNorm.error.toStdString();
+    EXPECT_FALSE(resNorm.sideSwapApplied)
+        << "fleet-norm naming must not be side-swapped";
+
+    // UniRig-style: named-left on the OPPOSITE lateral sign — swap expected.
+    Ogre::Entity* mir = build("sidemir", +1.0f);
+    ASSERT_NE(mir, nullptr);
+    const auto resMir = AnimationMerger::applyMotionClip(
+        mir->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
+        srcRestWorld(), false, 8, false, canonRestDirs());
+    ASSERT_TRUE(resMir.ok) << resMir.error.toStdString();
+    EXPECT_TRUE(resMir.sideSwapApplied)
+        << "mirror-named rig must have its L/R roles swapped";
+
+    // yaw180 flips forward and therefore trueLeft: the SAME mirror-named rig
+    // evaluated as backward-facing must NOT swap (its names match anatomy
+    // when the character faces -Z).
+    const auto resMirYaw = AnimationMerger::applyMotionClip(
+        mir->getSkeleton(), "sideclip2", quats, 30, /*worldFrame=*/true,
+        srcRestWorld(), false, 8, /*yaw180=*/true, canonRestDirs());
+    ASSERT_TRUE(resMirYaw.ok) << resMirYaw.error.toStdString();
+    EXPECT_FALSE(resMirYaw.sideSwapApplied)
+        << "backward-facing flips trueLeft — mirror naming becomes correct";
+
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    sm->destroyEntity(norm);
+    sm->destroyEntity(mir);
 }
