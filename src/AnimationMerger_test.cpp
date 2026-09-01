@@ -1944,8 +1944,11 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
     // is ABOUT the check, so re-enable real detection.
     qunsetenv("QTMESH_T2M_SIDE_SWAP");
 
-    // Fleet norm (Mixamo-in-Ogre): named-left sits at MINUS up×fwd — with
-    // forward +Z (yaw180=false) that is negative X. No swap expected.
+    // ONE composed permutation (replaces the old compensateCanonicalHandedness
+    // on the library path): canonical-LEFT roles must end on the bones at
+    // +trueLeft (anatomical left). A Mixamo-convention rig — named-left at
+    // MINUS up×fwd (negative X when facing +Z) — therefore gets exactly ONE
+    // swap (what the old compensator did on the validated case).
     Ogre::Entity* norm = build("sidenorm", -1.0f);
     ASSERT_NE(norm, nullptr);
     const auto quats = identityClip(3);
@@ -1953,28 +1956,28 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
         norm->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
     ASSERT_TRUE(resNorm.ok) << resNorm.error.toStdString();
-    EXPECT_FALSE(resNorm.sideSwapApplied)
-        << "fleet-norm naming must not be side-swapped";
+    EXPECT_TRUE(resNorm.sideSwapApplied)
+        << "Mixamo-convention naming takes the single composed swap";
 
-    // UniRig-style: named-left on the OPPOSITE lateral sign — swap expected.
+    // Anatomically-named rig (UniRig): named-left already at +trueLeft — the
+    // roles land correctly with NO permutation.
     Ogre::Entity* mir = build("sidemir", +1.0f);
     ASSERT_NE(mir, nullptr);
     const auto resMir = AnimationMerger::applyMotionClip(
         mir->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
     ASSERT_TRUE(resMir.ok) << resMir.error.toStdString();
-    EXPECT_TRUE(resMir.sideSwapApplied)
-        << "mirror-named rig must have its L/R roles swapped";
+    EXPECT_FALSE(resMir.sideSwapApplied)
+        << "anatomically-named rig needs no permutation";
 
-    // yaw180 flips forward and therefore trueLeft: the SAME mirror-named rig
-    // evaluated as backward-facing must NOT swap (its names match anatomy
-    // when the character faces -Z).
+    // yaw180 flips forward and therefore trueLeft: the SAME rig evaluated as
+    // backward-facing has its named-left at -trueLeft — swap expected.
     const auto resMirYaw = AnimationMerger::applyMotionClip(
         mir->getSkeleton(), "sideclip2", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, /*yaw180=*/true, canonRestDirs());
     ASSERT_TRUE(resMirYaw.ok) << resMirYaw.error.toStdString();
-    EXPECT_FALSE(resMirYaw.sideSwapApplied)
-        << "backward-facing flips trueLeft — mirror naming becomes correct";
+    EXPECT_TRUE(resMirYaw.sideSwapApplied)
+        << "backward-facing flips trueLeft — the swap is needed again";
 
     auto* sm = Manager::getSingleton()->getSceneMgr();
     sm->destroyEntity(norm);

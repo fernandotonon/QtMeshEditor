@@ -4292,11 +4292,22 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     //      as legs), so leg tracks drive the arms.
     // Both are resolved GEOMETRICALLY from the bind pose: up = +Y, forward =
     // ±Z from the caller's mesh-derived yaw180 facing, trueLeft = up × fwd.
-    {
+    // Template/library clips only (cmuLibraryHandedness) — this block
+    // REPLACES compensateCanonicalHandedness for that path: one composed
+    // permutation instead of two independent ones that could cancel (the
+    // old compensator was facing-blind raw world-X and read the FIRST bone
+    // per role, so mis-named chest-height "legs" fed it garbage). The mocap
+    // path (cmuLibraryHandedness=false) keeps its historical mapping.
+    if (cmuLibraryHandedness) {
         const Ogre::Vector3 up(0, 1, 0);
         const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
         const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
 
+        // BIND pose positions — the current pose may be mid-animation
+        // (crossed limbs would flip the vote). Same reset the old
+        // compensator used on this exact path.
+        skel->reset(true);
+        skel->_updateTransforms();
         std::vector<Ogre::Vector3> bonePos(static_cast<size_t>(nBones));
         for (int i = 0; i < nBones; ++i)
             bonePos[i] = skel->getBone(static_cast<unsigned short>(i))
@@ -4367,7 +4378,12 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
             side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
         }
-        constexpr double kExpectedSideSign = -1.0;
+        // One-permutation convention: canonical LEFT roles must end on the
+        // bones at +trueLeft (anatomical left) — that is the state the old
+        // compensator produced on the validated Mixamo case (named-left at
+        // -trueLeft, one swap). So: swap when the named pairs sit at
+        // -trueLeft; an anatomically-named rig (UniRig) needs none.
+        constexpr double kExpectedSideSign = +1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
             fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
                     side, kExpectedSideSign);
@@ -4418,7 +4434,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 if (rc.seg < 0) continue;
                 const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
                                       .dotProduct(trueLeft);
-                const int sideIdx = lat < 0.0f ? 1 : 0;   // fleet norm: left at -trueLeft
+                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +trueLeft
                 if (armTaken[sideIdx]) continue;
                 boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
                 ++rescued;
@@ -4431,8 +4447,9 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         }
     }
 
-    if (cmuLibraryHandedness)
-        compensateCanonicalHandedness(skel, boneToCanon);
+    // NB compensateCanonicalHandedness is intentionally NOT called here any
+    // more for the library path — the #969 block above composes the same
+    // decision (facing-aware, on the cleaned mapping, V2 fingers included).
 
     res.canonicalJoints = distinct;
     // Bones-per-role: rigs segment chains differently (Mixamo has Spine AND
