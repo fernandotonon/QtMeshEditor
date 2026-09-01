@@ -132,7 +132,26 @@ MeshGenPredictor::Result predictTrellis2(
     t2.mock             = opts.trellis2Mock;
     t2.sourceKeepDir    = opts.trellis2SourceKeepDir;
     t2.sourceKeepBaseName = opts.trellis2SourceKeepBaseName;
-    return Trellis2Predictor::predict(image, t2, progress);
+    MeshGenPredictor::Result r = Trellis2Predictor::predict(image, t2, progress);
+    // TRELLIS.2 decodes in a Z-up frame — in the viewer's Y-up world the
+    // model arrives face-down. Bake a -90° X rotation into the geometry:
+    // (x, y, z) -> (x, z, -y). Rigid (det +1), so winding, UVs and the
+    // tangent-space normal map are untouched; object-space vertex normals
+    // rotate with the positions. The kept .qtm3d source stays in the native
+    // frame (re-bakes come back through this same path).
+    if (r.ok) {
+        for (size_t v = 0; v + 2 < r.positions.size(); v += 3) {
+            const float y = r.positions[v + 1];
+            r.positions[v + 1] = r.positions[v + 2];
+            r.positions[v + 2] = -y;
+        }
+        for (size_t v = 0; v + 2 < r.normals.size(); v += 3) {
+            const float y = r.normals[v + 1];
+            r.normals[v + 1] = r.normals[v + 2];
+            r.normals[v + 2] = -y;
+        }
+    }
+    return r;
 }
 
 // Game-ready pass for the LOCAL backends (TripoSR/TripoSG): weld, drop
