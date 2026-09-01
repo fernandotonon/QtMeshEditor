@@ -236,6 +236,7 @@ bool MotionLibrary::parse(const QByteArray& json)
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
+        clip.uprightness = meanChestLean(clip.quats);
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
@@ -251,6 +252,37 @@ std::vector<QString> MotionLibrary::actions() const
     std::vector<QString> out;
     for (const auto& c : m_clips) out.push_back(c.action);
     return out;
+}
+
+float MotionLibrary::meanChestLean(
+    const std::vector<std::vector<std::array<float, 4>>>& quats)
+{
+    // Chest = canonical joint 2. up' = q * (0,1,0) * q⁻¹; report mean up'.z.
+    double sum = 0.0;
+    int n = 0;
+    for (const auto& frame : quats) {
+        if (frame.size() <= 2)
+            continue;
+        const auto& q = frame[2];
+        const float x = q[0], y = q[1], z = q[2], w = q[3];
+        // z-component of the rotated +Y axis: 2(yz + wx)... careful with
+        // convention: R(q)·(0,1,0) = (2(xy − wz), 1 − 2(x² + z²), 2(yz + wx)).
+        sum += 2.0f * (y * z + w * x);
+        ++n;
+    }
+    return n ? static_cast<float>(sum / n) : 0.0f;
+}
+
+double MotionLibrary::takeWeight(const QString& action, float quality,
+                                 float uprightness)
+{
+    double w = static_cast<double>(quality) * quality;   // the #855 rule
+    const QString a = action.toLower();
+    const bool locomotion = (a == QLatin1String("walk"))
+                         || (a == QLatin1String("run"));
+    if (locomotion && uprightness < -0.10f)
+        w *= 0.02;   // backpedal-look take: only picked when nothing else
+    return w;
 }
 
 int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
@@ -279,9 +311,10 @@ int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) co
         QList<double> weights;
         weights.reserve(hits.size());
         for (int i : hits) {
-            const double q = m_clips[static_cast<size_t>(i)].quality;
-            weights.append(q * q);
-            total += q * q;
+            const auto& c = m_clips[static_cast<size_t>(i)];
+            const double w = takeWeight(c.action, c.quality, c.uprightness);
+            weights.append(w);
+            total += w;
         }
         if (total <= 1e-9)
             return hits.at(QRandomGenerator::global()->bounded(hits.size()));
