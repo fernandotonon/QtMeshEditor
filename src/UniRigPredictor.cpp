@@ -459,15 +459,25 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
             if (claimed[k]) continue;
             std::vector<int> chain = walkChain(k);
             if (chain.empty()) continue;
-            // ARM vs LEG by the CHAIN'S DIRECTION, not its attach height: a leg
-            // DESCENDS (its tip is well below its root in up); an arm extends
-            // sideways/level. (The hips are mid-height, so attach-height alone
-            // mislabels hip-rooted legs as arms — observed on real UniRig rigs.)
+            // ARM vs LEG: attach HEIGHT relative to the ROOT decides when it
+            // can — arms hang off the upper spine (chest/shoulders, well above
+            // the hips), legs off the root itself. Chain DIRECTION alone
+            // (the previous rule: "arms extend sideways") mislabels A-POSE
+            // arms, which descend almost as steeply as legs — observed on a
+            // real UniRig rig where BOTH arm chains were named *UpLeg_1 and
+            // the leg tracks drove the arms. Direction remains the
+            // tie-breaker only inside the ambiguous attach band.
             const double dropFrac = (up(chain.front()) - up(chain.back())) / bodyH;
             const double sideReach = std::abs(side(chain.back()) - side(chain.front()));
             const double upDrop     = up(chain.front()) - up(chain.back());
-            // Leg if it mostly goes DOWN; arm if it mostly goes SIDEWAYS.
-            const bool isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
+            const double attachFrac = (up(a) - up(root)) / bodyH;   // a = attach joint
+            bool isArm;
+            if (attachFrac > 0.15)
+                isArm = true;    // attached well above the hips → arm (A-pose safe)
+            else if (attachFrac < 0.05)
+                isArm = false;   // attached at/below the hips → leg
+            else
+                isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
             const bool left  = (side(chain.front()) >= 0.0);
             const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
             const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };

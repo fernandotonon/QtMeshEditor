@@ -2053,14 +2053,30 @@ bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
     Ogre::SkeletonInstance* skel = entity->getSkeleton();
     if (!skel) return false;
 
-    // Ankle reference: bones resolving to the canonical foot roles (17/21).
+    // Ankle reference: bones resolving to the canonical foot roles (17/21) —
+    // but only those that are actually LOW. Mis-labeled rigs (#969: UniRig
+    // A-pose arms named "*Foot_1") put foot-named bones at chest height;
+    // averaging those drags the "foot band" into the torso and the centroid
+    // test reads the backplate/cloak instead of the toes (false backward →
+    // every generated clip contorts). Gate each candidate to the lowest
+    // quarter of the skeleton's height.
+    float loB = 0, hiB = 0;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        const float y = skel->getBone(i)->_getDerivedPosition().y;
+        if (i == 0) { loB = hiB = y; }
+        loB = std::min(loB, y); hiB = std::max(hiB, y);
+    }
+    const float skelH = std::max(1e-6f, hiB - loB);
     Ogre::Vector3 ankleSum = Ogre::Vector3::ZERO;
     int ankles = 0;
     for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
         Ogre::Bone* b = skel->getBone(i);
         const int c = MotionInbetween::canonicalIndexForBone(
             QString::fromStdString(b->getName()));
-        if (c == 17 || c == 21) { ankleSum += b->_getDerivedPosition(); ++ankles; }
+        if (c != 17 && c != 21) continue;
+        const Ogre::Vector3 p = b->_getDerivedPosition();
+        if (p.y > loB + 0.25f * skelH) continue;   // "foot" at chest height
+        ankleSum += p; ++ankles;
     }
     if (ankles == 0) return false;
     const Ogre::Vector3 ankle = ankleSum / static_cast<float>(ankles);
@@ -4268,24 +4284,69 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!canonSeen[c]) { canonSeen[c] = 1; ++distinct; }
         }
     }
-    // ── #969 name-vs-anatomy side check ────────────────────────────────
-    // Rigs whose bone NAMES mirror their anatomy (UniRig/AutoRig outputs,
-    // Blender -X-scale exports whose chirality differs from the Mixamo-import
-    // fleet norm the motion library is calibrated against) retarget every
-    // clip with L/R swapped: the left-leg track lands on the anatomical
-    // right. Detect it name-independently from bind GEOMETRY: the character's
-    // TRUE left is up × forward (up = +Y; forward = ±Z from the caller's
-    // mesh-derived facing — the same yaw180 detectBackwardFacing() feeds us).
-    // Sum dot(namedLeft − namedRight, trueLeft) over the paired roles
-    // (weighted by separation, so a near-centred pair can't flip the vote).
-    // The expected sign is calibrated on the known-good Mixamo case
-    // (kExpectedSideSign below); the opposite sign ⇒ mirror every L/R role
-    // (and V2 finger side) so names match anatomy for the whole retarget.
+    // ── #969 name-vs-anatomy consistency (side swap + arm/leg guard) ──
+    // Two real-world failure modes on generated (UniRig/AutoRig) rigs:
+    //  (a) bone names put "Left*" on the anatomical right (the side swap);
+    //  (b) whole ARM chains carry LEG names ("LeftUpLeg_1" at chest height —
+    //      the pre-fix UniRig labeler classified A-pose arms, which descend,
+    //      as legs), so leg tracks drive the arms.
+    // Both are resolved GEOMETRICALLY from the bind pose: up = +Y, forward =
+    // ±Z from the caller's mesh-derived yaw180 facing, trueLeft = up × fwd.
     {
         const Ogre::Vector3 up(0, 1, 0);
         const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
         const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
-        // (left role, right role) pairs, most reliable first.
+
+        std::vector<Ogre::Vector3> bonePos(static_cast<size_t>(nBones));
+        for (int i = 0; i < nBones; ++i)
+            bonePos[i] = skel->getBone(static_cast<unsigned short>(i))
+                             ->_getDerivedPosition();
+
+        // Hip reference + body height (for the arm/leg altitude bands).
+        int hipIdx = -1;
+        float loY = 0, hiY = 0;
+        for (int i = 0; i < nBones; ++i) {
+            if (boneToCanon[i] == 0 && hipIdx < 0) hipIdx = i;
+            loY = i ? std::min(loY, bonePos[i].y) : bonePos[i].y;
+            hiY = i ? std::max(hiY, bonePos[i].y) : bonePos[i].y;
+        }
+        const float bodyH = std::max(1e-6f, hiY - loY);
+
+        // ---- (b) arm/leg altitude guard --------------------------------
+        // A LEG-role bone bound well ABOVE the hips is a mis-named arm
+        // segment: strip it (remembering its segment for the rescue below).
+        // An ARM-role bone well BELOW the hips is stripped outright.
+        // seg: 0 = upper limb root, 1 = middle, 2 = tip; -1 = buttock/collar.
+        struct Rescue { int bone; int seg; };
+        std::vector<Rescue> rescue;
+        if (hipIdx >= 0) {
+            const float hipY = bonePos[hipIdx].y;
+            for (int i = 0; i < nBones; ++i) {
+                const int c = boneToCanon[i];
+                if (c < 0) continue;
+                const bool legRole = (c >= 14 && c <= 21);
+                const bool armRole = (c >= 6 && c <= 13);
+                if (legRole && bonePos[i].y > hipY + 0.10f * bodyH) {
+                    int seg = -1;
+                    if (c == 15 || c == 19) seg = 0;
+                    else if (c == 16 || c == 20) seg = 1;
+                    else if (c == 17 || c == 21) seg = 2;
+                    rescue.push_back({i, seg});
+                    boneToCanon[i] = -1;
+                } else if (armRole && bonePos[i].y < hipY - 0.10f * bodyH) {
+                    boneToCanon[i] = -1;   // "arm" below the hips — drop
+                }
+            }
+        }
+
+        // ---- (a) side check on the CLEANED mapping ---------------------
+        // Sum dot(namedLeft − namedRight, trueLeft) over the paired roles
+        // (weighted by separation, so a near-centred pair can't flip the
+        // vote). The expected sign is calibrated on the known-good Mixamo
+        // case as loaded by OUR importer: it measures side = -2.36, i.e. the
+        // fleet-norm rigs put named-left at MINUS up×fwd (the same "all
+        // imports mirror alike" #951 measured from the toes). A POSITIVE
+        // score is the odd one out (UniRig outputs) and triggers the swap.
         static const int kPairs[][2] = {
             {19, 15},   // hips
             {10, 6},    // collars
@@ -4298,8 +4359,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         for (int i = 0; i < nBones; ++i) {
             const int c = boneToCanon[i];
             if (c < 0 || c >= 22 || roleHas[c]) continue;
-            rolePos[c] = skel->getBone(static_cast<unsigned short>(i))
-                             ->_getDerivedPosition();
+            rolePos[c] = bonePos[i];
             roleHas[c] = true;
         }
         double side = 0.0;
@@ -4307,12 +4367,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
             side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
         }
-        // Calibrated on Mixamo Rumba as loaded by OUR importer (templates
-        // apply correctly there today): it measures side = -2.36, i.e. in
-        // Ogre's frame the fleet-norm rigs put named-left at MINUS up×fwd —
-        // the same "all imports mirror alike" #951 measured from the toes.
-        // A POSITIVE score is the odd one out (UniRig/AutoRig outputs) and
-        // triggers the swap.
         constexpr double kExpectedSideSign = -1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
             fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
@@ -4343,6 +4397,37 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     "[t2m] bone naming is mirrored vs anatomy (side score "
                     "%.3f) — swapped L/R canonical roles to match geometry\n",
                     side);
+        }
+
+        // ---- (b, continued) rescue mis-named arm chains ----------------
+        // The stripped chest-height "leg" chains ARE the arms — remap each
+        // segment onto the matching arm role, side chosen geometrically in
+        // the POST-swap convention (fleet norm: left roles live at MINUS
+        // trueLeft). Only fills a side whose arm roles are entirely vacant,
+        // so a rig with real (correctly named) arms is never stomped.
+        if (!rescue.empty() && hipIdx >= 0) {
+            bool armTaken[2] = {false, false};   // 0 = right(7..9), 1 = left(11..13)
+            for (int i = 0; i < nBones; ++i) {
+                const int c = boneToCanon[i];
+                if (c >= 7 && c <= 9)   armTaken[0] = true;
+                if (c >= 11 && c <= 13) armTaken[1] = true;
+            }
+            static const int kArmSeg[2][3] = {{7, 8, 9}, {11, 12, 13}};
+            int rescued = 0;
+            for (const Rescue& rc : rescue) {
+                if (rc.seg < 0) continue;
+                const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
+                                      .dotProduct(trueLeft);
+                const int sideIdx = lat < 0.0f ? 1 : 0;   // fleet norm: left at -trueLeft
+                if (armTaken[sideIdx]) continue;
+                boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
+                ++rescued;
+            }
+            if (rescued > 0)
+                fprintf(stderr,
+                        "[t2m] %d leg-named bone(s) bound at chest height — "
+                        "remapped onto the vacant arm roles (mis-labeled "
+                        "A-pose arms)\n", rescued);
         }
     }
 

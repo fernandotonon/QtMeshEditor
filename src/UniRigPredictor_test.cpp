@@ -473,3 +473,55 @@ TEST(UniRigPredictor, EnsureModelBlockingHonoursNoDownloadGuard)
     SUCCEED();
     (void)p;
 }
+
+TEST(UniRigPredictor, LabelJointsClassifiesAPoseArmsByAttachHeight)
+{
+    // #969: A-pose arms DESCEND almost as steeply as legs, so the old
+    // direction-only rule ("arms extend sideways") named both arm chains
+    // *UpLeg_1 on a real UniRig rig and the leg tracks drove the arms.
+    // Attach height must win: chains hanging off the upper spine are arms
+    // even when they drop; chains off the root are legs even when they splay.
+    using J = UniRigPredictor::Joint;
+    std::vector<J> j;
+    auto add = [&](double x, double y, double z, int parent) {
+        J jt; jt.pos = {x, y, z}; jt.parent = parent; jt.part = -1;
+        jt.name = QStringLiteral("joint_%1").arg(j.size());
+        j.push_back(jt);
+        return static_cast<int>(j.size()) - 1;
+    };
+    const int hips  = add(0, 1.00, 0, -1);
+    const int sp0   = add(0, 1.15, 0, hips);
+    const int sp1   = add(0, 1.30, 0, sp0);
+    const int chest = add(0, 1.45, 0, sp1);
+    const int neck  = add(0, 1.55, 0, chest);
+    add(0, 1.70, 0, neck);                       // head
+    // A-POSE arms: attach at the chest, drop steeply (dy ≈ -0.45 over the
+    // chain vs lateral reach ≈ 0.35 — the old rule called this a leg).
+    const int lsh = add(+0.15, 1.42, 0, chest);
+    const int lel = add(+0.30, 1.15, 0, lsh);
+    add(+0.42, 0.90, 0, lel);
+    const int rsh = add(-0.15, 1.42, 0, chest);
+    const int rel = add(-0.30, 1.15, 0, rsh);
+    add(-0.42, 0.90, 0, rel);
+    // Legs: attach at the root, straight down.
+    const int lhip = add(+0.12, 0.95, 0, hips);
+    const int lkne = add(+0.12, 0.50, 0, lhip);
+    add(+0.12, 0.05, 0, lkne);
+    const int rhip = add(-0.12, 0.95, 0, hips);
+    const int rkne = add(-0.12, 0.50, 0, rhip);
+    add(-0.12, 0.05, 0, rkne);
+
+    UniRigPredictor::labelJointsAnatomically(j, /*upAxis=*/1);
+
+    int armChains = 0, legChains = 0, legNamedHigh = 0;
+    for (const auto& jt : j) {
+        if (jt.name.contains(QLatin1String("Arm"))
+            && !jt.name.contains(QLatin1String("ForeArm"))) ++armChains;
+        if (jt.name.contains(QLatin1String("UpLeg"))) ++legChains;
+        if (jt.name.contains(QLatin1String("UpLeg")) && jt.pos[1] > 1.2)
+            ++legNamedHigh;
+    }
+    EXPECT_EQ(armChains, 2) << "both A-pose chains must be named as arms";
+    EXPECT_EQ(legChains, 2) << "exactly the two root chains are legs";
+    EXPECT_EQ(legNamedHigh, 0) << "no leg name may land at chest height";
+}
