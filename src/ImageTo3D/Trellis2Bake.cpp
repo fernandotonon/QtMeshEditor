@@ -189,18 +189,33 @@ std::vector<float> smoothNormalField(std::vector<float> normals,
                 }
             }
         }
+        // Two-phase update: resolve every canonical slot from the
+        // PRE-iteration values into a scratch buffer first, then broadcast.
+        // Writing normals[] in place while later weld-group members still
+        // read their canonical slot would hand them the already-normalized
+        // post-update value (canon[v] is the smallest index of the group,
+        // so it is always updated first) — split vertices would diverge
+        // from their canonical vertex, compounding per iteration.
+        std::vector<float> next(positions.size());
         for (size_t v = 0; v < nv; ++v) {
-            const uint32_t cv = canon[v];
-            float nn[3] = {normals[cv * 3 + 0] + acc[cv * 3 + 0],
-                           normals[cv * 3 + 1] + acc[cv * 3 + 1],
-                           normals[cv * 3 + 2] + acc[cv * 3 + 2]};
+            if (canon[v] != v)
+                continue;   // canonical slots only
+            float nn[3] = {normals[v * 3 + 0] + acc[v * 3 + 0],
+                           normals[v * 3 + 1] + acc[v * 3 + 1],
+                           normals[v * 3 + 2] + acc[v * 3 + 2]};
             const float l = len3(nn);
             if (l > 1e-20f) {
-                normals[v * 3 + 0] = nn[0] / l;
-                normals[v * 3 + 1] = nn[1] / l;
-                normals[v * 3 + 2] = nn[2] / l;
+                nn[0] /= l; nn[1] /= l; nn[2] /= l;
+            } else {
+                nn[0] = normals[v * 3 + 0];
+                nn[1] = normals[v * 3 + 1];
+                nn[2] = normals[v * 3 + 2];
             }
+            std::memcpy(&next[v * 3], nn, sizeof(nn));
         }
+        for (size_t v = 0; v < nv; ++v)
+            std::memcpy(&normals[v * 3], &next[canon[v] * 3],
+                        sizeof(float) * 3);
     }
     return normals;
 }
