@@ -421,8 +421,11 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.vertexColor     = true;
         // TripoSR removal already ran above; TripoSG's white-background and
         // TRELLIS.2's keep-alpha matte removal happen inside the predictor
-        // dispatch.
-        opts.removeBackground = rembg && (useSG || useT2);
+        // dispatch. TRELLIS.2 ALWAYS gets the matte (the CLI forces it too):
+        // its preprocess needs an alpha channel to keep the non-commercial
+        // rembg model unused, so the GUI checkbox only governs the Tripo
+        // backends.
+        opts.removeBackground = useT2 || (rembg && useSG);
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;

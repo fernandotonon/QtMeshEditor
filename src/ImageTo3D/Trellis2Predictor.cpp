@@ -191,13 +191,25 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         return failResult(QStringLiteral("trellis2: input image is null."));
     RuntimeKind kind = runtimeKind();
     // --mock is a Python-sidecar feature (synthetic generation for GPU-less
-    // plumbing tests) — route mock runs there even when trellis.cpp is found.
-    if ((opts.mock || qEnvironmentVariableIsSet("QTMESH_TRELLIS2_MOCK"))
-        && kind == RuntimeKind::TrellisCpp
-        && !pythonPath().isEmpty() && !generateScriptPath().isEmpty()) {
-        kind = RuntimeKind::PythonSidecar;
+    // plumbing tests) — route mock runs there even when trellis.cpp is found,
+    // and NEVER silently fall through to a real multi-minute generation when
+    // the sidecar isn't there to serve the mock.
+    const bool mockRun =
+        opts.mock || qEnvironmentVariableIsSet("QTMESH_TRELLIS2_MOCK");
+    if (mockRun && kind != RuntimeKind::None) {
+        if (!pythonPath().isEmpty() && !generateScriptPath().isEmpty())
+            kind = RuntimeKind::PythonSidecar;
+        else if (kind == RuntimeKind::TrellisCpp)
+            return failResult(QStringLiteral(
+                "trellis2: mock generation needs the Python sidecar "
+                "(ai/trellis2/generate.py + a python with numpy/Pillow) — "
+                "refusing to run a real trellis.cpp generation for a mock "
+                "request."));
     }
-    if (kind == RuntimeKind::None)
+    // The QTMESH_TRELLIS2_IMPORT re-bake seam (Phase 9) skips inference
+    // entirely — it must work with NO runtime installed.
+    const QString importPath = qEnvironmentVariable("QTMESH_TRELLIS2_IMPORT");
+    if (kind == RuntimeKind::None && importPath.isEmpty())
         return failResult(runtimeDescription());
 
     auto report = [&progress](Stage s, int done, int total) -> bool {
@@ -223,7 +235,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     }();
     QString warning;
     bool matteReady = inputHasMatte;
-    if (!inputHasMatte && opts.removeBackground && !opts.mock) {
+    if (!inputHasMatte && opts.removeBackground && !mockRun) {
         if (!report(Stage::Encode, 0, 1))
             return failResult(QStringLiteral("cancelled"));
         if (BackgroundRemover::isAvailable()) {
@@ -272,7 +284,6 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // skips inference entirely and re-runs the native pipeline (game-ready +
     // bake) on a previously preserved generation — re-bake textures /
     // re-target LODs without paying the model again.
-    const QString importPath = qEnvironmentVariable("QTMESH_TRELLIS2_IMPORT");
     if (!importPath.isEmpty()) {
         Trellis2Interchange::ReadResult rr = Trellis2Interchange::read(importPath);
         if (!rr.ok)
@@ -545,7 +556,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     MeshGenPredictor::Result r;
     r.warning = warning;
     r.sourceInterchangePath = keptSourcePath;
-    r.usedModel = !opts.mock;
+    r.usedModel = !mockRun;
     r.bakeTripoSROrientation = false;   // TRELLIS.2 is +Y-up like TripoSG
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------

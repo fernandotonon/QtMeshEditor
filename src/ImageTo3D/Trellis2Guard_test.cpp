@@ -34,8 +34,11 @@ bool lineIsAllowlisted(const QString& line)
 {
     const QString t = line.trimmed();
     // Python/requirements comments and Markdown prose are documentation.
+    // NB: only a Markdown BULLET ("- text") is prose — a bare '-' prefix
+    // would also allowlist pip requirement flags like
+    // "-e git+…/nvdiffrast.git#egg=nvdiffrast".
     if (t.startsWith(QLatin1Char('#')) || t.startsWith(QLatin1Char('*'))
-        || t.startsWith(QLatin1Char('-')) || t.startsWith(QLatin1Char('|'))
+        || t.startsWith(QLatin1String("- ")) || t.startsWith(QLatin1Char('|'))
         || t.startsWith(QLatin1Char('>')))
         return true;
     // The explicit guard/report constructs in generate.py.
@@ -118,6 +121,14 @@ TEST(Trellis2GuardTest, RequirementsNeverListRestrictedOrTrapPackages)
         // The PyPI package named `cumesh` is an unrelated, unlicensed project —
         // CuMesh must be built from the pinned JeffreyXiang/CuMesh checkout.
         EXPECT_NE(pkg, QStringLiteral("cumesh")) << line.toStdString();
+        // Editable/VCS requirement forms ("-e git+…#egg=nvdiffrast",
+        // "nvdiffrast @ git+…") hide the name from the pkg-prefix parse —
+        // ban the names ANYWHERE in a non-comment requirement line.
+        const QString low = line.toLower();
+        EXPECT_FALSE(low.contains(QLatin1String("nvdiffrast"))
+                     || low.contains(QLatin1String("nvdiffrec"))
+                     || low.contains(QLatin1String("cumesh")))
+            << line.toStdString();
     }
 }
 

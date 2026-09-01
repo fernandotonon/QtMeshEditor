@@ -159,8 +159,15 @@ def main() -> None:
     args = ap.parse_args()
 
     if not sys.platform.startswith("linux"):
-        log("WARNING: TRELLIS.2 upstream supports Linux + NVIDIA GPUs only; "
-            "continuing, but generation will not work on this platform.")
+        # Hard stop: upstream's CUDA extensions only build on Linux, and the
+        # venv layout below assumes env/bin/python (Windows venvs use
+        # env\Scripts\python.exe) — continuing would fail with a confusing
+        # filesystem error instead of this message. On macOS use the
+        # trellis.cpp runtime instead (docs/TRELLIS2.md).
+        raise SystemExit(
+            "TRELLIS.2's Python sidecar supports Linux + NVIDIA GPUs only. "
+            "On macOS/Windows install the trellis.cpp runtime instead — see "
+            "docs/TRELLIS2.md.")
     if sys.version_info < (3, 10):
         raise SystemExit("Python >= 3.10 required")
     if shutil.which("git") is None:

@@ -10757,6 +10757,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "upscale (was the bake disabled or did it fall back?)." << Qt::endl;
     }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+#ifdef ENABLE_ONNX
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (upModel.isEmpty()) {
             err() << "Warning: upscale model unavailable — keeping the "
@@ -10770,6 +10771,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Warning: texture upscale failed (" << ur.error
                       << ") — keeping the un-upscaled texture." << Qt::endl;
         }
+#else
+        // Reachable on non-ONNX builds via the TRELLIS.2 backend (which has
+        // no ONNX dependency) — the Real-ESRGAN upscaler is ONNX-only.
+        err() << "Warning: --upscale-texture requires an ONNX build "
+                 "(rebuild with -DENABLE_ONNX=ON) — keeping the un-upscaled "
+                 "texture." << Qt::endl;
+#endif
     }
 
     // Baked texture (+ synthesized PBR maps) land next to the exported mesh

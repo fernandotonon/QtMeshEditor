@@ -146,17 +146,22 @@ TEST(CLIPipelineCmdGenerate3dCoverage, Trellis2BackendAcceptedButUnknownRejected
     // trellis2 is a valid backend; with a real image but a deliberately
     // nonexistent runtime the command must fail at RUNTIME (1) with the
     // install hint — never crash, never a usage error.
-    qputenv("QTMESH_TRELLIS2_ENV", "/nonexistent/qtmesh-trellis2-cli-ut");
-    qputenv("QTMESH_TRELLIS2_PYTHON", "/nonexistent/python-cli-ut");
+    // All ASSERTs run BEFORE the env override: an ASSERT returns from the
+    // test body immediately, and env vars set before a failed ASSERT would
+    // leak into every later test in this process.
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     const QString png = QDir(tmp.path()).filePath("in.png");
     QImage img(16, 16, QImage::Format_RGB888);
     img.fill(Qt::red);
     ASSERT_TRUE(img.save(png, "PNG"));
+    qputenv("QTMESH_TRELLIS2_ENV", "/nonexistent/qtmesh-trellis2-cli-ut");
+    qputenv("QTMESH_TRELLIS2_PYTHON", "/nonexistent/python-cli-ut");
+    qputenv("QTMESH_TRELLIS2_CLI", "/nonexistent/trellis-cli-cli-ut");
     const QByteArray pngBytes = png.toLocal8Bit();
     Gen3dArgv ok({"generate3d", pngBytes.constData(), "--backend", "trellis2"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(ok.argc(), ok.argv()), 1);
     qunsetenv("QTMESH_TRELLIS2_ENV");
     qunsetenv("QTMESH_TRELLIS2_PYTHON");
+    qunsetenv("QTMESH_TRELLIS2_CLI");
 }

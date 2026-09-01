@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <limits>
+#include <cmath>
 
 namespace Trellis2Interchange {
 
@@ -55,9 +56,13 @@ qint64 elementSize(const QString& dtype)
 
 qint64 elementCount(const ArrayRef& ref)
 {
+    // shape values are FILE-CONTROLLED: multiply with overflow checks so a
+    // crafted manifest can't wrap the count and slip past checkedBlob().
     qint64 n = 1;
     for (qint64 d : ref.shape) {
         if (d < 0)
+            return -1;
+        if (d != 0 && n > std::numeric_limits<qint64>::max() / d)
             return -1;
         n *= d;
     }
@@ -75,12 +80,20 @@ const uint8_t* checkedBlob(const QByteArray& blob, qint64 blobBase,
         return nullptr;
     }
     const qint64 count = elementCount(ref);
-    if (count < 0 || count * esize != ref.byteLength) {
+    if (count < 0 || count > std::numeric_limits<qint64>::max() / esize
+        || count * esize != ref.byteLength) {
         *error = QStringLiteral("array size mismatch (dtype %1)").arg(ref.dtype);
         return nullptr;
     }
+    // offset/byteLength are file-controlled too — reject any range whose
+    // arithmetic would overflow before it can be bounds-checked.
+    if (ref.offset > std::numeric_limits<qint64>::max() - blobBase) {
+        *error = QStringLiteral("array exceeds file bounds");
+        return nullptr;
+    }
     const qint64 start = blobBase + ref.offset;
-    if (start < 0 || start + ref.byteLength > blob.size()) {
+    if (start < 0 || ref.byteLength > blob.size()
+        || start > blob.size() - ref.byteLength) {
         *error = QStringLiteral("array exceeds file bounds");
         return nullptr;
     }
@@ -193,6 +206,21 @@ ReadResult read(const QString& path)
                 const uint16_t* s = reinterpret_cast<const uint16_t*>(p);
                 for (size_t i = 0; i < d.voxelCoords.size(); ++i)
                     d.voxelCoords[i] = s[i];
+            }
+            // Coordinates index the res³ grid — a coordinate outside
+            // [0, resolution) would make every volume sampler mis-key.
+            if (d.resolution <= 0) {
+                r.error = QStringLiteral(
+                    "'voxel_coords' present without a positive 'resolution'");
+                return r;
+            }
+            for (uint32_t c : d.voxelCoords) {
+                if (c >= static_cast<uint32_t>(d.resolution)) {
+                    r.error = QStringLiteral(
+                        "voxel coordinate %1 outside grid (resolution %2)")
+                                  .arg(c).arg(d.resolution);
+                    return r;
+                }
             }
         }
     }
@@ -312,29 +340,44 @@ bool write(const QString& path, const Data& data, QString* error)
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return failWith(QStringLiteral("cannot write %1").arg(path));
-    f.write(kMagic, 8);
+    // A short write (disk full, quota, unplugged volume) must not leave a
+    // truncated file that reads as "valid until it isn't" — check every
+    // write and fail loudly.
+    auto put = [&f](const char* p, qint64 n) {
+        return f.write(p, n) == n;
+    };
+    bool ok = put(kMagic, 8);
     const uint32_t version = kVersion;
     const uint32_t jsonLen = static_cast<uint32_t>(json.size());
-    f.write(reinterpret_cast<const char*>(&version), 4);
-    f.write(reinterpret_cast<const char*>(&jsonLen), 4);
-    f.write(json);
+    ok = ok && put(reinterpret_cast<const char*>(&version), 4);
+    ok = ok && put(reinterpret_cast<const char*>(&jsonLen), 4);
+    ok = ok && f.write(json) == json.size();
     const qint64 headerLen = 16 + json.size();
     const qint64 blobBase = align16(headerLen);
     static const char zeros[16] = {};
-    f.write(zeros, blobBase - headerLen);
+    ok = ok && put(zeros, blobBase - headerLen);
     qint64 pos = 0;
     for (const Entry& e : entries) {
+        if (!ok)
+            break;
         const qint64 wanted =
             static_cast<qint64>(arrays.value(QLatin1String(e.name))
                                     .toObject()
                                     .value(QStringLiteral("offset"))
                                     .toDouble());
         if (wanted > pos) {
-            f.write(zeros, wanted - pos);
+            ok = put(zeros, wanted - pos);
             pos = wanted;
         }
-        f.write(reinterpret_cast<const char*>(e.ptr), e.bytes);
+        ok = ok && put(reinterpret_cast<const char*>(e.ptr), e.bytes);
         pos += e.bytes;
+    }
+    ok = ok && f.flush();
+    if (!ok) {
+        f.close();
+        QFile::remove(path);
+        return failWith(QStringLiteral("short write to %1 (%2)")
+                            .arg(path, f.errorString()));
     }
     return true;
 }
@@ -416,7 +459,10 @@ ReadResult readTrellisCppDump(const QString& path)
         const float* ap = reinterpret_cast<const float*>(p);
         for (size_t i = 0; i < d.voxelAttrs.size(); ++i) {
             const float v = ap[i];
-            const float cl = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            // NaN fails both comparisons and float->u8 of NaN is UB —
+            // treat non-finite lanes as 0.
+            const float cl = !std::isfinite(v) ? 0.0f
+                : (v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v));
             d.voxelAttrs[i] = static_cast<uint8_t>(cl * 255.0f + 0.5f);
         }
     }

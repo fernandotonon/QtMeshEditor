@@ -67,8 +67,8 @@ backend specifically (all other QtMeshEditor features work without any of this).
 
 | Weights | Purpose | License | Bundled? | Commercial use |
 |---|---|---|---|---|
-| `microsoft/TRELLIS.2-4B` (rev `af44b45f…`) | flow models + shape/tex VAEs | MIT | no — HF download on install | ✅ |
-| `microsoft/TRELLIS-image-large` `ss_dec_conv3d_16l8_fp16` only (rev `25e0d31f…`) | sparse-structure decoder referenced by `pipeline.json` | MIT | no — HF download | ✅ |
+| `microsoft/TRELLIS.2-4B` (rev `af44b45f…`) | flow models + shape/tex VAEs | MIT | no — HF download on first generation | ✅ |
+| `microsoft/TRELLIS-image-large` `ss_dec_conv3d_16l8_fp16` only (rev `25e0d31f…`) | sparse-structure decoder referenced by `pipeline.json` | MIT | no — HF download on first generation | ✅ |
 | `facebook/dinov3-vitl16-pretrain-lvd1689m` | image conditioning encoder | **DINOv3 License** (custom Meta) | no — **gated** HF download by the user | ✅ with conditions (§4) |
 | `briaai/RMBG-2.0` | upstream default background remover (named in `pipeline.json`) | **CC BY-NC 4.0** ❌ | **never downloaded or loaded** — bypassed (§3) | ❌ non-commercial |
 | `ZhengPeng7/BiRefNet` | MIT alternative background remover | MIT | not used (QtMeshEditor does its own bg removal) | ✅ |

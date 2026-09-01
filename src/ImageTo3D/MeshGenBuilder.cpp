@@ -326,9 +326,14 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                     unique + QStringLiteral("_%1.png").arg(QLatin1String(suffix)));
                 return img.save(p, "PNG") ? p : QString();
             };
-            normalPath   = saveMap(result.normalMap,   "normal");
-            roughnessPath = saveMap(result.roughnessMap, "roughness");
-            metallicPath = saveMap(result.metallicMap, "metallic");
+            // Honour the disabled-PBR option for the REAL baked maps too —
+            // "no PBR" must mean a diffuse-only asset, not "no synthesized
+            // maps but the generated ones still bind".
+            if (opts.generatePbrMaps) {
+                normalPath   = saveMap(result.normalMap,   "normal");
+                roughnessPath = saveMap(result.roughnessMap, "roughness");
+                metallicPath = saveMap(result.metallicMap, "metallic");
+            }
 
             // Optional PBR stage (#404): synthesize normal + roughness from the
             // baked diffuse BEFORE the resource location is (re)indexed so the

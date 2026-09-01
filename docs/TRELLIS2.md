@@ -14,7 +14,7 @@ next to the local ONNX backends:
 
 **TRELLIS.2 generates; QtMeshEditor makes the asset.**
 
-```
+```text
 input image ── U²-Net alpha matte (QtMeshEditor, Apache-2.0) ──► RGBA
     ──► ai/trellis2/generate.py  (inference ONLY: DINOv3 cond → sparse structure
          → shape SLat → tex SLat → raw mesh + sparse PBR attribute volume)

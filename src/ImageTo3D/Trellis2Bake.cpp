@@ -135,6 +135,76 @@ std::vector<float> smoothNormalsWelded(const std::vector<float>& positions,
     return n;
 }
 
+// Laplacian-smooth a per-vertex normal FIELD over the position-welded vertex
+// adjacency (renormalizing each pass). Raw dual-grid surfaces carry
+// voxel-scale normal noise; baked as a detail normal it reads as glittery
+// specular speckle. A few averaging passes flatten the noise while the
+// underlying geometry (and therefore real relief) is untouched.
+std::vector<float> smoothNormalField(std::vector<float> normals,
+                                     const std::vector<float>& positions,
+                                     const std::vector<uint32_t>& indices,
+                                     int iterations)
+{
+    if (iterations <= 0 || normals.size() != positions.size())
+        return normals;
+    const size_t nv = positions.size() / 3;
+    // Weld by bit-identical position so seam-split vertices smooth together.
+    struct PosKey {
+        uint32_t a, b, c;
+        bool operator==(const PosKey& o) const
+        { return a == o.a && b == o.b && c == o.c; }
+    };
+    struct PosKeyHash {
+        size_t operator()(const PosKey& k) const
+        {
+            uint64_t h = k.a;
+            h = h * 0x9E3779B97F4A7C15ull + k.b;
+            h = h * 0x9E3779B97F4A7C15ull + k.c;
+            return static_cast<size_t>(h ^ (h >> 32));
+        }
+    };
+    std::unordered_map<PosKey, uint32_t, PosKeyHash> canonOf;
+    canonOf.reserve(nv * 2);
+    std::vector<uint32_t> canon(nv);
+    for (size_t v = 0; v < nv; ++v) {
+        PosKey k;
+        std::memcpy(&k.a, &positions[v * 3 + 0], 4);
+        std::memcpy(&k.b, &positions[v * 3 + 1], 4);
+        std::memcpy(&k.c, &positions[v * 3 + 2], 4);
+        canon[v] = canonOf.emplace(k, static_cast<uint32_t>(v)).first->second;
+    }
+    // Canonical edge list (deduped implicitly by symmetric accumulation).
+    std::vector<float> acc;
+    for (int it = 0; it < iterations; ++it) {
+        acc.assign(positions.size(), 0.0f);
+        for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t a = canon[indices[t + k]];
+                const uint32_t b = canon[indices[t + (k + 1) % 3]];
+                if (a == b)
+                    continue;
+                for (int c = 0; c < 3; ++c) {
+                    acc[a * 3 + c] += normals[b * 3 + c];
+                    acc[b * 3 + c] += normals[a * 3 + c];
+                }
+            }
+        }
+        for (size_t v = 0; v < nv; ++v) {
+            const uint32_t cv = canon[v];
+            float nn[3] = {normals[cv * 3 + 0] + acc[cv * 3 + 0],
+                           normals[cv * 3 + 1] + acc[cv * 3 + 1],
+                           normals[cv * 3 + 2] + acc[cv * 3 + 2]};
+            const float l = len3(nn);
+            if (l > 1e-20f) {
+                normals[v * 3 + 0] = nn[0] / l;
+                normals[v * 3 + 1] = nn[1] / l;
+                normals[v * 3 + 2] = nn[2] / l;
+            }
+        }
+    }
+    return normals;
+}
+
 // ---- sparse uniform grid over source triangles for closest-point queries ---
 class TriangleGrid {
 public:
@@ -1013,8 +1083,9 @@ BakeResult bake(const std::vector<float>& targetPositions,
                         &origNormals[static_cast<size_t>(xref[v]) * 3],
                         sizeof(float) * 3);
     }
-    const std::vector<float> sNormals =
-        smoothNormals(sourcePositions, sourceIndices);
+    const std::vector<float> sNormals = smoothNormalField(
+        smoothNormals(sourcePositions, sourceIndices),
+        sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);
     std::vector<float> tTangent;    // xyzw per vertex (w = handedness)
     if (opts.bakeNormalMap) {
         std::vector<float> tan1(r.positions.size(), 0.0f);
@@ -1495,8 +1566,9 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
     // accumulated per split vertex (UV seams SHOULD split the tangent basis).
     const std::vector<float> tNormals =
         smoothNormalsWelded(targetPositions, targetIndices);
-    const std::vector<float> sNormals =
-        smoothNormalsWelded(sourcePositions, sourceIndices);
+    const std::vector<float> sNormals = smoothNormalField(
+        smoothNormalsWelded(sourcePositions, sourceIndices),
+        sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);
     std::vector<float> tan1(targetPositions.size(), 0.0f);
     std::vector<float> tan2(targetPositions.size(), 0.0f);
     for (size_t t = 0; t + 2 < targetIndices.size(); t += 3) {

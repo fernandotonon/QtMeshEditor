@@ -130,11 +130,14 @@ struct BakeOptions {
     int  supersample  = 1;      // 1 or 2 (2 = 2×2 subsamples per texel)
     bool bakeNormalMap = true;  // bake source detail normals (for simplified targets)
     // Laplacian smoothing iterations applied to the SOURCE normal field
-    // before it feeds the detail-normal bake. Raw dual-grid surfaces carry
-    // voxel-scale normal noise that otherwise bakes into a glittery normal
-    // map (white specular speckle); ~8 iterations flattens the noise while
-    // keeping shape-scale relief. 0 disables.
-    int  sourceNormalSmoothIterations = 8;
+    // before it feeds the detail-normal bake (0 = off, the default). Raw
+    // dual-grid dumps carried voxel-scale normal noise that baked into a
+    // glittery normal map; the runtime now receives the REMESHED shell, so
+    // by default the field is used as-is — smoothing a clean source would
+    // instead bake curvature disagreement (rounded source vs one-ring
+    // target normals) into the map. Raise this only when baking from a raw
+    // (un-remeshed) dual-grid source.
+    int  sourceNormalSmoothIterations = 0;
     // done/total covered texels; return false to cancel.
     std::function<bool(int done, int total)> progress;
 };

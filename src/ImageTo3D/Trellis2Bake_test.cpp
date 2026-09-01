@@ -331,6 +331,24 @@ TEST(Trellis2BakeTest, DetailNormalEncodesSourceRelief)
                 ++tilted;
         }
     EXPECT_GT(tilted, 20);
+
+    // And the (opt-in) source-normal field smoothing actually smooths: the
+    // same bake with smoothing passes must tilt strictly fewer texels —
+    // this fixture's single-edge-scale ridge is exactly the "noise" scale
+    // the option exists to flatten on raw dual-grid sources.
+    Trellis2Bake::BakeOptions bo;
+    bo.sourceNormalSmoothIterations = 8;
+    const auto rs = Trellis2Bake::bakeDetailNormal(tpos, tidx, tuvs, 64, 64,
+                                                   spos, sidx, bo);
+    ASSERT_TRUE(rs.ok) << rs.error.toStdString();
+    int tiltedSmoothed = 0;
+    for (int y = 4; y < 60; y += 4)
+        for (int x = 4; x < 60; x += 4) {
+            const uchar* p = rs.normalMap.constScanLine(y) + size_t(x) * 3;
+            if (std::abs(int(p[0]) - 128) > 8)
+                ++tiltedSmoothed;
+        }
+    EXPECT_LT(tiltedSmoothed, tilted);
 }
 
 TEST(Trellis2BakeTest, DetailNormalRejectsBadInput)

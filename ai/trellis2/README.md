@@ -8,7 +8,7 @@ GUI's *AI: Image → 3D* panel).
 
 `generate.py` runs **Microsoft TRELLIS.2** (MIT, pinned revision) inference only:
 
-```
+```text
 RGBA image (alpha matte made by QtMeshEditor's own U²-Net)
    ↓ generate.py            DINOv3 cond → sparse structure → shape SLat → tex SLat
 raw geometry + sparse PBR attribute volume (base color / metallic / roughness / alpha)

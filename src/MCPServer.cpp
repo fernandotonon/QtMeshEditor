@@ -2712,12 +2712,9 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
 
 QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
 {
-#ifndef ENABLE_ONNX
-    Q_UNUSED(args);
-    return makeErrorResult(
-        "This build was compiled without AI image-to-3D generation "
-        "(rebuild with -DENABLE_ONNX=ON).");
-#else
+    // NOT blanket-gated on ENABLE_ONNX: the TRELLIS.2 backend runs through an
+    // external runtime (trellis.cpp / Python sidecar) and works in ONNX-off
+    // builds — only the local TripoSR/TripoSG paths require the ONNX build.
     const QString imagePath = args.value("image_path").toString();
     if (imagePath.trimmed().isEmpty())
         return makeErrorResult("'image_path' is required.");
@@ -2798,6 +2795,13 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution)
             .arg(backendName));
 
+#ifndef ENABLE_ONNX
+    if (opts.backend != MeshGenPredictor::Backend::Trellis2)
+        return makeErrorResult(
+            "This build was compiled without local AI image-to-3D generation "
+            "(rebuild with -DENABLE_ONNX=ON, or install the TRELLIS.2 runtime "
+            "and use backend 'trellis2').");
+#endif
     if (opts.backend == MeshGenPredictor::Backend::Trellis2) {
         if (!Trellis2Predictor::runtimeAvailable())
             return makeErrorResult(Trellis2Predictor::runtimeDescription());
@@ -2846,6 +2850,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
 
     // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
     // un-upscaled texture on any failure — same policy as the CLI).
+#ifdef ENABLE_ONNX
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (!upModel.isEmpty()) {
@@ -2855,6 +2860,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 res.texture = ur.image;
         }
     }
+#else
+    Q_UNUSED(upscaleTex);   // Real-ESRGAN is ONNX-only; best-effort, skipped.
+#endif
 
     // Baked texture (+ synthesized PBR maps): land next to the export target
     // when one is given so the references survive outside the app; else the
@@ -2896,7 +2904,6 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // the MCP caller can tell a textured result from a fallback one.
     if (!res.warning.isEmpty()) result["warning"] = res.warning;
     return result;
-#endif
 }
 
 QJsonObject MCPServer::toolUpscaleTexture(const QJsonObject &args)
@@ -9871,8 +9878,9 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
-#ifdef ENABLE_ONNX
-    // generate_mesh_from_image (#764) — only advertised when ONNX is compiled in.
+    // generate_mesh_from_image (#764) — always advertised: the TRELLIS.2
+    // backend runs through an external runtime and needs no ONNX build (the
+    // handler gates the local TripoSR/TripoSG paths on ENABLE_ONNX itself).
     {
         QJsonObject props;
         props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
@@ -9909,7 +9917,6 @@ QJsonArray MCPServer::buildToolsList()
             QJsonArray{"image_path"}
         );
     }
-#endif // ENABLE_ONNX
 
     // save_scene
     {
