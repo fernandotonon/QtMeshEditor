@@ -197,6 +197,8 @@ public:
         float length = 0.0f;       // seconds
         bool refined = false;      // RMIB refine pass ran (smoothed the motion)
         bool usedModel = false;    // RMIB model (vs spline) used in the refine pass
+        bool sideSwapApplied = false;  // #969: bone names mirrored vs anatomy —
+                                       // L/R canonical roles were swapped
     };
 
     /// Apply a TEMPLATE MOTION CLIP (#411) onto a skeleton as a new animation.

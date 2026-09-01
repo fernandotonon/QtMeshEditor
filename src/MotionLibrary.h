@@ -56,6 +56,12 @@ public:
         // leg length and lowers the root bone's Y (descent-only) so crouch/
         // pickup/working actually sink. Empty → flat root (locomotion clips).
         std::vector<float> rootY;
+        // Mean chest forward-lean over the clip: chest joint's up-vector
+        // z-component averaged per frame (canonical frame faces +Z, so
+        // 0 = upright, positive = leaning into the motion, NEGATIVE = the
+        // torso tips BACKWARD — a run that reads as backpedaling). Computed
+        // at parse time; feeds the posture-aware take sampling.
+        float uprightness = 0.0f;
         /// Optional (#838 finger animation): per-frame LOCAL finger curl,
         /// size frames × 30 (2 sides × 5 fingers × 3 segments, see
         /// AnimationMerger::fingerSlot). Empty when the source rig has no
@@ -115,6 +121,21 @@ public:
     // map. Returns the clip index, or -1 if nothing matches. `matchedAction`
     // (optional) reports which action was chosen.
     int matchPrompt(const QString& prompt, QString* matchedAction = nullptr) const;
+
+    /// Mean chest forward-lean of a canonical clip (see Clip::uprightness).
+    /// Pure — exposed for unit tests.
+    static float meanChestLean(
+        const std::vector<std::vector<std::array<float, 4>>>& quats);
+
+    /// Sampling weight for one take of `action`: quality² (the #855 rule)
+    /// times a posture penalty — locomotion takes whose torso tips backward
+    /// (uprightness < -0.10) are nearly never picked while upright takes of
+    /// the same action exist (the user-facing symptom was "the run plays
+    /// backwards": 2 of 3 library run takes lean back ≥ 13°, walk takes are
+    /// all upright). Non-locomotion actions are exempt (sit/crawl/death
+    /// legitimately tip). Pure — exposed for unit tests.
+    static double takeWeight(const QString& action, float quality,
+                             float uprightness);
 
     // ---- Download / cache (mirrors the ONNX-model pattern) -----------------
     // Absolute path the library is cached at (AppData/ai_models/motion/...).

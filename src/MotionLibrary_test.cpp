@@ -249,3 +249,34 @@ TEST(MotionLibrary, ActionsListed)
     ASSERT_EQ(a.size(), 2u);
     EXPECT_EQ(a[0].toStdString(), "walk");
 }
+
+TEST(MotionLibrary, MeanChestLeanSignConvention)
+{
+    // Identity chest → upright (0). A chest pitched BACKWARD (top of the
+    // torso tips toward -Z) must read negative; pitched forward positive.
+    using F = std::vector<std::vector<std::array<float, 4>>>;
+    F upright(3, std::vector<std::array<float, 4>>(22, {0, 0, 0, 1}));
+    EXPECT_NEAR(MotionLibrary::meanChestLean(upright), 0.0f, 1e-5f);
+
+    // -20° about +X tips +Y toward -Z (backward); +20° tips it toward +Z.
+    const float a = 20.0f * static_cast<float>(M_PI) / 180.0f;
+    F back = upright, fwd = upright;
+    for (auto& fr : back) fr[2] = {std::sin(-a / 2), 0, 0, std::cos(-a / 2)};
+    for (auto& fr : fwd)  fr[2] = {std::sin(+a / 2), 0, 0, std::cos(+a / 2)};
+    EXPECT_LT(MotionLibrary::meanChestLean(back), -0.3f);
+    EXPECT_GT(MotionLibrary::meanChestLean(fwd),  +0.3f);
+}
+
+TEST(MotionLibrary, TakeWeightPenalizesBackleaningLocomotion)
+{
+    // #969 follow-up ("the run plays backwards"): 2 of 3 library run takes
+    // tip the torso back >= 13 deg. Locomotion takes with backward lean get a
+    // near-zero sampling weight while upright takes keep the #855 quality^2.
+    EXPECT_NEAR(MotionLibrary::takeWeight("run", 1.0f, 0.0f), 1.0, 1e-9);
+    EXPECT_NEAR(MotionLibrary::takeWeight("run", 0.5f, 0.05f), 0.25, 1e-9);
+    EXPECT_LT(MotionLibrary::takeWeight("run", 1.0f, -0.22f), 0.05);
+    EXPECT_LT(MotionLibrary::takeWeight("walk", 1.0f, -0.34f), 0.05);
+    // Non-locomotion actions legitimately tip (sit/crawl/death) — no penalty.
+    EXPECT_NEAR(MotionLibrary::takeWeight("sit", 1.0f, -0.6f), 1.0, 1e-9);
+    EXPECT_NEAR(MotionLibrary::takeWeight("death", 0.8f, -0.9f), 0.64, 1e-6);
+}
