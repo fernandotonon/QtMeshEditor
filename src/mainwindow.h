@@ -25,6 +25,7 @@ class EditorModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
+class QVBoxLayout;
 class QQmlApplicationEngine;
 class QPlainTextEdit;
 class QLabel;
@@ -201,6 +202,15 @@ protected:
 
 private:
     void initToolBar();
+    /// Paint v2 Slice H (#551): the brush-preset and colour-swatch sections of
+    /// the brush portal. Split out of initToolBar (already ~2000 lines) so this
+    /// slice does not push its cognitive complexity past the Sonar gate.
+    /// `paintSettings`/`paintLay` are the portal's host widget + layout;
+    /// `toggleStyle` is initToolBar's shared checkable-button stylesheet.
+    void buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* paintLay,
+                                 const QString& toggleStyle);
+    void buildColorSwatchSection(QWidget* paintSettings, QVBoxLayout* paintLay,
+                                 const QString& toggleStyle);
     void updateMergeAnimationsButton();
     const QPalette& darkPalette();
 

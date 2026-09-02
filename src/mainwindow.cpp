@@ -166,6 +166,7 @@
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QSignalBlocker>
+#include <QComboBox>
 #include <QGridLayout>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -2228,15 +2229,19 @@ void MainWindow::initToolBar()
     };
     const QString paintToggleStyle = inspectorToggleStyle();
 
-    auto addSectionSeparator = [paintSettings, paintLay]() {
+    // Returns the frame so a caller can hide it together with the section it
+    // precedes — otherwise hiding a section's widgets leaves its separator
+    // behind and two rules stack up against each other.
+    auto addSectionSeparator = [paintSettings, paintLay]() -> QFrame* {
         auto* line = new QFrame(paintSettings);
         line->setFrameShape(QFrame::HLine);
         line->setFrameShadow(QFrame::Sunken);
         line->setFixedHeight(2);
         paintLay->addWidget(line);
+        return line;
     };
 
-    addSectionSeparator();
+    QFrame* shapeSeparator = addSectionSeparator();
 
     // Soft round vs hard square edge — only applies to Round/Square footprints.
     auto* shapeRow = new QHBoxLayout();
@@ -2254,7 +2259,8 @@ void MainWindow::initToolBar()
     shapeGroup->setExclusive(true);
     shapeGroup->addButton(shapeRound);
     shapeGroup->addButton(shapeSquare);
-    auto syncShape = [shapeRound, shapeSquare, shapeLabel, emPaint, tpcPaint]() {
+    auto syncShape = [shapeRound, shapeSquare, shapeLabel, shapeSeparator,
+                      emPaint, tpcPaint]() {
         const bool square = emPaint->vertexPaintShape() == EditModeController::ShapeSquare;
         QSignalBlocker br(shapeRound);
         QSignalBlocker bs(shapeSquare);
@@ -2265,6 +2271,9 @@ void MainWindow::initToolBar()
         shapeLabel->setVisible(classicFootprint);
         shapeRound->setVisible(classicFootprint);
         shapeSquare->setVisible(classicFootprint);
+        // Hide this section's separator with it, else it collapses against the
+        // next one and reads as a doubled rule above "Color:".
+        if (shapeSeparator) shapeSeparator->setVisible(classicFootprint);
     };
     syncShape();
     connect(shapeRound, &QPushButton::clicked, this, [emPaint]() {
@@ -2499,7 +2508,11 @@ void MainWindow::initToolBar()
 
     auto* footprintHint = new QLabel(footprintBox);
     footprintHint->setWordWrap(true);
-    footprintHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+    // palette(text) — the theme's foreground — NOT palette(mid), which is a
+    // mid-grey meant for BORDERS (its only other use in this file) and renders
+    // near-black on the dark theme. Kept as a palette role rather than a literal
+    // colour so it follows the theme instead of hardcoding white.
+    footprintHint->setStyleSheet(QStringLiteral("color: palette(text); font-size: 11px;"));
     footLay->addWidget(footprintHint);
 
     auto* stampPickBtn = new QPushButton(footprintBox);
@@ -2823,6 +2836,12 @@ void MainWindow::initToolBar()
         tilingOffsetVLabel->setText(QObject::tr("Tile offset V: %1%").arg(v));
     });
     connect(tpcPaint, &TexturePaintController::stampChanged, this, syncFootprintUi);
+
+    addSectionSeparator();
+    buildBrushPresetSection(paintSettings, paintLay, paintToggleStyle);
+
+    addSectionSeparator();
+    buildColorSwatchSection(paintSettings, paintLay, paintToggleStyle);
 
     paintSettings->setMinimumWidth(280);
     paintSettings->adjustSize();
@@ -6638,3 +6657,283 @@ void MainWindow::repositionWelcomeScreen()
     m_welcomeScreen->setGeometry(rect());
 }
 // LCOV_EXCL_STOP
+
+// ---------------------------------------------------------------------------
+// Paint v2 Slice H (#551): brush portal sections.
+// Split out of initToolBar (already ~2000 lines) so this slice does not push
+// its cognitive complexity past the Sonar gate. `toggleStyle` is initToolBar's
+// shared checkable-button stylesheet, passed in rather than recomputed so the
+// buttons match the rest of the portal.
+// ---------------------------------------------------------------------------
+
+void MainWindow::buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* paintLay,
+                                         const QString& toggleStyle)
+{
+    auto* tpcPaint = TexturePaintController::instance();
+    if (!tpcPaint || !paintSettings || !paintLay) return;
+    const QString paintToggleStyle = toggleStyle;
+        auto* presetRow = new QHBoxLayout();
+        auto* presetLabel = new QLabel(tr("Preset:"), paintSettings);
+        auto* presetCombo = new QComboBox(paintSettings);
+        presetCombo->setMinimumWidth(150);
+        presetRow->addWidget(presetLabel);
+        presetRow->addWidget(presetCombo, 1);
+        paintLay->addLayout(presetRow);
+
+        auto* presetBtnRow = new QHBoxLayout();
+        auto* savePresetBtn = new QPushButton(tr("Save as…"), paintSettings);
+        auto* delPresetBtn = new QPushButton(tr("Delete"), paintSettings);
+        savePresetBtn->setStyleSheet(paintToggleStyle);
+        delPresetBtn->setStyleSheet(paintToggleStyle);
+        auto* exportPresetBtn = new QPushButton(tr("Export…"), paintSettings);
+        auto* importPresetBtn = new QPushButton(tr("Import…"), paintSettings);
+        exportPresetBtn->setStyleSheet(paintToggleStyle);
+        importPresetBtn->setStyleSheet(paintToggleStyle);
+        presetBtnRow->addWidget(savePresetBtn);
+        presetBtnRow->addWidget(delPresetBtn);
+        presetBtnRow->addStretch();
+        paintLay->addLayout(presetBtnRow);
+
+        auto* presetIoRow = new QHBoxLayout();
+        presetIoRow->addWidget(exportPresetBtn);
+        presetIoRow->addWidget(importPresetBtn);
+        presetIoRow->addStretch();
+        paintLay->addLayout(presetIoRow);
+
+        // Rebuild on demand so presets saved this session appear without a
+        // restart; block signals so repopulating cannot re-trigger an apply.
+        auto refreshPresets = [tpcPaint, presetCombo, delPresetBtn]() {
+            const QString current = presetCombo->currentText();
+            QSignalBlocker b(presetCombo);
+            presetCombo->clear();
+            presetCombo->addItems(tpcPaint->brushPresetNames());
+            const int idx = presetCombo->findText(current);
+            if (idx >= 0) presetCombo->setCurrentIndex(idx);
+            // Bundled presets are compiled in, so Delete could only remove a
+            // user override — disable it rather than appear to delete something
+            // that returns on restart.
+            // Enabled whenever a CUSTOM file exists for this name — including a
+            // custom preset that shadows a bundled name, which must be
+            // removable to restore the bundled version. The controller makes
+            // the same distinction.
+            delPresetBtn->setEnabled(tpcPaint->canDeleteBrushPreset(
+                presetCombo->currentText()));
+        };
+        refreshPresets();
+
+        connect(presetCombo, QOverload<int>::of(&QComboBox::activated), this,
+                [tpcPaint, presetCombo, delPresetBtn](int idx) {
+                    if (idx < 0) return;
+                    const QString name = presetCombo->itemText(idx);
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QStringLiteral("paint preset apply %1").arg(name));
+                    tpcPaint->applyBrushPreset(name);
+                    delPresetBtn->setEnabled(tpcPaint->canDeleteBrushPreset(name));
+                });
+
+        connect(savePresetBtn, &QPushButton::clicked, this,
+                [this, tpcPaint, refreshPresets, presetCombo]() {
+                    bool ok = false;
+                    const QString name = QInputDialog::getText(
+                        this, tr("Save Brush Preset"), tr("Preset name:"),
+                        QLineEdit::Normal, QString(), &ok);
+                    if (!ok || name.trimmed().isEmpty()) return;
+                    if (tpcPaint->isBundledBrushPreset(name.trimmed())) {
+                        QMessageBox::information(
+                            this, tr("Save Brush Preset"),
+                            tr("'%1' is a bundled preset name. Saving will "
+                               "override it; the bundled version returns if you "
+                               "delete the override.").arg(name.trimmed()));
+                    }
+                    if (!tpcPaint->saveBrushPreset(name)) {
+                        QMessageBox::warning(this, tr("Save Brush Preset"),
+                                             tr("Could not save the preset."));
+                        return;
+                    }
+                    refreshPresets();
+                    const int i = presetCombo->findText(name.trimmed());
+                    if (i >= 0) presetCombo->setCurrentIndex(i);
+                });
+
+        connect(delPresetBtn, &QPushButton::clicked, this,
+                [this, tpcPaint, refreshPresets, presetCombo]() {
+                    const QString name = presetCombo->currentText();
+                    if (name.isEmpty()) return;
+                    if (QMessageBox::question(
+                            this, tr("Delete Brush Preset"),
+                            tr("Delete the preset '%1'?").arg(name))
+                        != QMessageBox::Yes) return;
+                    tpcPaint->deleteBrushPreset(name);
+                    refreshPresets();
+                });
+
+        connect(exportPresetBtn, &QPushButton::clicked, this,
+                [this, tpcPaint, presetCombo]() {
+                    const QString name = presetCombo->currentText();
+                    if (name.isEmpty()) return;
+                    QFileDialog dlg(this, tr("Export Brush Preset"));
+                    dlg.setAcceptMode(QFileDialog::AcceptSave);
+                    dlg.setDefaultSuffix(QStringLiteral("json"));
+                    dlg.setNameFilter(tr("Brush preset (*.json)"));
+                    // Native dialogs freeze against Ogre GL — the same reason
+                    // every other file dialog in this file sets this.
+                    dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+                    dlg.selectFile(name + QStringLiteral(".json"));
+                    if (dlg.exec() != QDialog::Accepted) return;
+                    const QStringList files = dlg.selectedFiles();
+                    if (files.isEmpty()) return;
+                    if (!tpcPaint->exportBrushPreset(name, files.first())) {
+                        QMessageBox::warning(this, tr("Export Brush Preset"),
+                                             tr("Could not write the preset file."));
+                        return;
+                    }
+                    SentryReporter::addBreadcrumb("file.export",
+                        QStringLiteral("paint preset export %1").arg(name));
+                });
+
+        connect(importPresetBtn, &QPushButton::clicked, this,
+                [this, tpcPaint, refreshPresets, presetCombo]() {
+                    QFileDialog dlg(this, tr("Import Brush Preset"));
+                    dlg.setFileMode(QFileDialog::ExistingFile);
+                    dlg.setNameFilter(tr("Brush preset (*.json)"));
+                    dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+                    if (dlg.exec() != QDialog::Accepted) return;
+                    const QStringList files = dlg.selectedFiles();
+                    if (files.isEmpty()) return;
+                    const QString imported = tpcPaint->importBrushPreset(files.first());
+                    if (imported.isEmpty()) {
+                        QMessageBox::warning(this, tr("Import Brush Preset"),
+                                             tr("That file is not a valid brush preset."));
+                        return;
+                    }
+                    SentryReporter::addBreadcrumb("file.import",
+                        QStringLiteral("paint preset import %1").arg(imported));
+                    refreshPresets();
+                    const int i = presetCombo->findText(imported);
+                    if (i >= 0) presetCombo->setCurrentIndex(i);
+                });
+}
+
+void MainWindow::buildColorSwatchSection(QWidget* paintSettings, QVBoxLayout* paintLay,
+                                         const QString& toggleStyle)
+{
+    auto* tpcPaint = TexturePaintController::instance();
+    if (!tpcPaint || !paintSettings || !paintLay) return;
+    const QString paintToggleStyle = toggleStyle;
+        auto* palRow = new QHBoxLayout();
+        auto* palLabel = new QLabel(tr("Palette:"), paintSettings);
+        auto* palCombo = new QComboBox(paintSettings);
+        palCombo->setMinimumWidth(150);
+        palRow->addWidget(palLabel);
+        palRow->addWidget(palCombo, 1);
+        paintLay->addLayout(palRow);
+
+        // 5 columns, as the issue specifies; rows grow with the palette.
+        auto* swatchHost = new QWidget(paintSettings);
+        auto* swatchGrid = new QGridLayout(swatchHost);
+        swatchGrid->setContentsMargins(0, 2, 0, 2);
+        swatchGrid->setSpacing(3);
+        paintLay->addWidget(swatchHost);
+
+        auto* recentLabel = new QLabel(tr("Recent:"), paintSettings);
+        recentLabel->setStyleSheet(QStringLiteral("color: palette(text); font-size: 11px;"));
+        paintLay->addWidget(recentLabel);
+        auto* recentHost = new QWidget(paintSettings);
+        auto* recentGrid = new QGridLayout(recentHost);
+        recentGrid->setContentsMargins(0, 0, 0, 2);
+        recentGrid->setSpacing(3);
+        paintLay->addWidget(recentHost);
+
+        // Shared tile factory: left-click sets FG, right-click sets BG. The BG
+        // binding matches the existing FG/BG toolbar swatch's semantics.
+        auto makeSwatchTile = [this, tpcPaint](QWidget* parent, const QString& hex) {
+            auto* b = new QPushButton(parent);
+            b->setFixedSize(22, 22);
+            b->setToolTip(tr("%1 — click to set foreground, right-click for background")
+                              .arg(hex));
+            b->setStyleSheet(QStringLiteral(
+                "QPushButton { background-color: %1; border: 1px solid palette(mid);"
+                " border-radius: 3px; }").arg(hex));
+            b->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(b, &QPushButton::clicked, this, [tpcPaint, hex]() {
+                tpcPaint->applyPaletteColor(hex, /*asBackground=*/false);
+            });
+            connect(b, &QPushButton::customContextMenuRequested, this,
+                    [tpcPaint, hex](const QPoint&) {
+                        tpcPaint->applyPaletteColor(hex, /*asBackground=*/true);
+                    });
+            return b;
+        };
+
+        auto clearGrid = [](QGridLayout* g) {
+            while (QLayoutItem* it = g->takeAt(0)) {
+                if (QWidget* w = it->widget()) w->deleteLater();
+                delete it;
+            }
+        };
+
+        auto refreshSwatches = [tpcPaint, palCombo, swatchGrid, clearGrid,
+                                makeSwatchTile, swatchHost]() {
+            clearGrid(swatchGrid);
+            const QStringList hexes = tpcPaint->colorPaletteSwatches(palCombo->currentText());
+            int i = 0;
+            for (const QString& hex : hexes) {
+                swatchGrid->addWidget(makeSwatchTile(swatchHost, hex), i / 5, i % 5);
+                ++i;
+            }
+        };
+
+        auto refreshRecent = [tpcPaint, recentGrid, clearGrid, makeSwatchTile,
+                              recentHost, recentLabel]() {
+            clearGrid(recentGrid);
+            const QStringList hexes = tpcPaint->recentPaintColors();
+            // Hide the whole row until something has been picked, rather than
+            // showing an empty "Recent:" heading.
+            recentLabel->setVisible(!hexes.isEmpty());
+            recentHost->setVisible(!hexes.isEmpty());
+            int i = 0;
+            for (const QString& hex : hexes) {
+                recentGrid->addWidget(makeSwatchTile(recentHost, hex), i / 6, i % 6);
+                ++i;
+            }
+        };
+
+        auto refreshPalettes = [tpcPaint, palCombo, refreshSwatches]() {
+            const QString current = palCombo->currentText();
+            QSignalBlocker b(palCombo);
+            palCombo->clear();
+            palCombo->addItems(tpcPaint->colorPaletteNames());
+            const int idx = palCombo->findText(current);
+            palCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+            refreshSwatches();
+        };
+        refreshPalettes();
+        refreshRecent();
+
+        connect(palCombo, QOverload<int>::of(&QComboBox::activated), this,
+                [refreshSwatches](int) { refreshSwatches(); });
+
+        auto* fromTexBtn = new QPushButton(tr("Palette from texture…"), paintSettings);
+        fromTexBtn->setStyleSheet(paintToggleStyle);
+        paintLay->addWidget(fromTexBtn);
+        connect(fromTexBtn, &QPushButton::clicked, this,
+                [this, tpcPaint, refreshPalettes]() {
+                    bool ok = false;
+                    const QString name = QInputDialog::getText(
+                        this, tr("Palette From Texture"), tr("Palette name:"),
+                        QLineEdit::Normal, QString(), &ok);
+                    if (!ok || name.trimmed().isEmpty()) return;
+                    if (!tpcPaint->savePaletteFromTexture(name)) {
+                        QMessageBox::warning(
+                            this, tr("Palette From Texture"),
+                            tr("Could not extract colours — paint a texture first."));
+                        return;
+                    }
+                    refreshPalettes();
+                });
+
+        // The controller emits paletteChanged when the recent ring or the
+        // palette list changes, so the grids stay in step with painting.
+        connect(tpcPaint, &TexturePaintController::paletteChanged, this,
+                [refreshRecent]() { refreshRecent(); });
+}
