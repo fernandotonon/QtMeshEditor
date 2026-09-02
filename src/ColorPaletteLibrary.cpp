@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -207,16 +208,17 @@ std::string saveCustom(const Palette& p)
     const QString path = QDir(QString::fromStdString(dir))
                              .filePath(QString::fromStdString(customFileStem(p.name))
                                        + QStringLiteral(".json"));
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return {};
+    // QSaveFile: temp file + rename on commit, so an interrupted or short
+    // write preserves the previous palette instead of truncating it.
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return {};
     const std::string json = toJson(p);
     if (f.write(json.data(), static_cast<qint64>(json.size()))
         != static_cast<qint64>(json.size())) {
-        f.close();
-        QFile::remove(path);            // never leave a truncated palette behind
+        f.cancelWriting();
         return {};
     }
-    f.close();
+    if (!f.commit()) return {};
     return path.toStdString();
 }
 

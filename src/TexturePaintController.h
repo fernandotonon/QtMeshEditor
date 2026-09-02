@@ -605,6 +605,10 @@ public:
     Q_INVOKABLE QStringList brushPresetNames() const;
     /// True when `name` is a bundled preset (gates rename/delete in the UI).
     Q_INVOKABLE bool isBundledBrushPreset(const QString& name) const;
+    /// True when a CUSTOM file exists for `name` — including a custom preset
+    /// that shadows a bundled name, which must stay deletable so the bundled
+    /// version can be restored. Drives the UI's Delete gate.
+    Q_INVOKABLE bool canDeleteBrushPreset(const QString& name) const;
     Q_INVOKABLE bool deleteBrushPreset(const QString& name);
     Q_INVOKABLE bool exportBrushPreset(const QString& name, const QString& path);
     /// Import a preset file and save it into the user library. Returns the
@@ -1238,6 +1242,10 @@ private:
                        Ogre::Vector3& outWorld) const;
 
     /// Cache the entity's world triangles for the projection stroke (once).
+    /// Push the live FOREGROUND colour onto the recent ring (no-op when it is
+    /// already newest). Driven by EditModeController's shared
+    /// vertexPaintChanged signal so every colour path feeds Recent.
+    void noteRecentForegroundColor();
     void ensureProjTris();
     /// Read the View straight off the live viewport camera, ignoring any locked
     /// pose. `snapProjectionCamera` uses this so a re-snap re-pins to where the

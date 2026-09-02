@@ -6712,9 +6712,12 @@ void MainWindow::buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* pa
             // Bundled presets are compiled in, so Delete could only remove a
             // user override — disable it rather than appear to delete something
             // that returns on restart.
-            delPresetBtn->setEnabled(
-                !presetCombo->currentText().isEmpty()
-                && !tpcPaint->isBundledBrushPreset(presetCombo->currentText()));
+            // Enabled whenever a CUSTOM file exists for this name — including a
+            // custom preset that shadows a bundled name, which must be
+            // removable to restore the bundled version. The controller makes
+            // the same distinction.
+            delPresetBtn->setEnabled(tpcPaint->canDeleteBrushPreset(
+                presetCombo->currentText()));
         };
         refreshPresets();
 
@@ -6725,7 +6728,7 @@ void MainWindow::buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* pa
                     SentryReporter::addBreadcrumb("ui.action",
                         QStringLiteral("paint preset apply %1").arg(name));
                     tpcPaint->applyBrushPreset(name);
-                    delPresetBtn->setEnabled(!tpcPaint->isBundledBrushPreset(name));
+                    delPresetBtn->setEnabled(tpcPaint->canDeleteBrushPreset(name));
                 });
 
         connect(savePresetBtn, &QPushButton::clicked, this,

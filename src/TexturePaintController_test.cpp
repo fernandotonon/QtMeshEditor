@@ -1575,3 +1575,91 @@ TEST_F(TexturePaintControllerSceneTest, SavePaletteFromTextureNeedsABuffer) {
     ctrl->closeSession();
     QStandardPaths::setTestModeEnabled(false);
 }
+
+// --- Slice H review fixes (#551 / PR #970) --------------------------------
+
+TEST_F(TexturePaintControllerSceneTest, PaletteColorPreservesBrushAlpha) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PaletteAlpha")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    // Swatches carry no alpha by design, so applying one must KEEP the brush's
+    // existing alpha rather than forcing it opaque via QColor(r,g,b).
+    em->setVertexPaintColor(QColor(10, 20, 30, 128));
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#4caf50")));
+    EXPECT_EQ(em->vertexPaintColor().alpha(), 128)
+        << "picking a swatch must not silently make the brush opaque";
+    EXPECT_EQ(em->vertexPaintColor().red(), 0x4c);
+
+    em->setVertexPaintBackgroundColor(QColor(1, 2, 3, 64));
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#ff0000"), true));
+    EXPECT_EQ(em->vertexPaintBackgroundColor().alpha(), 64);
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, RecentRingSeesColorsSetOutsideThePalette) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("RecentShared")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    // The toolbar picker and pickBrushColorInteractive() call
+    // setVertexPaintColor directly. Without hooking the shared change signal,
+    // Recent would only ever show colours re-picked from palette tiles.
+    em->setVertexPaintColor(QColor(0x11, 0x22, 0x33));
+    const QStringList recent = ctrl->recentPaintColors();
+    ASSERT_FALSE(recent.isEmpty());
+    EXPECT_EQ(recent.front(), QStringLiteral("#112233"));
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, PresetRoundTripsFgBgRampMode) {
+    QStandardPaths::setTestModeEnabled(true);
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetFgBg")));
+    auto* ctrl = TexturePaintController::instance();
+
+    // Save a gradient brush in FG/BG mode.
+    ctrl->setColorSource(1);          // Gradient
+    ctrl->setUseFgBgRamp(true);
+    ASSERT_TRUE(ctrl->saveBrushPreset(QStringLiteral("FgBg Preset")));
+
+    // Move to a NAMED ramp, then re-apply: FG/BG must come back, not the name.
+    ctrl->setUseFgBgRamp(false);
+    ctrl->setActiveRampName(QStringLiteral("Sunset"));
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("FgBg Preset")));
+    EXPECT_TRUE(ctrl->useFgBgRamp())
+        << "an FG/BG gradient preset must not restore a named ramp instead";
+
+    EXPECT_TRUE(ctrl->deleteBrushPreset(QStringLiteral("FgBg Preset")));
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
+}
+
+TEST_F(TexturePaintControllerSceneTest, CustomPresetShadowingBundledNameIsDeletable) {
+    QStandardPaths::setTestModeEnabled(true);
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetShadow")));
+    auto* ctrl = TexturePaintController::instance();
+
+    // A bundled name with no custom file: nothing to delete.
+    EXPECT_FALSE(ctrl->canDeleteBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_FALSE(ctrl->deleteBrushPreset(QStringLiteral("Soft Round")));
+
+    // Save a custom preset that SHADOWS the bundled name. Because custom wins
+    // in allPresets(), refusing to delete it would permanently hide the bundled
+    // version with no way back.
+    ctrl->setBrushRadius(0.191);
+    ASSERT_TRUE(ctrl->saveBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_TRUE(ctrl->canDeleteBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_TRUE(ctrl->deleteBrushPreset(QStringLiteral("Soft Round")));
+
+    // The bundled version is back.
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_NEAR(ctrl->texturePaintRadius(), 0.06, 1e-6)
+        << "deleting the override must restore the bundled preset";
+
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
+}

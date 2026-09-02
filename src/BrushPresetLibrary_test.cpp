@@ -250,3 +250,18 @@ TEST_F(BrushPresetLibraryFileTest, NamesCollidingAfterSanitisationDoNotOverwrite
     BrushPresetLibrary::deleteCustom(a.name);
     BrushPresetLibrary::deleteCustom(b.name);
 }
+
+TEST(BrushPresetLibraryTest, JsonRoundTripsFgBgRampFlag) {
+    // The FG/BG flag must be explicit in JSON: inferring it from an empty
+    // rampName would make an old file with no name silently become FG/BG.
+    BrushPresetLibrary::Preset p;
+    p.name = "FgBg"; p.colorSource = 1; p.useFgBgRamp = true;
+    BrushPresetLibrary::Preset b;
+    ASSERT_TRUE(BrushPresetLibrary::fromJson(BrushPresetLibrary::toJson(p), b));
+    EXPECT_TRUE(b.useFgBgRamp);
+
+    p.useFgBgRamp = false; p.rampName = "Sunset";
+    ASSERT_TRUE(BrushPresetLibrary::fromJson(BrushPresetLibrary::toJson(p), b));
+    EXPECT_FALSE(b.useFgBgRamp);
+    EXPECT_EQ(b.rampName, "Sunset");
+}

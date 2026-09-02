@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -171,6 +172,7 @@ std::string toJson(const Preset& p)
     o["stampAngleDeg"] = p.stampAngleDeg;
     o["colorSource"] = p.colorSource;
     o["gradientMode"] = p.gradientMode;
+    o["useFgBgRamp"] = p.useFgBgRamp;
     o["rampName"] = QString::fromStdString(p.rampName);
     o["note"] = QString::fromStdString(p.note);
     return QJsonDocument(o).toJson(QJsonDocument::Compact).toStdString();
@@ -206,6 +208,7 @@ bool fromJson(const std::string& json, Preset& out)
     p.stampAngleDeg = o.value("stampAngleDeg").toDouble(p.stampAngleDeg);
     p.colorSource   = o.value("colorSource").toInt(p.colorSource);
     p.gradientMode  = o.value("gradientMode").toInt(p.gradientMode);
+    p.useFgBgRamp   = o.value("useFgBgRamp").toBool(p.useFgBgRamp);
     p.rampName      = o.value("rampName").toString().toStdString();
     p.note          = o.value("note").toString().toStdString();
 
@@ -245,16 +248,18 @@ std::string saveCustom(const Preset& p)
     const QString path = QDir(QString::fromStdString(dir))
                              .filePath(QString::fromStdString(customFileStem(p.name))
                                        + QStringLiteral(".json"));
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return {};
+    // QSaveFile writes to a temp file and commits by rename, so an
+    // interrupted or short write leaves the PREVIOUS file intact instead of a
+    // truncated one. Truncating in place risks losing a user's saved preset.
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return {};
     const std::string json = toJson(p);
     if (f.write(json.data(), static_cast<qint64>(json.size()))
         != static_cast<qint64>(json.size())) {
-        f.close();
-        QFile::remove(path);        // never leave a truncated preset behind
+        f.cancelWriting();
         return {};
     }
-    f.close();
+    if (!f.commit()) return {};
     return path.toStdString();
 }
 
@@ -326,14 +331,16 @@ bool findPreset(const std::string& name, Preset& out)
 bool exportToFile(const Preset& p, const std::string& path)
 {
     if (!p.isValid() || path.empty()) return false;
-    QFile f(QString::fromStdString(path));
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    // Atomic: exporting over an existing file must not destroy it on failure.
+    QSaveFile f(QString::fromStdString(path));
+    if (!f.open(QIODevice::WriteOnly)) return false;
     const std::string json = toJson(p);
-    const bool ok = f.write(json.data(), static_cast<qint64>(json.size()))
-                    == static_cast<qint64>(json.size());
-    f.close();
-    if (!ok) QFile::remove(QString::fromStdString(path));
-    return ok;
+    if (f.write(json.data(), static_cast<qint64>(json.size()))
+        != static_cast<qint64>(json.size())) {
+        f.cancelWriting();
+        return false;
+    }
+    return f.commit();
 }
 
 bool importFromFile(const std::string& path, Preset& out)

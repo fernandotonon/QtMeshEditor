@@ -454,6 +454,15 @@ TexturePaintController::TexturePaintController(QObject* parent)
                     if (m_useFgBgRamp)
                         reloadActiveRamp();
                 });
+        // Paint v2 Slice H (#551): feed the recent-colour ring from the SHARED
+        // foreground-change signal, not just from palette clicks. The toolbar
+        // swatch and pickBrushColorInteractive() call setVertexPaintColor
+        // directly, so hooking only applyPaletteColor would leave Recent
+        // showing solely colours re-picked from tiles — never a newly chosen
+        // one. pushRecent de-duplicates, so the repeat notifications this
+        // signal produces are harmless.
+        connect(em, &EditModeController::vertexPaintChanged,
+                this, [this]() { noteRecentForegroundColor(); });
     }
 
     // Restore Paint v2 Slice A preferences.
@@ -7279,7 +7288,11 @@ bool TexturePaintController::applyBrushPreset(const QString& name)
 
     setColorSource(p.colorSource);
     setGradientMode(p.gradientMode);
-    if (!p.rampName.empty()) setActiveRampName(QString::fromStdString(p.rampName));
+    // An empty rampName is the FG/BG sentinel: without honouring it, a saved
+    // FG/BG gradient would restore whichever NAMED ramp happened to be active.
+    setUseFgBgRamp(p.useFgBgRamp);
+    if (!p.useFgBgRamp && !p.rampName.empty())
+        setActiveRampName(QString::fromStdString(p.rampName));
 
     // Deliberately NOT restored: the paint COLOUR. A preset describes the brush
     // (its shape and dynamics), not what you are painting with — clobbering the
@@ -7312,7 +7325,10 @@ bool TexturePaintController::saveBrushPreset(const QString& name)
     p.stampAngleDeg = stampFixedAngle();
     p.colorSource = colorSource();
     p.gradientMode = gradientMode();
-    p.rampName = activeRampName().toStdString();
+    p.useFgBgRamp = useFgBgRamp();
+    // Record an empty name in FG/BG mode so the saved preset does not carry a
+    // named ramp it is not actually using.
+    p.rampName = useFgBgRamp() ? std::string() : activeRampName().toStdString();
 
     if (BrushPresetLibrary::saveCustom(p).empty()) return false;
     SentryReporter::addBreadcrumb("paint.preset.save", trimmed);
@@ -7332,12 +7348,21 @@ bool TexturePaintController::isBundledBrushPreset(const QString& name) const
     return BrushPresetLibrary::isBundled(name.toStdString());
 }
 
+bool TexturePaintController::canDeleteBrushPreset(const QString& name) const
+{
+    if (name.isEmpty()) return false;
+    for (const auto& p : BrushPresetLibrary::loadCustomPresets())
+        if (QString::fromStdString(p.name) == name) return true;
+    return false;
+}
+
 bool TexturePaintController::deleteBrushPreset(const QString& name)
 {
-    // Bundled presets are compiled in, so "deleting" one could only remove a
-    // user override — refuse rather than appear to delete something that comes
-    // straight back on restart.
-    if (isBundledBrushPreset(name)) return false;
+    // Deleting is really "remove the custom file", so it must be allowed for a
+    // custom preset that SHADOWS a bundled name — otherwise saving a custom
+    // "Soft Round" would permanently hide the bundled one with no way back.
+    // Only refuse when there is no custom file to remove.
+    if (!canDeleteBrushPreset(name)) return false;
     const bool ok = BrushPresetLibrary::deleteCustom(name.toStdString());
     if (ok) SentryReporter::addBreadcrumb("paint.preset.delete", name);
     return ok;
@@ -7388,6 +7413,21 @@ QStringList TexturePaintController::recentPaintColors() const
     return out;
 }
 
+void TexturePaintController::noteRecentForegroundColor()
+{
+    auto* em = EditModeController::instance();
+    if (!em) return;
+    const QColor c = em->vertexPaintColor();
+    if (!c.isValid()) return;
+    ColorPaletteLibrary::Swatch s;
+    s.r = static_cast<uint8_t>(c.red());
+    s.g = static_cast<uint8_t>(c.green());
+    s.b = static_cast<uint8_t>(c.blue());
+    if (!m_recentColors.empty() && m_recentColors.front() == s) return;  // no churn
+    ColorPaletteLibrary::pushRecent(m_recentColors, s);
+    emit paletteChanged();
+}
+
 bool TexturePaintController::applyPaletteColor(const QString& hex, bool asBackground)
 {
     ColorPaletteLibrary::Swatch s;
@@ -7395,16 +7435,21 @@ bool TexturePaintController::applyPaletteColor(const QString& hex, bool asBackgr
 
     auto* em = EditModeController::instance();
     if (!em) return false;
-    const QColor c(s.r, s.g, s.b);
+    // Preserve the EXISTING alpha. Swatches deliberately carry no alpha (a
+    // palette curates hues), so QColor(r,g,b) — which is opaque — would silently
+    // force the brush fully opaque on every pick, contradicting that design.
+    const QColor prev = asBackground ? em->vertexPaintBackgroundColor()
+                                     : em->vertexPaintColor();
+    QColor c(s.r, s.g, s.b);
+    c.setAlpha(prev.alpha());
     if (asBackground) em->setVertexPaintBackgroundColor(c);
     else              em->setVertexPaintColor(c);
 
-    // Only the foreground feeds the recent ring: the background is a secondary
-    // slot the user changes rarely, and mixing it in would churn the history.
-    if (!asBackground) {
-        ColorPaletteLibrary::pushRecent(m_recentColors, s);
-        emit paletteChanged();
-    }
+    // The recent ring is fed by the shared vertexPaintChanged hook (see the
+    // ctor), which setVertexPaintColor above has just triggered — so there is
+    // no direct push here. Only the FOREGROUND enters the ring; the background
+    // is a rarely-changed secondary slot that would churn the history.
+
     SentryReporter::addBreadcrumb("paint.palette.apply",
         QStringLiteral("%1%2").arg(hex, asBackground ? QStringLiteral(" (bg)") : QString()));
     return true;

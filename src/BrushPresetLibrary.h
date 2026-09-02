@@ -62,7 +62,11 @@ struct Preset {
     // --- colour source ---
     int         colorSource = 0;  ///< ColorSource (0 Solid, 1 Gradient)
     int         gradientMode = 0; ///< GradientMode (0 Linear, 1 Radial, 2 Angular)
-    std::string rampName;         ///< gradient ramp name; empty = FG/BG
+    /// True = use the FG/BG two-stop ramp instead of `rampName`. Stored
+    /// explicitly rather than inferred from an empty rampName, so applying a
+    /// preset cannot fall back to whichever named ramp was previously active.
+    bool        useFgBgRamp = false;
+    std::string rampName;         ///< gradient ramp name; ignored when useFgBgRamp
 
     /// Optional one-line description shown as a tooltip.
     std::string note;
