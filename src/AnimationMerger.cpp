@@ -4299,9 +4299,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // per role, so mis-named chest-height "legs" fed it garbage). The mocap
     // path (cmuLibraryHandedness=false) keeps its historical mapping.
     if (cmuLibraryHandedness) {
-        const Ogre::Vector3 up(0, 1, 0);
-        const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
-        const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
+        // The side decision is deliberately FACING-BLIND world-X — exactly
+        // the rule the old compensator applied to every validated result:
+        // canonical-LEFT roles must end on the bones at world +X, regardless
+        // of which way the mesh faces (facing is handled by the clip-level
+        // yaw180, never by the side mapping; a facing-aware trueLeft variant
+        // was tried here and INVERTED backward-facing rigs — user-reported).
+        const Ogre::Vector3 trueLeft(1, 0, 0);
 
         // BIND pose positions — the current pose may be mid-animation
         // (crossed limbs would flip the vote). Same reset the old
@@ -4323,10 +4327,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         }
         const float bodyH = std::max(1e-6f, hiY - loY);
 
-        // ---- (b) arm/leg altitude guard --------------------------------
+        // ---- (b) leg-altitude guard ------------------------------------
         // A LEG-role bone bound well ABOVE the hips is a mis-named arm
         // segment: strip it (remembering its segment for the rescue below).
-        // An ARM-role bone well BELOW the hips is stripped outright.
+        // The symmetric arm-below-hips strip was deliberately DROPPED after
+        // review: a relaxed/hanging bind pose legitimately puts wrists below
+        // the hips, and stripped arm roles have no rescue — the hands would
+        // simply freeze. Leg-named-arms is the observed real-world failure;
+        // arm-named-legs is not.
         // seg: 0 = upper limb root, 1 = middle, 2 = tip; -1 = buttock/collar.
         struct Rescue { int bone; int seg; };
         std::vector<Rescue> rescue;
@@ -4336,7 +4344,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 const int c = boneToCanon[i];
                 if (c < 0) continue;
                 const bool legRole = (c >= 14 && c <= 21);
-                const bool armRole = (c >= 6 && c <= 13);
                 if (legRole && bonePos[i].y > hipY + 0.10f * bodyH) {
                     int seg = -1;
                     if (c == 15 || c == 19) seg = 0;
@@ -4344,8 +4351,6 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     else if (c == 17 || c == 21) seg = 2;
                     rescue.push_back({i, seg});
                     boneToCanon[i] = -1;
-                } else if (armRole && bonePos[i].y < hipY - 0.10f * bodyH) {
-                    boneToCanon[i] = -1;   // "arm" below the hips — drop
                 }
             }
         }
@@ -4378,11 +4383,10 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
             side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
         }
-        // One-permutation convention: canonical LEFT roles must end on the
-        // bones at +trueLeft (anatomical left) — that is the state the old
-        // compensator produced on the validated Mixamo case (named-left at
-        // -trueLeft, one swap). So: swap when the named pairs sit at
-        // -trueLeft; an anatomically-named rig (UniRig) needs none.
+        // Swap when the named-left roles sit at NEGATIVE world X (they must
+        // end at +X). Mixamo measures -2.36 → one swap (identical to the old
+        // compensator); the -Z-facing UniRig orc measures -0.44 → swap; a
+        // +X-named rig needs none.
         constexpr double kExpectedSideSign = +1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
             fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
@@ -4434,7 +4438,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 if (rc.seg < 0) continue;
                 const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
                                       .dotProduct(trueLeft);
-                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +trueLeft
+                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +X
                 if (armTaken[sideIdx]) continue;
                 boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
                 ++rescued;
