@@ -167,6 +167,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintLayerStack.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GradientRamp.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ColorPaletteLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushPresetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushEngine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushFootprint.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BrushAssetLibrary.cpp

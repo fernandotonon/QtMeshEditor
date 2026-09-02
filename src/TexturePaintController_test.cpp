@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <QStandardPaths>
+
 #include <QColor>
 #include <QDir>
 #include <QFile>
@@ -1412,4 +1414,252 @@ TEST_F(TexturePaintControllerSceneTest, DecalSessionBeginCancelPlumbing) {
     EXPECT_FALSE(ctrl->decalSessionActive());
 
     ctrl->closeSession();
+}
+
+// --- Paint v2 Slice H (#551): brush presets + colour palettes -------------
+// The library cores are covered pure-data in BrushPresetLibrary_test /
+// ColorPaletteLibrary_test. These cases cover the CONTROLLER contract: a preset
+// actually reaches the live brush, capture round-trips, and every entry point
+// degrades safely on bad input.
+
+TEST_F(TexturePaintControllerSceneTest, ApplyBrushPresetReachesTheLiveBrush) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetApply")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+
+    // "Hard Round": radius 0.04, strength 1.0, falloff 0.05, round footprint.
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Hard Round")));
+    EXPECT_NEAR(ctrl->texturePaintRadius(), 0.04, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintStrength(), 1.0, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintFalloff(), 0.05, 1e-6);
+
+    // Switching presets must move every field, not just the first one applied.
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Wet Brush")));
+    EXPECT_NEAR(ctrl->texturePaintRadius(), 0.1, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintStrength(), 0.25, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintFalloff(), 0.95, 1e-6);
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, ApplyStampPresetSelectsItsStampAndFootprint) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetStamp")));
+    auto* ctrl = TexturePaintController::instance();
+
+    // Move the stamp somewhere else FIRST. m_activeStampName is restored from
+    // QSettings, so without this the expected value can already be in place and
+    // the assertion passes even if the preset never applies it (verified: a
+    // mutant that skipped setActiveStampName survived this test until the
+    // pre-set was added).
+    ctrl->setActiveStampName(QStringLiteral("Soft Circle"));
+    ASSERT_EQ(ctrl->activeStampName(), QStringLiteral("Soft Circle"));
+
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Spray Paint")));
+    EXPECT_EQ(ctrl->activeStampName(), QStringLiteral("Spatter"))
+        << "a stamp preset must select its stamp asset";
+    EXPECT_EQ(ctrl->footprintType(),
+              static_cast<int>(BrushFootprint::FootprintType::StampImage))
+        << "and switch the footprint to stamp mode";
+    // Dynamics ride along, else the preset would look identical to a plain brush.
+    EXPECT_NEAR(ctrl->stampScatter(), 0.8, 1e-6);
+    EXPECT_NEAR(ctrl->stampSizeJitter(), 0.5, 1e-6);
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, ApplyBrushPresetLeavesPaintColorAlone) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetColor")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    em->setVertexPaintColor(QColor(12, 34, 56));
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Soft Round")));
+    // A preset describes the BRUSH, not what you paint with — clobbering the
+    // user's colour on every preset click would be hostile.
+    EXPECT_EQ(em->vertexPaintColor(), QColor(12, 34, 56));
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, SaveBrushPresetCapturesCurrentBrush) {
+    QStandardPaths::setTestModeEnabled(true);
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetSave")));
+    auto* ctrl = TexturePaintController::instance();
+
+    ctrl->setBrushRadius(0.0321);
+    ctrl->setBrushStrength(0.456);
+    ctrl->setBrushFalloff(0.789);
+    ASSERT_TRUE(ctrl->saveBrushPreset(QStringLiteral("Captured Brush")));
+
+    // Move the brush away, then apply the capture — it must come back.
+    ctrl->setBrushRadius(0.2);
+    ctrl->setBrushStrength(0.1);
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Captured Brush")));
+    EXPECT_NEAR(ctrl->texturePaintRadius(), 0.0321, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintStrength(), 0.456, 1e-6);
+    EXPECT_NEAR(ctrl->texturePaintFalloff(), 0.789, 1e-6);
+
+    EXPECT_TRUE(ctrl->deleteBrushPreset(QStringLiteral("Captured Brush")));
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
+}
+
+TEST_F(TexturePaintControllerSceneTest, BrushPresetEntryPointsRejectBadInput) {
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+
+    EXPECT_FALSE(ctrl->applyBrushPreset(QStringLiteral("No Such Preset")));
+    EXPECT_FALSE(ctrl->saveBrushPreset(QString()));
+    EXPECT_FALSE(ctrl->saveBrushPreset(QStringLiteral("   ")))
+        << "a whitespace-only name is not a usable preset name";
+    // Bundled presets are compiled in: "deleting" one could only remove a user
+    // override, so it must refuse rather than appear to delete something that
+    // comes straight back on restart.
+    EXPECT_FALSE(ctrl->deleteBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_TRUE(ctrl->isBundledBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_FALSE(ctrl->isBundledBrushPreset(QStringLiteral("No Such Preset")));
+    EXPECT_GE(ctrl->brushPresetNames().size(), 15);
+}
+
+TEST_F(TexturePaintControllerSceneTest, PaletteColorAppliesAndFeedsRecentRing) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PaletteApply")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#4caf50")));
+    EXPECT_EQ(em->vertexPaintColor(), QColor(0x4c, 0xaf, 0x50));
+    ASSERT_FALSE(ctrl->recentPaintColors().isEmpty());
+    EXPECT_EQ(ctrl->recentPaintColors().front(), QStringLiteral("#4caf50"));
+
+    // The background slot must NOT churn the recent ring.
+    const int before = ctrl->recentPaintColors().size();
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#ff0000"), /*asBackground=*/true));
+    EXPECT_EQ(em->vertexPaintBackgroundColor(), QColor(255, 0, 0));
+    EXPECT_EQ(ctrl->recentPaintColors().size(), before)
+        << "background picks must not enter the recent ring";
+
+    EXPECT_FALSE(ctrl->applyPaletteColor(QStringLiteral("nonsense")));
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, PaletteListsExposeBundledContent) {
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_NE(ctrl, nullptr);
+    const QStringList names = ctrl->colorPaletteNames();
+    EXPECT_GE(names.size(), 6) << "#551 requires at least 6 bundled palettes";
+    ASSERT_TRUE(names.contains(QStringLiteral("Material Design")));
+
+    const QStringList sw = ctrl->colorPaletteSwatches(QStringLiteral("Material Design"));
+    EXPECT_FALSE(sw.isEmpty());
+    for (const QString& s : sw)
+        EXPECT_TRUE(s.startsWith('#') && s.size() == 7) << s.toStdString();
+
+    EXPECT_TRUE(ctrl->colorPaletteSwatches(QStringLiteral("No Such Palette")).isEmpty());
+}
+
+TEST_F(TexturePaintControllerSceneTest, SavePaletteFromTextureNeedsABuffer) {
+    QStandardPaths::setTestModeEnabled(true);
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->closeSession();
+    // No session => no buffer => must refuse rather than save an empty palette.
+    EXPECT_FALSE(ctrl->savePaletteFromTexture(QStringLiteral("From Nothing")));
+
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PaletteFromTex")));
+    ctrl->setTexturePaintEnabled(true);
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    EXPECT_FALSE(ctrl->savePaletteFromTexture(QString()))
+        << "an unnamed palette is not saveable";
+
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
+}
+
+// --- Slice H review fixes (#551 / PR #970) --------------------------------
+
+TEST_F(TexturePaintControllerSceneTest, PaletteColorPreservesBrushAlpha) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PaletteAlpha")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    // Swatches carry no alpha by design, so applying one must KEEP the brush's
+    // existing alpha rather than forcing it opaque via QColor(r,g,b).
+    em->setVertexPaintColor(QColor(10, 20, 30, 128));
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#4caf50")));
+    EXPECT_EQ(em->vertexPaintColor().alpha(), 128)
+        << "picking a swatch must not silently make the brush opaque";
+    EXPECT_EQ(em->vertexPaintColor().red(), 0x4c);
+
+    em->setVertexPaintBackgroundColor(QColor(1, 2, 3, 64));
+    ASSERT_TRUE(ctrl->applyPaletteColor(QStringLiteral("#ff0000"), true));
+    EXPECT_EQ(em->vertexPaintBackgroundColor().alpha(), 64);
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, RecentRingSeesColorsSetOutsideThePalette) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("RecentShared")));
+    auto* ctrl = TexturePaintController::instance();
+    auto* em = EditModeController::instance();
+    ASSERT_NE(em, nullptr);
+
+    // The toolbar picker and pickBrushColorInteractive() call
+    // setVertexPaintColor directly. Without hooking the shared change signal,
+    // Recent would only ever show colours re-picked from palette tiles.
+    em->setVertexPaintColor(QColor(0x11, 0x22, 0x33));
+    const QStringList recent = ctrl->recentPaintColors();
+    ASSERT_FALSE(recent.isEmpty());
+    EXPECT_EQ(recent.front(), QStringLiteral("#112233"));
+
+    ctrl->closeSession();
+}
+
+TEST_F(TexturePaintControllerSceneTest, PresetRoundTripsFgBgRampMode) {
+    QStandardPaths::setTestModeEnabled(true);
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetFgBg")));
+    auto* ctrl = TexturePaintController::instance();
+
+    // Save a gradient brush in FG/BG mode.
+    ctrl->setColorSource(1);          // Gradient
+    ctrl->setUseFgBgRamp(true);
+    ASSERT_TRUE(ctrl->saveBrushPreset(QStringLiteral("FgBg Preset")));
+
+    // Move to a NAMED ramp, then re-apply: FG/BG must come back, not the name.
+    ctrl->setUseFgBgRamp(false);
+    ctrl->setActiveRampName(QStringLiteral("Sunset"));
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("FgBg Preset")));
+    EXPECT_TRUE(ctrl->useFgBgRamp())
+        << "an FG/BG gradient preset must not restore a named ramp instead";
+
+    EXPECT_TRUE(ctrl->deleteBrushPreset(QStringLiteral("FgBg Preset")));
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
+}
+
+TEST_F(TexturePaintControllerSceneTest, CustomPresetShadowingBundledNameIsDeletable) {
+    QStandardPaths::setTestModeEnabled(true);
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("PresetShadow")));
+    auto* ctrl = TexturePaintController::instance();
+
+    // A bundled name with no custom file: nothing to delete.
+    EXPECT_FALSE(ctrl->canDeleteBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_FALSE(ctrl->deleteBrushPreset(QStringLiteral("Soft Round")));
+
+    // Save a custom preset that SHADOWS the bundled name. Because custom wins
+    // in allPresets(), refusing to delete it would permanently hide the bundled
+    // version with no way back.
+    ctrl->setBrushRadius(0.191);
+    ASSERT_TRUE(ctrl->saveBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_TRUE(ctrl->canDeleteBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_TRUE(ctrl->deleteBrushPreset(QStringLiteral("Soft Round")));
+
+    // The bundled version is back.
+    ASSERT_TRUE(ctrl->applyBrushPreset(QStringLiteral("Soft Round")));
+    EXPECT_NEAR(ctrl->texturePaintRadius(), 0.06, 1e-6)
+        << "deleting the override must restore the bundled preset";
+
+    ctrl->closeSession();
+    QStandardPaths::setTestModeEnabled(false);
 }

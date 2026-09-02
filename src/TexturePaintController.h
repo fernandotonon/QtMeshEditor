@@ -12,6 +12,7 @@
 #include "SymmetryMirrorMap.h"
 #include "ProjectionPainter.h"
 #include "DecalSession.h"
+#include "ColorPaletteLibrary.h"
 
 #include <QColor>
 #include <QObject>
@@ -592,6 +593,45 @@ public:
     /// Setters that mirror through to EditModeController so the toolbar
     /// brush popup and the Material-mode Paint Brush panel both stay
     /// in sync.
+    // --- Paint v2 Slice H (#551): brush presets + palettes ---
+    /// Apply a preset (bundled or custom) to the live brush. Returns false when
+    /// the name is unknown. Emits the usual per-setting change signals, so the
+    /// panel refreshes without any preset-specific plumbing.
+    Q_INVOKABLE bool applyBrushPreset(const QString& name);
+    /// Capture the CURRENT brush configuration as a named custom preset and
+    /// save it. Returns false on an empty name or a write failure.
+    Q_INVOKABLE bool saveBrushPreset(const QString& name);
+    /// Bundled + custom preset names, for the library UI.
+    Q_INVOKABLE QStringList brushPresetNames() const;
+    /// True when `name` is a bundled preset (gates rename/delete in the UI).
+    Q_INVOKABLE bool isBundledBrushPreset(const QString& name) const;
+    /// True when a CUSTOM file exists for `name` — including a custom preset
+    /// that shadows a bundled name, which must stay deletable so the bundled
+    /// version can be restored. Drives the UI's Delete gate.
+    Q_INVOKABLE bool canDeleteBrushPreset(const QString& name) const;
+    Q_INVOKABLE bool deleteBrushPreset(const QString& name);
+    Q_INVOKABLE bool exportBrushPreset(const QString& name, const QString& path);
+    /// Import a preset file and save it into the user library. Returns the
+    /// imported preset's name, or an empty string on failure.
+    Q_INVOKABLE QString importBrushPreset(const QString& path);
+
+    /// Palette names (bundled + custom) and a palette's swatches as
+    /// "#rrggbb" strings, for the swatch grid.
+    Q_INVOKABLE QStringList colorPaletteNames() const;
+    Q_INVOKABLE QStringList colorPaletteSwatches(const QString& paletteName) const;
+    /// Most-recently-used colours, newest first (max 12).
+    Q_INVOKABLE QStringList recentPaintColors() const;
+    /// Set the foreground (or `asBackground`) paint colour from "#rrggbb".
+    /// The brush's existing ALPHA is preserved — swatches carry no alpha, so a
+    /// pick must not silently make the brush opaque.
+    /// Only a FOREGROUND pick reaches the recent ring (via the shared
+    /// vertexPaintChanged hook); the background is a rarely-changed secondary
+    /// slot that would churn the history.
+    Q_INVOKABLE bool applyPaletteColor(const QString& hex, bool asBackground = false);
+    /// Build a palette from the ACTIVE paint buffer and save it. Returns false
+    /// when there is no session or the extraction found no opaque pixels.
+    Q_INVOKABLE bool savePaletteFromTexture(const QString& paletteName, int maxColours = 10);
+
     Q_INVOKABLE void setBrushRadius(double r);
     Q_INVOKABLE void setBrushStrength(double s);
     Q_INVOKABLE void setBrushFalloff(double f);
@@ -767,6 +807,9 @@ signals:
     void stabilizerChanged();
     /// Paint v2 Slice F (#549): projection mode / stencil / lock state changed.
     void projectionChanged();
+    /// Paint v2 Slice H (#551): the palette list or the recent-colour ring
+    /// changed, so a swatch grid should refresh.
+    void paletteChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -1148,6 +1191,12 @@ private:
     QPointF m_stabLastRaw;                // true last cursor (for end catch-up)
     bool    m_stabHaveLastRaw = false;
 
+    // --- Paint v2 Slice H (#551): recent colours ---
+    /// Newest first, capped at 12. In-memory only: this is a session
+    /// convenience, and persisting it would restore a stale palette that no
+    /// longer matches whatever the user is painting next.
+    std::vector<ColorPaletteLibrary::Swatch> m_recentColors;
+
     // --- Paint v2 Slice F (#549): projection / stencil painting ---
     int     m_projectionMode = 0;         // 0 off / 1 stencil-brush / 2 camera-locked
     QString m_stencilImagePath;
@@ -1197,6 +1246,10 @@ private:
                        Ogre::Vector3& outWorld) const;
 
     /// Cache the entity's world triangles for the projection stroke (once).
+    /// Push the live FOREGROUND colour onto the recent ring (no-op when it is
+    /// already newest). Driven by EditModeController's shared
+    /// vertexPaintChanged signal so every colour path feeds Recent.
+    void noteRecentForegroundColor();
     void ensureProjTris();
     /// Read the View straight off the live viewport camera, ignoring any locked
     /// pose. `snapProjectionCamera` uses this so a re-snap re-pins to where the
