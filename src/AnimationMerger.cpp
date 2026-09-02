@@ -4299,9 +4299,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // per role, so mis-named chest-height "legs" fed it garbage). The mocap
     // path (cmuLibraryHandedness=false) keeps its historical mapping.
     if (cmuLibraryHandedness) {
-        const Ogre::Vector3 up(0, 1, 0);
-        const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
-        const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
+        // The side decision is deliberately FACING-BLIND world-X — exactly
+        // the rule the old compensator applied to every validated result:
+        // canonical-LEFT roles must end on the bones at world +X, regardless
+        // of which way the mesh faces (facing is handled by the clip-level
+        // yaw180, never by the side mapping; a facing-aware trueLeft variant
+        // was tried here and INVERTED backward-facing rigs — user-reported).
+        const Ogre::Vector3 trueLeft(1, 0, 0);
 
         // BIND pose positions — the current pose may be mid-animation
         // (crossed limbs would flip the vote). Same reset the old
@@ -4378,11 +4382,10 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
             side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
         }
-        // One-permutation convention: canonical LEFT roles must end on the
-        // bones at +trueLeft (anatomical left) — that is the state the old
-        // compensator produced on the validated Mixamo case (named-left at
-        // -trueLeft, one swap). So: swap when the named pairs sit at
-        // -trueLeft; an anatomically-named rig (UniRig) needs none.
+        // Swap when the named-left roles sit at NEGATIVE world X (they must
+        // end at +X). Mixamo measures -2.36 → one swap (identical to the old
+        // compensator); the -Z-facing UniRig orc measures -0.44 → swap; a
+        // +X-named rig needs none.
         constexpr double kExpectedSideSign = +1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
             fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
@@ -4434,7 +4437,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 if (rc.seg < 0) continue;
                 const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
                                       .dotProduct(trueLeft);
-                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +trueLeft
+                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +X
                 if (armTaken[sideIdx]) continue;
                 boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
                 ++rescued;
