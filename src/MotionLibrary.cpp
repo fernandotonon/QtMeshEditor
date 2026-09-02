@@ -236,7 +236,11 @@ bool MotionLibrary::parse(const QByteArray& json)
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
-        clip.uprightness = meanChestLean(clip.quats);
+        // meanChestLean reads joint 2 as a WORLD orientation — only valid
+        // for world-frame libraries (schema v3+). Legacy local-frame clips
+        // keep a neutral 0 so the posture penalty can never misfire on a
+        // parent-relative chest value.
+        clip.uprightness = m_worldFrame ? meanChestLean(clip.quats) : 0.0f;
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
