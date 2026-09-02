@@ -66,6 +66,20 @@ Blues, Earth Tones. Custom palettes live in `<AppData>/paint/palettes/*.json`.
 alpha is a separate brush property. Baking alpha into swatches would override
 the user's setting on every pick.
 
+That design only holds if `applyPaletteColor` **copies the brush's existing
+alpha** onto the picked colour. The first implementation did not — it built
+`QColor(r, g, b)`, which is opaque, so every swatch pick silently discarded a
+partially transparent brush and did the exact opposite of the intent above.
+There is a test pinning it (`PaletteColorPreservesBrushAlpha`), and it is
+mutation-checked, because the bug is invisible unless you happen to be painting
+with a translucent brush.
+
+Only a **foreground** pick reaches the recent ring. The ring is fed from
+`EditModeController::vertexPaintChanged` rather than from `applyPaletteColor`,
+so colours chosen through the toolbar swatch or `pickBrushColorInteractive()`
+appear too — hooking only the palette path left Recent showing solely colours
+*re-picked from tiles*, never a newly chosen one.
+
 ## Files
 
 | File | Role |

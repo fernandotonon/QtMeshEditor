@@ -621,8 +621,12 @@ public:
     Q_INVOKABLE QStringList colorPaletteSwatches(const QString& paletteName) const;
     /// Most-recently-used colours, newest first (max 12).
     Q_INVOKABLE QStringList recentPaintColors() const;
-    /// Set the foreground (or background) paint colour from "#rrggbb" and push
-    /// it onto the recent ring.
+    /// Set the foreground (or `asBackground`) paint colour from "#rrggbb".
+    /// The brush's existing ALPHA is preserved — swatches carry no alpha, so a
+    /// pick must not silently make the brush opaque.
+    /// Only a FOREGROUND pick reaches the recent ring (via the shared
+    /// vertexPaintChanged hook); the background is a rarely-changed secondary
+    /// slot that would churn the history.
     Q_INVOKABLE bool applyPaletteColor(const QString& hex, bool asBackground = false);
     /// Build a palette from the ACTIVE paint buffer and save it. Returns false
     /// when there is no session or the extraction found no opaque pixels.
