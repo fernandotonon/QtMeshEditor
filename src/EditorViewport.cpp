@@ -72,7 +72,9 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
     QAction* normalsAction  = m_pMainWindow ? m_pMainWindow->actionShowNormals()  : nullptr;
     QAction* meshInfoAction = m_pMainWindow ? m_pMainWindow->actionShowMeshInfo() : nullptr;
     QAction* viewCubeAction = m_pMainWindow ? m_pMainWindow->actionShowViewCube() : nullptr;
-    m_titleBar = new ViewportTitleBar(this, gridAction, normalsAction, meshInfoAction, viewCubeAction, this);
+    QAction* lightsAction   = m_pMainWindow ? m_pMainWindow->actionShowLightIcons() : nullptr;
+    m_titleBar = new ViewportTitleBar(this, gridAction, normalsAction, meshInfoAction,
+                                      viewCubeAction, lightsAction, this);
     setTitleBarWidget(m_titleBar);
     if (layout())
         layout()->setContentsMargins(0, 0, 0, 0);

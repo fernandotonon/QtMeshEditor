@@ -39,7 +39,8 @@ class QToolButton;
 /// Custom title-bar widget used by `EditorViewport` (a `QDockWidget`).
 ///
 /// Replaces Qt's default dock title bar so the per-viewport display
-/// controls (Show Grid / Show Normals / Show Mesh Info / Show View Cube) live
+/// controls (Show Grid / Show Normals / Show Mesh Info / Show View Cube /
+/// Show Lights) live
 /// directly in the title strip instead of as a separate floating widget. This avoids the
 /// long-standing compositing issue with `OgreWidget` (which uses
 /// `WA_PaintOnScreen` and produced black rectangles for any overlapping Qt
@@ -63,6 +64,7 @@ public:
                      QAction* normalsAction,
                      QAction* meshInfoAction,
                      QAction* viewCubeAction,
+                     QAction* lightsAction = nullptr,
                      QWidget* parent = nullptr);
 
     /// Returns the toolbutton bound to the corresponding QAction (or nullptr
@@ -71,6 +73,7 @@ public:
     QToolButton* normalsButton() const { return m_normalsButton; }
     QToolButton* meshInfoButton() const { return m_meshInfoButton; }
     QToolButton* viewCubeButton() const { return m_viewCubeButton; }
+    QToolButton* lightsButton() const { return m_lightsButton; }
     QToolButton* floatButton() const { return m_floatButton; }
     QToolButton* closeButton() const { return m_closeButton; }
     QLabel* titleLabel() const { return m_titleLabel; }
@@ -93,6 +96,7 @@ private:
     QToolButton* m_normalsButton = nullptr;
     QToolButton* m_meshInfoButton = nullptr;
     QToolButton* m_viewCubeButton = nullptr;
+    QToolButton* m_lightsButton = nullptr;
     QToolButton* m_floatButton = nullptr;
     QToolButton* m_closeButton = nullptr;
 

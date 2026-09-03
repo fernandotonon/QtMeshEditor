@@ -4532,6 +4532,11 @@ QAction* MainWindow::actionShowViewCube() const
     return ui ? ui->actionShow_View_Cube : nullptr;
 }
 
+QAction* MainWindow::actionShowLightIcons() const
+{
+    return ui ? ui->actionShow_Light_Icons : nullptr;
+}
+
 void MainWindow::revealBottomTool(const QString& toolId)
 {
     QDockWidget* dock = nullptr;
