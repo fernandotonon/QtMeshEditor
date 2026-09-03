@@ -247,6 +247,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WeightPaintOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GeodesicVoxelBind.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinningDisplay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinMetrics.cpp

@@ -126,6 +126,7 @@ QuadRetopoController.cpp
 SkinWeights.cpp
 SkinWeightsPost.cpp
 WeightPaintOps.cpp
+SkinWeightController.cpp
 GeodesicVoxelBind.cpp
 SkinningDisplay.cpp
 SkinMetrics.cpp
@@ -369,6 +370,7 @@ QuadRetopoController.h
 SkinWeights.h
 SkinWeightsPost.h
 WeightPaintOps.h
+SkinWeightController.h
 GeodesicVoxelBind.h
 SkinningDisplay.h
 SkinMetrics.h

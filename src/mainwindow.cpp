@@ -134,6 +134,7 @@
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
 #include "PaintChannelPresets.h"
+#include "SkinWeightController.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
@@ -1152,6 +1153,11 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<PaintChannelPresets>("PropertiesPanel", 1, 0, "PaintChannelPresets",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return PaintChannelPresets::qmlInstance(engine, nullptr);
+            });
+        // Skel Slice D (#558): skin weight painting.
+        qmlRegisterSingletonType<SkinWeightController>("PropertiesPanel", 1, 0, "SkinWeightController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return SkinWeightController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

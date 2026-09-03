@@ -848,10 +848,17 @@ private:
     void processPendingStrokeUpdate();
     void processPendingStrokeUpdateUV();
 
+public:
     /// Same hit-test but returns the local-space position and normal
     /// at the hit (for vertex paint, which works in 3D space).
+    ///
+    /// PUBLIC (Skel Slice D, #558): SkinWeightController needs screen -> mesh-local
+    /// for its vertex-space weight brush. It is a const query with no side
+    /// effects, and exposing it avoids a second copy of the same ray/triangle
+    /// intersection.
     bool hitTestLocalPoint(OgreWidget* widget, const QPoint& screenPos,
                            Ogre::Vector3& outLocal, Ogre::Vector3& outNormal) const;
+private:
 
     /// Allocate a new manual Ogre::Texture with current buffer
     /// dimensions. When `rebindToModel` is true, also walk the
