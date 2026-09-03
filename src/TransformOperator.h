@@ -233,6 +233,9 @@ private:
 
     // Vertex paint drag state (edit mode only).
     bool                                    mVertexPaintDragActive = false;
+    /// Skel Slice D (#558): a weight-paint stroke owns the drag. Separate
+    /// from the vertex-paint flag so the two brushes cannot both claim it.
+    bool                                    mWeightPaintDragActive = false;
     bool                                    mTexturePaintDragActive = false;
     // Paint v2 Slice F (#549): decal-handle drag state.
     bool                                    mDecalDragActive = false;

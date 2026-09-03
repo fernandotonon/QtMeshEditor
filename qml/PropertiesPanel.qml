@@ -2993,6 +2993,191 @@ Rectangle {
                         }
                     }
                 }
+
+            // ---- Skel Slice D (#558): weight painting -------------------
+            Rectangle {
+                width: parent.width - 16
+                height: 1
+                color: PropertiesPanelController.borderColor
+                opacity: 0.5
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Paint skin weights on the ACTIVE BONE (select one in the "
+                    + "bone list). Brush size/strength/falloff come from the "
+                    + "paint brush settings. Undoable per stroke."
+            }
+
+            Row {
+                spacing: 6
+                Rectangle {
+                    width: wpLabel.implicitWidth + 18
+                    height: 24
+                    radius: 3
+                    color: SkinWeightController.weightPaintEnabled
+                         ? PropertiesPanelController.highlightColor
+                         : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        id: wpLabel
+                        anchors.centerIn: parent
+                        text: SkinWeightController.weightPaintEnabled
+                            ? "Weight paint: ON" : "Weight paint: OFF"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: SkinWeightController.weightPaintEnabled =
+                                   !SkinWeightController.weightPaintEnabled
+                    }
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: SkinWeightController.activeBoneName !== ""
+                        ? ("Bone: " + SkinWeightController.activeBoneName)
+                        : "No bone selected"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.85
+                }
+            }
+
+            // Brush mode. Indices match WeightPaintOps::BrushMode.
+            Row {
+                spacing: 4
+                visible: SkinWeightController.weightPaintEnabled
+                Repeater {
+                    model: [ { m: 0, label: "Add" },
+                             { m: 1, label: "Subtract" },
+                             { m: 2, label: "Blur" } ]
+                    Rectangle {
+                        required property var modelData
+                        width: modeLbl.implicitWidth + 14
+                        height: 22
+                        radius: 3
+                        color: SkinWeightController.brushMode === modelData.m
+                             ? PropertiesPanelController.highlightColor
+                             : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            id: modeLbl
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: SkinWeightController.brushMode = modelData.m
+                        }
+                    }
+                }
+            }
+
+            // Live readout: the active bone's weight under the cursor.
+            Text {
+                width: parent.width - 16
+                visible: SkinWeightController.weightPaintEnabled
+                text: SkinWeightController.hoverWeight >= 0
+                    ? ("Weight under cursor: "
+                       + SkinWeightController.hoverWeight.toFixed(4)
+                       + "  (vertex " + SkinWeightController.hoverVertex + ")")
+                    : "Weight under cursor: \u2014"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.85
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: SkinWeightController.status !== ""
+                text: SkinWeightController.status
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9
+                opacity: 0.7
+            }
+
+            Text {
+                text: "Weight utilities"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9
+                opacity: 0.7
+            }
+            Flow {
+                width: parent.width - 16
+                spacing: 4
+                Repeater {
+                    model: [ { op: "normalize", label: "Normalize" },
+                             { op: "smooth",    label: "Smooth" },
+                             { op: "limit",     label: "Limit 4" },
+                             { op: "mirror",    label: "Mirror X" },
+                             { op: "fill",      label: "Fill island" } ]
+                    Rectangle {
+                        required property var modelData
+                        width: opLbl.implicitWidth + 14
+                        height: 22
+                        radius: 3
+                        color: opMa.containsMouse
+                             ? PropertiesPanelController.headerColor
+                             : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            id: opLbl
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: opMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            ToolTip.visible: containsMouse
+                            ToolTip.delay: 500
+                            ToolTip.text: modelData.op === "mirror"
+                                ? "Mirror weights across X by vertex position. Bone-pair (_l/_r) mirroring needs Slice E; this matches vertices geometrically."
+                                : (modelData.op === "fill"
+                                   ? "Flood-fill the connected island under the cursor at the active bone."
+                                   : "Applies to the whole mesh. Undoable.")
+                            onClicked: {
+                                if (modelData.op === "normalize") SkinWeightController.normalizeAll()
+                                else if (modelData.op === "smooth") SkinWeightController.smoothAll(2)
+                                else if (modelData.op === "limit") SkinWeightController.limitInfluencesAll(4)
+                                else if (modelData.op === "mirror") SkinWeightController.mirrorAll(0, 0.001)
+                                else if (modelData.op === "fill") SkinWeightController.fillConnectedAtHover(0)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Per-vertex inspector for the hovered vertex.
+            Text {
+                width: parent.width - 16
+                visible: SkinWeightController.weightPaintEnabled
+                         && SkinWeightController.hoverVertex >= 0
+                text: "Vertex " + SkinWeightController.hoverVertex + ": "
+                      + SkinWeightController.vertexWeights(
+                            SkinWeightController.hoverVertex).join("  ")
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9
+                opacity: 0.8
+            }
+
             }
         }
     }
