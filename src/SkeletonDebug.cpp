@@ -196,6 +196,11 @@ void SkeletonDebug::createChildLinks(const Ogre::Bone* pBone)
             continue;
 
         Ogre::Entity* link = mSceneMan->createEntity("SkeletonDebug/LinkMesh");
+        // Skel Slice D (#558): the skeleton draws LAST so it stays visible on
+        // top of both weight overlays. Order is mesh (MAIN) -> heat map (MAIN+1,
+        // alpha 0.7, would otherwise wash the bones out) -> vertex dots (MAIN+2)
+        // -> skeleton (MAIN+3).
+        link->setRenderQueueGroup(Ogre::RENDER_QUEUE_MAIN + 3);
         auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)link);
         mBoneEntities.push_back(link);
 
@@ -257,6 +262,7 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             * invEntScale;
 
         Ogre::Entity* joint = mSceneMan->createEntity("SkeletonDebug/JointMesh");
+        joint->setRenderQueueGroup(Ogre::RENDER_QUEUE_MAIN + 3);
         auto* jointTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)joint);
         jointTp->setScale(jointScale, jointScale, jointScale);
         mBoneEntities.push_back(joint);
@@ -267,6 +273,7 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             createChildLinks(pBone);
 
         Ogre::Entity* axes = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
+        axes->setRenderQueueGroup(Ogre::RENDER_QUEUE_MAIN + 3);
         auto* axesTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)axes);
         axesTp->setScale(mScaleAxes / scaleMagnitude.x,
                          mScaleAxes / scaleMagnitude.y,

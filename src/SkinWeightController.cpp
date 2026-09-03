@@ -1,6 +1,8 @@
 #include "SkinWeightController.h"
 
 #include "AnimationControlController.h"
+#include "AnimationWidget.h"
+#include "BoneWeightOverlay.h"
 #include "EditModeController.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -9,17 +11,24 @@
 #include "TexturePaintController.h"
 #include "UndoManager.h"
 
+#include <OgreCamera.h>
+#include <OgreRay.h>
+#include <OgreSceneNode.h>
+#include "OgreWidget.h"
+#include "SpaceCamera.h"
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreMesh.h>
 #include <OgreSkeleton.h>
 #include <OgreSubMesh.h>
 
+#include <QApplication>
 #include <QTimer>
 #include <QUndoCommand>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -110,10 +119,36 @@ void SkinWeightController::setWeightPaintEnabled(bool on)
     if (on) {
         if (!ensureSession())
             m_status = QStringLiteral("Select a skinned mesh and a bone first.");
+
+        // Painting without the heat map gives no feedback, so entering paint
+        // mode turns the overlay ON. The inverse (hiding the overlay leaves
+        // paint mode) lives in AnimationWidget::toggleBoneWeights, the single
+        // point every overlay path funnels through.
+        //
+        // Guarded on isBoneWeightsShown so this cannot re-enter: that method
+        // only calls back into setWeightPaintEnabled on the OFF branch, and
+        // m_enabled is already true here, so the early-return would catch it
+        // anyway — but not creating the cycle at all is cheaper to reason about.
+        if (m_entity) {
+            if (auto* animWidget = findAnimationWidget()) {
+                if (!animWidget->isBoneWeightsShown(m_entity))
+                    animWidget->toggleBoneWeights(m_entity, true);
+            }
+        }
     } else {
         if (m_strokeActive) endStroke();
-        closeSession();
     }
+
+    // Show per-vertex dots while painting. The heat map is depth-check-off so it
+    // bleeds through the surface, making it ambiguous which side of the mesh a
+    // colour is on; the dots are depth-TESTED, so occlusion by the geometry
+    // gives back the depth cue and makes individual vertices easier to target.
+    // Done BEFORE closeSession() so m_entity is still set on the way out.
+    if (auto* overlay = findOverlay())
+        overlay->setShowVertices(on);
+
+    if (!on)
+        closeSession();
     SentryReporter::addBreadcrumb("scene.skel.weight.enable",
         QStringLiteral("enabled=%1").arg(on));
     emit weightPaintChanged();
@@ -141,6 +176,48 @@ QString SkinWeightController::activeBoneName() const
 {
     auto* acc = AnimationControlController::instance();
     return acc ? acc->selectedBone() : QString();
+}
+
+/// Bone that absorbs weight taken off the active bone when the active bone is a
+/// vertex's ONLY influence.
+///
+/// The active bone's PARENT is the anatomically sensible recipient: weight
+/// leaving a forearm belongs on the upper arm, not on some unrelated bone. A
+/// row must sum to 1, so without a recipient a sole influence at 1.0 can never
+/// be reduced — that was the "cannot subtract once it hits 1.0" bug.
+///
+/// Falls back to any other bone in the skeleton when the active bone is a ROOT
+/// (no parent), so a root-weighted vertex is still paintable; -1 only when the
+/// skeleton has a single bone, where the row genuinely has nowhere else to go.
+int SkinWeightController::fallbackBoneHandle(int forBoneHandle) const
+{
+    // Relative to the bone BEING WRITTEN, not the UI's active bone: the numeric
+    // setter names its own bone and may target one that is not selected, and a
+    // fallback belonging to a different bone would move weight somewhere the
+    // user never touched.
+    const int active = forBoneHandle >= 0 ? forBoneHandle : activeBoneHandle();
+    if (!m_entity || !m_entity->hasSkeleton() || active < 0) return -1;
+
+    Ogre::Skeleton* skel = m_entity->getSkeleton();
+    if (!skel) return -1;
+
+    Ogre::Bone* bone = nullptr;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* b = skel->getBone(i);
+        if (b && static_cast<int>(b->getHandle()) == active) { bone = b; break; }
+    }
+    if (!bone) return -1;
+
+    if (auto* parent = dynamic_cast<Ogre::Bone*>(bone->getParent()))
+        return static_cast<int>(parent->getHandle());
+
+    // Root bone: pick the first other bone so the vertex is not stuck at 1.0.
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* b = skel->getBone(i);
+        if (b && static_cast<int>(b->getHandle()) != active)
+            return static_cast<int>(b->getHandle());
+    }
+    return -1;
 }
 
 int SkinWeightController::activeBoneHandle() const
@@ -342,6 +419,44 @@ void SkinWeightController::refreshOverlay()
     // still works with the overlay hidden.
     if (!m_entity) return;
     m_entity->_updateAnimation();
+
+    // Restamp the heat map so the stroke is visible AS it is painted. The
+    // overlay caches per-vertex colours at build time, so _updateAnimation()
+    // alone only moves the existing (stale) colours with the mesh — the weights
+    // would not appear to change until something forced a full rebuild.
+    if (auto* overlay = findOverlay())
+    {
+        if (overlay->isVisible())
+            overlay->refreshColours();
+    }
+}
+
+/// The heat-map overlay for the painted entity, or nullptr.
+///
+/// BoneWeightOverlay is owned by AnimationWidget, which has no singleton, so it
+/// is reached the way MCPServer does: findChild off a top-level window. A
+/// missing widget/overlay is NORMAL (headless tests, or the heat map toggled
+/// off) and must stay silent — painting never depends on the overlay existing.
+AnimationWidget* SkinWeightController::findAnimationWidget() const
+{
+    for (QWidget* top : QApplication::topLevelWidgets())
+    {
+        // The widget may BE a top-level (no parent) or a descendant of one, so
+        // check both. Only descending missed a parentless AnimationWidget.
+        if (auto* w = qobject_cast<AnimationWidget*>(top))
+            return w;
+        if (auto* w = top->findChild<AnimationWidget*>())
+            return w;
+    }
+    return nullptr;
+}
+
+BoneWeightOverlay* SkinWeightController::findOverlay() const
+{
+    if (!m_entity)
+        return nullptr;
+    auto* animWidget = findAnimationWidget();
+    return animWidget ? animWidget->getBoneWeightOverlay(m_entity) : nullptr;
 }
 
 void SkinWeightController::pushUndo(const QString& label,
@@ -377,6 +492,68 @@ bool SkinWeightController::runUndoableOp(const QString& label,
 
 // --- stroke ----------------------------------------------------------------
 
+bool SkinWeightController::hitTestLocalPoint(OgreWidget* widget,
+                                             const QPoint& screenPos,
+                                             double outLocal[3]) const
+{
+    if (!m_haveData || !m_entity || !widget) return false;
+    if (m_data.indices.empty() || m_data.positions.empty()) return false;
+    auto* spaceCam = widget->getSpaceCamera();
+    auto* camera = spaceCam ? spaceCam->getCamera() : nullptr;
+    if (!camera) return false;
+    int vw = 0, vh = 0;
+    widget->pixelSizeForCameraPicking(vw, vh);
+    if (vw <= 0 || vh <= 0) return false;
+
+    const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+    const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+    const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+
+    Ogre::SceneNode* node = m_entity->getParentSceneNode();
+    const Ogre::Affine3 worldToLocal =
+        node ? node->_getFullTransform().inverse() : Ogre::Affine3::IDENTITY;
+    const Ogre::Vector3 o = worldToLocal * ray.getOrigin();
+    Ogre::Vector3 d = worldToLocal.linear() * ray.getDirection();
+    d.normalise();
+
+    // Moller-Trumbore over the session's own triangle list, so the hit is in
+    // the same index space as m_data.weights.
+    const float* P = m_data.positions.data();
+    auto vertexAt = [P](std::uint32_t i) {
+        return Ogre::Vector3(P[i * 3 + 0], P[i * 3 + 1], P[i * 3 + 2]);
+    };
+    Ogre::Real bestT = std::numeric_limits<Ogre::Real>::infinity();
+    bool found = false;
+    const size_t triCount = m_data.indices.size() / 3;
+    const size_t vertCount = m_data.positions.size() / 3;
+    for (size_t t = 0; t < triCount; ++t) {
+        const std::uint32_t i0 = m_data.indices[t * 3 + 0];
+        const std::uint32_t i1 = m_data.indices[t * 3 + 1];
+        const std::uint32_t i2 = m_data.indices[t * 3 + 2];
+        if (i0 >= vertCount || i1 >= vertCount || i2 >= vertCount) continue;
+        const Ogre::Vector3 v0 = vertexAt(i0);
+        const Ogre::Vector3 e1 = vertexAt(i1) - v0;
+        const Ogre::Vector3 e2 = vertexAt(i2) - v0;
+        const Ogre::Vector3 pvec = d.crossProduct(e2);
+        const Ogre::Real det = e1.dotProduct(pvec);
+        if (std::abs(det) < 1e-8f) continue;
+        const Ogre::Real invDet = 1.0f / det;
+        const Ogre::Vector3 tvec = o - v0;
+        const Ogre::Real u = tvec.dotProduct(pvec) * invDet;
+        if (u < 0.0f || u > 1.0f) continue;
+        const Ogre::Vector3 qvec = tvec.crossProduct(e1);
+        const Ogre::Real v = d.dotProduct(qvec) * invDet;
+        if (v < 0.0f || u + v > 1.0f) continue;
+        const Ogre::Real tHit = e2.dotProduct(qvec) * invDet;
+        if (tHit <= 0.0f || tHit >= bestT) continue;
+        bestT = tHit;
+        const Ogre::Vector3 hit = o + d * tHit;
+        outLocal[0] = hit.x; outLocal[1] = hit.y; outLocal[2] = hit.z;
+        found = true;
+    }
+    return found;
+}
+
 bool SkinWeightController::beginStroke(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_enabled || m_strokeActive) return false;
@@ -401,11 +578,8 @@ void SkinWeightController::updateStroke(OgreWidget* widget, const QPoint& screen
     const int bone = activeBoneHandle();
     if (bone < 0) return;
 
-    // Reuse the paint controller's screen->mesh-local resolver rather than
-    // duplicating a ray/triangle intersection.
-    auto* tpc = TexturePaintController::instance();
-    Ogre::Vector3 localPos, localNormal;
-    if (!tpc || !tpc->hitTestLocalPoint(widget, screenPos, localPos, localNormal)) {
+    double hit[3] = {0, 0, 0};
+    if (!hitTestLocalPoint(widget, screenPos, hit)) {
         return;                        // off-mesh: no dab (matches vertex paint)
     }
 
@@ -421,8 +595,9 @@ void SkinWeightController::updateStroke(OgreWidget* widget, const QPoint& screen
                      : WeightPaintOps::BrushShape::Round;
     o.mode = static_cast<WeightPaintOps::BrushMode>(m_brushMode);
     o.maxInfluences = m_maxInfluences;
+    o.fallbackBoneHandle = fallbackBoneHandle();
 
-    const double center[3] = {localPos.x, localPos.y, localPos.z};
+    const double center[3] = {hit[0], hit[1], hit[2]};
     const auto locked = lockedBoneFlags();
     const int n = WeightPaintOps::applyDab(
         m_data.positions.data(), static_cast<int>(m_data.weights.size()),
@@ -457,9 +632,8 @@ void SkinWeightController::endStroke()
 void SkinWeightController::updateHover(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_haveData) return;
-    auto* tpc = TexturePaintController::instance();
-    Ogre::Vector3 localPos, localNormal;
-    if (!tpc || !tpc->hitTestLocalPoint(widget, screenPos, localPos, localNormal)) {
+    double hit[3] = {0, 0, 0};
+    if (!hitTestLocalPoint(widget, screenPos, hit)) {
         if (m_hoverVertex != -1 || m_hoverWeight >= 0.0) {
             m_hoverVertex = -1;
             m_hoverWeight = -1.0;      // -1 reads as "off mesh", not "zero weight"
@@ -472,9 +646,9 @@ void SkinWeightController::updateHover(OgreWidget* widget, const QPoint& screenP
     double bestD2 = 0.0;
     const int count = static_cast<int>(m_data.weights.size());
     for (int v = 0; v < count; ++v) {
-        const double dx = m_data.positions[v * 3 + 0] - localPos.x;
-        const double dy = m_data.positions[v * 3 + 1] - localPos.y;
-        const double dz = m_data.positions[v * 3 + 2] - localPos.z;
+        const double dx = m_data.positions[v * 3 + 0] - hit[0];
+        const double dy = m_data.positions[v * 3 + 1] - hit[1];
+        const double dz = m_data.positions[v * 3 + 2] - hit[2];
         const double d2 = dx * dx + dy * dy + dz * dz;
         if (best < 0 || d2 < bestD2) { bestD2 = d2; best = v; }
     }
@@ -614,10 +788,17 @@ bool SkinWeightController::setVertexWeight(int vertexIndex, const QString& boneN
     }
     const int idx = vertexIndex;
     const double w = std::clamp(weight, 0.0, 1.0);
-    return runUndoableOp(QStringLiteral("Set Vertex Weight"), [this, idx, handle, w]() {
+    const auto locked = lockedBoneFlags();
+    const int fallback = fallbackBoneHandle(handle);
+    return runUndoableOp(QStringLiteral("Set Vertex Weight"),
+                         [this, idx, handle, w, locked, fallback]() {
         auto& vw = m_data.weights[static_cast<size_t>(idx)];
-        if (!WeightPaintOps::setWeight(vw, handle, w)) return 0;
-        WeightPaintOps::normalizeRow(vw);
-        return 1;
+        const double before = WeightPaintOps::weightOf(vw, handle);
+        // NOT setWeight + normalizeRow: normalizeRow rescales every entry
+        // including the one just written, so lowering a SOLE influence
+        // renormalised it straight back to 1.0 — the same "cannot subtract at
+        // 1.0" bug the brush had, reached through the numeric setter instead.
+        WeightPaintOps::writeWeightHoldingTarget(vw, handle, w, locked, fallback);
+        return std::abs(WeightPaintOps::weightOf(vw, handle) - before) > 1e-9 ? 1 : 0;
     });
 }

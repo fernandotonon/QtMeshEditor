@@ -19,6 +19,9 @@
 #include <memory>
 #include <vector>
 
+class AnimationWidget;
+class BoneWeightOverlay;
+
 namespace Ogre {
 class Bone;
 class Entity;
@@ -131,11 +134,25 @@ private:
     explicit SkinWeightController(QObject* parent = nullptr);
     ~SkinWeightController() override;
 
+    /// Screen -> mesh-LOCAL hit against THIS controller's own session
+    /// geometry (m_data.positions/indices).
+    ///
+    /// Deliberately NOT TexturePaintController::hitTestLocalPoint: that one
+    /// early-returns unless a TEXTURE paint session exists (`m_paintMesh`),
+    /// which weight painting never creates — so it always returned false and
+    /// every dab was silently skipped. Using our own extracted geometry also
+    /// keeps the hit test in the exact index space the weights use.
+    bool hitTestLocalPoint(OgreWidget* widget, const QPoint& screenPos,
+                           double outLocal[3]) const;
     /// Ensure a session exists for the selected skinned entity.
     bool ensureSession();
     void closeSession();
     /// Active bone HANDLE, or -1.
     int activeBoneHandle() const;
+    /// Bone that absorbs weight when `forBoneHandle` is a vertex's ONLY
+    /// influence (normally that bone's PARENT). Pass -1 to use the active bone.
+    /// Returns -1 when no recipient exists.
+    int fallbackBoneHandle(int forBoneHandle = -1) const;
     /// Per-bone-handle lock flags sized to the skeleton.
     std::vector<std::uint8_t> lockedBoneFlags() const;
     /// Adjacency over the session mesh (built lazily; Blur/smooth need it).
@@ -151,6 +168,10 @@ private:
     bool runUndoableOp(const QString& label,
                        const std::function<int()>& op);
     void refreshOverlay();
+    /// Heat-map overlay for the painted entity, or nullptr when absent.
+    BoneWeightOverlay* findOverlay() const;
+    /// The AnimationWidget that owns the weight overlays, or nullptr.
+    AnimationWidget* findAnimationWidget() const;
 
     bool m_enabled = false;
     int  m_brushMode = 0;

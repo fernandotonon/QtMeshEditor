@@ -1248,14 +1248,13 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             }
         }
 
-        // In edit mode, delegate selection to EditModeController
-        if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
-        {
-            auto* editCtrl = EditModeController::instance();
-            // Skel Slice D (#558): weight paint is checked BEFORE vertex paint —
-            // both are edit-mode brushes, and whichever is enabled owns the
-            // click. Weight paint wins so enabling it does not require also
-            // turning vertex paint off.
+        // Skel Slice D (#558): weight painting is an ANIMATION-mode feature, so
+        // this must sit OUTSIDE the edit-mode branch below. It was originally
+        // placed inside it, which meant clicks never reached the brush because
+        // edit mode is off in Animation mode — the brush appeared completely
+        // dead. Only the SELECT tool is hijacked, so the transform gizmos keep
+        // working while the brush is armed.
+        if (mTransformState == TS_SELECT) {
             if (auto* swc = SkinWeightController::instance();
                 swc && swc->weightPaintEnabled()) {
                 if (swc->beginStroke(m_pActiveWidget, e->pos())) {
@@ -1264,10 +1263,16 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                                                   "stroke begin");
                     return;
                 }
-                // Brush on: do not fall through to box/component selection on a
-                // miss, or a stray click would blow away the user's selection.
+                // Brush armed: swallow the click rather than falling through to
+                // selection, so a miss cannot blow away the user's selection.
                 return;
             }
+        }
+
+        // In edit mode, delegate selection to EditModeController
+        if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
+        {
+            auto* editCtrl = EditModeController::instance();
             if (editCtrl->vertexPaintEnabled()) {
                 if (editCtrl->beginVertexPaintStroke(m_pActiveWidget, e->pos())) {
                     mVertexPaintDragActive = true;
@@ -1503,7 +1508,8 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
-    // Skel Slice D (#558): weight-paint drag / hover readout.
+    // Skel Slice D (#558): weight-paint drag / hover readout. Deliberately NOT
+    // gated on edit mode — this is an Animation-mode feature.
     if (auto* swc = SkinWeightController::instance(); swc && m_pActiveWidget) {
         if (mWeightPaintDragActive && (e->buttons() & Qt::LeftButton)) {
             swc->updateStroke(m_pActiveWidget, e->pos());

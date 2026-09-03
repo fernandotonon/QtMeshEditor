@@ -44,6 +44,16 @@ struct DabOptions {
     BrushMode mode = BrushMode::Add;
     /// Cap applied after every dab. 0 leaves the influence count alone.
     int maxInfluences = 4;
+    /// Bone handle that absorbs weight when the painted bone is a vertex's ONLY
+    /// influence and the user paints it DOWN.
+    ///
+    /// Without a recipient there is nowhere for the freed weight to go: the row
+    /// must still sum to 1, so the painted bone would keep everything and a
+    /// vertex at 1.0 could never be reduced (the reported "cannot subtract once
+    /// it reaches 1.0" bug). -1 means "no fallback available", in which case a
+    /// sole influence at 1.0 legitimately stays pinned — a single-bone row has
+    /// no other way to satisfy the sum.
+    int fallbackBoneHandle = -1;
 };
 
 /// Per-vertex falloff for a dab, matching EditModeController's vertex-colour
@@ -64,6 +74,25 @@ bool setWeight(SkinWeights::VertexWeights& vw, int boneHandle, double weight);
 /// Renormalise one row so its weights sum to 1. A row that sums to ~0 is left
 /// untouched rather than being given an arbitrary distribution.
 void normalizeRow(SkinWeights::VertexWeights& vw);
+
+/// Set `boneHandle` to `target` on one vertex and rescale the OTHER unlocked
+/// bones into the remaining headroom, so the row sums to 1 with the painted
+/// value INTACT.
+///
+/// Prefer this over setWeight()+normalizeRow() for any user-driven weight
+/// change: normalizeRow scales EVERY entry, including the one just written, so
+/// lowering a sole influence renormalises it straight back to 1.0 (the reported
+/// "cannot subtract once a vertex reaches 1.0" bug — which appeared in BOTH the
+/// brush and the numeric per-vertex setter).
+///
+/// `fallbackBoneHandle` receives freed weight when the painted bone is the
+/// vertex's only influence; -1 means none is available, in which case a sole
+/// influence stays pinned because the row has nowhere else to sum to 1.
+void writeWeightHoldingTarget(SkinWeights::VertexWeights& vw,
+                              int boneHandle,
+                              double target,
+                              const std::vector<std::uint8_t>& lockedBones = {},
+                              int fallbackBoneHandle = -1);
 
 /// Apply one brush dab centred at `center` (mesh-local).
 ///

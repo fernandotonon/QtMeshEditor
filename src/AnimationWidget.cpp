@@ -15,6 +15,7 @@
 #include "Manager.h"
 #include "AnimationWidget.h"
 #include "SentryReporter.h"
+#include "SkinWeightController.h"
 
 AnimationWidget::AnimationWidget(QWidget *parent) :
     QWidget(parent)
@@ -149,6 +150,12 @@ bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
                 overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
         }
 
+        // Adopt the CURRENT weight-paint state. Paint mode may already be on
+        // (the user can enable painting before switching the heat map on), and a
+        // brand-new overlay defaults to no dots — so without this the dots never
+        // appear for that ordering, which is exactly how it was first reported.
+        overlay->setShowVertices(SkinWeightController::instance()->weightPaintEnabled());
+
         overlay->setVisible(true);
     }
     else
@@ -158,6 +165,16 @@ bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
             delete mWeightOverlays.value(entity);
             mWeightOverlays.remove(entity);
         }
+
+        // Weight painting is meaningless without the heat map — the user would
+        // be editing weights with no feedback at all — so hiding the overlay
+        // leaves paint mode too. Enforced HERE rather than at each caller
+        // because every path (Inspector checkbox, MCP, and the selection /
+        // mode-change cleanups in PropertiesPanelController) funnels through
+        // this one method.
+        auto* weights = SkinWeightController::instance();
+        if (weights && weights->weightPaintEnabled())
+            weights->setWeightPaintEnabled(false);
     }
 
     updateSkeletonTable();

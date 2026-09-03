@@ -608,7 +608,10 @@ Rectangle {
                 sectionVisible: root.currentTab === root.modeToolsTab
                     && root.modeToolMatches(EditorModeController.AnimationMode)
                     && SkinWeightsController.hasSkinnedSelection
-                expanded: false
+                // Auto-expand once weight painting is on, so the brush modes
+                // and utilities are visible instead of hidden behind a
+                // collapsed header the user has to know to open.
+                expanded: SkinWeightController.weightPaintEnabled
 
                 Component.onCompleted: content = skinningToolsComponent
             }
@@ -2994,6 +2997,7 @@ Rectangle {
                     }
                 }
 
+        }
             // ---- Skel Slice D (#558): weight painting -------------------
             Rectangle {
                 width: parent.width - 16
@@ -3176,8 +3180,6 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 9
                 opacity: 0.8
-            }
-
             }
         }
     }
@@ -3596,11 +3598,74 @@ Rectangle {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     PropertiesPanelController.toggleBoneWeights(modelData.entity, !modelData.showWeights)
+                                    // Turning weights OFF also exits paint mode
+                                    // (enforced in C++); this refresh makes the
+                                    // row's paint state match.
                                     skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
                                 }
                             }
                         }
                         Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+
+                        // Skel Slice D (#558): the weight-PAINT toggle belongs
+                        // next to the weight-DISPLAY checkbox — that is where a
+                        // user working on weights already is. The full brush
+                        // controls live in Mode Tools -> Skinning, but the
+                        // feature was undiscoverable when the on/off switch was
+                        // only there (reported: "I selected a bone and it is
+                        // showing the weights, but I can't find any way to
+                        // paint it").
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: wpaintLbl.implicitWidth + 14
+                            height: 20
+                            radius: 3
+                            color: SkinWeightController.weightPaintEnabled
+                                 ? PropertiesPanelController.highlightColor
+                                 : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Text {
+                                id: wpaintLbl
+                                anchors.centerIn: parent
+                                text: SkinWeightController.weightPaintEnabled
+                                    ? "Painting" : "Paint\u2026"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                ToolTip.visible: containsMouse
+                                ToolTip.delay: 400
+                                ToolTip.text: SkinWeightController.activeBoneName !== ""
+                                    ? ("Paint weights on '" + SkinWeightController.activeBoneName
+                                       + "'. Brush size/strength come from the paint brush settings; "
+                                       + "modes and utilities are in Mode Tools \u2192 Skinning.")
+                                    : "Select a bone first, then paint its weights."
+                                onClicked: {
+                                    // The heat map follows paint mode in C++
+                                    // (SkinWeightController::setWeightPaintEnabled
+                                    // shows it; AnimationWidget::toggleBoneWeights
+                                    // hides paint mode with it), so this only has
+                                    // to toggle paint and then refresh the rows so
+                                    // the Weights checkbox repaints to match.
+                                    SkinWeightController.weightPaintEnabled =
+                                        !SkinWeightController.weightPaintEnabled
+                                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                                }
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: SkinWeightController.weightPaintEnabled
+                                     && SkinWeightController.hoverWeight >= 0
+                            text: SkinWeightController.hoverWeight.toFixed(3)
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            opacity: 0.85
+                        }
                     }
                 }
             }

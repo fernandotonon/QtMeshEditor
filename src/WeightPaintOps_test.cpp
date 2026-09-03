@@ -385,3 +385,80 @@ TEST(WeightPaintOpsTest, TotalWeightOnBoneTracksPaintedChange) {
     EXPECT_GT(WeightPaintOps::totalWeightOnBone(s.w, 7), 0.0)
         << "a readout must be able to show the paint actually landed";
 }
+
+// --- subtracting from a fully-weighted vertex (#558 follow-up) -------------
+
+// Reported bug: once a vertex reached 1.0 it could never be painted DOWN again;
+// below 1.0 subtract worked fine. Cause: at 1.0 after pruning, the painted bone
+// is the row's ONLY influence, and since a row must sum to 1 the freed weight
+// was handed straight back to it — pinning it at 1.0 forever.
+TEST(WeightPaintOpsTest, SubtractWorksWhenTheActiveBoneIsTheSoleInfluence) {
+    const float pos[3] = {0.f, 0.f, 0.f};
+    const double centre[3] = {0.0, 0.0, 0.0};
+
+    WeightPaintOps::DabOptions o;
+    o.mode = WeightPaintOps::BrushMode::Subtract;
+    o.radius = 1.0;
+    o.strength = 0.5;
+    o.falloff = 0.0;
+    o.fallbackBoneHandle = 9;          // stands in for the parent bone
+
+    std::vector<VertexWeights> w{vw({{3, 1.0}})};
+
+    ASSERT_EQ(WeightPaintOps::applyDab(pos, 1, w, centre, 3, o), 1);
+
+    const double painted = WeightPaintOps::weightOf(w[0], 3);
+    EXPECT_LT(painted, 0.99)
+        << "a vertex at 1.0 must be reducible; it stayed pinned at full weight";
+    EXPECT_NEAR(painted, 0.5, 1e-6);
+
+    // The freed weight has to go somewhere, or the row stops summing to 1 and
+    // the later prune/renormalise springs the painted bone back to 1.0.
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 9), 0.5, 1e-6)
+        << "freed weight must land on the fallback bone";
+    EXPECT_NEAR(rowSum(w[0]), 1.0, 1e-6) << "row must stay normalised";
+}
+
+// With no fallback available (single-bone skeleton) a sole influence genuinely
+// cannot be reduced — the row has nowhere else to put the weight. Pin that so
+// the behaviour is a documented limit rather than a silent regression.
+TEST(WeightPaintOpsTest, SoleInfluenceStaysPinnedWithoutAFallbackBone) {
+    const float pos[3] = {0.f, 0.f, 0.f};
+    const double centre[3] = {0.0, 0.0, 0.0};
+
+    WeightPaintOps::DabOptions o;
+    o.mode = WeightPaintOps::BrushMode::Subtract;
+    o.radius = 1.0;
+    o.strength = 0.5;
+    o.falloff = 0.0;
+    o.fallbackBoneHandle = -1;         // none available
+
+    std::vector<VertexWeights> w{vw({{3, 1.0}})};
+
+    WeightPaintOps::applyDab(pos, 1, w, centre, 3, o);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 3), 1.0, 1e-6)
+        << "with nowhere to move weight, the row must stay normalised at 1.0";
+}
+
+// An EXISTING zero-weight sibling must be preferred over inventing a new
+// influence: it keeps the influence count down and respects the row the user
+// already has.
+TEST(WeightPaintOpsTest, SubtractPrefersAnExistingSiblingOverTheFallbackBone) {
+    const float pos[3] = {0.f, 0.f, 0.f};
+    const double centre[3] = {0.0, 0.0, 0.0};
+
+    WeightPaintOps::DabOptions o;
+    o.mode = WeightPaintOps::BrushMode::Subtract;
+    o.radius = 1.0;
+    o.strength = 0.5;
+    o.falloff = 0.0;
+    o.fallbackBoneHandle = 9;
+
+    std::vector<VertexWeights> w{vw({{3, 1.0}, {7, 0.0}})};
+
+    WeightPaintOps::applyDab(pos, 1, w, centre, 3, o);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 7), 0.5, 1e-6)
+        << "the existing sibling should absorb the freed weight";
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 9), 0.0, 1e-6)
+        << "the fallback bone must not be added when a sibling already exists";
+}

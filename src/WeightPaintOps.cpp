@@ -67,10 +67,13 @@ bool rowIsDegenerate(const SkinWeights::VertexWeights& vw)
     return sum <= 1e-9;
 }
 
+} // namespace
+
 void writeWeightHoldingTarget(SkinWeights::VertexWeights& vw,
                               int boneHandle,
                               double target,
-                              const std::vector<std::uint8_t>& lockedBones)
+                              const std::vector<std::uint8_t>& lockedBones,
+                              int fallbackBoneHandle)
 {
     const double t = std::clamp(target, 0.0, 1.0);
 
@@ -112,10 +115,25 @@ void writeWeightHoldingTarget(SkinWeights::VertexWeights& vw,
                 if (boneLocked(vw.boneIndices[k], lockedBones)) continue;
                 if (sibling < 0 || vw.boneIndices[k] < vw.boneIndices[sibling]) sibling = k;
             }
-            if (sibling >= 0) vw.weights[sibling] = headroom;
-            // No sibling at all: the painted bone is the row's only unlocked
-            // influence, so it legitimately takes the remainder.
-            else setWeight(vw, boneHandle, allowed + headroom);
+            if (sibling >= 0) {
+                vw.weights[sibling] = headroom;
+                return;
+            }
+            // No existing sibling. Introduce the caller-supplied fallback bone
+            // (normally the painted bone's PARENT) to hold the freed weight.
+            //
+            // Handing the headroom back to the painted bone instead — which is
+            // what this did originally — pinned any vertex that reached 1.0 at
+            // 1.0 forever, because a sole influence must own the whole row to
+            // keep it summing to 1. Adding a recipient is the only way to let
+            // the value come down.
+            const bool absorbed = fallbackBoneHandle >= 0
+                               && fallbackBoneHandle != boneHandle
+                               && !boneLocked(fallbackBoneHandle, lockedBones)
+                               && setWeight(vw, fallbackBoneHandle, headroom);
+            // Genuinely nowhere to put it: keep the row normalised.
+            if (!absorbed)
+                setWeight(vw, boneHandle, allowed + headroom);
         }
         return;
     }
@@ -126,8 +144,6 @@ void writeWeightHoldingTarget(SkinWeights::VertexWeights& vw,
         vw.weights[k] *= scale;
     }
 }
-
-} // namespace
 
 double falloffWeight(double distance, double radius, double falloff, BrushShape shape)
 {
@@ -259,7 +275,8 @@ int applyDab(const float* positions, int vertexCount,
             --vw.count;
         }
         const SkinWeights::VertexWeights beforeWrite = vw;
-        writeWeightHoldingTarget(vw, activeBoneHandle, target, lockedBones);
+        writeWeightHoldingTarget(vw, activeBoneHandle, target, lockedBones,
+                                 options.fallbackBoneHandle);
         if (rowIsDegenerate(vw)) {
             // Every influence reached zero. Renormalising (or pruning) such a
             // row hands its largest slot 1.0 — so painting a weight DOWN to
@@ -313,7 +330,10 @@ int fillConnected(std::vector<SkinWeights::VertexWeights>& weights,
             const double current = weightOf(vw, activeBoneHandle);
             const double target = current + amount * (1.0 - current);
             if (std::abs(target - current) > 1e-9) {
-                writeWeightHoldingTarget(vw, activeBoneHandle, target, lockedBones);
+                // fillConnected only ever raises weight toward the active bone,
+                // so it never needs a recipient for freed weight.
+                writeWeightHoldingTarget(vw, activeBoneHandle, target, lockedBones,
+                                         -1);
                 ++reached;
             }
         }
