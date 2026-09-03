@@ -2862,9 +2862,15 @@ Rectangle {
         id: skinningToolsComponent
 
         Column {
+            id: skinToolsCol
             width: parent ? parent.width : 200
             padding: 8
             spacing: 6
+
+            // Weight utilities start collapsed: they are whole-mesh operations
+            // reached occasionally, so they should not push the per-bone paint
+            // controls (used constantly) down the panel.
+            property bool utilsExpanded: false
 
             Text {
                 width: parent.width - 16
@@ -3112,11 +3118,48 @@ Rectangle {
                 opacity: 0.7
             }
 
+            // ---- Weight utilities (whole-mesh ops) ----
+            Rectangle {
+                width: parent.width - 16; height: 24; radius: 4
+                color: utilsHeaderMouse.containsMouse
+                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.1)
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor; border.width: 1
+                Row {
+                    anchors.fill: parent; anchors.leftMargin: 6; spacing: 4
+                    Text { anchors.verticalCenter: parent.verticalCenter
+                        text: skinToolsCol.utilsExpanded ? "▼" : "▶"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                    Text { anchors.verticalCenter: parent.verticalCenter
+                        text: "Weight utilities"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11; font.bold: true }
+                }
+                MouseArea {
+                    id: utilsHeaderMouse
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: skinToolsCol.utilsExpanded = !skinToolsCol.utilsExpanded
+                }
+            }
+            Column {
+                width: parent.width
+                spacing: 6
+                visible: skinToolsCol.utilsExpanded
+
+            // These are not brush strokes: they rewrite weights across every
+            // vertex at once, so say so up front rather than only in a tooltip
+            // the user has to hover to find.
             Text {
-                text: "Weight utilities"
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                text: "These act on the WHOLE mesh, not just the painted area — "
+                    + "not on the selected bone or the brush region. Each is one "
+                    + "undo step. \"Fill island\" is the exception: it fills only "
+                    + "the connected island under the cursor, at the active bone."
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 9
-                opacity: 0.7
+                opacity: 0.8
             }
             Flow {
                 width: parent.width - 16
@@ -3166,6 +3209,7 @@ Rectangle {
                         }
                     }
                 }
+            }
             }
 
             // Per-vertex inspector for the hovered vertex.
