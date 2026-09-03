@@ -499,3 +499,58 @@ TEST_F(BoneWeightOverlayRuntimeTest, ReEnablingPaintAfterDisablingWeightsDoesNot
     EXPECT_TRUE(w->isBoneWeightsShown(e)) << "the overlay must be rebuilt";
     SUCCEED();
 }
+
+// Picking must follow the SKINNED surface, not the bind pose.
+//
+// m_data.positions is bind-pose VertexData, but the viewport and the heat map
+// both render _getSkelAnimVertexData(). Once a bone moves the surface, picking
+// against the bind pose tests geometry that is no longer under the cursor.
+// Reported in review on PR #973.
+//
+// This asserts the SELECTION of geometry, not a screen ray: it moves a bone,
+// then requires the positions the controller picks against to have moved with
+// it. A ray test would need a viewport and would not isolate the cause.
+TEST_F(BoneWeightOverlayRuntimeTest, PickingFollowsThePosedSurfaceNotTheBindPose) {
+    auto* e = createAnimatedTestEntity("RtPosePick");
+    ASSERT_NE(e, nullptr);
+    ASSERT_TRUE(e->hasSkeleton());
+
+    QWidget host;
+    auto* w = new AnimationWidget(&host);
+    host.show();
+    QApplication::processEvents();
+    SelectionSet::getSingleton()->selectOne(e);
+
+    auto* c = SkinWeightController::instance();
+    c->setWeightPaintEnabled(true);
+    ASSERT_TRUE(c->weightPaintEnabled());
+
+    // Software animation is what produces _getSkelAnimVertexData().
+    e->addSoftwareAnimationRequest(false);
+
+    auto* skel = e->getSkeleton();
+    Ogre::Bone* child = skel->getBone("Child");
+    ASSERT_NE(child, nullptr);
+    child->setManuallyControlled(true);
+
+    const std::vector<float> before = c->pickPositionsForTest();
+    ASSERT_FALSE(before.empty());
+
+    // Move the bone well clear of the bind pose and re-skin.
+    child->translate(Ogre::Vector3(0.0f, 5.0f, 0.0f));
+    e->getParentSceneNode()->_update(true, true);
+    e->_updateAnimation();
+
+    const std::vector<float> after = c->pickPositionsForTest();
+    ASSERT_EQ(after.size(), before.size());
+
+    bool moved = false;
+    for (size_t i = 0; i < before.size(); ++i)
+        if (std::abs(after[i] - before[i]) > 1e-3f) { moved = true; break; }
+    EXPECT_TRUE(moved)
+        << "picking geometry did not follow the posed surface — it is still the "
+           "bind pose, so strokes will miss where the user clicks";
+
+    e->removeSoftwareAnimationRequest(false);
+    c->setWeightPaintEnabled(false);
+}

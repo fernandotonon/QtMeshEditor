@@ -462,3 +462,65 @@ TEST(WeightPaintOpsTest, SubtractPrefersAnExistingSiblingOverTheFallbackBone) {
     EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 9), 0.0, 1e-6)
         << "the fallback bone must not be added when a sibling already exists";
 }
+
+// A LOCKED bone must survive the post-dab influence cap untouched.
+//
+// SkinWeightsPost::pruneAndRenormalize is shared with the auto-skinners and has
+// no lock concept: it keeps the top K by weight and renormalises everything. A
+// locked bone holding a small weight on an over-cap row was therefore evicted
+// by a dab that never touched it. Reported in review on PR #973.
+TEST(WeightPaintOpsTest, PostDabInfluenceCapPreservesLockedBones) {
+    const float pos[3] = {0.f, 0.f, 0.f};
+    const double centre[3] = {0.0, 0.0, 0.0};
+
+    WeightPaintOps::DabOptions o;
+    o.mode = WeightPaintOps::BrushMode::Add;
+    o.radius = 1.0;
+    o.strength = 0.5;
+    o.falloff = 0.0;
+    o.maxInfluences = 4;                 // the default cap
+
+    // Bone 5 is locked AND holds the smallest weight on a 5-influence row —
+    // precisely what a top-4 prune evicts.
+    std::vector<std::uint8_t> locked(16, 0);
+    locked[5] = 1;
+
+    std::vector<VertexWeights> w{
+        vw({{1, 0.30}, {2, 0.30}, {3, 0.20}, {4, 0.19}, {5, 0.01}})};
+
+    WeightPaintOps::applyDab(pos, 1, w, centre, 1, o, locked);
+
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 5), 0.01, 1e-9)
+        << "a locked bone must keep its EXACT weight through the cap";
+    EXPECT_NEAR(rowSum(w[0]), 1.0, 1e-6) << "row must stay normalised";
+}
+
+// The cap still applies to the UNLOCKED remainder — preserving locks must not
+// become a licence to exceed maxInfluences without bound.
+TEST(WeightPaintOpsTest, PostDabInfluenceCapStillBoundsUnlockedBones) {
+    const float pos[3] = {0.f, 0.f, 0.f};
+    const double centre[3] = {0.0, 0.0, 0.0};
+
+    WeightPaintOps::DabOptions o;
+    o.mode = WeightPaintOps::BrushMode::Add;
+    o.radius = 1.0;
+    o.strength = 0.5;
+    o.falloff = 0.0;
+    o.maxInfluences = 2;
+
+    std::vector<std::uint8_t> locked(16, 0);
+    locked[5] = 1;
+
+    std::vector<VertexWeights> w{
+        vw({{1, 0.25}, {2, 0.25}, {3, 0.25}, {4, 0.15}, {5, 0.10}})};
+
+    WeightPaintOps::applyDab(pos, 1, w, centre, 1, o, locked);
+
+    int unlockedKept = 0;
+    for (int k = 0; k < w[0].count; ++k)
+        if (w[0].boneIndices[k] != 5) ++unlockedKept;
+    EXPECT_LE(unlockedKept, 2) << "the cap must still bound unlocked influences";
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 5), 0.10, 1e-9)
+        << "the locked bone is kept on top of the cap, at its exact value";
+    EXPECT_NEAR(rowSum(w[0]), 1.0, 1e-6);
+}

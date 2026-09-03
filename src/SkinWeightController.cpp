@@ -307,16 +307,31 @@ std::vector<std::uint8_t> SkinWeightController::lockedBoneFlags() const
 
 // --- mesh write-back -------------------------------------------------------
 
+/// True when at least one submesh actually uses the mesh's shared vertex block.
+///
+/// A mesh can retain a non-null `sharedVertexData` while every submesh uses
+/// private vertex data. The shared block is then NOT an owner, and every walk
+/// over owners must agree on that: `SkinEvaluate::extract` gates on this, so a
+/// write-back that included the unused shared block would consume the first
+/// private submesh's rows as the shared owner, advance its base, and then read
+/// shifted/exhausted rows for every remaining owner — clearing valid bone
+/// assignments across the whole mesh.
+static bool meshUsesSharedVertices(const Ogre::Mesh* mesh)
+{
+    if (!mesh || !mesh->sharedVertexData) return false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        const Ogre::SubMesh* sub = mesh->getSubMesh(i);
+        if (sub && sub->useSharedVertices) return true;
+    }
+    return false;
+}
+
 std::vector<SkinWeightController::OwnerSnapshot>
 SkinWeightController::captureSnapshot(Ogre::Mesh* mesh)
 {
     std::vector<OwnerSnapshot> out;
     if (!mesh) return out;
-    // Mesh-level (shared) list only when some submesh actually uses it.
-    bool anyShared = false;
-    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i)
-        if (mesh->getSubMesh(i) && mesh->getSubMesh(i)->useSharedVertices) anyShared = true;
-    if (anyShared) {
+    if (meshUsesSharedVertices(mesh)) {
         OwnerSnapshot o;
         o.submeshIndex = -1;
         o.assignments = mesh->getBoneAssignments();
@@ -392,7 +407,9 @@ void SkinWeightController::flushToMesh()
         base += vertexCount;
     };
 
-    if (mesh->sharedVertexData)
+    // Must match SkinEvaluate::extract's owner walk exactly (see
+    // meshUsesSharedVertices): the weights array is indexed by that walk.
+    if (meshUsesSharedVertices(mesh.get()))
         writeOwner(nullptr, mesh->sharedVertexData->vertexCount);
     for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
         Ogre::SubMesh* sub = mesh->getSubMesh(i);
@@ -492,12 +509,78 @@ bool SkinWeightController::runUndoableOp(const QString& label,
 
 // --- stroke ----------------------------------------------------------------
 
+/// Positions to hit-test against: the entity's SOFTWARE-SKINNED vertices when a
+/// pose is active, else the bind pose.
+///
+/// `m_data.positions` comes from the mesh's bind-pose VertexData, but the
+/// viewport and BoneWeightOverlay both render `_getSkelAnimVertexData()`. Once a
+/// bone moves the surface, picking against the bind pose tests geometry that is
+/// no longer under the cursor — strokes miss, or land on bind-pose vertices in a
+/// different visible region. Reported in review on PR #973.
+///
+/// Rebuilt per stroke rather than cached across frames: the pose can change
+/// between strokes (scrubbing the timeline), and a stale cache is exactly the
+/// bug this exists to fix. Falls back to the bind pose whenever software-skinned
+/// data is unavailable, so a static mesh is unaffected.
+///
+/// Walks owners in the SAME order as SkinEvaluate::extract, so index i here is
+/// index i in m_data.positions/weights.
+const std::vector<float>& SkinWeightController::pickPositions() const
+{
+    if (!m_entity || !m_entity->hasSkeleton())
+        return m_data.positions;
+
+    const Ogre::MeshPtr& mesh = m_entity->getMesh();
+    if (!mesh)
+        return m_data.positions;
+
+    m_pickPositions.clear();
+    m_pickPositions.reserve(m_data.positions.size());
+
+    auto appendFrom = [this](Ogre::VertexData* vd) -> bool {
+        if (!vd) return false;
+        const auto* posElem =
+            vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        if (!posElem) return false;
+        auto vbuf = vd->vertexBufferBinding->getBuffer(posElem->getSource());
+        if (!vbuf || vd->vertexCount == 0) return false;
+        auto* base = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (size_t j = 0; j < vd->vertexCount; ++j) {
+            float* p = nullptr;
+            posElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &p);
+            m_pickPositions.push_back(p[0]);
+            m_pickPositions.push_back(p[1]);
+            m_pickPositions.push_back(p[2]);
+        }
+        vbuf->unlock();
+        return true;
+    };
+
+    bool ok = true;
+    if (meshUsesSharedVertices(mesh.get()))
+        ok = appendFrom(m_entity->_getSkelAnimVertexData());
+    for (unsigned short i = 0; ok && i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(i);
+        if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+        ok = appendFrom(m_entity->getSubEntity(i)->_getSkelAnimVertexData());
+    }
+
+    // Any gap means the walk disagreed with extract's; the bind pose is wrong
+    // but SAFE (indices still line up), whereas a partial array would paint the
+    // wrong vertices outright.
+    if (!ok || m_pickPositions.size() != m_data.positions.size())
+        return m_data.positions;
+    return m_pickPositions;
+}
+
 bool SkinWeightController::hitTestLocalPoint(OgreWidget* widget,
                                              const QPoint& screenPos,
                                              double outLocal[3]) const
 {
     if (!m_haveData || !m_entity || !widget) return false;
     if (m_data.indices.empty() || m_data.positions.empty()) return false;
+    const std::vector<float>& positions = pickPositions();
     auto* spaceCam = widget->getSpaceCamera();
     auto* camera = spaceCam ? spaceCam->getCamera() : nullptr;
     if (!camera) return false;
@@ -518,14 +601,14 @@ bool SkinWeightController::hitTestLocalPoint(OgreWidget* widget,
 
     // Moller-Trumbore over the session's own triangle list, so the hit is in
     // the same index space as m_data.weights.
-    const float* P = m_data.positions.data();
+    const float* P = positions.data();
     auto vertexAt = [P](std::uint32_t i) {
         return Ogre::Vector3(P[i * 3 + 0], P[i * 3 + 1], P[i * 3 + 2]);
     };
     Ogre::Real bestT = std::numeric_limits<Ogre::Real>::infinity();
     bool found = false;
     const size_t triCount = m_data.indices.size() / 3;
-    const size_t vertCount = m_data.positions.size() / 3;
+    const size_t vertCount = positions.size() / 3;
     for (size_t t = 0; t < triCount; ++t) {
         const std::uint32_t i0 = m_data.indices[t * 3 + 0];
         const std::uint32_t i1 = m_data.indices[t * 3 + 1];
@@ -600,7 +683,7 @@ void SkinWeightController::updateStroke(OgreWidget* widget, const QPoint& screen
     const double center[3] = {hit[0], hit[1], hit[2]};
     const auto locked = lockedBoneFlags();
     const int n = WeightPaintOps::applyDab(
-        m_data.positions.data(), static_cast<int>(m_data.weights.size()),
+        pickPositions().data(), static_cast<int>(m_data.weights.size()),
         m_data.weights, center, bone, o, locked,
         o.mode == WeightPaintOps::BrushMode::Blur ? adjacency()
                                                   : std::vector<std::vector<int>>{});
@@ -646,9 +729,12 @@ void SkinWeightController::updateHover(OgreWidget* widget, const QPoint& screenP
     double bestD2 = 0.0;
     const int count = static_cast<int>(m_data.weights.size());
     for (int v = 0; v < count; ++v) {
-        const double dx = m_data.positions[v * 3 + 0] - hit[0];
-        const double dy = m_data.positions[v * 3 + 1] - hit[1];
-        const double dz = m_data.positions[v * 3 + 2] - hit[2];
+        // Same geometry the ray hit, or the nearest-vertex readout disagrees
+        // with where the user clicked once a pose is active.
+        const std::vector<float>& pp = pickPositions();
+        const double dx = pp[v * 3 + 0] - hit[0];
+        const double dy = pp[v * 3 + 1] - hit[1];
+        const double dz = pp[v * 3 + 2] - hit[2];
         const double d2 = dx * dx + dy * dy + dz * dz;
         if (best < 0 || d2 < bestD2) { bestD2 = d2; best = v; }
     }
@@ -694,6 +780,9 @@ bool SkinWeightController::limitInfluencesAll(int maxInfluences)
 bool SkinWeightController::mirrorAll(int axis, double tolerance)
 {
     return runUndoableOp(QStringLiteral("Mirror Weights"), [this, axis, tolerance]() {
+        // Deliberately the BIND POSE, not pickPositions(): mirroring pairs
+        // vertices across the rest-pose symmetry plane, and a posed mesh is not
+        // symmetric — picking uses the skinned pose, this must not.
         return WeightPaintOps::mirrorByPosition(
             m_data.positions.data(), static_cast<int>(m_data.weights.size()),
             m_data.weights, axis, /*pivot=*/0.0, tolerance, lockedBoneFlags());

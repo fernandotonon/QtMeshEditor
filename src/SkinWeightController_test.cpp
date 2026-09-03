@@ -20,6 +20,8 @@ The MIT License — see other project sources for the full header.
 #include "WeightPaintOps.h"
 
 #include <OgreMesh.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreMeshManager.h>
 #include <OgreSubMesh.h>
 
 #include <QApplication>
@@ -177,4 +179,55 @@ TEST_F(SkinWeightControllerSceneTest, RestoreToleratesAMissingSubmesh) {
     SkinWeightController::restoreSnapshot(mesh.get(), bogus);   // must not crash
     SkinWeightController::restoreSnapshot(nullptr, bogus);      // nor on a null mesh
     SUCCEED();
+}
+
+// A mesh can retain a non-null sharedVertexData while every submesh uses
+// PRIVATE vertex data. The shared block is then not an owner, and every walk
+// over owners must agree on that: SkinEvaluate::extract gates on it, so a
+// write-back that included the unused shared block would consume the first
+// private submesh's rows as the shared owner, advance its base, and then read
+// shifted/exhausted rows for every later owner — clearing valid assignments
+// across the mesh. Reported in review on PR #973.
+//
+// captureSnapshot shares the gate with flushToMesh, so asserting on the
+// snapshot's owner list pins the walk without needing a live paint session.
+TEST_F(SkinWeightControllerSceneTest, UnusedSharedVertexDataIsNotAnOwner) {
+    const std::string name = uniqueName("swcUnusedShared");
+    Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(mesh);
+
+    // A shared block exists...
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    mesh->sharedVertexData->vertexCount = 3;
+    auto sharedBuf = Ogre::HardwareBufferManager::getSingleton()
+        .createVertexBuffer(decl->getVertexSize(0), 3,
+                            Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, sharedBuf);
+
+    // ...but the only submesh uses its OWN vertex data.
+    auto* sub = mesh->createSubMesh();
+    sub->useSharedVertices = false;
+    sub->vertexData = new Ogre::VertexData();
+    auto* sdecl = sub->vertexData->vertexDeclaration;
+    sdecl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    sub->vertexData->vertexCount = 3;
+    auto subBuf = Ogre::HardwareBufferManager::getSingleton()
+        .createVertexBuffer(sdecl->getVertexSize(0), 3,
+                            Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    sub->vertexData->vertexBufferBinding->setBinding(0, subBuf);
+
+    Ogre::VertexBoneAssignment vba;
+    vba.vertexIndex = 0; vba.boneIndex = 1; vba.weight = 1.0f;
+    sub->addBoneAssignment(vba);
+
+    const auto snap = SkinWeightController::captureSnapshot(mesh.get());
+    ASSERT_EQ(snap.size(), 1u)
+        << "an unused shared block must NOT appear as an owner";
+    EXPECT_EQ(snap[0].submeshIndex, 0)
+        << "the single owner is the private submesh, not the mesh-level list";
+
+    Ogre::MeshManager::getSingleton().remove(mesh);
 }

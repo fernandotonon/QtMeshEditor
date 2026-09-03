@@ -126,6 +126,11 @@ public:
     /// Re-read weights from the mesh after an undo/redo replaced them.
     void resyncFromMesh();
 
+    /// Test hook: the positions picking/brushing actually run against. Exposed
+    /// so a test can assert that they follow the POSED surface (see
+    /// pickPositions) without needing a viewport and a screen ray.
+    const std::vector<float>& pickPositionsForTest() const { return pickPositions(); }
+
 signals:
     void weightPaintChanged();
     void hoverChanged();
@@ -133,6 +138,11 @@ signals:
 private:
     explicit SkinWeightController(QObject* parent = nullptr);
     ~SkinWeightController() override;
+
+    /// Positions to pick/brush against: the SOFTWARE-SKINNED vertices when a
+    /// pose is active, else the bind pose. Same owner order as
+    /// SkinEvaluate::extract, so indices match m_data.weights.
+    const std::vector<float>& pickPositions() const;
 
     /// Screen -> mesh-LOCAL hit against THIS controller's own session
     /// geometry (m_data.positions/indices).
@@ -184,6 +194,8 @@ private:
     std::vector<std::vector<int>> m_adjacency;
     bool m_haveAdjacency = false;
     std::vector<QString> m_lockedBones;  ///< by NAME: survives skeleton rebinds
+    /// Scratch buffer for pickPositions(); mutable so picking stays const.
+    mutable std::vector<float> m_pickPositions;
 
     bool m_strokeActive = false;
     bool m_strokeDirty = false;

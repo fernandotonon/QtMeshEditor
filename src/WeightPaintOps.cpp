@@ -145,6 +145,75 @@ void writeWeightHoldingTarget(SkinWeights::VertexWeights& vw,
     }
 }
 
+/// Influence cap that never drops or rescales a LOCKED bone.
+///
+/// SkinWeightsPost::pruneAndRenormalize is shared with the auto-skinners and has
+/// no concept of locks: it sorts by weight, keeps the top K and renormalises
+/// everything. A locked bone holding a small weight on a row that exceeds the
+/// cap is therefore evicted — or has its value rescaled — by a dab that never
+/// touched it, breaking the lock contract. (Verified: a locked bone at 0.01 on a
+/// 5-influence row vanished under the default 4-influence cap.)
+///
+/// Locked entries are kept unconditionally and at their EXACT value; the cap is
+/// then applied to the unlocked remainder, which is renormalised into whatever
+/// headroom the locked bones leave.
+void capInfluencesRespectingLocks(std::vector<SkinWeights::VertexWeights>& weights,
+                                  int maxInfluences,
+                                  const std::vector<std::uint8_t>& lockedBones)
+{
+    if (lockedBones.empty()) {
+        SkinWeightsPost::pruneAndRenormalize(weights, maxInfluences);
+        return;
+    }
+
+    const int maxK = std::clamp(maxInfluences, 1, 8);
+    for (auto& vw : weights) {
+        if (vw.count <= 0) continue;
+
+        // Split the row; locked entries are immovable.
+        SkinWeights::VertexWeights out{};
+        double lockedSum = 0.0;
+        for (int k = 0; k < vw.count && out.count < 8; ++k) {
+            if (!boneLocked(vw.boneIndices[k], lockedBones)) continue;
+            out.boneIndices[out.count] = vw.boneIndices[k];
+            out.weights[out.count] = vw.weights[k];
+            ++out.count;
+            lockedSum += vw.weights[k];
+        }
+
+        // Unlocked entries, largest first, up to the remaining slots.
+        std::vector<std::pair<int, double>> unlocked;
+        for (int k = 0; k < vw.count; ++k)
+            if (!boneLocked(vw.boneIndices[k], lockedBones))
+                unlocked.emplace_back(vw.boneIndices[k], vw.weights[k]);
+        std::sort(unlocked.begin(), unlocked.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+
+        const double headroom = std::max(0.0, 1.0 - lockedSum);
+        double freeSum = 0.0;
+        const int freeSlots = std::min(maxK, 8 - out.count);
+        int taken = 0;
+        for (const auto& [bone, w] : unlocked) {
+            if (taken >= freeSlots) break;
+            if (w < 0.01 && taken > 0) break;      // sorted → the rest are smaller
+            out.boneIndices[out.count] = bone;
+            out.weights[out.count] = w;
+            ++out.count;
+            freeSum += w;
+            ++taken;
+        }
+
+        // Scale the unlocked survivors into the locked bones' leftover headroom.
+        if (freeSum > 1e-12 && headroom > 0.0) {
+            const double scale = headroom / freeSum;
+            for (int k = 0; k < out.count; ++k)
+                if (!boneLocked(out.boneIndices[k], lockedBones))
+                    out.weights[k] *= scale;
+        }
+        vw = out;
+    }
+}
+
 double falloffWeight(double distance, double radius, double falloff, BrushShape shape)
 {
     if (radius <= 0.0) return 0.0;
@@ -290,7 +359,7 @@ int applyDab(const float* positions, int vertexCount,
     }
 
     if (modified > 0 && options.maxInfluences > 0)
-        SkinWeightsPost::pruneAndRenormalize(weights, options.maxInfluences);
+        capInfluencesRespectingLocks(weights, options.maxInfluences, lockedBones);
     return modified;
 }
 
