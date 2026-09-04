@@ -2000,7 +2000,11 @@ Rectangle {
                     id: mgT2Preset
                     width: 190
                     enabled: !MeshGenController.busy
-                    model: ["Fast (512)", "Balanced (default)", "High (1536, more VRAM)"]
+                    // Balanced/High run the 1024/1536 cascade pipelines and
+                    // need the "TRELLIS.2 cascade" weights from AI Model
+                    // Settings; without them the generation falls back to 512
+                    // (thin structures can vanish) and says so in the status.
+                    model: ["Fast (512)", "Balanced (1024 cascade, default)", "High (1536 cascade, more VRAM)"]
                     currentIndex: 1
                     readonly property var presetValues: ["fast", "balanced", "high"]
                     property string presetValue: presetValues[currentIndex]
