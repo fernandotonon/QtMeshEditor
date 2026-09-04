@@ -146,10 +146,10 @@ Shader "Hidden/QTM/VAT" {
                 OUT.pos = UnityObjectToClipPos(float4(modelVertex, 1.0));
 
                 float3 n = lerp(n_curr, n_next, blend) * 2.0 - 1.0;
-                // Negate to compensate for QtMeshEditor's FBX → Ogre
-                // import path; remove if your bake's normals look
-                // correct without it.
-                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, -n));
+                // The bake and the exported mesh share the same source space —
+                // the decoded normal is used as-is (pre-3.37.1 bakes paired with
+                // the old mirrored export: re-bake, or negate n locally).
+                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));
                 OUT.worldPos = mul(unity_ObjectToWorld, float4(modelVertex, 1.0)).xyz;
                 OUT.uv = IN.uv;
                 return OUT;

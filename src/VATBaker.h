@@ -92,6 +92,7 @@ public:
         /// vertex-buffer order, then passes it here so the bake's PNG
         /// columns land in the glTF's vertex order.
         std::vector<uint32_t> vertexPermutation;
+
     };
 
     struct BakeResult {

@@ -120,6 +120,7 @@
 #include <memory>
 
 #include <set>
+#include <map>
 #include <cstdio>
 
 #ifdef ENABLE_PS1_RIP
@@ -8373,69 +8374,50 @@ struct BakeVertex {
 // order, matching the order `VATBaker::collectPostSkinPositions` walks
 // (submesh-index, skip-shared-after-first). Returned vector has length
 // equal to the bake's `vertexCount`.
-std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
+// One submesh's vertex extraction (positions + optional normals/UV0),
+// appended to `out`. Split out of readOgreBindVertices to keep each piece
+// within cognitive-complexity bounds.
+static void appendSubmeshBindVertices(const Ogre::VertexData* vData,
+                                      std::vector<BakeVertex>& out)
 {
-    std::vector<BakeVertex> out;
-    if (!entity) return out;
-    Ogre::MeshPtr mesh = entity->getMesh();
-    if (!mesh) return out;
+    const auto* posElem = vData->vertexDeclaration->findElementBySemantic(
+        Ogre::VES_POSITION);
+    if (!posElem) return;
 
-    bool sharedAppended = false;
-    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(si);
-        if (!sub) continue;
-        if (sub->useSharedVertices && sharedAppended) continue;
+    const auto* normElem = vData->vertexDeclaration->findElementBySemantic(
+        Ogre::VES_NORMAL);
+    // UV0 specifically (semantic + index 0). Subsequent UV sets are
+    // ignored — Assimp's glTF export writes UV0 to TEXCOORD_0 in order.
+    const auto* uvElem = vData->vertexDeclaration->findElementBySemantic(
+        Ogre::VES_TEXTURE_COORDINATES, 0);
 
-        const Ogre::VertexData* vData = sub->useSharedVertices
-            ? mesh->sharedVertexData
-            : sub->vertexData;
-        if (!vData) continue;
-
-        const auto* posElem = vData->vertexDeclaration->findElementBySemantic(
-            Ogre::VES_POSITION);
-        if (!posElem) continue;
-
-        const auto* normElem = vData->vertexDeclaration->findElementBySemantic(
-            Ogre::VES_NORMAL);
-        // UV0 specifically (semantic + index 0). Subsequent UV sets are
-        // ignored — Assimp's glTF export writes UV0 to TEXCOORD_0 in order.
-        const auto* uvElem = vData->vertexDeclaration->findElementBySemantic(
-            Ogre::VES_TEXTURE_COORDINATES, 0);
-
-        // Each VES_* may live in a different bound vertex buffer; lock all
-        // sources that this submesh touches.
-        auto lockSource = [&](unsigned short src) -> unsigned char* {
-            auto vbuf = vData->vertexBufferBinding->getBuffer(src);
-            if (!vbuf) return nullptr;
-            return static_cast<unsigned char*>(
-                vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        };
-        auto unlockSource = [&](unsigned short src) {
-            auto vbuf = vData->vertexBufferBinding->getBuffer(src);
-            if (vbuf) vbuf->unlock();
-        };
-
-        unsigned char* posBytes  = lockSource(posElem->getSource());
-        unsigned char* normBytes = normElem
-            ? (normElem->getSource() == posElem->getSource()
-                   ? posBytes : lockSource(normElem->getSource()))
+    // Each VES_* may live in a different bound vertex buffer: lock every
+    // distinct source once, unlock once.
+    std::map<unsigned short, unsigned char*> locked;
+    auto bytesFor = [&](unsigned short src) -> unsigned char* {
+        auto it = locked.find(src);
+        if (it != locked.end()) return it->second;
+        auto vbuf = vData->vertexBufferBinding->getBuffer(src);
+        unsigned char* b = vbuf
+            ? static_cast<unsigned char*>(
+                  vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY))
             : nullptr;
-        unsigned char* uvBytes   = uvElem
-            ? (uvElem->getSource() == posElem->getSource()
-                   ? posBytes
-                   : (normElem && uvElem->getSource() == normElem->getSource()
-                          ? normBytes : lockSource(uvElem->getSource())))
-            : nullptr;
+        locked[src] = b;
+        return b;
+    };
+    auto strideFor = [&](unsigned short src) -> size_t {
+        auto vbuf = vData->vertexBufferBinding->getBuffer(src);
+        return vbuf ? vbuf->getVertexSize() : 0;
+    };
 
-        const size_t posStride = vData->vertexBufferBinding->getBuffer(
-            posElem->getSource())->getVertexSize();
-        const size_t normStride = normElem
-            ? vData->vertexBufferBinding->getBuffer(
-                  normElem->getSource())->getVertexSize() : 0;
-        const size_t uvStride = uvElem
-            ? vData->vertexBufferBinding->getBuffer(
-                  uvElem->getSource())->getVertexSize() : 0;
+    unsigned char* posBytes  = bytesFor(posElem->getSource());
+    unsigned char* normBytes = normElem ? bytesFor(normElem->getSource()) : nullptr;
+    unsigned char* uvBytes   = uvElem   ? bytesFor(uvElem->getSource())   : nullptr;
+    const size_t posStride  = strideFor(posElem->getSource());
+    const size_t normStride = normElem ? strideFor(normElem->getSource()) : 0;
+    const size_t uvStride   = uvElem   ? strideFor(uvElem->getSource())   : 0;
 
+    if (posBytes) {
         for (size_t j = 0; j < vData->vertexCount; ++j) {
             BakeVertex bv{};
             Ogre::Real* pPos = nullptr;
@@ -8456,19 +8438,34 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
             }
             out.push_back(bv);
         }
+    }
 
-        // Unlock in matching order — same buffer must only be unlocked once.
-        std::set<unsigned short> unlocked;
-        unlocked.insert(posElem->getSource());
-        unlockSource(posElem->getSource());
-        if (normElem && !unlocked.count(normElem->getSource())) {
-            unlocked.insert(normElem->getSource());
-            unlockSource(normElem->getSource());
-        }
-        if (uvElem && !unlocked.count(uvElem->getSource())) {
-            unlockSource(uvElem->getSource());
-        }
+    for (const auto& kv : locked) {
+        auto vbuf = vData->vertexBufferBinding->getBuffer(kv.first);
+        if (vbuf && kv.second) vbuf->unlock();
+    }
+}
+
+std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
+{
+    std::vector<BakeVertex> out;
+    if (!entity) return out;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return out;
+
+    bool sharedAppended = false;
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub) continue;
+        if (sub->useSharedVertices && sharedAppended) continue;
+
+        const Ogre::VertexData* vData = sub->useSharedVertices
+            ? mesh->sharedVertexData
+            : sub->vertexData;
+        if (!vData) continue;
         if (sub->useSharedVertices) sharedAppended = true;
+
+        appendSubmeshBindVertices(vData, out);
     }
     return out;
 }

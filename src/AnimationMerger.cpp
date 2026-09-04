@@ -4299,13 +4299,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     // per role, so mis-named chest-height "legs" fed it garbage). The mocap
     // path (cmuLibraryHandedness=false) keeps its historical mapping.
     if (cmuLibraryHandedness) {
-        // The side decision is deliberately FACING-BLIND world-X — exactly
-        // the rule the old compensator applied to every validated result:
-        // canonical-LEFT roles must end on the bones at world +X, regardless
-        // of which way the mesh faces (facing is handled by the clip-level
-        // yaw180, never by the side mapping; a facing-aware trueLeft variant
-        // was tried here and INVERTED backward-facing rigs — user-reported).
-        const Ogre::Vector3 trueLeft(1, 0, 0);
+        // FACING-AWARE side decision (#977 recalibration): the library's
+        // canonical-LEFT channels must end on the target's ANATOMICAL RIGHT
+        // bones — the bones at MINUS trueLeft (up × fwd, fwd from the
+        // caller's mesh-derived yaw180). That is the empirically validated
+        // mapping on both rig classes, re-derived after the import mirror
+        // was removed (#977): with mirrored imports the equivalent rule
+        // happened to be facing-blind world-X; unmirrored rigs make the
+        // facing term real again (a +Z-facing Mixamo and a -Z-facing UniRig
+        // rig both take one swap under this rule, and the +X-side arm keeps
+        // carrying the same clip channel as every validated render).
+        const Ogre::Vector3 up(0, 1, 0);
+        const Ogre::Vector3 fwd(0, 0, yaw180 ? -1.0f : 1.0f);
+        const Ogre::Vector3 trueLeft = up.crossProduct(fwd);
 
         // BIND pose positions — the current pose may be mid-animation
         // (crossed limbs would flip the vote). Same reset the old
@@ -4383,11 +4389,12 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
             side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
         }
-        // Swap when the named-left roles sit at NEGATIVE world X (they must
-        // end at +X). Mixamo measures -2.36 → one swap (identical to the old
-        // compensator); the -Z-facing UniRig orc measures -0.44 → swap; a
-        // +X-named rig needs none.
-        constexpr double kExpectedSideSign = +1.0;
+        // Swap when the named-left pairs sit at PLUS trueLeft — canonical-
+        // left must end at MINUS trueLeft (anatomical right). Measured after
+        // the de-mirror: Mixamo scores +2.36 (fwd +Z) → swap; the -Z-facing
+        // UniRig orc scores +0.44 against its trueLeft → swap; a rig whose
+        // names mirror its anatomy scores negative → none.
+        constexpr double kExpectedSideSign = -1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
             fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
                     side, kExpectedSideSign);
@@ -4438,7 +4445,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 if (rc.seg < 0) continue;
                 const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
                                       .dotProduct(trueLeft);
-                const int sideIdx = lat >= 0.0f ? 1 : 0;  // left roles at +X
+                const int sideIdx = lat < 0.0f ? 1 : 0;   // left roles at -trueLeft
                 if (armTaken[sideIdx]) continue;
                 boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
                 ++rescued;

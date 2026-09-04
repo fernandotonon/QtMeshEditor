@@ -1944,43 +1944,43 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
     // is ABOUT the check, so re-enable real detection.
     qunsetenv("QTMESH_T2M_SIDE_SWAP");
 
-    // ONE composed permutation (replaces the old compensateCanonicalHandedness
-    // on the library path): canonical-LEFT roles must end on the bones at
-    // world +X — the facing-blind rule of the old compensator, whose output
-    // every library clip was validated against. A rig with named-left at -X
-    // therefore gets exactly ONE swap.
-    Ogre::Entity* norm = build("sidenorm", -1.0f);
-    ASSERT_NE(norm, nullptr);
+    // ONE composed permutation: the library's canonical-LEFT channels land
+    // on the ANATOMICAL RIGHT bones (-trueLeft, facing-aware) — recalibrated
+    // in #977 after the import mirror was removed. A rig with anatomically
+    // correct names facing +Z (named-left at +X = +trueLeft) therefore
+    // takes exactly ONE swap...
+    Ogre::Entity* anat = build("sideanat", +1.0f);
+    ASSERT_NE(anat, nullptr);
     const auto quats = identityClip(3);
-    const auto resNorm = AnimationMerger::applyMotionClip(
-        norm->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
+    const auto resAnat = AnimationMerger::applyMotionClip(
+        anat->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
-    ASSERT_TRUE(resNorm.ok) << resNorm.error.toStdString();
-    EXPECT_TRUE(resNorm.sideSwapApplied)
-        << "Mixamo-convention naming takes the single composed swap";
+    ASSERT_TRUE(resAnat.ok) << resAnat.error.toStdString();
+    EXPECT_TRUE(resAnat.sideSwapApplied)
+        << "anatomically-named +Z-facing rig takes the single composed swap";
 
-    // Anatomically-named rig (UniRig): named-left already at +trueLeft — the
-    // roles land correctly with NO permutation.
-    Ogre::Entity* mir = build("sidemir", +1.0f);
+    // ...while a mirror-named rig (named-left at -X) already has its
+    // named-left on the anatomical right — no permutation.
+    Ogre::Entity* mir = build("sidemir", -1.0f);
     ASSERT_NE(mir, nullptr);
     const auto resMir = AnimationMerger::applyMotionClip(
         mir->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
     ASSERT_TRUE(resMir.ok) << resMir.error.toStdString();
     EXPECT_FALSE(resMir.sideSwapApplied)
-        << "anatomically-named rig needs no permutation";
+        << "mirror-named rig needs no permutation";
 
-    // The side decision is FACING-BLIND (world-X, like the old compensator
-    // whose results the library is calibrated against): yaw180 must NOT
-    // change it. A facing-aware variant inverted backward-facing rigs.
-    const auto resMirYaw = AnimationMerger::applyMotionClip(
-        mir->getSkeleton(), "sideclip2", quats, 30, /*worldFrame=*/true,
+    // Facing-AWARE: yaw180 flips trueLeft, so the same anatomically-named
+    // rig evaluated as backward-facing has its named-left already on the
+    // anatomical right — no swap.
+    const auto resAnatYaw = AnimationMerger::applyMotionClip(
+        anat->getSkeleton(), "sideclip2", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, /*yaw180=*/true, canonRestDirs());
-    ASSERT_TRUE(resMirYaw.ok) << resMirYaw.error.toStdString();
-    EXPECT_FALSE(resMirYaw.sideSwapApplied)
-        << "the side decision is facing-blind — yaw180 must not flip it";
+    ASSERT_TRUE(resAnatYaw.ok) << resAnatYaw.error.toStdString();
+    EXPECT_FALSE(resAnatYaw.sideSwapApplied)
+        << "backward-facing flips trueLeft — no swap for this rig";
 
     auto* sm = Manager::getSingleton()->getSceneMgr();
-    sm->destroyEntity(norm);
+    sm->destroyEntity(anat);
     sm->destroyEntity(mir);
 }

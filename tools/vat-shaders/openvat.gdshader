@@ -99,10 +99,11 @@ void vertex() {
 	vec3 p = mix(p_curr, p_next, blend);
 	VERTEX = bounds_min + p * (bounds_max - bounds_min);
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
-	// Negate to compensate for the FBX → Ogre import path's left-
-	// handed conversion. Remove this if you're not seeing inverted
-	// lighting (e.g. for bakes from a different source pipeline).
-	NORMAL = -normalize(n);
+	// The bake and the exported mesh share the same source space, so
+	// the decoded normal is used as-is (bakes made before QtMeshEditor
+	// 3.37.1 paired with the old mirrored export — re-bake those, or
+	// negate n locally).
+	NORMAL = normalize(n);
 
 	uv0_pass = UV;
 }
