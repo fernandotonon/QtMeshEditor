@@ -107,8 +107,16 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
                          aiProcess_PopulateArmatureData | // necessary to load bone node information
                          aiProcess_OptimizeMeshes |
                          aiProcess_GlobalScale;
+    // HISTORICAL NAME, NEW MEANING (#977): this used to apply the full
+    // aiProcess_ConvertToLeftHanded (axis mirror + winding flip + V flip),
+    // which presented every imported asset MIRRORED in the editor — glTF,
+    // FBX and OBJ are right-handed like Ogre, so the mirror was never a
+    // conversion, just a defect the whole pipeline compensated around
+    // (exports, VAT shaders, retarget side conventions). Only the V flip is
+    // a real convention difference, so that is all this applies now: the
+    // viewport, the source file and every export share one space.
     if (convertToLeftHanded)
-        flags |= aiProcess_ConvertToLeftHanded;
+        flags |= aiProcess_FlipUVs;
     flags |= additionalFlags;
 
     auto pathEndsWithInsensitive = [](const std::string& p, std::string_view suf) -> bool {
@@ -152,7 +160,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
                                   aiProcess_PopulateArmatureData |
                                   aiProcess_GlobalScale;
         if (convertToLeftHanded)
-            lightFlags |= aiProcess_ConvertToLeftHanded;
+            lightFlags |= aiProcess_FlipUVs;   // V flip only — see above
         lightFlags |= additionalFlags;
         importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
         scene = importer.ReadFile(path, lightFlags);

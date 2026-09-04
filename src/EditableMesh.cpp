@@ -438,11 +438,11 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
     // so source quads survive into aiMesh::mFaces. Keep the rest of the
     // post-processing aligned with the rendering importer so vertex
     // attributes don't drift between the two views — including the
-    // ConvertToLeftHanded flip that AssimpToOgreImporter applies to
-    // every non-.x asset. Without matching that flag here, the
-    // editable mesh would end up mirrored (X flipped) relative to the
-    // rendered Ogre mesh, and the vertex/edge/face overlays would draw
-    // on the wrong side of the on-screen geometry. (Chunk 4 fix.)
+    // V-flip that AssimpToOgreImporter applies to every non-.x asset
+    // (formerly the full ConvertToLeftHanded — the mirror half was
+    // removed in #977; only the UV convention difference remains).
+    // Without matching that flag here the editable mesh's UVs would
+    // drift from the rendered Ogre mesh. (Chunk 4 fix, updated #977.)
     // Tangent handling: we deliberately do NOT request
     // aiProcess_CalcTangentSpace here because that flag implicitly
     // triangulates the mesh in Assimp, defeating the whole point of
@@ -459,7 +459,7 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         aiProcess_ValidateDataStructure |
         aiProcess_LimitBoneWeights |
         aiProcess_GlobalScale;
-    if (convertToLeftHanded) flags |= aiProcess_ConvertToLeftHanded;
+    if (convertToLeftHanded) flags |= aiProcess_FlipUVs;   // see comment above
     // Pass through any caller-supplied topology flags so the n-gon
     // probe matches the rendered mesh's submesh layout (e.g.
     // aiProcess_FindDegenerates / aiProcess_SortByPType — both can

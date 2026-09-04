@@ -8378,7 +8378,6 @@ struct BakeVertex {
 // appended to `out`. Split out of readOgreBindVertices to keep each piece
 // within cognitive-complexity bounds.
 static void appendSubmeshBindVertices(const Ogre::VertexData* vData,
-                                      bool exportSpaceMirrorZ,
                                       std::vector<BakeVertex>& out)
 {
     const auto* posElem = vData->vertexDeclaration->findElementBySemantic(
@@ -8418,22 +8417,16 @@ static void appendSubmeshBindVertices(const Ogre::VertexData* vData,
     const size_t normStride = normElem ? strideFor(normElem->getSource()) : 0;
     const size_t uvStride   = uvElem   ? strideFor(uvElem->getSource())   : 0;
 
-    // EXPORT space (provenance-gated): mirror Z to match the exported glTF
-    // when the exporter applies the inverse of the import's
-    // ConvertToLeftHanded — this list feeds both the bake-column alignment
-    // against the read-back glTF and the bind sidecar consumers pair with
-    // that file.
-    const float zs = exportSpaceMirrorZ ? -1.0f : 1.0f;
     if (posBytes) {
         for (size_t j = 0; j < vData->vertexCount; ++j) {
             BakeVertex bv{};
             Ogre::Real* pPos = nullptr;
             posElem->baseVertexPointerToElement(posBytes + j * posStride, &pPos);
-            bv.position = {pPos[0], pPos[1], zs * pPos[2]};
+            bv.position = {pPos[0], pPos[1], pPos[2]};
             if (normElem && normBytes) {
                 Ogre::Real* pN = nullptr;
                 normElem->baseVertexPointerToElement(normBytes + j * normStride, &pN);
-                bv.normal = {pN[0], pN[1], zs * pN[2]};
+                bv.normal = {pN[0], pN[1], pN[2]};
                 bv.hasNormal = true;
             }
             if (uvElem && uvBytes) {
@@ -8453,8 +8446,7 @@ static void appendSubmeshBindVertices(const Ogre::VertexData* vData,
     }
 }
 
-std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity,
-                                             bool exportSpaceMirrorZ)
+std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
 {
     std::vector<BakeVertex> out;
     if (!entity) return out;
@@ -8473,7 +8465,7 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity,
         if (!vData) continue;
         if (sub->useSharedVertices) sharedAppended = true;
 
-        appendSubmeshBindVertices(vData, exportSpaceMirrorZ, out);
+        appendSubmeshBindVertices(vData, out);
     }
     return out;
 }
@@ -9200,19 +9192,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // weight splits, which Mixamo characters carry by the hundreds —
     // 17% of verts on Rumba Dancing share a quantized bind position
     // with at least one other vert.
-    // Provenance: the exported source.gltf mirrors Z only for meshes that
-    // came in through Assimp's ConvertToLeftHanded (see MeshImporterExporter)
-    // — the bake, alignment and bind sidecar must follow the same rule.
-    bool vatExportMirrorZ = false;
-    if (Ogre::MeshPtr m = entity->getMesh()) {
-        const Ogre::Any& a = m->getUserObjectBindings().getUserAny(
-            "qtme.source_convert_lh");
-        // Pointer-form any_cast: nullptr on type mismatch, no throw.
-        if (const bool* v = Ogre::any_cast<bool>(&a))
-            vatExportMirrorZ = *v;
-    }
     auto writeOgreBindSidecar = [&](Ogre::Entity* e, const QString& path) {
-        std::vector<BakeVertex> verts = readOgreBindVertices(e, vatExportMirrorZ);
+        std::vector<BakeVertex> verts = readOgreBindVertices(e);
         if (verts.empty()) return false;
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
@@ -9254,7 +9235,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // inject TEXCOORD_<channel> into the exported glTF.
     std::vector<size_t> submeshStarts;
     if (exportResult == 0) {
-        std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity, vatExportMirrorZ);
+        std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
         std::vector<BakeVertex> gltfVerts;
         if (!readGltfVertices(gltfPath, gltfVerts)) {
             err() << "Warning: failed to read back source.gltf for VAT "
@@ -9309,7 +9290,6 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // original into VATBaker::Options).
     std::vector<uint32_t> vertexPermCopy = vertexPerm;
     opts.vertexPermutation = std::move(vertexPerm);
-    opts.exportSpaceMirrorZ = vatExportMirrorZ;
 
     SentryReporter::addBreadcrumb("file.export",
         QString("Writing OpenVAT bake to %1 (anim=%2)")
