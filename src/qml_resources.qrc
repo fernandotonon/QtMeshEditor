@@ -8,6 +8,7 @@
     <file alias="TextureChannelPackerDialog.qml">../qml/TextureChannelPackerDialog.qml</file>
     <file alias="NormalMapGeneratorDialog.qml">../qml/NormalMapGeneratorDialog.qml</file>
     <file alias="TextureAtlasDialog.qml">../qml/TextureAtlasDialog.qml</file>
+    <file alias="PaintBakeDialog.qml">../qml/PaintBakeDialog.qml</file>
     <file alias="ApplyAtlasDialog.qml">../qml/ApplyAtlasDialog.qml</file>
     <file alias="UvUnwrapDialog.qml">../qml/UvUnwrapDialog.qml</file>
     <file alias="QuadRetopoDialog.qml">../qml/QuadRetopoDialog.qml</file>

@@ -5285,7 +5285,37 @@ Rectangle {
                         anchors.fill: parent
                         enabled: texPaintCol.hasSession
                         cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Bake this channel into the model's own "
+                            + "texture slot (stays in the editor)."
+                        hoverEnabled: true
                         onClicked: TexturePaintController.bakeChannel(texPaintCol.activeChannel)
+                    }
+                }
+                // Slice I (#552): bake ALL painted channels out to disk as an
+                // engine texture set. Distinct from the per-channel Bake above,
+                // which rebinds inside the editor rather than exporting.
+                Rectangle {
+                    width: 92; height: 22; radius: 4
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent; text: "Bake set…"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: texPaintCol.hasSession
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Export every painted channel as a PBR "
+                            + "texture set for Unity / Unreal / Godot / glTF."
+                        onClicked: root.openPaintBakeDialog()
                     }
                 }
             }
@@ -9482,6 +9512,24 @@ Rectangle {
             textureAtlasLoader.active = true
         } else if (textureAtlasLoader.item) {
             textureAtlasLoader.item.open()
+        }
+    }
+
+    // Paint v2 Slice I (#552): bake painted layers to engine deliverables.
+    // Same lazy-load pattern as the dialogs above.
+    Loader {
+        id: paintBakeLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/PaintBakeDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openPaintBakeDialog() {
+        if (!paintBakeLoader.active) {
+            paintBakeLoader.active = true
+        } else if (paintBakeLoader.item) {
+            paintBakeLoader.item.open()
         }
     }
 
