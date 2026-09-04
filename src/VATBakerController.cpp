@@ -168,16 +168,12 @@ bool VATBakerController::bake(const QString& animationName,
 
     // Provenance-gated export space (same rule as cmdVat): the bake pairs
     // with a glTF export that mirrors Z only for Assimp-imported meshes.
-    {
-        Ogre::MeshPtr m = entity->getMesh();
-        const Ogre::Any& a = m ? m->getUserObjectBindings().getUserAny(
-                                     "qtme.source_convert_lh")
-                               : Ogre::Any();
-        if (a.has_value()) {
-            try {
-                opts.exportSpaceMirrorZ = Ogre::any_cast<bool>(a);
-            } catch (...) {}
-        }
+    if (Ogre::MeshPtr m = entity->getMesh()) {
+        const Ogre::Any& a = m->getUserObjectBindings().getUserAny(
+            "qtme.source_convert_lh");
+        // Pointer-form any_cast: nullptr on type mismatch, no throw.
+        if (const bool* v = Ogre::any_cast<bool>(&a))
+            opts.exportSpaceMirrorZ = *v;
     }
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
 

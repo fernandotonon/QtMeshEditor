@@ -3822,9 +3822,10 @@ static bool meshImportedLeftHanded(const Ogre::Entity* e)
     if (!mesh) return false;
     const Ogre::Any& a =
         mesh->getUserObjectBindings().getUserAny("qtme.source_convert_lh");
-    if (a.has_value()) {
-        try { return Ogre::any_cast<bool>(a); } catch (...) {}
-    }
+    // Pointer-form any_cast: returns nullptr on a type mismatch instead of
+    // throwing, so no exception machinery is involved.
+    if (const bool* v = Ogre::any_cast<bool>(&a))
+        return *v;
     return false;
 }
 
