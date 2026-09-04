@@ -1360,6 +1360,12 @@ BakeResult bake(const std::vector<float>& targetPositions,
                             float nts[3] = {dot3(Ns, T), dot3(Ns, B),
                                             dot3(Ns, Nt)};
                             normalize3(nts);
+                            // A detail normal can never point INTO the
+                            // surface: negative tangent-space z texels (a
+                            // few % on dense noisy sources) render as dark
+                            // glints under lighting. Clamp and renormalize.
+                            if (nts[2] < 0.05f) nts[2] = 0.05f;
+                            normalize3(nts);
                             for (int k = 0; k < 3; ++k)
                                 accN[k] += nts[k];
                         }
@@ -1727,6 +1733,10 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                 }
                 float nts[3] = {dot3(Ns, T), dot3(Ns, B), dot3(Ns, Nt)};
                 normalize3(nts);
+                // Detail normals never point INTO the surface — clamp the
+                // few inverted-z texels dense noisy sources produce (they
+                // render as dark glints) and renormalize.
+                if (nts[2] < 0.05f) { nts[2] = 0.05f; normalize3(nts); }
                 uchar* np = normal.scanLine(y) + static_cast<size_t>(x) * 3;
                 np[0] = toByte(nts[0] * 0.5f + 0.5f);
                 np[1] = toByte(nts[1] * 0.5f + 0.5f);

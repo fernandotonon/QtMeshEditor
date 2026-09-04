@@ -258,6 +258,19 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
             file(QStringLiteral("trellis2"), QStringLiteral("tex_dec.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture decoder")),
         }};
     out << ModelSpec{
+        QStringLiteral("trellis2-cascade-gguf"), tr("TRELLIS.2 cascade (1024/1536)"), tr("Image to 3D"),
+        tr("Optional high-resolution cascade weights for TRELLIS.2's Balanced and "
+           "High presets (1024/1536 pipelines). Without them those presets fall "
+           "back to the 512 pipeline, where thin structures (arms, straps) can "
+           "vanish at the sparse-structure stage. Requires the base TRELLIS.2 "
+           "weights and the trellis.cpp runtime."),
+        QStringLiteral("~5.2 GB"), QString(),
+        true,
+        {
+            file(QStringLiteral("trellis2"), QStringLiteral("shape_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 shape flow (1024 cascade)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("tex_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture flow (1024 cascade)")),
+        }};
+    out << ModelSpec{
         QStringLiteral("background-removal"), tr("Background Removal"), tr("Image to 3D"),
         tr("U2Net ONNX model used to remove backgrounds before image-to-3D generation."),
         QStringLiteral("~170 MB"), onnxAvailable ? QString() : tr("Requires an ONNX-enabled build"),

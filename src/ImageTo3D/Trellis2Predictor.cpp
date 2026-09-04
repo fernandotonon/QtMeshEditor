@@ -336,18 +336,45 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         res = 512;
     else if (presetName == QLatin1String("high"))
         res = 1536;
+    QString models2 = models;
     if (res > 512
-        && !QDir(models).exists(QStringLiteral("shape_flow_1024.gguf"))) {
-        if (!warning.isEmpty())
-            warning += QStringLiteral(" ");
-        warning += QStringLiteral(
-            "trellis.cpp models dir has no 1024-cascade weights — using the "
-            "512 pipeline.");
-        res = 512;
+        && !QDir(models2).exists(QStringLiteral("shape_flow_1024.gguf"))) {
+        // The resolved dir (often the trellis-cli sibling with the 512 set)
+        // has no cascade weights — but the AI Model Settings download
+        // location may: prefer it when it holds the FULL set including the
+        // cascade, so downloading "TRELLIS.2 cascade" in Settings lights up
+        // the Balanced/High presets without touching the cli install.
+        const QString catalogDir =
+            QDir(QStandardPaths::writableLocation(
+                     QStandardPaths::AppDataLocation))
+                .filePath(QStringLiteral("ai_models/trellis2"));
+        const QDir cd(catalogDir);
+        const bool catalogHasAll =
+            cd.exists(QStringLiteral("shape_flow_1024.gguf"))
+            && cd.exists(QStringLiteral("tex_flow_1024.gguf"))
+            && cd.exists(QStringLiteral("ss_flow.gguf"))
+            && cd.exists(QStringLiteral("shape_flow_512.gguf"))
+            && cd.exists(QStringLiteral("tex_flow_512.gguf"))
+            && cd.exists(QStringLiteral("shape_dec.gguf"))
+            && cd.exists(QStringLiteral("tex_dec.gguf"))
+            && cd.exists(QStringLiteral("ss_dec.gguf"))
+            && cd.exists(QStringLiteral("dinov3.gguf"));
+        if (catalogHasAll) {
+            models2 = catalogDir;
+        } else {
+            if (!warning.isEmpty())
+                warning += QStringLiteral(" ");
+            warning += QStringLiteral(
+                "the '%1' preset needs the 1024-cascade weights, which are "
+                "not installed — using the 512 pipeline (thin structures may "
+                "be lost). Download 'TRELLIS.2 cascade' in AI Model Settings "
+                "to enable it.").arg(presetName);
+            res = 512;
+        }
     }
     QStringList args{QStringLiteral("--image"),     inputPng,
                      QStringLiteral("--dump-post"), outDump,
-                     QStringLiteral("--models"),    models,
+                     QStringLiteral("--models"),    models2,
                      QStringLiteral("--res"),       QString::number(res),
                      QStringLiteral("--seed"),      QString::number(opts.seed)};
     QProcess proc;
