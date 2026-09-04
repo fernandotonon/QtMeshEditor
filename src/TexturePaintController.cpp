@@ -1,4 +1,5 @@
 #include "TexturePaintController.h"
+#include "PaintBakeTargets.h"
 #include "BrushPresetLibrary.h"
 
 #include "AppSettingsKeys.h"
@@ -5010,6 +5011,248 @@ bool TexturePaintController::bakeChannel(int channel)
     const std::string baseName = QFileInfo(outFile).fileName().toStdString();
     bindBakedChannelTexture(entity, slot, baseName, ch);
     return true;
+}
+
+// --- Slice I (#552): bake-up to engine deliverables ----------------------
+
+QStringList TexturePaintController::bakeTargetIds() const
+{
+    return PaintBakeTargets::targetIds();
+}
+
+QString TexturePaintController::bakeTargetLabel(const QString& targetId) const
+{
+    PaintBakeTargets::Target t{};
+    if (!PaintBakeTargets::targetFromId(targetId, t)) return {};
+    return QString::fromLatin1(PaintBakeTargets::targetLabel(t));
+}
+
+/// The layer stack for `ch`, honouring the live-vs-stashed split.
+///
+/// The ACTIVE channel's stack lives in m_layerStack; its m_channelSessions copy
+/// is deliberately stale until the next channel switch (see stashChannelSession).
+/// Reading the map blindly would silently bake the pre-edit state of whatever
+/// channel happens to be open — the single most likely way this bake goes wrong.
+const PaintLayerStack* TexturePaintController::stackForChannel(
+    PaintChannelNS::Channel ch) const
+{
+    if (ch == m_activeChannel && m_layerStack.layerCount() > 0)
+        return &m_layerStack;
+    const auto it = m_channelSessions.constFind(static_cast<int>(ch));
+    if (it != m_channelSessions.constEnd() && it->initialized)
+        return &it->layerStack;
+    return nullptr;
+}
+
+/// Composite `ch`, optionally forcing hidden layers in.
+///
+/// PaintLayerStack::compositeTo hardcodes `solo ? i == solo : visible`, so
+/// "include hidden layers" cannot be expressed through it. Rather than add an
+/// option to the live compositing path — which is on the paint hot path — this
+/// snapshots the stack, forces every layer visible, composites, and restores.
+QImage TexturePaintController::compositeChannelForBake(PaintChannelNS::Channel ch,
+                                                       bool includeHidden)
+{
+    const PaintLayerStack* src = stackForChannel(ch);
+    if (!src || src->empty()) return {};
+
+    if (!includeHidden)
+        return compositeChannelToImage(*src);
+
+    // Mutate a COPY: the live stack must not be disturbed by a bake.
+    PaintLayerStack tmp = *src;
+    tmp.clearSolo();
+    for (int i = 0; i < tmp.layerCount(); ++i)
+        tmp.setVisible(i, true);
+    return compositeChannelToImage(tmp);
+}
+
+QStringList TexturePaintController::paintedChannelIds() const
+{
+    QStringList out;
+    for (int i = 0; i < PaintChannelNS::kTexturePaintChannelCount; ++i) {
+        const auto ch = static_cast<PaintChannelNS::Channel>(i);
+        // Height shares the Normal session and has no data of its own (#547).
+        if (ch == PaintChannelNS::Channel::Height) continue;
+        const PaintLayerStack* st = stackForChannel(ch);
+        if (st && !st->empty())
+            out << QString::fromLatin1(PaintChannelNS::id(ch));
+    }
+    return out;
+}
+
+/// Gather every painted channel into the bake input struct.
+PaintBakeTargets::ChannelImages TexturePaintController::gatherBakeChannels(
+    bool includeHidden)
+{
+    PaintBakeTargets::ChannelImages ci;
+    ci.baseColor = compositeChannelForBake(PaintChannelNS::Channel::BaseColor, includeHidden);
+    ci.normal    = compositeChannelForBake(PaintChannelNS::Channel::Normal,    includeHidden);
+    ci.roughness = compositeChannelForBake(PaintChannelNS::Channel::Roughness, includeHidden);
+    ci.metallic  = compositeChannelForBake(PaintChannelNS::Channel::Metallic,  includeHidden);
+    ci.ao        = compositeChannelForBake(PaintChannelNS::Channel::AO,        includeHidden);
+    ci.emissive  = compositeChannelForBake(PaintChannelNS::Channel::Emissive,  includeHidden);
+    return ci;
+}
+
+QString TexturePaintController::bakePbrSet(const QString& targetId,
+                                           const QString& outputDir,
+                                           int resolution,
+                                           const QString& namePrefix,
+                                           bool includeHidden,
+                                           bool writeSidecar)
+{
+    PaintBakeTargets::Target target{};
+    if (!PaintBakeTargets::targetFromId(targetId, target))
+        return tr("Unknown bake target '%1'.").arg(targetId);
+
+    if (outputDir.trimmed().isEmpty())
+        return tr("Choose an output directory first.");
+    QDir dir(outputDir);
+    if (!dir.exists() && !QDir().mkpath(outputDir))
+        return tr("Could not create output directory '%1'.").arg(outputDir);
+
+    const PaintBakeTargets::ChannelImages channels = gatherBakeChannels(includeHidden);
+    if (channels.empty())
+        return tr("Nothing painted yet — paint a channel before baking.");
+
+    PaintBakeTargets::Options opt;
+    opt.target = target;
+    opt.resolution = resolution;
+    opt.namePrefix = namePrefix.trimmed();
+
+    const PaintBakeTargets::Result res = PaintBakeTargets::build(channels, opt);
+    if (!res.ok)
+        return res.error.isEmpty() ? tr("Bake failed.") : res.error;
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.start",
+        QStringLiteral("target=%1 res=%2 textures=%3 hidden=%4")
+            .arg(targetId).arg(resolution).arg(res.textures.size())
+            .arg(includeHidden ? 1 : 0));
+
+    // Write every texture before reporting success: a partial set on disk is
+    // worse than none, because it looks complete.
+    QStringList written;
+    for (const auto& t : res.textures) {
+        const QString stem = opt.namePrefix.isEmpty()
+                                 ? t.suffix
+                                 : (opt.namePrefix + QStringLiteral("_") + t.suffix);
+        const QString path = dir.filePath(stem + QStringLiteral(".png"));
+        if (!t.image.save(path)) {
+            SentryReporter::addBreadcrumb("paint.bake.error",
+                                          QStringLiteral("write failed %1").arg(stem));
+            return tr("Could not write '%1'.").arg(path);
+        }
+        written << path;
+    }
+
+    if (!res.godotResource.isEmpty()) {
+        const QString stem = opt.namePrefix.isEmpty() ? QStringLiteral("material")
+                                                      : opt.namePrefix;
+        QFile f(dir.filePath(stem + QStringLiteral(".tres")));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(res.godotResource.toUtf8());
+        // A missing .tres is a degraded but usable bake (the PNGs are the
+        // deliverable), so this is not treated as a hard failure.
+    }
+
+    if (writeSidecar) {
+        auto* entity = activeEntity();
+        const QString meshName = entity && entity->getMesh()
+            ? QString::fromStdString(entity->getMesh()->getName()) : QString();
+        const QString json = PaintBakeTargets::sidecarJson(
+            opt, paintedChannelIds(), res.textures, meshName);
+        const QString stem = opt.namePrefix.isEmpty() ? QStringLiteral("paint_bake")
+                                                      : opt.namePrefix;
+        QFile f(dir.filePath(stem + QStringLiteral(".bake.json")));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(json.toUtf8());
+    }
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.done",
+        QStringLiteral("target=%1 wrote=%2").arg(targetId).arg(written.size()));
+    return {};
+}
+
+QString TexturePaintController::chooseBakeOutputDir()
+{
+    // DontUseNativeDialog matches the other texture-export pickers in this
+    // project (see MaterialEditorQML::chooseTextureExportPath).
+    return QFileDialog::getExistingDirectory(
+        nullptr, tr("Bake PBR set to folder"), QString(),
+        QFileDialog::ShowDirsOnly | QFileDialog::DontUseNativeDialog);
+}
+
+QString TexturePaintController::bakePreviewUrl(const QString& targetId, int index,
+                                                int previewSize)
+{
+    PaintBakeTargets::Target target{};
+    if (!PaintBakeTargets::targetFromId(targetId, target)) return {};
+
+    const PaintBakeTargets::ChannelImages channels = gatherBakeChannels(false);
+    if (channels.empty()) return {};
+
+    PaintBakeTargets::Options opt;
+    opt.target = target;
+    // Small: base64 data-URIs are ~80ms on a 2048 texture vs ~3ms small (see
+    // PaintBufferImageProvider) — previews stay thumbnails on purpose.
+    opt.resolution = std::clamp(previewSize, 32, 512);
+
+    const PaintBakeTargets::Result res = PaintBakeTargets::build(channels, opt);
+    if (!res.ok || index < 0 || index >= static_cast<int>(res.textures.size()))
+        return {};
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!res.textures[static_cast<size_t>(index)].image.save(&buf, "PNG")) return {};
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString TexturePaintController::bakeVertexLayerToTextureLayer(int resolution,
+                                                               int dilation)
+{
+    auto* entity = activeEntity();
+    if (!entity) return tr("Select a mesh first.");
+    if (m_layerStack.layerCount() <= 0)
+        return tr("Start a paint session on this channel first.");
+
+    EditableMesh mesh;
+    if (!mesh.loadFromEntity(entity))
+        return tr("Could not read the mesh geometry.");
+
+    // Match the live stack so addFromBuffer does not have to resize.
+    const int edge = resolution > 0 ? resolution
+                                    : std::max(m_layerStack.width(), 1);
+    TexturePaintBuffer scratch(edge, edge);
+
+    VertexColorBaker::Options opts;
+    opts.resolution = edge;
+    opts.dilationPixels = std::max(0, dilation);
+    // Transparent background so unrasterised texels do not paint over the
+    // layers underneath — this becomes a LAYER, not a flat texture.
+    opts.background = Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.0f);
+
+    const int painted = VertexColorBaker::bake(mesh, scratch, opts);
+    if (painted <= 0)
+        return tr("The mesh has no vertex colours to bake, or no UV0 to bake into.");
+
+    const int idx = m_layerStack.addFromBuffer(
+        scratch, tr("Vertex colour bake"), PaintLayerStack::LayerType::Generated);
+    if (idx < 0) return tr("Could not add the baked layer.");
+
+    m_layerStack.setActiveIndex(idx);
+    m_layerStack.compositeTo(m_buffer);
+    m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
+    flushDirtyToOgre();
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.vertex_layer",
+        QStringLiteral("res=%1 dilation=%2 pixels=%3").arg(edge).arg(dilation).arg(painted));
+    emit layersChanged();
+    return {};
 }
 
 QString TexturePaintController::currentSlotTextureName(const std::string& slot) const
