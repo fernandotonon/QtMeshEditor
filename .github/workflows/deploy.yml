@@ -380,7 +380,7 @@ jobs:
         Write-Host "cmake location: $((Get-Command cmake.exe).Source)"
         gcc --version
         cmake --version
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} -DENABLE_ONNX=ON
       shell: powershell
 
     - name: Build
@@ -430,6 +430,19 @@ jobs:
             Copy-Item "$mingwBin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
             Copy-Item "$mingwBin/libstdc++-6.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
             Copy-Item "$mingwBin/libwinpthread-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            # ONNX Runtime is MSVC-built: app-local deployment of the VC++
+            # runtime it links (vcruntime140*, msvcp140*) so a clean Windows
+            # without the VC redistributable can still start the process.
+            # windows-latest carries the redist copies in System32.
+            $sys32 = "$env:SystemRoot/System32"
+            foreach ($dll in @("vcruntime140.dll","vcruntime140_1.dll","msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll")) {
+              if (Test-Path "$sys32/$dll") {
+                Copy-Item "$sys32/$dll" "${{github.workspace}}/bin" -Force
+                Write-Host "Bundled $dll"
+              } else {
+                Write-Host "NOTE: $dll not found in System32"
+              }
+            }
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/zlib1__.dll" -ErrorAction SilentlyContinue
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
       shell: powershell

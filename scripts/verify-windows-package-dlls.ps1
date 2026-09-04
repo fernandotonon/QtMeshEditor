@@ -26,7 +26,10 @@ if (-not (Test-Path $BinDir)) {
 $BinDir = (Resolve-Path $BinDir).Path
 
 # Windows loader / MinGW runtimes that are expected from System32 or need not be bundled.
-$SystemDllPattern = '^(?i)(api-ms-.*|ext-ms-.*|kernel32|kernelbase|user32|gdi32|advapi32|shell32|ole32|comdlg32|ws2_32|winmm|imm32|oleaut32|setupapi|version|msvcrt|ucrtbase|vcruntime.*|dbghelp|crypt32|secur32|bcrypt|ntdll|msvcp.*|d3d.*|dxgi|opengl32|glu32|wtsapi32|userenv|netapi32|iphlpapi|shlwapi|comctl32|uxtheme|dwmapi|propsys|windowscodecs|hid|setupapi|winspool|mpr|powrprof|cfgmgr32|devobj|wintrust|imagehlp|mswsock|dnsapi|rsaenh|bcryptprimitives|profapi)\.dll$'
+# NB vcruntime*/msvcp* are NOT in this list: since ONNX Runtime (MSVC-built)
+# ships in the package, the VC++ runtime must be bundled app-local — a clean
+# Windows has no VC redistributable and the process would fail at startup.
+$SystemDllPattern = '^(?i)(api-ms-.*|ext-ms-.*|kernel32|kernelbase|user32|gdi32|advapi32|shell32|ole32|comdlg32|ws2_32|winmm|imm32|oleaut32|setupapi|version|msvcrt|ucrtbase|dbghelp|crypt32|secur32|bcrypt|ntdll|d3d.*|dxgi|opengl32|glu32|wtsapi32|userenv|netapi32|iphlpapi|shlwapi|comctl32|uxtheme|dwmapi|propsys|windowscodecs|hid|setupapi|winspool|mpr|powrprof|cfgmgr32|devobj|wintrust|imagehlp|mswsock|dnsapi|rsaenh|bcryptprimitives|profapi)\.dll$'
 
 function Test-IsSystemDll([string]$Name) {
     return $Name -match $SystemDllPattern
