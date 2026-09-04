@@ -12,8 +12,13 @@
 # Linux x64 GPU: pass -DQTMESH_ONNX_GPU=ON (auto-defaults ON when nvidia-smi is
 # found outside CI) to fetch onnxruntime-linux-x64-gpu-*.tgz. The CUDA provider
 # .so must ship next to the binary AND cuDNN 9 + CUDA 12 must be on the system.
-# Windows MinGW is intentionally NOT wired here — the official Windows archive is
-# MSVC-built and won't link under MinGW.
+# Windows (MSVC and MinGW) uses the official win-x64 archive. The DLL exports a
+# plain C ABI (x64: no stdcall decoration), so MinGW links it too — via the
+# shipped onnxruntime.lib import library, which GNU binutils reads (short-
+# import-archive format). NB the import library, NOT the DLL directly: the CI
+# link runs with -static, and GNU ld refuses raw dynamic objects in static
+# mode while import libraries are ordinary archives (the same way the Qt
+# .dll.a import libs link there).
 
 if(TARGET qtmesh_onnx)
     return()
@@ -62,7 +67,7 @@ elseif(UNIX)
         endif()
     endif()
     set(_ort_libname "libonnxruntime.so.${QTMESH_ONNX_VERSION}")
-elseif(WIN32 AND NOT MINGW)
+elseif(WIN32)
     if(QTMESH_ONNX_GPU)
         message(WARNING "QTMESH_ONNX_GPU: Windows GPU package not wired in CMake yet; using CPU ONNX Runtime")
         set(QTMESH_ONNX_GPU OFF CACHE BOOL "" FORCE)
@@ -112,10 +117,15 @@ set_target_properties(qtmesh_onnx PROPERTIES
     IMPORTED_LOCATION "${QTMESH_ONNX_RUNTIME_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "${QTMESH_ONNX_INCLUDE_DIR}")
 if(WIN32)
+    # Both toolchains use the shipped import library (see the header comment:
+    # under -static, GNU ld accepts archives but refuses raw DLLs).
     file(GLOB _ort_implib "${QTMESH_ONNX_ROOT}/lib/onnxruntime.lib")
     if(_ort_implib)
         list(GET _ort_implib 0 _ort_implib0)
         set_target_properties(qtmesh_onnx PROPERTIES IMPORTED_IMPLIB "${_ort_implib0}")
+    elseif(MINGW)
+        message(FATAL_ERROR "ENABLE_ONNX: onnxruntime.lib missing from the win-x64 "
+                            "archive — MinGW needs the import library to link.")
     endif()
 endif()
 

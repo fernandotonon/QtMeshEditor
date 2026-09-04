@@ -380,7 +380,7 @@ jobs:
         Write-Host "cmake location: $((Get-Command cmake.exe).Source)"
         gcc --version
         cmake --version
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} -DENABLE_ONNX=ON
       shell: powershell
 
     - name: Build
