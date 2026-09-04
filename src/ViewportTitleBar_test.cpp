@@ -150,3 +150,25 @@ TEST_F(ViewportTitleBarTest, EmptyTooltipFallsBackToActionText)
     ASSERT_NE(bar.viewCubeButton(), nullptr);
     EXPECT_EQ(bar.viewCubeButton()->toolTip(), QStringLiteral("View Cube"));
 }
+
+TEST_F(ViewportTitleBarTest, LightsToggleButtonBindsToAction)
+{
+    // The lights-overlay toggle lives in the viewport title strip like
+    // Grid/Normals/Info — toggling the button drives the action and the
+    // action's state reflects back onto the button.
+    QDockWidget dock;
+    QAction lights(QStringLiteral("Show Light Icons"), nullptr);
+    lights.setCheckable(true);
+    lights.setChecked(true);
+    ViewportTitleBar bar(&dock, nullptr, nullptr, nullptr, nullptr, &lights);
+    ASSERT_NE(bar.lightsButton(), nullptr);
+    EXPECT_TRUE(bar.lightsButton()->isChecked());
+    bar.lightsButton()->click();
+    EXPECT_FALSE(lights.isChecked());
+    lights.setChecked(true);
+    EXPECT_TRUE(bar.lightsButton()->isChecked());
+
+    // Omitting the action (old ctor shape) creates no button.
+    ViewportTitleBar bare(&dock, nullptr, nullptr, nullptr, nullptr);
+    EXPECT_EQ(bare.lightsButton(), nullptr);
+}

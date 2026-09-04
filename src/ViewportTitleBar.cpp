@@ -88,6 +88,7 @@ ViewportTitleBar::ViewportTitleBar(QDockWidget* dock,
                                    QAction* normalsAction,
                                    QAction* meshInfoAction,
                                    QAction* viewCubeAction,
+                                   QAction* lightsAction,
                                    QWidget* parent)
     : QWidget(parent ? parent : dock)
     , m_dock(dock)
@@ -123,10 +124,12 @@ ViewportTitleBar::ViewportTitleBar(QDockWidget* dock,
     m_normalsButton  = makeActionButton(normalsAction,  QStringLiteral("N"));
     m_meshInfoButton = makeActionButton(meshInfoAction, QStringLiteral("I"));
     m_viewCubeButton = makeActionButton(viewCubeAction, QStringLiteral("C"));
+    m_lightsButton   = makeActionButton(lightsAction,   QStringLiteral("L"));
     if (m_gridButton)     layout->addWidget(m_gridButton);
     if (m_normalsButton)  layout->addWidget(m_normalsButton);
     if (m_meshInfoButton) layout->addWidget(m_meshInfoButton);
     if (m_viewCubeButton) layout->addWidget(m_viewCubeButton);
+    if (m_lightsButton)   layout->addWidget(m_lightsButton);
 
     if (m_dock) {
         // Re-implement the float/close buttons that `setTitleBarWidget`
