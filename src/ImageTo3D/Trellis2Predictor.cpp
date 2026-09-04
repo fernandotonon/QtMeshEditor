@@ -127,6 +127,18 @@ QString Trellis2Predictor::trellisCliModelsDir()
             dir = QDir(QFileInfo(cli).absolutePath())
                       .filePath(QStringLiteral("models"));
     }
+    if (dir.isEmpty() || !QDir(dir).exists()) {
+        // AI Model Settings download location (AIModelCatalog "trellis2-gguf"):
+        // models fetched from the Settings dialog land here, so a user who
+        // pre-downloaded them only has to install/point at the trellis-cli
+        // binary.
+        const QString catalogDir =
+            QDir(QStandardPaths::writableLocation(
+                     QStandardPaths::AppDataLocation))
+                .filePath(QStringLiteral("ai_models/trellis2"));
+        if (QDir(catalogDir).exists())
+            dir = catalogDir;
+    }
     return (!dir.isEmpty() && QDir(dir).exists()) ? dir : QString();
 }
 
