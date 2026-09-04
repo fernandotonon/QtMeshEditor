@@ -117,6 +117,14 @@ set_target_properties(qtmesh_onnx PROPERTIES
     IMPORTED_LOCATION "${QTMESH_ONNX_RUNTIME_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "${QTMESH_ONNX_INCLUDE_DIR}")
 if(WIN32)
+    if(MINGW)
+        # MinGW-w64's sal.h lags the newer MSVC source annotations ORT's
+        # header uses (_Frees_ptr_opt_ & co) — force-include a shim that
+        # no-op defines only what the real sal.h did not provide.
+        set_property(TARGET qtmesh_onnx APPEND PROPERTY
+            INTERFACE_COMPILE_OPTIONS
+            "SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/onnx_mingw_sal_shim.h")
+    endif()
     # Both toolchains use the shipped import library (see the header comment:
     # under -static, GNU ld accepts archives but refuses raw DLLs).
     file(GLOB _ort_implib "${QTMESH_ONNX_ROOT}/lib/onnxruntime.lib")
