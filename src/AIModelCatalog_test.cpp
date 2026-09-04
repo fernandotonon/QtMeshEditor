@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <QDir>
 #include <QStandardPaths>
+#include <QSettings>
+#include <QVariant>
 #include "AIModelCatalog.h"
 #include "ImageTo3D/Trellis2Predictor.h"
 
@@ -36,9 +38,27 @@ TEST(AIModelCatalogTest, PredictorFindsCatalogDownloadedTrellis2Models)
 {
     // With no explicit models dir and no trellis-cli sibling dir, the
     // predictor must fall back to the AI Model Settings download location.
-    qputenv("QTMESH_TRELLIS2_CLI", "/nonexistent/trellis-cli-catalog-ut");
-    qunsetenv("QTMESH_TRELLIS2_CLI_MODELS");
-    QStandardPaths::setTestModeEnabled(true);
+    // Scoped isolation of every source trellisCliModelsDir() reads: the env
+    // vars, the QSettings key (a developer machine may point it at a real
+    // install), and QStandardPaths test mode.
+    struct Scope {
+        QVariant savedSetting;
+        Scope() {
+            QSettings st;
+            savedSetting = st.value(QStringLiteral("ai/trellis2CliModels"));
+            st.remove(QStringLiteral("ai/trellis2CliModels"));
+            qputenv("QTMESH_TRELLIS2_CLI", "/nonexistent/trellis-cli-catalog-ut");
+            qunsetenv("QTMESH_TRELLIS2_CLI_MODELS");
+            QStandardPaths::setTestModeEnabled(true);
+        }
+        ~Scope() {
+            QStandardPaths::setTestModeEnabled(false);
+            qunsetenv("QTMESH_TRELLIS2_CLI");
+            QSettings st;
+            if (savedSetting.isValid())
+                st.setValue(QStringLiteral("ai/trellis2CliModels"), savedSetting);
+        }
+    } scope;
     const QString catalogDir =
         QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
             .filePath(QStringLiteral("ai_models/trellis2"));
@@ -48,6 +68,4 @@ TEST(AIModelCatalogTest, PredictorFindsCatalogDownloadedTrellis2Models)
     EXPECT_EQ(QDir(resolved).absolutePath(), QDir(catalogDir).absolutePath());
 
     QDir(catalogDir).removeRecursively();
-    QStandardPaths::setTestModeEnabled(false);
-    qunsetenv("QTMESH_TRELLIS2_CLI");
 }

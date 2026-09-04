@@ -121,25 +121,42 @@ QString Trellis2Predictor::trellisCliModelsDir()
     QString dir = qEnvironmentVariable(kEnvCliModelsVar);
     if (dir.isEmpty())
         dir = QSettings().value(QLatin1String(kCliModelsSettingsKey)).toString();
-    if (dir.isEmpty()) {
-        const QString cli = trellisCliPath();
-        if (!cli.isEmpty())
-            dir = QDir(QFileInfo(cli).absolutePath())
-                      .filePath(QStringLiteral("models"));
+    // An EXPLICIT dir (env var / QSettings) is authoritative — returned as-is
+    // so error messages point at what the user configured. The IMPLICIT
+    // candidates below are only accepted when they actually hold the
+    // required model set: a bare/partial <cli>/models directory must not
+    // shadow weights downloaded through AI Model Settings.
+    if (!dir.isEmpty())
+        return QDir(dir).exists() ? dir : QString();
+
+    const auto hasRequiredGgufs = [](const QString& d) {
+        const QDir q(d);
+        return q.exists(QStringLiteral("ss_flow.gguf"))
+            && q.exists(QStringLiteral("shape_flow_512.gguf"))
+            && q.exists(QStringLiteral("tex_flow_512.gguf"))
+            && q.exists(QStringLiteral("shape_dec.gguf"))
+            && q.exists(QStringLiteral("tex_dec.gguf"))
+            && q.exists(QStringLiteral("ss_dec.gguf"))
+            && q.exists(QStringLiteral("dinov3.gguf"));
+    };
+
+    const QString cli = trellisCliPath();
+    if (!cli.isEmpty()) {
+        const QString sibling = QDir(QFileInfo(cli).absolutePath())
+                                    .filePath(QStringLiteral("models"));
+        if (hasRequiredGgufs(sibling))
+            return sibling;
     }
-    if (dir.isEmpty() || !QDir(dir).exists()) {
-        // AI Model Settings download location (AIModelCatalog "trellis2-gguf"):
-        // models fetched from the Settings dialog land here, so a user who
-        // pre-downloaded them only has to install/point at the trellis-cli
-        // binary.
-        const QString catalogDir =
-            QDir(QStandardPaths::writableLocation(
-                     QStandardPaths::AppDataLocation))
-                .filePath(QStringLiteral("ai_models/trellis2"));
-        if (QDir(catalogDir).exists())
-            dir = catalogDir;
-    }
-    return (!dir.isEmpty() && QDir(dir).exists()) ? dir : QString();
+    // AI Model Settings download location (AIModelCatalog "trellis2-gguf"):
+    // models fetched from the Settings dialog land here, so a user who
+    // pre-downloaded them only has to install/point at the trellis-cli
+    // binary.
+    const QString catalogDir =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("ai_models/trellis2"));
+    if (QDir(catalogDir).exists())
+        return catalogDir;
+    return QString();
 }
 
 bool Trellis2Predictor::trellisCliAvailable()
