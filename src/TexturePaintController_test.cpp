@@ -1681,20 +1681,34 @@ TEST_F(TexturePaintControllerSceneTest, BakeTargetIdsAndLabelsAreExposedToQml) {
     EXPECT_TRUE(ctrl->bakeTargetLabel(QStringLiteral("nope")).isEmpty());
 }
 
+// An empty bake must report why rather than writing a directory of blank
+// textures, which would look like a successful export.
+//
+// Guarded on the ACTUAL precondition instead of assuming it: per-channel stacks
+// are only dropped when the painted ENTITY changes (#547), so a previous test in
+// the same process can leave a stashed stack that makes this bake legitimately
+// succeed. Asserting "nothing is painted" up front turns that into a skip rather
+// than a spurious failure — the earlier version asserted the empty output
+// directory directly and failed only when run after the preset tests.
+// An empty bake must report why rather than writing a directory of blank
+// textures, which would look like a successful export.
+//
+// Uses a FRESH entity name per run so no stashed per-channel stack from an
+// earlier test can apply: stacks are keyed to the painted entity and only
+// dropped when that entity changes (#547). An earlier version tried to detect
+// the leftover state and skip, which meant it silently stopped asserting
+// anything in a full-suite run.
 TEST_F(TexturePaintControllerSceneTest, BakeWithNothingPaintedReportsAnError) {
-    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeEmpty")));
+    static int s_run = 0;
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeEmptyFresh%1").arg(++s_run)));
     auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(false);
+    ASSERT_TRUE(ctrl->paintedChannelIds().isEmpty())
+        << "a fresh entity must start with no painted channels: "
+        << ctrl->paintedChannelIds().join(", ").toStdString();
+
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-
-    // ESTABLISH the precondition rather than assuming it: an earlier test in
-    // the same process may have left a session (and therefore a layer stack)
-    // open, in which case the bake legitimately succeeds and this fails only
-    // when run after those tests — a false alarm, not a bug.
-    ctrl->setTexturePaintEnabled(false);
-    ASSERT_FALSE(ctrl->hasActiveSession());
-
-    // No session at all: must refuse cleanly rather than writing blank files.
     const QString err = ctrl->bakePbrSet(QStringLiteral("generic"), dir.path());
     EXPECT_FALSE(err.isEmpty()) << "an empty bake must report why, not succeed";
     EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Files).isEmpty())
@@ -1883,4 +1897,41 @@ TEST_F(TexturePaintControllerSceneTest, VertexLayerBakeDegradesWithoutASession) 
     auto* ctrl = TexturePaintController::instance();
     // No paint session: must report why rather than dereferencing a null stack.
     EXPECT_FALSE(ctrl->bakeVertexLayerToTextureLayer(64, 2).isEmpty());
+}
+
+// "Has a stack" is NOT "has paint": opening a session seeds layer 0, so a
+// channel the user merely SELECTED has a non-empty layer stack. Reporting that
+// as painted listed all six channels on an untouched mesh and would have baked
+// six blank textures. Paint is detected by a non-transparent texel instead.
+TEST_F(TexturePaintControllerSceneTest, MerelyVisitingAChannelDoesNotCountAsPainted) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("VisitNotPaint")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    // Visit several channels WITHOUT painting; each opens a session.
+    for (auto ch : {PaintChannelNS::Channel::Roughness,
+                    PaintChannelNS::Channel::Metallic,
+                    PaintChannelNS::Channel::AO,
+                    PaintChannelNS::Channel::BaseColor}) {
+        ctrl->setActiveChannel(static_cast<int>(ch));
+        ASSERT_TRUE(ctrl->hasActiveSession());
+    }
+
+    EXPECT_TRUE(ctrl->paintedChannelIds().isEmpty())
+        << "visiting a channel must not mark it painted: "
+        << ctrl->paintedChannelIds().join(", ").toStdString();
+
+    // Now actually paint one, and ONLY that one should be reported.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    const QStringList painted = ctrl->paintedChannelIds();
+    EXPECT_TRUE(painted.contains(QStringLiteral("basecolor")))
+        << painted.join(", ").toStdString();
+    EXPECT_FALSE(painted.contains(QStringLiteral("roughness")))
+        << "an unpainted-but-visited channel must stay out: "
+        << painted.join(", ").toStdString();
 }

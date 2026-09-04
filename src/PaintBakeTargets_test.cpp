@@ -295,9 +295,34 @@ TEST(PaintBakeTargetsTest, ResolutionResamplesEveryOutput) {
 
 TEST(PaintBakeTargetsTest, NothingPaintedIsAnErrorNotABlankTextureSet) {
     // Writing a directory of blank textures would look like a successful bake.
+    //
+    // NB build() defends this twice — an up-front ch.empty() check and a
+    // trailing "no output textures" check — so removing EITHER alone still
+    // fails the bake. Mutation testing showed neither guard is individually
+    // detectable; the assertion below therefore pins the OBSERVABLE contract
+    // (not ok, an explanation, no textures) rather than pretending to pin one
+    // specific branch. The message is checked to distinguish the two paths.
     const Result r = build(ChannelImages{}, Options{});
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());
+    EXPECT_TRUE(r.textures.empty());
+    EXPECT_TRUE(r.error.contains(QStringLiteral("Nothing painted")))
+        << "the up-front empty check should be what reports this, giving the "
+           "clearer message; got: " << r.error.toStdString();
+}
+
+// A target whose required channels are absent must also fail, even though other
+// channels ARE painted — this is the trailing "no output textures" guard, which
+// the all-empty case above cannot reach.
+TEST(PaintBakeTargetsTest, ATargetWithNoFeedingChannelsIsAnError) {
+    // glTF emits only from roughness/metallic/ao/basecolor/normal/emissive; a
+    // channel set that feeds none of them yields no outputs. Construct that by
+    // painting nothing the target consumes.
+    ChannelImages ch;   // all null
+    Options o;
+    o.target = Target::GLTF;
+    const Result r = build(ch, o);
+    EXPECT_FALSE(r.ok);
     EXPECT_TRUE(r.textures.empty());
 }
 

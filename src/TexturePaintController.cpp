@@ -5044,6 +5044,27 @@ const PaintLayerStack* TexturePaintController::stackForChannel(
     return nullptr;
 }
 
+/// True when `stack` holds any actually-painted pixel.
+///
+/// PaintLayerStack::empty() only means "no layers", but opening a session SEEDS
+/// layer 0 — so every channel that was ever merely VISITED reports as having a
+/// stack. Using that as "painted" listed all six channels on a mesh nobody had
+/// touched, and would have baked six blank textures. Paint is detected by a
+/// non-transparent texel in any visible layer instead.
+static bool stackHasPaintedPixels(const PaintLayerStack& stack)
+{
+    if (stack.empty()) return false;
+    const int w = stack.width(), h = stack.height();
+    if (w <= 0 || h <= 0) return false;
+
+    std::vector<uint8_t> px;
+    stack.compositeTo(px);
+    if (static_cast<int>(px.size()) < w * h * 4) return false;
+    for (size_t i = 3; i < px.size(); i += 4)
+        if (px[i] != 0) return true;      // any non-transparent texel
+    return false;
+}
+
 /// Composite `ch`, optionally forcing hidden layers in.
 ///
 /// PaintLayerStack::compositeTo hardcodes `solo ? i == solo : visible`, so
@@ -5054,7 +5075,10 @@ QImage TexturePaintController::compositeChannelForBake(PaintChannelNS::Channel c
                                                        bool includeHidden)
 {
     const PaintLayerStack* src = stackForChannel(ch);
-    if (!src || src->empty()) return {};
+    // Same rule as paintedChannelIds: a session seeds layer 0, so "has a stack"
+    // is not "has paint". Without this the bake emitted a blank texture for
+    // every channel the user had merely selected.
+    if (!src || !stackHasPaintedPixels(*src)) return {};
 
     if (!includeHidden)
         return compositeChannelToImage(*src);
@@ -5075,7 +5099,7 @@ QStringList TexturePaintController::paintedChannelIds() const
         // Height shares the Normal session and has no data of its own (#547).
         if (ch == PaintChannelNS::Channel::Height) continue;
         const PaintLayerStack* st = stackForChannel(ch);
-        if (st && !st->empty())
+        if (st && stackHasPaintedPixels(*st))
             out << QString::fromLatin1(PaintChannelNS::id(ch));
     }
     return out;
