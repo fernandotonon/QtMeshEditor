@@ -3809,6 +3809,25 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
     return uri;
 }
 
+// Provenance of the entity's mesh: true when it entered the editor through
+// the Assimp import path with aiProcess_ConvertToLeftHanded applied (the
+// importer caches this on the mesh as "qtme.source_convert_lh"). Native
+// sources — Ogre .mesh, PS1 rips, procedural primitives, AI-generated
+// meshes — were never mirrored on the way in, so their exports must not
+// apply the inverse either.
+static bool meshImportedLeftHanded(const Ogre::Entity* e)
+{
+    if (!e) return false;
+    Ogre::MeshPtr mesh = e->getMesh();
+    if (!mesh) return false;
+    const Ogre::Any& a =
+        mesh->getUserObjectBindings().getUserAny("qtme.source_convert_lh");
+    if (a.has_value()) {
+        try { return Ogre::any_cast<bool>(a); } catch (...) {}
+    }
+    return false;
+}
+
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
                                     bool stripAnimations)
 {
@@ -4351,9 +4370,21 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             // The one true exception is DirectX .x: Assimp's .x exporter
             // performs its own RH→LH conversion internally, so applying
             // the process here would double-flip.
+            //
+            // PROVENANCE gate (glTF/GLB only): the inverse is only correct
+            // for meshes that WERE mirrored on import. Native sources
+            // (Ogre .mesh, PS1 rips, procedural primitives, AI-generated
+            // meshes) never passed through ConvertToLeftHanded — for those
+            // the glTF export stays pass-through (+ the explicit V flip the
+            // glTF UV origin needs), exactly the pre-fix behavior.
             bool skipHandedness = (formatId == "x");
+            const bool isGltf = (formatId == "gltf2" || formatId == "glb2");
+            if (isGltf && !meshImportedLeftHanded(e))
+                skipHandedness = true;
             unsigned int exportFlags = skipHandedness
                 ? 0 : aiProcess_ConvertToLeftHanded;
+            if (isGltf && skipHandedness)
+                exportFlags |= aiProcess_FlipUVs;
             // Split >65535-vertex meshes so Assimp's exporters don't truncate
             // the vertex accessors at 65536 (which tears large meshes apart).
             splitLargeMeshesForExport(scene);
@@ -4667,9 +4698,16 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
             // Same handedness rule as the main exporter: the import mirrored
             // the scene via ConvertToLeftHanded, so every export (glTF/GLB
             // included) applies it again to restore source space; only .x
-            // skips (Assimp's .x exporter converts internally).
+            // skips (Assimp's .x exporter converts internally), and glTF of
+            // a NATIVE-provenance mesh (never mirrored on import) stays
+            // pass-through + V flip.
             bool skipHandedness = (formatId == "x");
+            const bool isGltf = (formatId == "gltf2" || formatId == "glb2");
+            if (isGltf && !meshImportedLeftHanded(entity))
+                skipHandedness = true;
             unsigned int exportFlags = skipHandedness ? 0 : aiProcess_ConvertToLeftHanded;
+            if (isGltf && skipHandedness)
+                exportFlags |= aiProcess_FlipUVs;
             // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
             splitLargeMeshesForExport(scene);
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),

@@ -149,7 +149,7 @@ Shader "Hidden/QTM/VAT" {
                 // Negate to compensate for QtMeshEditor's FBX → Ogre
                 // import path; remove if your bake's normals look
                 // correct without it.
-                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, -n));
+                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));
                 OUT.worldPos = mul(unity_ObjectToWorld, float4(modelVertex, 1.0)).xyz;
                 OUT.uv = IN.uv;
                 return OUT;

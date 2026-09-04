@@ -102,7 +102,7 @@ void vertex() {
 	// Negate to compensate for the FBX → Ogre import path's left-
 	// handed conversion. Remove this if you're not seeing inverted
 	// lighting (e.g. for bakes from a different source pipeline).
-	NORMAL = -normalize(n);
+	NORMAL = normalize(n);
 
 	uv0_pass = UV;
 }

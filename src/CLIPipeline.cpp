@@ -8373,7 +8373,8 @@ struct BakeVertex {
 // order, matching the order `VATBaker::collectPostSkinPositions` walks
 // (submesh-index, skip-shared-after-first). Returned vector has length
 // equal to the bake's `vertexCount`.
-std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
+std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity,
+                                             bool exportSpaceMirrorZ)
 {
     std::vector<BakeVertex> out;
     if (!entity) return out;
@@ -8440,16 +8441,17 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
             BakeVertex bv{};
             Ogre::Real* pPos = nullptr;
             posElem->baseVertexPointerToElement(posBytes + j * posStride, &pPos);
-            // EXPORT space: mirror Z to match the exported glTF (the
-            // exporter applies the inverse of the import's
-            // ConvertToLeftHanded) — this list feeds both the bake-column
-            // alignment against the read-back glTF and the bind sidecar
-            // consumers pair with that file.
-            bv.position = {pPos[0], pPos[1], -pPos[2]};
+            // EXPORT space (provenance-gated): mirror Z to match the
+            // exported glTF when the exporter applies the inverse of the
+            // import's ConvertToLeftHanded — this list feeds both the
+            // bake-column alignment against the read-back glTF and the bind
+            // sidecar consumers pair with that file.
+            const float zs = exportSpaceMirrorZ ? -1.0f : 1.0f;
+            bv.position = {pPos[0], pPos[1], zs * pPos[2]};
             if (normElem && normBytes) {
                 Ogre::Real* pN = nullptr;
                 normElem->baseVertexPointerToElement(normBytes + j * normStride, &pN);
-                bv.normal = {pN[0], pN[1], -pN[2]};
+                bv.normal = {pN[0], pN[1], zs * pN[2]};
                 bv.hasNormal = true;
             }
             if (uvElem && uvBytes) {
@@ -9200,8 +9202,21 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // weight splits, which Mixamo characters carry by the hundreds —
     // 17% of verts on Rumba Dancing share a quantized bind position
     // with at least one other vert.
+    // Provenance: the exported source.gltf mirrors Z only for meshes that
+    // came in through Assimp's ConvertToLeftHanded (see MeshImporterExporter)
+    // — the bake, alignment and bind sidecar must follow the same rule.
+    bool vatExportMirrorZ = false;
+    {
+        Ogre::MeshPtr m = entity->getMesh();
+        const Ogre::Any& a = m ? m->getUserObjectBindings().getUserAny(
+                                     "qtme.source_convert_lh")
+                               : Ogre::Any();
+        if (a.has_value()) {
+            try { vatExportMirrorZ = Ogre::any_cast<bool>(a); } catch (...) {}
+        }
+    }
     auto writeOgreBindSidecar = [&](Ogre::Entity* e, const QString& path) {
-        std::vector<BakeVertex> verts = readOgreBindVertices(e);
+        std::vector<BakeVertex> verts = readOgreBindVertices(e, vatExportMirrorZ);
         if (verts.empty()) return false;
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
@@ -9243,7 +9258,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // inject TEXCOORD_<channel> into the exported glTF.
     std::vector<size_t> submeshStarts;
     if (exportResult == 0) {
-        std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
+        std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity, vatExportMirrorZ);
         std::vector<BakeVertex> gltfVerts;
         if (!readGltfVertices(gltfPath, gltfVerts)) {
             err() << "Warning: failed to read back source.gltf for VAT "
@@ -9298,6 +9313,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // original into VATBaker::Options).
     std::vector<uint32_t> vertexPermCopy = vertexPerm;
     opts.vertexPermutation = std::move(vertexPerm);
+    opts.exportSpaceMirrorZ = vatExportMirrorZ;
 
     SentryReporter::addBreadcrumb("file.export",
         QString("Writing OpenVAT bake to %1 (anim=%2)")

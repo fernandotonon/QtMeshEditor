@@ -95,20 +95,22 @@ OpenVAT writes them as quoted strings with 8 decimal places — e.g.
 GDScript and Python). The strings are deliberate: it makes the JSON
 diffable across exporters that round differently.
 
-## Normal-flip gotcha
+## Normal-flip gotcha (historical)
 
-QtMeshEditor's FBX import path applies `aiProcess_ConvertToLeftHanded`,
-which flips winding without flipping the captured normal vector. The
-shader templates include a `NORMAL = -normalize(n)` (or equivalent) on
-read to compensate. **If your bake came from a different source** (e.g.
-Blender via the OpenVAT add-on) and you see inverted lighting, remove
-the negation:
+Templates used to negate the decoded normal (`NORMAL = -normalize(n)`) to
+compensate for the exporter of the time, which left the import-side
+`aiProcess_ConvertToLeftHanded` winding flip un-inverted in the exported
+glTF. The exporter now restores source space (and the bake data follows
+the same export space), so the templates read the normal **as-is**:
 
 ```cpp
-// Godot:    NORMAL = normalize(n);   // not -normalize
-// Unity:    OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));   // drop the -
-// Unreal:   result.Normal = normalize(n);                                      // drop the -
+// Godot:    NORMAL = normalize(n);
+// Unity:    OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));
+// Unreal:   result.Normal = normalize(n);
 ```
+
+If you pair an OLD bake (made before this change) with these templates and
+see inverted lighting, re-bake — or re-add the negation locally.
 
 ## Where this came from
 

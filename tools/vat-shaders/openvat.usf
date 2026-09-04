@@ -149,7 +149,7 @@ float3 n = lerp(n_c, n_n, blend) * 2.0 - 1.0;
 // Negate to compensate for QtMeshEditor's FBX → Ogre import path's
 // left-handed conversion. Remove the minus if your bake's normals
 // already render correctly.
-result.Normal = normalize(-n);
+result.Normal = normalize(n);
 
 return result;
 // === End custom node body ========================================

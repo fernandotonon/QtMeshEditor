@@ -92,6 +92,14 @@ public:
         /// vertex-buffer order, then passes it here so the bake's PNG
         /// columns land in the glTF's vertex order.
         std::vector<uint32_t> vertexPermutation;
+
+        /// Mirror Z into EXPORT space (set when the source mesh entered the
+        /// editor through the Assimp import's ConvertToLeftHanded — the glTF
+        /// exporter applies the inverse for such meshes, and the bake must
+        /// live in the same space as the exported mesh it pairs with).
+        /// Native-provenance meshes (.mesh, generated, PS1) export
+        /// pass-through, so their bakes stay unmirrored.
+        bool exportSpaceMirrorZ = false;
     };
 
     struct BakeResult {

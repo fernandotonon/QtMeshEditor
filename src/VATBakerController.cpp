@@ -166,6 +166,19 @@ bool VATBakerController::bake(const QString& animationName,
     m_progressTotal = 0;
     emit bakeProgress(m_progressDone, m_progressTotal);
 
+    // Provenance-gated export space (same rule as cmdVat): the bake pairs
+    // with a glTF export that mirrors Z only for Assimp-imported meshes.
+    {
+        Ogre::MeshPtr m = entity->getMesh();
+        const Ogre::Any& a = m ? m->getUserObjectBindings().getUserAny(
+                                     "qtme.source_convert_lh")
+                               : Ogre::Any();
+        if (a.has_value()) {
+            try {
+                opts.exportSpaceMirrorZ = Ogre::any_cast<bool>(a);
+            } catch (...) {}
+        }
+    }
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
 
     m_progressDone = result.frameCount;
