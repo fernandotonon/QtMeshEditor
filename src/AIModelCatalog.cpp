@@ -195,6 +195,9 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     const QString t2mBase = resolveBaseUrl(
         "ai/t2mModelBaseUrl", "QTMESH_T2M_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/motion/");
+    const QString trellis2Base = resolveBaseUrl(
+        "ai/trellis2GgufBaseUrl", "QTMESH_TRELLIS2_GGUF_BASE_URL",
+        "https://huggingface.co/fernandotonon/QtMeshEditor-trellis2-gguf/resolve/main/");
     const QString segmentBase = resolveBaseUrl(
         "ai/segmentModelBaseUrl", "QTMESH_SEGMENT_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/segment/");
@@ -236,6 +239,24 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
         QStringLiteral("Medium"), onnxAvailable ? QString() : tr("Requires an ONNX-enabled build"),
         onnxAvailable,
         { file(QStringLiteral("pbr"), QStringLiteral("RealESRGAN_x4plus.onnx"), pbrBase, QStringLiteral("Upscale 4x")) }};
+    out << ModelSpec{
+        QStringLiteral("trellis2-gguf"), tr("TRELLIS.2 (trellis.cpp)"), tr("Image to 3D"),
+        tr("Microsoft TRELLIS.2-4B GGUF weights for the trellis.cpp runtime — the "
+           "highest-quality image-to-3D backend, with real PBR attributes. Runs on "
+           "Apple Silicon (Metal), Vulkan and CUDA; no ONNX or Python needed. Also "
+           "install the trellis-cli binary and point ai/trellis2Cli at it (see "
+           "docs/TRELLIS2.md); these models are found automatically once downloaded."),
+        QStringLiteral("~10.4 GB"), QString(),
+        true,
+        {
+            file(QStringLiteral("trellis2"), QStringLiteral("dinov3.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 DINOv3 conditioning encoder")),
+            file(QStringLiteral("trellis2"), QStringLiteral("ss_flow.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 sparse-structure flow")),
+            file(QStringLiteral("trellis2"), QStringLiteral("ss_dec.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 sparse-structure decoder")),
+            file(QStringLiteral("trellis2"), QStringLiteral("shape_flow_512.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 shape flow (512)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("shape_dec.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 shape decoder")),
+            file(QStringLiteral("trellis2"), QStringLiteral("tex_flow_512.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture flow (512)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("tex_dec.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture decoder")),
+        }};
     out << ModelSpec{
         QStringLiteral("background-removal"), tr("Background Removal"), tr("Image to 3D"),
         tr("U2Net ONNX model used to remove backgrounds before image-to-3D generation."),
