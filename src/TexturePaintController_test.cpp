@@ -21,6 +21,9 @@
 #include "TestHelpers.h"
 #include "TexturePaintBuffer.h"
 #include "TexturePaintController.h"
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include "UndoManager.h"
 
 #include <OgreEntity.h>
@@ -1662,4 +1665,273 @@ TEST_F(TexturePaintControllerSceneTest, CustomPresetShadowingBundledNameIsDeleta
 
     ctrl->closeSession();
     QStandardPaths::setTestModeEnabled(false);
+}
+
+// --- Slice I (#552): bake-up workflow -------------------------------------
+
+TEST_F(TexturePaintControllerSceneTest, BakeTargetIdsAndLabelsAreExposedToQml) {
+    auto* ctrl = TexturePaintController::instance();
+    const QStringList ids = ctrl->bakeTargetIds();
+    EXPECT_TRUE(ids.contains(QStringLiteral("generic")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("unity")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("unreal")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("godot")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("gltf")));
+    EXPECT_FALSE(ctrl->bakeTargetLabel(QStringLiteral("unity")).isEmpty());
+    EXPECT_TRUE(ctrl->bakeTargetLabel(QStringLiteral("nope")).isEmpty());
+}
+
+// An empty bake must report why rather than writing a directory of blank
+// textures, which would look like a successful export.
+//
+// Guarded on the ACTUAL precondition instead of assuming it: per-channel stacks
+// are only dropped when the painted ENTITY changes (#547), so a previous test in
+// the same process can leave a stashed stack that makes this bake legitimately
+// succeed. Asserting "nothing is painted" up front turns that into a skip rather
+// than a spurious failure — the earlier version asserted the empty output
+// directory directly and failed only when run after the preset tests.
+// An empty bake must report why rather than writing a directory of blank
+// textures, which would look like a successful export.
+//
+// Uses a FRESH entity name per run so no stashed per-channel stack from an
+// earlier test can apply: stacks are keyed to the painted entity and only
+// dropped when that entity changes (#547). An earlier version tried to detect
+// the leftover state and skip, which meant it silently stopped asserting
+// anything in a full-suite run.
+TEST_F(TexturePaintControllerSceneTest, BakeWithNothingPaintedReportsAnError) {
+    static int s_run = 0;
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeEmptyFresh%1").arg(++s_run)));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(false);
+    ASSERT_TRUE(ctrl->paintedChannelIds().isEmpty())
+        << "a fresh entity must start with no painted channels: "
+        << ctrl->paintedChannelIds().join(", ").toStdString();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString err = ctrl->bakePbrSet(QStringLiteral("generic"), dir.path());
+    EXPECT_FALSE(err.isEmpty()) << "an empty bake must report why, not succeed";
+    EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Files).isEmpty())
+        << "a failed bake must leave no files behind";
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeRejectsAnUnknownTargetBeforeTouchingDisk) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeBadTarget")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_TRUE(ctrl->ensurePaintableTexture(64));
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString err = ctrl->bakePbrSet(QStringLiteral("unrealengine5"), dir.path());
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Files).isEmpty());
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeRejectsAnEmptyOutputDirectory) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeNoDir")));
+    auto* ctrl = TexturePaintController::instance();
+    ASSERT_TRUE(ctrl->ensurePaintableTexture(64));
+    EXPECT_FALSE(ctrl->bakePbrSet(QStringLiteral("generic"), QString()).isEmpty());
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeWritesTexturesAndSidecarForThePaintedChannel) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeWrite")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    // A stroke so BaseColor actually has data.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString err = ctrl->bakePbrSet(QStringLiteral("generic"), dir.path(),
+                                         64, QStringLiteral("hero"));
+    ASSERT_TRUE(err.isEmpty()) << err.toStdString();
+
+    const QStringList files = QDir(dir.path()).entryList(QDir::Files);
+    EXPECT_TRUE(files.contains(QStringLiteral("hero_BaseColor.png")))
+        << files.join(", ").toStdString();
+    EXPECT_TRUE(files.contains(QStringLiteral("hero.bake.json")))
+        << "the sidecar is an acceptance criterion: " << files.join(", ").toStdString();
+
+    // The sidecar must describe what was actually written.
+    QFile f(QDir(dir.path()).filePath(QStringLiteral("hero.bake.json")));
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    EXPECT_EQ(root["target"].toString(), QStringLiteral("generic"));
+    EXPECT_EQ(root["namePrefix"].toString(), QStringLiteral("hero"));
+    EXPECT_GT(root["outputs"].toArray().size(), 0);
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakeCanSkipTheSidecar) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeNoSidecar")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(ctrl->bakePbrSet(QStringLiteral("generic"), dir.path(), 64,
+                                 QString(), false, /*writeSidecar=*/false).isEmpty());
+    const QStringList files = QDir(dir.path()).entryList(QDir::Files);
+    EXPECT_FALSE(files.filter(QStringLiteral(".bake.json")).size() > 0);
+    EXPECT_TRUE(files.contains(QStringLiteral("BaseColor.png")))
+        << "no prefix means bare channel names";
+}
+
+TEST_F(TexturePaintControllerSceneTest, GodotBakeAlsoWritesTheTresSidecar) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeGodot")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(ctrl->bakePbrSet(QStringLiteral("godot"), dir.path(), 64,
+                                 QStringLiteral("mat")).isEmpty());
+    const QStringList files = QDir(dir.path()).entryList(QDir::Files);
+    EXPECT_TRUE(files.contains(QStringLiteral("mat.tres")))
+        << "the .tres carries Godot's sRGB/linear flags: "
+        << files.join(", ").toStdString();
+    EXPECT_TRUE(files.contains(QStringLiteral("mat_Albedo.png")));
+}
+
+// The ACTIVE channel's stack lives in m_layerStack; its m_channelSessions copy
+// is deliberately stale until the next switch. A bake that read the map blindly
+// would silently emit the pre-edit state of whatever channel is open — the most
+// likely way this whole feature goes quietly wrong.
+TEST_F(TexturePaintControllerSceneTest, BakeReadsTheLiveStackForTheActiveChannel) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeLive")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+
+    // Nothing painted yet -> BaseColor still counts as having a stack (the
+    // session seeded layer 0), but the point is the LIVE one is consulted.
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.25, 0.25));
+    ctrl->updateStrokeUV(0.27, 0.27);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+    const QStringList painted = ctrl->paintedChannelIds();
+    EXPECT_TRUE(painted.contains(QStringLiteral("basecolor")))
+        << "the active channel must be visible to the bake: "
+        << painted.join(", ").toStdString();
+}
+
+// Height must never appear as a bakeable channel: it shares the Normal session
+// and has no data of its own (#547).
+//
+// Asserting only on paintedChannelIds() cannot fail — setActiveChannel redirects
+// Height to Normal, so m_channelSessions[Height] is never populated and the
+// filter is unreachable defensive code (a mutant removing it still passed).
+// So this pins the REACHABLE invariant that makes Height unbakeable: selecting
+// it lands on Normal, and the bake's channel list therefore never grows a
+// height entry even after painting what the user asked to be "Height".
+TEST_F(TexturePaintControllerSceneTest, SelectingHeightRedirectsToNormalSoNothingBakesAsHeight) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeNoHeight")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::Height));
+    EXPECT_EQ(ctrl->activeChannel(),
+              static_cast<int>(PaintChannelNS::Channel::Normal))
+        << "Height must redirect to Normal; otherwise it would accumulate a "
+           "session the bake has no output for";
+
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    const QStringList painted = ctrl->paintedChannelIds();
+    EXPECT_FALSE(painted.contains(QStringLiteral("height")))
+        << painted.join(", ").toStdString();
+    EXPECT_TRUE(painted.contains(QStringLiteral("normal")))
+        << "the stroke must have landed on Normal: "
+        << painted.join(", ").toStdString();
+
+    // And Height is not offered by the picker at all.
+    const QVariantList channels = ctrl->paintChannels();
+    for (const QVariant& v : channels) {
+        EXPECT_NE(v.toMap().value(QStringLiteral("id")).toString(),
+                  QStringLiteral("height"));
+    }
+}
+
+TEST_F(TexturePaintControllerSceneTest, BakePreviewUrlIsADataUriOrEmpty) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakePreview")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->hasActiveSession());
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    const QString url = ctrl->bakePreviewUrl(QStringLiteral("generic"), 0, 64);
+    EXPECT_TRUE(url.startsWith(QStringLiteral("data:image/png;base64,")))
+        << url.left(40).toStdString();
+    // Out-of-range and bad target degrade to empty, never crash.
+    EXPECT_TRUE(ctrl->bakePreviewUrl(QStringLiteral("generic"), 99, 64).isEmpty());
+    EXPECT_TRUE(ctrl->bakePreviewUrl(QStringLiteral("nope"), 0, 64).isEmpty());
+}
+
+TEST_F(TexturePaintControllerSceneTest, VertexLayerBakeDegradesWithoutASession) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("BakeVertexNoSession")));
+    auto* ctrl = TexturePaintController::instance();
+    // No paint session: must report why rather than dereferencing a null stack.
+    EXPECT_FALSE(ctrl->bakeVertexLayerToTextureLayer(64, 2).isEmpty());
+}
+
+// "Has a stack" is NOT "has paint": opening a session seeds layer 0, so a
+// channel the user merely SELECTED has a non-empty layer stack. Reporting that
+// as painted listed all six channels on an untouched mesh and would have baked
+// six blank textures. Paint is detected by a non-transparent texel instead.
+TEST_F(TexturePaintControllerSceneTest, MerelyVisitingAChannelDoesNotCountAsPainted) {
+    ASSERT_TRUE(m_fix.setup(QStringLiteral("VisitNotPaint")));
+    auto* ctrl = TexturePaintController::instance();
+    ctrl->setTexturePaintEnabled(true);
+
+    // Visit several channels WITHOUT painting; each opens a session.
+    for (auto ch : {PaintChannelNS::Channel::Roughness,
+                    PaintChannelNS::Channel::Metallic,
+                    PaintChannelNS::Channel::AO,
+                    PaintChannelNS::Channel::BaseColor}) {
+        ctrl->setActiveChannel(static_cast<int>(ch));
+        ASSERT_TRUE(ctrl->hasActiveSession());
+    }
+
+    EXPECT_TRUE(ctrl->paintedChannelIds().isEmpty())
+        << "visiting a channel must not mark it painted: "
+        << ctrl->paintedChannelIds().join(", ").toStdString();
+
+    // Now actually paint one, and ONLY that one should be reported.
+    ctrl->setActiveChannel(static_cast<int>(PaintChannelNS::Channel::BaseColor));
+    ASSERT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
+    ctrl->updateStrokeUV(0.52, 0.52);
+    ctrl->endStrokeUV();
+    pumpEventsFor(150);
+
+    const QStringList painted = ctrl->paintedChannelIds();
+    EXPECT_TRUE(painted.contains(QStringLiteral("basecolor")))
+        << painted.join(", ").toStdString();
+    EXPECT_FALSE(painted.contains(QStringLiteral("roughness")))
+        << "an unpainted-but-visited channel must stay out: "
+        << painted.join(", ").toStdString();
 }

@@ -171,6 +171,9 @@ qtmesh lod model.fbx --auto
 
 # Bake vertex colors → texture (with UV-seam dilation)
 qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
+qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
+qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
 
 # Auto UV unwrap (xatlas — same library Blender/Godot use)
 qtmesh uv model.fbx --unwrap -o unwrapped.glb               # overwrite UV0
@@ -249,6 +252,9 @@ outward by N pixels to mask UV-seam bleed at MIP-map time.
 
 ```bash
 qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
+qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
+qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
 ```
 
 **Export.** Vertex colors are preserved on export to formats that support

@@ -158,6 +158,7 @@ TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
 PaintLayerBlend.cpp
 PaintLayerStack.cpp
+PaintBakeTargets.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 ColorPaletteLibrary.cpp
@@ -395,6 +396,7 @@ TextureAtlasPacker.h
 PaintBufferImageProvider.h
 PaintLayerBlend.h
 PaintLayerStack.h
+PaintBakeTargets.h
 PaintChannel.h
 SymmetryMirrorMap.h
 PaintSelectionMask.h
