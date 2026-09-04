@@ -430,6 +430,19 @@ jobs:
             Copy-Item "$mingwBin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
             Copy-Item "$mingwBin/libstdc++-6.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
             Copy-Item "$mingwBin/libwinpthread-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            # ONNX Runtime is MSVC-built: app-local deployment of the VC++
+            # runtime it links (vcruntime140*, msvcp140*) so a clean Windows
+            # without the VC redistributable can still start the process.
+            # windows-latest carries the redist copies in System32.
+            $sys32 = "$env:SystemRoot/System32"
+            foreach ($dll in @("vcruntime140.dll","vcruntime140_1.dll","msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll")) {
+              if (Test-Path "$sys32/$dll") {
+                Copy-Item "$sys32/$dll" "${{github.workspace}}/bin" -Force
+                Write-Host "Bundled $dll"
+              } else {
+                Write-Host "NOTE: $dll not found in System32"
+              }
+            }
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/zlib1__.dll" -ErrorAction SilentlyContinue
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
       shell: powershell
