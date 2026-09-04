@@ -194,6 +194,10 @@ public:
     /// PNG texture with configurable resolution and seam dilation.
     /// Surfaces VertexColorBaker via the CLI for headless asset pipelines.
     static int cmdBakeVertexColors(int argc, char* argv[]);
+    /// Paint v2 Slice I (#552): repack a mesh's existing PBR textures into an
+    /// engine channel layout. Headless, so there is no live layer stack —
+    /// channels come from the material's bound texture slots.
+    static int cmdPaintBake(int argc, char* argv[]);
 
     /// Bake a skeletal animation into a Vertex Animation Texture (VAT)
     /// + JSON sidecar. Surfaces `VATBaker::bake()` over the CLI for
