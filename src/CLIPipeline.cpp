@@ -8235,81 +8235,45 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
     return 0;
 }
 
-int CLIPipeline::cmdPaintBake(int argc, char* argv[])
+bool CLIPipeline::paintBakeToDirectory(const QString& inputPath,
+                                       const QString& targetId,
+                                       const QString& outputDir,
+                                       int resolution,
+                                       const QString& namePrefix,
+                                       bool writeSidecar,
+                                       QStringList& writtenOut,
+                                       QStringList& inputChannelsOut,
+                                       QString& errorOut)
 {
-    // Parse:
-    //   paint-bake <file> --target <id> -o <dir>
-    //              [--resolution N] [--prefix NAME] [--no-sidecar] [--json]
-    //
-    // Headless, so there is NO live paint session and no layer stack. Channels
-    // are read from the mesh's bound texture slots instead — i.e. this repacks
-    // an already-textured asset into an engine layout, which is the useful
-    // headless half of Slice I. The GUI path bakes the live layer stack.
-    QString inputPath, outputDir, targetId = QStringLiteral("generic"), prefix;
-    int resolution = 0;
-    bool writeSidecar = true;
-    bool jsonOutput = false;
-
-    for (int i = 1; i < argc; ++i) {
-        QString arg(argv[i]);
-        if (arg == "paint-bake" || arg == "--cli") continue;
-        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
-            outputDir = QString(argv[++i]); continue;
-        }
-        if (arg == "--target" && i + 1 < argc) { targetId = QString(argv[++i]); continue; }
-        if (arg == "--prefix" && i + 1 < argc) { prefix = QString(argv[++i]); continue; }
-        if (arg == "--resolution" && i + 1 < argc) {
-            resolution = QString(argv[++i]).toInt(); continue;
-        }
-        if (arg == "--no-sidecar") { writeSidecar = false; continue; }
-        if (arg == "--json") { jsonOutput = true; continue; }
-        if (arg == "--list-targets") {
-            for (const QString& id : PaintBakeTargets::targetIds()) {
-                PaintBakeTargets::Target t{};
-                PaintBakeTargets::targetFromId(id, t);
-                cliWrite(QStringLiteral("%1  %2\n")
-                             .arg(id, -10)
-                             .arg(QString::fromLatin1(
-                                 PaintBakeTargets::targetLabel(t))));
-            }
-            return 0;
-        }
-        if (!arg.startsWith('-') && inputPath.isEmpty()) { inputPath = arg; continue; }
-    }
-
-    if (inputPath.isEmpty() || outputDir.isEmpty()) {
-        err() << "Error: missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh paint-bake <file> --target <id> -o <dir>" << Qt::endl;
-        err() << "         [--resolution N] [--prefix NAME] [--no-sidecar] [--json]" << Qt::endl;
-        err() << "       qtmesh paint-bake --list-targets" << Qt::endl;
-        return 2;
-    }
-
     PaintBakeTargets::Target target{};
     if (!PaintBakeTargets::targetFromId(targetId, target)) {
-        err() << QStringLiteral("Unknown --target '%1'. Try --list-targets.").arg(targetId) << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Unknown target '%1'.").arg(targetId);
+        return false;
     }
     if (resolution < 0) {
-        err() << QStringLiteral("--resolution must be 0 (keep source) or positive.") << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Resolution must be 0 (keep source) or positive.");
+        return false;
+    }
+    if (outputDir.trimmed().isEmpty()) {
+        errorOut = QStringLiteral("An output directory is required.");
+        return false;
     }
 
     if (!initOgreHeadless()) {
-        err() << QStringLiteral("Failed to initialise the render system.") << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Failed to initialise the render system.");
+        return false;
     }
 
     const QFileInfo fi(inputPath);
     if (!fi.exists()) {
-        err() << QStringLiteral("Input file not found: %1").arg(inputPath) << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Input file not found: %1").arg(inputPath);
+        return false;
     }
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
-        err() << QStringLiteral("Could not import '%1'.").arg(inputPath) << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Could not import '%1'.").arg(inputPath);
+        return false;
     }
 
     // Collect the material's PBR slots. Slot names are the canonical ones the
@@ -8395,39 +8359,39 @@ int CLIPipeline::cmdPaintBake(int argc, char* argv[])
     channels.emissive  = loadSlot("emissive");
 
     if (channels.empty()) {
-        err() << QStringLiteral(
+        errorOut = QStringLiteral(
             "No PBR texture slots found on '%1'. paint-bake repacks EXISTING "
-            "textures; there is nothing to bake.").arg(inputPath) << Qt::endl;
-        return 1;
+            "textures; there is nothing to bake.").arg(inputPath);
+        return false;
     }
 
     PaintBakeTargets::Options opt;
     opt.target = target;
     opt.resolution = resolution;
-    opt.namePrefix = prefix.trimmed();
+    opt.namePrefix = namePrefix.trimmed();
 
     const PaintBakeTargets::Result res = PaintBakeTargets::build(channels, opt);
     if (!res.ok) {
-        err() << (res.error.isEmpty() ? QStringLiteral("Bake failed.") : res.error)
-              << Qt::endl;
-        return 1;
+        errorOut = res.error.isEmpty() ? QStringLiteral("Bake failed.") : res.error;
+        return false;
     }
 
     QDir dir(outputDir);
     if (!dir.exists() && !QDir().mkpath(outputDir)) {
-        err() << QStringLiteral("Could not create '%1'.").arg(outputDir) << Qt::endl;
-        return 1;
+        errorOut = QStringLiteral("Could not create '%1'.").arg(outputDir);
+        return false;
     }
 
-    QStringList written;
+    QStringList& written = writtenOut;
+    written.clear();
     for (const auto& t : res.textures) {
         const QString stem = opt.namePrefix.isEmpty()
                                  ? t.suffix
                                  : (opt.namePrefix + QStringLiteral("_") + t.suffix);
         const QString path = dir.filePath(stem + QStringLiteral(".png"));
         if (!t.image.save(path)) {
-            err() << QStringLiteral("Could not write '%1'.").arg(path) << Qt::endl;
-            return 1;
+            errorOut = QStringLiteral("Could not write '%1'.").arg(path);
+            return false;
         }
         written << path;
     }
@@ -8438,7 +8402,8 @@ int CLIPipeline::cmdPaintBake(int argc, char* argv[])
         if (f.open(QIODevice::WriteOnly | QIODevice::Text))
             f.write(res.godotResource.toUtf8());
     }
-    QStringList inputChannels;
+    QStringList& inputChannels = inputChannelsOut;
+    inputChannels.clear();
     if (!channels.baseColor.isNull()) inputChannels << QStringLiteral("basecolor");
     if (!channels.normal.isNull())    inputChannels << QStringLiteral("normal");
     if (!channels.roughness.isNull()) inputChannels << QStringLiteral("roughness");
@@ -8454,6 +8419,77 @@ int CLIPipeline::cmdPaintBake(int argc, char* argv[])
             f.write(PaintBakeTargets::sidecarJson(opt, inputChannels, res.textures,
                                                   QFileInfo(inputPath).fileName())
                         .toUtf8());
+    }
+
+    return true;
+}
+
+int CLIPipeline::cmdPaintBake(int argc, char* argv[])
+{
+    // Parse:
+    //   paint-bake <file> --target <id> -o <dir>
+    //              [--resolution N] [--prefix NAME] [--no-sidecar] [--json]
+    //
+    // Headless, so there is NO live paint session and no layer stack. Channels
+    // are read from the mesh's bound texture slots instead — i.e. this repacks
+    // an already-textured asset into an engine layout, which is the useful
+    // headless half of Slice I. The GUI path bakes the live layer stack.
+    QString inputPath, outputDir, targetId = QStringLiteral("generic"), prefix;
+    int resolution = 0;
+    bool writeSidecar = true;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "paint-bake" || arg == "--cli") continue;
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputDir = QString(argv[++i]); continue;
+        }
+        if (arg == "--target" && i + 1 < argc) { targetId = QString(argv[++i]); continue; }
+        if (arg == "--prefix" && i + 1 < argc) { prefix = QString(argv[++i]); continue; }
+        if (arg == "--resolution" && i + 1 < argc) {
+            resolution = QString(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--no-sidecar") { writeSidecar = false; continue; }
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--list-targets") {
+            for (const QString& id : PaintBakeTargets::targetIds()) {
+                PaintBakeTargets::Target t{};
+                PaintBakeTargets::targetFromId(id, t);
+                cliWrite(QStringLiteral("%1  %2\n")
+                             .arg(id, -10)
+                             .arg(QString::fromLatin1(
+                                 PaintBakeTargets::targetLabel(t))));
+            }
+            return 0;
+        }
+        if (!arg.startsWith('-') && inputPath.isEmpty()) { inputPath = arg; continue; }
+    }
+
+    if (inputPath.isEmpty() || outputDir.isEmpty()) {
+        err() << "Error: missing required arguments." << Qt::endl;
+        err() << "Usage: qtmesh paint-bake <file> --target <id> -o <dir>" << Qt::endl;
+        err() << "         [--resolution N] [--prefix NAME] [--no-sidecar] [--json]" << Qt::endl;
+        err() << "       qtmesh paint-bake --list-targets" << Qt::endl;
+        return 2;
+    }
+
+    PaintBakeTargets::Target target{};
+    if (!PaintBakeTargets::targetFromId(targetId, target)) {
+        err() << QStringLiteral("Unknown --target '%1'. Try --list-targets.").arg(targetId) << Qt::endl;
+        return 1;
+    }
+    if (resolution < 0) {
+        err() << QStringLiteral("--resolution must be 0 (keep source) or positive.") << Qt::endl;
+        return 1;
+    }
+
+    QStringList written, inputChannels;
+    QString error;
+    if (!paintBakeToDirectory(inputPath, targetId, outputDir, resolution, prefix,
+                              writeSidecar, written, inputChannels, error)) {
+        err() << error << Qt::endl;
+        return 1;
     }
 
     SentryReporter::addBreadcrumb(

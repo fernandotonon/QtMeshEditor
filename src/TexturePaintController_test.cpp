@@ -1687,6 +1687,13 @@ TEST_F(TexturePaintControllerSceneTest, BakeWithNothingPaintedReportsAnError) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
 
+    // ESTABLISH the precondition rather than assuming it: an earlier test in
+    // the same process may have left a session (and therefore a layer stack)
+    // open, in which case the bake legitimately succeeds and this fails only
+    // when run after those tests — a false alarm, not a bug.
+    ctrl->setTexturePaintEnabled(false);
+    ASSERT_FALSE(ctrl->hasActiveSession());
+
     // No session at all: must refuse cleanly rather than writing blank files.
     const QString err = ctrl->bakePbrSet(QStringLiteral("generic"), dir.path());
     EXPECT_FALSE(err.isEmpty()) << "an empty bake must report why, not succeed";

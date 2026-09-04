@@ -199,6 +199,24 @@ public:
     /// channels come from the material's bound texture slots.
     static int cmdPaintBake(int argc, char* argv[]);
 
+    /// Shared core behind `qtmesh paint-bake` and MCP `paint_bake`.
+    ///
+    /// Imports `inputPath`, reads its bound PBR slots, builds the engine layout
+    /// and writes the textures (+ .tres / sidecar) into `outputDir`. Kept as one
+    /// function so the CLI and MCP surfaces cannot drift apart.
+    ///
+    /// Returns true on success; on failure `errorOut` explains why and nothing
+    /// is written. `writtenOut` receives the absolute paths written.
+    static bool paintBakeToDirectory(const QString& inputPath,
+                                     const QString& targetId,
+                                     const QString& outputDir,
+                                     int resolution,
+                                     const QString& namePrefix,
+                                     bool writeSidecar,
+                                     QStringList& writtenOut,
+                                     QStringList& inputChannelsOut,
+                                     QString& errorOut);
+
     /// Bake a skeletal animation into a Vertex Animation Texture (VAT)
     /// + JSON sidecar. Surfaces `VATBaker::bake()` over the CLI for
     /// headless asset pipelines. Slice 1: engine-agnostic / RGBA8 /

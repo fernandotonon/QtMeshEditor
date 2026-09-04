@@ -718,6 +718,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_pivot_mode"), &MCPServer::toolSetPivotMode},
         {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode},
         {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
+        {QStringLiteral("paint_bake"), &MCPServer::toolPaintBake},
         {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
@@ -807,7 +808,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("import_alembic"),
         QStringLiteral("capture_face_from_video"),
         QStringLiteral("capture_body_from_video"),
-        QStringLiteral("cloud_upload")
+        QStringLiteral("cloud_upload"),
+        QStringLiteral("paint_bake")
     };
     return heavyTools.contains(name);
 }
@@ -883,6 +885,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
             {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
             {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("paint_bake"), QStringLiteral("texture_atlas")},
             {QStringLiteral("pack_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
@@ -6376,6 +6379,57 @@ QJsonObject MCPServer::toolGetPivotMode(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolPaintBake(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_bake");
+
+    const QString input = args.value("input").toString();
+    const QString outputDir = args.value("output_dir").toString();
+    if (input.isEmpty() || outputDir.isEmpty())
+        return makeErrorResult("Error: 'input' and 'output_dir' are required");
+
+    const QString target = args.contains("target")
+                               ? args.value("target").toString()
+                               : QStringLiteral("generic");
+    const int resolution = args.value("resolution").toInt(0);
+    const QString prefix = args.value("prefix").toString();
+    const bool writeSidecar = args.contains("write_sidecar")
+                                  ? args.value("write_sidecar").toBool()
+                                  : true;
+
+    // Shared with `qtmesh paint-bake` so the two surfaces cannot drift.
+    QStringList written, inputChannels;
+    QString error;
+    if (!CLIPipeline::paintBakeToDirectory(input, target, outputDir, resolution,
+                                           prefix, writeSidecar, written,
+                                           inputChannels, error)) {
+        return makeErrorResult(
+            QString("Error: %1").arg(error.isEmpty() ? QStringLiteral("bake failed")
+                                                     : error));
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Baked %1 texture(s) for '%2' into %3")
+                     .arg(written.size()).arg(target, outputDir)}}};
+    result["target"] = target;
+    result["output_dir"] = outputDir;
+    result["resolution"] = resolution;
+    QJsonArray ins;
+    for (const QString& c : inputChannels) ins.append(c);
+    result["input_channels"] = ins;
+    QJsonArray outs;
+    for (const QString& w : written) outs.append(w);
+    result["written"] = outs;
+    // Stated in the payload so a caller expecting seven maps sees why there are
+    // six, rather than reading it as a failure.
+    result["height_omitted"] =
+        QStringLiteral("Height is not a paintable channel (#547): it shares the "
+                       "Normal session and has no standalone consumer.");
+    return result;
+}
+
 QJsonObject MCPServer::toolPackTextures(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "pack_textures");
@@ -10663,6 +10717,46 @@ QJsonArray MCPServer::buildToolsList()
             "Unreal MR = Metallic+Roughness). Each output channel takes either a source image (sampled "
             "as luminance) or a constant 0..1 value. Smaller sources are bilinear-scaled to match the "
             "largest input. Returns the output dimensions on success.",
+            props,
+            required
+        );
+    }
+
+    // paint_bake (Paint v2 Slice I #552)
+    {
+        QJsonObject props;
+        props["input"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Mesh file whose bound PBR textures should be repacked."}};
+        props["target"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Engine layout: generic | unity | unreal | godot | gltf. "
+                            "unity = metallic+smoothness RGBA with a DirectX (+Y down) normal; "
+                            "unreal = ORM packed RGB; godot = separate textures + a .tres "
+                            "carrying each texture's sRGB/linear flag; gltf = metallic-roughness "
+                            "with G=roughness, B=metallic."}};
+        props["output_dir"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Directory to write the texture set into. Created if absent."}};
+        props["resolution"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Output edge length. 0 (default) keeps each channel's own size."}};
+        props["prefix"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Filename prefix, e.g. 'hero' -> hero_BaseColor.png."}};
+        props["write_sidecar"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Default true — writes a <prefix>.bake.json describing the bake."}};
+        QJsonArray required;
+        required.append("input");
+        required.append("output_dir");
+        appendTool(
+            "paint_bake",
+            "Repack a mesh's existing PBR textures into an engine channel layout "
+            "(Unity / Unreal / Godot / glTF) plus a sidecar JSON. Height is not emitted: "
+            "it is not a paintable channel (it shares the Normal session and has no "
+            "standalone consumer), so there is no height data to bake. Returns the list "
+            "of written files.",
             props,
             required
         );

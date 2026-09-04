@@ -175,9 +175,15 @@ QString buildGodotResource(const std::vector<OutputTexture>& textures,
     QString s;
     s += QStringLiteral("[gd_resource type=\"StandardMaterial3D\" format=3]\n\n");
     for (const auto& t : textures) {
-        s += QStringLiteral("; %1%2.png  srgb=%3  (%4)\n")
-                 .arg(prefix, t.suffix, t.srgb ? QStringLiteral("true")
-                                               : QStringLiteral("false"), t.note);
+        // Must match the writer's stem exactly (prefix + "_" + suffix), or the
+        // .tres references files that do not exist on disk.
+        const QString file = prefix.isEmpty()
+                                 ? (t.suffix + QStringLiteral(".png"))
+                                 : (prefix + QStringLiteral("_") + t.suffix
+                                    + QStringLiteral(".png"));
+        s += QStringLiteral("; %1  srgb=%2  (%3)\n")
+                 .arg(file, t.srgb ? QStringLiteral("true")
+                                   : QStringLiteral("false"), t.note);
     }
     s += QStringLiteral("\n[resource]\n");
     for (const auto& t : textures) {

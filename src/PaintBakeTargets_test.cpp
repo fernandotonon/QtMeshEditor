@@ -242,6 +242,12 @@ TEST(PaintBakeTargetsTest, GodotEmitsSeparateTexturesAndATresWithColourSpaceFlag
     EXPECT_FALSE(r.godotResource.isEmpty()) << ".tres sidecar is the point of this target";
     // The colour-space flag is the import bug this sidecar exists to prevent.
     EXPECT_TRUE(r.godotResource.contains(QStringLiteral("Albedo -> sRGB")));
+    // The referenced filenames must match what the writer actually produces
+    // (prefix + "_" + suffix); an earlier version emitted "heroAlbedo.png" and
+    // pointed the .tres at files that do not exist.
+    EXPECT_TRUE(r.godotResource.contains(QStringLiteral("hero_Albedo.png")))
+        << r.godotResource.toStdString();
+    EXPECT_FALSE(r.godotResource.contains(QStringLiteral("heroAlbedo.png")));
     EXPECT_TRUE(r.godotResource.contains(QStringLiteral("Roughness -> linear/data")));
 }
 

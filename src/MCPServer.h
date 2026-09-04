@@ -259,6 +259,9 @@ private:
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture (e.g. ORM = AO+Roughness+Metallic).
     QJsonObject toolPackTextures(const QJsonObject &args);
+    /// Paint v2 Slice I (#552): repack a mesh's PBR textures into an engine
+    /// channel layout (delegates to CLIPipeline::cmdPaintBake's core).
+    QJsonObject toolPaintBake(const QJsonObject &args);
     /// Slice H: generate a tangent-space normal map from a height/bump
     /// source via Sobel filter.
     QJsonObject toolGenerateNormalMap(const QJsonObject &args);
