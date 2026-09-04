@@ -165,6 +165,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBufferImageProvider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintLayerBlend.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintLayerStack.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBakeTargets.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GradientRamp.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ColorPaletteLibrary.cpp
