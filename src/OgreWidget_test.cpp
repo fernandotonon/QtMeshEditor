@@ -19,6 +19,7 @@
 // These tests exercise QWidget event handlers and Ogre frame callbacks directly.
 #define protected public
 #include "OgreWidget.h"
+#include "SkinWeightController.h"
 #undef protected
 
 class OgreWidgetTest : public ::testing::Test {
@@ -276,4 +277,30 @@ TEST_F(OgreWidgetTest, ViewportDefaultsApplyWhenUnset)
                 ViewportSettingsKeys::defaultNearClip(), 1e-5);
     EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(),
                 ViewportSettingsKeys::defaultFarClip(), 1e-3);
+}
+
+// --- brush cursor for weight painting (Skel Slice D, #558) ----------------
+
+// Enabling weight paint must swap the viewport cursor to the round brush, the
+// same affordance vertex-colour painting already gets. The cursor is driven by
+// the weightPaintChanged signal, so this also covers that wiring; without the
+// connection the shape stays an arrow and the mode gives no visual feedback.
+TEST_F(OgreWidgetTest, WeightPaintSwitchesTheViewportCursorToTheBrush)
+{
+    auto* weights = SkinWeightController::instance();
+    ASSERT_NE(weights, nullptr);
+    weights->setWeightPaintEnabled(false);
+    widget->setCursor(Qt::ArrowCursor);
+
+    // No skinned selection here, so the session cannot open — but the CURSOR is
+    // a pure mode affordance and must follow the requested mode regardless.
+    weights->setWeightPaintEnabled(true);
+    app->processEvents();
+    EXPECT_EQ(widget->cursor().shape(), Qt::BitmapCursor)
+        << "a custom pixmap cursor reports BitmapCursor";
+
+    weights->setWeightPaintEnabled(false);
+    app->processEvents();
+    EXPECT_EQ(widget->cursor().shape(), Qt::ArrowCursor)
+        << "leaving paint mode must restore the arrow";
 }

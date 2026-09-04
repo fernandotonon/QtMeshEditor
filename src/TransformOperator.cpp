@@ -31,6 +31,7 @@
 #include "commands/SkeletonBoneCommands.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
+#include "SkinWeightController.h"
 #include "AutoRigController.h"
 #include "FaceRigController.h"
 #include "TexturePaintController.h"
@@ -1247,6 +1248,27 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             }
         }
 
+        // Skel Slice D (#558): weight painting is an ANIMATION-mode feature, so
+        // this must sit OUTSIDE the edit-mode branch below. It was originally
+        // placed inside it, which meant clicks never reached the brush because
+        // edit mode is off in Animation mode — the brush appeared completely
+        // dead. Only the SELECT tool is hijacked, so the transform gizmos keep
+        // working while the brush is armed.
+        if (mTransformState == TS_SELECT) {
+            if (auto* swc = SkinWeightController::instance();
+                swc && swc->weightPaintEnabled()) {
+                if (swc->beginStroke(m_pActiveWidget, e->pos())) {
+                    mWeightPaintDragActive = true;
+                    SentryReporter::addBreadcrumb("scene.skel.weight.stroke",
+                                                  "stroke begin");
+                    return;
+                }
+                // Brush armed: swallow the click rather than falling through to
+                // selection, so a miss cannot blow away the user's selection.
+                return;
+            }
+        }
+
         // In edit mode, delegate selection to EditModeController
         if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
         {
@@ -1486,6 +1508,20 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Skel Slice D (#558): weight-paint drag / hover readout. Deliberately NOT
+    // gated on edit mode — this is an Animation-mode feature.
+    if (auto* swc = SkinWeightController::instance(); swc && m_pActiveWidget) {
+        if (mWeightPaintDragActive && (e->buttons() & Qt::LeftButton)) {
+            swc->updateStroke(m_pActiveWidget, e->pos());
+            return;                      // the brush owns the drag
+        }
+        if (swc->weightPaintEnabled()) {
+            // Keep the "weight under cursor" readout live even when not
+            // painting; do NOT consume, so camera hover still works.
+            swc->updateHover(m_pActiveWidget, e->pos());
+        }
+    }
+
     // Vertex paint drag: update on every move while LMB is held.
     auto* editCtrl = EditModeController::instance();
     if (mVertexPaintDragActive && editCtrl->isEditModeActive()
@@ -2051,6 +2087,12 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (mWeightPaintDragActive && e->button() == Qt::LeftButton) {
+        if (auto* swc = SkinWeightController::instance()) swc->endStroke();
+        mWeightPaintDragActive = false;
+        SentryReporter::addBreadcrumb("scene.skel.weight.stroke", "stroke end");
+        return;
+    }
     if (mVertexPaintDragActive && e->button() == Qt::LeftButton) {
         EditModeController::instance()->endVertexPaintStroke(/*commitUndo=*/true);
         mVertexPaintDragActive = false;

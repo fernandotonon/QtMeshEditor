@@ -45,6 +45,7 @@ THE SOFTWARE.
 #include "EditorViewport.h"
 #include "QtInputManager.h"
 #include "EditModeController.h"
+#include "SkinWeightController.h"
 #include "TransformOperator.h"
 #include "HDR/HdrViewportController.h"
 #include "ShadowController.h"
@@ -109,6 +110,21 @@ void applyViewportCameraFromSettings(SpaceCamera* cam)
 }
 }
 
+/// True when a brush-style paint mode owns the cursor.
+///
+/// Vertex-colour painting (Edit Mode) and skin-weight painting (Animation Mode)
+/// both want the round brush cursor. The condition is consulted from four
+/// places — ctor signal, press, move, release — so it lives here rather than
+/// being copied, which is how weight paint originally missed the cursor.
+static bool brushCursorActive()
+{
+    auto* edit = EditModeController::instance();
+    if (edit && edit->isEditModeActive() && edit->vertexPaintEnabled())
+        return true;
+    auto* weights = SkinWeightController::instance();
+    return weights && weights->weightPaintEnabled();
+}
+
 OgreWidget::OgreWidget( QWidget *parent ):
     QWidget( parent )
 {
@@ -119,15 +135,16 @@ OgreWidget::OgreWidget( QWidget *parent ):
 
     setFocusPolicy(Qt::ClickFocus); //one click to get focus
 
-    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
-            this, [this]() {
-        const bool paintOn = EditModeController::instance()->isEditModeActive()
-                          && EditModeController::instance()->vertexPaintEnabled();
-        if (paintOn)
+    auto applyBrushCursor = [this]() {
+        if (brushCursorActive())
             QWidget::setCursor(vertexPaintBrushCursor());
         else
             QWidget::setCursor(Qt::ArrowCursor);
-    });
+    };
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, applyBrushCursor);
+    connect(SkinWeightController::instance(), &SkinWeightController::weightPaintChanged,
+            this, applyBrushCursor);
 
     initOgreWindow();
 }
@@ -529,8 +546,7 @@ void OgreWidget::mousePressEvent(QMouseEvent *e)
     }
     else if(e->buttons().testFlag(Qt::LeftButton))
     {
-        if (EditModeController::instance()->isEditModeActive()
-            && EditModeController::instance()->vertexPaintEnabled()) {
+        if (brushCursorActive()) {
             QWidget::setCursor(vertexPaintBrushCursor());
         } else {
             QCursor cursor = this->cursor();
@@ -552,9 +568,10 @@ void OgreWidget::mouseMoveEvent(QMouseEvent *e)
     mCamera->mouseMoveEvent(e);
 
     if (e->buttons() == Qt::NoButton) {
-        if (EditModeController::instance()->isEditModeActive()
-            && EditModeController::instance()->vertexPaintEnabled()) {
-            EditModeController::instance()->updateVertexPaintPreview(this, e->pos());
+        auto* edit = EditModeController::instance();
+        if (edit->isEditModeActive() && edit->vertexPaintEnabled())
+            edit->updateVertexPaintPreview(this, e->pos());
+        if (brushCursorActive()) {
             QWidget::setCursor(vertexPaintBrushCursor());
         } else {
             QWidget::unsetCursor();
@@ -567,8 +584,7 @@ void OgreWidget::mouseReleaseEvent(QMouseEvent *e)
     QtInputManager::getInstance().mouseReleaseEvent(e);
     mCamera->mouseReleaseEvent(e);
 
-    if (EditModeController::instance()->isEditModeActive()
-        && EditModeController::instance()->vertexPaintEnabled()) {
+    if (brushCursorActive()) {
         QWidget::setCursor(vertexPaintBrushCursor());
     } else {
         QCursor cursor = this->cursor();

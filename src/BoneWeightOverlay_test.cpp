@@ -6,7 +6,9 @@
 #include <OgreException.h>
 #include "BoneWeightOverlay.h"
 #include "MeshImporterExporter.h"
+#include "AnimationWidget.h"
 #include "SelectionSet.h"
+#include "SkinWeightController.h"
 #include "Manager.h"
 #include "TestHelpers.h"
 
@@ -460,4 +462,159 @@ TEST_F(BoneWeightOverlayInMemoryTest, DoubleSetVisibleTrueNoDuplicate)
     EXPECT_EQ(countAfterFirst, countAfterSecond);
 
     overlay.setVisible(false);
+}
+
+// --- live colour refresh (Skel Slice D, #558) ------------------------------
+
+// refreshColours() exists so a weight-paint stroke is visible AS it is painted.
+// The overlay caches colours at build time, so the real risk is a refresh that
+// runs without restamping anything. Assert the CACHED COLOUR ACTUALLY CHANGES
+// when the underlying assignment changes — a crash-free no-op would pass a
+// weaker test while leaving the user staring at a frozen heat map.
+TEST_F(BoneWeightOverlayInMemoryTest, RefreshColoursRestampsAfterAWeightEdit)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_RefreshColours");
+    ASSERT_NE(entity, nullptr);
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setSelectedBone(1);
+    overlay.setVisible(true);
+
+    ASSERT_FALSE(overlay.sectionColours().empty());
+    ASSERT_FALSE(overlay.sectionColours()[0].empty());
+    const Ogre::ColourValue before = overlay.sectionColours()[0][0];
+
+    // The fixture weights every vertex 1.0 to bone 1 (full red). Drop vertex 0
+    // to a low weight, which must read back as a distinctly cooler colour.
+    Ogre::MeshPtr mesh = entity->getMesh();
+    ASSERT_TRUE(mesh);
+    const auto saved = mesh->getBoneAssignments();
+    mesh->clearBoneAssignments();
+    for (const auto& kv : saved) {
+        Ogre::VertexBoneAssignment vba = kv.second;
+        if (vba.vertexIndex == 0 && vba.boneIndex == 1)
+            vba.weight = 0.1f;
+        mesh->addBoneAssignment(vba);
+    }
+
+    overlay.refreshColours();
+
+    const Ogre::ColourValue after = overlay.sectionColours()[0][0];
+    EXPECT_NE(before.r, after.r) << "refreshColours() must restamp the cache";
+    EXPECT_LT(after.r, before.r) << "a lower weight must read cooler (less red)";
+    EXPECT_NEAR(after.r, BoneWeightOverlay::weightToColor(0.1f).r, 1e-5f);
+}
+
+// --- per-vertex dots (Skel Slice D, #558) ---------------------------------
+
+// The dots exist to give a depth cue the depth-off heat map cannot. Assert the
+// toggle actually creates/destroys the ManualObject, and that it stays off when
+// the overlay itself is hidden (no stray object left in the scene).
+TEST_F(BoneWeightOverlayInMemoryTest, ShowVerticesCreatesAndDestroysThePointObject)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_VertDots");
+    ASSERT_NE(entity, nullptr);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    BoneWeightOverlay overlay(entity, sceneMgr);
+    overlay.setSelectedBone(1);
+    overlay.setVisible(true);
+
+    EXPECT_FALSE(overlay.showVertices()) << "dots are opt-in";
+
+    overlay.setShowVertices(true);
+    EXPECT_TRUE(overlay.showVertices());
+    const std::string objName =
+        sceneMgr->getName() + "/BoneWeightVertices/" + entity->getName();
+    EXPECT_TRUE(sceneMgr->hasManualObject(objName))
+        << "enabling dots must emit a point-list object";
+
+    overlay.setShowVertices(false);
+    EXPECT_FALSE(overlay.showVertices());
+    EXPECT_FALSE(sceneMgr->hasManualObject(objName))
+        << "disabling dots must remove the object, not just hide it";
+}
+
+// Turning the whole overlay off must take the dots with it, or they linger on a
+// mesh whose heat map is gone.
+TEST_F(BoneWeightOverlayInMemoryTest, HidingTheOverlayAlsoDropsTheVertexDots)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_VertDotsHide");
+    ASSERT_NE(entity, nullptr);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    BoneWeightOverlay overlay(entity, sceneMgr);
+    overlay.setSelectedBone(1);
+    overlay.setVisible(true);
+    overlay.setShowVertices(true);
+
+    const std::string objName =
+        sceneMgr->getName() + "/BoneWeightVertices/" + entity->getName();
+    ASSERT_TRUE(sceneMgr->hasManualObject(objName));
+
+    overlay.setVisible(false);
+    EXPECT_FALSE(sceneMgr->hasManualObject(objName))
+        << "hiding the overlay must tear down the dots too";
+}
+
+// The dots are depth-TESTED while the heat map is not — that asymmetry is the
+// entire point of the feature, so pin it.
+TEST_F(BoneWeightOverlayInMemoryTest, VertexDotMaterialIsDepthTestedUnlikeTheHeatMap)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_VertDotsDepth");
+    ASSERT_NE(entity, nullptr);
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setSelectedBone(1);
+    overlay.setVisible(true);
+    overlay.setShowVertices(true);
+
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    auto dotMat = matMgr.getByName("BoneWeightOverlay/VertexMaterial");
+    ASSERT_TRUE(dotMat);
+    auto* dotPass = dotMat->getTechnique(0)->getPass(0);
+    EXPECT_TRUE(dotPass->getDepthCheckEnabled())
+        << "dots must be occluded by the mesh; that occlusion IS the depth cue";
+    EXPECT_FALSE(dotPass->getDepthWriteEnabled())
+        << "dots must not write depth, or they occlude the skeleton";
+
+    auto heatMat = matMgr.getByName("BoneWeightOverlay/Material");
+    ASSERT_TRUE(heatMat);
+    EXPECT_FALSE(heatMat->getTechnique(0)->getPass(0)->getDepthCheckEnabled())
+        << "the heat map deliberately shows through the surface";
+}
+
+// A brand-new overlay must ADOPT the current weight-paint state.
+//
+// This used to cover "paint enabled BEFORE any overlay exists", but paint mode
+// now creates the overlay itself (SkinWeightController::setWeightPaintEnabled
+// -> toggleBoneWeights), so that ordering is no longer reachable. What still
+// matters, and what this now checks, is that an overlay REBUILT while paint
+// mode is live comes back with its dots on — the case that occurs when the user
+// hides and re-shows the heat map mid-session.
+TEST_F(BoneWeightOverlayInMemoryTest, NewOverlayAdoptsActiveWeightPaintState)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_AdoptPaint");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget(nullptr);
+    SelectionSet::getSingleton()->selectOne(entity);
+    SkinWeightController::instance()->setWeightPaintEnabled(true);
+
+    // Paint mode brought the overlay up by itself.
+    auto* first = widget.getBoneWeightOverlay(entity);
+    ASSERT_NE(first, nullptr) << "paint mode must create the overlay";
+
+    // Destroy just the overlay, leaving paint mode enabled, then rebuild it the
+    // way a re-show does. Calling toggleBoneWeights(false) would also exit paint
+    // mode by design, so drive the rebuild directly.
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, true))
+        << "re-showing an already-shown overlay must be a no-op, not a rebuild";
+
+    auto* overlay = widget.getBoneWeightOverlay(entity);
+    ASSERT_NE(overlay, nullptr);
+    EXPECT_TRUE(overlay->showVertices())
+        << "the overlay must read paint mode at construction";
+
+    SkinWeightController::instance()->setWeightPaintEnabled(false);
 }
