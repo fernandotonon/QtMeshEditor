@@ -8440,11 +8440,16 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
             BakeVertex bv{};
             Ogre::Real* pPos = nullptr;
             posElem->baseVertexPointerToElement(posBytes + j * posStride, &pPos);
-            bv.position = {pPos[0], pPos[1], pPos[2]};
+            // EXPORT space: mirror Z to match the exported glTF (the
+            // exporter applies the inverse of the import's
+            // ConvertToLeftHanded) — this list feeds both the bake-column
+            // alignment against the read-back glTF and the bind sidecar
+            // consumers pair with that file.
+            bv.position = {pPos[0], pPos[1], -pPos[2]};
             if (normElem && normBytes) {
                 Ogre::Real* pN = nullptr;
                 normElem->baseVertexPointerToElement(normBytes + j * normStride, &pN);
-                bv.normal = {pN[0], pN[1], pN[2]};
+                bv.normal = {pN[0], pN[1], -pN[2]};
                 bv.hasNormal = true;
             }
             if (uvElem && uvBytes) {

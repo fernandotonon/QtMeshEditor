@@ -4332,38 +4332,28 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
 
             Assimp::Exporter exporter;
-            // glTF/GLB and DirectX (.x) are right-handed like Ogre — skip
-            // handedness conversion. For .x specifically, Assimp's exporter
-            // handles the RH→LH conversion internally, so applying
-            // ConvertToLeftHanded would double-flip the geometry. For glTF
-            // (also RH), ConvertToLeftHanded would flip the X axis AND
-            // reverse triangle winding, which silently breaks any consumer
-            // that pairs the export with a separately-computed vertex
-            // stream — e.g. the OpenVAT bake, whose texture columns are
-            // indexed by Ogre's original RH vertex order. Only apply LH
-            // conversion for formats that genuinely expect left-handed
-            // coords (the Assimp pose exporter has the same skip list).
-            bool rightHanded = (formatId == "x"
-                                || formatId == "gltf2"
-                                || formatId == "glb2");
-            unsigned int exportFlags = rightHanded
+            // Handedness: the IMPORT applies aiProcess_ConvertToLeftHanded
+            // (axis mirror + winding + V flip), so the in-scene data is a
+            // MIRROR of the source file. Every export must apply the same
+            // process again — each of its steps is an involution, so a
+            // second application restores source space exactly (axis back,
+            // winding back, and the V flip lands the single net flip the
+            // glTF spec's top-left origin needs). glTF/GLB historically
+            // SKIPPED this (only adding FlipUVs), which mirrored the
+            // geometry on every export: models came back facing the other
+            // way and asymmetric details swapped sides — the user-visible
+            // "exported glb is rotated backwards", and each import→export
+            // cycle flipped again (#411-era upside-down reports were the
+            // same bug on skinned binds). The OpenVAT bake, which pairs the
+            // exported glTF with separately-computed vertex streams, bakes
+            // in EXPORT space for the same reason (readOgreBindVertices /
+            // VATBaker mirror Z to match).
+            // The one true exception is DirectX .x: Assimp's .x exporter
+            // performs its own RH→LH conversion internally, so applying
+            // the process here would double-flip.
+            bool skipHandedness = (formatId == "x");
+            unsigned int exportFlags = skipHandedness
                 ? 0 : aiProcess_ConvertToLeftHanded;
-
-            // glTF spec mandates V=0 at the top-left of the texture
-            // (DirectX-style), while Ogre stores UVs as authored —
-            // typically with V=0 at the bottom (OpenGL-style). The
-            // import-time `aiProcess_ConvertToLeftHanded` was historically
-            // responsible for flipping V via its bundled FlipUVs step;
-            // dropping LH conversion above also drops that flip, leaving
-            // the exported glTF with Ogre's V values. Every glTF consumer
-            // (Godot, three.js, Blender) then V-flips on import, landing
-            // the texture upside-down relative to the bind pose. Restore
-            // the V flip explicitly for glTF/GLB so the round-trip
-            // remains correct — this is unrelated to handedness and the
-            // OpenVAT bake doesn't care about UV0 (the bake encodes
-            // positions + normals by column, not by UV lookup).
-            if (formatId == "gltf2" || formatId == "glb2")
-                exportFlags |= aiProcess_FlipUVs;
             // Split >65535-vertex meshes so Assimp's exporters don't truncate
             // the vertex accessors at 65536 (which tears large meshes apart).
             splitLargeMeshesForExport(scene);
@@ -4674,10 +4664,12 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
 
         try {
             Assimp::Exporter exporter;
-            // glTF/GLB and DirectX (.x) are right-handed like Ogre — skip handedness conversion.
-            // Only apply ConvertToLeftHanded for formats that expect left-handed coords (e.g. FBX).
-            bool rightHanded = (formatId == "x" || formatId == "gltf2" || formatId == "glb2");
-            unsigned int exportFlags = rightHanded ? 0 : aiProcess_ConvertToLeftHanded;
+            // Same handedness rule as the main exporter: the import mirrored
+            // the scene via ConvertToLeftHanded, so every export (glTF/GLB
+            // included) applies it again to restore source space; only .x
+            // skips (Assimp's .x exporter converts internally).
+            bool skipHandedness = (formatId == "x");
+            unsigned int exportFlags = skipHandedness ? 0 : aiProcess_ConvertToLeftHanded;
             // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
             splitLargeMeshesForExport(scene);
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),

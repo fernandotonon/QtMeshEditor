@@ -557,6 +557,13 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             return result;
         }
 
+        // EXPORT space: the glTF exporter mirrors Z on the way out (the
+        // inverse of the import's ConvertToLeftHanded — see
+        // MeshImporterExporter), and the consumer pairs this bake with the
+        // exported mesh, so the texture data must live in the same space.
+        for (size_t i = before; i < flat.size(); ++i)
+            flat[i].z = -flat[i].z;
+
         for (size_t i = before; i < flat.size(); ++i) {
             const auto& p = flat[i];
             lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
@@ -580,6 +587,10 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                     .arg(f).arg(nrmAppended).arg(frameVerts);
             return result;
         }
+        // Same export-space Z mirror as positions (a mirror maps normals
+        // the same way: n.z = -n.z).
+        for (size_t i = normals.size() - nrmAppended; i < normals.size(); ++i)
+            normals[i].z = -normals[i].z;
     }
 
     entity->removeSoftwareAnimationRequest(true);
