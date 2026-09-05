@@ -69,3 +69,105 @@ TEST(BackgroundRemoverTest, SegmentsWhenModelPresentElseFallsBack)
         EXPECT_EQ(r.image.size(), img.size());   // original passed through
     }
 }
+
+// --- Uniform-background rescue (pure, model-free) --------------------------
+// The fixture: a white 200×200 backdrop with a blue "body" the saliency
+// already found (alpha=1). The rescue must recover geometry the saliency
+// missed WITHOUT re-mattering the backdrop (3.37.3 field reports: kept
+// shadows/vignettes became flat slabs and washed the bakes out bright).
+
+namespace {
+
+struct RescueFixture {
+    static constexpr int W = 200, H = 200;
+    QImage img{W, H, QImage::Format_RGB32};
+    std::vector<float> alpha;
+
+    RescueFixture()
+    {
+        img.fill(qRgb(255, 255, 255));
+        alpha.assign(size_t(W) * H, 0.0f);
+        // Body: blue rect, already matted as foreground.
+        for (int y = 80; y <= 160; ++y)
+            for (int x = 30; x <= 90; ++x) {
+                img.setPixel(x, y, qRgb(40, 60, 200));
+                alpha[size_t(y) * W + x] = 1.0f;
+            }
+    }
+    float a(int x, int y) const { return alpha[size_t(y) * W + x]; }
+};
+
+} // namespace
+
+TEST(BackgroundRemoverTest, RescueRecoversLimbConnectedToSubject)
+{
+    RescueFixture f;
+    // A thin blue "arm" the saliency missed, attached to the body.
+    for (int y = 100; y <= 110; ++y)
+        for (int x = 91; x <= 170; ++x)
+            f.img.setPixel(x, y, qRgb(40, 60, 200));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(160, 105), 1.0f);   // arm tip rescued
+    EXPECT_EQ(f.a(120, 105), 1.0f);   // arm middle rescued
+    EXPECT_EQ(f.a(180, 30), 0.0f);    // plain backdrop untouched
+}
+
+TEST(BackgroundRemoverTest, RescueIgnoresDropShadow)
+{
+    RescueFixture f;
+    // A gray drop shadow touching the body's feet: same chroma as the white
+    // backdrop, darker — the old rescue kept it and TRELLIS grew a slab.
+    for (int y = 161; y <= 185; ++y)
+        for (int x = 20; x <= 110; ++x)
+            f.img.setPixel(x, y, qRgb(170, 170, 170));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(60, 175), 0.0f);    // shadow stays background
+    EXPECT_EQ(f.a(105, 170), 0.0f);
+}
+
+TEST(BackgroundRemoverTest, RescueIgnoresDisconnectedBlob)
+{
+    RescueFixture f;
+    // A strongly-colored watermark/logo far from the subject: chroma passes,
+    // but it is not connected to the saliency foreground.
+    for (int y = 15; y <= 40; ++y)
+        for (int x = 150; x <= 190; ++x)
+            f.img.setPixel(x, y, qRgb(200, 40, 40));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(170, 25), 0.0f);    // disconnected blob dropped
+}
+
+TEST(BackgroundRemoverTest, RescueAbortsWhenItWouldFloodTheFrame)
+{
+    RescueFixture f;
+    // Corners agree (white — the panel stays clear of all four 24px corner
+    // patches) but the "background" isn't uniform after all: a huge colored
+    // panel touches the body. Rescuing it would hand the 3D generation a
+    // backdrop slab — the safety valve must bail out instead.
+    for (int y = 30; y <= 165; ++y)
+        for (int x = 91; x <= 190; ++x)
+            f.img.setPixel(x, y, qRgb(80, 160, 90));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(150, 120), 0.0f);   // panel not rescued
+    EXPECT_EQ(f.a(60, 120), 1.0f);    // body untouched
+}
+
+TEST(BackgroundRemoverTest, RescueSkipsBusyBackground)
+{
+    RescueFixture f;
+    // Make the corners disagree — no reliable background color, no rescue.
+    for (int y = 0; y < 30; ++y)
+        for (int x = 0; x < 30; ++x)
+            f.img.setPixel(x, y, qRgb(200, 30, 30));
+    // A missed limb that WOULD be rescued on a uniform backdrop.
+    for (int y = 100; y <= 110; ++y)
+        for (int x = 91; x <= 170; ++x)
+            f.img.setPixel(x, y, qRgb(40, 60, 200));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(160, 105), 0.0f);   // gate closed → alpha untouched
+}
