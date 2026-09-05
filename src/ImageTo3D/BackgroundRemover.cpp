@@ -242,6 +242,8 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
             auto patchStats = [&](int px, int py, double m[3], double& var) {
                 double sum[3] = {0, 0, 0}, sq[3] = {0, 0, 0};
                 int n = 0;
+                px = std::max(0, px);
+                py = std::max(0, py);
                 for (int y = py; y < py + 24 && y < H; ++y) {
                     const QRgb* line =
                         reinterpret_cast<const QRgb*>(src32.constScanLine(y));
@@ -263,10 +265,14 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
                 }
             };
             double c0[3], c1[3], c2[3], c3[3], v0, v1, v2, v3;
+            // Clamp the patch origins: an image under 24px would otherwise
+            // hand negative coordinates to constScanLine/line[x].
+            const int px1 = std::max(0, W - 24);
+            const int py1 = std::max(0, H - 24);
             patchStats(0, 0, c0, v0);
-            patchStats(W - 24, 0, c1, v1);
-            patchStats(0, H - 24, c2, v2);
-            patchStats(W - 24, H - 24, c3, v3);
+            patchStats(px1, 0, c1, v1);
+            patchStats(0, py1, c2, v2);
+            patchStats(px1, py1, c3, v3);
             double bg[3], spread = 0;
             for (int k = 0; k < 3; ++k) {
                 bg[k] = (c0[k] + c1[k] + c2[k] + c3[k]) / 4.0;
