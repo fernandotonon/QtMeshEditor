@@ -277,8 +277,17 @@ public:
 
     // Closest point on the whole surface. Returns triangle index (or -1 for
     // an empty mesh) and fills the closest point + barycentrics.
-    int closest(const float p[3], float outPoint[3], float outBary[3]) const
+    int closest(const float p[3], float outPoint[3], float outBary[3],
+                const float* towardNormal = nullptr) const
     {
+        // towardNormal (optional): reject candidate triangles whose face
+        // normal opposes it (dot < -0.2). The bake queries the DENSE source
+        // from a SIMPLIFIED surface point; on detailed regions the plain
+        // nearest triangle can belong to a different nearby surface (the
+        // back of an ear, the inside of a mouth) whose color then lands as
+        // a dark chip exactly where the model is most detailed. Filtering
+        // by facing keeps the sample on "our" side; the caller falls back
+        // to the unfiltered query when nothing on-side is found.
         if (m_triCount == 0)
             return -1;
         const int cx = cellIndex(p[0], 0);
@@ -300,6 +309,16 @@ public:
                 const float* a = &(*m_positions)[idx[0] * 3];
                 const float* b = &(*m_positions)[idx[1] * 3];
                 const float* c = &(*m_positions)[idx[2] * 3];
+                if (towardNormal) {
+                    float e1[3], e2[3], fn[3];
+                    sub3(b, a, e1);
+                    sub3(c, a, e2);
+                    cross3(e1, e2, fn);
+                    const float l = len3(fn);
+                    if (l > 1e-20f
+                        && dot3(fn, towardNormal) < -0.2f * l)
+                        continue;
+                }
                 float cp[3], bc[3];
                 closestPointOnTriangle(a, b, c, p, cp, bc);
                 float dvec[3];
@@ -1312,7 +1331,9 @@ BakeResult bake(const std::vector<float>& targetPositions,
                         normalize3(Nt);
 
                         float S[3], sb[3];
-                        const int sTri = grid.closest(P, S, sb);
+                        int sTri = grid.closest(P, S, sb, Nt);
+                        if (sTri < 0)
+                            sTri = grid.closest(P, S, sb);
                         float attr[6];
                         if (!volume.sample(sTri >= 0 ? S : P, attr))
                             continue;   // no opaque voxel within reach —
@@ -1482,50 +1503,84 @@ BakeResult bake(const std::vector<float>& targetPositions,
         covered.swap(next);
     }
 
-    // Mip-safe background: the dilation ring (a few texels) disappears at
-    // higher mip levels, and on heavily-charted meshes (a simplified TRELLIS
-    // dual grid produces thousands of small charts) the neutral background
-    // then bleeds through as bright seam networks at render time. Fill ALL
-    // remaining background with the mesh's average baked colour so every mip
-    // level samples plausible values.
+    // Mip-safe fill: after the exact gutter dilation above, fill EVERY
+    // remaining uncovered texel — inter-chart background AND interior holes
+    // (failed samples) — with its NEAREST covered texel's values via a
+    // jump-flood pass. The previous global-average flood was the source of
+    // the "dark chip" flecks on detailed models: a heavily-charted simplify
+    // (thousands of tiny charts) mixes bright skin and dark leather, so the
+    // average is mud, and both mip bleed at chart borders and any interior
+    // fill landed muddy chips onto bright surfaces. Nearest-texel fill makes
+    // every empty texel extend its closest chart instead.
     {
-        double sum[5] = {0, 0, 0, 0, 0};
-        size_t n = 0;
-        for (int y = 0; y < H; ++y) {
-            const uchar* bcRow = bcBits + static_cast<size_t>(y) * bcBpl;
-            const uchar* roRow = roBits + static_cast<size_t>(y) * roBpl;
-            const uchar* meRow = meBits + static_cast<size_t>(y) * meBpl;
+        constexpr int32_t kNoSeed = -1;
+        std::vector<int32_t> seed(static_cast<size_t>(W) * H, kNoSeed);
+        for (int y = 0; y < H; ++y)
             for (int x = 0; x < W; ++x) {
-                if (!covered[static_cast<size_t>(y) * W + x])
-                    continue;
-                sum[0] += bcRow[x * 4 + 0];
-                sum[1] += bcRow[x * 4 + 1];
-                sum[2] += bcRow[x * 4 + 2];
-                sum[3] += roRow[x];
-                sum[4] += meRow[x];
-                ++n;
+                const size_t lin = static_cast<size_t>(y) * W + x;
+                if (covered[lin])
+                    seed[lin] = static_cast<int32_t>(lin);
+            }
+        auto better = [&](int32_t cand, int x, int y, int32_t cur) {
+            if (cand == kNoSeed) return false;
+            const int cx = cand % W, cy = cand / W;
+            const long long dcx = cx - x, dcy = cy - y;
+            const long long dc = dcx * dcx + dcy * dcy;
+            if (cur == kNoSeed) return true;
+            const int ux = cur % W, uy = cur / W;
+            const long long dux = ux - x, duy = uy - y;
+            return dc < dux * dux + duy * duy;
+        };
+        int step = 1;
+        while (step < std::max(W, H)) step <<= 1;
+        for (; step >= 1; step >>= 1) {
+            for (int y = 0; y < H; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    const size_t lin = static_cast<size_t>(y) * W + x;
+                    int32_t best = seed[lin];
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        const int ny = y + dy * step;
+                        if (ny < 0 || ny >= H) continue;
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int nx = x + dx * step;
+                            if (nx < 0 || nx >= W) continue;
+                            const int32_t cand =
+                                seed[static_cast<size_t>(ny) * W + nx];
+                            if (better(cand, x, y, best))
+                                best = cand;
+                        }
+                    }
+                    seed[lin] = best;
+                }
             }
         }
-        if (n > 0) {
-            const uchar avg[5] = {
-                static_cast<uchar>(sum[0] / n + 0.5),
-                static_cast<uchar>(sum[1] / n + 0.5),
-                static_cast<uchar>(sum[2] / n + 0.5),
-                static_cast<uchar>(sum[3] / n + 0.5),
-                static_cast<uchar>(sum[4] / n + 0.5)};
-            for (int y = 0; y < H; ++y) {
-                uchar* bcRow = bcBits + static_cast<size_t>(y) * bcBpl;
-                uchar* roRow = roBits + static_cast<size_t>(y) * roBpl;
-                uchar* meRow = meBits + static_cast<size_t>(y) * meBpl;
-                for (int x = 0; x < W; ++x) {
-                    if (covered[static_cast<size_t>(y) * W + x])
-                        continue;
-                    bcRow[x * 4 + 0] = avg[0];
-                    bcRow[x * 4 + 1] = avg[1];
-                    bcRow[x * 4 + 2] = avg[2];
-                    bcRow[x * 4 + 3] = 255;
-                    roRow[x] = avg[3];
-                    meRow[x] = avg[4];
+        for (int y = 0; y < H; ++y) {
+            uchar* bcRow = bcBits + static_cast<size_t>(y) * bcBpl;
+            uchar* roRow = roBits + static_cast<size_t>(y) * roBpl;
+            uchar* meRow = meBits + static_cast<size_t>(y) * meBpl;
+            for (int x = 0; x < W; ++x) {
+                const size_t lin = static_cast<size_t>(y) * W + x;
+                if (covered[lin])
+                    continue;
+                const int32_t src = seed[lin];
+                if (src == kNoSeed)
+                    continue;   // fully empty atlas (no covered texels)
+                const int sx = src % W, sy = src / W;
+                const uchar* sbc = bcBits + static_cast<size_t>(sy) * bcBpl
+                                 + static_cast<size_t>(sx) * 4;
+                bcRow[x * 4 + 0] = sbc[0];
+                bcRow[x * 4 + 1] = sbc[1];
+                bcRow[x * 4 + 2] = sbc[2];
+                bcRow[x * 4 + 3] = 255;
+                roRow[x] = (roBits + static_cast<size_t>(sy) * roBpl)[sx];
+                meRow[x] = (meBits + static_cast<size_t>(sy) * meBpl)[sx];
+                if (noBits) {
+                    uchar* nRow = noBits + static_cast<size_t>(y) * noBpl;
+                    const uchar* snr = noBits + static_cast<size_t>(sy) * noBpl
+                                     + static_cast<size_t>(sx) * 3;
+                    nRow[x * 3 + 0] = snr[0];
+                    nRow[x * 3 + 1] = snr[1];
+                    nRow[x * 3 + 2] = snr[2];
                 }
             }
         }
@@ -1719,7 +1774,9 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                     B[k] *= wsign;
 
                 float S[3], sb[3];
-                const int sTri = grid.closest(P, S, sb);
+                int sTri = grid.closest(P, S, sb, Nt);
+                if (sTri < 0)
+                    sTri = grid.closest(P, S, sb);
                 float Ns[3];
                 if (sTri >= 0) {
                     const uint32_t* sidx = &sourceIndices[sTri * 3];
