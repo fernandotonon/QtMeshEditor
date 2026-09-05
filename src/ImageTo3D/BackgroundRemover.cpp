@@ -378,6 +378,8 @@ void BackgroundRemover::applyUniformBackgroundRescue(const QImage& image,
     // Distance threshold above the background's own noise floor.
     const double thr = std::max(28.0, 6.0 * std::sqrt(std::max(0.0, maxVar)));
     const double bgSum = bg[0] + bg[1] + bg[2];
+    const double bgChroma = std::max({bg[0], bg[1], bg[2]})
+                          - std::min({bg[0], bg[1], bg[2]});
     const size_t total = static_cast<size_t>(W) * static_cast<size_t>(H);
 
     // Pass 1 — candidates: clearly different from the background color, and
@@ -401,15 +403,25 @@ void BackgroundRemover::applyUniformBackgroundRescue(const QImage& image,
             if (d <= thr)
                 continue;
             const double s = r + g + b;
-            if (s > 1.0 && bgSum > 1.0) {
-                const double k = bgSum / s;
-                if (k > 0.7 && k < 3.5) {
-                    const double d2 = std::abs(r * k - bg[0])
-                                    + std::abs(g * k - bg[1])
-                                    + std::abs(b * k - bg[2]);
-                    if (d2 <= thr)
-                        continue;   // shading of the backdrop, not geometry
-                }
+            const double k = (s > 1.0 && bgSum > 1.0) ? bgSum / s : 1e9;
+            if (k > 0.7 && k < 3.5) {
+                const double d2 = std::abs(r * k - bg[0])
+                                + std::abs(g * k - bg[1])
+                                + std::abs(b * k - bg[2]);
+                if (d2 <= thr)
+                    continue;   // shading of the backdrop, not geometry
+            } else if (bgChroma < 24.0) {
+                // Outside the proportional window the luminance-scaled
+                // comparison is meaningless (clipped shadows; noise blown up
+                // by a huge k), but a deep/clipped shadow on an ACHROMATIC
+                // backdrop is itself achromatic — still shading. Genuinely
+                // dark geometry is left to the saliency net (solid dark
+                // masses are salient; the rescue exists for the chromatic
+                // thin appendages saliency misses).
+                const double pixChroma = std::max({r, g, b})
+                                       - std::min({r, g, b});
+                if (pixChroma < 24.0)
+                    continue;
             }
             cand[i] = 1;
         }

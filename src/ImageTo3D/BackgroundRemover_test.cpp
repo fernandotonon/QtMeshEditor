@@ -118,13 +118,34 @@ TEST(BackgroundRemoverTest, RescueIgnoresDropShadow)
     RescueFixture f;
     // A gray drop shadow touching the body's feet: same chroma as the white
     // backdrop, darker — the old rescue kept it and TRELLIS grew a slab.
-    for (int y = 161; y <= 185; ++y)
-        for (int x = 20; x <= 110; ++x)
+    for (int y = 161; y <= 175; ++y)
+        for (int x = 30; x <= 105; ++x)
             f.img.setPixel(x, y, qRgb(170, 170, 170));
 
     BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
     EXPECT_EQ(f.a(60, 175), 0.0f);    // shadow stays background
     EXPECT_EQ(f.a(105, 170), 0.0f);
+}
+
+TEST(BackgroundRemoverTest, RescueIgnoresDeepClippedShadow)
+{
+    RescueFixture f;
+    // A deep, near-clipped shadow (below the proportional-shading window,
+    // k >= 3.5) touching the body: achromatic on an achromatic backdrop is
+    // still shading, however dark. Dark GEOMETRY on a white backdrop is the
+    // saliency net's job — solid dark masses are salient.
+    for (int y = 161; y <= 175; ++y)
+        for (int x = 30; x <= 105; ++x)
+            f.img.setPixel(x, y, qRgb(45, 45, 45));
+
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(60, 175), 0.0f);    // deep shadow stays background
+    // A CHROMATIC dark limb at the same depth is still rescued.
+    for (int y = 100; y <= 110; ++y)
+        for (int x = 91; x <= 170; ++x)
+            f.img.setPixel(x, y, qRgb(20, 25, 90));
+    BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
+    EXPECT_EQ(f.a(160, 105), 1.0f);
 }
 
 TEST(BackgroundRemoverTest, RescueIgnoresDisconnectedBlob)
