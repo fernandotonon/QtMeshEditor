@@ -223,6 +223,88 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
                     a = (a >= opts.threshold) ? 1.0f : 0.0f;
                 }
                 alpha[static_cast<size_t>(y) * W + x] = a;
+            }
+        }
+
+        // --- Uniform-background color rescue (#978) ------------------------
+        // U²-Net's 320² saliency reliably finds the subject's mass but can
+        // MISS thin appendages — a T-pose goblin lost a whole arm to the
+        // matte, and the 3D generation faithfully reproduced the amputation.
+        // Character sheets/renders overwhelmingly sit on a near-uniform
+        // background, which gives an independent, resolution-exact signal:
+        // when the four corner patches agree on a background color, any
+        // pixel whose color clearly differs from it is foreground — OR that
+        // mask into the saliency alpha so a saliency miss can never clip
+        // real geometry. Busy backgrounds (corners disagree) skip the
+        // rescue entirely and behave exactly as before.
+        {
+            const QImage src32 = image.convertToFormat(QImage::Format_RGB32);
+            auto patchStats = [&](int px, int py, double m[3], double& var) {
+                double sum[3] = {0, 0, 0}, sq[3] = {0, 0, 0};
+                int n = 0;
+                px = std::max(0, px);
+                py = std::max(0, py);
+                for (int y = py; y < py + 24 && y < H; ++y) {
+                    const QRgb* line =
+                        reinterpret_cast<const QRgb*>(src32.constScanLine(y));
+                    for (int x = px; x < px + 24 && x < W; ++x) {
+                        const double c[3] = {double(qRed(line[x])),
+                                             double(qGreen(line[x])),
+                                             double(qBlue(line[x]))};
+                        for (int k = 0; k < 3; ++k) {
+                            sum[k] += c[k];
+                            sq[k] += c[k] * c[k];
+                        }
+                        ++n;
+                    }
+                }
+                var = 0;
+                for (int k = 0; k < 3; ++k) {
+                    m[k] = sum[k] / std::max(1, n);
+                    var += sq[k] / std::max(1, n) - m[k] * m[k];
+                }
+            };
+            double c0[3], c1[3], c2[3], c3[3], v0, v1, v2, v3;
+            // Clamp the patch origins: an image under 24px would otherwise
+            // hand negative coordinates to constScanLine/line[x].
+            const int px1 = std::max(0, W - 24);
+            const int py1 = std::max(0, H - 24);
+            patchStats(0, 0, c0, v0);
+            patchStats(px1, 0, c1, v1);
+            patchStats(0, py1, c2, v2);
+            patchStats(px1, py1, c3, v3);
+            double bg[3], spread = 0;
+            for (int k = 0; k < 3; ++k) {
+                bg[k] = (c0[k] + c1[k] + c2[k] + c3[k]) / 4.0;
+                const double mx = std::max({c0[k], c1[k], c2[k], c3[k]});
+                const double mn = std::min({c0[k], c1[k], c2[k], c3[k]});
+                spread = std::max(spread, mx - mn);
+            }
+            const double maxVar = std::max({v0, v1, v2, v3});
+            if (spread < 12.0 && maxVar < 90.0) {
+                // Distance threshold above the background's own noise floor.
+                const double thr =
+                    std::max(28.0, 6.0 * std::sqrt(std::max(0.0, maxVar)));
+                for (int y = 0; y < H; ++y) {
+                    const QRgb* line =
+                        reinterpret_cast<const QRgb*>(src32.constScanLine(y));
+                    for (int x = 0; x < W; ++x) {
+                        float& a = alpha[static_cast<size_t>(y) * W + x];
+                        if (a >= 1.0f)
+                            continue;
+                        const double d = std::abs(qRed(line[x]) - bg[0])
+                                       + std::abs(qGreen(line[x]) - bg[1])
+                                       + std::abs(qBlue(line[x]) - bg[2]);
+                        if (d > thr)
+                            a = 1.0f;
+                    }
+                }
+            }
+        }
+
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const float a = alpha[static_cast<size_t>(y) * W + x];
                 if (a > 0.5f) {
                     ++kept;
                     bx0 = std::min(bx0, x); by0 = std::min(by0, y);

@@ -336,18 +336,75 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         res = 512;
     else if (presetName == QLatin1String("high"))
         res = 1536;
-    if (res > 512
-        && !QDir(models).exists(QStringLiteral("shape_flow_1024.gguf"))) {
-        if (!warning.isEmpty())
-            warning += QStringLiteral(" ");
-        warning += QStringLiteral(
-            "trellis.cpp models dir has no 1024-cascade weights — using the "
-            "512 pipeline.");
-        res = 512;
+    QString models2 = models;
+    const auto hasCascade = [](const QString& d) {
+        // BOTH cascade files, always — launching trellis-cli at 1024/1536
+        // with only one of them (e.g. a cancelled two-file download) fails
+        // mid-run instead of falling back.
+        const QDir q(d);
+        return q.exists(QStringLiteral("shape_flow_1024.gguf"))
+            && q.exists(QStringLiteral("tex_flow_1024.gguf"));
+    };
+    if (res > 512 && !hasCascade(models2)) {
+        // The resolved dir (often the trellis-cli sibling with the 512 set)
+        // has no cascade weights — but the AI Model Settings download
+        // location may. The cascade card downloads ONLY the two 1024 files,
+        // so the common layout is base set beside trellis-cli + cascade in
+        // the catalog dir: merge them into a temp dir of links (copies when
+        // linking fails) so trellis-cli sees one complete set. When the
+        // catalog holds everything, it is used directly.
+        const QString catalogDir =
+            QDir(QStandardPaths::writableLocation(
+                     QStandardPaths::AppDataLocation))
+                .filePath(QStringLiteral("ai_models/trellis2"));
+        static const char* kBase[] = {
+            "ss_flow.gguf",  "shape_flow_512.gguf", "tex_flow_512.gguf",
+            "shape_dec.gguf", "tex_dec.gguf", "ss_dec.gguf", "dinov3.gguf"};
+        const auto hasBase = [&](const QString& d) {
+            const QDir q(d);
+            for (const char* f : kBase)
+                if (!q.exists(QLatin1String(f)))
+                    return false;
+            return true;
+        };
+        if (hasCascade(catalogDir)) {
+            if (hasBase(catalogDir)) {
+                models2 = catalogDir;
+            } else if (hasBase(models2)) {
+                const QString merged =
+                    QDir(tmp.path()).filePath(QStringLiteral("models"));
+                QDir().mkpath(merged);
+                bool mergedOk = true;
+                const auto place = [&](const QString& srcDir, const char* f) {
+                    const QString src = QDir(srcDir).filePath(QLatin1String(f));
+                    const QString dst = QDir(merged).filePath(QLatin1String(f));
+                    if (QFile::link(src, dst) || QFile::copy(src, dst))
+                        return true;
+                    mergedOk = false;
+                    return false;
+                };
+                for (const char* f : kBase)
+                    place(models2, f);
+                place(catalogDir, "shape_flow_1024.gguf");
+                place(catalogDir, "tex_flow_1024.gguf");
+                if (mergedOk)
+                    models2 = merged;
+            }
+        }
+        if (!hasCascade(models2)) {
+            if (!warning.isEmpty())
+                warning += QStringLiteral(" ");
+            warning += QStringLiteral(
+                "the '%1' preset needs the 1024-cascade weights, which are "
+                "not installed — using the 512 pipeline (thin structures may "
+                "be lost). Download 'TRELLIS.2 cascade' in AI Model Settings "
+                "to enable it.").arg(presetName);
+            res = 512;
+        }
     }
     QStringList args{QStringLiteral("--image"),     inputPng,
                      QStringLiteral("--dump-post"), outDump,
-                     QStringLiteral("--models"),    models,
+                     QStringLiteral("--models"),    models2,
                      QStringLiteral("--res"),       QString::number(res),
                      QStringLiteral("--seed"),      QString::number(opts.seed)};
     QProcess proc;
