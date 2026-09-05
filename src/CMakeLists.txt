@@ -845,6 +845,12 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_trellis_lic}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
         COMMENT "Copying bundled trellis-cli + license notices next to QtMeshEditor")
+    # `make install` (the CI packaging path) must carry the runtime too —
+    # the POST_BUILD copy only reaches the build tree.
+    install(PROGRAMS "${QTMESH_TRELLIS_CLI_BINARY}"
+            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    install(FILES "${_trellis_lic}"
+            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 endif()
 
 # Link Sentry if enabled

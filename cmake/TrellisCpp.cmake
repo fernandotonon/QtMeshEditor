@@ -45,8 +45,17 @@ set(_trellis_cmake_args
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
 if(CMAKE_OSX_ARCHITECTURES)
+    # LIST_SEPARATOR '|' below keeps a multi-arch value ("arm64;x86_64") as
+    # ONE child argument instead of splitting at the semicolon.
+    string(REPLACE ";" "|" _trellis_osx_archs "${CMAKE_OSX_ARCHITECTURES}")
     list(APPEND _trellis_cmake_args
-         -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES})
+         "-DCMAKE_OSX_ARCHITECTURES=${_trellis_osx_archs}")
+endif()
+if(CMAKE_OSX_DEPLOYMENT_TARGET)
+    # The release build targets macOS 11.0 — the child must match or the
+    # bundled runtime could fail on supported systems.
+    list(APPEND _trellis_cmake_args
+         -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()
 
 ExternalProject_Add(qtmesh_trelliscpp
@@ -56,6 +65,7 @@ ExternalProject_Add(qtmesh_trelliscpp
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
     BINARY_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-build"
+    LIST_SEPARATOR |
     CMAKE_ARGS     ${_trellis_cmake_args}
     BUILD_COMMAND  ${CMAKE_COMMAND} --build <BINARY_DIR> --target trellis-cli
                    --config Release -j4
