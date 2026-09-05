@@ -822,6 +822,19 @@ if(ENABLE_ONNX)
     endif()
 endif()
 
+if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
+    # Ship the bundled TRELLIS.2 runtime next to the editor binary (macOS:
+    # inside Contents/MacOS). Trellis2Predictor probes this location, and the
+    # GGUF weights come from AI Model Settings — so a fresh install needs no
+    # extra runtime setup. Built as an isolated ExternalProject (its vendored
+    # ggml fork collides with llama.cpp's ggml targets otherwise).
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_trelliscpp)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${QTMESH_TRELLIS_CLI_BINARY}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMENT "Copying bundled trellis-cli next to QtMeshEditor")
+endif()
+
 # Link Sentry if enabled
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)

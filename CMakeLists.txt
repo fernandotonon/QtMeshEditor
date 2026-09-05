@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 3.37.2 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 3.37.3 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -295,6 +295,16 @@ if(ENABLE_STABLE_DIFFUSION)
     add_definitions(-DENABLE_STABLE_DIFFUSION)
     message(STATUS "AI texture generation enabled with stable-diffusion.cpp")
 endif()
+##############################################################
+#  Bundled trellis.cpp runtime — TRELLIS.2 image-to-3D needs no install
+##############################################################
+option(ENABLE_TRELLIS_CPP
+    "Build and bundle the trellis.cpp CLI (TRELLIS.2 runtime) with the editor" OFF)
+if(ENABLE_TRELLIS_CPP)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/TrellisCpp.cmake)
+    message(STATUS "Bundling trellis.cpp runtime (trellis-cli) with the editor")
+endif()
+
 ##############################################################
 #  ONNX Runtime — AI PBR map synthesis (#404)
 ##############################################################
