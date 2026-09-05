@@ -3,6 +3,7 @@
 
 #include <QImage>
 #include <QString>
+#include <vector>
 
 // AI background removal (epic #764 support): segment the foreground object out of
 // a photo so image-to-3D (TripoSR) sees a clean, isolated subject. TripoSR is
@@ -80,6 +81,20 @@ public:
     static Result removeBackground(const QImage& image,
                                    const QString& modelPath,
                                    const Options& opts = {});
+
+    // Uniform-background thin-appendage rescue (#978): OR into `alpha` pixels
+    // that clearly differ from the corner-agreed background color. Tightened
+    // after 3.37.3 field reports (backdrop slabs + washed-out bakes): a pixel
+    // must differ in CHROMA — a brightness-only change (drop shadow, vignette,
+    // lighting falloff on the backdrop) stays background — and its rescue
+    // region must be CONNECTED to the existing U²-Net foreground (a
+    // saliency-missed arm touches the body; a watermark or backdrop gradient
+    // does not). Skips busy backgrounds (corner patches disagree) and aborts
+    // when the rescue would flood the frame. `alpha` is the row-major
+    // [width*height] foreground matte in [0,1]. Pure (QImage + alpha in/out),
+    // public so it unit-tests headless.
+    static void applyUniformBackgroundRescue(const QImage& image,
+                                             std::vector<float>& alpha);
 };
 
 #endif // BACKGROUND_REMOVER_H

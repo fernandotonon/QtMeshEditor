@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #ifdef ENABLE_ONNX
@@ -226,81 +227,13 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
             }
         }
 
-        // --- Uniform-background color rescue (#978) ------------------------
+        // --- Uniform-background color rescue (#978, tightened) --------------
         // U²-Net's 320² saliency reliably finds the subject's mass but can
         // MISS thin appendages — a T-pose goblin lost a whole arm to the
         // matte, and the 3D generation faithfully reproduced the amputation.
-        // Character sheets/renders overwhelmingly sit on a near-uniform
-        // background, which gives an independent, resolution-exact signal:
-        // when the four corner patches agree on a background color, any
-        // pixel whose color clearly differs from it is foreground — OR that
-        // mask into the saliency alpha so a saliency miss can never clip
-        // real geometry. Busy backgrounds (corners disagree) skip the
-        // rescue entirely and behave exactly as before.
-        {
-            const QImage src32 = image.convertToFormat(QImage::Format_RGB32);
-            auto patchStats = [&](int px, int py, double m[3], double& var) {
-                double sum[3] = {0, 0, 0}, sq[3] = {0, 0, 0};
-                int n = 0;
-                px = std::max(0, px);
-                py = std::max(0, py);
-                for (int y = py; y < py + 24 && y < H; ++y) {
-                    const QRgb* line =
-                        reinterpret_cast<const QRgb*>(src32.constScanLine(y));
-                    for (int x = px; x < px + 24 && x < W; ++x) {
-                        const double c[3] = {double(qRed(line[x])),
-                                             double(qGreen(line[x])),
-                                             double(qBlue(line[x]))};
-                        for (int k = 0; k < 3; ++k) {
-                            sum[k] += c[k];
-                            sq[k] += c[k] * c[k];
-                        }
-                        ++n;
-                    }
-                }
-                var = 0;
-                for (int k = 0; k < 3; ++k) {
-                    m[k] = sum[k] / std::max(1, n);
-                    var += sq[k] / std::max(1, n) - m[k] * m[k];
-                }
-            };
-            double c0[3], c1[3], c2[3], c3[3], v0, v1, v2, v3;
-            // Clamp the patch origins: an image under 24px would otherwise
-            // hand negative coordinates to constScanLine/line[x].
-            const int px1 = std::max(0, W - 24);
-            const int py1 = std::max(0, H - 24);
-            patchStats(0, 0, c0, v0);
-            patchStats(px1, 0, c1, v1);
-            patchStats(0, py1, c2, v2);
-            patchStats(px1, py1, c3, v3);
-            double bg[3], spread = 0;
-            for (int k = 0; k < 3; ++k) {
-                bg[k] = (c0[k] + c1[k] + c2[k] + c3[k]) / 4.0;
-                const double mx = std::max({c0[k], c1[k], c2[k], c3[k]});
-                const double mn = std::min({c0[k], c1[k], c2[k], c3[k]});
-                spread = std::max(spread, mx - mn);
-            }
-            const double maxVar = std::max({v0, v1, v2, v3});
-            if (spread < 12.0 && maxVar < 90.0) {
-                // Distance threshold above the background's own noise floor.
-                const double thr =
-                    std::max(28.0, 6.0 * std::sqrt(std::max(0.0, maxVar)));
-                for (int y = 0; y < H; ++y) {
-                    const QRgb* line =
-                        reinterpret_cast<const QRgb*>(src32.constScanLine(y));
-                    for (int x = 0; x < W; ++x) {
-                        float& a = alpha[static_cast<size_t>(y) * W + x];
-                        if (a >= 1.0f)
-                            continue;
-                        const double d = std::abs(qRed(line[x]) - bg[0])
-                                       + std::abs(qGreen(line[x]) - bg[1])
-                                       + std::abs(qBlue(line[x]) - bg[2]);
-                        if (d > thr)
-                            a = 1.0f;
-                    }
-                }
-            }
-        }
+        // See applyUniformBackgroundRescue for the chroma + connectivity
+        // rules that keep shadows/vignettes/watermarks out of the matte.
+        applyUniformBackgroundRescue(image, alpha);
 
         for (int y = 0; y < H; ++y) {
             for (int x = 0; x < W; ++x) {
@@ -384,3 +317,170 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 }
 
 #endif // ENABLE_ONNX
+
+// Compiled in every build (the header declares it unconditionally and the
+// unit tests exercise it without ONNX).
+void BackgroundRemover::applyUniformBackgroundRescue(const QImage& image,
+                                                     std::vector<float>& alpha)
+{
+    const int W = image.width(), H = image.height();
+    if (W <= 0 || H <= 0
+        || alpha.size() != static_cast<size_t>(W) * static_cast<size_t>(H))
+        return;
+
+    const QImage src32 = image.convertToFormat(QImage::Format_RGB32);
+    auto patchStats = [&](int px, int py, double m[3], double& var) {
+        double sum[3] = {0, 0, 0}, sq[3] = {0, 0, 0};
+        int n = 0;
+        // Clamp the patch origins: an image under 24px would otherwise hand
+        // negative coordinates to constScanLine/line[x].
+        px = std::max(0, px);
+        py = std::max(0, py);
+        for (int y = py; y < py + 24 && y < H; ++y) {
+            const QRgb* line =
+                reinterpret_cast<const QRgb*>(src32.constScanLine(y));
+            for (int x = px; x < px + 24 && x < W; ++x) {
+                const double c[3] = {double(qRed(line[x])),
+                                     double(qGreen(line[x])),
+                                     double(qBlue(line[x]))};
+                for (int k = 0; k < 3; ++k) {
+                    sum[k] += c[k];
+                    sq[k] += c[k] * c[k];
+                }
+                ++n;
+            }
+        }
+        var = 0;
+        for (int k = 0; k < 3; ++k) {
+            m[k] = sum[k] / std::max(1, n);
+            var += sq[k] / std::max(1, n) - m[k] * m[k];
+        }
+    };
+    double c0[3], c1[3], c2[3], c3[3], v0, v1, v2, v3;
+    const int px1 = std::max(0, W - 24);
+    const int py1 = std::max(0, H - 24);
+    patchStats(0, 0, c0, v0);
+    patchStats(px1, 0, c1, v1);
+    patchStats(0, py1, c2, v2);
+    patchStats(px1, py1, c3, v3);
+    double bg[3], spread = 0;
+    for (int k = 0; k < 3; ++k) {
+        bg[k] = (c0[k] + c1[k] + c2[k] + c3[k]) / 4.0;
+        const double mx = std::max({c0[k], c1[k], c2[k], c3[k]});
+        const double mn = std::min({c0[k], c1[k], c2[k], c3[k]});
+        spread = std::max(spread, mx - mn);
+    }
+    const double maxVar = std::max({v0, v1, v2, v3});
+    // Busy background (corners disagree) → no reliable bg color → no rescue.
+    if (!(spread < 12.0 && maxVar < 90.0))
+        return;
+
+    // Distance threshold above the background's own noise floor.
+    const double thr = std::max(28.0, 6.0 * std::sqrt(std::max(0.0, maxVar)));
+    const double bgSum = bg[0] + bg[1] + bg[2];
+    const double bgChroma = std::max({bg[0], bg[1], bg[2]})
+                          - std::min({bg[0], bg[1], bg[2]});
+    const size_t total = static_cast<size_t>(W) * static_cast<size_t>(H);
+
+    // Pass 1 — candidates: clearly different from the background color, and
+    // NOT a brightness-only (shading) change. Drop shadows, vignettes and
+    // lighting falloff keep the backdrop's CHROMA at a different luminance;
+    // scaling the pixel to the background's luminance collapses those back
+    // onto the background color, while real geometry keeps a chroma distance.
+    // The scale range covers modest brightening (spill) through deep shadow;
+    // a genuinely dark object (k above the cap) stays a candidate.
+    std::vector<uint8_t> cand(total, 0);
+    for (int y = 0; y < H; ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(src32.constScanLine(y));
+        for (int x = 0; x < W; ++x) {
+            const size_t i = static_cast<size_t>(y) * W + x;
+            if (alpha[i] >= 1.0f)
+                continue;
+            const double r = qRed(line[x]), g = qGreen(line[x]),
+                         b = qBlue(line[x]);
+            const double d = std::abs(r - bg[0]) + std::abs(g - bg[1])
+                           + std::abs(b - bg[2]);
+            if (d <= thr)
+                continue;
+            const double s = r + g + b;
+            const double k = (s > 1.0 && bgSum > 1.0) ? bgSum / s : 1e9;
+            if (k > 0.7 && k < 3.5) {
+                const double d2 = std::abs(r * k - bg[0])
+                                + std::abs(g * k - bg[1])
+                                + std::abs(b * k - bg[2]);
+                if (d2 <= thr)
+                    continue;   // shading of the backdrop, not geometry
+            } else if (bgChroma < 24.0) {
+                // Outside the proportional window the luminance-scaled
+                // comparison is meaningless (clipped shadows; noise blown up
+                // by a huge k), but a deep/clipped shadow on an ACHROMATIC
+                // backdrop is itself achromatic — still shading. Genuinely
+                // dark geometry is left to the saliency net (solid dark
+                // masses are salient; the rescue exists for the chromatic
+                // thin appendages saliency misses).
+                const double pixChroma = std::max({r, g, b})
+                                       - std::min({r, g, b});
+                if (pixChroma < 24.0)
+                    continue;
+            }
+            cand[i] = 1;
+        }
+    }
+
+    // Pass 2 — connectivity: keep only candidate regions attached to the
+    // existing U²-Net foreground. A saliency-missed limb touches the body; a
+    // watermark, prop shadow or backdrop gradient blob does not. Seeds are
+    // candidates 8-adjacent to a foreground pixel; flood over candidates.
+    std::vector<uint8_t> keep(total, 0);
+    std::vector<size_t> stack;
+    stack.reserve(1024);
+    auto foregroundAt = [&](int x, int y) {
+        return x >= 0 && x < W && y >= 0 && y < H
+               && alpha[static_cast<size_t>(y) * W + x] >= 0.5f;
+    };
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const size_t i = static_cast<size_t>(y) * W + x;
+            if (!cand[i] || keep[i])
+                continue;
+            bool seed = false;
+            for (int dy = -1; dy <= 1 && !seed; ++dy)
+                for (int dx = -1; dx <= 1 && !seed; ++dx)
+                    seed = (dx || dy) && foregroundAt(x + dx, y + dy);
+            if (!seed)
+                continue;
+            keep[i] = 1;
+            stack.push_back(i);
+            while (!stack.empty()) {
+                const size_t j = stack.back();
+                stack.pop_back();
+                const int jx = int(j % W), jy = int(j / W);
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = jx + dx, ny = jy + dy;
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H)
+                            continue;
+                        const size_t n = static_cast<size_t>(ny) * W + nx;
+                        if (cand[n] && !keep[n]) {
+                            keep[n] = 1;
+                            stack.push_back(n);
+                        }
+                    }
+            }
+        }
+    }
+
+    // Safety valve: a rescue that floods the frame is a misfire (the gate
+    // passed on agreeing corners but the "background" wasn't uniform after
+    // all) — keep the saliency matte untouched rather than hand the 3D
+    // generation a backdrop slab.
+    size_t rescued = 0;
+    for (size_t i = 0; i < total; ++i)
+        rescued += keep[i];
+    if (rescued > total * 3 / 10)
+        return;
+
+    for (size_t i = 0; i < total; ++i)
+        if (keep[i])
+            alpha[i] = 1.0f;
+}
