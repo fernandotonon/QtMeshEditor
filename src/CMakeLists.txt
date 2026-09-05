@@ -822,6 +822,37 @@ if(ENABLE_ONNX)
     endif()
 endif()
 
+if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
+    # Ship the bundled TRELLIS.2 runtime next to the editor binary (macOS:
+    # inside Contents/MacOS). Trellis2Predictor probes this location, and the
+    # GGUF weights come from AI Model Settings — so a fresh install needs no
+    # extra runtime setup. Built as an isolated ExternalProject (its vendored
+    # ggml fork collides with llama.cpp's ggml targets otherwise).
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_trelliscpp)
+    # MIT compliance: redistributing trellis-cli requires shipping the
+    # upstream copyright + permission notices — concatenate trellis.cpp's
+    # LICENSE with its vendored dependencies' notices into ONE file that
+    # travels next to the binary in every package.
+    set(_trellis_src "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+    set(_trellis_lic "${CMAKE_BINARY_DIR}/trellis-cli.THIRD_PARTY_LICENSES.txt")
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+                -DOUT=${_trellis_lic}
+                "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
+                -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${QTMESH_TRELLIS_CLI_BINARY}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_trellis_lic}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMENT "Copying bundled trellis-cli + license notices next to QtMeshEditor")
+    # `make install` (the CI packaging path) must carry the runtime too —
+    # the POST_BUILD copy only reaches the build tree.
+    install(PROGRAMS "${QTMESH_TRELLIS_CLI_BINARY}"
+            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    install(FILES "${_trellis_lic}"
+            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+endif()
+
 # Link Sentry if enabled
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)

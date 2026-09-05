@@ -893,6 +893,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_TRELLIS_CPP=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
             -DENABLE_DRACO=ON \
@@ -964,6 +965,16 @@ jobs:
             cp ./packaging/linux/DEBIAN-postinst ./pack-deb/DEBIAN/postinst
             chmod 755 ./pack-deb/DEBIAN/postinst
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
+            # Bundled TRELLIS.2 runtime (ENABLE_TRELLIS_CPP) — must sit next
+            # to the editor binary, where Trellis2Predictor probes for it.
+            if [ -f ./bin/trellis-cli ]; then
+              cp ./bin/trellis-cli ./pack-deb/usr/share/qtmesheditor/trellis-cli
+              chmod 755 ./pack-deb/usr/share/qtmesheditor/trellis-cli
+              # MIT compliance: the runtime's upstream + vendored notices
+              # must accompany the redistributed binary.
+              cp ./bin/trellis-cli.THIRD_PARTY_LICENSES.txt \
+                 ./pack-deb/usr/share/doc/qtmesheditor/trellis-cli.THIRD_PARTY_LICENSES.txt
+            fi
 
             # Create proper launcher script
             printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
@@ -2109,6 +2120,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
             -DENABLE_ONNX=ON \
+            -DENABLE_TRELLIS_CPP=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
             -DENABLE_DRACO=ON \

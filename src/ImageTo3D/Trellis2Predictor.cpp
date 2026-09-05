@@ -113,6 +113,34 @@ QString Trellis2Predictor::trellisCliPath()
         cli = QSettings().value(QLatin1String(kCliSettingsKey)).toString();
     if (!cli.isEmpty())
         return QFileInfo::exists(cli) ? cli : QString();
+    // Bundled runtime: builds with ENABLE_TRELLIS_CPP ship trellis-cli next
+    // to the editor binary (macOS: inside Contents/MacOS), so a fresh
+    // install needs no runtime setup — only the AI Model Settings weights.
+    // Probe BOTH the application dir and the dir of the RESOLVED executable:
+    // the Homebrew install launches through a /opt/homebrew/bin symlink,
+    // where applicationDirPath() is the symlink's directory while the
+    // bundled runtime sits beside the real binary inside the .app (the same
+    // trap main.cpp's fixBundlePathsForSymlinkLaunch documents for Qt
+    // plugins — and CLI mode returns before that workaround even runs).
+    if (QCoreApplication::instance()) {
+        const QString exeName =
+#ifdef Q_OS_WIN
+            QStringLiteral("trellis-cli.exe");
+#else
+            QStringLiteral("trellis-cli");
+#endif
+        QStringList dirs{QCoreApplication::applicationDirPath()};
+        const QString realExe =
+            QFileInfo(QCoreApplication::applicationFilePath())
+                .canonicalFilePath();
+        if (!realExe.isEmpty())
+            dirs << QFileInfo(realExe).absolutePath();
+        for (const QString& d : dirs) {
+            const QString bundled = QDir(d).filePath(exeName);
+            if (QFileInfo::exists(bundled))
+                return bundled;
+        }
+    }
     return QStandardPaths::findExecutable(QStringLiteral("trellis-cli"));
 }
 
@@ -203,6 +231,14 @@ QString Trellis2Predictor::runtimeDescription()
     case RuntimeKind::None:
         break;
     }
+    // With a bundled trellis-cli (ENABLE_TRELLIS_CPP builds) the only
+    // missing piece is the weights — say exactly that instead of asking the
+    // user to install a runtime they already have.
+    if (!trellisCliPath().isEmpty())
+        return QStringLiteral(
+            "TRELLIS.2 models not downloaded yet. Open AI Model Settings → "
+            "QtMeshEditor Models and download 'TRELLIS.2 (trellis.cpp)' "
+            "(plus 'TRELLIS.2 cascade' for the Balanced/High presets).");
     return QStringLiteral(
         "TRELLIS.2 runtime not installed. Either build trellis.cpp and point "
         "QTMESH_TRELLIS2_CLI / QSettings ai/trellis2Cli at trellis-cli (with "
