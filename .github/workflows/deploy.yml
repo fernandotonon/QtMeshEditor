@@ -970,6 +970,10 @@ jobs:
             if [ -f ./bin/trellis-cli ]; then
               cp ./bin/trellis-cli ./pack-deb/usr/share/qtmesheditor/trellis-cli
               chmod 755 ./pack-deb/usr/share/qtmesheditor/trellis-cli
+              # MIT compliance: the runtime's upstream + vendored notices
+              # must accompany the redistributed binary.
+              cp ./bin/trellis-cli.THIRD_PARTY_LICENSES.txt \
+                 ./pack-deb/usr/share/doc/qtmesheditor/trellis-cli.THIRD_PARTY_LICENSES.txt
             fi
 
             # Create proper launcher script

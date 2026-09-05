@@ -829,10 +829,22 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
     # extra runtime setup. Built as an isolated ExternalProject (its vendored
     # ggml fork collides with llama.cpp's ggml targets otherwise).
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_trelliscpp)
+    # MIT compliance: redistributing trellis-cli requires shipping the
+    # upstream copyright + permission notices — concatenate trellis.cpp's
+    # LICENSE with its vendored dependencies' notices into ONE file that
+    # travels next to the binary in every package.
+    set(_trellis_src "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+    set(_trellis_lic "${CMAKE_BINARY_DIR}/trellis-cli.THIRD_PARTY_LICENSES.txt")
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+                -DOUT=${_trellis_lic}
+                "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
+                -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${QTMESH_TRELLIS_CLI_BINARY}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
-        COMMENT "Copying bundled trellis-cli next to QtMeshEditor")
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_trellis_lic}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMENT "Copying bundled trellis-cli + license notices next to QtMeshEditor")
 endif()
 
 # Link Sentry if enabled

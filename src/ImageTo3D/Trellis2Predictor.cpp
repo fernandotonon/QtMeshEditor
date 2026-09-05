@@ -116,17 +116,30 @@ QString Trellis2Predictor::trellisCliPath()
     // Bundled runtime: builds with ENABLE_TRELLIS_CPP ship trellis-cli next
     // to the editor binary (macOS: inside Contents/MacOS), so a fresh
     // install needs no runtime setup — only the AI Model Settings weights.
+    // Probe BOTH the application dir and the dir of the RESOLVED executable:
+    // the Homebrew install launches through a /opt/homebrew/bin symlink,
+    // where applicationDirPath() is the symlink's directory while the
+    // bundled runtime sits beside the real binary inside the .app (the same
+    // trap main.cpp's fixBundlePathsForSymlinkLaunch documents for Qt
+    // plugins — and CLI mode returns before that workaround even runs).
     if (QCoreApplication::instance()) {
-        const QString bundled = QDir(QCoreApplication::applicationDirPath())
-                                    .filePath(
+        const QString exeName =
 #ifdef Q_OS_WIN
-                                        QStringLiteral("trellis-cli.exe")
+            QStringLiteral("trellis-cli.exe");
 #else
-                                        QStringLiteral("trellis-cli")
+            QStringLiteral("trellis-cli");
 #endif
-                                    );
-        if (QFileInfo::exists(bundled))
-            return bundled;
+        QStringList dirs{QCoreApplication::applicationDirPath()};
+        const QString realExe =
+            QFileInfo(QCoreApplication::applicationFilePath())
+                .canonicalFilePath();
+        if (!realExe.isEmpty())
+            dirs << QFileInfo(realExe).absolutePath();
+        for (const QString& d : dirs) {
+            const QString bundled = QDir(d).filePath(exeName);
+            if (QFileInfo::exists(bundled))
+                return bundled;
+        }
     }
     return QStandardPaths::findExecutable(QStringLiteral("trellis-cli"));
 }
