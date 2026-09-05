@@ -345,6 +345,12 @@ bool write(const QString& path, const Data& data, QString* error)
     }
 
     QJsonObject meta = data.meta;
+    // In-memory Data is display-ready (sRGB) by contract — the legacy-linear
+    // interpretation applies only to FILES from pre-conversion builds.
+    // Stamp unlabeled data so a write()/read() round trip is lossless
+    // instead of gamma-converting fresh bytes as if they were legacy.
+    if (!meta.contains(QStringLiteral("colorSpace")))
+        meta.insert(QStringLiteral("colorSpace"), QStringLiteral("srgb"));
     meta.insert(QStringLiteral("resolution"), data.resolution);
     meta.insert(QStringLiteral("voxelSize"), static_cast<double>(data.voxelSize));
     meta.insert(QStringLiteral("origin"),
