@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QTemporaryDir>
 
@@ -109,6 +110,24 @@ TEST(AppStorageTest, RetargetsLegacyModelsDirectorySettings)
             QStringLiteral(".local/share/QtMeshEditor/QtMeshEditor/sd_models"));
 
     QSettings settings;
+    const QString prevLlm =
+        settings.value(QStringLiteral("LLM/modelsDirectory")).toString();
+    const QString prevSd =
+        settings.value(QStringLiteral("StableDiffusion/modelsDirectory")).toString();
+    auto restoreSettings = qScopeGuard([&] {
+        if (prevLlm.isEmpty())
+            settings.remove(QStringLiteral("LLM/modelsDirectory"));
+        else
+            settings.setValue(QStringLiteral("LLM/modelsDirectory"), prevLlm);
+        if (prevSd.isEmpty())
+            settings.remove(QStringLiteral("StableDiffusion/modelsDirectory"));
+        else
+            settings.setValue(QStringLiteral("StableDiffusion/modelsDirectory"),
+                             prevSd);
+        settings.sync();
+        clearSnapEnv();
+    });
+
     settings.setValue(QStringLiteral("LLM/modelsDirectory"), legacyLlm);
     settings.setValue(QStringLiteral("StableDiffusion/modelsDirectory"), legacySd);
     settings.sync();
@@ -122,15 +141,14 @@ TEST(AppStorageTest, RetargetsLegacyModelsDirectorySettings)
               AppStorage::sdModelsRoot());
 
     // Explicit custom outside snap tree stays put.
-    const QString custom = QStringLiteral("/opt/custom/sd_models");
+    const QString custom =
+        QStringLiteral("/tmp/qtmesh-test-custom-models-do-not-use");
     settings.setValue(QStringLiteral("LLM/modelsDirectory"), custom);
     settings.sync();
     AppStorage::migrateHeavyDataFromRevisionScopedStorage();
     settings.sync();
     EXPECT_EQ(settings.value(QStringLiteral("LLM/modelsDirectory")).toString(),
               custom);
-
-    clearSnapEnv();
 }
 
 TEST(AppStorageTest, MigrateRenamesFromRevisionWhenDistinct)
