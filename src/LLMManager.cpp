@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QRegularExpression>
+#include "AppStorage.h"
 
 LLMManager* LLMManager::s_instance = nullptr;
 
@@ -88,8 +89,7 @@ void LLMManager::shutdownWorkerThread()
 
 QString LLMManager::getDefaultModelsDirectory() const
 {
-    QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath("models");
+    return AppStorage::llmModelsRoot();
 }
 
 void LLMManager::populateRecommendedModels()

@@ -38,6 +38,7 @@
 #include "ModelDownloader.h"
 #include "AIModelCatalog.h"
 #include "RTShaderHelper.h"
+#include "AppStorage.h"
 #include "TextureChannelPacker.h"
 #include "TextureAtlasPacker.h"
 #include "ApplyAtlas.h"
@@ -138,8 +139,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     // Register generated textures directory as Ogre resource location at startup
     // so textures from previous sessions are found when materials reference them
     if (isOgreAvailable()) {
-        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QString genTexDir = QDir(dataPath).filePath("generated_textures");
+        QString genTexDir = QDir(AppStorage::persistentRoot()).filePath("generated_textures");
         if (QDir(genTexDir).exists()) {
             try {
                 auto &rgm = Ogre::ResourceGroupManager::getSingleton();
@@ -2172,8 +2172,7 @@ QString fileUrl(const QString& path)
 // and any stale file removed. Empty if AppData can't be resolved.
 QString previewOutPath(const QString& texName, const QString& suffix)
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dataPath = AppStorage::persistentRoot();
     if (dataPath.isEmpty())
         return {};
     const QString outDir = QDir(dataPath).filePath(QStringLiteral("texture_previews"));
@@ -2331,10 +2330,8 @@ QString MaterialEditorQML::computeTexturePreviewPath(const QString &texName) con
     }
 
     // 2. Check the generated-textures directory.
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     const QString genTexPath =
-        QDir(dataPath).filePath("generated_textures/" + texName);
+        QDir(AppStorage::persistentRoot()).filePath("generated_textures/" + texName);
     if (QFileInfo::exists(genTexPath))
         return fileUrl(genTexPath);
 
@@ -4157,8 +4154,7 @@ void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
             QRegularExpressionMatch match = it.next();
             QString texName = match.captured(1).trimmed();
             bool existsOnDisk = false;
-            QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-            QString genPath = QDir(dataPath).filePath("generated_textures/" + texName);
+            QString genPath = QDir(AppStorage::persistentRoot()).filePath("generated_textures/" + texName);
             if (QFileInfo::exists(genPath)) existsOnDisk = true;
             QStringList searchDirs = {
                 "media/materials/textures/" + texName,
@@ -4883,8 +4879,7 @@ void MaterialEditorQML::finishMultiViewBake()
     }
 
     // Save the baked atlas next to the generated textures and apply it.
-    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    const QString outDir = QDir(dataPath).filePath("generated_textures");
+    const QString outDir = QDir(AppStorage::persistentRoot()).filePath("generated_textures");
     QDir().mkpath(outDir);
     // Sanitize the entity name into a filesystem-safe basename — imported names
     // can carry '/', ':', spaces, etc. that would break out.save().
@@ -5033,8 +5028,7 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
     const Ogre::String texStd = textureFileName.toStdString();
     {
-        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        const QString absPath = QDir(dataPath).filePath("generated_textures/" + textureFileName);
+        const QString absPath = QDir(AppStorage::persistentRoot()).filePath("generated_textures/" + textureFileName);
         try {
             // Drop any stale texture of this name so the new bytes load.
             if (Ogre::TextureManager::getSingleton().getByName(texStd, group))

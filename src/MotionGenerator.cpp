@@ -26,6 +26,7 @@
 #include <random>
 #include <array>
 #include <vector>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -65,16 +66,12 @@ bool MotionGenerator::isModelBackendAvailable()
 
 QString MotionGenerator::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/motion/t2m.onnx"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion/t2m.onnx"));
 }
 
 QString MotionGenerator::vocabPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/motion/t2m-vocab.json"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion/t2m-vocab.json"));
 }
 
 bool MotionGenerator::modelPresent()

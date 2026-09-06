@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstring>
+#include "AppStorage.h"
 
 namespace FaceRig {
 
@@ -136,9 +137,7 @@ bool ArkitTemplate::load(const QString& path, QString* error)
 
 QString ArkitTemplate::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/facerig/")
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("facerig/")
                                    + QString::fromLatin1(kModelFile));
 }
 

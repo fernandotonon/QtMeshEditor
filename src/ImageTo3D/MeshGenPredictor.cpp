@@ -25,6 +25,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <string>
 #include <unordered_map>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -43,9 +44,7 @@ constexpr int   kEncoderImageSize = 512;
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/triposr/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("triposr/"));
 }
 
 } // namespace

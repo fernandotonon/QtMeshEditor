@@ -28,6 +28,7 @@ constexpr const char* kBaseUrlSettingsKey = "ai/inbetweenModelBaseUrl";
 #include <onnxruntime_cxx_api.h>
 #include <array>
 #include <unordered_map>
+#include "AppStorage.h"
 #endif
 
 // Out-of-line ctor (same idiom as AutoRig::Options / UniRigPredictor::Options):
@@ -385,9 +386,7 @@ bool MotionInbetween::isModelBackendAvailable()
 
 QString MotionInbetween::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/inbetween/rmib.onnx"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("inbetween/rmib.onnx"));
 }
 
 bool MotionInbetween::modelPresent()

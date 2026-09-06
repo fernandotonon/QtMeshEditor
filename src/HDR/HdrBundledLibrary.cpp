@@ -20,6 +20,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
+#include "AppStorage.h"
 
 namespace HdrBundledLibrary {
 
@@ -191,8 +192,7 @@ QStringList hdriSearchRoots()
 
 QString userHdriDirectory()
 {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    const QString dir = base + QStringLiteral("/hdri");
+    const QString dir = AppStorage::hdriRoot();
     QDir().mkpath(dir);
     return dir;
 }

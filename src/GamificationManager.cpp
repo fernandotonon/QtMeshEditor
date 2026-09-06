@@ -33,7 +33,8 @@ constexpr qint64 kMaxBackoffMs = 30 * 60 * 1000;
 
 QString gamificationDir()
 {
-    // Same root as sd_models/ai_models/hdri (see SDManager, AIAssistManager).
+    // Same durable root as sd_models/ai_models/hdri (see AppStorage /
+    // SDManager / AIAssistManager). Under Snap this is $SNAP_USER_COMMON.
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
            + QStringLiteral("/gamification");
 }

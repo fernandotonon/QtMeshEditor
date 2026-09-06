@@ -19,6 +19,7 @@
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -44,9 +45,7 @@ float stableSigmoid(float x)
 
 QString PoseCapPredictor::modelDir()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/mocap/pose"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("mocap/pose"));
 }
 
 bool PoseCapPredictor::modelsPresent()

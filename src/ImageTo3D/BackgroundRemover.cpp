@@ -18,6 +18,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <string>
 #include <unordered_map>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -32,9 +33,7 @@ constexpr int kNet = 320;   // u2net input size
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/rembg/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("rembg/"));
 }
 
 } // namespace

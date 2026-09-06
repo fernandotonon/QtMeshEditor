@@ -1,3 +1,7 @@
+# Multi-GB AI weights / HDR caches use $SNAP_USER_COMMON (AppStorage), not
+# $SNAP_USER_DATA — Snap copies the latter on every refresh and would otherwise
+# duplicate tens of GB per upgrade. See src/AppStorage.cpp.
+
 name: qtmesheditor
 adopt-info: qtmesheditor
 title: QtMeshEditor

@@ -23,6 +23,7 @@
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -261,9 +262,7 @@ bool SkinTokensPredictor::isAvailable()
 
 QString SkinTokensPredictor::modelDir()
 {
-    return QStandardPaths::writableLocation(
-               QStandardPaths::AppDataLocation)
-        + QStringLiteral("/ai_models/skintokens");
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("skintokens"));
 }
 
 QString SkinTokensPredictor::manifestPath()

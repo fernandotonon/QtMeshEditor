@@ -22,6 +22,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <string>
 #include <unordered_map>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -52,9 +53,7 @@ constexpr float kNumTrainTimesteps = 1000.0f;
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/triposg/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("triposg/"));
 }
 
 } // namespace

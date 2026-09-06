@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include <QUuid>
 #include <QRegularExpression>
+#include "AppStorage.h"
 
 SDManager* SDManager::s_instance = nullptr;
 
@@ -86,8 +87,7 @@ void SDManager::shutdownWorkerThread()
 
 QString SDManager::getDefaultModelsDirectory() const
 {
-    QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath("sd_models");
+    return AppStorage::sdModelsRoot();
 }
 
 void SDManager::populateRecommendedModels()
@@ -382,8 +382,7 @@ void SDManager::scanForModels()
 
 QString SDManager::generateOutputPath() const
 {
-    QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir outputDir(QDir(dataPath).filePath("generated_textures"));
+    QDir outputDir(QDir(AppStorage::persistentRoot()).filePath("generated_textures"));
     if (!outputDir.exists()) {
         outputDir.mkpath(".");
     }
@@ -413,9 +412,7 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
 
     QString outputPath;
     if (!outputFileName.isEmpty()) {
-        // Use the specified filename in the generated textures directory
-        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QDir outputDir(QDir(dataPath).filePath("generated_textures"));
+        QDir outputDir(QDir(AppStorage::persistentRoot()).filePath("generated_textures"));
         if (!outputDir.exists()) {
             outputDir.mkpath(".");
         }
@@ -466,8 +463,7 @@ void SDManager::generateMeshTexture(const QString &prompt,
     // LCOV_EXCL_START — requires a loaded SD model + worker
     QString outputPath;
     if (!outputFileName.isEmpty()) {
-        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QDir outputDir(QDir(dataPath).filePath("generated_textures"));
+        QDir outputDir(QDir(AppStorage::persistentRoot()).filePath("generated_textures"));
         if (!outputDir.exists()) outputDir.mkpath(".");
         QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
         // The worker always encodes PNG, so force a .png suffix — a .jpg

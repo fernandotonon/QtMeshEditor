@@ -17,6 +17,7 @@
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
+#include "AppStorage.h"
 #endif
 
 namespace FaceRig {
@@ -44,9 +45,7 @@ FaceLandmarkDetector::~FaceLandmarkDetector() = default;
 
 QString FaceLandmarkDetector::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/facerig/")
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("facerig/")
                                    + QString::fromLatin1(kModelFile));
 }
 

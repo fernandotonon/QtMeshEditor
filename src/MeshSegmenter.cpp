@@ -23,6 +23,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <random>
 #include <unordered_set>
+#include "AppStorage.h"
 #endif
 
 namespace {
@@ -319,9 +320,7 @@ bool MeshSegmenter::isModelBackendAvailable()
 
 QString MeshSegmenter::modelPath(Category c)
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/segment/")
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("segment/")
                                    + modelFileName(c));
 }
 
@@ -329,9 +328,7 @@ bool MeshSegmenter::modelPresent(Category c) { return QFileInfo::exists(modelPat
 
 QString MeshSegmenter::classifierModelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/segment/")
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("segment/")
                                    + QString::fromLatin1(kClassifierModelFile));
 }
 
