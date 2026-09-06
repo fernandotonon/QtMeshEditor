@@ -4,6 +4,7 @@
 #include <QSettings>
 #include <QVariant>
 #include "AIModelCatalog.h"
+#include "AppStorage.h"
 #include "ImageTo3D/Trellis2Predictor.h"
 
 // The TRELLIS.2 GGUF weights are downloadable from AI Model Settings
@@ -60,8 +61,7 @@ TEST(AIModelCatalogTest, PredictorFindsCatalogDownloadedTrellis2Models)
         }
     } scope;
     const QString catalogDir =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-            .filePath(QStringLiteral("ai_models/trellis2"));
+        QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("trellis2"));
     ASSERT_TRUE(QDir().mkpath(catalogDir));
 
     const QString resolved = Trellis2Predictor::trellisCliModelsDir();

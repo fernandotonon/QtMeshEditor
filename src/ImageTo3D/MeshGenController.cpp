@@ -28,6 +28,7 @@
 #include <QThread>
 
 #include <thread>
+#include "AppStorage.h"
 
 // Holds the worker's output for the main-thread build step.
 struct MeshGenController::Pending {
@@ -444,8 +445,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             // Phase 9: keep the raw full-res generation in AppData so
             // textures/LODs can be re-baked without re-running inference.
             opts.trellis2SourceKeepDir =
-                QDir(QStandardPaths::writableLocation(
-                         QStandardPaths::AppDataLocation))
+                QDir(AppStorage::persistentRoot())
                     .filePath(QStringLiteral("generated_sources"));
             opts.trellis2SourceKeepBaseName = imageStem;
         }

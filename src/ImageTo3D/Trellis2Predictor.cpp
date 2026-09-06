@@ -17,6 +17,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include "AppStorage.h"
 
 namespace {
 
@@ -60,8 +61,7 @@ QString Trellis2Predictor::runtimeDir()
     if (dir.isEmpty())
         dir = QSettings().value(QLatin1String(kDirSettingsKey)).toString();
     if (dir.isEmpty()) {
-        const QString base =
-            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString base = AppStorage::persistentRoot();
         dir = QDir(base).filePath(QStringLiteral("trellis2"));
     }
     return QDir(dir).exists() ? dir : QString();
@@ -180,8 +180,7 @@ QString Trellis2Predictor::trellisCliModelsDir()
     // pre-downloaded them only has to install/point at the trellis-cli
     // binary.
     const QString catalogDir =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-            .filePath(QStringLiteral("ai_models/trellis2"));
+        QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("trellis2"));
     if (QDir(catalogDir).exists())
         return catalogDir;
     return QString();
@@ -390,9 +389,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         // linking fails) so trellis-cli sees one complete set. When the
         // catalog holds everything, it is used directly.
         const QString catalogDir =
-            QDir(QStandardPaths::writableLocation(
-                     QStandardPaths::AppDataLocation))
-                .filePath(QStringLiteral("ai_models/trellis2"));
+            QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("trellis2"));
         static const char* kBase[] = {
             "ss_flow.gguf",  "shape_flow_512.gguf", "tex_flow_512.gguf",
             "shape_dec.gguf", "tex_dec.gguf", "ss_dec.gguf", "dinov3.gguf"};

@@ -14,6 +14,7 @@
 #include <QTcpSocket>
 
 #include "AppSettingsKeys.h"
+#include "AppStorage.h"
 #include "CloudCredentialStore.h"
 #include "GamificationManager.h"
 
@@ -145,8 +146,7 @@ protected:
     static void cleanStorage()
     {
         const QString dir =
-            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-            + QStringLiteral("/gamification");
+            QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("gamification"));
         QDir(dir).removeRecursively();
     }
 
@@ -221,8 +221,7 @@ TEST_F(GamificationManagerTest, NoteOperationFiltersNonNumericMetricsAndAliasesF
 
     // Inspect the persisted queue: the operation body must be numeric-only.
     const QString queuePath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-        + QStringLiteral("/gamification/queue.json");
+        QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("gamification/queue.json"));
     QFile f(queuePath);
     ASSERT_TRUE(f.open(QIODevice::ReadOnly));
     const QJsonArray events =

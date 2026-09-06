@@ -1,5 +1,7 @@
 #include "ImageCaptioner.h"
 
+#include "AppStorage.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -39,9 +41,7 @@ constexpr const char* kBaseUrlSettingsKey = "ai/captionModelBaseUrl";
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/caption/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("caption/"));
 }
 } // namespace
 

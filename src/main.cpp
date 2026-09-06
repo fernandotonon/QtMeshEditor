@@ -25,6 +25,7 @@
 #include "LLMManager.h"
 #include "OnnxRuntimeSettings.h"
 #include "AIModelCatalog.h"
+#include "AppStorage.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -161,6 +162,8 @@ int main(int argc, char *argv[])
         QCoreApplication::setOrganizationName("QtMeshEditor");
         QCoreApplication::setOrganizationDomain("none");
         QCoreApplication::setApplicationName("QtMeshEditor");
+        // Snap: move multi-GB AI weights out of $SNAP_USER_DATA before CLI work.
+        AppStorage::migrateHeavyDataFromRevisionScopedStorage();
         return CLIPipeline::run(argc, argv);
     }
 
@@ -197,6 +200,7 @@ int main(int argc, char *argv[])
         QCoreApplication::setOrganizationDomain("none");
         QCoreApplication::setApplicationName("QtMeshEditor");
         QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+        AppStorage::migrateHeavyDataFromRevisionScopedStorage();
         OnnxRuntimeSettings::prepareRuntimeEnvironment();
         (void)OnnxRuntimeSettings::instance();
 
@@ -297,6 +301,9 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationDomain("none");
     QCoreApplication::setApplicationName("QtMeshEditor");
     QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+    // Snap refreshes copy $SNAP_USER_DATA per revision — move multi-GB AI
+    // weights into $SNAP_USER_COMMON first so upgrades stop filling the disk.
+    AppStorage::migrateHeavyDataFromRevisionScopedStorage();
 
     a.setStyle(QStyleFactory::create("Fusion"));
     ThemeManager::applySavedThemeFromSettings();

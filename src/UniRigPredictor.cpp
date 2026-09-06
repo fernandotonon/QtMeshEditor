@@ -19,6 +19,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "AppStorage.h"
 
 namespace {
 // Both files are hosted alongside the #404 PBR/upscale ONNX models. The UniRig
@@ -541,26 +542,20 @@ QString UniRigPredictor::modelPath()
 
 QString UniRigPredictor::encoderModelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(
-        QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kEncoderFile));
+    return QDir(AppStorage::aiModelsRoot()).filePath(
+        QStringLiteral("unirig/") + QString::fromLatin1(kEncoderFile));
 }
 
 QString UniRigPredictor::decoderModelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(
-        QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kDecoderFile));
+    return QDir(AppStorage::aiModelsRoot()).filePath(
+        QStringLiteral("unirig/") + QString::fromLatin1(kDecoderFile));
 }
 
 QString UniRigPredictor::embedModelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(
-        QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kEmbedFile));
+    return QDir(AppStorage::aiModelsRoot()).filePath(
+        QStringLiteral("unirig/") + QString::fromLatin1(kEmbedFile));
 }
 
 bool UniRigPredictor::modelsPresent()

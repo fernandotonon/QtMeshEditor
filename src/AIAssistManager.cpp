@@ -12,6 +12,7 @@
 #include <QSettings>
 #include <QEventLoop>
 #include <QTimer>
+#include "AppStorage.h"
 
 AIAssistManager* AIAssistManager::s_instance = nullptr;
 
@@ -91,9 +92,7 @@ bool AIAssistManager::isAvailable() const
 
 QString AIAssistManager::modelPath(Map map) const
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/pbr/") + mapModelFile(map));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("pbr/") + mapModelFile(map));
 }
 
 bool AIAssistManager::isModelReady() const

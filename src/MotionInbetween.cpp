@@ -24,6 +24,8 @@ constexpr const char* kDefaultModelBaseUrl =
 constexpr const char* kBaseUrlSettingsKey = "ai/inbetweenModelBaseUrl";
 } // namespace
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #include <array>
@@ -385,9 +387,7 @@ bool MotionInbetween::isModelBackendAvailable()
 
 QString MotionInbetween::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/inbetween/rmib.onnx"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("inbetween/rmib.onnx"));
 }
 
 bool MotionInbetween::modelPresent()

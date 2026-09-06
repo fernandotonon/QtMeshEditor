@@ -19,6 +19,8 @@
 #include <cmath>
 #include <vector>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #endif
@@ -113,9 +115,7 @@ void flipNhwcHorizontal(float* nhwc, int size)
 
 QString HandCapPredictor::modelDir()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/mocap/hands"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("mocap/hands"));
 }
 
 bool HandCapPredictor::modelsPresent()

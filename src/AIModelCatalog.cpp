@@ -1,4 +1,5 @@
 #include "AIModelCatalog.h"
+#include "AppStorage.h"
 
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
@@ -119,8 +120,7 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
 
 QString AIModelCatalog::rootPath() const
 {
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("ai_models"));
+    return AppStorage::aiModelsRoot();
 }
 
 QString AIModelCatalog::modelsRootUrl() const

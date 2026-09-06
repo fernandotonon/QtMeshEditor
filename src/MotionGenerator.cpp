@@ -21,6 +21,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #include <random>
@@ -65,16 +67,12 @@ bool MotionGenerator::isModelBackendAvailable()
 
 QString MotionGenerator::modelPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/motion/t2m.onnx"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion/t2m.onnx"));
 }
 
 QString MotionGenerator::vocabPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/motion/t2m-vocab.json"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion/t2m-vocab.json"));
 }
 
 bool MotionGenerator::modelPresent()

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <functional>
 #include <algorithm>
+#include "AppStorage.h"
 
 namespace HdrCache {
 namespace {
@@ -228,8 +229,7 @@ QString brdfPath(const QString& cacheKey)
 
 QString cacheRootDirectory()
 {
-    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("hdr_cache"));
+    return AppStorage::hdrCacheRoot();
 }
 
 QString entryDirectory(const QString& cacheKey)

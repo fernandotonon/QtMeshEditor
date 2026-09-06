@@ -1,6 +1,7 @@
 #include "GamificationManager.h"
 
 #include "AppSettingsKeys.h"
+#include "AppStorage.h"
 #include "CloudCredentialStore.h"
 #include "QtMeshCloudClient.h"
 #include "SentryReporter.h"
@@ -33,9 +34,9 @@ constexpr qint64 kMaxBackoffMs = 30 * 60 * 1000;
 
 QString gamificationDir()
 {
-    // Same root as sd_models/ai_models/hdri (see SDManager, AIAssistManager).
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-           + QStringLiteral("/gamification");
+    // Same durable root as sd_models/ai_models/hdri (see AppStorage).
+    // Under Snap this is $SNAP_USER_COMMON so queue/stats survive refreshes.
+    return QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("gamification"));
 }
 
 /// Operations whose op key doubles as (or maps onto) a discovery feature

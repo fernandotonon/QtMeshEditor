@@ -232,6 +232,7 @@ MeshDecimatorController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 AIModelCatalog.cpp
+AppStorage.cpp
 WelcomeScreenController.cpp
 WelcomeDialog.cpp
 ScanConfig.cpp

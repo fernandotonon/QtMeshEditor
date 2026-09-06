@@ -2,6 +2,7 @@
 #include "BrushPresetLibrary.h"
 
 #include "AppSettingsKeys.h"
+#include "AppStorage.h"
 #include "EditModeController.h"
 #include "GamificationManager.h"
 #include "EditableMesh.h"
@@ -4777,8 +4778,7 @@ inline uint8_t luma601(QRgb p)
 // Directory for baked channel textures (shared with AI-generated maps).
 QString generatedTexDir()
 {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    const QString dir = QDir(base).filePath("generated_textures");
+    const QString dir = QDir(AppStorage::persistentRoot()).filePath("generated_textures");
     QDir().mkpath(dir);
     return dir;
 }

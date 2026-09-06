@@ -14,6 +14,7 @@
 #include <QUrl>
 #include <QVariantMap>
 #include "SentryReporter.h"
+#include "AppStorage.h"
 
 LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     : QDialog(parent)
@@ -857,8 +858,7 @@ void LLMSettingsWidget::onAIModelCatalogOpenFolderClicked()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("Open QtMeshEditor models folder"));
-    const QString folderPath = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                   .filePath(QStringLiteral("ai_models"));
+    const QString folderPath = AppStorage::aiModelsRoot();
     QDir dir;
     if (!dir.mkpath(folderPath)) {
         QMessageBox::warning(this, "Open Folder Failed",

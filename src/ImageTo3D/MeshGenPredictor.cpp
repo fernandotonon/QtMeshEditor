@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <array>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
 #include <QEventLoop>
@@ -43,9 +45,7 @@ constexpr int   kEncoderImageSize = 512;
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/triposr/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("triposr/"));
 }
 
 } // namespace

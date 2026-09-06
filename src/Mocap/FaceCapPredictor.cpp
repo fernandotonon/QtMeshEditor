@@ -19,6 +19,8 @@
 #include <cmath>
 #include <vector>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #endif
@@ -44,9 +46,7 @@ constexpr float kPresenceThreshold = 0.5f;
 
 QString FaceCapPredictor::modelDir()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/mocap/face"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("mocap/face"));
 }
 
 bool FaceCapPredictor::modelsPresent()

@@ -18,6 +18,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
+#include "AppStorage.h"
 
 namespace {
 constexpr const char* kLibraryFile = "motion-library.json";        // V1 (v3 schema)
@@ -356,9 +357,7 @@ int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) co
 
 QString MotionLibrary::libraryPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    const QDir dir(QDir(dataPath).filePath(QStringLiteral("ai_models/motion")));
+    const QDir dir(QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion")));
     // Prefer the V2 library (schema v4, fingers folded in) when present; fall
     // back to the V1 file. Old app builds only know `motion-library.json`, so
     // shipping a `-v2` file alongside never breaks them — this is opt-in.
@@ -371,10 +370,8 @@ bool MotionLibrary::libraryPresent() { return QFileInfo::exists(libraryPath()); 
 
 QString MotionLibrary::curationPath()
 {
-    const QString dataPath =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(
-        QStringLiteral("ai_models/motion/curation.json"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(
+        QStringLiteral("motion/curation.json"));
 }
 
 QSet<QString> MotionLibrary::loadCuration()

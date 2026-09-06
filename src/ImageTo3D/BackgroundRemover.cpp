@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
 #include "OnnxRuntimeSettings.h"
@@ -32,9 +34,7 @@ constexpr int kNet = 320;   // u2net input size
 
 QString modelDir()
 {
-    const QString base =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(base).filePath(QStringLiteral("ai_models/rembg/"));
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("rembg/"));
 }
 
 } // namespace

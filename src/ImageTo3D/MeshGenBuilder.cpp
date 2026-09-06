@@ -1,5 +1,6 @@
 #include "MeshGenBuilder.h"
 
+#include "AppStorage.h"
 #include "Manager.h"
 #include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
 #include "MeshImporterExporter.h"  // applyNormalMapsToEntity (tangents + RTSS)
@@ -307,8 +308,7 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
         && result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2) {
         QString dir = opts.textureDir;
         if (dir.isEmpty())
-            dir = QDir(QStandardPaths::writableLocation(
-                           QStandardPaths::AppDataLocation))
+            dir = QDir(AppStorage::persistentRoot())
                       .filePath(QStringLiteral("generated_textures"));
         QDir().mkpath(dir);
         const QString candidate =
