@@ -503,8 +503,15 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: AnimationControlController.trimWindow(
-                                   root.inbetweenT0, root.inbetweenT1)
+                    onClicked: {
+                        var r = AnimationControlController.trimWindow(
+                                    root.inbetweenT0, root.inbetweenT1)
+                        // The selected keys' times no longer exist after the
+                        // re-time — clear so the range bar doesn't linger with
+                        // stale pre-trim values.
+                        if (r && r.ok)
+                            root.clearSelection()
+                    }
                 }
             }
         }

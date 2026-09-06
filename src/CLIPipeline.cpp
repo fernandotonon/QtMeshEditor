@@ -3415,6 +3415,10 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     // Resample mode
     // Trim mode: cut the animation to the [--start-time, --end-time] window.
     if (trimMode) {
+        if (skel->getNumAnimations() == 0) {
+            err() << "Error: File has no skeletal animations to trim." << Qt::endl;
+            return 1;
+        }
         if (animationFilter.isEmpty() && skel->getNumAnimations() > 1) {
             err() << "Error: --trim on a multi-animation file needs "
                      "--animation <name>." << Qt::endl;

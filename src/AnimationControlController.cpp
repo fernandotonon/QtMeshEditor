@@ -1898,6 +1898,14 @@ QVariantMap AnimationControlController::trimWindow(double t0, double t1)
     // refresh (same rationale as inbetweenWindow).
     m_selectedTrack   = nullptr;
     m_currentKeyframe = nullptr;
+    // The timeline exposes m_sliderMaximum, not the Ogre animation — without
+    // this the slider keeps accepting times past the trimmed end. Reset the
+    // loop region too (it may reference cut times).
+    m_sliderMaximum = static_cast<int>(cmd->newLength() * 1000);
+    m_loopStart        = 0.0;
+    m_loopEnd          = cmd->newLength();
+    m_loopRegionActive = false;
+    emit loopRegionChanged();
     setSliderValue(0);
     refreshSliderTicks();
     emit boneRowsChanged();

@@ -453,10 +453,21 @@ AnimationMerger::TrimResult AnimationMerger::trimAnimation(
 
     const auto interpMode = srcAnim->getInterpolationMode();
     const auto rotInterpMode = srcAnim->getRotationInterpolationMode();
+    // Base-keyframe metadata (additive-animation reference) must survive the
+    // recreate — dropping it silently changes how the clip composes.
+    const bool useBaseKf = srcAnim->getUseBaseKeyFrame();
+    const Ogre::String baseKfAnim = srcAnim->getBaseKeyFrameAnimationName();
+    // The base reference time is in the OLD clip's timeline; keep it inside
+    // the trimmed range when it referenced this same clip.
+    float baseKfTime = srcAnim->getBaseKeyFrameTime();
+    if (useBaseKf && (baseKfAnim.empty() || baseKfAnim == animName))
+        baseKfTime = std::clamp(baseKfTime - t0, 0.0f, t1 - t0);
     skel->removeAnimation(animName);
     Ogre::Animation* newAnim = skel->createAnimation(animName, t1 - t0);
     newAnim->setInterpolationMode(interpMode);
     newAnim->setRotationInterpolationMode(rotInterpMode);
+    if (useBaseKf)
+        newAnim->setUseBaseKeyFrame(true, baseKfTime, baseKfAnim);
     for (const auto& td : tracks) {
         auto* newTrack = newAnim->createNodeTrack(td.handle);
         if (td.associatedNode)
