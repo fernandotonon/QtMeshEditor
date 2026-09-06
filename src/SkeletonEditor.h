@@ -179,6 +179,17 @@ public:
 
     static void refreshAfterEdit(const std::string& entityName, const QString& selectBone = {});
 
+    /// Undo plumbing for RemoveSkeletonCommand: the imported-rest-pose cache
+    /// is cleared with the skeleton (a re-rig must not inherit the old rig's
+    /// rests), but an UNDO must bring the ORIGINAL entry back — otherwise the
+    /// cache lazily repopulates from the restored skeleton's current initial
+    /// transforms, and if rest poses were edited before the removal, "Reset
+    /// Rest" would treat the edited rest as the import. Opaque QByteArray so
+    /// the cache type stays internal; empty = no entry existed.
+    static QByteArray serializeImportedRestCache(Ogre::Entity* entity);
+    static void deserializeImportedRestCache(Ogre::Entity* entity,
+                                             const QByteArray& data);
+
     /// Push undo commands — used by QML and tests.
     Q_INVOKABLE bool createBoneForSelected(const QString& parentBoneName = {});
     Q_INVOKABLE bool removeSelectedBone(bool removeChildren, bool transferWeightsToParent);

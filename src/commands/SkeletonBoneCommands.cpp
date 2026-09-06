@@ -135,6 +135,11 @@ void RemoveSkeletonCommand::redo()
 
     if (m_firstRedo) {
         m_before = SkeletonEditor::captureSnapshot(entity);
+        // The imported-rest cache is cleared with the skeleton; capture the
+        // original entry so undo restores it VERBATIM — repopulating lazily
+        // from the restored skeleton would bake any pre-removal rest EDITS
+        // in as the "import".
+        m_restCache = SkeletonEditor::serializeImportedRestCache(entity);
         m_firstRedo = false;
     }
 
@@ -156,8 +161,10 @@ void RemoveSkeletonCommand::undo()
     Ogre::Entity* entity = resolveEntityByName(m_entityName);
     if (!entity) return;
     QString err;
-    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err)) {
+        SkeletonEditor::deserializeImportedRestCache(entity, m_restCache);
         SkeletonEditor::refreshAfterEdit(m_entityName);
+    }
     m_applied = false;
     if (auto* rig = AutoRigController::instance())
         emit rig->selectionChanged();

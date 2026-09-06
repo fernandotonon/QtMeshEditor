@@ -69,6 +69,7 @@ public:
 private:
     std::string m_entityName;
     SkeletonEditor::Snapshot m_before;
+    QByteArray m_restCache;   ///< imported-rest cache entry, restored on undo
     bool m_applied = false;
     bool m_firstRedo = true;
 };
