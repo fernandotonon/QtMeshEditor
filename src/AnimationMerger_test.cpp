@@ -1944,11 +1944,12 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
     // is ABOUT the check, so re-enable real detection.
     qunsetenv("QTMESH_T2M_SIDE_SWAP");
 
-    // ONE composed permutation: the library's canonical-LEFT channels land
-    // on the ANATOMICAL RIGHT bones (-trueLeft, facing-aware) — recalibrated
-    // in #977 after the import mirror was removed. A rig with anatomically
-    // correct names facing +Z (named-left at +X = +trueLeft) therefore
-    // takes exactly ONE swap...
+    // FACING-BLIND world-anchored rule: the canonical channels are world-
+    // anchored (canonical left = world +X), so named-left bones at +X
+    // already receive the right channels — NO swap. This is the fleet norm
+    // (Mixamo measures rawNamedLeftX +2.36); the 3.37.x facing-aware rule
+    // wrongly swapped it, mirroring every asymmetric clip (verified by
+    // punch-curve correlation: output-right followed source-LEFT).
     Ogre::Entity* anat = build("sideanat", +1.0f);
     ASSERT_NE(anat, nullptr);
     const auto quats = identityClip(3);
@@ -1956,29 +1957,33 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
         anat->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
     ASSERT_TRUE(resAnat.ok) << resAnat.error.toStdString();
-    EXPECT_TRUE(resAnat.sideSwapApplied)
-        << "anatomically-named +Z-facing rig takes the single composed swap";
+    EXPECT_FALSE(resAnat.sideSwapApplied)
+        << "named-left at world +X already matches the world-anchored "
+           "channels — swapping would mirror every asymmetric clip";
 
-    // ...while a mirror-named rig (named-left at -X) already has its
-    // named-left on the anatomical right — no permutation.
+    // A rig with named-left at world -X (the UniRig orc class: measured
+    // -0.44, and rendered contorted without the swap) takes the swap.
     Ogre::Entity* mir = build("sidemir", -1.0f);
     ASSERT_NE(mir, nullptr);
     const auto resMir = AnimationMerger::applyMotionClip(
         mir->getSkeleton(), "sideclip", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, false, canonRestDirs());
     ASSERT_TRUE(resMir.ok) << resMir.error.toStdString();
-    EXPECT_FALSE(resMir.sideSwapApplied)
-        << "mirror-named rig needs no permutation";
+    EXPECT_TRUE(resMir.sideSwapApplied)
+        << "named-left at world -X needs the swap to receive the "
+           "world-anchored canonical-left channels";
 
-    // Facing-AWARE: yaw180 flips trueLeft, so the same anatomically-named
-    // rig evaluated as backward-facing has its named-left already on the
-    // anatomical right — no swap.
+    // FACING-BLIND: yaw180 must not change the decision — the world-frame
+    // transport never yaws the channels, so the +X rig still takes no swap
+    // when evaluated as backward-facing. (The facing-aware variant of this
+    // rule is exactly what made the swap decision flip with the unstable
+    // facing vote — the 'sometimes flipped knees/elbows' field report.)
     const auto resAnatYaw = AnimationMerger::applyMotionClip(
         anat->getSkeleton(), "sideclip2", quats, 30, /*worldFrame=*/true,
         srcRestWorld(), false, 8, /*yaw180=*/true, canonRestDirs());
     ASSERT_TRUE(resAnatYaw.ok) << resAnatYaw.error.toStdString();
     EXPECT_FALSE(resAnatYaw.sideSwapApplied)
-        << "backward-facing flips trueLeft — no swap for this rig";
+        << "side rule is facing-blind — yaw180 must not flip it";
 
     auto* sm = Manager::getSingleton()->getSceneMgr();
     sm->destroyEntity(anat);
