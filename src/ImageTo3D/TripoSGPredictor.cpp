@@ -14,6 +14,8 @@
 #include <cmath>
 #include <random>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
 #include <QEventLoop>
@@ -22,7 +24,6 @@
 #include <onnxruntime_cxx_api.h>
 #include <string>
 #include <unordered_map>
-#include "AppStorage.h"
 #endif
 
 namespace {

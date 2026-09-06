@@ -21,12 +21,13 @@
 #include <algorithm>
 #include <cmath>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #include <random>
 #include <array>
 #include <vector>
-#include "AppStorage.h"
 #endif
 
 namespace {

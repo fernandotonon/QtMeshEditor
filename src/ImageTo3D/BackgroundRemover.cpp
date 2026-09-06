@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
 #include "OnnxRuntimeSettings.h"
@@ -18,7 +20,6 @@
 #include <onnxruntime_cxx_api.h>
 #include <string>
 #include <unordered_map>
-#include "AppStorage.h"
 #endif
 
 namespace {

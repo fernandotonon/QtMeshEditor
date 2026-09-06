@@ -24,11 +24,12 @@ constexpr const char* kDefaultModelBaseUrl =
 constexpr const char* kBaseUrlSettingsKey = "ai/inbetweenModelBaseUrl";
 } // namespace
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #include <array>
 #include <unordered_map>
-#include "AppStorage.h"
 #endif
 
 // Out-of-line ctor (same idiom as AutoRig::Options / UniRigPredictor::Options):

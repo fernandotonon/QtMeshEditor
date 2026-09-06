@@ -19,9 +19,10 @@
 #include <cmath>
 #include <vector>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
-#include "AppStorage.h"
 #endif
 
 namespace {

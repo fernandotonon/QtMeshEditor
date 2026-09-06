@@ -19,11 +19,12 @@
 #include <numeric>
 #include <unordered_map>
 
+#include "AppStorage.h"
+
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
 #include <random>
 #include <unordered_set>
-#include "AppStorage.h"
 #endif
 
 namespace {
