@@ -201,6 +201,10 @@ void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
             mShowSkeleton.remove(entity);
         }
         updateSkeletonTable();
+        // The skeletal clips died with the skeleton — rebuild the animation
+        // table too, or the poll timer keeps asking the entity for states
+        // that no longer exist.
+        updateAnimationTable();
         return;
     }
 
@@ -390,6 +394,14 @@ void AnimationWidget::pollAnimationState()
         auto* animNameItem = ui->animTable->item(row, 1);
         if(!animNameItem) continue;
 
+        // Entity::getAnimationState THROWS (ItemIdentityException) when the
+        // state doesn't exist — it never returns null. The table can be
+        // stale (skeleton removed via Delete Skeleton, clip deleted via
+        // MCP), and an Ogre exception escaping this timer slot aborts the
+        // app. Check membership first.
+        Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+        if(!states || !states->hasAnimationState(animNameItem->text().toStdString()))
+            continue;
         Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
         if(!animState) continue;
 
@@ -531,7 +543,14 @@ void AnimationWidget::on_animTable_clicked(const QModelIndex &index) const
     if(!entity)
         return;
 
-    Ogre::AnimationState* animationState = entity->getAnimationState(ui->animTable->item(index.row(),1)->text().toStdString().data());
+    // getAnimationState throws on a missing name (stale table row after a
+    // skeleton removal / clip delete) — membership check first.
+    const std::string animName =
+        ui->animTable->item(index.row(), 1)->text().toStdString();
+    Ogre::AnimationStateSet* stateSet = entity->getAllAnimationStates();
+    if(!stateSet || !stateSet->hasAnimationState(animName))
+        return;
+    Ogre::AnimationState* animationState = entity->getAnimationState(animName);
     if(!animationState)
         return;
 
