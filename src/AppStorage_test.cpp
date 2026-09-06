@@ -1,15 +1,29 @@
 #include "AppStorage.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QIODevice>
+#include <QSettings>
 #include <QTemporaryDir>
 
 #include <gtest/gtest.h>
 
-TEST(AppStorageTest, PersistentRootFallsBackToAppDataWhenNotSnap)
+namespace {
+
+void clearSnapEnv()
 {
     qunsetenv("SNAP");
     qunsetenv("SNAP_USER_COMMON");
+    qunsetenv("SNAP_USER_DATA");
+}
+
+} // namespace
+
+TEST(AppStorageTest, PersistentRootFallsBackToAppDataWhenNotSnap)
+{
+    clearSnapEnv();
     EXPECT_FALSE(AppStorage::isSnap());
     EXPECT_EQ(AppStorage::persistentRoot(), AppStorage::revisionScopedRoot());
     EXPECT_TRUE(AppStorage::aiModelsRoot().endsWith(QStringLiteral("/ai_models"))
@@ -30,29 +44,20 @@ TEST(AppStorageTest, PersistentRootUsesSnapUserCommon)
               QDir(AppStorage::persistentRoot())
                   .filePath(QStringLiteral("ai_models")));
 
-    qunsetenv("SNAP");
-    qunsetenv("SNAP_USER_COMMON");
+    clearSnapEnv();
 }
 
-TEST(AppStorageTest, MigrateMovesHeavyDirsIntoCommon)
+TEST(AppStorageTest, MigrateWritesMarkerAndIsIdempotent)
 {
     QTemporaryDir common;
-    QTemporaryDir revision;
     ASSERT_TRUE(common.isValid());
-    ASSERT_TRUE(revision.isValid());
 
-    // Point "AppDataLocation" at our temp revision root via test mode +
-    // we can't easily override QStandardPaths, so exercise moveDir via
-    // SNAP_USER_COMMON while planting files under a fake nested layout that
-    // migrate also scoops — call migrate after staging under persistent's
-    // sibling by simulating the rename paths directly through the public API
-    // with env + a planted source under revisionScopedRoot when possible.
     qputenv("SNAP", "/snap/qtmesheditor/x1");
     qputenv("SNAP_USER_COMMON", common.path().toUtf8());
+    // Distinct SNAP_USER_DATA so sibling scan has a parent; no heavy dirs.
+    qputenv("SNAP_USER_DATA",
+            QDir(common.path()).filePath(QStringLiteral("../rev100")).toUtf8());
 
-    // revisionScopedRoot() still comes from QStandardPaths — plant under
-    // persistent's parent isn't available. Instead verify migrate is a no-op
-    // when persistent == planted dest and create the dest structure.
     const QString destAi = AppStorage::aiModelsRoot();
     ASSERT_TRUE(QDir().mkpath(destAi));
     QFile f(QDir(destAi).filePath(QStringLiteral("marker.gguf")));
@@ -61,22 +66,75 @@ TEST(AppStorageTest, MigrateMovesHeavyDirsIntoCommon)
     f.close();
 
     AppStorage::migrateHeavyDataFromRevisionScopedStorage();
-    EXPECT_TRUE(QFileInfo::exists(
-        QDir(AppStorage::persistentRoot())
-            .filePath(QStringLiteral(".snap-persistent-root"))));
+    const QString marker = QDir(AppStorage::persistentRoot())
+                               .filePath(QStringLiteral(".snap-persistent-root"));
+    EXPECT_TRUE(QFileInfo::exists(marker));
     EXPECT_TRUE(QFileInfo::exists(f.fileName()));
 
-    qunsetenv("SNAP");
-    qunsetenv("SNAP_USER_COMMON");
+    // Second call: marker present + no revision heavy dirs → early return.
+    AppStorage::migrateHeavyDataFromRevisionScopedStorage();
+    EXPECT_TRUE(QFileInfo::exists(marker));
+
+    clearSnapEnv();
+}
+
+TEST(AppStorageTest, HeavySubdirNamesIncludeModelsAndGamification)
+{
+    EXPECT_TRUE(AppStorage::heavySubdirNames().contains(QStringLiteral("ai_models")));
+    EXPECT_TRUE(AppStorage::heavySubdirNames().contains(QStringLiteral("sd_models")));
+    EXPECT_TRUE(AppStorage::heavySubdirNames().contains(QStringLiteral("models")));
+    EXPECT_TRUE(AppStorage::heavySubdirNames().contains(QStringLiteral("gamification")));
+}
+
+TEST(AppStorageTest, RetargetsLegacyModelsDirectorySettings)
+{
+    ASSERT_NE(QCoreApplication::instance(), nullptr);
+
+    QTemporaryDir snapRoot;
+    ASSERT_TRUE(snapRoot.isValid());
+    const QString revData = QDir(snapRoot.path()).filePath(QStringLiteral("100"));
+    const QString common = QDir(snapRoot.path()).filePath(QStringLiteral("common"));
+    ASSERT_TRUE(QDir().mkpath(revData));
+    ASSERT_TRUE(QDir().mkpath(common));
+
+    qputenv("SNAP", "/snap/qtmesheditor/x1");
+    qputenv("SNAP_USER_COMMON", common.toUtf8());
+    qputenv("SNAP_USER_DATA", revData.toUtf8());
+
+    const QString legacyLlm =
+        QDir(revData).filePath(
+            QStringLiteral(".local/share/QtMeshEditor/QtMeshEditor/models"));
+    const QString legacySd =
+        QDir(revData).filePath(
+            QStringLiteral(".local/share/QtMeshEditor/QtMeshEditor/sd_models"));
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("LLM/modelsDirectory"), legacyLlm);
+    settings.setValue(QStringLiteral("StableDiffusion/modelsDirectory"), legacySd);
+    settings.sync();
+
+    AppStorage::migrateHeavyDataFromRevisionScopedStorage();
+
+    settings.sync();
+    EXPECT_EQ(settings.value(QStringLiteral("LLM/modelsDirectory")).toString(),
+              AppStorage::llmModelsRoot());
+    EXPECT_EQ(settings.value(QStringLiteral("StableDiffusion/modelsDirectory")).toString(),
+              AppStorage::sdModelsRoot());
+
+    // Explicit custom outside snap tree stays put.
+    const QString custom = QStringLiteral("/opt/custom/sd_models");
+    settings.setValue(QStringLiteral("LLM/modelsDirectory"), custom);
+    settings.sync();
+    AppStorage::migrateHeavyDataFromRevisionScopedStorage();
+    settings.sync();
+    EXPECT_EQ(settings.value(QStringLiteral("LLM/modelsDirectory")).toString(),
+              custom);
+
+    clearSnapEnv();
 }
 
 TEST(AppStorageTest, MigrateRenamesFromRevisionWhenDistinct)
 {
-    // Unit-level coverage of the rename path: plant src under a temp "revision"
-    // tree and invoke the same helper logic by temporarily swapping env so
-    // persistentRoot() is common, then manually calling migrate after we
-    // can't redirect AppDataLocation — so we test heavySubdirNames + rename
-    // with QFile::rename the same way migrate does, against common.
     QTemporaryDir common;
     QTemporaryDir revision;
     ASSERT_TRUE(common.isValid());

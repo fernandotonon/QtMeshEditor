@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QSettings>
 #include <QStandardPaths>
 
 #include <QtGlobal>
@@ -23,6 +24,7 @@ QStringList heavyNames()
         QStringLiteral("generated_sources"),
         QStringLiteral("texture_previews"),
         QStringLiteral("trellis2"), // Python sidecar env (large)
+        QStringLiteral("gamification"),
     };
 }
 
@@ -60,6 +62,67 @@ void migrateFromRoot(const QString& fromRoot, const QString& toRoot)
         moveDirIfNeeded(QDir(fromRoot).filePath(name),
                         QDir(toRoot).filePath(name));
     }
+}
+
+bool heavyDirPresent(const QString& root)
+{
+    for (const QString& name : heavyNames()) {
+        if (QDir(QDir(root).filePath(name)).exists())
+            return true;
+        if (QDir(QDir(root).filePath(QStringLiteral("QtMeshEditor/%1").arg(name)))
+                .exists())
+            return true;
+    }
+    return false;
+}
+
+/// True for historical default model dirs under Snap AppData
+/// (…/QtMeshEditor/QtMeshEditor/{models,sd_models} or one QtMeshEditor segment).
+bool isLegacyDefaultModelsPath(const QString& path, const QString& leaf)
+{
+    const QString cleaned = QDir::cleanPath(path);
+    if (QFileInfo(cleaned).fileName() != leaf)
+        return false;
+    return cleaned.endsWith(QStringLiteral("/QtMeshEditor/QtMeshEditor/") + leaf)
+        || cleaned.endsWith(QStringLiteral("/QtMeshEditor/") + leaf);
+}
+
+/// Rewrite LLM/SD modelsDirectory when they still point at revision-scoped
+/// defaults after the on-disk rename into $SNAP_USER_COMMON.
+void retargetPersistedModelDirectories()
+{
+    const QString common = qEnvironmentVariable("SNAP_USER_COMMON");
+    const QString snapUserData = qEnvironmentVariable("SNAP_USER_DATA");
+    if (common.isEmpty() || snapUserData.isEmpty())
+        return;
+
+    const QString snapApp = QDir::cleanPath(QFileInfo(snapUserData).absolutePath());
+    const QString commonClean = QDir::cleanPath(common);
+
+    auto retarget = [&](const QString& group, const QString& key, const QString& leaf,
+                        const QString& newPath) {
+        QSettings settings;
+        const QString fullKey = group + QLatin1Char('/') + key;
+        const QString saved = settings.value(fullKey).toString();
+        if (saved.isEmpty())
+            return;
+        const QString cleaned = QDir::cleanPath(saved);
+        // Already under common (default or custom) — leave alone.
+        if (cleaned.startsWith(commonClean))
+            return;
+        // Explicit custom path outside the snap app tree — leave alone.
+        if (!cleaned.startsWith(snapApp))
+            return;
+        if (!isLegacyDefaultModelsPath(cleaned, leaf))
+            return;
+        settings.setValue(fullKey, newPath);
+        settings.sync();
+    };
+
+    retarget(QStringLiteral("LLM"), QStringLiteral("modelsDirectory"),
+             QStringLiteral("models"), AppStorage::llmModelsRoot());
+    retarget(QStringLiteral("StableDiffusion"), QStringLiteral("modelsDirectory"),
+             QStringLiteral("sd_models"), AppStorage::sdModelsRoot());
 }
 
 } // namespace
@@ -125,6 +188,18 @@ void migrateHeavyDataFromRevisionScopedStorage()
     if (persistent.isEmpty() || persistent == revision)
         return;
 
+    const QString markerPath =
+        QDir(persistent).filePath(QStringLiteral(".snap-persistent-root"));
+    const bool markerExists = QFileInfo::exists(markerPath);
+
+    // After the first successful migration, skip the multi-revision scan
+    // unless the current revision still has heavy dirs (e.g. a refresh that
+    // re-copied leftovers before this build).
+    if (markerExists && !heavyDirPresent(revision)) {
+        retargetPersistedModelDirectories();
+        return;
+    }
+
     QDir().mkpath(persistent);
 
     auto scoop = [&](const QString& fromRoot) {
@@ -157,12 +232,16 @@ void migrateHeavyDataFromRevisionScopedStorage()
         }
     }
 
-    // Marker so support logs can confirm the durable root.
-    QFile marker(QDir(persistent).filePath(QStringLiteral(".snap-persistent-root")));
-    if (!marker.exists() && marker.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        marker.write("QtMeshEditor heavy data root (SNAP_USER_COMMON)\n");
-        marker.close();
+    // Marker so support logs can confirm the durable root / skip rescans.
+    if (!markerExists) {
+        QFile marker(markerPath);
+        if (marker.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            marker.write("QtMeshEditor heavy data root (SNAP_USER_COMMON)\n");
+            marker.close();
+        }
     }
+
+    retargetPersistedModelDirectories();
 }
 
 } // namespace AppStorage

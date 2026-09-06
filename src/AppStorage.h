@@ -41,8 +41,11 @@ QStringList heavySubdirNames();
 
 /// One-shot: move heavy subdirs from revision-scoped AppData (and a known
 /// accidental nested `…/QtMeshEditor/QtMeshEditor/…` layout) into
-/// `persistentRoot()`. No-op when already migrated or not snap. Prefer
-/// rename (same filesystem); never copies multi-GB trees.
+/// `persistentRoot()`. No-op when already migrated (marker present and
+/// current revision has no leftover heavy dirs) or not snap. Also rewrites
+/// persisted LLM/SD `modelsDirectory` settings that still point at legacy
+/// revision-scoped defaults. Prefer rename (same filesystem); never copies
+/// multi-GB trees.
 void migrateHeavyDataFromRevisionScopedStorage();
 
 } // namespace AppStorage
