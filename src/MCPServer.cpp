@@ -4389,6 +4389,17 @@ QJsonObject MCPServer::toolTrimAnimation(const QJsonObject &args)
     if (!mgr)
         return makeErrorResult("Error: Manager not available");
 
+    // Strict arg typing: a present-but-mistyped field must error, not fall
+    // back to a default that silently trims the wrong window.
+    if (args.contains("entity_name") && !args["entity_name"].isString())
+        return makeErrorResult("Error: 'entity_name' must be a string.");
+    if (args.contains("animation_name") && !args["animation_name"].isString())
+        return makeErrorResult("Error: 'animation_name' must be a string.");
+    if (args.contains("start_time") && !args["start_time"].isDouble())
+        return makeErrorResult("Error: 'start_time' must be a number.");
+    if (args.contains("end_time") && !args["end_time"].isDouble())
+        return makeErrorResult("Error: 'end_time' must be a number.");
+
     QString entityName = args["entity_name"].toString();
     Ogre::Entity* entity = nullptr;
     const QList<Ogre::Entity*> allEntities = mgr->getEntities();
@@ -4419,6 +4430,15 @@ QJsonObject MCPServer::toolTrimAnimation(const QJsonObject &args)
     const float t0 = static_cast<float>(args.value("start_time").toDouble(0.0));
     const float t1 = args.contains("end_time")
         ? static_cast<float>(args.value("end_time").toDouble(clipLen)) : clipLen;
+    // Pre-validate BEFORE pushing — a redo() failure would leave a dead undo
+    // entry on the stack (and clear the redo branch).
+    {
+        const float c0 = std::clamp(t0, 0.0f, clipLen);
+        const float c1 = std::clamp(t1, 0.0f, clipLen);
+        if (c1 - c0 < 0.01f)
+            return makeErrorResult(
+                "Error: Trim window too small — select at least one frame.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("trim_animation %1 [%2..%3]").arg(animName).arg(t0).arg(t1));

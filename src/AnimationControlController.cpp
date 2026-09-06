@@ -1882,6 +1882,22 @@ QVariantMap AnimationControlController::trimWindow(double t0, double t1)
         return out;
     }
 
+    // Pre-validate BEFORE pushing: a command that fails inside redo() still
+    // lands on the undo stack as a dead entry (and clears the redo branch).
+    // Same window rules as AnimationMerger::trimAnimation.
+    {
+        const float len =
+            m_selectedSkeleton->getAnimation(m_selectedAnimation)->getLength();
+        const float c0 = std::clamp(static_cast<float>(t0), 0.0f, len);
+        const float c1 = std::clamp(static_cast<float>(t1), 0.0f, len);
+        if (c1 - c0 < 0.01f) {
+            out["error"] = QStringLiteral(
+                "Trim window too small — select at least one frame.");
+            emit inbetweenStatus(out["error"].toString(), true);
+            return out;
+        }
+    }
+
     auto* cmd = new TrimAnimationCommand(m_selectedEntity->getName(),
                                          m_selectedAnimation,
                                          static_cast<float>(t0),
