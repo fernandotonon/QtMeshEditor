@@ -2053,6 +2053,16 @@ bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
     Ogre::SkeletonInstance* skel = entity->getSkeleton();
     if (!skel) return false;
 
+    // BIND pose, not the live pose: this runs on a rig that may be
+    // mid-animation (a previously applied clip playing or paused), and ankle
+    // positions sampled from an animated pose flip the facing vote from call
+    // to call — which flips trueLeft in the #969 side rule and lands knees/
+    // elbows on the opposite side nondeterministically for the same clip +
+    // model. The render loop re-applies enabled AnimationStates next frame,
+    // and every retarget path downstream resets the skeleton itself anyway.
+    skel->reset(true);
+    skel->_updateTransforms();
+
     // Ankle reference: bones resolving to the canonical foot roles (17/21) —
     // but only those that are actually LOW. Mis-labeled rigs (#969: UniRig
     // A-pose arms named "*Foot_1") put foot-named bones at chest height;

@@ -2033,7 +2033,13 @@ QVariantList AnimationControlController::listMotionClips()
         const QString name = asset.isEmpty()
             ? actLabel : QStringLiteral("%1  (%2)").arg(actLabel, asset);
         QVariantMap m;
-        m["index"] = i;
+        // NOT "index": a ListModel role named "index" SHADOWS the delegate's
+        // built-in row index in QML (bare `index` and `model.index` both
+        // resolve to the role), which broke the picker — toggleApproved(row)
+        // received the library index and get(row) went out of range on any
+        // filtered list, so starring silently did nothing once "Only good ★"
+        // kicked in.
+        m["libIndex"] = i;
         m["action"] = c.action;
         m["name"] = name;
         m["source"] = c.source;

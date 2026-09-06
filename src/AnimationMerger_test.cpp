@@ -1984,3 +1984,93 @@ TEST_F(AnimationMergerTest, ApplyMotionClipDetectsMirroredSideNaming)
     sm->destroyEntity(anat);
     sm->destroyEntity(mir);
 }
+
+// detectBackwardFacing must be POSE-INDEPENDENT: it feeds yaw180, which feeds
+// the #969 side rule's trueLeft — if it samples the skeleton mid-animation,
+// applying the same clip to the same model gives different knee/elbow sides
+// depending on where the previous clip's playhead happens to be (the field
+// report: "sometimes it flips the knees and elbows, same animation and same
+// model"). The detector must read the BIND pose regardless of the live pose.
+TEST_F(AnimationMergerTest, DetectBackwardFacingIgnoresLivePose)
+{
+    // Rig: hips high, Mixamo-named feet in the lowest quarter.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "facing_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    unsigned short h = 0;
+    auto bone = [&](const char* n, const Ogre::Vector3& p, Ogre::Bone* parent) {
+        auto* b = skel->createBone(n, h++);
+        b->setPosition(p);
+        if (parent) parent->addChild(b);
+        return b;
+    };
+    auto* hips = bone("Hips", {0, 1.0f, 0}, nullptr);
+    auto* spine = bone("Spine", {0, 0.3f, 0}, hips);
+    bone("Head", {0, 0.4f, 0}, spine);
+    bone("LeftFoot", {0.15f, -0.9f, 0}, hips);
+    bone("RightFoot", {-0.15f, -0.9f, 0}, hips);
+    skel->setBindingPose();
+
+    // A "live" clip that translates the hips forward — the exact state a
+    // previously applied animation leaves behind. Ankles move to z=0.5 while
+    // the mesh's toe block stays at z=0.2, so a live-pose read sees the toes
+    // BEHIND the ankles and votes backward.
+    auto* anim = skel->createAnimation("pose", 1.0f);
+    auto* trk = anim->createNodeTrack(0, hips);
+    trk->createNodeKeyFrame(0.0f)->setTranslate({0, 0, 0.5f});
+    trk->createNodeKeyFrame(1.0f)->setTranslate({0, 0, 0.5f});
+
+    // Mesh: 20 toe verts forward (+Z) of the bind ankles, in the foot band,
+    // plus a head vert for height.
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        "facing_mesh", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    std::vector<float> verts;
+    for (int i = 0; i < 20; ++i) {
+        verts.push_back(-0.2f + 0.02f * i);   // x spread
+        verts.push_back(0.08f);               // in the foot band (~0.1)
+        verts.push_back(0.2f);                // toes forward of ankle z=0
+    }
+    verts.insert(verts.end(), {0.0f, 1.7f, 0.0f});   // head
+    const size_t nV = verts.size() / 3;
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), nV, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    vbuf->writeData(0, verts.size() * sizeof(float), verts.data());
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+    mesh->sharedVertexData->vertexCount = nV;
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+    mesh->_notifySkeleton(skel);
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 1, 2, 1));
+    mesh->_setBoundingSphereRadius(2.0f);
+    mesh->load();
+
+    auto* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* ent = sm->createEntity("facing_ent", mesh);
+    ASSERT_NE(ent, nullptr);
+
+    // Bind pose: toes forward → not backward-facing.
+    EXPECT_FALSE(AnimationMerger::detectBackwardFacing(ent));
+
+    // Pose the LIVE SkeletonInstance as a playing clip would.
+    Ogre::SkeletonInstance* live = ent->getSkeleton();
+    ASSERT_NE(live, nullptr);
+    live->reset(true);
+    live->getAnimation("pose")->apply(live, 0.5f);
+    live->_updateTransforms();
+
+    // The verdict must not change with the live pose.
+    EXPECT_FALSE(AnimationMerger::detectBackwardFacing(ent))
+        << "facing vote flipped with the live pose — the side rule would "
+           "mirror knees/elbows depending on the previous clip's playhead";
+
+    sm->destroyEntity(ent);
+}
