@@ -1026,10 +1026,19 @@ SkeletonEditor::Result SkeletonEditor::removeSkeleton(Ogre::Entity* entity)
     }
     // Strip every weight first — a skeleton-less mesh must not carry stale
     // bone assignments (exporters and a later Auto-Rig re-skin both start
-    // from a clean list).
-    mesh->clearBoneAssignments();
-    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
-        mesh->getSubMesh(si)->clearBoneAssignments();
+    // from a clean list). Only clear where assignments actually exist:
+    // clearBoneAssignments sets the compile-dirty flag, and a SHARED-vertices
+    // submesh has vertexData == nullptr — compiling it later (the undo
+    // restore re-attaches the skeleton and _initAnimationState flushes dirty
+    // submeshes) dereferences that null and crashes. Shared-vertex weights
+    // live on the MESH, which is cleared above.
+    if (!mesh->getBoneAssignments().empty())
+        mesh->clearBoneAssignments();
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (sub && !sub->getBoneAssignments().empty())
+            sub->clearBoneAssignments();
+    }
     // Empty name = "use no skeleton" (documented Ogre API) — hasSkeleton()
     // turns false, which is exactly what AutoRigController's riggable gate
     // checks. Re-initialise so the entity drops its SkeletonInstance and
