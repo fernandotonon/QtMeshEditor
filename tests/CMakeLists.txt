@@ -270,6 +270,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIModelCatalog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppStorage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.cpp
