@@ -1039,6 +1039,12 @@ SkeletonEditor::Result SkeletonEditor::removeSkeleton(Ogre::Entity* entity)
         if (sub && !sub->getBoneAssignments().empty())
             sub->clearBoneAssignments();
     }
+    // The imported-rest-pose cache is keyed by mesh name and populated once —
+    // after a re-rig the mesh has a NEW skeleton, and a stale entry holding
+    // the OLD skeleton's bone rests would feed "Reset Rest" wrong transforms
+    // for any bone whose name matches. Drop it with the skeleton (it lazily
+    // repopulates from whatever skeleton exists next).
+    clearImportedRestCache(entity);
     // Empty name = "use no skeleton" (documented Ogre API) — hasSkeleton()
     // turns false, which is exactly what AutoRigController's riggable gate
     // checks. Re-initialise so the entity drops its SkeletonInstance and
