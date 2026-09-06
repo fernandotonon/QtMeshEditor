@@ -379,6 +379,103 @@ int AnimationMerger::resampleAnimation(Ogre::Skeleton* skel,
     return originalMaxKeyframes - targetKeyframes;
 }
 
+AnimationMerger::TrimResult AnimationMerger::trimAnimation(
+    Ogre::Skeleton* skel, const std::string& animName, float t0, float t1)
+{
+    TrimResult res;
+    if (!skel || !skel->hasAnimation(animName)) {
+        res.error = QStringLiteral("Animation not found.");
+        return res;
+    }
+    Ogre::Animation* srcAnim = skel->getAnimation(animName);
+    const float length = srcAnim->getLength();
+    t0 = std::clamp(t0, 0.0f, length);
+    t1 = std::clamp(t1, 0.0f, length);
+    if (t1 - t0 < 0.01f) {
+        res.error = QStringLiteral(
+            "Trim window too small — select at least one frame.");
+        return res;
+    }
+    // No-op window (whole clip) — succeed without touching the tracks.
+    if (t0 <= 1e-4f && t1 >= length - 1e-4f) {
+        res.ok = true;
+        res.newLength = length;
+        return res;
+    }
+
+    // Collect the trimmed keyframe data per track: exact interpolated
+    // boundary poses at t0/t1 plus every original key strictly inside,
+    // all shifted by -t0. Same collect-then-rebuild shape as
+    // resampleAnimation — recreating the animation avoids the
+    // _keyFrameDataChanged stale-cache gotcha entirely.
+    constexpr float kEps = 1e-4f;
+    struct TrackData {
+        unsigned short handle;
+        Ogre::Node* associatedNode;
+        bool useShortestPath;
+        struct KeyframeData {
+            float time;
+            Ogre::Vector3 translate;
+            Ogre::Quaternion rotation;
+            Ogre::Vector3 scale;
+        };
+        std::vector<KeyframeData> keyframes;
+    };
+    std::vector<TrackData> tracks;
+    int kept = 0, original = 0;
+
+    for (const auto& [handle, srcTrack] : srcAnim->_getNodeTrackList()) {
+        TrackData td;
+        td.handle = handle;
+        td.associatedNode = srcTrack->getAssociatedNode();
+        td.useShortestPath = srcTrack->getUseShortestRotationPath();
+        original += static_cast<int>(srcTrack->getNumKeyFrames());
+
+        auto sampleAt = [&](float t, float outTime) {
+            Ogre::TransformKeyFrame kf(nullptr, t);
+            srcTrack->getInterpolatedKeyFrame(srcAnim->_getTimeIndex(t), &kf);
+            td.keyframes.push_back({outTime, kf.getTranslate(),
+                                    kf.getRotation(), kf.getScale()});
+        };
+        sampleAt(t0, 0.0f);
+        for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k) {
+            const auto* kf = srcTrack->getNodeKeyFrame(k);
+            const float t = kf->getTime();
+            if (t <= t0 + kEps || t >= t1 - kEps)
+                continue;
+            td.keyframes.push_back({t - t0, kf->getTranslate(),
+                                    kf->getRotation(), kf->getScale()});
+        }
+        sampleAt(t1, t1 - t0);
+        kept += static_cast<int>(td.keyframes.size());
+        tracks.push_back(std::move(td));
+    }
+
+    const auto interpMode = srcAnim->getInterpolationMode();
+    const auto rotInterpMode = srcAnim->getRotationInterpolationMode();
+    skel->removeAnimation(animName);
+    Ogre::Animation* newAnim = skel->createAnimation(animName, t1 - t0);
+    newAnim->setInterpolationMode(interpMode);
+    newAnim->setRotationInterpolationMode(rotInterpMode);
+    for (const auto& td : tracks) {
+        auto* newTrack = newAnim->createNodeTrack(td.handle);
+        if (td.associatedNode)
+            newTrack->setAssociatedNode(td.associatedNode);
+        newTrack->setUseShortestRotationPath(td.useShortestPath);
+        for (const auto& kfData : td.keyframes) {
+            auto* kf = newTrack->createNodeKeyFrame(kfData.time);
+            kf->setTranslate(kfData.translate);
+            kf->setRotation(kfData.rotation);
+            kf->setScale(kfData.scale);
+        }
+    }
+
+    res.ok = true;
+    res.keyframesRemoved = std::max(0, original - kept);
+    res.newLength = t1 - t0;
+    return res;
+}
+
 int AnimationMerger::decimateAnimation(Ogre::Skeleton* skel,
                                        const std::string& animName,
                                        int step)

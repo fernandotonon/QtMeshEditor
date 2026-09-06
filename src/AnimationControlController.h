@@ -330,6 +330,12 @@ public:
     /// error } so the dope-sheet UI can surface a "fell back to spline" note.
     /// Emits inbetweenStatus(message, isError). Not undoable yet — a follow-up
     /// can wrap it in a command (mirrors the resample-curve path).
+    /// Trim the selected animation to the [t0, t1] dope-sheet window — cuts
+    /// everything outside, bakes exact boundary poses, shifts to start at 0.
+    /// UNDOABLE (TrimAnimationCommand snapshots the skeleton). Emits
+    /// inbetweenStatus (the dope sheet's shared status line).
+    Q_INVOKABLE QVariantMap trimWindow(double t0, double t1);
+
     Q_INVOKABLE QVariantMap inbetweenWindow(double t0, double t1,
                                             int gapFrames,
                                             bool noModel = false);

@@ -94,6 +94,26 @@ public:
                                  const std::string& animName,
                                  int step);
 
+    /// Result of trimAnimation.
+    struct TrimResult {
+        bool ok = false;
+        QString error;
+        int keyframesRemoved = 0;   ///< keyframes dropped outside the window
+        float newLength = 0.f;      ///< t1 - t0
+    };
+
+    /// TRIM an animation to the [t0, t1] window: keyframes outside are cut,
+    /// exact boundary poses are baked at both ends (interpolated, so the
+    /// motion at the new start/end matches the original at t0/t1), all kept
+    /// keyframes shift by -t0, and the animation length becomes t1 - t0.
+    /// The clip keeps its name; the source keyframes outside the window are
+    /// gone (callers wanting undo should snapshot first — the GUI goes
+    /// through TrimAnimationCommand). Times are clamped to [0, length];
+    /// t1 must exceed t0 by at least ~one frame (0.01s).
+    static TrimResult trimAnimation(Ogre::Skeleton* skel,
+                                    const std::string& animName,
+                                    float t0, float t1);
+
     /// Tolerances for redundant-keyframe detection. A keyframe is "redundant"
     /// when removing it leaves the lerp/slerp from its neighbors within tolerance
     /// of the original value. Defaults are the "Conservative" preset — the

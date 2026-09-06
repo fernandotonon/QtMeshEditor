@@ -9,6 +9,7 @@
 #include "UndoManager.h"
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
 #include "commands/ResampleCurveCommand.h"
 #include "commands/CurveEditModelChangeCommand.h"
@@ -1868,6 +1869,52 @@ void AnimationControlController::notifyExternalAnimationEdit()
     emit boneRowsChanged();
     emit keyframeTicksChanged();
     emit currentKeyframeChanged();
+}
+
+QVariantMap AnimationControlController::trimWindow(double t0, double t1)
+{
+    QVariantMap out;
+    out["ok"] = false;
+    if (!m_selectedEntity || !m_selectedSkeleton || m_selectedAnimation.empty()
+        || !m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
+        out["error"] = QStringLiteral("No animation selected.");
+        emit inbetweenStatus(out["error"].toString(), true);
+        return out;
+    }
+
+    auto* cmd = new TrimAnimationCommand(m_selectedEntity->getName(),
+                                         m_selectedAnimation,
+                                         static_cast<float>(t0),
+                                         static_cast<float>(t1));
+    UndoManager::getSingleton()->push(cmd);
+    if (!cmd->applied()) {
+        out["error"] = cmd->error().isEmpty()
+            ? QStringLiteral("Trim failed.") : cmd->error();
+        emit inbetweenStatus(out["error"].toString(), true);
+        return out;
+    }
+
+    // Structural edit — drop cached track/keyframe pointers before the view
+    // refresh (same rationale as inbetweenWindow).
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    setSliderValue(0);
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+    emit currentKeyframeChanged();
+    emit animationLengthChanged();
+    emit animationTreeChanged();
+
+    out["ok"] = true;
+    out["keyframesRemoved"] = cmd->keyframesRemoved();
+    out["newLength"] = cmd->newLength();
+    const QString msg =
+        QStringLiteral("Trimmed to %1s (%2 keyframes cut) — Ctrl+Z restores.")
+            .arg(QString::number(cmd->newLength(), 'f', 2))
+            .arg(cmd->keyframesRemoved());
+    emit inbetweenStatus(msg, false);
+    return out;
 }
 
 QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,

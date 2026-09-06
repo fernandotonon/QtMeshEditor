@@ -49,6 +49,7 @@ qtmesh anim model.fbx --list                   # list animations
 qtmesh anim model.fbx --list --json            # list animations (JSON)
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o out.fbx  # rename an animation
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+qtmesh anim model.fbx --trim --start-time 0.5 --end-time 2.0 --animation "Walk" -o out.fbx  # cut the clip to [0.5s..2s] (boundary poses baked, re-timed to start at 0; GUI: dope-sheet "✂ Trim to range" on the selected keys)
 qtmesh anim model.fbx --resample 30 -o optimized.fbx  # resample to 30 keyframes
 qtmesh anim model.fbx --decimate-step 5 -o lighter.fbx  # keep every 5th keyframe
 qtmesh anim model.fbx --resample 30 --animation "Walk" -o out.fbx  # resample specific animation

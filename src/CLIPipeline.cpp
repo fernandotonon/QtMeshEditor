@@ -2453,6 +2453,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool decimateMode = false;
     bool simplifyMode = false;
     bool bakeFpsMode  = false;
+    bool trimMode = false;            // --trim: cut the clip to [start,end]
     bool inbetweenMode = false;       // #409: AI in-betweening
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
     bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
@@ -2528,6 +2529,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             bakeFps = QString(argv[++i]).toInt();
             continue;
         }
+        // Trim: keep only [--start-time, --end-time] of the animation (cut
+        // the lead-in/tail; exact boundary poses baked; re-timed to start 0).
+        if (arg == "--trim") { trimMode = true; continue; }
         if (arg == "--in-between") { inbetweenMode = true; continue; }
         if (arg == "--gap-frames" && i + 1 < argc) {
             inbetweenGapFrames = QString(argv[++i]).toInt();
@@ -3070,8 +3074,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
         && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode
-        && !dumpCanonicalMode) {
-        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
+        && !trimMode && !dumpCanonicalMode) {
+        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --trim, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
@@ -3093,7 +3097,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     if ((renameMode || mergeMode || resampleMode || decimateMode || simplifyMode
-         || bakeFpsMode || inbetweenMode) && outputPath.isEmpty()) {
+         || bakeFpsMode || inbetweenMode || trimMode) && outputPath.isEmpty()) {
         outputPath = filePath;  // overwrite in place
     }
 
@@ -3409,6 +3413,56 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     // Resample mode
+    // Trim mode: cut the animation to the [--start-time, --end-time] window.
+    if (trimMode) {
+        if (animationFilter.isEmpty() && skel->getNumAnimations() > 1) {
+            err() << "Error: --trim on a multi-animation file needs "
+                     "--animation <name>." << Qt::endl;
+            return 2;
+        }
+        std::string trimAnim = animationFilter.isEmpty()
+            ? skel->getAnimation(static_cast<unsigned short>(0))->getName()
+            : animationFilter.toStdString();
+        if (!skel->hasAnimation(trimAnim)) {
+            err() << "Error: Animation not found: "
+                  << QString::fromStdString(trimAnim) << Qt::endl;
+            return 1;
+        }
+        const float len = skel->getAnimation(trimAnim)->getLength();
+        const float t0 = inbetweenStart >= 0.0f ? inbetweenStart : 0.0f;
+        const float t1 = inbetweenEnd >= 0.0f ? inbetweenEnd : len;
+        SentryReporter::addBreadcrumb("cli.anim",
+            QString("Trim anim=%1 [%2..%3]")
+                .arg(QString::fromStdString(trimAnim)).arg(t0).arg(t1));
+        const auto r = AnimationMerger::trimAnimation(skel.get(), trimAnim, t0, t1);
+        if (!r.ok) {
+            err() << "Error: " << r.error << Qt::endl;
+            return 1;
+        }
+        QFileInfo outFi(outputPath);
+        if (isAnimOnlyInput) {
+            QString exportErr;
+            if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+                err() << "Error: Export failed: " << exportErr << Qt::endl;
+                return 1;
+            }
+        } else {
+            entity->refreshAvailableAnimationState();
+            auto* node = entity->getParentSceneNode();
+            if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
+                                               formatForExtension(outputPath)) != 0) {
+                err() << "Error: Export failed." << Qt::endl;
+                return 1;
+            }
+        }
+        cliWrite(QString("Trimmed '%1' to [%2s..%3s] → %4s (%5 keyframes cut)\nOutput: %6\n")
+            .arg(QString::fromStdString(trimAnim))
+            .arg(t0, 0, 'f', 2).arg(t1, 0, 'f', 2)
+            .arg(r.newLength, 0, 'f', 2).arg(r.keyframesRemoved)
+            .arg(outFi.fileName()));
+        return 0;
+    }
+
     if (resampleMode) {
         if (resampleCount < 2) {
             err() << "Error: --resample requires N >= 2." << Qt::endl;
