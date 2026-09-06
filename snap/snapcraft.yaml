@@ -58,7 +58,10 @@ apps:
       - removable-media
       - camera
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
+      # usr/share/qtmesheditor is on the path so bundled trellis-cli can find
+      # any leftover libggml*.so next to itself ($ORIGIN) via LD_LIBRARY_PATH
+      # when RPATH alone is not enough under snap confinement.
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
       QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH
       QT_QPA_PLATFORM: xcb
       # Multimedia FFmpeg backend: plugins/multimedia/ under this root.
@@ -76,7 +79,7 @@ apps:
       - removable-media
       - opengl
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio:$LD_LIBRARY_PATH
       QT_QPA_PLATFORM: offscreen
       QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
 

@@ -449,6 +449,27 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // stderr (backend banner, ggml logs) forwards to ours; stdout carries the
     // "[k/7]" stage lines we map onto the shared Stage enum.
     proc.setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    // Prepend the CLI directory so leftover libggml shared libs next to the
+    // bundled binary resolve even when RPATH was stripped (snap/deb private
+    // lib dir, macOS SIP, Windows PATH). Static BUILD_SHARED_LIBS=OFF is the
+    // primary fix; this is defense in depth for every OS.
+    {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        const QString cliDir = QFileInfo(cli).absolutePath();
+#ifdef Q_OS_WIN
+        const QLatin1String key("PATH");
+        const QLatin1Char sep(';');
+#elif defined(Q_OS_MACOS)
+        const QLatin1String key("DYLD_LIBRARY_PATH");
+        const QLatin1Char sep(':');
+#else
+        const QLatin1String key("LD_LIBRARY_PATH");
+        const QLatin1Char sep(':');
+#endif
+        const QString cur = env.value(key);
+        env.insert(key, cur.isEmpty() ? cliDir : (cliDir + sep + cur));
+        proc.setProcessEnvironment(env);
+    }
     proc.start();
     if (!proc.waitForStarted(15000))
         return failResult(QStringLiteral("trellis2: failed to start %1").arg(cli));
@@ -484,10 +505,19 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     }
     if (cancelled)
         return failResult(QStringLiteral("cancelled"));
-    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0)
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        // 127 = dynamic linker "command/library not found" on Linux — the
+        // classic symptom when packaging ships trellis-cli without libggml*.
+        if (proc.exitCode() == 127)
+            return failResult(QStringLiteral(
+                "trellis2: trellis-cli failed to load (exit 127 — usually a "
+                "missing libggml shared library next to the bundled binary). "
+                "Reinstall a build that ships the self-contained trellis.cpp "
+                "runtime."));
         return failResult(QStringLiteral(
             "trellis2: trellis-cli exited with code %1 (see stderr log).")
                               .arg(proc.exitCode()));
+    }
     Trellis2Interchange::ReadResult rr =
         Trellis2Interchange::readTrellisCppDump(outDump);
     if (!rr.ok)

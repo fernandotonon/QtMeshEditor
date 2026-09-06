@@ -381,7 +381,9 @@ jobs:
         gcc --version
         cmake --version
         cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} -DENABLE_ONNX=ON
-      shell: powershell
+        # ENABLE_TRELLIS_CPP stays OFF on MinGW for now (follow-up). When it
+        # turns on, cmake/TrellisCpp.cmake already forces BUILD_SHARED_LIBS=OFF
+        # and CopyTrellisRuntime.cmake scoops ggml*.dll next to trellis-cli.exe.      shell: powershell
 
     - name: Build
       env:
@@ -907,6 +909,37 @@ jobs:
     - name: Build
       run: sudo make install -j8
 
+    - name: Verify bundled trellis-cli is loadable
+      run: |
+            # Regression guard for 3.37.3/3.37.4: shipping trellis-cli without
+            # libggml*.so made every snap/deb install fail with exit 127.
+            if [ ! -f ./bin/trellis-cli ]; then
+              echo "ERROR: ENABLE_TRELLIS_CPP=ON but ./bin/trellis-cli is missing"
+              ls -la ./bin | head -40
+              exit 1
+            fi
+            echo "=== ldd trellis-cli ==="
+            ldd ./bin/trellis-cli
+            if ldd ./bin/trellis-cli | grep -E 'libggml' | grep -q 'not found'; then
+              echo "ERROR: unresolved libggml deps — package would exit 127 on users' machines"
+              exit 1
+            fi
+            # If still dynamically linked to ggml, the matching .so must sit in
+            # ./bin so CopyTrellisRuntime / pack-deb can ship them ($ORIGIN).
+            if ldd ./bin/trellis-cli | grep -qE 'libggml[^ ]*\.so'; then
+              while read -r line; do
+                so=$(echo "$line" | awk '{print $1}')
+                case "$so" in
+                  libggml*.so*)
+                    ls ./bin/"$so"* ./bin/libggml* 2>/dev/null | head -5 \
+                      || { echo "ERROR: linked $so but no libggml* in ./bin"; exit 1; }
+                    ;;
+                esac
+              done < <(ldd ./bin/trellis-cli)
+            else
+              echo "trellis-cli has no dynamic libggml deps (static ggml — preferred)"
+            fi
+
     - name: Upload debug symbols to Sentry
       if: github.event_name == 'release' && github.event.action == 'published'
       env:
@@ -974,10 +1007,18 @@ jobs:
               # must accompany the redistributed binary.
               cp ./bin/trellis-cli.THIRD_PARTY_LICENSES.txt \
                  ./pack-deb/usr/share/doc/qtmesheditor/trellis-cli.THIRD_PARTY_LICENSES.txt
+              # ggml shared libs (if BUILD_SHARED_LIBS wasn't fully static):
+              # must sit next to trellis-cli ($ORIGIN) AND in the private lib
+              # dir. 3.37.3/3.37.4 shipped only the CLI → exit 127 on snap/deb.
+              for ggml_lib in ./bin/libggml*; do
+                [ -e "$ggml_lib" ] || continue
+                cp -a "$ggml_lib" ./pack-deb/usr/share/qtmesheditor/
+                cp -a "$ggml_lib" ./pack-deb/usr/lib/qtmesheditor/
+              done
             fi
 
             # Create proper launcher script
-            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
             # Create qtmesh symlink for CLI mode (name starts with "qtmesh" but not "qtmesheditor")
@@ -2137,6 +2178,45 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
+
+    - name: Verify bundled trellis-cli (macOS)
+      run: |
+            # ggml defaults to static on Apple, but Metal/backends can still
+            # emit dylibs — same class of bug as Linux exit 127 if we ship the
+            # CLI without them. Fail the job if any ggml dylib is referenced
+            # but missing from Contents/MacOS (codesign loop already signs *).
+            set -euo pipefail
+            CLI="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/trellis-cli"
+            MACOS_DIR="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS"
+            if [ ! -f "$CLI" ]; then
+              echo "ERROR: ENABLE_TRELLIS_CPP=ON but trellis-cli missing from .app"
+              ls -la "$MACOS_DIR" | head -40
+              exit 1
+            fi
+            echo "=== otool -L trellis-cli ==="
+            otool -L "$CLI"
+            missing=0
+            while read -r line; do
+              lib=$(echo "$line" | awk '{print $1}')
+              case "$lib" in
+                *ggml*)
+                  base=$(basename "$lib")
+                  case "$lib" in
+                    /System/*|/usr/lib/*) ;;
+                    *)
+                      if [ ! -f "$MACOS_DIR/$base" ]; then
+                        echo "ERROR: $lib referenced but $base not in Contents/MacOS"
+                        missing=1
+                      fi
+                      ;;
+                  esac
+                  ;;
+              esac
+            done < <(otool -L "$CLI" | tail -n +2)
+            if [ "$missing" -ne 0 ]; then
+              exit 1
+            fi
+            echo "trellis-cli present; ggml dylibs (if any) colocated"
 
     - name: Upload debug symbols to Sentry
       if: github.event_name == 'release' && github.event.action == 'published'

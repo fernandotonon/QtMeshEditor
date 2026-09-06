@@ -834,23 +834,35 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
     # LICENSE with its vendored dependencies' notices into ONE file that
     # travels next to the binary in every package.
     set(_trellis_src "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+    set(_trellis_build "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-build")
     set(_trellis_lic "${CMAKE_BINARY_DIR}/trellis-cli.THIRD_PARTY_LICENSES.txt")
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 -DOUT=${_trellis_lic}
                 "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
                 -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${QTMESH_TRELLIS_CLI_BINARY}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_trellis_lic}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
-        COMMENT "Copying bundled trellis-cli + license notices next to QtMeshEditor")
+        COMMAND ${CMAKE_COMMAND}
+                -DDEST=$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
+                -DCLI=${QTMESH_TRELLIS_CLI_BINARY}
+                -DBUILD_DIR=${_trellis_build}
+                -DLIC=${_trellis_lic}
+                -P ${CMAKE_SOURCE_DIR}/cmake/CopyTrellisRuntime.cmake
+        COMMENT "Copying bundled trellis-cli (+ ggml libs) next to QtMeshEditor")
     # `make install` (the CI packaging path) must carry the runtime too —
-    # the POST_BUILD copy only reaches the build tree.
-    install(PROGRAMS "${QTMESH_TRELLIS_CLI_BINARY}"
-            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-    install(FILES "${_trellis_lic}"
-            DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    # the POST_BUILD copy only reaches the build tree. install(CODE) reuses
+    # the same scoop so any leftover libggml*.so land beside the CLI AND get
+    # picked up by the .deb's `cp ./bin/*.so*` → /usr/lib/qtmesheditor step
+    # (snap inherits that path via LD_LIBRARY_PATH). CMAKE_INSTALL_PREFIX is
+    # already the runtime bin/ dir in this project.
+    install(CODE "
+        execute_process(COMMAND \"${CMAKE_COMMAND}\"
+            -DDEST=\${CMAKE_INSTALL_PREFIX}
+            -DCLI=${QTMESH_TRELLIS_CLI_BINARY}
+            -DBUILD_DIR=${_trellis_build}
+            -DLIC=${_trellis_lic}
+            -P \"${CMAKE_SOURCE_DIR}/cmake/CopyTrellisRuntime.cmake\"
+            COMMAND_ERROR_IS_FATAL ANY)
+        ")
 endif()
 
 # Link Sentry if enabled
