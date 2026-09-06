@@ -12,7 +12,15 @@
 # trellis.cpp vendors its own patched ggml fork whose target names collide
 # with the ggml that llama.cpp (ENABLE_LOCAL_LLM) already brings into this
 # build. The sub-build has its own namespace and we only consume the one
-# produced executable.
+# produced executable (+ any ggml shared libs if the static build falls back).
+#
+# BUILD_SHARED_LIBS=OFF is REQUIRED for shipping: ggml defaults to shared on
+# Linux, and a dynamically-linked trellis-cli needs libggml{,-cpu,-base}.so.0
+# next to it ($ORIGIN). 3.37.3/3.37.4 shipped only the CLI → exit 127
+# ("error while loading shared libraries") on every .deb/snap install.
+# Static ggml folds those into the CLI so the package is self-contained.
+# CopyTrellisRuntime.cmake still scoops up any leftover shared libs as a
+# safety net for backend-as-DLL layouts.
 #
 # Backends: ggml picks Metal automatically on Apple; everywhere else this
 # builds the CPU backend (slow but functional baseline — GPU builds remain a
@@ -42,6 +50,8 @@ set(_trellis_cmake_args
     # native-tuned CI build would crash on older machines, and Apple clang
     # rejects -mcpu=native when an explicit target arch is set anyway.
     -DGGML_NATIVE=OFF
+    # Self-contained CLI for .deb / snap / .app — see header comment.
+    -DBUILD_SHARED_LIBS=OFF
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
 if(CMAKE_OSX_ARCHITECTURES)
