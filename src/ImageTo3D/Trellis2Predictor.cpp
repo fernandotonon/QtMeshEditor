@@ -19,6 +19,8 @@
 #include <QTemporaryDir>
 #include "AppStorage.h"
 
+#include <cstdio>
+
 namespace {
 
 constexpr const char* kEnvDirVar     = "QTMESH_TRELLIS2_ENV";
@@ -443,9 +445,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);
-    // stderr (backend banner, ggml logs) forwards to ours; stdout carries the
-    // "[k/7]" stage lines we map onto the shared Stage enum.
-    proc.setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    // Separate channels: stdout carries "[k/7]" stage lines; stderr is drained
+    // here so (a) the pipe cannot fill and stall a long run, (b) failures can
+    // surface the real message (e.g. "unknown option: --dump-post") instead of
+    // a useless "see stderr log" when the GUI has nowhere to show Forwarded
+    // stderr. Mirror stderr to our own stderr for CLI/debug visibility.
+    proc.setProcessChannelMode(QProcess::SeparateChannels);
     // Prepend the CLI directory so leftover libggml shared libs next to the
     // bundled binary resolve even when RPATH was stripped (snap/deb private
     // lib dir, macOS SIP, Windows PATH). Static BUILD_SHARED_LIBS=OFF is the
@@ -474,6 +479,15 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     int lastDone = 0, lastTotal = 2;
     bool cancelled = false;
     QByteArray pending;
+    QByteArray errBuf;
+    auto drainStderr = [&]() {
+        const QByteArray chunk = proc.readAllStandardError();
+        if (chunk.isEmpty())
+            return;
+        errBuf += chunk;
+        fwrite(chunk.constData(), 1, static_cast<size_t>(chunk.size()), stderr);
+        fflush(stderr);
+    };
     auto handleLine = [&](const QByteArray& line) {
         if (line.size() >= 5 && line[0] == '[' && line[2] == '/'
             && line[4] == ']' && line[1] >= '1' && line[1] <= '9') {
@@ -486,6 +500,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     while (proc.state() != QProcess::NotRunning) {
         proc.waitForReadyRead(300);
         pending += proc.readAllStandardOutput();
+        drainStderr();
         int nl;
         while ((nl = pending.indexOf('\n')) >= 0) {
             handleLine(pending.left(nl));
@@ -500,6 +515,8 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             break;
         }
     }
+    pending += proc.readAllStandardOutput();
+    drainStderr();
     if (cancelled)
         return failResult(QStringLiteral("cancelled"));
     if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
@@ -511,8 +528,19 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "missing libggml shared library next to the bundled binary). "
                 "Reinstall a build that ships the self-contained trellis.cpp "
                 "runtime."));
+        QString detail = QString::fromLocal8Bit(errBuf).trimmed();
+        detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        while (detail.contains(QLatin1String("  ")))
+            detail.replace(QLatin1String("  "), QLatin1String(" "));
+        if (detail.size() > 400)
+            detail = QStringLiteral("…") + detail.right(399);
+        if (!detail.isEmpty())
+            return failResult(QStringLiteral(
+                "trellis2: trellis-cli exited with code %1: %2")
+                                  .arg(proc.exitCode())
+                                  .arg(detail));
         return failResult(QStringLiteral(
-            "trellis2: trellis-cli exited with code %1 (see stderr log).")
+            "trellis2: trellis-cli exited with code %1.")
                               .arg(proc.exitCode()));
     }
     Trellis2Interchange::ReadResult rr =
