@@ -2058,10 +2058,16 @@ bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
     // positions sampled from an animated pose flip the facing vote from call
     // to call — which flips trueLeft in the #969 side rule and lands knees/
     // elbows on the opposite side nondeterministically for the same clip +
-    // model. The render loop re-applies enabled AnimationStates next frame,
-    // and every retarget path downstream resets the skeleton itself anyway.
+    // model.
     skel->reset(true);
     skel->_updateTransforms();
+    // Re-arm the live pose: a PLAYING state re-applies next frame on its own,
+    // but a PAUSED enabled state is not dirty and would leave the viewport
+    // stuck in this bind pose if the caller exits early (e.g. the humanoid
+    // gate rejects the rig). _notifyDirty makes the next _updateAnimation
+    // re-apply every enabled state at its current time.
+    if (auto* states = entity->getAllAnimationStates())
+        states->_notifyDirty();
 
     // Ankle reference: bones resolving to the canonical foot roles (17/21) —
     // but only those that are actually LOW. Mis-labeled rigs (#969: UniRig
