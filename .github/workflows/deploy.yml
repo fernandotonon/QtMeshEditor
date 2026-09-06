@@ -931,8 +931,12 @@ jobs:
                 so=$(echo "$line" | awk '{print $1}')
                 case "$so" in
                   libggml*.so*)
-                    ls ./bin/"$so"* ./bin/libggml* 2>/dev/null | head -5 \
-                      || { echo "ERROR: linked $so but no libggml* in ./bin"; exit 1; }
+                    # Exact SONAME must exist in ./bin (not a broad libggml*
+                    # fallback — that let CI pass when the linked name was missing).
+                    if [ ! -e "./bin/$so" ]; then
+                      echo "ERROR: linked $so but $so is missing from ./bin"
+                      exit 1
+                    fi
                     ;;
                 esac
               done < <(ldd ./bin/trellis-cli)
