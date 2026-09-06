@@ -126,6 +126,14 @@ public:
 
     static Result createBone(Ogre::Entity* entity, const CreateOptions& opts);
     static Result removeBone(Ogre::Entity* entity, const QString& boneName, const RemoveOptions& opts);
+    /// Remove the ENTIRE skeleton from the entity's mesh: clears every bone
+    /// assignment (shared + per-submesh), unbinds the skeleton
+    /// (setSkeletonName("")), and re-initialises the entity. The mesh becomes
+    /// a plain static mesh again — Auto-Rig sees it as riggable, so the user
+    /// can regenerate a rig from scratch. Skeletal animations go with the
+    /// skeleton; mesh-level morph/pose animations are untouched. Undo is a
+    /// full Snapshot restore (RemoveSkeletonCommand).
+    static Result removeSkeleton(Ogre::Entity* entity);
     static Result renameBone(Ogre::Entity* entity, const QString& oldName, const QString& newName);
     static Result duplicateBone(Ogre::Entity* entity, const QString& sourceBoneName);
 
@@ -174,6 +182,7 @@ public:
     /// Push undo commands — used by QML and tests.
     Q_INVOKABLE bool createBoneForSelected(const QString& parentBoneName = {});
     Q_INVOKABLE bool removeSelectedBone(bool removeChildren, bool transferWeightsToParent);
+    Q_INVOKABLE bool removeSelectedSkeleton();
     Q_INVOKABLE bool renameSelectedBone(const QString& newName);
     Q_INVOKABLE bool duplicateSelectedBone();
     Q_INVOKABLE bool reparentSelectedBone(const QString& newParentName, bool keepWorld = true);

@@ -1,5 +1,6 @@
 #include "SkeletonBoneCommands.h"
 
+#include "AutoRigController.h"
 #include "Manager.h"
 #include "PropertiesPanelController.h"
 #include "SelectionSet.h"
@@ -117,6 +118,49 @@ void RemoveBoneCommand::undo()
     if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
         SkeletonEditor::refreshAfterEdit(m_entityName, m_boneName);
     m_applied = false;
+}
+
+RemoveSkeletonCommand::RemoveSkeletonCommand(std::string entityName,
+                                             QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+{
+    setText(QStringLiteral("Remove skeleton"));
+}
+
+void RemoveSkeletonCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    }
+
+    const auto result = SkeletonEditor::removeSkeleton(entity);
+    if (!result.ok) return;
+
+    m_applied = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.remove_skeleton"),
+        QString::fromStdString(m_entityName));
+    SkeletonEditor::refreshAfterEdit(m_entityName);
+    // The mesh just flipped to "riggable" — refresh the Inspector's
+    // Auto-Rig / Skinning section gating.
+    if (auto* rig = AutoRigController::instance())
+        emit rig->selectionChanged();
+}
+
+void RemoveSkeletonCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    QString err;
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        SkeletonEditor::refreshAfterEdit(m_entityName);
+    m_applied = false;
+    if (auto* rig = AutoRigController::instance())
+        emit rig->selectionChanged();
 }
 
 RenameBoneCommand::RenameBoneCommand(std::string entityName,

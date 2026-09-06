@@ -1012,6 +1012,35 @@ SkeletonEditor::Result SkeletonEditor::removeBone(Ogre::Entity* entity,
     return result;
 }
 
+SkeletonEditor::Result SkeletonEditor::removeSkeleton(Ogre::Entity* entity)
+{
+    Result result;
+    if (!entity || !entity->getMesh()) {
+        result.error = QStringLiteral("Invalid entity");
+        return result;
+    }
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    if (!mesh->hasSkeleton()) {
+        result.error = QStringLiteral("Entity has no skeleton");
+        return result;
+    }
+    // Strip every weight first — a skeleton-less mesh must not carry stale
+    // bone assignments (exporters and a later Auto-Rig re-skin both start
+    // from a clean list).
+    mesh->clearBoneAssignments();
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
+        mesh->getSubMesh(si)->clearBoneAssignments();
+    // Empty name = "use no skeleton" (documented Ogre API) — hasSkeleton()
+    // turns false, which is exactly what AutoRigController's riggable gate
+    // checks. Re-initialise so the entity drops its SkeletonInstance and
+    // rebuilds its AnimationStateSet from the mesh (morph clips survive,
+    // skeletal states go with the skeleton).
+    mesh->setSkeletonName(Ogre::BLANKSTRING);
+    entity->_initialise(true);
+    result.ok = true;
+    return result;
+}
+
 SkeletonEditor::Result SkeletonEditor::renameBone(Ogre::Entity* entity,
                                                     const QString& oldName,
                                                     const QString& newName)
@@ -1860,6 +1889,16 @@ bool SkeletonEditor::removeSelectedBone(bool removeChildren, bool transferWeight
     opts.transferWeightsToParent = transferWeightsToParent;
 
     auto* cmd = new RemoveBoneCommand(entity->getName(), bone, opts);
+    UndoManager::getSingleton()->push(cmd);
+    return cmd->applied();
+}
+
+bool SkeletonEditor::removeSelectedSkeleton()
+{
+    Ogre::Entity* entity = selectedSkinnedEntity();
+    if (!entity) return false;
+
+    auto* cmd = new RemoveSkeletonCommand(entity->getName());
     UndoManager::getSingleton()->push(cmd);
     return cmd->applied();
 }

@@ -131,7 +131,12 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
 
 bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
 {
-    if (!entity || !entity->hasSkeleton())
+    if (!entity)
+        return false;
+    // Showing needs a skeleton; HIDING must work without one — after
+    // RemoveSkeletonCommand the entity has no skeleton but its overlay (and
+    // weight-paint session) still exist and must be torn down.
+    if (show && !entity->hasSkeleton())
         return false;
 
     if (show)
@@ -183,8 +188,21 @@ bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
 
 void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
 {
-    if (!entity || !entity->hasSkeleton())
+    if (!entity)
         return;
+    if (!entity->hasSkeleton()) {
+        // The skeleton was REMOVED (RemoveSkeletonCommand) — any live overlay
+        // for this entity holds pointers into the destroyed SkeletonInstance
+        // and its per-tick update would dereference them. Tear both down;
+        // toggleBoneWeights(false) also exits weight-paint mode (the funnel).
+        toggleBoneWeights(entity, false);
+        if (mShowSkeleton.contains(entity)) {
+            delete mShowSkeleton.value(entity); // NOSONAR — QMap doesn't own
+            mShowSkeleton.remove(entity);
+        }
+        updateSkeletonTable();
+        return;
+    }
 
     if (mShowSkeleton.contains(entity))
         mShowSkeleton.value(entity)->rebuildVisuals();

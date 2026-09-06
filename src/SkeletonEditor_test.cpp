@@ -744,3 +744,40 @@ TEST_F(SkeletonEditorTest, RestGhostMeshStaysAtEnableTimePoseAfterBake) {
     EXPECT_TRUE(ghostHost.restGhostShown());
 }
 
+
+TEST_F(SkeletonEditorTest, RemoveSkeletonMakesMeshRiggableAndUndoRestores) {
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelEd_RemoveAll");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    ASSERT_TRUE(mesh->hasSkeleton());
+    const auto before = SkeletonEditor::captureSnapshot(entity);
+    ASSERT_FALSE(before.bones.empty());
+
+    // Remove the ENTIRE skeleton: mesh becomes a plain static mesh (this is
+    // what lets Auto-Rig regenerate a rig — its riggable gate checks
+    // getSkeleton() == nullptr) with no stale weights.
+    const auto result = SkeletonEditor::removeSkeleton(entity);
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    EXPECT_FALSE(mesh->hasSkeleton());
+    EXPECT_EQ(mesh->getSkeleton(), nullptr);
+    EXPECT_FALSE(entity->hasSkeleton());
+    EXPECT_TRUE(mesh->getBoneAssignments().empty());
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
+        EXPECT_TRUE(mesh->getSubMesh(si)->getBoneAssignments().empty());
+
+    // Removing again reports a clean error, not a crash.
+    EXPECT_FALSE(SkeletonEditor::removeSkeleton(entity).ok);
+
+    // Undo path (what RemoveSkeletonCommand::undo runs): the snapshot
+    // restore brings the whole rig back — bones, weights and animations.
+    QString err;
+    ASSERT_TRUE(SkeletonEditor::restoreSnapshot(entity, before, &err))
+        << err.toStdString();
+    mesh = entity->getMesh().get();
+    ASSERT_TRUE(mesh->hasSkeleton());
+    Ogre::SkeletonPtr skel = mesh->getSkeleton();
+    EXPECT_EQ(skel->getNumBones(),
+              static_cast<unsigned short>(before.bones.size()));
+    EXPECT_TRUE(skel->hasAnimation("TestAnim"));
+    EXPECT_TRUE(entity->hasSkeleton());
+}
