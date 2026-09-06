@@ -2053,6 +2053,22 @@ bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
     Ogre::SkeletonInstance* skel = entity->getSkeleton();
     if (!skel) return false;
 
+    // BIND pose, not the live pose: this runs on a rig that may be
+    // mid-animation (a previously applied clip playing or paused), and ankle
+    // positions sampled from an animated pose flip the facing vote from call
+    // to call — which flips trueLeft in the #969 side rule and lands knees/
+    // elbows on the opposite side nondeterministically for the same clip +
+    // model.
+    skel->reset(true);
+    skel->_updateTransforms();
+    // Re-arm the live pose: a PLAYING state re-applies next frame on its own,
+    // but a PAUSED enabled state is not dirty and would leave the viewport
+    // stuck in this bind pose if the caller exits early (e.g. the humanoid
+    // gate rejects the rig). _notifyDirty makes the next _updateAnimation
+    // re-apply every enabled state at its current time.
+    if (auto* states = entity->getAllAnimationStates())
+        states->_notifyDirty();
+
     // Ankle reference: bones resolving to the canonical foot roles (17/21) —
     // but only those that are actually LOW. Mis-labeled rigs (#969: UniRig
     // A-pose arms named "*Foot_1") put foot-named bones at chest height;
@@ -4384,24 +4400,33 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             rolePos[c] = bonePos[i];
             roleHas[c] = true;
         }
+        // FACING-BLIND world-X score. The canonical channels are WORLD-
+        // anchored: canonical left = world +X (the library extractor's frame,
+        // CMU convention), and the world-frame transport never yaws the
+        // channels to the rig's facing (the root is locked to the standing
+        // pose; yaw180 only steers the raw-delta fallback). So the bones that
+        // must RECEIVE the canonical-left channels are the ones at world +X —
+        // regardless of which way the rig faces. A facing-aware trueLeft here
+        // (the 3.37.x regression) made the fleet-norm Mixamo (+X named-left,
+        // faces +Z) and the UniRig orc (−X named-left, faces −Z) score the
+        // SAME sign and mirrored every asymmetric clip on Mixamo-class rigs.
+        // Empirical matrix (QTMESH_T2M_SIDE_DEBUG, punch-curve correlation):
+        //   Mixamo  rawNamedLeftX +2.36 → no swap (swap mirrors the clip)
+        //   orc     rawNamedLeftX −0.44 → swap    (without it: contorted)
         double side = 0.0;
         for (const auto& pr : kPairs) {
             if (!roleHas[pr[0]] || !roleHas[pr[1]]) continue;
-            side += (rolePos[pr[0]] - rolePos[pr[1]]).dotProduct(trueLeft);
+            side += rolePos[pr[0]].x - rolePos[pr[1]].x;
         }
-        // Swap when the named-left pairs sit at PLUS trueLeft — canonical-
-        // left must end at MINUS trueLeft (anatomical right). Measured after
-        // the de-mirror: Mixamo scores +2.36 (fwd +Z) → swap; the -Z-facing
-        // UniRig orc scores +0.44 against its trueLeft → swap; a rig whose
-        // names mirror its anatomy scores negative → none.
-        constexpr double kExpectedSideSign = -1.0;
         if (qEnvironmentVariableIsSet("QTMESH_T2M_SIDE_DEBUG"))
-            fprintf(stderr, "[t2m] side score %.4f (expected sign %+.0f)\n",
-                    side, kExpectedSideSign);
+            fprintf(stderr,
+                    "[t2m] side score %.4f (facing-blind world-X; swap if "
+                    "negative) yaw180=%d trueLeft=(%.1f,%.1f,%.1f)\n",
+                    side, yaw180 ? 1 : 0, trueLeft.x, trueLeft.y, trueLeft.z);
         const QByteArray forceSwap = qgetenv("QTMESH_T2M_SIDE_SWAP");
         const bool swap = !forceSwap.isEmpty()
             ? (forceSwap != "0")
-            : (side != 0.0 && (side * kExpectedSideSign) < 0.0);
+            : (side < 0.0);
         if (swap) {
             auto mirrorRole = [canonN](int c) {
                 // V1 body pairs: 6..9 ↔ 10..13, 14..17 ↔ 18..21.
@@ -4421,17 +4446,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     boneToCanon[i] = mirrorRole(boneToCanon[i]);
             res.sideSwapApplied = true;
             fprintf(stderr,
-                    "[t2m] bone naming is mirrored vs anatomy (side score "
-                    "%.3f) — swapped L/R canonical roles to match geometry\n",
+                    "[t2m] named-left bones sit at world -X (side score "
+                    "%.3f) — swapped L/R canonical roles so the world-"
+                    "anchored channels land on the right bones\n",
                     side);
         }
 
         // ---- (b, continued) rescue mis-named arm chains ----------------
         // The stripped chest-height "leg" chains ARE the arms — remap each
         // segment onto the matching arm role, side chosen geometrically in
-        // the POST-swap convention (fleet norm: left roles live at MINUS
-        // trueLeft). Only fills a side whose arm roles are entirely vacant,
-        // so a rig with real (correctly named) arms is never stomped.
+        // the world-anchored channel convention (canonical-left roles belong
+        // to the bones at world +X — same facing-blind frame as the side
+        // score above). Only fills a side whose arm roles are entirely
+        // vacant, so a rig with real (correctly named) arms is never stomped.
         if (!rescue.empty() && hipIdx >= 0) {
             bool armTaken[2] = {false, false};   // 0 = right(7..9), 1 = left(11..13)
             for (int i = 0; i < nBones; ++i) {
@@ -4443,9 +4470,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             int rescued = 0;
             for (const Rescue& rc : rescue) {
                 if (rc.seg < 0) continue;
-                const float lat = (bonePos[rc.bone] - bonePos[hipIdx])
-                                      .dotProduct(trueLeft);
-                const int sideIdx = lat < 0.0f ? 1 : 0;   // left roles at -trueLeft
+                const float lat = bonePos[rc.bone].x - bonePos[hipIdx].x;
+                const int sideIdx = lat > 0.0f ? 1 : 0;   // left roles at +X
                 if (armTaken[sideIdx]) continue;
                 boneToCanon[rc.bone] = kArmSeg[sideIdx][rc.seg];
                 ++rescued;

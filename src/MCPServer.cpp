@@ -146,6 +146,7 @@
 #include "PartOpsMesh.h"
 #include "commands/SplitMeshCommand.h"
 #include "commands/ExplodePartsCommand.h"
+#include "commands/SkeletonBoneCommands.h"
 #include "commands/JoinPartsCommand.h"
 #include "commands/TransformCommands.h"
 
@@ -653,6 +654,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
+        {QStringLiteral("remove_skeleton"), &MCPServer::toolRemoveSkeleton},
         {QStringLiteral("add_arkit_blendshapes"), &MCPServer::toolAddArkitBlendshapes},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
@@ -2438,6 +2440,35 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     j["skinned"] = skinned;
     result["rig"] = j;
     return result;
+}
+
+QJsonObject MCPServer::toolRemoveSkeleton(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty() || !resolved.first())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+    if (!entity->getMesh() || !entity->getMesh()->hasSkeleton())
+        return makeErrorResult("Selected entity has no skeleton.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("remove_skeleton entity=%1")
+            .arg(QString::fromStdString(entity->getName())));
+
+    // Same undoable command the Inspector's "Delete Skeleton" button pushes.
+    auto* cmd = new RemoveSkeletonCommand(entity->getName());
+    UndoManager::getSingleton()->push(cmd);
+    if (!cmd->applied())
+        return makeErrorResult("Remove skeleton failed.");
+    return makeSuccessResult(
+        QStringLiteral("Skeleton removed from '%1' — the mesh is static again "
+                       "(auto_rig can regenerate a rig).")
+            .arg(QString::fromStdString(entity->getName())));
 }
 
 QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
@@ -10253,6 +10284,20 @@ QJsonArray MCPServer::buildToolsList()
             "joints toward the mesh's medial mass. Best on roughly upright, manifold, "
             "T/A-pose meshes with +Y up. Already-skinned meshes are rejected. Pair "
             "skin:true for a one-click rig+skin.",
+            props
+        );
+    }
+
+    // remove_skeleton
+    {
+        QJsonObject props;
+        appendTool(
+            "remove_skeleton",
+            "Remove the ENTIRE skeleton from the currently selected mesh: clears "
+            "all bone weights and unbinds the rig, turning it back into a plain "
+            "static mesh so auto_rig can regenerate a skeleton from scratch. "
+            "Skeletal animations are removed with the skeleton (morph/pose clips "
+            "survive). Undoable in the GUI session.",
             props
         );
     }

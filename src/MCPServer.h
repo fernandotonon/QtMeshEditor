@@ -182,6 +182,7 @@ private:
     /// #407: native auto-rig of the selected static mesh (template embedding),
     /// optional skin chain + re-export.
     QJsonObject toolAutoRig(const QJsonObject &args);
+    QJsonObject toolRemoveSkeleton(const QJsonObject &args);
     /// #889: fit the ARKit blendshape template onto the selected face mesh
     /// (NRICP + deformation transfer), attach the 52 ARKit morph targets, and
     /// optionally re-export.

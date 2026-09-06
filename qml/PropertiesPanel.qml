@@ -3992,6 +3992,7 @@ Rectangle {
                     SkelToolButton { label: "Attach"; action: "attach" }
                     SkelToolButton { label: "Remove"; action: "remove" }
                     SkelToolButton { label: "Rename"; action: "rename" }
+                    SkelToolButton { label: "Delete Skeleton"; action: "removeSkeleton"; needsBone: false }
                 }
 
                 Text {
@@ -9835,6 +9836,17 @@ Rectangle {
             }
         } else if (action === "remove") {
             root.openRemoveBoneDialog()
+        } else if (action === "removeSkeleton") {
+            // Whole-rig removal (undoable): the mesh becomes a plain static
+            // mesh again, so Auto-Rig can regenerate the skeleton from
+            // scratch (Object-mode Rigging section reappears).
+            if (SkeletonEditor.removeSelectedSkeleton()) {
+                root.boneEditStatus =
+                    "Skeleton removed — use Auto-Rig to regenerate (Ctrl+Z restores)."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "Remove skeleton failed."
+            }
         } else if (action === "rename") {
             root.openRenameBoneDialog()
         }

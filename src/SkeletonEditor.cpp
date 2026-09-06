@@ -19,6 +19,8 @@
 #include <OgreSubMesh.h>
 #include <OgreSubEntity.h>
 
+#include <QDataStream>
+#include <QIODevice>
 #include <QSet>
 #include <QStringList>
 #include <QVariantMap>
@@ -1012,6 +1014,121 @@ SkeletonEditor::Result SkeletonEditor::removeBone(Ogre::Entity* entity,
     return result;
 }
 
+QByteArray SkeletonEditor::serializeImportedRestCache(Ogre::Entity* entity)
+{
+    const std::string key = restCacheKey(entity);
+    if (key.empty()) return {};
+    auto& caches = importedRestCaches();
+    const auto it = caches.find(key);
+    if (it == caches.end()) return {};
+
+    QByteArray out;
+    QDataStream s(&out, QIODevice::WriteOnly);
+    s.setVersion(QDataStream::Qt_6_0);
+    const ImportedRestCache& c = it->second;
+    s << static_cast<quint32>(c.bones.size());
+    for (const auto& [name, trs] : c.bones) {
+        s << QByteArray::fromStdString(name)
+          << trs.position.x << trs.position.y << trs.position.z
+          << trs.orientation.w << trs.orientation.x << trs.orientation.y
+          << trs.orientation.z
+          << trs.scale.x << trs.scale.y << trs.scale.z;
+    }
+    s << static_cast<quint32>(c.bindVertexBuffers.size());
+    for (const auto& b : c.bindVertexBuffers) {
+        s << static_cast<qint32>(b.submeshIndex);
+        s << static_cast<quint32>(b.positions.size());
+        for (float f : b.positions) s << f;
+        s << static_cast<quint32>(b.normals.size());
+        for (float f : b.normals) s << f;
+    }
+    return out;
+}
+
+void SkeletonEditor::deserializeImportedRestCache(Ogre::Entity* entity,
+                                                  const QByteArray& data)
+{
+    const std::string key = restCacheKey(entity);
+    if (key.empty() || data.isEmpty()) return;
+
+    QDataStream s(data);
+    s.setVersion(QDataStream::Qt_6_0);
+    ImportedRestCache c;
+    quint32 nBones = 0;
+    s >> nBones;
+    for (quint32 i = 0; i < nBones && s.status() == QDataStream::Ok; ++i) {
+        QByteArray name;
+        RestPoseTRS trs;
+        s >> name >> trs.position.x >> trs.position.y >> trs.position.z
+          >> trs.orientation.w >> trs.orientation.x >> trs.orientation.y
+          >> trs.orientation.z
+          >> trs.scale.x >> trs.scale.y >> trs.scale.z;
+        c.bones.emplace_back(name.toStdString(), trs);
+    }
+    quint32 nBufs = 0;
+    s >> nBufs;
+    for (quint32 i = 0; i < nBufs && s.status() == QDataStream::Ok; ++i) {
+        Snapshot::BindVertexBuffer b;
+        qint32 idx = -1;
+        quint32 n = 0;
+        s >> idx;
+        b.submeshIndex = idx;
+        s >> n;
+        b.positions.resize(n);
+        for (quint32 k = 0; k < n; ++k) s >> b.positions[k];
+        s >> n;
+        b.normals.resize(n);
+        for (quint32 k = 0; k < n; ++k) s >> b.normals[k];
+        c.bindVertexBuffers.push_back(std::move(b));
+    }
+    if (s.status() == QDataStream::Ok)
+        importedRestCaches()[key] = std::move(c);
+}
+
+SkeletonEditor::Result SkeletonEditor::removeSkeleton(Ogre::Entity* entity)
+{
+    Result result;
+    if (!entity || !entity->getMesh()) {
+        result.error = QStringLiteral("Invalid entity");
+        return result;
+    }
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    if (!mesh->hasSkeleton()) {
+        result.error = QStringLiteral("Entity has no skeleton");
+        return result;
+    }
+    // Strip every weight first — a skeleton-less mesh must not carry stale
+    // bone assignments (exporters and a later Auto-Rig re-skin both start
+    // from a clean list). Only clear where assignments actually exist:
+    // clearBoneAssignments sets the compile-dirty flag, and a SHARED-vertices
+    // submesh has vertexData == nullptr — compiling it later (the undo
+    // restore re-attaches the skeleton and _initAnimationState flushes dirty
+    // submeshes) dereferences that null and crashes. Shared-vertex weights
+    // live on the MESH, which is cleared above.
+    if (!mesh->getBoneAssignments().empty())
+        mesh->clearBoneAssignments();
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (sub && !sub->getBoneAssignments().empty())
+            sub->clearBoneAssignments();
+    }
+    // The imported-rest-pose cache is keyed by mesh name and populated once —
+    // after a re-rig the mesh has a NEW skeleton, and a stale entry holding
+    // the OLD skeleton's bone rests would feed "Reset Rest" wrong transforms
+    // for any bone whose name matches. Drop it with the skeleton (it lazily
+    // repopulates from whatever skeleton exists next).
+    clearImportedRestCache(entity);
+    // Empty name = "use no skeleton" (documented Ogre API) — hasSkeleton()
+    // turns false, which is exactly what AutoRigController's riggable gate
+    // checks. Re-initialise so the entity drops its SkeletonInstance and
+    // rebuilds its AnimationStateSet from the mesh (morph clips survive,
+    // skeletal states go with the skeleton).
+    mesh->setSkeletonName(Ogre::BLANKSTRING);
+    entity->_initialise(true);
+    result.ok = true;
+    return result;
+}
+
 SkeletonEditor::Result SkeletonEditor::renameBone(Ogre::Entity* entity,
                                                     const QString& oldName,
                                                     const QString& newName)
@@ -1860,6 +1977,16 @@ bool SkeletonEditor::removeSelectedBone(bool removeChildren, bool transferWeight
     opts.transferWeightsToParent = transferWeightsToParent;
 
     auto* cmd = new RemoveBoneCommand(entity->getName(), bone, opts);
+    UndoManager::getSingleton()->push(cmd);
+    return cmd->applied();
+}
+
+bool SkeletonEditor::removeSelectedSkeleton()
+{
+    Ogre::Entity* entity = selectedSkinnedEntity();
+    if (!entity) return false;
+
+    auto* cmd = new RemoveSkeletonCommand(entity->getName());
     UndoManager::getSingleton()->push(cmd);
     return cmd->applied();
 }

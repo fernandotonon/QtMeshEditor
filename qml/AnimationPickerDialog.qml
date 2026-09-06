@@ -23,7 +23,9 @@ Window {
     // emitted after a successful apply so the panel can refresh its anim list
     signal applied(string animation, string entity)
 
-    property var allClips: []          // full [{index,action,name,source,quality,frames,approved}]
+    property var allClips: []          // full [{libIndex,action,name,source,quality,frames,approved}]
+                                       // (role is libIndex, NOT index — a role named
+                                       // "index" shadows the delegate's row index)
     property string filterText: ""
     property int busyIndex: -1         // row currently generating (for UI feedback)
     property bool onlyApproved: true   // curation filter: show only "good" clips
@@ -233,7 +235,7 @@ Window {
                                 id: applyBtn
                                 width: 58; height: 24; radius: 3
                                 anchors.verticalCenter: parent.verticalCenter
-                                property bool busy: dialog.busyIndex === model.index
+                                property bool busy: dialog.busyIndex === model.libIndex
                                 opacity: busy ? 0.5 : 1.0
                                 color: applyMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
                                      : applyMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
@@ -244,7 +246,7 @@ Window {
                                 MouseArea {
                                     id: applyMa; anchors.fill: parent; hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: dialog.applyClip(model.index, model.name)
+                                    onClicked: dialog.applyClip(model.libIndex, model.name)
                                 }
                             }
                         }

@@ -51,6 +51,29 @@ private:
     bool m_firstRedo = true;
 };
 
+/// Remove the ENTIRE skeleton from an entity's mesh (weights + binding), so
+/// the mesh becomes riggable again and Auto-Rig can regenerate a rig from
+/// scratch. Undo restores the full pre-removal skeleton, animations and
+/// weights from a Snapshot.
+class RemoveSkeletonCommand : public QUndoCommand
+{
+public:
+    explicit RemoveSkeletonCommand(std::string entityName,
+                                   QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+
+private:
+    std::string m_entityName;
+    SkeletonEditor::Snapshot m_before;
+    QByteArray m_restCache;   ///< imported-rest cache entry, restored on undo
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};
+
 class RenameBoneCommand : public QUndoCommand
 {
 public:

@@ -362,9 +362,11 @@ public:
 
     /// List every clip in the template motion library for the animation
     /// PICKER (Mixamo-style browse). Each entry is a QVariantMap
-    /// { index, action, name, source, quality, frames } where `name` is a
-    /// human-readable label like "Walk (Tired Character)". Downloads the
-    /// library on first use (blocking). Empty list if unavailable.
+    /// { libIndex, action, name, source, quality, frames, approved } where
+    /// `name` is a human-readable label like "Walk (Tired Character)".
+    /// (`libIndex`, NOT `index` — a ListModel role named "index" shadows the
+    /// QML delegate's row index.) Downloads the library on first use
+    /// (blocking). Empty list if unavailable.
     Q_INVOKABLE QVariantList listMotionClips();
     /// Curation (#838 ship-gate): persist whether a library clip (keyed by its
     /// stable `source` string) is user-approved ("good"). The picker's checkbox

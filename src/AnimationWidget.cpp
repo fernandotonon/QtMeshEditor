@@ -131,7 +131,12 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
 
 bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
 {
-    if (!entity || !entity->hasSkeleton())
+    if (!entity)
+        return false;
+    // Showing needs a skeleton; HIDING must work without one — after
+    // RemoveSkeletonCommand the entity has no skeleton but its overlay (and
+    // weight-paint session) still exist and must be torn down.
+    if (show && !entity->hasSkeleton())
         return false;
 
     if (show)
@@ -183,8 +188,25 @@ bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
 
 void AnimationWidget::rebuildSkeletonOverlays(Ogre::Entity* entity)
 {
-    if (!entity || !entity->hasSkeleton())
+    if (!entity)
         return;
+    if (!entity->hasSkeleton()) {
+        // The skeleton was REMOVED (RemoveSkeletonCommand) — any live overlay
+        // for this entity holds pointers into the destroyed SkeletonInstance
+        // and its per-tick update would dereference them. Tear both down;
+        // toggleBoneWeights(false) also exits weight-paint mode (the funnel).
+        toggleBoneWeights(entity, false);
+        if (mShowSkeleton.contains(entity)) {
+            delete mShowSkeleton.value(entity); // NOSONAR — QMap doesn't own
+            mShowSkeleton.remove(entity);
+        }
+        updateSkeletonTable();
+        // The skeletal clips died with the skeleton — rebuild the animation
+        // table too, or the poll timer keeps asking the entity for states
+        // that no longer exist.
+        updateAnimationTable();
+        return;
+    }
 
     if (mShowSkeleton.contains(entity))
         mShowSkeleton.value(entity)->rebuildVisuals();
@@ -372,6 +394,14 @@ void AnimationWidget::pollAnimationState()
         auto* animNameItem = ui->animTable->item(row, 1);
         if(!animNameItem) continue;
 
+        // Entity::getAnimationState THROWS (ItemIdentityException) when the
+        // state doesn't exist — it never returns null. The table can be
+        // stale (skeleton removed via Delete Skeleton, clip deleted via
+        // MCP), and an Ogre exception escaping this timer slot aborts the
+        // app. Check membership first.
+        Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+        if(!states || !states->hasAnimationState(animNameItem->text().toStdString()))
+            continue;
         Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
         if(!animState) continue;
 
@@ -513,7 +543,14 @@ void AnimationWidget::on_animTable_clicked(const QModelIndex &index) const
     if(!entity)
         return;
 
-    Ogre::AnimationState* animationState = entity->getAnimationState(ui->animTable->item(index.row(),1)->text().toStdString().data());
+    // getAnimationState throws on a missing name (stale table row after a
+    // skeleton removal / clip delete) — membership check first.
+    const std::string animName =
+        ui->animTable->item(index.row(), 1)->text().toStdString();
+    Ogre::AnimationStateSet* stateSet = entity->getAllAnimationStates();
+    if(!stateSet || !stateSet->hasAnimationState(animName))
+        return;
+    Ogre::AnimationState* animationState = entity->getAnimationState(animName);
     if(!animationState)
         return;
 
