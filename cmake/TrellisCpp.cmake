@@ -4,9 +4,11 @@
 # and ships it next to the editor binary, so TRELLIS.2 needs NO separate
 # runtime install — only the GGUF weights, which AI Model Settings downloads
 # into <AppData>/ai_models/trellis2/ (a directory Trellis2Predictor already
-# resolves). Pinned to upstream main AFTER both of our PRs merged (#44 Metal
-# support, #45 --dump-post with the cleaned remesh) — re-audit licenses if the
-# pin moves (docs/trellis2-dependencies.md).
+# resolves). MUST include PR #45 (`--dump-post`) — 3.37.6 shipped pin
+# 16f3109e (2026-08-21) which predated that merge and every snap/deb invoke
+# failed with "unknown option: --dump-post". Current pin is upstream main
+# after #44 (Metal) + #45 (dump-post). Re-audit licenses if the pin moves
+# (docs/trellis2-dependencies.md).
 #
 # Built as an EXTERNAL PROJECT (isolated sub-build), NOT FetchContent:
 # trellis.cpp vendors its own patched ggml fork whose target names collide
@@ -70,7 +72,7 @@ endif()
 
 ExternalProject_Add(qtmesh_trelliscpp
     GIT_REPOSITORY https://github.com/pwilkin/trellis.cpp.git
-    GIT_TAG        16f3109e82f3922033bfa62b83c42899678b7b6f
+    GIT_TAG        2516c48b677050c570f47eba2e68dc8a5bc918b0
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"

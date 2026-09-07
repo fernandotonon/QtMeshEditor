@@ -65,11 +65,14 @@ when both are present:
 | **trellis.cpp** (preferred, **bundled**) | C++/GGML ([pwilkin/trellis.cpp](https://github.com/pwilkin/trellis.cpp)) — CUDA / Vulkan / **Metal** / CPU, no Python, GGUF weights. Built with `ENABLE_TRELLIS_CPP` as a **self-contained** `trellis-cli` (`BUILD_SHARED_LIBS=OFF` so ggml is linked in — shipping only the CLI without `libggml*.so` caused exit 127 on Linux .deb/snap). | Linux + **macOS** release builds (Windows MinGW still OFF pending verification) | Discovery order: env `QTMESH_TRELLIS2_CLI` → QSettings `ai/trellis2Cli` → bundled next to the editor binary → `trellis-cli` on `PATH`. Models: `QTMESH_TRELLIS2_CLI_MODELS` / `ai/trellis2CliModels` / `<AppData>/ai_models/trellis2` (GGUFs from AI Model Settings / [`ilintar/trellis2-gguf`](https://huggingface.co/ilintar/trellis2-gguf)) |
 | Python sidecar | upstream-exact PyTorch/CUDA (`ai/trellis2/`) | Linux + NVIDIA | as below |
 
-QtMeshEditor invokes `trellis-cli --dump-post` (added in the fork): trellis.cpp emits the
-RAW decoded mesh + sparse PBR volume and exits before its own remesh/UV/bake — QtMeshEditor
-keeps the game-ready + native-bake pipeline either way. Presets map to `--res` (fast=512,
-balanced=1024, high=1536); with only the 512 GGUFs installed the backend drops to the 512
-pipeline with a warning. `--mock` runs always route to the Python sidecar.
+QtMeshEditor invokes `trellis-cli --dump-post` (upstream PR
+[#45](https://github.com/pwilkin/trellis.cpp/pull/45); pin must be at/after that merge —
+3.37.6 shipped an older pin and every install failed with `unknown option: --dump-post`):
+trellis.cpp emits the RAW decoded mesh + sparse PBR volume and exits before its own
+remesh/UV/bake — QtMeshEditor keeps the game-ready + native-bake pipeline either way.
+Presets map to `--res` (fast=512, balanced=1024, high=1536); with only the 512 GGUFs
+installed the backend drops to the 512 pipeline with a warning. `--mock` runs always
+route to the Python sidecar.
 
 ## Install (Linux + NVIDIA GPU)
 
