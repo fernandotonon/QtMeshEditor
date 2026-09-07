@@ -286,20 +286,26 @@ void MeshGenController::generateSourceImage(const QString& prompt)
         .arg(QDateTime::currentMSecsSinceEpoch());
     m_imageGenActive = true;
 
-    // One-time signal wiring (UniqueConnection keeps re-entry safe).
-    connect(sd, &SDManager::modelLoadCompleted, this,
-            &MeshGenController::onImageGenModelLoaded,
-            Qt::UniqueConnection);
-    connect(sd, &SDManager::modelLoadError, this,
-            &MeshGenController::onImageGenError, Qt::UniqueConnection);
-    connect(sd, &SDManager::generationCompleted, this,
-            &MeshGenController::onImageGenCompleted, Qt::UniqueConnection);
-    connect(sd, &SDManager::generationError, this,
-            &MeshGenController::onImageGenError, Qt::UniqueConnection);
-    connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
-        if (!m_imageGenActive) return;
-        emit imageGenProgress(sd->generationStep(), sd->generationTotalSteps());
-    }, Qt::UniqueConnection);
+    // One-time signal wiring. NB: Qt::UniqueConnection only works with
+    // member-function-pointer connections — on a LAMBDA it silently fails to
+    // connect at all (which is how the progress bar stayed "indeterminate"
+    // forever: the forwarder below never fired). Guard with a flag instead.
+    if (!m_imageGenWired) {
+        m_imageGenWired = true;
+        connect(sd, &SDManager::modelLoadCompleted, this,
+                &MeshGenController::onImageGenModelLoaded);
+        connect(sd, &SDManager::modelLoadError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationCompleted, this,
+                &MeshGenController::onImageGenCompleted);
+        connect(sd, &SDManager::generationError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+            if (!m_imageGenActive) return;
+            emit imageGenProgress(sd->generationStep(),
+                                  sd->generationTotalSteps());
+        });
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
         QStringLiteral("prompt-to-3d image gen (%1)").arg(model));

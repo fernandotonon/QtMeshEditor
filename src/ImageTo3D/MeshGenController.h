@@ -166,6 +166,7 @@ private:
     QString m_imageGenPrompt;        // the (suffixed) prompt being generated
     QString m_imageGenFileName;      // expected output file (signal correlation)
     QString m_imageGenRef;           // edit mode: image being edited (else empty)
+    bool m_imageGenWired = false;    // SDManager signal wiring done once
     int m_imageGenSize = 1024;       // 1024 for FLUX.2, 512 for SD checkpoints
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path
