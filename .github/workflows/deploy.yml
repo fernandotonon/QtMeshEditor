@@ -943,16 +943,36 @@ jobs:
             else
               echo "trellis-cli has no dynamic libggml deps (static ggml — preferred)"
             fi
+            # Vulkan GPU backend must be linked (falls back to CPU at runtime
+            # when no device is present — but the .so must resolve).
+            if ! ldd ./bin/trellis-cli | grep -q 'libvulkan\.so'; then
+              echo "ERROR: trellis-cli was built without Vulkan (no libvulkan.so dep)"
+              ldd ./bin/trellis-cli
+              exit 1
+            fi
+            echo "trellis-cli links libvulkan (GPU backend enabled)"
             # 3.37.7 regression: GGML_NATIVE=OFF still defaulted AVX2+FMA, so
             # Ivy Bridge (AVX, no FMA) died with SIGILL / exit 4 on vfmadd*.
-            # Disassembly must not contain FMA3 opcodes in a shipped binary.
+            # Scan the CLI and any colocated libggml*.so*. Capture objdump to a
+            # file first — under pipefail, `objdump | grep -m1` can SIGPIPE the
+            # producer and make a real match look like a miss.
             if [ "${{ matrix.arch }}" = "amd64" ]; then
-              if objdump -d ./bin/trellis-cli | grep -E -m1 '[[:space:]](vfmadd|vfmsub|vfnmadd|vfnmsub)' >/tmp/trellis-fma.txt; then
-                echo "ERROR: trellis-cli contains FMA opcodes (not portable to pre-Haswell CPUs):"
-                cat /tmp/trellis-fma.txt
+              fma_found=0
+              shopt -s nullglob
+              for f in ./bin/trellis-cli ./bin/libggml*.so*; do
+                objdump -d "$f" >"/tmp/trellis-disasm.$$.txt"
+                if grep -E '[[:space:]](vfmadd|vfmsub|vfnmadd|vfnmsub)' \
+                     "/tmp/trellis-disasm.$$.txt" >"/tmp/trellis-fma.$$.txt"; then
+                  echo "ERROR: $f contains FMA opcodes (not portable to pre-Haswell CPUs):"
+                  head -5 "/tmp/trellis-fma.$$.txt"
+                  fma_found=1
+                fi
+                rm -f "/tmp/trellis-disasm.$$.txt" "/tmp/trellis-fma.$$.txt"
+              done
+              if [ "$fma_found" -ne 0 ]; then
                 exit 1
               fi
-              echo "trellis-cli has no FMA opcodes (portable AVX baseline)"
+              echo "trellis-cli (+ any libggml*.so) has no FMA opcodes (portable AVX baseline)"
             fi
 
     - name: Upload debug symbols to Sentry

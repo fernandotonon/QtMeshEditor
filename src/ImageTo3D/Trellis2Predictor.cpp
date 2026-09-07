@@ -533,20 +533,28 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "missing libggml shared library next to the bundled binary). "
                 "Reinstall a build that ships the self-contained trellis.cpp "
                 "runtime."));
-        // CrashExit with code 4 is the usual QProcess report for SIGILL
-        // (illegal instruction) — 3.37.7's Haswell-tuned ggml hit this on
-        // Ivy Bridge (AVX without FMA).
-        if (proc.exitStatus() == QProcess::CrashExit
-            && (proc.exitCode() == 4 || proc.exitCode() == 132))
+        // QProcess does not expose the terminating signal on CrashExit — do
+        // not infer SIGILL from exitCode 4/132 (undefined / platform-specific).
+        if (proc.exitStatus() == QProcess::CrashExit) {
+            QString detail = QString::fromLocal8Bit(errBuf).trimmed();
+            detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            while (detail.contains(QLatin1String("  ")))
+                detail.replace(QLatin1String("  "), QLatin1String(" "));
+            if (detail.size() > 400)
+                detail = QStringLiteral("…") + detail.right(399);
+            if (!detail.isEmpty())
+                return failResult(QStringLiteral(
+                    "trellis2: trellis-cli crashed (status %1): %2 — if this "
+                    "is an illegal-instruction fault, update to a portable "
+                    "trellis.cpp build (AVX without FMA/AVX2).")
+                                      .arg(proc.exitCode())
+                                      .arg(detail));
             return failResult(QStringLiteral(
-                "trellis2: trellis-cli crashed with SIGILL (illegal "
-                "instruction) — this CPU lacks instructions the bundled "
-                "runtime was compiled with. Update to a build that ships a "
-                "portable trellis.cpp (AVX without FMA/AVX2)."));
-        if (proc.exitStatus() == QProcess::CrashExit)
-            return failResult(QStringLiteral(
-                "trellis2: trellis-cli crashed (signal/status %1).")
+                "trellis2: trellis-cli crashed (status %1) — if this is an "
+                "illegal-instruction fault, update to a portable trellis.cpp "
+                "build (AVX without FMA/AVX2).")
                                   .arg(proc.exitCode()));
+        }
         QString detail = QString::fromLocal8Bit(errBuf).trimmed();
         detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
         while (detail.contains(QLatin1String("  ")))
