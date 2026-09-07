@@ -485,6 +485,11 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (chunk.isEmpty())
             return;
         errBuf += chunk;
+        // Cap retained stderr so a noisy/long run cannot grow unbounded;
+        // the failure message still takes only a short suffix below.
+        constexpr int kMaxCapturedStderr = 64 * 1024;
+        if (errBuf.size() > kMaxCapturedStderr)
+            errBuf = errBuf.right(kMaxCapturedStderr);
         fwrite(chunk.constData(), 1, static_cast<size_t>(chunk.size()), stderr);
         fflush(stderr);
     };
