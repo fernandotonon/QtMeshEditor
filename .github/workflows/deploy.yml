@@ -943,6 +943,17 @@ jobs:
             else
               echo "trellis-cli has no dynamic libggml deps (static ggml — preferred)"
             fi
+            # 3.37.7 regression: GGML_NATIVE=OFF still defaulted AVX2+FMA, so
+            # Ivy Bridge (AVX, no FMA) died with SIGILL / exit 4 on vfmadd*.
+            # Disassembly must not contain FMA3 opcodes in a shipped binary.
+            if [ "${{ matrix.arch }}" = "amd64" ]; then
+              if objdump -d ./bin/trellis-cli | grep -E -m1 '[[:space:]](vfmadd|vfmsub|vfnmadd|vfnmsub)' >/tmp/trellis-fma.txt; then
+                echo "ERROR: trellis-cli contains FMA opcodes (not portable to pre-Haswell CPUs):"
+                cat /tmp/trellis-fma.txt
+                exit 1
+              fi
+              echo "trellis-cli has no FMA opcodes (portable AVX baseline)"
+            fi
 
     - name: Upload debug symbols to Sentry
       if: github.event_name == 'release' && github.event.action == 'published'
