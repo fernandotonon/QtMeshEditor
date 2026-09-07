@@ -158,6 +158,7 @@ private:
     bool m_busy = false;
     bool m_imageGenActive = false;   // prompt-to-3D image generation in flight
     QString m_imageGenPrompt;        // the (suffixed) prompt being generated
+    QString m_imageGenFileName;      // expected output file (signal correlation)
     int m_imageGenSize = 1024;       // 1024 for FLUX.2, 512 for SD checkpoints
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path

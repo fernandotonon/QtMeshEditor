@@ -10529,12 +10529,16 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
     if (chosenModel.isEmpty()
         && SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
         chosenModel = SDManager::flux2KleinModelName();
-    if (chosenModel.isEmpty()) chosenModel = sd->lastModelName();
+    // The remembered model may have been deleted since — verify before
+    // trusting it, or valid entries found by scanForModels never get a turn.
+    if (chosenModel.isEmpty() && !sd->lastModelName().isEmpty()
+        && sd->modelFileExists(sd->lastModelName()))
+        chosenModel = sd->lastModelName();
     if (chosenModel.isEmpty()) {
         const QStringList avail = sd->availableModels();
         if (!avail.isEmpty()) chosenModel = avail.first();
     }
-    if (chosenModel.isEmpty()) {
+    if (chosenModel.isEmpty() || !sd->modelFileExists(chosenModel)) {
         err() << "Error: no image model found. Download FLUX.2-klein-4B in AI "
                  "Model Settings, or place an SD checkpoint in "
               << sd->modelsDirectory() << " (or pass --image-model)." << Qt::endl;

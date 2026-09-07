@@ -223,7 +223,13 @@ QString MeshGenController::imageGenModelName() const
 void MeshGenController::generateSourceImage(const QString& prompt)
 {
 #ifdef ENABLE_STABLE_DIFFUSION
-    if (m_busy || m_imageGenActive) return;
+    if (m_busy || m_imageGenActive) {
+        // The QML button flips its local busy flag BEFORE calling in — a
+        // silent return would leave it stuck. Report the rejection.
+        emit imageGenStatus(
+            tr("Busy — wait for the current generation to finish."), true);
+        return;
+    }
     const QString trimmed = prompt.trimmed();
     if (trimmed.isEmpty()) {
         emit imageGenStatus(tr("Enter a prompt first."), true);
@@ -243,6 +249,11 @@ void MeshGenController::generateSourceImage(const QString& prompt)
     m_imageGenPrompt = trimmed
         + QStringLiteral(", single subject, full body, centered, "
                          "plain light gray background");
+    // Explicit output name: SDManager's generationCompleted is GLOBAL, so a
+    // texture generation finishing while we wait must not be mistaken for our
+    // image — onImageGenCompleted correlates on this exact filename.
+    m_imageGenFileName = QStringLiteral("prompt3d_%1.png")
+        .arg(QDateTime::currentMSecsSinceEpoch());
     m_imageGenActive = true;
 
     // One-time signal wiring (UniqueConnection keeps re-entry safe).
@@ -265,7 +276,8 @@ void MeshGenController::generateSourceImage(const QString& prompt)
         (model == SDManager::flux2KleinModelName()) ? 1024 : 512;
     if (loadedIsTarget) {
         emit imageGenStatus(tr("Generating image…"), false);
-        sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize);
+        sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize,
+                          m_imageGenFileName);
     } else {
         emit imageGenStatus(tr("Loading %1…").arg(model), false);
         sd->loadModel(model);   // continues in onImageGenModelLoaded
@@ -283,13 +295,17 @@ void MeshGenController::onImageGenModelLoaded()
     if (!m_imageGenActive) return;
     emit imageGenStatus(tr("Generating image…"), false);
     SDManager::instance()->generateImage(m_imageGenPrompt,
-                                         m_imageGenSize, m_imageGenSize);
+                                         m_imageGenSize, m_imageGenSize,
+                                         m_imageGenFileName);
 #endif
 }
 
 void MeshGenController::onImageGenCompleted(const QString& outputPath)
 {
     if (!m_imageGenActive) return;   // someone else's SD generation
+    // Correlate: only OUR file ends the run (a texture generation finishing
+    // in parallel emits the same global signal with a different path).
+    if (QFileInfo(outputPath).fileName() != m_imageGenFileName) return;
     m_imageGenActive = false;
     applySelectedImage(outputPath);
     emit imageGenStatus(
