@@ -121,7 +121,9 @@ public slots:
     /// seamless-texture enhancement) — the prompt-to-3D source-image path.
     /// Saves under <AppData>/generated_sources/. Same async signals as
     /// generateTexture (generationStarted/Progress/Completed/Error).
-    Q_INVOKABLE void generateImage(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
+    /// `refImagePath` (FLUX.2 only): kontext-style EDIT — the prompt describes
+    /// a change to that image instead of a scene from scratch.
+    Q_INVOKABLE void generateImage(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString(), const QString &refImagePath = QString());
     // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
 
     // Issue #403: mesh-aware (depth-conditioned) generation. Same

@@ -69,6 +69,14 @@ public:
     void setSettings(const SDSettings &settings);
     SDSettings getSettings() const { return m_settings; }
 
+    /// FLUX.2 image EDITING (kontext-style): the next generation call uses
+    /// `image` as a reference image, so the prompt describes a CHANGE to it
+    /// ("give him golden armor") instead of a scene from scratch. Consumed by
+    /// (and cleared after) the next generateTexture*/generateImage run; only
+    /// honoured when a FLUX.2 set is loaded (SD-class checkpoints have no
+    /// reference conditioning here).
+    void setRefImage(const QImage &image);
+
     void requestStop();
     bool isGenerating() const { return m_isGenerating.load(); }
 
@@ -98,6 +106,7 @@ private:
     QString m_modelPath;
     Flux2Set m_flux2;          ///< resolved component set when m_isFlux2
     bool m_isFlux2 = false;    ///< model loaded as a FLUX.2 component set
+    QImage m_refImage;         ///< one-shot reference image (setRefImage)
     SDSettings m_settings;
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_isGenerating{false};

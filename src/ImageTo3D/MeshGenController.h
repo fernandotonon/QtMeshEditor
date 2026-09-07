@@ -110,7 +110,12 @@ public:
     // Progress/result arrive via imageGenStatus.
     Q_INVOKABLE bool imageGenAvailable() const;
     Q_INVOKABLE QString imageGenModelName() const;
+    /// When an image is already selected, generateSourceImage EDITS it
+    /// (FLUX.2 kontext-style — the prompt describes the change); with no
+    /// image it generates from scratch. clearSelectedImage removes the
+    /// selection (the preview's 🗑 button) so the next prompt starts fresh.
     Q_INVOKABLE void generateSourceImage(const QString& prompt);
+    Q_INVOKABLE void clearSelectedImage();
 
     Q_INVOKABLE bool modelsPresent(int quality = 0) const;
     // Download the decoder + the given tier's encoder (blocks on the caller's
@@ -160,6 +165,7 @@ private:
     bool m_imageGenActive = false;   // prompt-to-3D image generation in flight
     QString m_imageGenPrompt;        // the (suffixed) prompt being generated
     QString m_imageGenFileName;      // expected output file (signal correlation)
+    QString m_imageGenRef;           // edit mode: image being edited (else empty)
     int m_imageGenSize = 1024;       // 1024 for FLUX.2, 512 for SD checkpoints
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path

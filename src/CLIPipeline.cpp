@@ -10508,10 +10508,12 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
 
 int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
                                                const QString& modelOverride,
-                                               const QString& outPng)
+                                               const QString& outPng,
+                                               const QString& refImagePath)
 {
 #ifndef ENABLE_STABLE_DIFFUSION
     Q_UNUSED(prompt); Q_UNUSED(modelOverride); Q_UNUSED(outPng);
+    Q_UNUSED(refImagePath);
     err() << "Error: --prompt needs a stable-diffusion build "
              "(rebuild with -DENABLE_STABLE_DIFFUSION=ON)." << Qt::endl;
     return 1;
@@ -10568,11 +10570,20 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
         }
     }
 
-    // Same subject steering the GUI applies — the matte + reconstruction want
-    // one isolated subject on a plain backdrop.
-    const QString fullPrompt = prompt.trimmed()
-        + QStringLiteral(", single subject, full body, centered, "
-                         "plain light gray background");
+    // Edit mode (image + prompt) needs FLUX.2's reference conditioning.
+    if (!refImagePath.isEmpty()
+        && chosenModel != SDManager::flux2KleinModelName()) {
+        err() << "Error: editing an image with a prompt needs FLUX.2-klein-4B "
+                 "(download it in AI Model Settings)." << Qt::endl;
+        return 1;
+    }
+    // Fresh generation gets the subject steering the reconstruction wants;
+    // an EDIT keeps the reference image's composition, so no suffix there.
+    const QString fullPrompt = refImagePath.isEmpty()
+        ? prompt.trimmed()
+              + QStringLiteral(", single subject, full body, centered, "
+                               "plain light gray background")
+        : prompt.trimmed();
     // FLUX.2-klein trains at 1024²; SD-class checkpoints at 512² (bigger
     // makes SD 1.5 duplicate the subject).
     const int genSize =
@@ -10590,7 +10601,7 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
         genLoop.quit();
     });
     sd->generateImage(fullPrompt, genSize, genSize,
-                      QFileInfo(outPng).fileName());
+                      QFileInfo(outPng).fileName(), refImagePath);
     genLoop.exec();
     if (genPath.isEmpty() || !QFileInfo::exists(genPath)) {
         err() << "Error: image generation failed: "
@@ -10803,26 +10814,40 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "any SD checkpoint via --image-model)." << Qt::endl;
         return 2;
     }
-    if (!inputPath.isEmpty() && !genPrompt.trimmed().isEmpty()) {
-        err() << "Error: give either an input image OR --prompt, not both." << Qt::endl;
-        return 2;
-    }
-
     // Prompt mode: generate the source image first, then run the normal
-    // pipeline on it. Needs -o (there is no input filename to derive from).
+    // pipeline on it. With BOTH an input image and --prompt, the image is
+    // EDITED by the prompt (FLUX.2 reference conditioning) and the edit
+    // becomes the pipeline input. Needs -o in prompt-only mode (no input
+    // filename to derive the output from).
     if (!genPrompt.trimmed().isEmpty()) {
-        if (outputPath.isEmpty()) {
+        if (outputPath.isEmpty() && inputPath.isEmpty()) {
             err() << "Error: --prompt needs -o <out.glb> (no input filename to "
                      "derive the output from)." << Qt::endl;
             return 2;
         }
+        QString refImage;
+        if (!inputPath.isEmpty()) {
+            const QFileInfo inFi(inputPath);
+            if (!inFi.exists()) {
+                err() << "Error: image not found: " << inputPath << Qt::endl;
+                return 1;
+            }
+            refImage = inFi.absoluteFilePath();
+            if (outputPath.isEmpty())
+                outputPath = inFi.absolutePath() + "/"
+                             + inFi.completeBaseName() + "_edited.glb";
+        }
         const QFileInfo outFi(outputPath);
         const QString srcPng = QDir(outFi.absolutePath())
             .filePath(outFi.completeBaseName() + QStringLiteral("_source_prompt.png"));
-        const int rc = generateSourceImageFromPrompt(genPrompt, imageModel, srcPng);
+        const int rc = generateSourceImageFromPrompt(genPrompt, imageModel,
+                                                     srcPng, refImage);
         if (rc != 0) return rc;
         inputPath = srcPng;
-        cliWrite(QString("Generated source image: %1\n").arg(srcPng));
+        cliWrite(QString("%1 source image: %2\n")
+                     .arg(refImage.isEmpty() ? QStringLiteral("Generated")
+                                             : QStringLiteral("Edited"))
+                     .arg(srcPng));
     }
 
     QFileInfo fi(inputPath);

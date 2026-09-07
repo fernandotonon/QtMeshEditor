@@ -1881,7 +1881,9 @@ Rectangle {
             // via stable-diffusion.cpp). Shown when the build has SD support
             // and a usable image model exists (or can be pointed at).
             Text {
-                text: "— or generate the image from text:"
+                text: MeshGenController.selectedImagePath.length > 0
+                    ? "— or EDIT the loaded image with a prompt (FLUX.2):"
+                    : "— or generate the image from text:"
                 color: PropertiesPanelController.textColor
                 opacity: 0.7; font.pixelSize: 10
             }
@@ -1917,7 +1919,9 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
-                            text: "e.g. a goblin warrior in bronze armor"
+                            text: MeshGenController.selectedImagePath.length > 0
+                                ? "e.g. give him golden armor"
+                                : "e.g. a goblin warrior in bronze armor"
                             color: PropertiesPanelController.textColor
                             opacity: 0.4; font.pixelSize: 11
                         }
@@ -2049,6 +2053,25 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: imageViewerWindow.open()
+                }
+                // Remove the image (back to generate-from-scratch).
+                Rectangle {
+                    anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 4
+                    width: 22; height: 22; radius: 3
+                    color: trashMa.containsMouse
+                        ? Qt.darker(PropertiesPanelController.headerColor, 1.1)
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    opacity: trashMa.containsMouse ? 1.0 : 0.7
+                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: trashMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: MeshGenController.clearSelectedImage()
+                    }
                 }
             }
             // Full-size viewer for the selected/generated source image.

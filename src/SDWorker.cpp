@@ -118,7 +118,11 @@ bool SDWorker::loadModel(const QString &modelPath)
             if (params.n_threads > 16) {
                 params.n_threads = 16;
             }
-            params.vae_decode_only = true;
+            // FLUX.2 keeps the full VAE: reference-image EDITING encodes the
+            // ref through it, and a decode-only graph hard-asserts inside
+            // sd.cpp (auto_encoder_kl GGML_ASSERT). The flux2 VAE is ~336MB —
+            // negligible next to the 4B diffusion model.
+            params.vae_decode_only = !m_isFlux2;
 
             m_ctx = new_sd_ctx(&params);
         } catch (const std::exception &e) {
@@ -214,6 +218,12 @@ void SDWorker::setSettings(const SDSettings &settings)
     m_settings = settings;
 }
 
+void SDWorker::setRefImage(const QImage &image)
+{
+    QMutexLocker locker(&m_mutex);
+    m_refImage = image;
+}
+
 void SDWorker::requestStop()
 {
     m_stopRequested.store(true);
@@ -262,6 +272,9 @@ void SDWorker::recreateContext()
     } else {
         params.vae_decode_only = true;
     }
+    // FLUX.2: full VAE always (reference-image editing encodes through it).
+    if (m_isFlux2)
+        params.vae_decode_only = false;
 
     m_ctx = new_sd_ctx(&params);
     if (!m_ctx) {
@@ -349,6 +362,32 @@ void SDWorker::generateTextureControlled(const QString &prompt,
             img_params.sample_params.sample_steps = 4;
             img_params.sample_params.sample_method = EULER_SAMPLE_METHOD;
         }
+
+        // FLUX.2 image editing: attach the one-shot reference image so the
+        // prompt EDITS it (kontext-style). Buffers must outlive
+        // generate_image, so they live in this scope; the ref is consumed
+        // (cleared) whether or not this generation succeeds.
+        QImage refRgb;
+        QByteArray refBytes;
+        sd_image_t refSdImage{};
+        if (m_isFlux2 && !m_refImage.isNull()) {
+            refRgb = m_refImage.convertToFormat(QImage::Format_RGB888);
+            const int rowBytes = refRgb.width() * 3;
+            refBytes.reserve(rowBytes * refRgb.height());
+            for (int y = 0; y < refRgb.height(); ++y)
+                refBytes.append(
+                    reinterpret_cast<const char*>(refRgb.constScanLine(y)),
+                    rowBytes);
+            refSdImage.data    = reinterpret_cast<uint8_t*>(refBytes.data());
+            refSdImage.width   = refRgb.width();
+            refSdImage.height  = refRgb.height();
+            refSdImage.channel = 3;
+            img_params.ref_images            = &refSdImage;
+            img_params.ref_images_count      = 1;
+            img_params.auto_resize_ref_image = true;
+            qDebug() << "SDWorker: FLUX.2 edit mode — 1 reference image";
+        }
+        m_refImage = QImage();
 
         // Issue #403: ControlNet depth conditioning. When a control
         // image was supplied and the context was built with a

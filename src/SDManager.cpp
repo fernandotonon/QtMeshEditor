@@ -464,7 +464,8 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
 }
 
 void SDManager::generateImage(const QString &prompt, int width, int height,
-                              const QString &outputFileName)
+                              const QString &outputFileName,
+                              const QString &refImagePath)
 {
     if (!isModelLoaded()) {
         emit generationError("No SD model loaded. Please load a model first.");
@@ -491,9 +492,24 @@ void SDManager::generateImage(const QString &prompt, int width, int height,
         fileName += QLatin1String(".png");
     const QString outputPath = outputDir.filePath(fileName);
 
+    // FLUX.2 edit mode: load the reference image on this thread (cheap) and
+    // hand it to the worker for the next generation.
+    QImage refImage;
+    if (!refImagePath.isEmpty()) {
+        refImage.load(refImagePath);
+        if (refImage.isNull()) {
+            emit generationError(
+                QStringLiteral("Cannot read the image to edit: %1")
+                    .arg(refImagePath));
+            return;
+        }
+    }
+
     SDSettings genSettings = m_settings;
-    QMetaObject::invokeMethod(m_worker, [this, prompt, outputPath, genSettings]() {
+    QMetaObject::invokeMethod(m_worker,
+                              [this, prompt, outputPath, genSettings, refImage]() {
         m_worker->setSettings(genSettings);
+        m_worker->setRefImage(refImage);
         m_worker->generateTexture(prompt, outputPath);
     }, Qt::QueuedConnection);
     // LCOV_EXCL_STOP

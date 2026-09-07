@@ -190,6 +190,18 @@ void MeshGenController::applySelectedImage(const QString& path)
     startCaptioning(path);
 }
 
+void MeshGenController::clearSelectedImage()
+{
+    if (m_busy || m_imageGenActive) return;
+    m_selectedImage.clear();
+    m_previewSource.clear();
+    m_caption.clear();
+    m_captioning = false;
+    emit selectedImageChanged();
+    emit captionChanged();
+    emit statusMessage(tr("Image cleared."));
+}
+
 // ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
 // stable-diffusion.cpp) instead of importing one ─────────────────────────────
 
@@ -244,11 +256,29 @@ void MeshGenController::generateSourceImage(const QString& prompt)
         return;
     }
 
-    // Steer toward what the 3D reconstruction wants: one isolated subject on
-    // a plain backdrop (the matte + TRELLIS/TripoSR are trained on that).
-    m_imageGenPrompt = trimmed
-        + QStringLiteral(", single subject, full body, centered, "
-                         "plain light gray background");
+    // EDIT mode: an image is already selected → the prompt describes a
+    // CHANGE to it (FLUX.2 kontext-style reference editing). Only klein can
+    // do that; on an SD checkpoint tell the user instead of silently
+    // generating something unrelated.
+    m_imageGenRef.clear();
+    if (!m_selectedImage.isEmpty()) {
+        if (model != SDManager::flux2KleinModelName()) {
+            emit imageGenStatus(
+                tr("Editing the loaded image needs FLUX.2-klein-4B (AI Model "
+                   "Settings) — or remove the image (🗑) to generate from "
+                   "scratch."), true);
+            return;
+        }
+        m_imageGenRef = m_selectedImage;
+    }
+
+    // Fresh generation: steer toward what the 3D reconstruction wants — one
+    // isolated subject on a plain backdrop. Edits keep the reference image's
+    // composition, so no suffix there.
+    m_imageGenPrompt = m_imageGenRef.isEmpty()
+        ? trimmed + QStringLiteral(", single subject, full body, centered, "
+                                   "plain light gray background")
+        : trimmed;
     // Explicit output name: SDManager's generationCompleted is GLOBAL, so a
     // texture generation finishing while we wait must not be mistaken for our
     // image — onImageGenCompleted correlates on this exact filename.
@@ -279,9 +309,11 @@ void MeshGenController::generateSourceImage(const QString& prompt)
     m_imageGenSize =
         (model == SDManager::flux2KleinModelName()) ? 1024 : 512;
     if (loadedIsTarget) {
-        emit imageGenStatus(tr("Generating image…"), false);
+        emit imageGenStatus(m_imageGenRef.isEmpty()
+                                ? tr("Generating image…")
+                                : tr("Editing the loaded image…"), false);
         sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize,
-                          m_imageGenFileName);
+                          m_imageGenFileName, m_imageGenRef);
     } else {
         emit imageGenStatus(tr("Loading %1…").arg(model), false);
         sd->loadModel(model);   // continues in onImageGenModelLoaded
@@ -297,10 +329,12 @@ void MeshGenController::onImageGenModelLoaded()
 {
 #ifdef ENABLE_STABLE_DIFFUSION
     if (!m_imageGenActive) return;
-    emit imageGenStatus(tr("Generating image…"), false);
+    emit imageGenStatus(m_imageGenRef.isEmpty()
+                            ? tr("Generating image…")
+                            : tr("Editing the loaded image…"), false);
     SDManager::instance()->generateImage(m_imageGenPrompt,
                                          m_imageGenSize, m_imageGenSize,
-                                         m_imageGenFileName);
+                                         m_imageGenFileName, m_imageGenRef);
 #endif
 }
 
