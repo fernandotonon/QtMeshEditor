@@ -75,7 +75,7 @@ if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
 endif()
 # Linux: Vulkan GPU backend (runtime dep: libvulkan1). Falls back to CPU
 # when no suitable device is present.
-if(UNIX AND NOT APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND _trellis_cmake_args -DGGML_VULKAN=ON)
 endif()
 if(CMAKE_OSX_ARCHITECTURES)

@@ -943,14 +943,15 @@ jobs:
             else
               echo "trellis-cli has no dynamic libggml deps (static ggml — preferred)"
             fi
-            # Vulkan GPU backend must be linked (falls back to CPU at runtime
-            # when no device is present — but the .so must resolve).
-            if ! ldd ./bin/trellis-cli | grep -q 'libvulkan\.so'; then
-              echo "ERROR: trellis-cli was built without Vulkan (no libvulkan.so dep)"
-              ldd ./bin/trellis-cli
+            # Vulkan GPU backend must be linked AND resolvable at link time
+            # (ldd can still print "libvulkan.so.1 => not found").
+            vulkan_ldd="$(ldd ./bin/trellis-cli)"
+            if ! grep -Eq '(^|[[:space:]])libvulkan\.so[^[:space:]]*[[:space:]]+=>[[:space:]]+/' <<<"$vulkan_ldd"; then
+              echo "ERROR: trellis-cli Vulkan dependency missing or unresolved:"
+              printf '%s\n' "$vulkan_ldd"
               exit 1
             fi
-            echo "trellis-cli links libvulkan (GPU backend enabled)"
+            echo "trellis-cli links a resolved libvulkan (GPU backend enabled)"
             # 3.37.7 regression: GGML_NATIVE=OFF still defaulted AVX2+FMA, so
             # Ivy Bridge (AVX, no FMA) died with SIGILL / exit 4 on vfmadd*.
             # Scan the CLI and any colocated libggml*.so*. Capture objdump to a
