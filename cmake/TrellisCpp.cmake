@@ -26,9 +26,11 @@
 # CopyTrellisRuntime.cmake still scoops up any leftover shared libs as a
 # safety net for backend-as-DLL layouts.
 #
-# Backends: ggml picks Metal automatically on Apple; everywhere else this
-# builds the CPU backend (slow but functional baseline — GPU builds remain a
-# power-user recompile with -DGGML_VULKAN/CUDA on the trellis.cpp side).
+# Backends: ggml picks Metal automatically on Apple. On Linux we enable
+# Vulkan (`GGML_VULKAN=ON`) so TRELLIS.2 uses the GPU when one is present
+# (NVIDIA/AMD/Intel via the system libvulkan — snap already has the
+# `opengl` + `gpu-2404` plugs). CUDA remains a power-user rebuild. Without
+# Vulkan the CLI is CPU-only and unusably slow on older hosts.
 # TRELLIS_WEBP is forced OFF: QtMeshEditor consumes --dump-post (raw mesh +
 # PBR volume) and does its own baking, so the WebP GLB texture path (and its
 # libwebp FetchContent) is dead weight here.
@@ -70,6 +72,11 @@ if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
          -DGGML_FMA=OFF
          -DGGML_F16C=OFF
          -DGGML_BMI2=OFF)
+endif()
+# Linux: Vulkan GPU backend (runtime dep: libvulkan1). Falls back to CPU
+# when no suitable device is present.
+if(UNIX AND NOT APPLE)
+    list(APPEND _trellis_cmake_args -DGGML_VULKAN=ON)
 endif()
 if(CMAKE_OSX_ARCHITECTURES)
     # LIST_SEPARATOR '|' below keeps a multi-arch value ("arm64;x86_64") as
