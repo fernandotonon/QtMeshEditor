@@ -1,3 +1,4 @@
+#include <QWidget>
 #include "PropertiesPanelController.h"
 #include "SceneTreeModel.h"
 #include "LightsController.h"
@@ -1241,6 +1242,18 @@ void PropertiesPanelController::toggleBoneWeights(const QString& entityName, boo
             return;
         }
     }
+}
+
+void PropertiesPanelController::setPanelWidget(QWidget* widget)
+{
+    mPanelWidget = widget;
+}
+
+void PropertiesPanelController::focusPanel()
+{
+    if (!mPanelWidget) return;
+    mPanelWidget->activateWindow();
+    mPanelWidget->setFocus(Qt::MouseFocusReason);
 }
 
 void PropertiesPanelController::refreshSkeletonOverlays(const QString& entityName)

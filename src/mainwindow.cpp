@@ -1315,6 +1315,9 @@ void MainWindow::initToolBar()
             root->setProperty("bottomToolHost",
                               QVariant::fromValue(static_cast<QObject*>(this)));
         }
+        // Register the panel widget so QML text inputs can re-grab WIDGET
+        // focus after the app window deactivates (focusPanel()).
+        PropertiesPanelController::instance()->setPanelWidget(m_propertiesPanel);
         createModeSurfaces();
 
         // Force QQuickWidget repaint when snap settings change — QQuickWidget

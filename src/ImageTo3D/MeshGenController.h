@@ -130,6 +130,7 @@ signals:
     void modelDownloadFinished(bool ok);  // pre-download from AI Settings
     void captionChanged();                 // caption / captioning state updated
     void imageGenStatus(const QString& message, bool isError);  // prompt-to-3D
+    void imageGenProgress(int step, int total);                 // sampling ticks
 
 private slots:
     // Prompt-to-3D chain (SDManager signal handlers; gated on m_imageGenActive

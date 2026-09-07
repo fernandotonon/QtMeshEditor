@@ -266,6 +266,10 @@ void MeshGenController::generateSourceImage(const QString& prompt)
             &MeshGenController::onImageGenCompleted, Qt::UniqueConnection);
     connect(sd, &SDManager::generationError, this,
             &MeshGenController::onImageGenError, Qt::UniqueConnection);
+    connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+        if (!m_imageGenActive) return;
+        emit imageGenProgress(sd->generationStep(), sd->generationTotalSteps());
+    }, Qt::UniqueConnection);
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
         QStringLiteral("prompt-to-3d image gen (%1)").arg(model));
