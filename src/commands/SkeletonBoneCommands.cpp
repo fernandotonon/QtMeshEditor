@@ -1,5 +1,6 @@
 #include "SkeletonBoneCommands.h"
 
+#include "AnimationMerger.h"
 #include "AutoRigController.h"
 #include "Manager.h"
 #include "PropertiesPanelController.h"
@@ -168,6 +169,68 @@ void RemoveSkeletonCommand::undo()
     m_applied = false;
     if (auto* rig = AutoRigController::instance())
         emit rig->selectionChanged();
+}
+
+TrimAnimationCommand::TrimAnimationCommand(std::string entityName,
+                                           std::string animName,
+                                           float t0, float t1,
+                                           QUndoCommand* parent)
+    : QUndoCommand(parent)
+    , m_entityName(std::move(entityName))
+    , m_animName(std::move(animName))
+    , m_t0(t0)
+    , m_t1(t1)
+{
+    setText(QStringLiteral("Trim animation"));
+}
+
+void TrimAnimationCommand::redo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity || !entity->getMesh() || !entity->getMesh()->hasSkeleton()) {
+        m_error = QStringLiteral("Entity has no skeleton.");
+        return;
+    }
+    // Master skeleton — the resource exports read; the entity's
+    // SkeletonInstance shares its animation list.
+    Ogre::Skeleton* master = entity->getMesh()->getSkeleton().get();
+    if (!master || !master->hasAnimation(m_animName)) {
+        m_error = QStringLiteral("Animation not found on the skeleton.");
+        return;
+    }
+
+    if (m_firstRedo) {
+        m_before = SkeletonEditor::captureSnapshot(entity);
+        m_firstRedo = false;
+    }
+
+    const auto r = AnimationMerger::trimAnimation(master, m_animName,
+                                                  m_t0, m_t1);
+    if (!r.ok) {
+        m_error = r.error;
+        return;
+    }
+    m_keyframesRemoved = r.keyframesRemoved;
+    m_newLength = r.newLength;
+    m_applied = true;
+    // The entity's AnimationState still carries the OLD length — rebuild the
+    // state set so the timeline/slider sees the trimmed clip.
+    entity->refreshAvailableAnimationState();
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.trim"),
+        QStringLiteral("%1 [%2..%3] -%4 keys")
+            .arg(QString::fromStdString(m_animName))
+            .arg(m_t0).arg(m_t1).arg(m_keyframesRemoved));
+    SkeletonEditor::refreshAfterEdit(m_entityName);
+}
+
+void TrimAnimationCommand::undo()
+{
+    Ogre::Entity* entity = resolveEntityByName(m_entityName);
+    if (!entity) return;
+    QString err;
+    if (SkeletonEditor::restoreSnapshot(entity, m_before, &err))
+        SkeletonEditor::refreshAfterEdit(m_entityName);
+    m_applied = false;
 }
 
 RenameBoneCommand::RenameBoneCommand(std::string entityName,

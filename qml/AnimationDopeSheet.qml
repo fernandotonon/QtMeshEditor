@@ -486,6 +486,34 @@ Rectangle {
                     }
                 }
             }
+            // Trim the clip to the selected window: keep [T0..T1], cut the
+            // rest, re-time to start at 0. Undoable (Ctrl+Z restores).
+            Rectangle {
+                id: trimBtn
+                width: trimTxt.implicitWidth + 12; height: 16; radius: 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: trimMa.containsMouse ? AnimationControlController.highlightColor
+                                            : AnimationControlController.headerColor
+                border.color: AnimationControlController.borderColor
+                Text { id: trimTxt; anchors.centerIn: parent
+                       text: "✂ Trim to range"; font.pixelSize: 10
+                       color: AnimationControlController.textColor }
+                MouseArea {
+                    id: trimMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        var r = AnimationControlController.trimWindow(
+                                    root.inbetweenT0, root.inbetweenT1)
+                        // The selected keys' times no longer exist after the
+                        // re-time — clear so the range bar doesn't linger with
+                        // stale pre-trim values.
+                        if (r && r.ok)
+                            root.clearSelection()
+                    }
+                }
+            }
         }
 
         // Result line: which path ran (RMIB model vs spline) + count, or why

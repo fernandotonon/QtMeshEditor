@@ -2079,3 +2079,65 @@ TEST_F(AnimationMergerTest, DetectBackwardFacingIgnoresLivePose)
 
     sm->destroyEntity(ent);
 }
+
+// Trim (#dope-sheet trim): cut a clip to [t0,t1] — exact boundary poses,
+// interior keys shifted by -t0, new length t1-t0, outside keys gone.
+TEST_F(AnimationMergerTest, TrimAnimationCutsWindowAndBakesBoundaries)
+{
+    auto skel = createTestSkeleton("trim_skel", {"Root"}, {});
+    auto* anim = skel->createAnimation("clip", 2.0f);
+    auto* trk = anim->createNodeTrack(0, skel->getBone(0));
+    // Linear X translation 0 → 2 over 2s: interpolation is exact, so the
+    // baked boundary poses are analytically checkable.
+    for (int i = 0; i <= 4; ++i) {
+        auto* kf = trk->createNodeKeyFrame(0.5f * i);
+        kf->setTranslate(Ogre::Vector3(0.5f * i, 0, 0));
+    }
+
+    const auto r = AnimationMerger::trimAnimation(skel.get(), "clip", 0.5f, 1.5f);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_FLOAT_EQ(r.newLength, 1.0f);
+
+    Ogre::Animation* trimmed = skel->getAnimation("clip");
+    ASSERT_NE(trimmed, nullptr);
+    EXPECT_FLOAT_EQ(trimmed->getLength(), 1.0f);
+    auto* t = trimmed->getNodeTrack(0);
+    ASSERT_NE(t, nullptr);
+    // keys: boundary@0 (was t=0.5), interior@0.5 (was t=1.0), boundary@1 (was 1.5)
+    ASSERT_EQ(t->getNumKeyFrames(), 3u);
+    EXPECT_NEAR(t->getNodeKeyFrame(0)->getTime(), 0.0f, 1e-4f);
+    EXPECT_NEAR(t->getNodeKeyFrame(0)->getTranslate().x, 0.5f, 1e-4f);
+    EXPECT_NEAR(t->getNodeKeyFrame(1)->getTime(), 0.5f, 1e-4f);
+    EXPECT_NEAR(t->getNodeKeyFrame(1)->getTranslate().x, 1.0f, 1e-4f);
+    EXPECT_NEAR(t->getNodeKeyFrame(2)->getTime(), 1.0f, 1e-4f);
+    EXPECT_NEAR(t->getNodeKeyFrame(2)->getTranslate().x, 1.5f, 1e-4f);
+    EXPECT_EQ(r.keyframesRemoved, 2);   // 5 original → 3 kept
+
+    // Mid-window boundary bake: trim at a non-keyframe time interpolates.
+    auto skel2 = createTestSkeleton("trim_skel2", {"Root"}, {});
+    auto* anim2 = skel2->createAnimation("clip", 2.0f);
+    auto* trk2 = anim2->createNodeTrack(0, skel2->getBone(0));
+    for (int i = 0; i <= 4; ++i) {
+        auto* kf = trk2->createNodeKeyFrame(0.5f * i);
+        kf->setTranslate(Ogre::Vector3(0.5f * i, 0, 0));
+    }
+    const auto r2 = AnimationMerger::trimAnimation(skel2.get(), "clip", 0.25f, 0.75f);
+    ASSERT_TRUE(r2.ok);
+    auto* t2 = skel2->getAnimation("clip")->getNodeTrack(0);
+    ASSERT_EQ(t2->getNumKeyFrames(), 3u);   // bake@0, key@0.25 (was 0.5), bake@0.5
+    EXPECT_NEAR(t2->getNodeKeyFrame(0)->getTranslate().x, 0.25f, 1e-3f);
+    EXPECT_NEAR(t2->getNodeKeyFrame(2)->getTranslate().x, 0.75f, 1e-3f);
+}
+
+TEST_F(AnimationMergerTest, TrimAnimationRejectsBadWindows)
+{
+    auto skel = createTestSkeleton("trim_bad", {"Root"}, {"clip"});
+    // Degenerate window
+    EXPECT_FALSE(AnimationMerger::trimAnimation(skel.get(), "clip", 0.5f, 0.5f).ok);
+    // Unknown animation
+    EXPECT_FALSE(AnimationMerger::trimAnimation(skel.get(), "nope", 0.0f, 1.0f).ok);
+    // Whole-clip window = no-op success
+    const auto r = AnimationMerger::trimAnimation(skel.get(), "clip", 0.0f, 99.0f);
+    EXPECT_TRUE(r.ok);
+    EXPECT_FLOAT_EQ(skel->getAnimation("clip")->getLength(), 1.0f);
+}

@@ -74,6 +74,37 @@ private:
     bool m_firstRedo = true;
 };
 
+/// Trim a skeletal animation to a [t0, t1] window (dope-sheet "Trim").
+/// Redo runs AnimationMerger::trimAnimation on the mesh's MASTER skeleton
+/// (so exports carry the cut); undo restores the full pre-trim snapshot.
+class TrimAnimationCommand : public QUndoCommand
+{
+public:
+    TrimAnimationCommand(std::string entityName,
+                         std::string animName,
+                         float t0, float t1,
+                         QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+    bool applied() const { return m_applied; }
+    QString error() const { return m_error; }
+    int keyframesRemoved() const { return m_keyframesRemoved; }
+    float newLength() const { return m_newLength; }
+
+private:
+    std::string m_entityName;
+    std::string m_animName;
+    float m_t0 = 0.f, m_t1 = 0.f;
+    SkeletonEditor::Snapshot m_before;
+    QString m_error;
+    int m_keyframesRemoved = 0;
+    float m_newLength = 0.f;
+    bool m_applied = false;
+    bool m_firstRedo = true;
+};
+
 class RenameBoneCommand : public QUndoCommand
 {
 public:

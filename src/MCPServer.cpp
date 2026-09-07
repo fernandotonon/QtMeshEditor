@@ -655,6 +655,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_skinning_display"), &MCPServer::toolSetSkinningDisplay},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
         {QStringLiteral("remove_skeleton"), &MCPServer::toolRemoveSkeleton},
+        {QStringLiteral("trim_animation"), &MCPServer::toolTrimAnimation},
         {QStringLiteral("add_arkit_blendshapes"), &MCPServer::toolAddArkitBlendshapes},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
@@ -4380,6 +4381,84 @@ QJsonObject MCPServer::toolBakeAnimationFps(const QJsonObject &args)
     } catch (std::exception& e) {
         return makeErrorResult(QString("Error: %1").arg(e.what()));
     }
+}
+
+QJsonObject MCPServer::toolTrimAnimation(const QJsonObject &args)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("Error: Manager not available");
+
+    // Strict arg typing: a present-but-mistyped field must error, not fall
+    // back to a default that silently trims the wrong window.
+    if (args.contains("entity_name") && !args["entity_name"].isString())
+        return makeErrorResult("Error: 'entity_name' must be a string.");
+    if (args.contains("animation_name") && !args["animation_name"].isString())
+        return makeErrorResult("Error: 'animation_name' must be a string.");
+    if (args.contains("start_time") && !args["start_time"].isDouble())
+        return makeErrorResult("Error: 'start_time' must be a number.");
+    if (args.contains("end_time") && !args["end_time"].isDouble())
+        return makeErrorResult("Error: 'end_time' must be a number.");
+
+    QString entityName = args["entity_name"].toString();
+    Ogre::Entity* entity = nullptr;
+    const QList<Ogre::Entity*> allEntities = mgr->getEntities();
+    if (!entityName.isEmpty()) {
+        for (auto* ent : allEntities)
+            if (ent && QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        if (!entity)
+            return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+    } else {
+        for (auto* ent : allEntities)
+            if (ent && ent->hasSkeleton()) { entity = ent; break; }
+    }
+    if (!entity || !entity->hasSkeleton())
+        return makeErrorResult("Error: No entity with skeleton found");
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    if (!skel)
+        return makeErrorResult("Error: No skeleton found");
+
+    QString animName = args["animation_name"].toString();
+    if (animName.isEmpty()) {
+        if (skel->getNumAnimations() == 0)
+            return makeErrorResult("Error: Skeleton has no animations");
+        animName = QString::fromStdString(skel->getAnimation(0)->getName());
+    } else if (!skel->hasAnimation(animName.toStdString())) {
+        return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+    }
+    const float clipLen = skel->getAnimation(animName.toStdString())->getLength();
+    const float t0 = static_cast<float>(args.value("start_time").toDouble(0.0));
+    const float t1 = args.contains("end_time")
+        ? static_cast<float>(args.value("end_time").toDouble(clipLen)) : clipLen;
+    // Pre-validate BEFORE pushing — a redo() failure would leave a dead undo
+    // entry on the stack (and clear the redo branch).
+    {
+        const float c0 = std::clamp(t0, 0.0f, clipLen);
+        const float c1 = std::clamp(t1, 0.0f, clipLen);
+        if (c1 - c0 < 0.01f)
+            return makeErrorResult(
+                "Error: Trim window too small — select at least one frame.");
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("trim_animation %1 [%2..%3]").arg(animName).arg(t0).arg(t1));
+
+    // Same undoable command the dope sheet's Trim button pushes.
+    auto* cmd = new TrimAnimationCommand(entity->getName(),
+                                         animName.toStdString(), t0, t1);
+    UndoManager::getSingleton()->push(cmd);
+    if (!cmd->applied())
+        return makeErrorResult(cmd->error().isEmpty()
+            ? QStringLiteral("Trim failed.") : cmd->error());
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Trimmed '%1' to %2s (%3 keyframes cut).")
+            .arg(animName)
+            .arg(QString::number(cmd->newLength(), 'f', 2))
+            .arg(cmd->keyframesRemoved()));
+    result["new_length"] = cmd->newLength();
+    result["keyframes_removed"] = cmd->keyframesRemoved();
+    return result;
 }
 
 QJsonObject MCPServer::toolMotionInBetween(const QJsonObject &args)
@@ -10284,6 +10363,27 @@ QJsonArray MCPServer::buildToolsList()
             "joints toward the mesh's medial mass. Best on roughly upright, manifold, "
             "T/A-pose meshes with +Y up. Already-skinned meshes are rejected. Pair "
             "skin:true for a one-click rig+skin.",
+            props
+        );
+    }
+
+    // trim_animation
+    {
+        QJsonObject props;
+        props["animation_name"] = QJsonObject{{"type", "string"},
+            {"description", "Animation to trim (default: the first one)."}};
+        props["start_time"] = QJsonObject{{"type", "number"},
+            {"description", "Window start in seconds (default 0)."}};
+        props["end_time"] = QJsonObject{{"type", "number"},
+            {"description", "Window end in seconds (default: clip length)."}};
+        props["entity_name"] = QJsonObject{{"type", "string"},
+            {"description", "Target entity (default: first skinned entity)."}};
+        appendTool(
+            "trim_animation",
+            "TRIM a skeletal animation to a [start_time, end_time] window: cuts "
+            "the lead-in and tail, bakes exact boundary poses at both ends, and "
+            "re-times the clip to start at 0. Undoable in the GUI session. Use "
+            "when only an interval of a clip is good.",
             props
         );
     }
