@@ -234,6 +234,17 @@ void SDManager::tryAutoLoadModel()
         return;
     }
 
+    // Cold-start convenience ONLY: if a load is already in flight or done,
+    // never stomp it. This fired 1s after construction and queued the
+    // last-used checkpoint BEHIND an explicit loadModel() call on the worker
+    // — the prompt-to-3D CLI asked for FLUX.2-klein, the auto-load silently
+    // replaced it with SD 1.5, and the 1024² generation came out as mush.
+    if (m_isLoading || isModelLoaded()) {
+        qDebug() << "SDManager: Auto-load skipped (a model is already"
+                    " loading/loaded)";
+        return;
+    }
+
     if (!modelFileExists(m_lastModelName)) {
         qDebug() << "SDManager: Auto-load model not found:" << m_lastModelName;
         return;

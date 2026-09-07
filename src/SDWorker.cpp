@@ -248,9 +248,10 @@ void SDWorker::recreateContext()
     // ControlNet needs the full VAE (encode + decode), so
     // vae_decode_only must be false in that case; otherwise keep the
     // decode-only optimization that halves VAE memory for plain
-    // txt2img.
+    // txt2img. NEVER for FLUX.2 — the persisted ControlNet is an SD 1.5
+    // depth model and poisons the flux context.
     QByteArray controlNetUtf8;
-    if (!m_settings.controlNetPath.isEmpty()) {
+    if (!m_isFlux2 && !m_settings.controlNetPath.isEmpty()) {
         controlNetUtf8 = m_settings.controlNetPath.toUtf8();
         params.control_net_path = controlNetUtf8.constData();
         params.vae_decode_only = false;
