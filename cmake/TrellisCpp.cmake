@@ -7,7 +7,9 @@
 # resolves). MUST include PR #45 (`--dump-post`) — 3.37.6 shipped pin
 # 16f3109e (2026-08-21) which predated that merge and every snap/deb invoke
 # failed with "unknown option: --dump-post". Current pin is upstream main
-# after #44 (Metal) + #45 (dump-post). Re-audit licenses if the pin moves
+# after #44 (Metal) + #45 (dump-post). On Linux x86_64 also force
+# AVX-without-FMA (see GGML_* flags below) — 3.37.7's Haswell default
+# SIGILL'd on Ivy Bridge. Re-audit licenses if the pin moves
 # (docs/trellis2-dependencies.md).
 #
 # Built as an EXTERNAL PROJECT (isolated sub-build), NOT FetchContent:
@@ -24,9 +26,11 @@
 # CopyTrellisRuntime.cmake still scoops up any leftover shared libs as a
 # safety net for backend-as-DLL layouts.
 #
-# Backends: ggml picks Metal automatically on Apple; everywhere else this
-# builds the CPU backend (slow but functional baseline — GPU builds remain a
-# power-user recompile with -DGGML_VULKAN/CUDA on the trellis.cpp side).
+# Backends: ggml picks Metal automatically on Apple. On Linux we enable
+# Vulkan (`GGML_VULKAN=ON`) so TRELLIS.2 uses the GPU when one is present
+# (NVIDIA/AMD/Intel via the system libvulkan — snap already has the
+# `opengl` + `gpu-2404` plugs). CUDA remains a power-user rebuild. Without
+# Vulkan the CLI is CPU-only and unusably slow on older hosts.
 # TRELLIS_WEBP is forced OFF: QtMeshEditor consumes --dump-post (raw mesh +
 # PBR volume) and does its own baking, so the WebP GLB texture path (and its
 # libwebp FetchContent) is dead weight here.
@@ -56,6 +60,24 @@ set(_trellis_cmake_args
     -DBUILD_SHARED_LIBS=OFF
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
+# GGML_NATIVE=OFF alone is NOT portable on x86_64: ggml then defaults
+# INS_ENB=ON (AVX2+FMA+F16C+BMI2) — Haswell+. 3.37.7 snap SIGILL'd
+# (vfmadd213ss / exit 4) on Ivy Bridge (AVX+F16C, no FMA). Pin an
+# AVX+SSE4.2 baseline without FMA/AVX2/F16C/BMI2 so Sandy Bridge+.
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    list(APPEND _trellis_cmake_args
+         -DGGML_SSE42=ON
+         -DGGML_AVX=ON
+         -DGGML_AVX2=OFF
+         -DGGML_FMA=OFF
+         -DGGML_F16C=OFF
+         -DGGML_BMI2=OFF)
+endif()
+# Linux: Vulkan GPU backend (runtime dep: libvulkan1). Falls back to CPU
+# when no suitable device is present.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND _trellis_cmake_args -DGGML_VULKAN=ON)
+endif()
 if(CMAKE_OSX_ARCHITECTURES)
     # LIST_SEPARATOR '|' below keeps a multi-arch value ("arm64;x86_64") as
     # ONE child argument instead of splitting at the semicolon.

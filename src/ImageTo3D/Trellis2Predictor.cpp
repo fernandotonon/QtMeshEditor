@@ -48,6 +48,59 @@ MeshGenPredictor::Result failResult(const QString& message)
     return r;
 }
 
+QString collapseTrellisCliStderr(const QByteArray& errBuf)
+{
+    QString detail = QString::fromLocal8Bit(errBuf).trimmed();
+    detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    while (detail.contains(QLatin1String("  ")))
+        detail.replace(QLatin1String("  "), QLatin1String(" "));
+    if (detail.size() > 400)
+        detail = QStringLiteral("…") + detail.right(399);
+    return detail;
+}
+
+// Flattened exit/crash reporting — keeps cpp:S134 nesting under the limit
+// inside Trellis2Predictor::predict's large control-flow tree.
+MeshGenPredictor::Result failFromTrellisCliProcess(const QProcess& proc,
+                                                   const QByteArray& errBuf)
+{
+    // 127 = dynamic linker "command/library not found" on Linux — the
+    // classic symptom when packaging ships trellis-cli without libggml*.
+    if (proc.exitCode() == 127)
+        return failResult(QStringLiteral(
+            "trellis2: trellis-cli failed to load (exit 127 — usually a "
+            "missing libggml shared library next to the bundled binary). "
+            "Reinstall a build that ships the self-contained trellis.cpp "
+            "runtime."));
+
+    const QString detail = collapseTrellisCliStderr(errBuf);
+    // QProcess does not expose the terminating signal on CrashExit — do not
+    // infer SIGILL from exitCode 4/132 (undefined / platform-specific).
+    if (proc.exitStatus() == QProcess::CrashExit) {
+        if (detail.isEmpty())
+            return failResult(QStringLiteral(
+                "trellis2: trellis-cli crashed (status %1) — if this is an "
+                "illegal-instruction fault, update to a portable trellis.cpp "
+                "build (AVX without FMA/AVX2).")
+                                  .arg(proc.exitCode()));
+        return failResult(QStringLiteral(
+            "trellis2: trellis-cli crashed (status %1): %2 — if this is an "
+            "illegal-instruction fault, update to a portable trellis.cpp "
+            "build (AVX without FMA/AVX2).")
+                              .arg(proc.exitCode())
+                              .arg(detail));
+    }
+
+    if (detail.isEmpty())
+        return failResult(QStringLiteral(
+            "trellis2: trellis-cli exited with code %1.")
+                              .arg(proc.exitCode()));
+    return failResult(QStringLiteral(
+        "trellis2: trellis-cli exited with code %1: %2")
+                          .arg(proc.exitCode())
+                          .arg(detail));
+}
+
 } // namespace
 
 Trellis2Predictor::Options::Options() = default;
@@ -487,8 +540,8 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         errBuf += chunk;
         // Cap retained stderr so a noisy/long run cannot grow unbounded;
         // the failure message still takes only a short suffix below.
-        constexpr int kMaxCapturedStderr = 64 * 1024;
-        if (errBuf.size() > kMaxCapturedStderr)
+        if (constexpr int kMaxCapturedStderr = 64 * 1024;
+            errBuf.size() > kMaxCapturedStderr)
             errBuf = errBuf.right(kMaxCapturedStderr);
         fwrite(chunk.constData(), 1, static_cast<size_t>(chunk.size()), stderr);
         fflush(stderr);
@@ -524,30 +577,8 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     drainStderr();
     if (cancelled)
         return failResult(QStringLiteral("cancelled"));
-    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
-        // 127 = dynamic linker "command/library not found" on Linux — the
-        // classic symptom when packaging ships trellis-cli without libggml*.
-        if (proc.exitCode() == 127)
-            return failResult(QStringLiteral(
-                "trellis2: trellis-cli failed to load (exit 127 — usually a "
-                "missing libggml shared library next to the bundled binary). "
-                "Reinstall a build that ships the self-contained trellis.cpp "
-                "runtime."));
-        QString detail = QString::fromLocal8Bit(errBuf).trimmed();
-        detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
-        while (detail.contains(QLatin1String("  ")))
-            detail.replace(QLatin1String("  "), QLatin1String(" "));
-        if (detail.size() > 400)
-            detail = QStringLiteral("…") + detail.right(399);
-        if (!detail.isEmpty())
-            return failResult(QStringLiteral(
-                "trellis2: trellis-cli exited with code %1: %2")
-                                  .arg(proc.exitCode())
-                                  .arg(detail));
-        return failResult(QStringLiteral(
-            "trellis2: trellis-cli exited with code %1.")
-                              .arg(proc.exitCode()));
-    }
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0)
+        return failFromTrellisCliProcess(proc, errBuf);
     Trellis2Interchange::ReadResult rr =
         Trellis2Interchange::readTrellisCppDump(outDump);
     if (!rr.ok)
