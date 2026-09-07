@@ -255,6 +255,12 @@ public:
     /// hosted). There is no non-model fallback (generative feature), so
     /// `--no-model` is rejected.
     static int cmdGenerate3d(int argc, char* argv[]);
+    /// Prompt-to-3D: synchronously generate the SOURCE image from text via
+    /// stable-diffusion.cpp (FLUX.2-klein-4B preferred, any SD checkpoint via
+    /// modelOverride) into outPng. Returns 0 on success (CLI exit code).
+    static int generateSourceImageFromPrompt(const QString& prompt,
+                                             const QString& modelOverride,
+                                             const QString& outPng);
 
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,

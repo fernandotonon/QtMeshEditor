@@ -270,6 +270,39 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
             file(QStringLiteral("trellis2"), QStringLiteral("shape_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 shape flow (1024 cascade)")),
             file(QStringLiteral("trellis2"), QStringLiteral("tex_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture flow (1024 cascade)")),
         }};
+#ifdef ENABLE_STABLE_DIFFUSION
+    constexpr bool sdAvailable = true;
+#else
+    constexpr bool sdAvailable = false;
+#endif
+    // Prompt-to-3D: FLUX.2-klein-4B text-to-image via the bundled sd.cpp —
+    // three components (all permissively licensed: klein weights Apache-2.0,
+    // Qwen3 Apache-2.0, VAE from the klein release). Installed under
+    // ai_models/flux2_klein/; SDManager lists the set as one model.
+    out << ModelSpec{
+        QStringLiteral("flux2-klein-gguf"), tr("FLUX.2-klein-4B (text to image)"), tr("Image to 3D"),
+        tr("Black Forest Labs FLUX.2-klein-4B (Apache-2.0) — generate the source "
+           "image for image-to-3D from a text prompt instead of importing one. "
+           "4-step distilled flow model; runs on the same stable-diffusion.cpp "
+           "backend as texture generation. Three components: diffusion GGUF, "
+           "VAE, and the Qwen3-4B text encoder."),
+        QStringLiteral("~5.2 GB"),
+        sdAvailable ? QString() : tr("Requires a stable-diffusion build"),
+        sdAvailable,
+        {
+            FileSpec{QStringLiteral("flux-2-klein-4b-Q4_0.gguf"),
+                     path(QStringLiteral("flux2_klein/flux-2-klein-4b-Q4_0.gguf")),
+                     QStringLiteral("https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_0.gguf"),
+                     QStringLiteral("FLUX.2-klein-4B diffusion (Q4_0)")},
+            FileSpec{QStringLiteral("flux2-vae.safetensors"),
+                     path(QStringLiteral("flux2_klein/flux2-vae.safetensors")),
+                     QStringLiteral("https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors"),
+                     QStringLiteral("FLUX.2 VAE")},
+            FileSpec{QStringLiteral("Qwen3-4B-Q4_K_M.gguf"),
+                     path(QStringLiteral("flux2_klein/Qwen3-4B-Q4_K_M.gguf")),
+                     QStringLiteral("https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"),
+                     QStringLiteral("Qwen3-4B text encoder (Q4_K_M)")},
+        }};
     out << ModelSpec{
         QStringLiteral("background-removal"), tr("Background Removal"), tr("Image to 3D"),
         tr("U2Net ONNX model used to remove backgrounds before image-to-3D generation."),

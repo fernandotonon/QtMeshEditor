@@ -12,6 +12,8 @@
 #include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
 #include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
 #include "ImageCaptioner.h"     // background SmolVLM caption of the picked image
+#include "SDManager.h"          // prompt-to-3D: text → source image (FLUX.2)
+#include "SDWorker.h"           // Flux2Set detection
 
 #include <OgreSceneNode.h>
 
@@ -155,7 +157,11 @@ void MeshGenController::selectImage()
         tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
+    applySelectedImage(path);
+}
 
+void MeshGenController::applySelectedImage(const QString& path)
+{
     m_selectedImage = path;
 
     // Build a small preview thumbnail as a data:image/png;base64 URL (same idiom
@@ -182,6 +188,119 @@ void MeshGenController::selectImage()
     // blocking the UI to caption. Shown under the thumbnail as it lands.
     m_caption.clear();
     startCaptioning(path);
+}
+
+// ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
+// stable-diffusion.cpp) instead of importing one ─────────────────────────────
+
+bool MeshGenController::imageGenAvailable() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sd = SDManager::instance();
+    if (!sd) return false;
+    return SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid()
+           || sd->isModelLoaded()
+           || !sd->availableModels().isEmpty();
+#else
+    return false;
+#endif
+}
+
+QString MeshGenController::imageGenModelName() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
+        return SDManager::flux2KleinModelName();
+    SDManager* sd = SDManager::instance();
+    if (sd && sd->isModelLoaded())
+        return sd->currentModelName();
+    if (sd && !sd->availableModels().isEmpty())
+        return sd->availableModels().first();
+#endif
+    return {};
+}
+
+void MeshGenController::generateSourceImage(const QString& prompt)
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (m_busy || m_imageGenActive) return;
+    const QString trimmed = prompt.trimmed();
+    if (trimmed.isEmpty()) {
+        emit imageGenStatus(tr("Enter a prompt first."), true);
+        return;
+    }
+    SDManager* sd = SDManager::instance();
+    const QString model = imageGenModelName();
+    if (!sd || model.isEmpty()) {
+        emit imageGenStatus(
+            tr("No image model — download FLUX.2-klein-4B in AI Model "
+               "Settings (or install a Stable Diffusion model)."), true);
+        return;
+    }
+
+    // Steer toward what the 3D reconstruction wants: one isolated subject on
+    // a plain backdrop (the matte + TRELLIS/TripoSR are trained on that).
+    m_imageGenPrompt = trimmed
+        + QStringLiteral(", single subject, full body, centered, "
+                         "plain light gray background");
+    m_imageGenActive = true;
+
+    // One-time signal wiring (UniqueConnection keeps re-entry safe).
+    connect(sd, &SDManager::modelLoadCompleted, this,
+            &MeshGenController::onImageGenModelLoaded,
+            Qt::UniqueConnection);
+    connect(sd, &SDManager::modelLoadError, this,
+            &MeshGenController::onImageGenError, Qt::UniqueConnection);
+    connect(sd, &SDManager::generationCompleted, this,
+            &MeshGenController::onImageGenCompleted, Qt::UniqueConnection);
+    connect(sd, &SDManager::generationError, this,
+            &MeshGenController::onImageGenError, Qt::UniqueConnection);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QStringLiteral("prompt-to-3d image gen (%1)").arg(model));
+
+    const bool loadedIsTarget =
+        sd->isModelLoaded() && sd->currentModelName() == model;
+    m_imageGenSize =
+        (model == SDManager::flux2KleinModelName()) ? 1024 : 512;
+    if (loadedIsTarget) {
+        emit imageGenStatus(tr("Generating image…"), false);
+        sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize);
+    } else {
+        emit imageGenStatus(tr("Loading %1…").arg(model), false);
+        sd->loadModel(model);   // continues in onImageGenModelLoaded
+    }
+#else
+    Q_UNUSED(prompt);
+    emit imageGenStatus(
+        tr("This build has no Stable Diffusion support."), true);
+#endif
+}
+
+void MeshGenController::onImageGenModelLoaded()
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (!m_imageGenActive) return;
+    emit imageGenStatus(tr("Generating image…"), false);
+    SDManager::instance()->generateImage(m_imageGenPrompt,
+                                         m_imageGenSize, m_imageGenSize);
+#endif
+}
+
+void MeshGenController::onImageGenCompleted(const QString& outputPath)
+{
+    if (!m_imageGenActive) return;   // someone else's SD generation
+    m_imageGenActive = false;
+    applySelectedImage(outputPath);
+    emit imageGenStatus(
+        tr("Image ready — press Generate to build the 3D model."), false);
+}
+
+void MeshGenController::onImageGenError(const QString& message)
+{
+    if (!m_imageGenActive) return;
+    m_imageGenActive = false;
+    emit imageGenStatus(message, true);
 }
 
 void MeshGenController::startCaptioning(const QString& path)

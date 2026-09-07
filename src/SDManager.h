@@ -95,6 +95,12 @@ public:
     static QString enhanceTexturePrompt(const QString &prompt);
     static QString getTextureNegativePrompt();
 
+    /// Prompt-to-3D image generation (FLUX.2-klein-4B via sd.cpp): where the
+    /// AI Model Settings catalog installs the component set, and the name it
+    /// is listed under in the model dropdown when present.
+    static QString flux2KleinDirectory();
+    static QString flux2KleinModelName();
+
     // Generation state
     bool isGenerating() const;
     int generationStep() const { return m_generationStep; }
@@ -111,6 +117,11 @@ public slots:
     Q_INVOKABLE void scanForModels();
 
     Q_INVOKABLE void generateTexture(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
+    /// Plain text-to-image with the prompt passed through UNTOUCHED (no
+    /// seamless-texture enhancement) — the prompt-to-3D source-image path.
+    /// Saves under <AppData>/generated_sources/. Same async signals as
+    /// generateTexture (generationStarted/Progress/Completed/Error).
+    Q_INVOKABLE void generateImage(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
     // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
 
     // Issue #403: mesh-aware (depth-conditioned) generation. Same

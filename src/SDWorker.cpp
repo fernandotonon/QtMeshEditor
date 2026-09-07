@@ -1,6 +1,8 @@
 // LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDWorker.h"
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 #include <QThread>
 #include <QImage>
 
@@ -8,6 +10,36 @@ SDWorker::SDWorker(QObject *parent)
     : QObject(parent)
 {
 }
+
+// LCOV_EXCL_STOP — pure file-set detection, unit-tested in every build
+SDWorker::Flux2Set SDWorker::detectFlux2Set(const QString &dir)
+{
+    Flux2Set set;
+    QDir d(dir);
+    if (dir.isEmpty() || !d.exists()) return set;
+    const QFileInfoList files = d.entryInfoList(
+        {QStringLiteral("*.gguf"), QStringLiteral("*.safetensors")},
+        QDir::Files);
+    for (const QFileInfo &fi : files) {
+        const QString lower = fi.fileName().toLower();
+        const bool isVae = lower.contains(QLatin1String("vae"))
+                           || lower.startsWith(QLatin1String("ae."));
+        if (isVae) {
+            if (set.vae.isEmpty()) set.vae = fi.absoluteFilePath();
+            continue;
+        }
+        if (lower.contains(QLatin1String("qwen"))
+            || lower.contains(QLatin1String("mistral"))) {
+            if (set.llm.isEmpty()) set.llm = fi.absoluteFilePath();
+            continue;
+        }
+        if (lower.contains(QLatin1String("flux"))) {
+            if (set.diffusion.isEmpty()) set.diffusion = fi.absoluteFilePath();
+        }
+    }
+    return set;
+}
+// LCOV_EXCL_START
 
 SDWorker::~SDWorker()
 {
@@ -45,11 +77,39 @@ bool SDWorker::loadModel(const QString &modelPath)
 
         qDebug() << "SDWorker: Loading model from" << modelPath;
 
+        // A DIRECTORY means a FLUX.2 component set (diffusion GGUF + VAE +
+        // Qwen3 text encoder) — sd.cpp loads those through separate params,
+        // not model_path.
+        m_isFlux2 = false;
+        m_flux2 = Flux2Set{};
+        if (QFileInfo(modelPath).isDir()) {
+            m_flux2 = detectFlux2Set(modelPath);
+            if (!m_flux2.valid()) {
+                error = QString("Directory does not contain a FLUX.2 set "
+                                "(diffusion + vae + text encoder): %1")
+                            .arg(modelPath);
+                qWarning() << "SDWorker:" << error;
+                emit modelLoadError(error);
+                return false;
+            }
+            m_isFlux2 = true;
+        }
+
         try {
             sd_ctx_params_t params;
             sd_ctx_params_init(&params);
             QByteArray modelPathUtf8 = modelPath.toUtf8();
-            params.model_path = modelPathUtf8.constData();
+            QByteArray diffUtf8, vaeUtf8, llmUtf8;
+            if (m_isFlux2) {
+                diffUtf8 = m_flux2.diffusion.toUtf8();
+                vaeUtf8  = m_flux2.vae.toUtf8();
+                llmUtf8  = m_flux2.llm.toUtf8();
+                params.diffusion_model_path = diffUtf8.constData();
+                params.vae_path             = vaeUtf8.constData();
+                params.llm_path             = llmUtf8.constData();
+            } else {
+                params.model_path = modelPathUtf8.constData();
+            }
             params.n_threads = m_settings.threads > 0 ? m_settings.threads : QThread::idealThreadCount();
             if (params.n_threads > 16) {
                 params.n_threads = 16;
@@ -169,7 +229,17 @@ void SDWorker::recreateContext()
     sd_ctx_params_t params;
     sd_ctx_params_init(&params);
     QByteArray pathUtf8 = m_modelPath.toUtf8();
-    params.model_path = pathUtf8.constData();
+    QByteArray diffUtf8, vaeUtf8, llmUtf8;
+    if (m_isFlux2 && m_flux2.valid()) {
+        diffUtf8 = m_flux2.diffusion.toUtf8();
+        vaeUtf8  = m_flux2.vae.toUtf8();
+        llmUtf8  = m_flux2.llm.toUtf8();
+        params.diffusion_model_path = diffUtf8.constData();
+        params.vae_path             = vaeUtf8.constData();
+        params.llm_path             = llmUtf8.constData();
+    } else {
+        params.model_path = pathUtf8.constData();
+    }
     params.n_threads = m_settings.threads > 0 ? m_settings.threads : QThread::idealThreadCount();
     if (params.n_threads > 16) params.n_threads = 16;
 
@@ -260,6 +330,18 @@ void SDWorker::generateTextureControlled(const QString &prompt,
         img_params.sample_params.guidance.txt_cfg = m_settings.cfgScale;
         img_params.seed = m_settings.seed;
         img_params.sample_params.sample_method = static_cast<enum sample_method_t>(m_settings.sampleMethod);
+        if (m_isFlux2) {
+            // FLUX.2-klein is a 4-step guidance-distilled flow model: cfg
+            // must stay at 1.0 (no negative prompt), euler (NOT ancestral),
+            // few steps. The user's SD-oriented settings (30 steps, cfg 7)
+            // produce garbage on it, so klein pins its own sampling.
+            img_params.negative_prompt = "";
+            img_params.sample_params.guidance.txt_cfg = 1.0f;
+            img_params.sample_params.sample_steps =
+                (m_settings.steps >= 1 && m_settings.steps <= 8)
+                    ? m_settings.steps : 4;
+            img_params.sample_params.sample_method = EULER_SAMPLE_METHOD;
+        }
 
         // Issue #403: ControlNet depth conditioning. When a control
         // image was supplied and the context was built with a

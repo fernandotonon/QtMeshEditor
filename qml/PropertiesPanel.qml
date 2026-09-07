@@ -1876,6 +1876,99 @@ Rectangle {
                 onClicked: MeshGenController.selectImage()
             }
 
+            // — or generate the source image from a TEXT PROMPT (FLUX.2-klein
+            // via stable-diffusion.cpp). Shown when the build has SD support
+            // and a usable image model exists (or can be pointed at).
+            Text {
+                text: "— or generate the image from text:"
+                color: PropertiesPanelController.textColor
+                opacity: 0.7; font.pixelSize: 10
+            }
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                Rectangle {
+                    width: parent.width - imgGenBtn.width - 6; height: 24; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: imgGenPromptIn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    TextInput {
+                        id: imgGenPromptIn
+                        anchors.fill: parent
+                        anchors.leftMargin: 6; anchors.rightMargin: 6
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        clip: true; selectByMouse: true; activeFocusOnPress: true
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onPressed: function(mouse) {
+                                imgGenPromptIn.forceActiveFocus()
+                                mouse.accepted = false
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
+                            text: "e.g. a goblin warrior in bronze armor"
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.4; font.pixelSize: 11
+                        }
+                        onAccepted: imgGenBtn.run()
+                    }
+                }
+                Rectangle {
+                    id: imgGenBtn
+                    width: 88; height: 24; radius: 3
+                    property bool genBusy: false
+                    opacity: genBusy ? 0.5 : 1.0
+                    color: imgGenMa.pressed
+                        ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                        : imgGenMa.containsMouse
+                            ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                            : PropertiesPanelController.highlightColor
+                    function run() {
+                        if (genBusy || !imgGenPromptIn.text.trim()) return
+                        if (!MeshGenController.imageGenAvailable()) {
+                            imgGenStatusTxt.isError = true
+                            imgGenStatusTxt.text =
+                                "Download FLUX.2-klein-4B in AI Model Settings first."
+                            return
+                        }
+                        genBusy = true
+                        MeshGenController.generateSourceImage(imgGenPromptIn.text)
+                    }
+                    Text { anchors.centerIn: parent
+                           text: imgGenBtn.genBusy ? "…" : "Create Image"
+                           color: "white"; font.pixelSize: 10 }
+                    MouseArea { id: imgGenMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: imgGenBtn.run() }
+                }
+            }
+            Text {
+                id: imgGenStatusTxt
+                width: parent.width - 16
+                visible: text.length > 0
+                property bool isError: false
+                color: isError ? "#e08080" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                text: ""
+            }
+            Connections {
+                target: MeshGenController
+                function onImageGenStatus(message, isError) {
+                    imgGenStatusTxt.isError = isError
+                    imgGenStatusTxt.text = message
+                    // Busy only while a load/generate is still pending: any
+                    // error, and the final "Image ready" line, end the run.
+                    imgGenBtn.genBusy = !isError
+                        && message.indexOf("ready") < 0
+                }
+            }
+
             // Preview of the selected image (shown once one is chosen).
             Rectangle {
                 width: parent.width - 16

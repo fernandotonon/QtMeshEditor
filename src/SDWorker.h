@@ -41,7 +41,27 @@ public:
     explicit SDWorker(QObject *parent = nullptr);
     ~SDWorker();
 
+    /// FLUX.2-klein component set (prompt-to-3D image generation): sd.cpp
+    /// loads it from THREE files — the diffusion GGUF, the flux2 VAE, and
+    /// the Qwen3 text encoder — instead of one checkpoint. `detectFlux2Set`
+    /// scans a directory for them by name (diffusion: "flux"* .gguf/.safetensors
+    /// that isn't the VAE; VAE: name containing "vae" or starting "ae.";
+    /// text encoder: name containing "qwen" or "mistral"). Pure — compiled
+    /// (and unit-tested) in every build.
+    struct Flux2Set {
+        QString diffusion;
+        QString vae;
+        QString llm;
+        bool valid() const {
+            return !diffusion.isEmpty() && !vae.isEmpty() && !llm.isEmpty();
+        }
+    };
+    static Flux2Set detectFlux2Set(const QString &dir);
+
+    /// Accepts either a single checkpoint FILE (the historical behavior) or
+    /// a DIRECTORY holding a FLUX.2 component set (detectFlux2Set).
     bool loadModel(const QString &modelPath);
+    bool isFlux2Loaded() const { return m_isFlux2; }
     void unloadModel();
     bool isModelLoaded() const;
     QString getLoadedModelPath() const { return m_modelPath; }
@@ -76,6 +96,8 @@ signals:
 
 private:
     QString m_modelPath;
+    Flux2Set m_flux2;          ///< resolved component set when m_isFlux2
+    bool m_isFlux2 = false;    ///< model loaded as a FLUX.2 component set
     SDSettings m_settings;
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_isGenerating{false};
