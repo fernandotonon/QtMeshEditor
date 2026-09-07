@@ -10044,9 +10044,8 @@ QJsonArray MCPServer::buildToolsList()
             "saved meshPath (+ sourcePath for the preserved trellis2 full-res "
             "generation); otherwise the mesh is loaded into the scene. Models "
             "download on first use; a missing runtime/model returns a clear error "
-            "(no crash).",
-            props,
-            QJsonArray{"image_path"}
+            "(no crash). Give image_path OR prompt (not both).",
+            props
         );
     }
 

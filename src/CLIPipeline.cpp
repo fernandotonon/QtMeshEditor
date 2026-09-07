@@ -10553,6 +10553,12 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
             [&](const QString&) { loadOk = true; loadLoop.quit(); });
         QObject::connect(sd, &SDManager::modelLoadError, &loadLoop,
             [&](const QString& e) { loadErr = e; loadLoop.quit(); });
+        // A stalled new_sd_ctx() emits no terminal signal — don't hang the
+        // CLI forever.
+        QTimer::singleShot(10 * 60 * 1000, &loadLoop, [&]() {
+            loadErr = QStringLiteral("timed out after 10 minutes");
+            loadLoop.quit();
+        });
         sd->loadModel(chosenModel);
         loadLoop.exec();
         if (!loadOk) {
@@ -10579,6 +10585,10 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
         [&](const QString& e) { genErr = e; genLoop.quit(); });
     QObject::connect(sd, &SDManager::generationStopped, &genLoop,
         [&]() { genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
+    QTimer::singleShot(30 * 60 * 1000, &genLoop, [&]() {
+        genErr = QStringLiteral("timed out after 30 minutes");
+        genLoop.quit();
+    });
     sd->generateImage(fullPrompt, genSize, genSize,
                       QFileInfo(outPng).fileName());
     genLoop.exec();

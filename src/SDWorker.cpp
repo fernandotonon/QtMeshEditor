@@ -89,6 +89,10 @@ bool SDWorker::loadModel(const QString &modelPath)
                                 "(diffusion + vae + text encoder): %1")
                             .arg(modelPath);
                 qWarning() << "SDWorker:" << error;
+                // The previous context was already freed above — consumers
+                // must see the unload transition before the error.
+                if (wasModelLoaded)
+                    emit modelUnloaded();
                 emit modelLoadError(error);
                 return false;
             }
@@ -338,9 +342,11 @@ void SDWorker::generateTextureControlled(const QString &prompt,
             // produce garbage on it, so klein pins its own sampling.
             img_params.negative_prompt = "";
             img_params.sample_params.guidance.txt_cfg = 1.0f;
-            img_params.sample_params.sample_steps =
-                (m_settings.steps >= 1 && m_settings.steps <= 8)
-                    ? m_settings.steps : 4;
+            // Unconditionally 4: the settings dialog's step count is an
+            // SD-model knob (turbo/SDXL auto-detect writes 12/30 into it),
+            // and klein is a 4-step distilled model — passing SD-oriented
+            // values through just degrades it.
+            img_params.sample_params.sample_steps = 4;
             img_params.sample_params.sample_method = EULER_SAMPLE_METHOD;
         }
 
