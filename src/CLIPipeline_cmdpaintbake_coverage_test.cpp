@@ -216,3 +216,43 @@ TEST(CLIPipeline_cmdPaintCoverageTest, ApplyStencilRejectsHeight)
                     "-o", "out.mesh"});
     EXPECT_EQ(CLIPipeline::cmdPaint(args.argc(), args.argv()), 2);
 }
+
+// Reported in review on PR #993: QString::toInt/toDouble return 0 on
+// non-numeric text with the ok flag discarded, so `--fov abc` built a
+// degenerate camera that projected nothing but still ran the whole
+// import/export path, and `--resolution abc` silently kept the source size.
+TEST(CLIPipeline_cmdPaintCoverageTest, NonNumericResolutionIsAUsageError)
+{
+    PaintArgv args({"qtmesh", "paint", "model.fbx", "--bake",
+                    "--resolution", "abc", "-o", "out"});
+    EXPECT_EQ(CLIPipeline::cmdPaint(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipeline_cmdPaintCoverageTest, NonNumericFovIsAUsageError)
+{
+    PaintArgv args({"qtmesh", "paint", "model.fbx", "--apply-stencil", "s.png",
+                    "--camera", "0,1,4,0,1,0", "--fov", "abc", "-o", "out.mesh"});
+    EXPECT_EQ(CLIPipeline::cmdPaint(args.argc(), args.argv()), 2);
+}
+
+// A degenerate FOV projects nothing; reject it up front rather than running the
+// whole pipeline to produce an empty result.
+TEST(CLIPipeline_cmdPaintCoverageTest, OutOfRangeFovIsAUsageError)
+{
+    for (const char* bad : {"0", "-45", "180", "400"}) {
+        PaintArgv args({"qtmesh", "paint", "model.fbx", "--apply-stencil", "s.png",
+                        "--camera", "0,1,4,0,1,0", "--fov", bad, "-o", "out.mesh"});
+        EXPECT_EQ(CLIPipeline::cmdPaint(args.argc(), args.argv()), 2) << "fov=" << bad;
+    }
+}
+
+TEST(CLIPipeline_cmdPaintCoverageTest, ValidNumericFlagsAreAccepted)
+{
+    // Must NOT be rejected by the new validation: these get past parsing and
+    // fail later on the missing input file (1), not on usage (2).
+    PaintArgv args({"qtmesh", "paint", "/nonexistent/x.fbx", "--apply-stencil", "s.png",
+                    "--camera", "0,1,4,0,1,0", "--fov", "60", "--resolution", "512",
+                    "-o", "out.mesh"});
+    EXPECT_NE(CLIPipeline::cmdPaint(args.argc(), args.argv()), 2)
+        << "valid numeric flags must survive argument parsing";
+}

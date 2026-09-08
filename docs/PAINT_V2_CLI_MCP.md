@@ -88,8 +88,8 @@ Normal session (see #547).
 The stdio transport uses **LSP-style `Content-Length` framing**, not
 newline-delimited JSON:
 
-```
-Content-Length: 57\r\n\r\n{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+```text
+Content-Length: 58\r\n\r\n{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 ```
 
 A newline-only client hangs on the first read.

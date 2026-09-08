@@ -8518,12 +8518,36 @@ int CLIPipeline::cmdPaint(int argc, char* argv[])
         // both so the two commands are interchangeable.
         if ((arg == "--engine" || arg == "--target") && i + 1 < argc) { engine = argv[++i]; continue; }
         if (arg == "--prefix" && i + 1 < argc) { prefix = argv[++i]; continue; }
-        if (arg == "--resolution" && i + 1 < argc) { resolution = QString(argv[++i]).toInt(); continue; }
+        // QString::toInt/toDouble return 0 on non-numeric text, so an unchecked
+        // `--fov abc` would build a DEGENERATE camera that projects nothing but
+        // still runs the whole import/export path, and `--resolution abc` would
+        // silently keep the source size. Report a usage error instead.
+        if (arg == "--resolution" && i + 1 < argc) {
+            bool numOk = false;
+            const QString raw(argv[++i]);
+            resolution = raw.toInt(&numOk);
+            if (!numOk) {
+                err() << QStringLiteral("Error: --resolution '%1' is not a number.").arg(raw)
+                      << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--layer" && i + 1 < argc) { layerAction = QString(argv[++i]).toLower(); continue; }
         if (arg == "--apply-stencil" && i + 1 < argc) { stencilPath = argv[++i]; continue; }
         if (arg == "--camera" && i + 1 < argc) { cameraSpec = argv[++i]; continue; }
         if (arg == "--channel" && i + 1 < argc) { channelId = QString(argv[++i]).toLower(); continue; }
-        if (arg == "--fov" && i + 1 < argc) { fov = QString(argv[++i]).toDouble(); continue; }
+        if (arg == "--fov" && i + 1 < argc) {
+            bool numOk = false;
+            const QString raw(argv[++i]);
+            fov = raw.toDouble(&numOk);
+            if (!numOk || fov <= 0.0 || fov >= 180.0) {
+                err() << QStringLiteral("Error: --fov must be a number in (0,180), got '%1'.")
+                             .arg(raw) << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (!arg.startsWith('-') && inputPath.isEmpty()) { inputPath = arg; continue; }
     }
 

@@ -6606,6 +6606,15 @@ int paintChannelFromId(const QString& id, QString& errorOut)
             "session. Use 'normal'.");
         return -1;
     }
+    // VertexColor is enum 7, past kTexturePaintChannelCount, so it is a real id
+    // that setActiveChannel silently IGNORES — the same silent-no-op trap as a
+    // typo. It is not a texture channel; it has its own Texture/Vertex toggle.
+    if (static_cast<int>(ch) >= PaintChannelNS::kTexturePaintChannelCount) {
+        errorOut = QStringLiteral(
+            "'%1' is not a texture channel — use the paint target toggle for "
+            "vertex colour.").arg(id);
+        return -1;
+    }
     return static_cast<int>(ch);
 }
 
@@ -6869,21 +6878,28 @@ QJsonObject MCPServer::toolPaintSetGradient(const QJsonObject &args)
         return result;
     }
 
+    // Resolve EVERY argument before applying ANY of them. Applying the ramp and
+    // then rejecting a bad mode left the session changed while returning an
+    // error — misleading for scripted callers that read an error as
+    // "nothing happened".
+    QString ramp;
     if (args.contains("ramp")) {
-        const QString ramp = args.value("ramp").toString();
+        ramp = args.value("ramp").toString();
         if (!ctrl->rampNames().contains(ramp))
             return makeErrorResult(QString("Error: no gradient ramp named '%1'").arg(ramp));
-        ctrl->setActiveRampName(ramp);
     }
+    int mode = -1;
     if (args.contains("mode")) {
         const QString m = args.value("mode").toString().trimmed().toLower();
-        const int mode = m == QLatin1String("radial")  ? 1
-                       : m == QLatin1String("angular") ? 2
-                       : m == QLatin1String("linear")  ? 0 : -1;
+        mode = m == QLatin1String("radial")  ? 1
+             : m == QLatin1String("angular") ? 2
+             : m == QLatin1String("linear")  ? 0 : -1;
         if (mode < 0)
             return makeErrorResult(QString("Error: mode must be linear|radial|angular, got '%1'").arg(m));
-        ctrl->setGradientMode(mode);
     }
+
+    if (!ramp.isEmpty()) ctrl->setActiveRampName(ramp);
+    if (mode >= 0) ctrl->setGradientMode(mode);
     ctrl->setColorSource(1);                // Gradient
 
     QJsonObject result;
