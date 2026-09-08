@@ -2,9 +2,9 @@
 
 Offline developer tooling that authors **CC0 template clips for the
 text-to-motion library (#411/#837) from scratch** — procedural keyframes on a
-real Mixamo-convention rig, no third-party motion data. The 12 clips shipped in
+real Mixamo-convention rig, no third-party motion data. The clips shipped in
 September 2026 (walk, run, idle, wave, jump, punch, kick, march, cheer, sit,
-throw, dance) were produced with these scripts.
+throw, dance, hang, crawl — 14 in total) were produced with these scripts.
 
 Not shipped; the app never runs Python.
 

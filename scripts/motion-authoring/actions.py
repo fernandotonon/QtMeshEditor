@@ -97,8 +97,11 @@ def walk():
 # RUN — faster, deeper knees, forward lean, bigger arm drive.
 # ---------------------------------------------------------------------------
 def run():
-    seconds = 1.6
-    cycles = 2.5
+    # Whole number of gait cycles — the app LOOPS clips, so a fractional
+    # cycle count snaps the legs/hips at the wrap point. Cadence kept at
+    # 1.5625 cycles/s (the original 2.5-cycles-in-1.6s feel).
+    seconds = 1.28
+    cycles = 2.0
 
     def pose(t):
         p = cycles * t
@@ -572,7 +575,7 @@ def crawl():
             "r_arm": (26.0, 0, 66.0 - 12.0 * reachR),
             "l_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachL)),
             "r_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachR)),
-            "hips": (6.0, 0, 1.5 * reachL),
+            "hips": (0.0, 0, 1.5 * reachL),   # pitch lives on the spine (root lock)
         }
 
     def hips_tr(t):
