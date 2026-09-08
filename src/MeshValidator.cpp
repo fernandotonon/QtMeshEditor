@@ -61,6 +61,7 @@ MeshValidator::MeshValidator() : QObject(nullptr)
         m_issues.clear();
         m_validated = false;
         m_cacheOptimizationAvailable = false;
+        m_weldAvailable = false;
         // The previous Optimize Geometry result was about the
         // previously-selected entity — drop it so it doesn't leak
         // into the new selection's report.
@@ -666,10 +667,17 @@ void MeshValidator::weldDuplicateVertices()
         emit error(tr("Select a mesh first."));
         return;
     }
+    // One undo step for the whole selection: child commands under a single
+    // parent, pushed once (QUndoCommand runs children's redo/undo in order).
+    auto* macro = new QUndoCommand(
+        QObject::tr("Weld duplicate vertices (%1 mesh(es))").arg(targets.size()));
+    std::vector<WeldVerticesCommand*> cmds;
+    cmds.reserve(static_cast<size_t>(targets.size()));
+    for (Ogre::Entity* entity : targets)
+        cmds.push_back(new WeldVerticesCommand(entity->getName(), 0.0f, macro));
+    UndoManager::getSingleton()->push(macro);
     int refs = 0, unified = 0, applied = 0;
-    for (Ogre::Entity* entity : targets) {
-        auto* cmd = new WeldVerticesCommand(entity->getName());
-        UndoManager::getSingleton()->push(cmd);
+    for (WeldVerticesCommand* cmd : cmds) {
         if (cmd->applied()) {
             ++applied;
             refs    += cmd->report().weldedVertices;

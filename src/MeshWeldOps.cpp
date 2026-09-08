@@ -211,12 +211,22 @@ MeshWeldOps::Report MeshWeldOps::run(Ogre::Entity* entity, float epsilon,
                 differ = weightsDiffer(weights[verts[0]], weights[verts[i]]);
             if (differ) {
                 ++rep.weightMismatchClusters;
-                for (size_t i = 1; i < verts.size(); ++i)
-                    if (weightsDiffer(weights[verts[0]], weights[verts[i]]))
-                        unifyTargets.push_back(verts[i]);
-                // Representative = verts[0]; remember the source for each.
-                for (size_t i = 1; i < verts.size(); ++i)
-                    weights[verts[i]] = weights[verts[0]];
+                // Representative = the member with the largest total weight,
+                // never an unweighted one — copying an EMPTY map onto a twin
+                // that carries valid assignments would delete real skinning
+                // data instead of repairing the seam.
+                int repIdx = verts[0];
+                float repSum = -1.0f;
+                for (int v : verts) {
+                    float sum = 0.0f;
+                    for (const auto& [bone, w] : weights[v]) sum += w;
+                    if (sum > repSum) { repSum = sum; repIdx = v; }
+                }
+                for (int v : verts)
+                    if (v != repIdx && weightsDiffer(weights[repIdx], weights[v]))
+                        unifyTargets.push_back(v);
+                for (int v : verts)
+                    weights[v] = weights[repIdx];
             }
         }
     }

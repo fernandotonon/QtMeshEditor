@@ -10750,7 +10750,10 @@ Rectangle {
             // Undoable. Shown when validation found something to weld.
             Rectangle {
                 width: parent.width - 16; height: 28; radius: 3
-                visible: MeshValidator.hasWeldableVertices
+                // `validated` too: the weld flag reflects the LAST validation,
+                // so without it the button would survive a selection change
+                // and weld a mesh that was never analyzed.
+                visible: MeshValidator.validated && MeshValidator.hasWeldableVertices
                 color: weldMouse.pressed ? Qt.darker("#50b070", 1.2)
                      : weldMouse.containsMouse ? Qt.lighter("#50b070", 1.2)
                      : "#50b070"

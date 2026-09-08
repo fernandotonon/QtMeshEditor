@@ -31,7 +31,8 @@ std::string uniqueWeldName(const char* prefix)
 //   v5 (1,1,0) uv(1,1)              tri B = 3,4,5
 // Skinned: everything on bone 1 except v4, which gets bone 0 — the
 // weight-mismatch cluster that tears during animation.
-Ogre::Entity* createWeldFixtureEntity(const std::string& name, bool skinned)
+Ogre::Entity* createWeldFixtureEntity(const std::string& name, bool skinned,
+                                      bool unweightedV2 = false)
 {
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
         name + "_mesh", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
@@ -80,6 +81,7 @@ Ogre::Entity* createWeldFixtureEntity(const std::string& name, bool skinned)
         Ogre::VertexBoneAssignment vba;
         vba.weight = 1.0f;
         for (unsigned v = 0; v < 6; ++v) {
+            if (unweightedV2 && v == 2) continue;   // v2 has NO assignments
             vba.vertexIndex = v;
             vba.boneIndex = (v == 4) ? 0 : 1;   // v4 mismatches its twin v2
             mesh->addBoneAssignment(vba);
@@ -206,4 +208,27 @@ TEST_F(MeshWeldOpsTest, NullEntityFailsGracefully)
     const MeshWeldOps::Report rep = MeshWeldOps::analyze(nullptr);
     EXPECT_FALSE(rep.ok);
     EXPECT_FALSE(rep.error.isEmpty());
+}
+
+TEST_F(MeshWeldOpsTest, UnweightedClusterMemberNeverBecomesTheRepresentative)
+{
+    // v2 carries NO assignments while its co-located twin v4 is weighted to
+    // bone 0. The representative must be the WEIGHTED member — copying the
+    // empty map would delete valid skinning data instead of repairing it.
+    Ogre::Entity* ent = createWeldFixtureEntity(
+        uniqueWeldName("weldEmptyRep"), /*skinned=*/true, /*unweightedV2=*/true);
+    ASSERT_NE(ent, nullptr);
+
+    const MeshWeldOps::Report rep = MeshWeldOps::apply(ent);
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_GE(rep.weightsUnified, 1);
+
+    // v2 gained v4's weights (bone 0); v4 kept them.
+    float w2 = -1.0f, w4 = -1.0f;
+    for (const auto& [vi, vba] : ent->getMesh()->getBoneAssignments()) {
+        if (vba.vertexIndex == 2 && vba.boneIndex == 0) w2 = vba.weight;
+        if (vba.vertexIndex == 4 && vba.boneIndex == 0) w4 = vba.weight;
+    }
+    EXPECT_NEAR(w2, 1.0f, 1e-5f) << "the unweighted twin must ADOPT weights";
+    EXPECT_NEAR(w4, 1.0f, 1e-5f) << "the weighted twin must keep its weights";
 }

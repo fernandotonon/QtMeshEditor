@@ -20,9 +20,11 @@ Ogre::Entity* weldResolveEntity(const std::string& name)
 } // namespace
 
 WeldVerticesCommand::WeldVerticesCommand(std::string entityName,
+                                         float epsilon,
                                          QUndoCommand* parent)
     : QUndoCommand(parent)
     , m_entityName(std::move(entityName))
+    , m_epsilon(epsilon)
 {
     setText(QStringLiteral("Weld duplicate vertices"));
 }
@@ -61,7 +63,7 @@ void WeldVerticesCommand::redo()
         m_assignSnaps.push_back(std::move(shared));
     }
 
-    m_report = MeshWeldOps::apply(entity);
+    m_report = MeshWeldOps::apply(entity, m_epsilon);
     m_applied = m_report.ok
                 && (m_report.weldedVertices > 0 || m_report.weightsUnified > 0);
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.weld"),

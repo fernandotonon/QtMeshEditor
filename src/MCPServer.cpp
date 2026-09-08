@@ -5665,7 +5665,7 @@ QJsonObject MCPServer::toolWeldVertices(const QJsonObject &args)
                 return makeErrorResult(
                     QString("Analysis failed: %1").arg(rep.error));
         } else {
-            auto* cmd = new WeldVerticesCommand(target->getName());
+            auto* cmd = new WeldVerticesCommand(target->getName(), epsilon);
             UndoManager::getSingleton()->push(cmd);
             rep = cmd->report();
             if (!rep.ok)

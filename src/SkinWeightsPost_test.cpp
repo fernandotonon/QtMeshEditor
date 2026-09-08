@@ -317,3 +317,29 @@ TEST(SkinWeightsPostTest, UnifyCoLocatedHandlesDegenerateInput)
     positions = {1.0f};
     EXPECT_EQ(SkinWeightsPost::unifyCoLocated(weights, positions), 0);
 }
+
+TEST(SkinWeightsPostTest, UnifyThenPruneKeepsRowsIdenticalAndCapped)
+{
+    // Two co-located rows with disjoint 3-bone sets: the unified union has 6
+    // influences, above a caller cap of 4. The computeAndApply pipeline runs
+    // unify BEFORE pruneAndRenormalize — pruning identical rows must keep
+    // them identical AND enforce the cap (review P1 on #992).
+    std::vector<SkinWeights::VertexWeights> weights = {
+        makeVW({{0, 0.5}, {1, 0.3}, {2, 0.2}}),
+        makeVW({{3, 0.5}, {4, 0.3}, {5, 0.2}}),
+    };
+    const std::vector<float> positions = {
+        1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f,
+    };
+    SkinWeightsPost::unifyCoLocated(weights, positions);
+    EXPECT_EQ(weights[0].count, 6);
+    SkinWeightsPost::pruneAndRenormalize(weights, 4);
+    EXPECT_LE(weights[0].count, 4);
+    EXPECT_EQ(weights[0].count, weights[1].count);
+    for (int i = 0; i < weights[0].count; ++i) {
+        EXPECT_EQ(weights[0].boneIndices[i], weights[1].boneIndices[i]);
+        EXPECT_NEAR(weights[0].weights[i], weights[1].weights[i], 1e-9);
+    }
+    EXPECT_NEAR(rowSum(weights[0]), 1.0, 1e-9);
+}

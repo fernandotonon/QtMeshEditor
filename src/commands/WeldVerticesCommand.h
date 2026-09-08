@@ -21,6 +21,7 @@ class WeldVerticesCommand : public QUndoCommand
 {
 public:
     explicit WeldVerticesCommand(std::string entityName,
+                                 float epsilon = 0.0f,
                                  QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -40,6 +41,7 @@ private:
     };
 
     std::string m_entityName;
+    float m_epsilon = 0.0f;      // <=0 = auto (1e-5 x bbox diagonal)
     std::vector<IndexSnapshot> m_indexSnaps;
     std::vector<AssignSnapshot> m_assignSnaps;
     MeshWeldOps::Report m_report;
