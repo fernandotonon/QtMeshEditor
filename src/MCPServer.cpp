@@ -6580,6 +6580,35 @@ QJsonArray paintLayersJson(TexturePaintController* ctrl)
     return arr;
 }
 
+/// Parse a channel id, or -1 with a reason.
+///
+/// Two traps make a shared validator worth it: PaintChannelNS::fromId returns
+/// Channel::Count for an unknown id and setActiveChannel silently IGNORES an
+/// out-of-range value, so an unvalidated typo paints the previously-active
+/// channel; and 'height' is a REAL id that setActiveChannel redirects to Normal,
+/// so it would silently write a different channel than the caller asked for.
+int paintChannelFromId(const QString& id, QString& errorOut)
+{
+    if (id.isEmpty()) {
+        errorOut = QStringLiteral("'channel' is required "
+                                  "(basecolor|normal|roughness|metallic|ao|emissive)");
+        return -1;
+    }
+    const auto ch = PaintChannelNS::fromId(id.toStdString());
+    if (ch == PaintChannelNS::Channel::Count
+        || id != QLatin1String(PaintChannelNS::id(ch))) {
+        errorOut = QStringLiteral("unknown channel '%1'").arg(id);
+        return -1;
+    }
+    if (ch == PaintChannelNS::Channel::Height) {
+        errorOut = QStringLiteral(
+            "'height' is not a paintable channel (#547) — it shares the Normal "
+            "session. Use 'normal'.");
+        return -1;
+    }
+    return static_cast<int>(ch);
+}
+
 QJsonObject paintOkResult(TexturePaintController* ctrl, const QString& text)
 {
     QJsonObject result;
@@ -6609,11 +6638,21 @@ QJsonObject MCPServer::toolPaintSetEnabled(const QJsonObject &args)
             const int res = args.value("resolution").toInt();
             if (res > 0) ctrl->ensurePaintableTexture(res);
         }
+        // setTexturePaintEnabled early-returns when the flag is ALREADY true, so
+        // a first call with no mesh selected leaves paint "enabled" with no
+        // session and every retry would no-op forever. Clear the flag first so
+        // an enable request always genuinely tries to open a session.
+        if (ctrl->texturePaintEnabled() && !ctrl->hasActiveSession())
+            ctrl->setTexturePaintEnabled(false);
         ctrl->setTexturePaintEnabled(true);
-        if (!ctrl->hasActiveSession())
+        if (!ctrl->hasActiveSession()) {
+            // Leave the flag OFF on failure, so the state the caller observes
+            // matches reality and the next attempt starts clean.
+            ctrl->setTexturePaintEnabled(false);
             return makeErrorResult(
                 "Error: could not start a paint session — select a mesh with a "
                 "material first (use select_object / load_mesh)");
+        }
     } else {
         ctrl->setTexturePaintEnabled(false);
     }
@@ -6666,7 +6705,16 @@ QJsonObject MCPServer::toolPaintDeleteLayer(const QJsonObject &args)
     if (index < 0 || index >= ctrl->layerCount())
         return makeErrorResult(QString("Error: index %1 is out of range (%2 layer(s))")
                                    .arg(index).arg(ctrl->layerCount()));
+    // The controller silently keeps at least one layer, so reporting success
+    // here would tell automation a mutation happened when nothing changed.
+    if (ctrl->layerCount() <= 1)
+        return makeErrorResult(
+            "Error: cannot delete the only layer — a session always keeps one");
+
+    const int before = ctrl->layerCount();
     ctrl->deletePaintLayer(index);
+    if (ctrl->layerCount() == before)
+        return makeErrorResult(QString("Error: layer %1 was not deleted").arg(index));
     return paintOkResult(ctrl, QString("Deleted layer %1").arg(index));
 }
 
@@ -6744,21 +6792,10 @@ QJsonObject MCPServer::toolPaintSetActiveChannel(const QJsonObject &args)
     if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
 
     const QString id = args.value("channel").toString().trimmed().toLower();
-    if (id.isEmpty())
-        return makeErrorResult("Error: 'channel' is required "
-                               "(basecolor|normal|roughness|metallic|ao|emissive)");
-    const auto ch = PaintChannelNS::fromId(id.toStdString());
-    // fromId falls back to BaseColor on an unknown id, so reject explicitly:
-    // silently painting BaseColor when the caller asked for roughness would be
-    // very hard to notice.
-    if (id != QLatin1String(PaintChannelNS::id(ch)))
-        return makeErrorResult(QString("Error: unknown channel '%1'").arg(id));
-    if (ch == PaintChannelNS::Channel::Height)
-        return makeErrorResult(
-            "Error: 'height' is not a paintable channel (#547) — it shares the "
-            "Normal session. Use 'normal'.");
-
-    ctrl->setActiveChannel(static_cast<int>(ch));
+    QString chErr;
+    const int ch = paintChannelFromId(id, chErr);
+    if (ch < 0) return makeErrorResult(QString("Error: %1").arg(chErr));
+    ctrl->setActiveChannel(ch);
     return paintOkResult(ctrl, QString("Active channel is now %1").arg(id));
 }
 
@@ -6874,10 +6911,10 @@ QJsonObject MCPServer::toolPaintApplyStencil(const QJsonObject &args)
 
     if (args.contains("channel")) {
         const QString id = args.value("channel").toString().trimmed().toLower();
-        const auto ch = PaintChannelNS::fromId(id.toStdString());
-        if (id != QLatin1String(PaintChannelNS::id(ch)))
-            return makeErrorResult(QString("Error: unknown channel '%1'").arg(id));
-        ctrl->setActiveChannel(static_cast<int>(ch));
+        QString chErr;
+        const int ch = paintChannelFromId(id, chErr);
+        if (ch < 0) return makeErrorResult(QString("Error: %1").arg(chErr));
+        ctrl->setActiveChannel(ch);
     }
 
     bool ok = false;

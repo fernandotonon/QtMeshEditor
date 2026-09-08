@@ -8645,10 +8645,50 @@ int CLIPipeline::cmdPaint(int argc, char* argv[])
             err() << QStringLiteral("Could not import '%1'.").arg(inputPath) << Qt::endl;
             return 1;
         }
-        // A freshly imported mesh has no paint session, so the honest answer is
-        // "no layers" plus the channels that DO carry texture data.
-        auto* ctrl = TexturePaintController::instance();
-        const QStringList painted = ctrl ? ctrl->paintedChannelIds() : QStringList{};
+        // A freshly imported mesh has no paint session, so paintedChannelIds()
+        // (which inspects live/stashed layer stacks) is always empty here. The
+        // useful answer is which PBR slots the MATERIAL actually binds — that is
+        // what "channels carrying texture data" means for a file on disk.
+        QStringList painted;
+        {
+            // slot name -> channel id. paintChannelForSlotName is file-local to
+            // TexturePaintController, so the mapping is spelled out here; both
+            // albedo and diffuse_map are the BaseColor channel.
+            struct SlotMap { const char* slot; const char* id; };
+            static const SlotMap kSlots[] = {
+                {"albedo",      "basecolor"},
+                {"diffuse_map", "basecolor"},
+                {"normal_map",  "normal"},
+                {"roughness",   "roughness"},
+                {"metallic",    "metallic"},
+                {"ao",          "ao"},
+                {"emissive",    "emissive"},
+            };
+            QSet<QString> seen;
+            for (auto* obj : entities) {
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                auto* ent = static_cast<Ogre::Entity*>(obj);
+                for (unsigned int si = 0; si < ent->getNumSubEntities(); ++si) {
+                    const auto& mat = ent->getSubEntity(si)->getMaterial();
+                    if (!mat || !mat->getTechnique(0) || !mat->getTechnique(0)->getPass(0))
+                        continue;
+                    for (auto* tus : mat->getTechnique(0)->getPass(0)->getTextureUnitStates()) {
+                        if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                            continue;
+                        const QString slot = QString::fromStdString(tus->getName());
+                        if (slot.isEmpty() || tus->getTextureName().empty()) continue;
+                        for (const auto& m : kSlots) {
+                            if (slot != QLatin1String(m.slot)) continue;
+                            const QString id = QString::fromLatin1(m.id);
+                            if (!seen.contains(id)) {
+                                seen.insert(id);
+                                painted << id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (jsonOutput) {
             QJsonObject root;
             root["layers"] = QJsonArray{};
@@ -8657,7 +8697,8 @@ int CLIPipeline::cmdPaint(int argc, char* argv[])
             root["paintedChannels"] = ch;
             root["note"] = QStringLiteral(
                 "Paint layers are a live-session concept and are not stored in a "
-                "mesh file; a freshly imported mesh has none.");
+                "mesh file; a freshly imported mesh has none. 'paintedChannels' "
+                "lists the PBR slots this material binds.");
             cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
         } else {
             cliWrite(QStringLiteral("Layers: 0 (paint layers are not persisted in a mesh file)\n"));
@@ -8673,6 +8714,30 @@ int CLIPipeline::cmdPaint(int argc, char* argv[])
         if (inputPath.isEmpty() || outputPath.isEmpty()) {
             err() << "Error: --apply-stencil needs <file> and -o <out>." << Qt::endl;
             return 2;
+        }
+        // Validate --channel HERE, before any filesystem or Ogre work: fromId
+        // returns Channel::Count for a typo and setActiveChannel silently
+        // IGNORES an out-of-range value, so an unvalidated flag would project
+        // into whatever channel was active and export a valid-looking but wrong
+        // asset. An invalid FLAG is a usage error (2), so it must be reported
+        // before a missing-input error (1) can mask it.
+        int parsedChannel = -1;
+        if (!channelId.isEmpty()) {
+            const auto ch = PaintChannelNS::fromId(channelId.toStdString());
+            if (ch == PaintChannelNS::Channel::Count
+                || channelId != QLatin1String(PaintChannelNS::id(ch))) {
+                err() << QStringLiteral("Error: unknown --channel '%1' "
+                                        "(basecolor|normal|roughness|metallic|ao|emissive)")
+                             .arg(channelId) << Qt::endl;
+                return 2;
+            }
+            if (ch == PaintChannelNS::Channel::Height) {
+                err() << "Error: 'height' is not a paintable channel (#547) — it "
+                         "shares the Normal session. Use --channel normal."
+                      << Qt::endl;
+                return 2;
+            }
+            parsedChannel = static_cast<int>(ch);
         }
         // Six comma-separated floats: eye xyz then target xyz. Required, because
         // there is no viewport camera to fall back on headlessly.
@@ -8726,10 +8791,8 @@ int CLIPipeline::cmdPaint(int argc, char* argv[])
                 break;
             }
         }
-        if (!channelId.isEmpty()) {
-            const auto ch = PaintChannelNS::fromId(channelId.toStdString());
-            ctrl->setActiveChannel(static_cast<int>(ch));
-        }
+        if (!channelId.isEmpty())
+            ctrl->setActiveChannel(parsedChannel);
         if (resolution > 0) ctrl->ensurePaintableTexture(resolution);
 
         if (!ctrl->projectFromPhotoWithCamera(
