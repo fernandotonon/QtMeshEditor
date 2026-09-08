@@ -840,7 +840,7 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 -DOUT=${_trellis_lic}
-                "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
+                "-DIN=${_trellis_src}/LICENSE|${_trellis_src}/thirdparty/ggml/LICENSE|${_trellis_src}/thirdparty/fqms/LICENSE.md|${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
                 -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
         COMMAND ${CMAKE_COMMAND}
                 -DDEST=$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
