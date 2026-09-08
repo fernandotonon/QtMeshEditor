@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Procedural humanoid animation library, authored against the calibrated
-Mixamo local-axis conventions (probe renders, 2026-09-08 — see README.md):
+Mixamo local-axis conventions (probe renders, 2026-09-08):
 
   arm    X+ = swing down toward body     Z+ = swing forward   Y+ = twist
   forearm Z+ = elbow curl (anatomical flexion); other axes unused
@@ -11,8 +11,10 @@ Mixamo local-axis conventions (probe renders, 2026-09-08 — see README.md):
   head   X+ = look down      Y+ = turn          Z+ = tilt
   hips   X+ = whole-body forward lean  Y+ = yaw  Z+ = lateral roll
 
-All angles are LOCAL deltas on the bind pose (T-pose). Same sign gives the
-same anatomical motion on both sides (the Mixamo mirrored bind).
+All angles are ANATOMICAL deltas on the bind pose (T-pose): the author layer
+mirrors Y and Z for right-side joints (the Mixamo right bind frames are
+mirrored, so raw same-sign Y/Z would move the right side the opposite way —
+numerically verified; X is symmetric as-is).
 
 Each action returns (seconds, pose_fn, hips_translate_fn|None).
 pose_fn(t01) -> {joint: (x,y,z) degrees}. t01 in [0,1]; clips are LOOPED by
@@ -489,6 +491,97 @@ def dance():
 
     return seconds, pose, hips_tr
 
+
+
+# ---------------------------------------------------------------------------
+# HANG — dangling from a ledge/bar overhead: arms straight up, body hanging,
+# legs dangling with a gentle sway. Loopable.
+# ---------------------------------------------------------------------------
+def hang():
+    seconds = 3.0
+
+    def pose(t):
+        sway = _s(t)                      # slow pendulum
+        sway2 = _s(2 * t, math.pi / 3)    # leg dangle detail
+        return {
+            # both arms straight overhead (T-pose horizontal -> vertical up),
+            # slightly narrowed so the hands read as gripping above the head
+            "l_arm": (-96.0 + 2.0 * sway, 0, 6.0),
+            "r_arm": (-96.0 - 2.0 * sway, 0, 6.0),
+            "l_forearm": (0, 0, 8.0),
+            "r_forearm": (0, 0, 8.0),
+            "l_hand": (0, 0, 10.0),
+            "r_hand": (0, 0, 10.0),
+            # shoulders shrugged up toward the ears (weight on the arms)
+            "l_shoulder": (-14.0, 0, 0),
+            "r_shoulder": (-14.0, 0, 0),
+            # body dangles: slight arch + pendulum roll
+            "spine": (-6.0, 2.0 * sway, 4.0 * sway),
+            "spine1": (-3.0, 1.0 * sway, 2.0 * sway),
+            "hips": (2.0, 0, 5.0 * sway),
+            "head": (-14.0, 4.0 * sway, -3.0 * sway),   # looking up at the grip
+            # legs hang loose, knees softly bent, small alternating dangle
+            "l_upleg": (6.0 + 3.0 * sway2, 0, 2.0),
+            "r_upleg": (6.0 - 3.0 * sway2, 0, 2.0),
+            "l_leg": (14.0 + 5.0 * sway2, 0, 0),
+            "r_leg": (14.0 - 5.0 * sway2, 0, 0),
+            "l_foot": (8.0, 0, 0),        # toes pointed (unloaded)
+            "r_foot": (8.0, 0, 0),
+        }
+
+    def hips_tr(t):
+        sway = _s(t)
+        # stretched by the body weight, drifting with the pendulum
+        return (0.02 * sway, 0.06, 0.0)
+
+    return seconds, pose, hips_tr
+
+
+# ---------------------------------------------------------------------------
+# CRAWL — hands-and-knees crawl cycle: torso pitched horizontal, alternating
+# contralateral arm reach + knee step. 2 cycles, loopable.
+# ---------------------------------------------------------------------------
+def crawl():
+    seconds = 2.4
+    cycles = 2.0
+
+    def pose(t):
+        p = cycles * t
+        reachL = _s(p)                    # +1 = left arm reaching forward
+        reachR = _s(p, math.pi)
+        return {
+            # The whole-body pitch lives on the SPINE chain, not the hips —
+            # the retarget locks the root's orientation to the standing pose,
+            # so hip pitch would be discarded (a hips-pitched first draft
+            # retargeted as an upright kneel with zombie arms).
+            "spine": (42.0, 3.0 * reachL, 0),
+            "spine1": (30.0, 2.0 * reachL, 0),
+            "spine2": (14.0, 0, 0),
+            "head": (-46.0, -5.0 * reachL, 0),   # face forward
+            # kneeling legs: thighs slightly forward, knees folded, shins on
+            # the ground; the step is a small hip-flex oscillation
+            "l_upleg": (26.0 + 12.0 * reachR, 0, 3.0),
+            "r_upleg": (26.0 + 12.0 * reachL, 0, 3.0),
+            "l_leg": (96.0 - 8.0 * reachR, 0, 0),
+            "r_leg": (96.0 - 8.0 * reachL, 0, 0),
+            "l_foot": (12.0, 0, 0),
+            "r_foot": (12.0, 0, 0),
+            # arms: ventral swing under the (bowed) shoulders, reaching
+            # alternately; anatomical convention (right side auto-mirrored)
+            "l_arm": (26.0, 0, 66.0 - 12.0 * reachL),
+            "r_arm": (26.0, 0, 66.0 - 12.0 * reachR),
+            "l_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachL)),
+            "r_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachR)),
+            "hips": (6.0, 0, 1.5 * reachL),
+        }
+
+    def hips_tr(t):
+        p = cycles * t
+        return (0.0, -0.46 + 0.015 * abs(_s(p)), 0.0)
+
+    return seconds, pose, hips_tr
+
+
 ACTIONS = {
     "walk": walk,
     "run": run,
@@ -502,6 +595,8 @@ ACTIONS = {
     "sit": sit,
     "throw": throw,
     "dance": dance,
+    "hang": hang,
+    "crawl": crawl,
 }
 
 

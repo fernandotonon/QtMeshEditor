@@ -212,11 +212,20 @@ def author(src_glb, out_glb, anim_name, fps, seconds, pose_fn,
     poses = [pose_fn(i / (nframes - 1)) for i in range(nframes)]
     for key, idx in joints.items():
         bind = g.node_bind_rotation(idx)
+        # Anatomical mirror: the Mixamo right-side bind frames are mirrored
+        # across the sagittal plane, so the SAME local euler means the
+        # OPPOSITE anatomical motion for Y (twist) and Z (fore/aft swing,
+        # elbow curl) — only X is symmetric (numerically verified: left arm
+        # Z+60 -> world +Z forward, right arm Z+60 -> world -Z backward).
+        # Negating Y and Z on right-side joints lets pose_fn speak pure
+        # anatomy: the same (x, y, z) always means the same body motion.
+        mirror = key.startswith("r_")
         quats = []
         for p in poses:
             e = p.get(key, (0.0, 0.0, 0.0))
             order = "XYZ" if len(e) == 3 else e[3]
-            delta = quat_from_euler(e[0], e[1], e[2], order=order)
+            ey, ez = (-e[1], -e[2]) if mirror else (e[1], e[2])
+            delta = quat_from_euler(e[0], ey, ez, order=order)
             quats.append(quat_mul(bind, delta))
         rot_tracks[idx] = (times, quats)
 

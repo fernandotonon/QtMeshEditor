@@ -41,9 +41,13 @@ samples `pose_fn(t01) -> {joint: (x_deg, y_deg, z_deg)}` at 30 fps and writes
 `final_local = bind_local * euler_delta` rotation channels (LINEAR). An optional
 `hips_translate_fn(t01)` adds root bob/travel to the hips translation.
 
-`actions.py` holds the action library and the **calibrated Mixamo local-axis
-conventions** (derived from single-axis probe renders — same sign gives the same
-anatomical motion on both sides because the Mixamo bind is mirrored):
+`actions.py` holds the action library. Angles are **anatomical**: the author
+layer negates Y and Z for right-side joints, because the Mixamo right-side bind
+frames are mirrored across the sagittal plane — the same raw local Y/Z means
+the OPPOSITE anatomical motion on the right (numerically verified: left arm
+Z+60 swings world-forward, right arm Z+60 swings world-BACKWARD; X is
+symmetric). With the mirror layer, the same (x, y, z) always means the same
+body motion on either side:
 
 | joint    | X+                    | Y+     | Z+              |
 |----------|-----------------------|--------|-----------------|
@@ -60,6 +64,10 @@ Authoring tips learned the hard way:
 
 - **Cyclic clips must close**: `pose_fn(0) == pose_fn(1)` (the app loops them),
   and clip frame 0 is the retarget's delta reference — start near neutral.
+- **Whole-body pitch belongs on the SPINE chain, not the hips**: the
+  retarget locks the root's orientation to the standing pose, so a
+  hips-pitched crawl retargets as an upright kneel. Bow spine/spine1/spine2
+  instead (the crawl clip is the reference).
 - **Fast strikes need a hold plateau** (trapezoid envelope, not a narrow bump):
   the generate path's 12 fps smooth-bake averages away a peak that lives on a
   single keyframe (this is why the first punch draft lost its snap).
