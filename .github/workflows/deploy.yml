@@ -402,8 +402,9 @@ jobs:
             Write-Error "ENABLE_TRELLIS_CPP=ON but bin/trellis-cli.exe is missing"
             exit 1
         }
-        if (-not (Test-Path "${{github.workspace}}/bin/trellis-cli.THIRD_PARTY_LICENSES.txt")) {
-            Write-Error "trellis-cli license notices missing from bin/"
+        $lic = "${{github.workspace}}/bin/trellis-cli.THIRD_PARTY_LICENSES.txt"
+        if (-not (Test-Path $lic) -or (Get-Item $lic).Length -eq 0) {
+            Write-Error "trellis-cli license notices missing or EMPTY in bin/ (the 3.38.0 zip shipped a 0-byte file)"
             exit 1
         }
         Write-Host "bundled trellis-cli.exe present: $((Get-Item "${{github.workspace}}/bin/trellis-cli.exe").Length) bytes"

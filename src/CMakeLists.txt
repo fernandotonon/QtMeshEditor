@@ -842,7 +842,7 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 -DOUT=${_trellis_lic}
-                "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
+                "-DIN=${_trellis_src}/LICENSE|${_trellis_src}/thirdparty/ggml/LICENSE|${_trellis_src}/thirdparty/fqms/LICENSE.md|${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
                 -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
         COMMAND ${CMAKE_COMMAND}
                 -DDEST=$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
@@ -850,7 +850,11 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
                 -DBUILD_DIR=${_trellis_build}
                 -DLIC=${_trellis_lic}
                 -P ${CMAKE_SOURCE_DIR}/cmake/CopyTrellisRuntime.cmake
-        COMMENT "Copying bundled trellis-cli (+ ggml libs) next to QtMeshEditor")
+        COMMENT "Copying bundled trellis-cli (+ ggml libs) next to QtMeshEditor"
+        # VERBATIM is what keeps the '|' separators inside -DIN as literal
+        # argument characters — without it the recipe shell can parse the
+        # unquoted command line and treat '|' as a pipe.
+        VERBATIM)
     # `make install` (the CI packaging path) must carry the runtime too —
     # the POST_BUILD copy only reaches the build tree. install(CODE) reuses
     # the same scoop so any leftover libggml*.so land beside the CLI AND get
