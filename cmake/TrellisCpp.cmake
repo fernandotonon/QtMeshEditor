@@ -64,7 +64,8 @@ set(_trellis_cmake_args
 # INS_ENB=ON (AVX2+FMA+F16C+BMI2) — Haswell+. 3.37.7 snap SIGILL'd
 # (vfmadd213ss / exit 4) on Ivy Bridge (AVX+F16C, no FMA). Pin an
 # AVX+SSE4.2 baseline without FMA/AVX2/F16C/BMI2 so Sandy Bridge+.
-if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+# Applies to Windows x86_64 too — the same shipping-binary rule.
+if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
     list(APPEND _trellis_cmake_args
          -DGGML_SSE42=ON
          -DGGML_AVX=ON
@@ -72,6 +73,21 @@ if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
          -DGGML_FMA=OFF
          -DGGML_F16C=OFF
          -DGGML_BMI2=OFF)
+endif()
+# Windows (MinGW): self-contained trellis-cli.exe. -static folds the MinGW
+# runtimes (libgcc/libstdc++/winpthread) into the exe so the package's
+# transitive-import verifier sees only system DLLs; GGML_OPENMP=OFF avoids a
+# libgomp dependency (ggml falls back to its own thread pool). CPU backend
+# for now — Vulkan needs the SDK on the runner + a driver-provided
+# vulkan-1.dll on user machines (tracked follow-up).
+if(WIN32)
+    list(APPEND _trellis_cmake_args
+         "-DCMAKE_EXE_LINKER_FLAGS=-static"
+         -DGGML_OPENMP=OFF)
+    if(CMAKE_MAKE_PROGRAM)
+        list(APPEND _trellis_cmake_args
+             "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+    endif()
 endif()
 # Linux: Vulkan GPU backend (runtime dep: libvulkan1). Falls back to CPU
 # when no suitable device is present.
