@@ -1,4 +1,7 @@
 #include "MeshValidator.h"
+#include "MeshWeldOps.h"
+#include "commands/WeldVerticesCommand.h"
+#include "UndoManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
@@ -163,6 +166,7 @@ void MeshValidator::doValidate()
     m_issues.clear();
     m_validated = false;
     m_cacheOptimizationAvailable = false;
+    m_weldAvailable = false;
 
     const QList<Ogre::Entity*> targets = validationTargetEntities();
     if (targets.isEmpty()) {
@@ -178,10 +182,27 @@ void MeshValidator::doValidate()
     int totalSubmeshes = 0;
     int meshesWithUVs = 0;
     int meshesWithoutUVs = 0;
+    int totalDupVertices = 0;
+    int totalDupClusters = 0;
+    int totalWeldable = 0;
+    int totalWeightMismatch = 0;
 
     for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh) continue;
+
+        // Co-located-vertex analysis (weld candidates + animation-tear risk).
+        // Runs BEFORE this loop's own buffer locks — MeshWeldOps locks the
+        // vertex buffers itself and Ogre throws on a double lock.
+        {
+            const MeshWeldOps::Report weld = MeshWeldOps::analyze(entity);
+            if (weld.ok) {
+                totalDupVertices    += weld.duplicateVertices;
+                totalDupClusters    += weld.duplicateClusters;
+                totalWeldable       += weld.weldableVertices;
+                totalWeightMismatch += weld.weightMismatchClusters;
+            }
+        }
 
         for (unsigned si = 0; si < mesh->getNumSubMeshes(); ++si) {
             Ogre::SubMesh* sub = mesh->getSubMesh(si);
@@ -292,6 +313,49 @@ void MeshValidator::doValidate()
     // This way the user always sees what was actually analyzed rather than a
     // bare "No issues found." that hides the scope of the validation.
     QLocale locale;
+
+    // 0. Geometry — co-located (duplicate) vertices. The dangerous case is a
+    // SKINNED mesh whose co-located twins carry different bone weights: the
+    // triangles visibly tear apart during animation (generated/baked meshes
+    // hit this constantly). Plain duplicates are only an info row — UV-seam
+    // twins are legitimate on every textured mesh.
+    if (totalWeightMismatch > 0) {
+        QVariantMap issue;
+        issue["type"] = "warning";
+        issue["description"] = QString(
+            "Geometry: %1 co-located vertex cluster(s) with MISMATCHED skin "
+            "weights — triangles tear apart when animated. Use 'Weld "
+            "Duplicate Vertices' to unify them.")
+                                   .arg(totalWeightMismatch);
+        issue["count"] = totalWeightMismatch;
+        issue["fixable"] = true;
+        issue["weldable"] = true;
+        m_issues.append(issue);
+    } else if (totalWeldable > 0) {
+        QVariantMap issue;
+        issue["type"] = "info";
+        issue["description"] = QString(
+            "Geometry: %1 fully-identical duplicate vertex(es) across %2 "
+            "co-located cluster(s) — weldable (UV seams are kept).")
+                                   .arg(totalWeldable)
+                                   .arg(totalDupClusters);
+        issue["count"] = totalWeldable;
+        issue["fixable"] = true;
+        issue["weldable"] = true;
+        m_issues.append(issue);
+    } else {
+        QVariantMap issue;
+        issue["type"] = "ok";
+        issue["description"] = totalDupVertices > 0
+            ? QString("Geometry: %1 co-located vertex(es) are UV/attribute "
+                      "seams (legitimate) — weights consistent, nothing to weld")
+                  .arg(totalDupVertices)
+            : QStringLiteral("Geometry: no duplicated vertex positions");
+        issue["count"] = 0;
+        issue["fixable"] = false;
+        m_issues.append(issue);
+    }
+    m_weldAvailable = (totalWeldable > 0 || totalWeightMismatch > 0);
 
     // 1. Geometry — degenerate triangles
     if (totalDegenerates > 0) {
@@ -592,5 +656,33 @@ void MeshValidator::optimizeVertexCache()
     }
 
     // Refresh the checklist — the row should flip to "already optimal".
+    validate();
+}
+
+void MeshValidator::weldDuplicateVertices()
+{
+    const QList<Ogre::Entity*> targets = validationTargetEntities();
+    if (targets.isEmpty()) {
+        emit error(tr("Select a mesh first."));
+        return;
+    }
+    int refs = 0, unified = 0, applied = 0;
+    for (Ogre::Entity* entity : targets) {
+        auto* cmd = new WeldVerticesCommand(entity->getName());
+        UndoManager::getSingleton()->push(cmd);
+        if (cmd->applied()) {
+            ++applied;
+            refs    += cmd->report().weldedVertices;
+            unified += cmd->report().weightsUnified;
+        }
+    }
+    if (applied == 0) {
+        emit fixApplied(tr("Nothing to weld — no duplicate vertices found."));
+    } else {
+        emit fixApplied(tr("Welded duplicates on %1 mesh(es): %2 index "
+                           "reference(s) remapped, %3 seam vertex(es) got "
+                           "unified skin weights. Ctrl+Z reverts.")
+                            .arg(applied).arg(refs).arg(unified));
+    }
     validate();
 }

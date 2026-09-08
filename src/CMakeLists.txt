@@ -100,6 +100,7 @@ commands/SplitMeshCommand.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp
+commands/WeldVerticesCommand.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
 UvSeamData.cpp
@@ -231,6 +232,7 @@ VertexCacheOptimizer.cpp
 MeshDecimator.cpp
 MeshDecimatorController.cpp
 MeshValidator.cpp
+MeshWeldOps.cpp
 AIChatManager.cpp
 AIModelCatalog.cpp
 AppStorage.cpp
@@ -419,6 +421,7 @@ MeshDecimator.h
 MeshDecimatorController.h
 PartOpsController.h
 MeshValidator.h
+MeshWeldOps.h
 AIChatManager.h
 AIModelCatalog.h
 WelcomeScreenController.h

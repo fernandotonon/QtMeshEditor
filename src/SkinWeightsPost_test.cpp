@@ -226,3 +226,94 @@ TEST(SkinWeightsPostTest, BleedFractionReturnsMinusOneWhenUncomputable)
     const std::vector<std::vector<int>> allowed = { {} };
     EXPECT_DOUBLE_EQ(SkinWeightsPost::bleedFraction(w, allowed), -1.0);
 }
+
+// ─── unifyCoLocated ──────────────────────────────────────────────────────────
+
+TEST(SkinWeightsPostTest, UnifyCoLocatedAveragesClusterWeights)
+{
+    // Two vertices at the SAME position with different weights (a UV-seam
+    // twin pair), one far-away vertex untouched.
+    std::vector<SkinWeights::VertexWeights> weights = {
+        makeVW({{0, 1.0}}),
+        makeVW({{0, 0.5}, {1, 0.5}}),
+        makeVW({{2, 1.0}}),
+    };
+    const std::vector<float> positions = {
+        1.0f, 2.0f, 3.0f,
+        1.0f, 2.0f, 3.0f,
+        9.0f, 9.0f, 9.0f,
+    };
+    const int changed = SkinWeightsPost::unifyCoLocated(weights, positions);
+    EXPECT_EQ(changed, 2);
+
+    // Both twins now identical: average = bone0 0.75, bone1 0.25.
+    EXPECT_NEAR(weightOnBone(weights[0], 0), 0.75, 1e-9);
+    EXPECT_NEAR(weightOnBone(weights[0], 1), 0.25, 1e-9);
+    EXPECT_NEAR(weightOnBone(weights[1], 0), 0.75, 1e-9);
+    EXPECT_NEAR(weightOnBone(weights[1], 1), 0.25, 1e-9);
+    EXPECT_NEAR(rowSum(weights[0]), 1.0, 1e-9);
+    // Far vertex untouched.
+    EXPECT_NEAR(weightOnBone(weights[2], 2), 1.0, 1e-9);
+}
+
+TEST(SkinWeightsPostTest, UnifyCoLocatedIsANoOpWhenWeightsAlreadyMatch)
+{
+    std::vector<SkinWeights::VertexWeights> weights = {
+        makeVW({{0, 0.5}, {1, 0.5}}),
+        makeVW({{0, 0.5}, {1, 0.5}}),
+    };
+    const std::vector<float> positions = {
+        1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f,
+    };
+    EXPECT_EQ(SkinWeightsPost::unifyCoLocated(weights, positions), 0);
+}
+
+TEST(SkinWeightsPostTest, UnifyCoLocatedLockedMemberDominates)
+{
+    std::vector<SkinWeights::VertexWeights> weights = {
+        makeVW({{0, 1.0}}),               // free
+        makeVW({{1, 1.0}}),               // LOCKED (manual weights)
+    };
+    const std::vector<float> positions = {
+        2.0f, 2.0f, 2.0f,
+        2.0f, 2.0f, 2.0f,
+    };
+    const std::vector<std::uint8_t> locked = {0, 1};
+    const int changed = SkinWeightsPost::unifyCoLocated(weights, positions,
+                                                        0.0f, locked);
+    EXPECT_EQ(changed, 1);
+    // The free twin copied the locked one; the locked one is untouched.
+    EXPECT_NEAR(weightOnBone(weights[0], 1), 1.0, 1e-9);
+    EXPECT_EQ(weights[0].count, 1);
+    EXPECT_NEAR(weightOnBone(weights[1], 1), 1.0, 1e-9);
+}
+
+TEST(SkinWeightsPostTest, UnifyCoLocatedRespectsEpsilon)
+{
+    std::vector<SkinWeights::VertexWeights> weights = {
+        makeVW({{0, 1.0}}),
+        makeVW({{1, 1.0}}),
+    };
+    // 0.3 apart — clustered only when epsilon is large enough.
+    std::vector<float> positions = {
+        0.0f, 0.0f, 0.0f,
+        0.3f, 0.0f, 0.0f,
+    };
+    auto w1 = weights;
+    EXPECT_EQ(SkinWeightsPost::unifyCoLocated(w1, positions, 0.001f), 0);
+    auto w2 = weights;
+    EXPECT_GT(SkinWeightsPost::unifyCoLocated(w2, positions, 1.0f), 0);
+}
+
+TEST(SkinWeightsPostTest, UnifyCoLocatedHandlesDegenerateInput)
+{
+    std::vector<SkinWeights::VertexWeights> weights;
+    std::vector<float> positions;
+    EXPECT_EQ(SkinWeightsPost::unifyCoLocated(weights, positions), 0);
+
+    // Positions shorter than weights → refuse rather than read OOB.
+    weights.push_back(makeVW({{0, 1.0}}));
+    positions = {1.0f};
+    EXPECT_EQ(SkinWeightsPost::unifyCoLocated(weights, positions), 0);
+}

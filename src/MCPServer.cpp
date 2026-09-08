@@ -1,4 +1,6 @@
 #include "MCPServer.h"
+#include "MeshWeldOps.h"
+#include "commands/WeldVerticesCommand.h"
 #include "mainwindow.h"
 #include "GamificationManager.h"
 #include "Manager.h"
@@ -743,6 +745,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
         {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh},
+        {QStringLiteral("weld_vertices"), &MCPServer::toolWeldVertices},
         {QStringLiteral("generate_isometric_sprites"), &MCPServer::toolGenerateIsometricSprites},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
@@ -885,6 +888,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("decimate_mesh"), QStringLiteral("decimate_lod")},
             {QStringLiteral("generate_lods"), QStringLiteral("decimate_lod")},
             {QStringLiteral("optimize_mesh"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("weld_vertices"), QStringLiteral("decimate_lod")},
             {QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("uv_unwrap_selection"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("uv_project"), QStringLiteral("uv_unwrap")},
@@ -941,7 +945,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
-        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("bake_vat"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("load_pose_library")
@@ -5609,6 +5613,99 @@ double resolveMcpReduction(const QJsonObject& args,
 // NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
 // every other tool method in this class); marking just this one const would
 // break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolWeldVertices(const QJsonObject &args)
+{
+    // Args:
+    //   entity_name (string, optional) — target entity; defaults to the
+    //                                    selection, else the only mesh entity
+    //   epsilon (double, optional)     — position tolerance; <=0/absent = auto
+    //   dry_run (bool, default false)  — analyze only, no mutation
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        Ogre::Entity* target = nullptr;
+        const QString entityName = args.value("entity_name").toString();
+        if (!entityName.isEmpty()) {
+            target = findEntityByName(entityName);
+            if (!target)
+                return makeErrorResult(
+                    QString("Entity '%1' not found.").arg(entityName));
+        } else {
+            const SelectionSet* sel = SelectionSet::getSingleton();
+            const QList<Ogre::Entity*> selected =
+                sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+            if (!selected.isEmpty()) {
+                target = selected.first();
+            } else {
+                // Fall back to the only mesh entity in the scene.
+                for (Ogre::Entity* ent : mgr->getEntities()) {
+                    if (!ent || ent->getMovableType() != "Entity") continue;
+                    if (target)
+                        return makeErrorResult(
+                            "Multiple entities in scene — pass entity_name or "
+                            "select one first.");
+                    target = ent;
+                }
+                if (!target)
+                    return makeErrorResult("No mesh entity in the scene.");
+            }
+        }
+
+        const float epsilon =
+            static_cast<float>(args.value("epsilon").toDouble(0.0));
+        const bool dryRun = args.value("dry_run").toBool(false);
+
+        SentryReporter::addBreadcrumb("ai.tool_call", "weld_vertices");
+
+        MeshWeldOps::Report rep;
+        if (dryRun) {
+            rep = MeshWeldOps::analyze(target, epsilon);
+            if (!rep.ok)
+                return makeErrorResult(
+                    QString("Analysis failed: %1").arg(rep.error));
+        } else {
+            auto* cmd = new WeldVerticesCommand(target->getName());
+            UndoManager::getSingleton()->push(cmd);
+            rep = cmd->report();
+            if (!rep.ok)
+                return makeErrorResult(
+                    QString("Weld failed: %1").arg(rep.error));
+        }
+
+        QJsonObject result = makeSuccessResult(
+            dryRun
+                ? QString("Analysis of '%1': %2 co-located vertex(es) in %3 "
+                          "cluster(s); %4 byte-identical duplicate(s) weldable; "
+                          "%5 cluster(s) with mismatched skin weights.")
+                      .arg(QString::fromStdString(target->getName()))
+                      .arg(rep.duplicateVertices)
+                      .arg(rep.duplicateClusters)
+                      .arg(rep.weldableVertices)
+                      .arg(rep.weightMismatchClusters)
+                : QString("Welded '%1': %2 index reference(s) remapped, %3 "
+                          "seam vertex(es) got unified skin weights. Undoable "
+                          "(Ctrl+Z).")
+                      .arg(QString::fromStdString(target->getName()))
+                      .arg(rep.weldedVertices)
+                      .arg(rep.weightsUnified));
+        QJsonObject weld;
+        weld["entity"] = QString::fromStdString(target->getName());
+        weld["dry_run"] = dryRun;
+        weld["duplicate_vertices"] = rep.duplicateVertices;
+        weld["duplicate_clusters"] = rep.duplicateClusters;
+        weld["weldable_vertices"] = rep.weldableVertices;
+        weld["weight_mismatch_clusters"] = rep.weightMismatchClusters;
+        weld["welded_references"] = rep.weldedVertices;
+        weld["weights_unified"] = rep.weightsUnified;
+        weld["skinned"] = rep.skinned;
+        result["weld"] = weld;
+        return result;
+    } catch (const std::exception &e) {
+        return makeErrorResult(QString("Error welding vertices: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
 {
     // Args (one wins, in priority order):
@@ -11109,6 +11206,29 @@ QJsonArray MCPServer::buildToolsList()
             "selected via `algo` (default `ogre`). The response includes a human-readable "
             "summary in 'content' and a structured 'decimation' object with per-submesh "
             "and total triangle counts before / after.",
+            props
+        );
+    }
+
+    // weld_vertices
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Target entity name. Omit to use the current selection (or the only mesh entity in the scene)."}};
+        props["epsilon"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Position tolerance for co-location. Omit/<=0 for auto (1e-5 x bounding-box diagonal)."}};
+        props["dry_run"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Analyze only — report duplicate/weldable counts without mutating (default false)."}};
+        appendTool(
+            "weld_vertices",
+            "Weld co-located duplicate vertices: remaps indices of byte-identical duplicates "
+            "to one representative (UV seams are preserved) and unifies skin weights across "
+            "remaining co-located seam twins so animation cannot tear the triangles apart. "
+            "The fix for generated/baked meshes whose surface visibly splits when animated. "
+            "Undoable (Ctrl+Z).",
             props
         );
     }

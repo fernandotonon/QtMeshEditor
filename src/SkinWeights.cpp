@@ -586,6 +586,11 @@ SkinWeights::JobResult SkinWeights::runJob(const ComputeJob& job,
     }
     SkinWeightsPost::pruneAndRenormalize(res.weights,
                                          opts.maxInfluencesPerVertex);
+    // Co-located (UV-seam twin) vertices must end up with IDENTICAL weights
+    // or animation tears the seam apart — smoothing runs on the adjacency
+    // graph, which does not connect duplicated seam vertices, so unify last.
+    SkinWeightsPost::unifyCoLocated(res.weights, job.positions,
+                                    /*epsilon=*/0.0f, res.locked);
 
     if (!res.info.allowedBones.empty()) {
         const double f = SkinWeightsPost::bleedFraction(res.weights,

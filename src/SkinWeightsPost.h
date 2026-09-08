@@ -58,6 +58,23 @@ public:
     // empty allowed set (no geodesic data for them).
     static double bleedFraction(const std::vector<SkinWeights::VertexWeights>& weights,
                                 const std::vector<std::vector<int>>& allowedBones);
+
+    // Unify weights across co-located vertices (same quantized position).
+    // Generated/baked meshes carry UV-seam twins: same position, different
+    // vertex records. If the skinner leaves them with (even slightly)
+    // different weights, animation pulls them apart and the surface tears
+    // along the seam. Each cluster of vertices within `epsilon` of one
+    // another gets ONE weight set — the entry-wise average of its members
+    // (renormalized) — so co-located vertices can never separate. Locked
+    // (merge-mode) vertices keep their weights and instead dominate their
+    // cluster: if a cluster contains locked members, the unlocked members
+    // copy the first locked member's weights. Returns the number of
+    // vertices whose weights changed. `positions` = xyz triples;
+    // epsilon <= 0 → auto: 1e-5 × bounding-box diagonal.
+    static int unifyCoLocated(std::vector<SkinWeights::VertexWeights>& weights,
+                              const std::vector<float>& positions,
+                              float epsilon = 0.0f,
+                              const std::vector<std::uint8_t>& locked = {});
 };
 
 #endif // SKIN_WEIGHTS_POST_H

@@ -43,9 +43,10 @@ struct MeshInfo {
 struct FixOptions {
     bool removeDegenerates = false;
     bool mergeMaterials = false;
+    bool weldVertices = false;   // post-import: MeshWeldOps::apply per entity
 
     bool anySet() const {
-        return removeDegenerates || mergeMaterials;
+        return removeDegenerates || mergeMaterials || weldVertices;
     }
 
     unsigned int toAssimpFlags() const {
