@@ -174,6 +174,10 @@ qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilatio
 qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
 qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
 qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
+qtmesh paint --list-stamps                                     # brush stamps (also --list-presets, --list-palettes; all take --json)
+qtmesh paint model.fbx --layer list --json                     # paint layers (layers are a live-session concept; bake to write pixels)
+qtmesh paint model.fbx --bake --engine unity -o out/           # alias of paint-bake --target
+qtmesh paint model.fbx --apply-stencil decal.png --camera "0,1,4,0,1,0" -o out.mesh  # project an image through an explicit camera
 
 # Auto UV unwrap (xatlas — same library Blender/Godot use)
 qtmesh uv model.fbx --unwrap -o unwrapped.glb               # overwrite UV0
@@ -255,6 +259,10 @@ qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilatio
 qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
 qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
 qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
+qtmesh paint --list-stamps                                     # brush stamps (also --list-presets, --list-palettes; all take --json)
+qtmesh paint model.fbx --layer list --json                     # paint layers (layers are a live-session concept; bake to write pixels)
+qtmesh paint model.fbx --bake --engine unity -o out/           # alias of paint-bake --target
+qtmesh paint model.fbx --apply-stencil decal.png --camera "0,1,4,0,1,0" -o out.mesh  # project an image through an explicit camera
 ```
 
 **Export.** Vertex colors are preserved on export to formats that support
