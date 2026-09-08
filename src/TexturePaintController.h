@@ -8,6 +8,7 @@
 #include "BrushFootprint.h"
 #include "GradientRamp.h"
 #include "PaintLayerStack.h"
+#include "PaintBakeTargets.h"
 #include "PaintChannel.h"
 #include "SymmetryMirrorMap.h"
 #include "ProjectionPainter.h"
@@ -498,6 +499,37 @@ public:
     /// Sobel) and re-wire the material for IBL. Returns false if the channel
     /// has no painted session. Exposed for the "Bake channel" button + tests.
     Q_INVOKABLE bool bakeChannel(int channel);
+
+    // --- Slice I (#552): bake-up to engine deliverables ------------------
+    /// Engine target ids for the bake dialog ("generic"/"unity"/...).
+    Q_INVOKABLE QStringList bakeTargetIds() const;
+    /// Human-readable label for a target id.
+    Q_INVOKABLE QString bakeTargetLabel(const QString& targetId) const;
+    /// Channel ids that currently hold painted data, so the dialog can show
+    /// what a bake would actually write.
+    Q_INVOKABLE QStringList paintedChannelIds() const;
+    /// Bake every painted channel to `outputDir` for `targetId`.
+    ///
+    /// `resolution` 0 keeps each channel's own size. `includeHidden` forces
+    /// hidden layers into the composite (see the snapshot/restore note in the
+    /// implementation). Returns "" on success, else an error message — matching
+    /// MaterialEditorQML's packTextureChannels convention.
+    Q_INVOKABLE QString bakePbrSet(const QString& targetId,
+                                   const QString& outputDir,
+                                   int resolution = 0,
+                                   const QString& namePrefix = QString(),
+                                   bool includeHidden = false,
+                                   bool writeSidecar = true);
+    /// Native directory picker for the bake dialog.
+    Q_INVOKABLE QString chooseBakeOutputDir();
+    /// Small base64 preview of one baked output, for the dialog thumbnail.
+    /// `index` is into the target's output list.
+    Q_INVOKABLE QString bakePreviewUrl(const QString& targetId, int index,
+                                       int previewSize = 128);
+    /// Rasterise the active channel's VERTEX-colour data into a new texture
+    /// LAYER (UV space, seam-dilated). Returns "" on success, else an error.
+    Q_INVOKABLE QString bakeVertexLayerToTextureLayer(int resolution = 0,
+                                                      int dilation = 4);
     /// @}
 
     /// Preview data URI (PNG, base64) regenerated on every dirty flush.
@@ -1008,6 +1040,14 @@ private:
     /// onto this base so the model's existing normal survives where unpainted.
     QString m_channelBaseTextureName;
     /// Stash the live session into m_channelSessions[channel].
+    // --- Slice I (#552) helpers ------------------------------------------
+    /// Layer stack for a channel, honouring the live-vs-stashed split.
+    const PaintLayerStack* stackForChannel(PaintChannelNS::Channel ch) const;
+    /// Composite one channel for a bake, optionally forcing hidden layers in.
+    QImage compositeChannelForBake(PaintChannelNS::Channel ch, bool includeHidden);
+    /// Every painted channel, as bake input.
+    PaintBakeTargets::ChannelImages gatherBakeChannels(bool includeHidden);
+
     void stashChannelSession(PaintChannelNS::Channel channel);
     /// Restore m_channelSessions[channel] into the live session (or mark it
     /// uninitialized so ensurePaintableTexture builds it fresh). Returns true

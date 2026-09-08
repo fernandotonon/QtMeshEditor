@@ -154,6 +154,7 @@ __pycache__/
 /multiview_bake_*i.png
 !docs/SKINNING_QUALITY.md
 !docs/PAINT_V2_SLICE_H_DESIGN.md
+!docs/PAINT_V2_SLICE_I_DESIGN.md
 !docs/img
 !docs/img/twist_bar_rest_lbs.png
 !docs/img/twist_bar_90_lbs.png
