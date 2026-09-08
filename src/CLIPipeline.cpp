@@ -2130,13 +2130,22 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 
     // Weld co-located vertices (index remap of byte-identical duplicates +
     // unified skin weights across seam twins — the animation-tearing fix).
-    int weldedRefs = 0, weightsUnified = 0;
+    int weldedRefs = 0, weightsUnified = 0, weldFailures = 0;
     if (opts.weldVertices) {
         for (Ogre::Entity* entity : entities) {
             const MeshWeldOps::Report r = MeshWeldOps::apply(entity);
             if (r.ok) {
                 weldedRefs += r.weldedVertices;
                 weightsUnified += r.weightsUnified;
+            } else {
+                // Never let a failure read as "nothing needed welding" — the
+                // MCP tool surfaces rep.error, so the CLI must too.
+                ++weldFailures;
+                err() << "Warning: weld skipped for '"
+                      << QString::fromStdString(entity->getName()) << "': "
+                      << (r.error.isEmpty() ? QStringLiteral("unknown error")
+                                            : r.error)
+                      << Qt::endl;
             }
         }
     }
@@ -2169,10 +2178,14 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
         if (opts.mergeMaterials) extras << "merge-materials";
         if (opts.weldVertices) extras << "weld-vertices";
         report += QString("  Extra: %1\n").arg(extras.join(", "));
-        if (opts.weldVertices)
+        if (opts.weldVertices) {
             report += QString("  Weld: %1 index reference(s) remapped, "
                               "%2 seam vertex weight(s) unified\n")
                           .arg(weldedRefs).arg(weightsUnified);
+            if (weldFailures > 0)
+                report += QString("        (%1 mesh(es) could not be welded — "
+                                  "see warnings above)\n").arg(weldFailures);
+        }
     }
 
     if (vertsBefore > 0) {
