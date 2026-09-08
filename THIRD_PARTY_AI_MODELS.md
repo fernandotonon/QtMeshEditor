@@ -443,3 +443,15 @@ distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
 unlicensed weights — in favour of UniRig; ShapeNet-Part/PartNet were rejected
 for #410 — non-commercial — in favour of synthetic bone-weight-derived labels).
+
+## Prompt-to-3D image generation (FLUX.2-klein-4B)
+
+- **FLUX.2-klein-4B** (Black Forest Labs) — text-to-image model used to
+  GENERATE the source image for image-to-3D from a prompt. **Apache-2.0
+  weights** (the open klein release; unlike FLUX.2-dev, which is
+  non-commercial and NOT used). Downloaded on demand from the official/
+  community conversions: diffusion GGUF (leejet/FLUX.2-klein-4B-GGUF, Q4_0),
+  VAE (Comfy-Org flux2-klein split files), text encoder **Qwen3-4B**
+  (Apache-2.0, unsloth GGUF Q4_K_M). ~5.2 GB total, installed under
+  `ai_models/flux2_klein/`; runs on the same stable-diffusion.cpp backend as
+  texture generation (4-step distilled flow: cfg 1.0, euler).

@@ -34,6 +34,9 @@ class MeshGenController : public QObject
     // The currently-selected source image (empty until the user picks one). The
     // panel's "Generate" button binds its enabled state to this being non-empty.
     Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
+    // The same path as a proper file URL (QUrl::fromLocalFile) for QML Image
+    // sources — hand-building "file:///" strings breaks on Windows paths.
+    Q_PROPERTY(QString selectedImageUrl READ selectedImageUrl NOTIFY selectedImageChanged)
     // A small preview thumbnail of the selected image as a data:image/png;base64
     // URL the QML Image element can show directly (same idiom as the texture
     // packer previews). Empty when no image is selected.
@@ -54,6 +57,7 @@ public:
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
     QString selectedImagePath() const { return m_selectedImage; }
+    QString selectedImageUrl() const;
     QString previewSource() const { return m_previewSource; }
     QString caption() const { return m_caption; }
     bool captioning() const { return m_captioning; }
@@ -102,6 +106,21 @@ public:
     Q_INVOKABLE bool trellis2Available() const;
     Q_INVOKABLE QString trellis2RuntimeHint() const;
 
+    // ── Prompt-to-3D: generate the source image from a TEXT PROMPT instead
+    // of importing one (FLUX.2-klein-4B via stable-diffusion.cpp; falls back
+    // to whatever SD checkpoint the user has). generateSourceImage is async —
+    // it loads the model if needed, generates a 1024² image, then selects it
+    // exactly as selectImage() would (preview + caption + Generate enabled).
+    // Progress/result arrive via imageGenStatus.
+    Q_INVOKABLE bool imageGenAvailable() const;
+    Q_INVOKABLE QString imageGenModelName() const;
+    /// When an image is already selected, generateSourceImage EDITS it
+    /// (FLUX.2 kontext-style — the prompt describes the change); with no
+    /// image it generates from scratch. clearSelectedImage removes the
+    /// selection (the preview's 🗑 button) so the next prompt starts fresh.
+    Q_INVOKABLE void generateSourceImage(const QString& prompt);
+    Q_INVOKABLE void clearSelectedImage();
+
     Q_INVOKABLE bool modelsPresent(int quality = 0) const;
     // Download the decoder + the given tier's encoder (blocks on the caller's
     // event loop, driven by ModelDownloader → its progress bar updates in the
@@ -119,9 +138,22 @@ signals:
     void error(const QString& message);
     void modelDownloadFinished(bool ok);  // pre-download from AI Settings
     void captionChanged();                 // caption / captioning state updated
+    void imageGenStatus(const QString& message, bool isError);  // prompt-to-3D
+    void imageGenProgress(int step, int total);                 // sampling ticks
+
+private slots:
+    // Prompt-to-3D chain (SDManager signal handlers; gated on m_imageGenActive
+    // so an unrelated texture generation never hijacks the selection).
+    void onImageGenModelLoaded();
+    void onImageGenCompleted(const QString& outputPath);
+    void onImageGenError(const QString& message);
 
 private:
     explicit MeshGenController(QObject* parent = nullptr);
+
+    // Store `path` as the selected source image: preview thumbnail, breadcrumb,
+    // signals, background caption. Shared by selectImage() and the prompt path.
+    void applySelectedImage(const QString& path);
 
     // Kick off SmolVLM captioning of `path` on a detached worker thread; the
     // result is marshalled back to the main thread (setCaptionResult).
@@ -134,6 +166,12 @@ private:
     void setBusy(bool b);
 
     bool m_busy = false;
+    bool m_imageGenActive = false;   // prompt-to-3D image generation in flight
+    QString m_imageGenPrompt;        // the (suffixed) prompt being generated
+    QString m_imageGenFileName;      // expected output file (signal correlation)
+    QString m_imageGenRef;           // edit mode: image being edited (else empty)
+    bool m_imageGenWired = false;    // SDManager signal wiring done once
+    int m_imageGenSize = 1024;       // 1024 for FLUX.2, 512 for SD checkpoints
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path
     QString m_previewSource;    // data:image/png;base64 thumbnail of it

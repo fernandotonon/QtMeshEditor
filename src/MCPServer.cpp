@@ -29,6 +29,7 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
+#include "AppStorage.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -2747,9 +2748,35 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // NOT blanket-gated on ENABLE_ONNX: the TRELLIS.2 backend runs through an
     // external runtime (trellis.cpp / Python sidecar) and works in ONNX-off
     // builds — only the local TripoSR/TripoSG paths require the ONNX build.
-    const QString imagePath = args.value("image_path").toString();
-    if (imagePath.trimmed().isEmpty())
-        return makeErrorResult("'image_path' is required.");
+    QString imagePath = args.value("image_path").toString();
+    const QString genPrompt = args.value("prompt").toString().trimmed();
+    if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
+        return makeErrorResult("'image_path' or 'prompt' is required.");
+    if (!genPrompt.isEmpty()) {
+        // Prompt-to-3D: generate the source image first (FLUX.2-klein via
+        // stable-diffusion.cpp — same synchronous path as the CLI --prompt).
+        // With BOTH image_path and prompt, the image is EDITED by the prompt
+        // (FLUX.2 reference conditioning) and the edit becomes the input.
+        QString refImage;
+        if (!imagePath.trimmed().isEmpty()) {
+            if (!QFileInfo::exists(imagePath))
+                return makeErrorResult(
+                    QStringLiteral("image not found: %1").arg(imagePath));
+            refImage = imagePath;
+        }
+        const QString srcPng = QDir(QDir(AppStorage::persistentRoot())
+                .filePath(QStringLiteral("generated_sources")))
+            .filePath(QStringLiteral("mcp_prompt_%1.png")
+                          .arg(QDateTime::currentMSecsSinceEpoch()));
+        QDir().mkpath(QFileInfo(srcPng).absolutePath());
+        const int rc = CLIPipeline::generateSourceImageFromPrompt(
+            genPrompt, args.value("image_model").toString(), srcPng, refImage);
+        if (rc != 0)
+            return makeErrorResult(
+                "Image generation from prompt failed — download FLUX.2-klein-4B "
+                "in AI Model Settings (or install an SD checkpoint).");
+        imagePath = srcPng;
+    }
     if (!QFileInfo::exists(imagePath))
         return makeErrorResult(QStringLiteral("image not found: %1").arg(imagePath));
 
@@ -9993,7 +10020,9 @@ QJsonArray MCPServer::buildToolsList()
     // handler gates the local TripoSR/TripoSG paths on ENABLE_ONNX itself).
     {
         QJsonObject props;
-        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required unless 'prompt' is given."}};
+        props["prompt"] = QJsonObject{{"type", "string"}, {"description", "Prompt-to-3D: generate the source image from this text (FLUX.2-klein-4B via stable-diffusion.cpp — download it in AI Model Settings; needs a stable-diffusion build). Combined WITH image_path, the prompt EDITS that image (FLUX.2 reference conditioning) and the edit becomes the input."}};
+        props["image_model"] = QJsonObject{{"type", "string"}, {"description", "With 'prompt': override the image-generation model (an SD checkpoint name from the sd_models directory; default: FLUX.2-klein-4B when downloaded, else the last-used SD model)."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
         props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. (TripoSR's encoder input is fixed at 512^2, so its detail gains taper off above 512; TripoSG uses a 224^2 DINOv2 encoder and this is purely the extraction grid.)"}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake its predicted per-vertex color (default true). Ignored by triposg (geometry-only — colour comes from the AI texture pass)."}};
@@ -10022,9 +10051,9 @@ QJsonArray MCPServer::buildToolsList()
             "saved meshPath (+ sourcePath for the preserved trellis2 full-res "
             "generation); otherwise the mesh is loaded into the scene. Models "
             "download on first use; a missing runtime/model returns a clear error "
-            "(no crash).",
-            props,
-            QJsonArray{"image_path"}
+            "(no crash). image_path alone reconstructs it; prompt alone "
+            "generates the image first; BOTH edits the image with the prompt.",
+            props
         );
     }
 

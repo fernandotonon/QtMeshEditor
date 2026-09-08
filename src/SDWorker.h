@@ -41,13 +41,41 @@ public:
     explicit SDWorker(QObject *parent = nullptr);
     ~SDWorker();
 
+    /// FLUX.2-klein component set (prompt-to-3D image generation): sd.cpp
+    /// loads it from THREE files — the diffusion GGUF, the flux2 VAE, and
+    /// the Qwen3 text encoder — instead of one checkpoint. `detectFlux2Set`
+    /// scans a directory for them by name (diffusion: "flux"* .gguf/.safetensors
+    /// that isn't the VAE; VAE: name containing "vae" or starting "ae.";
+    /// text encoder: name containing "qwen" or "mistral"). Pure — compiled
+    /// (and unit-tested) in every build.
+    struct Flux2Set {
+        QString diffusion;
+        QString vae;
+        QString llm;
+        bool valid() const {
+            return !diffusion.isEmpty() && !vae.isEmpty() && !llm.isEmpty();
+        }
+    };
+    static Flux2Set detectFlux2Set(const QString &dir);
+
+    /// Accepts either a single checkpoint FILE (the historical behavior) or
+    /// a DIRECTORY holding a FLUX.2 component set (detectFlux2Set).
     bool loadModel(const QString &modelPath);
+    bool isFlux2Loaded() const { return m_isFlux2; }
     void unloadModel();
     bool isModelLoaded() const;
     QString getLoadedModelPath() const { return m_modelPath; }
 
     void setSettings(const SDSettings &settings);
     SDSettings getSettings() const { return m_settings; }
+
+    /// FLUX.2 image EDITING (kontext-style): the next generation call uses
+    /// `image` as a reference image, so the prompt describes a CHANGE to it
+    /// ("give him golden armor") instead of a scene from scratch. Consumed by
+    /// (and cleared after) the next generateTexture*/generateImage run; only
+    /// honoured when a FLUX.2 set is loaded (SD-class checkpoints have no
+    /// reference conditioning here).
+    void setRefImage(const QImage &image);
 
     void requestStop();
     bool isGenerating() const { return m_isGenerating.load(); }
@@ -76,6 +104,9 @@ signals:
 
 private:
     QString m_modelPath;
+    Flux2Set m_flux2;          ///< resolved component set when m_isFlux2
+    bool m_isFlux2 = false;    ///< model loaded as a FLUX.2 component set
+    QImage m_refImage;         ///< one-shot reference image (setRefImage)
     SDSettings m_settings;
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_isGenerating{false};

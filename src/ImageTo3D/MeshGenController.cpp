@@ -12,6 +12,8 @@
 #include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
 #include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
 #include "ImageCaptioner.h"     // background SmolVLM caption of the picked image
+#include "SDManager.h"          // prompt-to-3D: text → source image (FLUX.2)
+#include "SDWorker.h"           // Flux2Set detection
 
 #include <OgreSceneNode.h>
 
@@ -26,6 +28,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
+#include <QUrl>
 
 #include <thread>
 #include "AppStorage.h"
@@ -155,7 +158,11 @@ void MeshGenController::selectImage()
         tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
+    applySelectedImage(path);
+}
 
+void MeshGenController::applySelectedImage(const QString& path)
+{
     m_selectedImage = path;
 
     // Build a small preview thumbnail as a data:image/png;base64 URL (same idiom
@@ -182,6 +189,189 @@ void MeshGenController::selectImage()
     // blocking the UI to caption. Shown under the thumbnail as it lands.
     m_caption.clear();
     startCaptioning(path);
+}
+
+QString MeshGenController::selectedImageUrl() const
+{
+    return m_selectedImage.isEmpty()
+        ? QString()
+        : QUrl::fromLocalFile(m_selectedImage).toString();
+}
+
+void MeshGenController::clearSelectedImage()
+{
+    if (m_busy || m_imageGenActive) return;
+    m_selectedImage.clear();
+    m_previewSource.clear();
+    m_caption.clear();
+    m_captioning = false;
+    // Drop any in-flight caption for the cleared image — its late result
+    // must not repopulate the caption of a selection that no longer exists.
+    m_captionForPath.clear();
+    emit selectedImageChanged();
+    emit captionChanged();
+    emit statusMessage(tr("Image cleared."));
+}
+
+// ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
+// stable-diffusion.cpp) instead of importing one ─────────────────────────────
+
+bool MeshGenController::imageGenAvailable() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sd = SDManager::instance();
+    if (!sd) return false;
+    return SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid()
+           || sd->isModelLoaded()
+           || !sd->availableModels().isEmpty();
+#else
+    return false;
+#endif
+}
+
+QString MeshGenController::imageGenModelName() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
+        return SDManager::flux2KleinModelName();
+    SDManager* sd = SDManager::instance();
+    if (sd && sd->isModelLoaded())
+        return sd->currentModelName();
+    if (sd && !sd->availableModels().isEmpty())
+        return sd->availableModels().first();
+#endif
+    return {};
+}
+
+void MeshGenController::generateSourceImage(const QString& prompt)
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (m_busy || m_imageGenActive) {
+        // The QML button flips its local busy flag BEFORE calling in — a
+        // silent return would leave it stuck. Report the rejection.
+        emit imageGenStatus(
+            tr("Busy — wait for the current generation to finish."), true);
+        return;
+    }
+    const QString trimmed = prompt.trimmed();
+    if (trimmed.isEmpty()) {
+        emit imageGenStatus(tr("Enter a prompt first."), true);
+        return;
+    }
+    SDManager* sd = SDManager::instance();
+    const QString model = imageGenModelName();
+    if (!sd || model.isEmpty()) {
+        emit imageGenStatus(
+            tr("No image model — download FLUX.2-klein-4B in AI Model "
+               "Settings (or install a Stable Diffusion model)."), true);
+        return;
+    }
+
+    // EDIT mode: an image is already selected → the prompt describes a
+    // CHANGE to it (FLUX.2 kontext-style reference editing). Only klein can
+    // do that; on an SD checkpoint tell the user instead of silently
+    // generating something unrelated.
+    m_imageGenRef.clear();
+    if (!m_selectedImage.isEmpty()) {
+        if (model != SDManager::flux2KleinModelName()) {
+            emit imageGenStatus(
+                tr("Editing the loaded image needs FLUX.2-klein-4B (AI Model "
+                   "Settings) — or remove the image (🗑) to generate from "
+                   "scratch."), true);
+            return;
+        }
+        m_imageGenRef = m_selectedImage;
+    }
+
+    // Fresh generation: steer toward what the 3D reconstruction wants — one
+    // isolated subject on a plain backdrop. Edits keep the reference image's
+    // composition, so no suffix there.
+    m_imageGenPrompt = m_imageGenRef.isEmpty()
+        ? trimmed + QStringLiteral(", single subject, full body, centered, "
+                                   "plain light gray background")
+        : trimmed;
+    // Explicit output name: SDManager's generationCompleted is GLOBAL, so a
+    // texture generation finishing while we wait must not be mistaken for our
+    // image — onImageGenCompleted correlates on this exact filename.
+    m_imageGenFileName = QStringLiteral("prompt3d_%1.png")
+        .arg(QDateTime::currentMSecsSinceEpoch());
+    m_imageGenActive = true;
+
+    // One-time signal wiring. NB: Qt::UniqueConnection only works with
+    // member-function-pointer connections — on a LAMBDA it silently fails to
+    // connect at all (which is how the progress bar stayed "indeterminate"
+    // forever: the forwarder below never fired). Guard with a flag instead.
+    if (!m_imageGenWired) {
+        m_imageGenWired = true;
+        connect(sd, &SDManager::modelLoadCompleted, this,
+                &MeshGenController::onImageGenModelLoaded);
+        connect(sd, &SDManager::modelLoadError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationCompleted, this,
+                &MeshGenController::onImageGenCompleted);
+        connect(sd, &SDManager::generationError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+            if (!m_imageGenActive) return;
+            emit imageGenProgress(sd->generationStep(),
+                                  sd->generationTotalSteps());
+        });
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QStringLiteral("prompt-to-3d image gen (%1)").arg(model));
+
+    const bool loadedIsTarget =
+        sd->isModelLoaded() && sd->currentModelName() == model;
+    m_imageGenSize =
+        (model == SDManager::flux2KleinModelName()) ? 1024 : 512;
+    if (loadedIsTarget) {
+        emit imageGenStatus(m_imageGenRef.isEmpty()
+                                ? tr("Generating image…")
+                                : tr("Editing the loaded image…"), false);
+        sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize,
+                          m_imageGenFileName, m_imageGenRef);
+    } else {
+        emit imageGenStatus(tr("Loading %1…").arg(model), false);
+        sd->loadModel(model);   // continues in onImageGenModelLoaded
+    }
+#else
+    Q_UNUSED(prompt);
+    emit imageGenStatus(
+        tr("This build has no Stable Diffusion support."), true);
+#endif
+}
+
+void MeshGenController::onImageGenModelLoaded()
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (!m_imageGenActive) return;
+    emit imageGenStatus(m_imageGenRef.isEmpty()
+                            ? tr("Generating image…")
+                            : tr("Editing the loaded image…"), false);
+    SDManager::instance()->generateImage(m_imageGenPrompt,
+                                         m_imageGenSize, m_imageGenSize,
+                                         m_imageGenFileName, m_imageGenRef);
+#endif
+}
+
+void MeshGenController::onImageGenCompleted(const QString& outputPath)
+{
+    if (!m_imageGenActive) return;   // someone else's SD generation
+    // Correlate: only OUR file ends the run (a texture generation finishing
+    // in parallel emits the same global signal with a different path).
+    if (QFileInfo(outputPath).fileName() != m_imageGenFileName) return;
+    m_imageGenActive = false;
+    applySelectedImage(outputPath);
+    emit imageGenStatus(
+        tr("Image ready — press Generate to build the 3D model."), false);
+}
+
+void MeshGenController::onImageGenError(const QString& message)
+{
+    if (!m_imageGenActive) return;
+    m_imageGenActive = false;
+    emit imageGenStatus(message, true);
 }
 
 void MeshGenController::startCaptioning(const QString& path)

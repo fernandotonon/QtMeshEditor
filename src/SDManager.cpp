@@ -234,6 +234,17 @@ void SDManager::tryAutoLoadModel()
         return;
     }
 
+    // Cold-start convenience ONLY: if a load is already in flight or done,
+    // never stomp it. This fired 1s after construction and queued the
+    // last-used checkpoint BEHIND an explicit loadModel() call on the worker
+    // — the prompt-to-3D CLI asked for FLUX.2-klein, the auto-load silently
+    // replaced it with SD 1.5, and the 1024² generation came out as mush.
+    if (m_isLoading || isModelLoaded()) {
+        qDebug() << "SDManager: Auto-load skipped (a model is already"
+                    " loading/loaded)";
+        return;
+    }
+
     if (!modelFileExists(m_lastModelName)) {
         qDebug() << "SDManager: Auto-load model not found:" << m_lastModelName;
         return;
@@ -370,6 +381,12 @@ void SDManager::scanForModels()
         m_availableModels.append(file.completeBaseName());
     }
 
+    // Prompt-to-3D image generation: the FLUX.2-klein-4B component set
+    // (downloaded via AI Model Settings into ai_models/flux2_klein/) is a
+    // DIRECTORY-shaped model — list it when the full set is present.
+    if (SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
+        m_availableModels.append(flux2KleinModelName());
+
     // Update recommended models download status
     for (int i = 0; i < m_recommendedModels.size(); ++i) {
         QString filePath = modelsDir.filePath(m_recommendedModels[i].fileName);
@@ -442,6 +459,58 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
     QMetaObject::invokeMethod(m_worker, [this, enhancedPrompt, outputPath, genSettings]() {
         m_worker->setSettings(genSettings);
         m_worker->generateTexture(enhancedPrompt, outputPath);
+    }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
+void SDManager::generateImage(const QString &prompt, int width, int height,
+                              const QString &outputFileName,
+                              const QString &refImagePath)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No SD model loaded. Please load a model first.");
+        return;
+    }
+
+    GamificationManager::noteFeature(QStringLiteral("stable_diffusion"));
+
+    // LCOV_EXCL_START — requires a loaded SD model
+    // Unlike generateTexture, the prompt goes through UNTOUCHED: this path
+    // generates a SUBJECT image (prompt-to-3D source), and the seamless-
+    // texture enhancement would fight it.
+    if (width > 0)  m_settings.width = width;
+    if (height > 0) m_settings.height = height;
+
+    QDir outputDir(QDir(AppStorage::persistentRoot()).filePath(
+        QStringLiteral("generated_sources")));
+    if (!outputDir.exists()) outputDir.mkpath(QStringLiteral("."));
+    QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
+    if (fileName.isEmpty())
+        fileName = QStringLiteral("prompt_%1.png")
+                       .arg(QDateTime::currentMSecsSinceEpoch());
+    if (!fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive))
+        fileName += QLatin1String(".png");
+    const QString outputPath = outputDir.filePath(fileName);
+
+    // FLUX.2 edit mode: load the reference image on this thread (cheap) and
+    // hand it to the worker for the next generation.
+    QImage refImage;
+    if (!refImagePath.isEmpty()) {
+        refImage.load(refImagePath);
+        if (refImage.isNull()) {
+            emit generationError(
+                QStringLiteral("Cannot read the image to edit: %1")
+                    .arg(refImagePath));
+            return;
+        }
+    }
+
+    SDSettings genSettings = m_settings;
+    QMetaObject::invokeMethod(m_worker,
+                              [this, prompt, outputPath, genSettings, refImage]() {
+        m_worker->setSettings(genSettings);
+        m_worker->setRefImage(refImage);
+        m_worker->generateTexture(prompt, outputPath);
     }, Qt::QueuedConnection);
     // LCOV_EXCL_STOP
 }
@@ -553,8 +622,27 @@ void SDManager::loadSettings()
     settings.endGroup();
 }
 
+QString SDManager::flux2KleinDirectory()
+{
+    // The AI Model Settings catalog installs the FLUX.2-klein-4B component
+    // set here (ai_models/flux2_klein/ — NOT sd_models, which holds
+    // single-file checkpoints).
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("flux2_klein"));
+}
+
+QString SDManager::flux2KleinModelName()
+{
+    return QStringLiteral("FLUX.2-klein-4B");
+}
+
 QString SDManager::getModelFilePath(const QString &modelName) const
 {
+    // The FLUX.2 set is a directory-shaped model (SDWorker loads the
+    // components from it).
+    if (modelName == flux2KleinModelName()
+        && SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
+        return flux2KleinDirectory();
+
     QDir modelsDir(m_modelsDirectory);
 
     // Check if it's a full filename with extension

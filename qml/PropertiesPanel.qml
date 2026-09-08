@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Layouts
 import PropertiesPanel 1.0
@@ -1876,7 +1877,153 @@ Rectangle {
                 onClicked: MeshGenController.selectImage()
             }
 
+            // — or generate the source image from a TEXT PROMPT (FLUX.2-klein
+            // via stable-diffusion.cpp). Shown when the build has SD support
+            // and a usable image model exists (or can be pointed at).
+            Text {
+                text: MeshGenController.selectedImagePath.length > 0
+                    ? "— or EDIT the loaded image with a prompt (FLUX.2):"
+                    : "— or generate the image from text:"
+                color: PropertiesPanelController.textColor
+                opacity: 0.7; font.pixelSize: 10
+            }
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                Rectangle {
+                    width: parent.width - imgGenBtn.width - 6; height: 24; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: imgGenPromptIn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    TextInput {
+                        id: imgGenPromptIn
+                        anchors.fill: parent
+                        anchors.leftMargin: 6; anchors.rightMargin: 6
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        clip: true; selectByMouse: true; activeFocusOnPress: true
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onPressed: function(mouse) {
+                                // WIDGET-level focus first: after the app window
+                                // deactivates, the QQuickWidget still thinks this
+                                // item has activeFocus, so forceActiveFocus alone
+                                // is a no-op while keys go to the viewport.
+                                PropertiesPanelController.focusPanel()
+                                imgGenPromptIn.forceActiveFocus()
+                                mouse.accepted = false
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
+                            text: MeshGenController.selectedImagePath.length > 0
+                                ? "e.g. give him golden armor"
+                                : "e.g. a goblin warrior in bronze armor"
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.4; font.pixelSize: 11
+                        }
+                        onAccepted: imgGenBtn.run()
+                    }
+                }
+                Rectangle {
+                    id: imgGenBtn
+                    width: 88; height: 24; radius: 3
+                    property bool genBusy: false
+                    opacity: genBusy ? 0.5 : 1.0
+                    color: imgGenMa.pressed
+                        ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                        : imgGenMa.containsMouse
+                            ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                            : PropertiesPanelController.highlightColor
+                    function run() {
+                        if (genBusy || !imgGenPromptIn.text.trim()) return
+                        if (!MeshGenController.imageGenAvailable()) {
+                            imgGenStatusTxt.isError = true
+                            imgGenStatusTxt.text =
+                                "Download FLUX.2-klein-4B in AI Model Settings first."
+                            return
+                        }
+                        genBusy = true
+                        MeshGenController.generateSourceImage(imgGenPromptIn.text)
+                    }
+                    Text { anchors.centerIn: parent
+                           text: imgGenBtn.genBusy ? "…" : "Create Image"
+                           color: "white"; font.pixelSize: 10 }
+                    MouseArea { id: imgGenMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: imgGenBtn.run() }
+                }
+            }
+            Text {
+                id: imgGenStatusTxt
+                width: parent.width - 16
+                visible: text.length > 0
+                property bool isError: false
+                color: isError ? "#e08080" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                text: ""
+            }
+            // Progress while the image generates: determinate once sampling
+            // ticks arrive, indeterminate sweep during the (long) model load.
+            Rectangle {
+                id: imgGenProgress
+                width: parent.width - 16; height: 6; radius: 3
+                visible: imgGenBtn.genBusy
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                property int step: 0
+                property int total: 0
+                onVisibleChanged: if (visible) { step = 0; total = 0 }
+                // Determinate fill
+                Rectangle {
+                    visible: imgGenProgress.total > 0
+                    x: 1; y: 1; height: parent.height - 2; radius: 2
+                    width: imgGenProgress.total > 0
+                        ? Math.max(4, (parent.width - 2)
+                                       * imgGenProgress.step / imgGenProgress.total)
+                        : 0
+                    color: PropertiesPanelController.highlightColor
+                }
+                // Indeterminate sweep (model loading — no ticks yet)
+                Rectangle {
+                    id: imgGenSweep
+                    visible: imgGenProgress.total === 0 && imgGenProgress.visible
+                    y: 1; height: parent.height - 2; width: parent.width / 4
+                    radius: 2
+                    color: PropertiesPanelController.highlightColor
+                    opacity: 0.7
+                    SequentialAnimation on x {
+                        running: imgGenSweep.visible
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1; to: imgGenProgress.width * 3 / 4 - 1
+                                          duration: 900; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: imgGenProgress.width * 3 / 4 - 1; to: 1
+                                          duration: 900; easing.type: Easing.InOutQuad }
+                    }
+                }
+            }
+            Connections {
+                target: MeshGenController
+                function onImageGenStatus(message, isError) {
+                    imgGenStatusTxt.isError = isError
+                    imgGenStatusTxt.text = message
+                    // Busy only while a load/generate is still pending: any
+                    // error, and the final "Image ready" line, end the run.
+                    imgGenBtn.genBusy = !isError
+                        && message.indexOf("ready") < 0
+                }
+                function onImageGenProgress(step, total) {
+                    imgGenProgress.step = step
+                    imgGenProgress.total = total
+                }
+            }
+
             // Preview of the selected image (shown once one is chosen).
+            // Click to open the full-size image in a viewer window.
             Rectangle {
                 width: parent.width - 16
                 height: visible ? 140 : 0
@@ -1893,6 +2040,75 @@ Rectangle {
                     smooth: true
                     cache: false
                 }
+                Text {
+                    anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.margins: 4
+                    text: "🔍"
+                    font.pixelSize: 12
+                    opacity: prevMa.containsMouse ? 1.0 : 0.5
+                }
+                MouseArea {
+                    id: prevMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: imageViewerWindow.open()
+                }
+                // Remove the image (back to generate-from-scratch).
+                Rectangle {
+                    anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 4
+                    width: 22; height: 22; radius: 3
+                    color: trashMa.containsMouse
+                        ? Qt.darker(PropertiesPanelController.headerColor, 1.1)
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    opacity: trashMa.containsMouse ? 1.0 : 0.7
+                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: trashMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: MeshGenController.clearSelectedImage()
+                    }
+                }
+            }
+            // Full-size viewer for the selected/generated source image.
+            Window {
+                id: imageViewerWindow
+                title: "Source Image"
+                flags: Qt.Dialog
+                color: PropertiesPanelController.panelColor
+                width: Math.min(1024, Screen.desktopAvailableWidth - 120)
+                height: Math.min(1024, Screen.desktopAvailableHeight - 120)
+                function open() {
+                    fullImage.source = ""   // force reload (same path, new pixels)
+                    fullImage.source = MeshGenController.selectedImageUrl
+                    show(); raise(); requestActivate()
+                }
+                Image {
+                    id: fullImage
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: false
+                }
+                Text {
+                    anchors.bottom: parent.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.margins: 4
+                    text: MeshGenController.selectedImagePath
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.6; font.pixelSize: 10
+                    elide: Text.ElideMiddle
+                    width: parent.width - 16
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                // Esc / click closes
+                Shortcut { sequence: "Esc"; onActivated: imageViewerWindow.close() }
+                MouseArea { anchors.fill: parent; onDoubleClicked: imageViewerWindow.close() }
             }
 
             // Auto-generated caption of the selected image (SmolVLM), computed
@@ -10672,6 +10888,8 @@ Rectangle {
                             anchors.fill: parent
                             cursorShape: Qt.IBeamCursor
                             onPressed: function(mouse) {
+                                // Widget-level focus first (see imgGenPromptIn).
+                                PropertiesPanelController.focusPanel()
                                 genPromptIn.forceActiveFocus()
                                 mouse.accepted = false
                             }

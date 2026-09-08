@@ -73,6 +73,7 @@
 #include "QtMeshCloudClient.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
+#include "SDWorker.h"
 #include "MeshDepthRenderer.h"
 #endif
 // #406: the LLM "describe material" path is always compiled (LLMManager itself
@@ -10505,6 +10506,122 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
+                                               const QString& modelOverride,
+                                               const QString& outPng,
+                                               const QString& refImagePath)
+{
+#ifndef ENABLE_STABLE_DIFFUSION
+    Q_UNUSED(prompt); Q_UNUSED(modelOverride); Q_UNUSED(outPng);
+    Q_UNUSED(refImagePath);
+    err() << "Error: --prompt needs a stable-diffusion build "
+             "(rebuild with -DENABLE_STABLE_DIFFUSION=ON)." << Qt::endl;
+    return 1;
+#else
+    SDManager* sd = SDManager::instance();
+    if (!sd) {
+        err() << "Error: image generation unavailable." << Qt::endl;
+        return 1;
+    }
+    sd->scanForModels();
+    // Model resolution: explicit override → the FLUX.2-klein set (the
+    // recommended prompt-to-3D model, downloadable in AI Model Settings) →
+    // last-used / first available SD checkpoint.
+    QString chosenModel = modelOverride;
+    if (chosenModel.isEmpty()
+        && SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
+        chosenModel = SDManager::flux2KleinModelName();
+    // The remembered model may have been deleted since — verify before
+    // trusting it, or valid entries found by scanForModels never get a turn.
+    if (chosenModel.isEmpty() && !sd->lastModelName().isEmpty()
+        && sd->modelFileExists(sd->lastModelName()))
+        chosenModel = sd->lastModelName();
+    if (chosenModel.isEmpty()) {
+        const QStringList avail = sd->availableModels();
+        if (!avail.isEmpty()) chosenModel = avail.first();
+    }
+    if (chosenModel.isEmpty() || !sd->modelFileExists(chosenModel)) {
+        err() << "Error: no image model found. Download FLUX.2-klein-4B in AI "
+                 "Model Settings, or place an SD checkpoint in "
+              << sd->modelsDirectory() << " (or pass --image-model)." << Qt::endl;
+        return 1;
+    }
+
+    // Edit mode (image + prompt) needs FLUX.2's reference conditioning —
+    // check BEFORE the (multi-GB, minutes-long) model load, not after.
+    if (!refImagePath.isEmpty()
+        && chosenModel != SDManager::flux2KleinModelName()) {
+        err() << "Error: editing an image with a prompt needs FLUX.2-klein-4B "
+                 "(download it in AI Model Settings)." << Qt::endl;
+        return 1;
+    }
+
+    if (!sd->isModelLoaded() || sd->currentModelName() != chosenModel) {
+        QEventLoop loadLoop;
+        bool loadOk = false;
+        QString loadErr;
+        QObject::connect(sd, &SDManager::modelLoadCompleted, &loadLoop,
+            [&](const QString&) { loadOk = true; loadLoop.quit(); });
+        QObject::connect(sd, &SDManager::modelLoadError, &loadLoop,
+            [&](const QString& e) { loadErr = e; loadLoop.quit(); });
+        // A stalled new_sd_ctx() emits no terminal signal — don't hang the
+        // CLI forever.
+        QTimer::singleShot(10 * 60 * 1000, &loadLoop, [&]() {
+            loadErr = QStringLiteral("timed out after 10 minutes");
+            loadLoop.quit();
+        });
+        sd->loadModel(chosenModel);
+        loadLoop.exec();
+        if (!loadOk) {
+            err() << "Error: failed to load image model '" << chosenModel
+                  << "': " << loadErr << Qt::endl;
+            return 1;
+        }
+    }
+    // Fresh generation gets the subject steering the reconstruction wants;
+    // an EDIT keeps the reference image's composition, so no suffix there.
+    const QString fullPrompt = refImagePath.isEmpty()
+        ? prompt.trimmed()
+              + QStringLiteral(", single subject, full body, centered, "
+                               "plain light gray background")
+        : prompt.trimmed();
+    // FLUX.2-klein trains at 1024²; SD-class checkpoints at 512² (bigger
+    // makes SD 1.5 duplicate the subject).
+    const int genSize =
+        (chosenModel == SDManager::flux2KleinModelName()) ? 1024 : 512;
+    QEventLoop genLoop;
+    QString genPath, genErr;
+    QObject::connect(sd, &SDManager::generationCompleted, &genLoop,
+        [&](const QString& p) { genPath = p; genLoop.quit(); });
+    QObject::connect(sd, &SDManager::generationError, &genLoop,
+        [&](const QString& e) { genErr = e; genLoop.quit(); });
+    QObject::connect(sd, &SDManager::generationStopped, &genLoop,
+        [&]() { genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
+    QTimer::singleShot(30 * 60 * 1000, &genLoop, [&]() {
+        genErr = QStringLiteral("timed out after 30 minutes");
+        genLoop.quit();
+    });
+    sd->generateImage(fullPrompt, genSize, genSize,
+                      QFileInfo(outPng).fileName(), refImagePath);
+    genLoop.exec();
+    if (genPath.isEmpty() || !QFileInfo::exists(genPath)) {
+        err() << "Error: image generation failed: "
+              << (genErr.isEmpty() ? QStringLiteral("no output produced") : genErr)
+              << Qt::endl;
+        return 1;
+    }
+    if (QFileInfo(genPath).absoluteFilePath()
+        != QFileInfo(outPng).absoluteFilePath()) {
+        QFile::remove(outPng);
+        if (!QFile::copy(genPath, outPng)) {
+            err() << "Error: cannot write " << outPng << Qt::endl;
+            return 1;
+        }
+    }
+    return 0;
+#endif
+}
+
 int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 {
     // Parse: generate3d <image> [-o out.glb] [--resolution N] [--no-color]
@@ -10528,6 +10645,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
     MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
     bool backendSet = false;    // explicit --backend beats the auto default
+    QString genPrompt;          // --prompt: generate the source image from text
+    QString imageModel;         // --image-model: SD model override for --prompt
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -10657,11 +10776,27 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                          "gains taper off above 512." << Qt::endl;
             continue;
         }
+        if (arg == "--prompt") {
+            if (i + 1 >= argc) {
+                err() << "Error: --prompt requires the text to generate from." << Qt::endl;
+                return 2;
+            }
+            genPrompt = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--image-model") {
+            if (i + 1 >= argc) {
+                err() << "Error: --image-model requires a model name." << Qt::endl;
+                return 2;
+            }
+            imageModel = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
     }
 
-    if (inputPath.isEmpty()) {
-        err() << "Error: No input image specified." << Qt::endl;
+    if (inputPath.isEmpty() && genPrompt.trimmed().isEmpty()) {
+        err() << "Error: No input image (or --prompt) specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
@@ -10669,12 +10804,53 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--backend trellis2|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
                  "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
               << Qt::endl;
+        err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
+                 "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
         err() << "  Default backend: trellis2 when its runtime is installed "
                  "(ai/trellis2/install.py), else triposr. --seed/--preset "
                  "apply to trellis2; --target-tris (game-ready simplify + "
-                 "detail-normal bake) applies to every backend." << Qt::endl;
+                 "detail-normal bake) applies to every backend. --prompt "
+                 "generates the source image first (FLUX.2-klein-4B via "
+                 "stable-diffusion.cpp — download it in AI Model Settings, or "
+                 "any SD checkpoint via --image-model)." << Qt::endl;
         return 2;
     }
+    // Prompt mode: generate the source image first, then run the normal
+    // pipeline on it. With BOTH an input image and --prompt, the image is
+    // EDITED by the prompt (FLUX.2 reference conditioning) and the edit
+    // becomes the pipeline input. Needs -o in prompt-only mode (no input
+    // filename to derive the output from).
+    if (!genPrompt.trimmed().isEmpty()) {
+        if (outputPath.isEmpty() && inputPath.isEmpty()) {
+            err() << "Error: --prompt needs -o <out.glb> (no input filename to "
+                     "derive the output from)." << Qt::endl;
+            return 2;
+        }
+        QString refImage;
+        if (!inputPath.isEmpty()) {
+            const QFileInfo inFi(inputPath);
+            if (!inFi.exists()) {
+                err() << "Error: image not found: " << inputPath << Qt::endl;
+                return 1;
+            }
+            refImage = inFi.absoluteFilePath();
+            if (outputPath.isEmpty())
+                outputPath = inFi.absolutePath() + "/"
+                             + inFi.completeBaseName() + "_edited.glb";
+        }
+        const QFileInfo outFi(outputPath);
+        const QString srcPng = QDir(outFi.absolutePath())
+            .filePath(outFi.completeBaseName() + QStringLiteral("_source_prompt.png"));
+        const int rc = generateSourceImageFromPrompt(genPrompt, imageModel,
+                                                     srcPng, refImage);
+        if (rc != 0) return rc;
+        inputPath = srcPng;
+        cliWrite(QString("%1 source image: %2\n")
+                     .arg(refImage.isEmpty() ? QStringLiteral("Generated")
+                                             : QStringLiteral("Edited"))
+                     .arg(srcPng));
+    }
+
     QFileInfo fi(inputPath);
     if (!fi.exists()) {
         err() << "Error: image not found: " << inputPath << Qt::endl; return 1;
