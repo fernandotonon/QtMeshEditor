@@ -29,6 +29,9 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
+#include <QVector3D>
+#include "PaintChannel.h"
+#include "TexturePaintController.h"
 #include "AppStorage.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
@@ -723,6 +726,19 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode},
         {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
         {QStringLiteral("paint_bake"), &MCPServer::toolPaintBake},
+        {QStringLiteral("paint_set_enabled"), &MCPServer::toolPaintSetEnabled},
+        {QStringLiteral("paint_list_layers"), &MCPServer::toolPaintListLayers},
+        {QStringLiteral("paint_add_layer"), &MCPServer::toolPaintAddLayer},
+        {QStringLiteral("paint_delete_layer"), &MCPServer::toolPaintDeleteLayer},
+        {QStringLiteral("paint_reorder_layer"), &MCPServer::toolPaintReorderLayer},
+        {QStringLiteral("paint_merge_down"), &MCPServer::toolPaintMergeDown},
+        {QStringLiteral("paint_flatten"), &MCPServer::toolPaintFlatten},
+        {QStringLiteral("paint_set_active_layer"), &MCPServer::toolPaintSetActiveLayer},
+        {QStringLiteral("paint_set_active_channel"), &MCPServer::toolPaintSetActiveChannel},
+        {QStringLiteral("paint_set_brush_preset"), &MCPServer::toolPaintSetBrushPreset},
+        {QStringLiteral("paint_set_color"), &MCPServer::toolPaintSetColor},
+        {QStringLiteral("paint_set_gradient"), &MCPServer::toolPaintSetGradient},
+        {QStringLiteral("paint_apply_stencil"), &MCPServer::toolPaintApplyStencil},
         {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
@@ -813,7 +829,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("capture_face_from_video"),
         QStringLiteral("capture_body_from_video"),
         QStringLiteral("cloud_upload"),
-        QStringLiteral("paint_bake")
+        QStringLiteral("paint_bake"),
+        QStringLiteral("paint_apply_stencil")
     };
     return heavyTools.contains(name);
 }
@@ -890,6 +907,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
             {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
             {QStringLiteral("paint_bake"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("paint_apply_stencil"), QStringLiteral("texture_atlas")},
             {QStringLiteral("pack_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
@@ -6516,6 +6534,380 @@ QJsonObject MCPServer::toolGetPivotMode(const QJsonObject &args)
     return result;
 }
 
+// --- Paint v2 Slice J (#553): live-session paint tools --------------------
+//
+// These operate on the RUNNING editor's paint session via
+// TexturePaintController, so they need a GUI-attached server (--with-mcp).
+// Everything runs on the main thread through the normal tool dispatch — no
+// BlockingQueuedConnection, which deadlocks (see the MCP notes in CLAUDE.md).
+
+namespace {
+
+/// Resolve the paint controller and require a live session.
+///
+/// Every layer/channel op is meaningless without one, and the failure is the
+/// single most likely thing a caller hits (running headless `--mcp`, or before
+/// enabling paint), so it gets one explicit message rather than a null deref.
+TexturePaintController* paintCtrlWithSession(QString& errorOut)
+{
+    auto* ctrl = TexturePaintController::instance();
+    if (!ctrl) {
+        errorOut = QStringLiteral("paint controller unavailable (GUI not running)");
+        return nullptr;
+    }
+    if (!ctrl->hasActiveSession()) {
+        errorOut = QStringLiteral(
+            "no active paint session — select a mesh and enable texture painting "
+            "first (this tool needs the GUI: run with --with-mcp)");
+        return nullptr;
+    }
+    return ctrl;
+}
+
+/// Layer list as JSON, shared by several tools' responses so a caller can see
+/// the result of its own mutation without a second round trip.
+QJsonArray paintLayersJson(TexturePaintController* ctrl)
+{
+    QJsonArray arr;
+    const QVariantList rows = ctrl->paintLayers();
+    for (const QVariant& v : rows) {
+        const QVariantMap m = v.toMap();
+        QJsonObject o;
+        for (auto it = m.constBegin(); it != m.constEnd(); ++it)
+            o[it.key()] = QJsonValue::fromVariant(it.value());
+        arr.append(o);
+    }
+    return arr;
+}
+
+QJsonObject paintOkResult(TexturePaintController* ctrl, const QString& text)
+{
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}};
+    result["layer_count"] = ctrl->layerCount();
+    result["active_layer"] = ctrl->activeLayerIndex();
+    result["active_channel"] = ctrl->activeChannel();
+    result["layers"] = paintLayersJson(ctrl);
+    return result;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolPaintSetEnabled(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_enabled");
+    auto* ctrl = TexturePaintController::instance();
+    if (!ctrl) return makeErrorResult("Error: paint controller unavailable (GUI not running)");
+
+    const bool enable = args.contains("enabled") ? args.value("enabled").toBool() : true;
+
+    if (enable) {
+        // Texture (not vertex) target, or there is no texture layer stack for
+        // the layer/channel tools to act on.
+        ctrl->setPaintTarget(TexturePaintController::TargetTexture);
+        if (args.contains("resolution")) {
+            const int res = args.value("resolution").toInt();
+            if (res > 0) ctrl->ensurePaintableTexture(res);
+        }
+        ctrl->setTexturePaintEnabled(true);
+        if (!ctrl->hasActiveSession())
+            return makeErrorResult(
+                "Error: could not start a paint session — select a mesh with a "
+                "material first (use select_object / load_mesh)");
+    } else {
+        ctrl->setTexturePaintEnabled(false);
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", enable ? QStringLiteral("Texture painting enabled")
+                        : QStringLiteral("Texture painting disabled")}}};
+    result["enabled"] = ctrl->texturePaintEnabled();
+    result["has_session"] = ctrl->hasActiveSession();
+    if (ctrl->hasActiveSession()) {
+        result["layer_count"] = ctrl->layerCount();
+        result["active_channel"] = ctrl->activeChannel();
+        result["resolution"] = ctrl->textureResolution();
+    }
+    return result;
+}
+
+QJsonObject MCPServer::toolPaintListLayers(const QJsonObject &)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_list_layers");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    return paintOkResult(ctrl, QString("%1 layer(s)").arg(ctrl->layerCount()));
+}
+
+QJsonObject MCPServer::toolPaintAddLayer(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_add_layer");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+
+    const int idx = ctrl->addPaintLayer(args.value("name").toString());
+    if (idx < 0) return makeErrorResult("Error: could not add a layer");
+    return paintOkResult(ctrl, QString("Added layer at index %1").arg(idx));
+}
+
+QJsonObject MCPServer::toolPaintDeleteLayer(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_delete_layer");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    if (!args.contains("index")) return makeErrorResult("Error: 'index' is required");
+
+    const int index = args.value("index").toInt();
+    if (index < 0 || index >= ctrl->layerCount())
+        return makeErrorResult(QString("Error: index %1 is out of range (%2 layer(s))")
+                                   .arg(index).arg(ctrl->layerCount()));
+    ctrl->deletePaintLayer(index);
+    return paintOkResult(ctrl, QString("Deleted layer %1").arg(index));
+}
+
+QJsonObject MCPServer::toolPaintReorderLayer(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_reorder_layer");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    if (!args.contains("from") || !args.contains("to"))
+        return makeErrorResult("Error: 'from' and 'to' are required");
+
+    int from = args.value("from").toInt();
+    const int to = args.value("to").toInt();
+    const int n = ctrl->layerCount();
+    if (from < 0 || from >= n || to < 0 || to >= n)
+        return makeErrorResult(QString("Error: index out of range (%1 layer(s))").arg(n));
+
+    // The controller only exposes move-up/move-down by one, so walk. Looping
+    // here keeps the single-step invariants (and their breadcrumbs) intact
+    // rather than reaching past the controller into the stack.
+    while (from > to) { ctrl->movePaintLayerUp(from);   --from; }
+    while (from < to) { ctrl->movePaintLayerDown(from); ++from; }
+    return paintOkResult(ctrl, QString("Moved layer to index %1").arg(to));
+}
+
+QJsonObject MCPServer::toolPaintMergeDown(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_merge_down");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    if (!args.contains("index")) return makeErrorResult("Error: 'index' is required");
+
+    const int index = args.value("index").toInt();
+    if (index <= 0 || index >= ctrl->layerCount())
+        return makeErrorResult(QString(
+            "Error: index %1 cannot merge down (needs a layer beneath it; "
+            "%2 layer(s))").arg(index).arg(ctrl->layerCount()));
+    ctrl->mergePaintLayerDown(index);
+    return paintOkResult(ctrl, QString("Merged layer %1 down").arg(index));
+}
+
+QJsonObject MCPServer::toolPaintFlatten(const QJsonObject &)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_flatten");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    ctrl->flattenPaintLayers();
+    return paintOkResult(ctrl, "Flattened all layers");
+}
+
+QJsonObject MCPServer::toolPaintSetActiveLayer(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_active_layer");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+    if (!args.contains("index")) return makeErrorResult("Error: 'index' is required");
+
+    const int index = args.value("index").toInt();
+    if (index < 0 || index >= ctrl->layerCount())
+        return makeErrorResult(QString("Error: index %1 is out of range (%2 layer(s))")
+                                   .arg(index).arg(ctrl->layerCount()));
+    ctrl->setActiveLayerIndex(index);
+    return paintOkResult(ctrl, QString("Active layer is now %1").arg(index));
+}
+
+QJsonObject MCPServer::toolPaintSetActiveChannel(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_active_channel");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+
+    const QString id = args.value("channel").toString().trimmed().toLower();
+    if (id.isEmpty())
+        return makeErrorResult("Error: 'channel' is required "
+                               "(basecolor|normal|roughness|metallic|ao|emissive)");
+    const auto ch = PaintChannelNS::fromId(id.toStdString());
+    // fromId falls back to BaseColor on an unknown id, so reject explicitly:
+    // silently painting BaseColor when the caller asked for roughness would be
+    // very hard to notice.
+    if (id != QLatin1String(PaintChannelNS::id(ch)))
+        return makeErrorResult(QString("Error: unknown channel '%1'").arg(id));
+    if (ch == PaintChannelNS::Channel::Height)
+        return makeErrorResult(
+            "Error: 'height' is not a paintable channel (#547) — it shares the "
+            "Normal session. Use 'normal'.");
+
+    ctrl->setActiveChannel(static_cast<int>(ch));
+    return paintOkResult(ctrl, QString("Active channel is now %1").arg(id));
+}
+
+QJsonObject MCPServer::toolPaintSetBrushPreset(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_brush_preset");
+    auto* ctrl = TexturePaintController::instance();
+    if (!ctrl) return makeErrorResult("Error: paint controller unavailable");
+
+    const QString name = args.value("name").toString();
+    if (name.isEmpty()) {
+        QJsonObject result;
+        QJsonArray names;
+        for (const QString& n : ctrl->brushPresetNames()) names.append(n);
+        result["content"] = QJsonArray{QJsonObject{
+            {"type", "text"},
+            {"text", QString("%1 preset(s) available").arg(names.size())}}};
+        result["presets"] = names;
+        return result;
+    }
+    if (!ctrl->applyBrushPreset(name))
+        return makeErrorResult(QString("Error: no brush preset named '%1'").arg(name));
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"}, {"text", QString("Applied brush preset '%1'").arg(name)}}};
+    result["preset"] = name;
+    return result;
+}
+
+QJsonObject MCPServer::toolPaintSetColor(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_color");
+    auto* ctrl = TexturePaintController::instance();
+    if (!ctrl) return makeErrorResult("Error: paint controller unavailable");
+
+    const QString hex = args.value("color").toString().trimmed();
+    if (hex.isEmpty()) return makeErrorResult("Error: 'color' is required (e.g. \"#ff8800\")");
+    const QColor c(hex);
+    if (!c.isValid())
+        return makeErrorResult(QString("Error: '%1' is not a valid colour").arg(hex));
+
+    const bool background = args.value("background").toBool(false);
+    // applyPaletteColor is the FG/BG-aware path and also feeds the recent ring,
+    // so scripted picks show up in the palette UI like manual ones.
+    if (!ctrl->applyPaletteColor(c.name(QColor::HexRgb), background))
+        return makeErrorResult("Error: could not apply the colour");
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Set %1 colour to %2")
+                     .arg(background ? "background" : "foreground", c.name())}}};
+    result["color"] = c.name();
+    result["background"] = background;
+    return result;
+}
+
+QJsonObject MCPServer::toolPaintSetGradient(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_set_gradient");
+    auto* ctrl = TexturePaintController::instance();
+    if (!ctrl) return makeErrorResult("Error: paint controller unavailable");
+
+    if (args.contains("enabled") && !args.value("enabled").toBool()) {
+        ctrl->setColorSource(0);            // Solid
+        QJsonObject result;
+        result["content"] = QJsonArray{QJsonObject{
+            {"type", "text"}, {"text", "Gradient off (solid colour)"}}};
+        result["enabled"] = false;
+        return result;
+    }
+
+    if (args.contains("ramp")) {
+        const QString ramp = args.value("ramp").toString();
+        if (!ctrl->rampNames().contains(ramp))
+            return makeErrorResult(QString("Error: no gradient ramp named '%1'").arg(ramp));
+        ctrl->setActiveRampName(ramp);
+    }
+    if (args.contains("mode")) {
+        const QString m = args.value("mode").toString().trimmed().toLower();
+        const int mode = m == QLatin1String("radial")  ? 1
+                       : m == QLatin1String("angular") ? 2
+                       : m == QLatin1String("linear")  ? 0 : -1;
+        if (mode < 0)
+            return makeErrorResult(QString("Error: mode must be linear|radial|angular, got '%1'").arg(m));
+        ctrl->setGradientMode(mode);
+    }
+    ctrl->setColorSource(1);                // Gradient
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"}, {"text", "Gradient colour source enabled"}}};
+    result["enabled"] = true;
+    result["ramp"] = ctrl->activeRampName();
+    QJsonArray ramps;
+    for (const QString& n : ctrl->rampNames()) ramps.append(n);
+    result["available_ramps"] = ramps;
+    return result;
+}
+
+QJsonObject MCPServer::toolPaintApplyStencil(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "paint_apply_stencil");
+    QString err;
+    auto* ctrl = paintCtrlWithSession(err);
+    if (!ctrl) return makeErrorResult(QString("Error: %1").arg(err));
+
+    const QString image = args.value("image").toString();
+    if (image.isEmpty()) return makeErrorResult("Error: 'image' is required");
+    if (!QFileInfo::exists(image))
+        return makeErrorResult(QString("Error: image not found: %1").arg(image));
+
+    if (args.contains("channel")) {
+        const QString id = args.value("channel").toString().trimmed().toLower();
+        const auto ch = PaintChannelNS::fromId(id.toStdString());
+        if (id != QLatin1String(PaintChannelNS::id(ch)))
+            return makeErrorResult(QString("Error: unknown channel '%1'").arg(id));
+        ctrl->setActiveChannel(static_cast<int>(ch));
+    }
+
+    bool ok = false;
+    if (args.contains("camera")) {
+        // Explicit camera: six numbers, eye then target. Same contract as
+        // `qtmesh paint --apply-stencil --camera`.
+        const QJsonArray cam = args.value("camera").toArray();
+        if (cam.size() != 6)
+            return makeErrorResult("Error: 'camera' must be [ex,ey,ez,tx,ty,tz]");
+        const double fov = args.contains("fov") ? args.value("fov").toDouble() : 45.0;
+        ok = ctrl->projectFromPhotoWithCamera(
+            image,
+            QVector3D(float(cam[0].toDouble()), float(cam[1].toDouble()),
+                      float(cam[2].toDouble())),
+            QVector3D(float(cam[3].toDouble()), float(cam[4].toDouble()),
+                      float(cam[5].toDouble())),
+            QVector3D(), fov);
+    } else {
+        // No camera given: use the live viewport, which is what the GUI does.
+        ok = ctrl->projectFromPhoto(image);
+    }
+    if (!ok)
+        return makeErrorResult(
+            "Error: stencil projection wrote no texels — the camera may not see "
+            "the mesh, or the mesh may have no UV0");
+
+    return paintOkResult(ctrl, QString("Projected '%1'")
+                                   .arg(QFileInfo(image).fileName()));
+}
+
 QJsonObject MCPServer::toolPaintBake(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "paint_bake");
@@ -10934,6 +11326,149 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // Paint v2 Slice J (#553): live-session paint tools.
+    // These need the GUI (--with-mcp); paint_bake above is file-in/file-out.
+    {
+        auto liveNote = QStringLiteral(
+            " Operates on the RUNNING editor's paint session: select a mesh and "
+            "enable texture painting first (requires --with-mcp).");
+
+        {
+            QJsonObject props;
+            props["enabled"] = QJsonObject{{"type", "boolean"},
+                {"description", "true (default) enters texture-paint mode; false leaves it."}};
+            props["resolution"] = QJsonObject{{"type", "integer"},
+                {"description", "Optional paint-buffer edge length for a new session."}};
+            appendTool("paint_set_enabled",
+                       "Enter or leave texture-paint mode on the selected mesh. Call "
+                       "this first: the other paint_* tools need a live session, and "
+                       "without it they can only be reached by clicking the GUI." + liveNote,
+                       props, QJsonArray{});
+        }
+
+        appendTool("paint_list_layers",
+                   "List the paint layers of the active session, with each layer's "
+                   "name, visibility, opacity and blend mode." + liveNote,
+                   QJsonObject{}, QJsonArray{});
+
+        {
+            QJsonObject props;
+            props["name"] = QJsonObject{{"type", "string"},
+                {"description", "Optional layer name; auto-generated when omitted."}};
+            appendTool("paint_add_layer",
+                       "Add an empty paint layer above the active one." + liveNote,
+                       props, QJsonArray{});
+        }
+        {
+            QJsonObject props;
+            props["index"] = QJsonObject{{"type", "integer"},
+                {"description", "Layer index to delete (0 = bottom)."}};
+            QJsonArray req; req.append("index");
+            appendTool("paint_delete_layer",
+                       "Delete one paint layer. Undoable in the editor." + liveNote,
+                       props, req);
+        }
+        {
+            QJsonObject props;
+            props["from"] = QJsonObject{{"type", "integer"}, {"description", "Current index."}};
+            props["to"]   = QJsonObject{{"type", "integer"}, {"description", "Target index."}};
+            QJsonArray req; req.append("from"); req.append("to");
+            appendTool("paint_reorder_layer",
+                       "Move a paint layer to a new index. Layers composite "
+                       "bottom-up, so a higher index draws on top." + liveNote,
+                       props, req);
+        }
+        {
+            QJsonObject props;
+            props["index"] = QJsonObject{{"type", "integer"},
+                {"description", "Layer to merge into the one beneath it (must be > 0)."}};
+            QJsonArray req; req.append("index");
+            appendTool("paint_merge_down",
+                       "Merge a paint layer into the layer below it." + liveNote,
+                       props, req);
+        }
+        appendTool("paint_flatten",
+                   "Flatten every paint layer into one." + liveNote,
+                   QJsonObject{}, QJsonArray{});
+        {
+            QJsonObject props;
+            props["index"] = QJsonObject{{"type", "integer"},
+                {"description", "Layer index to make active (subsequent strokes go here)."}};
+            QJsonArray req; req.append("index");
+            appendTool("paint_set_active_layer",
+                       "Choose which paint layer receives strokes." + liveNote,
+                       props, req);
+        }
+        {
+            QJsonObject props;
+            props["channel"] = QJsonObject{{"type", "string"},
+                {"description", "basecolor | normal | roughness | metallic | ao | "
+                                "emissive. 'height' is rejected: it is not a "
+                                "paintable channel (it shares the Normal session)."}};
+            QJsonArray req; req.append("channel");
+            appendTool("paint_set_active_channel",
+                       "Choose which PBR channel to paint into. Each channel keeps "
+                       "its own layer stack." + liveNote,
+                       props, req);
+        }
+        {
+            QJsonObject props;
+            props["name"] = QJsonObject{{"type", "string"},
+                {"description", "Preset name. Omit to LIST the available presets "
+                                "instead of applying one."}};
+            appendTool("paint_set_brush_preset",
+                       "Apply a brush preset (tool, radius, strength, falloff, "
+                       "footprint, stamp, dynamics). Note a preset deliberately "
+                       "does NOT change the paint colour.",
+                       props, QJsonArray{});
+        }
+        {
+            QJsonObject props;
+            props["color"] = QJsonObject{{"type", "string"},
+                {"description", "Hex colour, e.g. \"#ff8800\"."}};
+            props["background"] = QJsonObject{{"type", "boolean"},
+                {"description", "Set the background swatch instead of the foreground."}};
+            QJsonArray req; req.append("color");
+            appendTool("paint_set_color",
+                       "Set the brush foreground (or background) colour. Also feeds "
+                       "the recent-colours ring, as a manual pick does.",
+                       props, req);
+        }
+        {
+            QJsonObject props;
+            props["enabled"] = QJsonObject{{"type", "boolean"},
+                {"description", "false switches back to a solid colour."}};
+            props["ramp"] = QJsonObject{{"type", "string"},
+                {"description", "Gradient ramp name; the response lists what is available."}};
+            props["mode"] = QJsonObject{{"type", "string"},
+                {"description", "linear (along the stroke) | radial (centre to edge) "
+                                "| angular (around the centre)."}};
+            appendTool("paint_set_gradient",
+                       "Switch the brush to a gradient colour source and choose the "
+                       "ramp and mapping mode.",
+                       props, QJsonArray{});
+        }
+        {
+            QJsonObject props;
+            props["image"] = QJsonObject{{"type", "string"},
+                {"description", "Path to the stencil/photo image to project."}};
+            props["camera"] = QJsonObject{{"type", "array"},
+                {"items", QJsonObject{{"type", "number"}}},
+                {"description", "Optional [ex,ey,ez,tx,ty,tz] eye-then-target. "
+                                "Omit to use the live viewport camera."}};
+            props["fov"] = QJsonObject{{"type", "number"},
+                {"description", "Vertical field of view in degrees (default 45)."}};
+            props["channel"] = QJsonObject{{"type", "string"},
+                {"description", "Channel to project into; defaults to the active one."}};
+            QJsonArray req; req.append("image");
+            appendTool("paint_apply_stencil",
+                       "Project an image onto the mesh through a camera and commit it "
+                       "as a new paint layer, with occlusion so back faces are not "
+                       "painted through." + liveNote,
+                       props, req);
+        }
     }
 
     // generate_normal_map (slice H)
