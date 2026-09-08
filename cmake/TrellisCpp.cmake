@@ -116,6 +116,10 @@ ExternalProject_Add(qtmesh_trelliscpp
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
     BINARY_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-build"
     LIST_SEPARATOR |
+    # MinGW header compat (see cmake/PatchTrellisMinGW.cmake) — idempotent,
+    # runs on every platform, errors loudly if the pin moves past the pattern.
+    PATCH_COMMAND  ${CMAKE_COMMAND} -DSRC=<SOURCE_DIR>
+                   -P ${CMAKE_CURRENT_LIST_DIR}/PatchTrellisMinGW.cmake
     CMAKE_ARGS     ${_trellis_cmake_args}
     BUILD_COMMAND  ${CMAKE_COMMAND} --build <BINARY_DIR> --target trellis-cli
                    --config Release -j4
