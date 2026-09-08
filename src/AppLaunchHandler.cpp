@@ -25,7 +25,7 @@ bool isCliSubcommand(const QString& arg)
         QStringLiteral("analyze"), QStringLiteral("vertex-cache"),
         QStringLiteral("decimate"), QStringLiteral("atlas"), QStringLiteral("atlas-apply"),
         QStringLiteral("optimize"), QStringLiteral("bake-vertex-colors"),
-        QStringLiteral("paint-bake"),
+        QStringLiteral("paint-bake"), QStringLiteral("paint"),
         QStringLiteral("vat"), QStringLiteral("uv"), QStringLiteral("hdri"), QStringLiteral("light"),
         QStringLiteral("retopo"),
         QStringLiteral("skin"), QStringLiteral("rig"), QStringLiteral("facerig"),

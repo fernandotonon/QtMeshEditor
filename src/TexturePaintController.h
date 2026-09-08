@@ -16,6 +16,7 @@
 #include "ColorPaletteLibrary.h"
 
 #include <QColor>
+#include <QVector3D>
 #include <QObject>
 #include <QPoint>
 #include <QPointF>
@@ -451,6 +452,22 @@ public:
     /// One-shot: load `path`, project it through the current camera onto the
     /// mesh, and commit the result as a NEW layer (one undo step).
     Q_INVOKABLE bool projectFromPhoto(const QString& path);
+
+    /// Project `path` using an EXPLICIT camera instead of the live viewport.
+    ///
+    /// `projectFromPhoto` reads the active viewport camera, so it cannot run
+    /// headlessly — there is no viewport in CLI/MCP. This takes eye/target/up
+    /// and builds the projection matrix itself, which is what `qtmesh paint
+    /// --apply-stencil --camera` and MCP `paint_apply_stencil` need.
+    ///
+    /// `fovYDegrees` and the mesh bounds drive the projection; `up` may be zero
+    /// to auto-pick a stable up vector. Returns false (without touching the
+    /// layer stack) when the image, mesh, or camera is unusable.
+    Q_INVOKABLE bool projectFromPhotoWithCamera(const QString& path,
+                                                const QVector3D& eye,
+                                                const QVector3D& target,
+                                                const QVector3D& up = QVector3D(),
+                                                double fovYDegrees = 45.0);
     /// Open a file dialog to pick the stencil image (sets stencilImagePath).
     Q_INVOKABLE void chooseStencilImage();
     /// Open a file dialog to pick a photo, then projectFromPhoto() it.
@@ -1287,6 +1304,13 @@ private:
     /// Destroy the decal preview texture/material (called from closeSession).
     void destroyDecalPreview();
     /// Rebuild the decal rectangle + handle overlay (or hide it when inactive).
+    /// Shared tail of both photo-projection paths (see the .cpp comment).
+    bool projectPhotoWithView(const QImage& src,
+                              const ProjectionPainter::View& v,
+                              const QString& layerName);
+    /// Load/normalise a projection source and rebuild the triangle cache.
+    QImage prepareProjectionSource(const QString& path);
+
     void refreshDecalOverlay();
     /// Ray-pick the decal rect plane at `screenPos` → world hit (on the plane).
     bool decalPlaneHit(OgreWidget* widget, const QPoint& screenPos,

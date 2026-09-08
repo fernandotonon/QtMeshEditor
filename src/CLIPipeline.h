@@ -199,6 +199,18 @@ public:
     /// channels come from the material's bound texture slots.
     static int cmdPaintBake(int argc, char* argv[]);
 
+    /// Paint v2 Slice J (#553): `qtmesh paint` — headless paint queries, the
+    /// bake (aliasing paint-bake), and stencil projection with an explicit
+    /// camera.
+    ///
+    /// Layer MUTATION (`--layer add/merge-down/flatten`) is deliberately absent:
+    /// paint layers are a live in-memory session and are never persisted to a
+    /// mesh file, so a headless `--layer add` would create a layer, write
+    /// nothing, and exit — a command that appears to work and does nothing.
+    /// `--layer list` IS supported (it reports the live/derived stack) and
+    /// baking is how painted pixels reach disk. See docs/PAINT_V2_CLI_MCP.md.
+    static int cmdPaint(int argc, char* argv[]);
+
     /// Shared core behind `qtmesh paint-bake` and MCP `paint_bake`.
     ///
     /// Imports `inputPath`, reads its bound PBR slots, builds the engine layout

@@ -920,25 +920,14 @@ void TexturePaintController::snapProjectionCamera()
     emit projectionChanged();
 }
 
-bool TexturePaintController::projectFromPhoto(const QString& path)
+/// Shared tail of both photo-projection entry points: everything after the
+/// View is decided. Kept as one function so the live-camera path and the
+/// explicit-camera (headless) path cannot drift in occlusion handling,
+/// resolution, breadcrumb, or commit behaviour.
+bool TexturePaintController::projectPhotoWithView(const QImage& src,
+                                                  const ProjectionPainter::View& v,
+                                                  const QString& layerName)
 {
-    if (!hasActiveSession()) {
-        if (auto* e = activeEntity()) ensurePaintableTexture(1024);
-        if (!hasActiveSession()) return false;
-    }
-    QImage src(path);
-    if (src.isNull()) return false;
-    src = src.convertToFormat(QImage::Format_RGBA8888);
-
-    m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
-    if (!m_haveProjTris) return false;
-
-    ProjectionPainter::View v;
-    auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
-                       : (TransformOperator::getSingletonPtr() ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
-    if (m_haveLockedView) v = m_lockedView;
-    else if (!currentProjectionView(widget, v)) return false;
-
     m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
     ProjectionPainter::Options opts = projectionOptions();
     opts.useOcclusion = m_haveProjOcc;   // photo always occludes when we have a map
@@ -951,8 +940,117 @@ bool TexturePaintController::projectFromPhoto(const QString& path)
 
     SentryReporter::addBreadcrumb("paint.projection.photo",
         QStringLiteral("texels=%1 occluded=%2").arg(rep.texelsWritten).arg(rep.texelsOccluded));
-    return commitProjectedLayer(scratch, QStringLiteral("Projected photo")) >= 0;
+    return commitProjectedLayer(scratch, layerName) >= 0;
 }
+
+/// Load + normalise a projection source image, and rebuild the triangle cache.
+/// Returns a null image when either step fails.
+QImage TexturePaintController::prepareProjectionSource(const QString& path)
+{
+    if (!hasActiveSession()) {
+        if (activeEntity()) ensurePaintableTexture(1024);
+        if (!hasActiveSession()) return {};
+    }
+    QImage src(path);
+    if (src.isNull()) return {};
+    src = src.convertToFormat(QImage::Format_RGBA8888);
+
+    m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
+    if (!m_haveProjTris) return {};
+    return src;
+}
+
+bool TexturePaintController::projectFromPhotoWithCamera(const QString& path,
+                                                        const QVector3D& eye,
+                                                        const QVector3D& target,
+                                                        const QVector3D& up,
+                                                        double fovYDegrees)
+{
+    const QImage src = prepareProjectionSource(path);
+    if (src.isNull()) return false;
+
+    const Ogre::Vector3 e(eye.x(), eye.y(), eye.z());
+    const Ogre::Vector3 t(target.x(), target.y(), target.z());
+    Ogre::Vector3 dir = t - e;
+    if (dir.squaredLength() < 1e-12f) return false;   // degenerate camera
+    dir.normalise();
+
+    // Auto-pick an up vector when none is given, avoiding the degenerate case
+    // where the caller looks straight down the world up axis.
+    Ogre::Vector3 upv(up.x(), up.y(), up.z());
+    if (upv.squaredLength() < 1e-12f) {
+        upv = std::abs(dir.dotProduct(Ogre::Vector3::UNIT_Y)) > 0.99f
+                  ? Ogre::Vector3::UNIT_Z : Ogre::Vector3::UNIT_Y;
+    }
+    Ogre::Vector3 right = dir.crossProduct(upv);
+    if (right.squaredLength() < 1e-12f) return false;  // up parallel to dir
+    right.normalise();
+    const Ogre::Vector3 trueUp = right.crossProduct(dir).normalisedCopy();
+
+    // World -> view: rows are the camera basis, looking along -Z per Ogre's
+    // right-handed convention (so the forward row is negated).
+    Ogre::Matrix4 view = Ogre::Matrix4::IDENTITY;
+    for (int i = 0; i < 3; ++i) {
+        view[0][i] =  right[i];
+        view[1][i] =  trueUp[i];
+        view[2][i] = -dir[i];
+    }
+    view[0][3] = -right.dotProduct(e);
+    view[1][3] = -trueUp.dotProduct(e);
+    view[2][3] =  dir.dotProduct(e);
+
+    // Frame the mesh so the projection covers it: near/far from the entity's
+    // world bounds along the view direction, with generous padding rather than
+    // a tight fit (a clipped far plane silently drops the far half of the mesh).
+    float nearD = 0.1f, farD = 1000.0f;
+    if (auto* ent = activeEntity()) {
+        const Ogre::AxisAlignedBox box = ent->getWorldBoundingBox(true);
+        if (!box.isNull() && !box.isInfinite()) {
+            const float d = e.distance(box.getCenter());
+            const float r = box.getHalfSize().length();
+            nearD = std::max(0.01f, d - r * 2.0f);
+            farD  = d + r * 3.0f;
+            if (farD <= nearD) { nearD = 0.1f; farD = 1000.0f; }
+        }
+    }
+
+    const float fovY = static_cast<float>(
+        std::clamp(fovYDegrees, 1.0, 179.0) * M_PI / 180.0);
+    const float f = 1.0f / std::tan(fovY * 0.5f);
+    Ogre::Matrix4 proj = Ogre::Matrix4::ZERO;
+    proj[0][0] = f;          // square aspect: the paint buffer is square
+    proj[1][1] = f;
+    proj[2][2] = -(farD + nearD) / (farD - nearD);
+    proj[2][3] = -(2.0f * farD * nearD) / (farD - nearD);
+    proj[3][2] = -1.0f;
+
+    ProjectionPainter::View v;
+    v.viewProj = proj * view;
+    v.camDirection = dir;
+    v.camPosition = e;
+
+    SentryReporter::addBreadcrumb(
+        "paint.projection.camera",
+        QStringLiteral("eye=%1,%2,%3 fov=%4")
+            .arg(e.x).arg(e.y).arg(e.z).arg(fovYDegrees));
+
+    return projectPhotoWithView(src, v, QStringLiteral("Projected stencil"));
+}
+
+bool TexturePaintController::projectFromPhoto(const QString& path)
+{
+    const QImage src = prepareProjectionSource(path);
+    if (src.isNull()) return false;
+
+    ProjectionPainter::View v;
+    auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
+                       : (TransformOperator::getSingletonPtr() ? TransformOperator::getSingleton()->getActiveWidget() : nullptr);
+    if (m_haveLockedView) v = m_lockedView;
+    else if (!currentProjectionView(widget, v)) return false;
+
+    return projectPhotoWithView(src, v, QStringLiteral("Projected photo"));
+}
+
 
 void TexturePaintController::chooseStencilImage()
 {
@@ -7200,6 +7298,8 @@ QStringList TexturePaintController::blendModeNames() const
 int TexturePaintController::addPaintLayer(const QString& name)
 {
     if (!hasActiveSession()) return -1;
+    SentryReporter::addBreadcrumb("paint.layer.add",
+        QStringLiteral("name=%1").arg(name.isEmpty() ? QStringLiteral("(auto)") : name));
     const auto before = m_layerStack.snapshot();
     const int idx = m_layerStack.addEmpty(name);
     recomposeComposite(/*fullBuffer=*/true);
@@ -7216,6 +7316,8 @@ int TexturePaintController::addPaintLayer(const QString& name)
 
 void TexturePaintController::deletePaintLayer(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.delete",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.layerCount() <= 1) return;
     const auto before = m_layerStack.snapshot();
@@ -7234,6 +7336,8 @@ void TexturePaintController::deletePaintLayer(int index)
 
 int TexturePaintController::duplicatePaintLayer(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.duplicate",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount()) return -1;
     const auto before = m_layerStack.snapshot();
     const int idx = m_layerStack.duplicateLayer(index);
@@ -7251,6 +7355,8 @@ int TexturePaintController::duplicatePaintLayer(int index)
 
 void TexturePaintController::movePaintLayerUp(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.reorder",
+        QStringLiteral("up index=%1").arg(index));
     if (index <= 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.moveLayer(index, index - 1);
@@ -7266,6 +7372,8 @@ void TexturePaintController::movePaintLayerUp(int index)
 
 void TexturePaintController::movePaintLayerDown(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.reorder",
+        QStringLiteral("down index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount() - 1) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.moveLayer(index, index + 1);
@@ -7281,6 +7389,8 @@ void TexturePaintController::movePaintLayerDown(int index)
 
 void TexturePaintController::renamePaintLayer(int index, const QString& name)
 {
+    SentryReporter::addBreadcrumb("paint.layer.rename",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount() || name.isEmpty()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.renameLayer(index, name);
@@ -7293,6 +7403,8 @@ void TexturePaintController::renamePaintLayer(int index, const QString& name)
 
 void TexturePaintController::mergePaintLayerDown(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.merge_down",
+        QStringLiteral("index=%1").arg(index));
     if (index <= 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.mergeDown(index);
@@ -7309,6 +7421,8 @@ void TexturePaintController::mergePaintLayerDown(int index)
 
 void TexturePaintController::flattenPaintLayers()
 {
+    SentryReporter::addBreadcrumb("paint.layer.flatten",
+        QStringLiteral("layers=%1").arg(m_layerStack.layerCount()));
     if (m_layerStack.layerCount() <= 1) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.flattenAll();
@@ -7324,6 +7438,8 @@ void TexturePaintController::flattenPaintLayers()
 
 void TexturePaintController::setPaintLayerVisible(int index, bool visible)
 {
+    SentryReporter::addBreadcrumb("paint.layer.visibility",
+        QStringLiteral("index=%1 visible=%2").arg(index).arg(visible ? 1 : 0));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.layer(index).visible == visible) return;
     const auto before = m_layerStack.snapshot();
@@ -7397,6 +7513,8 @@ void TexturePaintController::endPaintLayerOpacityDrag()
 
 void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
 {
+    SentryReporter::addBreadcrumb("paint.layer.blend_mode",
+        QStringLiteral("index=%1 mode=%2").arg(index).arg(mode));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.setBlendMode(index, static_cast<PaintLayerBlend::Mode>(mode));
