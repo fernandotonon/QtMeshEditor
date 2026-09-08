@@ -34,6 +34,9 @@ class MeshGenController : public QObject
     // The currently-selected source image (empty until the user picks one). The
     // panel's "Generate" button binds its enabled state to this being non-empty.
     Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
+    // The same path as a proper file URL (QUrl::fromLocalFile) for QML Image
+    // sources — hand-building "file:///" strings breaks on Windows paths.
+    Q_PROPERTY(QString selectedImageUrl READ selectedImageUrl NOTIFY selectedImageChanged)
     // A small preview thumbnail of the selected image as a data:image/png;base64
     // URL the QML Image element can show directly (same idiom as the texture
     // packer previews). Empty when no image is selected.
@@ -54,6 +57,7 @@ public:
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
     QString selectedImagePath() const { return m_selectedImage; }
+    QString selectedImageUrl() const;
     QString previewSource() const { return m_previewSource; }
     QString caption() const { return m_caption; }
     bool captioning() const { return m_captioning; }

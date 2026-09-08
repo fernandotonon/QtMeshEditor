@@ -2084,8 +2084,7 @@ Rectangle {
                 height: Math.min(1024, Screen.desktopAvailableHeight - 120)
                 function open() {
                     fullImage.source = ""   // force reload (same path, new pixels)
-                    fullImage.source = "file:///"
-                        + MeshGenController.selectedImagePath.replace(/^\//, "")
+                    fullImage.source = MeshGenController.selectedImageUrl
                     show(); raise(); requestActivate()
                 }
                 Image {

@@ -28,6 +28,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
+#include <QUrl>
 
 #include <thread>
 #include "AppStorage.h"
@@ -190,6 +191,13 @@ void MeshGenController::applySelectedImage(const QString& path)
     startCaptioning(path);
 }
 
+QString MeshGenController::selectedImageUrl() const
+{
+    return m_selectedImage.isEmpty()
+        ? QString()
+        : QUrl::fromLocalFile(m_selectedImage).toString();
+}
+
 void MeshGenController::clearSelectedImage()
 {
     if (m_busy || m_imageGenActive) return;
@@ -197,6 +205,9 @@ void MeshGenController::clearSelectedImage()
     m_previewSource.clear();
     m_caption.clear();
     m_captioning = false;
+    // Drop any in-flight caption for the cleared image — its late result
+    // must not repopulate the caption of a selection that no longer exists.
+    m_captionForPath.clear();
     emit selectedImageChanged();
     emit captionChanged();
     emit statusMessage(tr("Image cleared."));

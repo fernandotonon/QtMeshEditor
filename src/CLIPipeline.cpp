@@ -10547,6 +10547,15 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
         return 1;
     }
 
+    // Edit mode (image + prompt) needs FLUX.2's reference conditioning —
+    // check BEFORE the (multi-GB, minutes-long) model load, not after.
+    if (!refImagePath.isEmpty()
+        && chosenModel != SDManager::flux2KleinModelName()) {
+        err() << "Error: editing an image with a prompt needs FLUX.2-klein-4B "
+                 "(download it in AI Model Settings)." << Qt::endl;
+        return 1;
+    }
+
     if (!sd->isModelLoaded() || sd->currentModelName() != chosenModel) {
         QEventLoop loadLoop;
         bool loadOk = false;
@@ -10568,14 +10577,6 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
                   << "': " << loadErr << Qt::endl;
             return 1;
         }
-    }
-
-    // Edit mode (image + prompt) needs FLUX.2's reference conditioning.
-    if (!refImagePath.isEmpty()
-        && chosenModel != SDManager::flux2KleinModelName()) {
-        err() << "Error: editing an image with a prompt needs FLUX.2-klein-4B "
-                 "(download it in AI Model Settings)." << Qt::endl;
-        return 1;
     }
     // Fresh generation gets the subject steering the reconstruction wants;
     // an EDIT keeps the reference image's composition, so no suffix there.

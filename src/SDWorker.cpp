@@ -312,6 +312,12 @@ void SDWorker::generateTextureControlled(const QString &prompt,
 
     QMutexLocker locker(&m_mutex);
 
+    // Consume the one-shot reference FIRST: every early return below
+    // (context failure, etc.) must also clear it, or a rejected edit's ref
+    // would silently attach to the next unrelated generation.
+    const QImage pendingRef = m_refImage;
+    m_refImage = QImage();
+
     // sd.cpp crashes on second generate_image() call with the same context.
     // Recreate the context before each generation to ensure clean state.
     recreateContext();
@@ -370,8 +376,8 @@ void SDWorker::generateTextureControlled(const QString &prompt,
         QImage refRgb;
         QByteArray refBytes;
         sd_image_t refSdImage{};
-        if (m_isFlux2 && !m_refImage.isNull()) {
-            refRgb = m_refImage.convertToFormat(QImage::Format_RGB888);
+        if (m_isFlux2 && !pendingRef.isNull()) {
+            refRgb = pendingRef.convertToFormat(QImage::Format_RGB888);
             const int rowBytes = refRgb.width() * 3;
             refBytes.reserve(rowBytes * refRgb.height());
             for (int y = 0; y < refRgb.height(); ++y)
@@ -387,7 +393,6 @@ void SDWorker::generateTextureControlled(const QString &prompt,
             img_params.auto_resize_ref_image = true;
             qDebug() << "SDWorker: FLUX.2 edit mode — 1 reference image";
         }
-        m_refImage = QImage();
 
         // Issue #403: ControlNet depth conditioning. When a control
         // image was supplied and the context was built with a
