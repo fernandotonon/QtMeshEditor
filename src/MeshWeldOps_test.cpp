@@ -113,8 +113,8 @@ class MeshWeldOpsTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        if (!tryInitOgre()) GTEST_SKIP() << "Ogre init unavailable";
-        if (!canLoadMeshFiles()) GTEST_SKIP() << "no GL context";
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed — invalid test environment";
+        if (!canLoadMeshFiles()) GTEST_SKIP() << "no GL context (macOS local run)";
     }
 };
 

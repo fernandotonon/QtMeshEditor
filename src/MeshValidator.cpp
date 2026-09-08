@@ -320,6 +320,12 @@ void MeshValidator::doValidate()
     // triangles visibly tear apart during animation (generated/baked meshes
     // hit this constantly). Plain duplicates are only an info row — UV-seam
     // twins are legitimate on every textured mesh.
+    // NB: weld rows carry fixable=false on purpose — `fixable` warnings feed
+    // the red "Fix All (re-import with cleanup)" button, whose OBJ round-trip
+    // drops the skeleton and does NOT unify weights. The weld rows have their
+    // own dedicated fix (the 'Weld Duplicate Vertices' button, gated on
+    // `weldable`), so routing them into Fix All would direct the user to a
+    // destructive action that cannot fix the reported problem.
     if (totalWeightMismatch > 0) {
         QVariantMap issue;
         issue["type"] = "warning";
@@ -329,7 +335,7 @@ void MeshValidator::doValidate()
             "Duplicate Vertices' to unify them.")
                                    .arg(totalWeightMismatch);
         issue["count"] = totalWeightMismatch;
-        issue["fixable"] = true;
+        issue["fixable"] = false;
         issue["weldable"] = true;
         m_issues.append(issue);
     } else if (totalWeldable > 0) {
@@ -341,7 +347,7 @@ void MeshValidator::doValidate()
                                    .arg(totalWeldable)
                                    .arg(totalDupClusters);
         issue["count"] = totalWeldable;
-        issue["fixable"] = true;
+        issue["fixable"] = false;
         issue["weldable"] = true;
         m_issues.append(issue);
     } else {

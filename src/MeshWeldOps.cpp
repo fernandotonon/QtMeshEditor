@@ -149,17 +149,22 @@ MeshWeldOps::Report MeshWeldOps::run(Ogre::Entity* entity, float epsilon,
     std::vector<WeightMap> weights(static_cast<size_t>(total));
     if (rep.skinned) {
         auto collect = [&](const Ogre::Mesh::VertexBoneAssignmentList& list,
-                           int base) {
-            for (const auto& [vi, vba] : list)
-                weights[base + vba.vertexIndex][vba.boneIndex] += vba.weight;
+                           const Owner& ow) {
+            // vba.vertexIndex is OWNER-LOCAL; a stale/malformed importer
+            // assignment can exceed the owner's vertex count — indexing
+            // `weights` with it unchecked would write past the end.
+            for (const auto& [vi, vba] : list) {
+                if (vba.vertexIndex >= ow.vd->vertexCount) continue;
+                weights[ow.base + vba.vertexIndex][vba.boneIndex] += vba.weight;
+            }
         };
         for (const Owner& ow : owners) {
             if (ow.submeshIndex < 0)
-                collect(mesh->getBoneAssignments(), ow.base);
+                collect(mesh->getBoneAssignments(), ow);
             else
                 collect(mesh->getSubMesh(
                             static_cast<unsigned short>(ow.submeshIndex))
-                            ->getBoneAssignments(), ow.base);
+                            ->getBoneAssignments(), ow);
         }
     }
 
