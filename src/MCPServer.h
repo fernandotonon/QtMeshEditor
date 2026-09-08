@@ -264,6 +264,25 @@ private:
     /// Paint v2 Slice I (#552): repack a mesh's PBR textures into an engine
     /// channel layout (delegates to CLIPipeline::cmdPaintBake's core).
     QJsonObject toolPaintBake(const QJsonObject &args);
+
+    // --- Paint v2 Slice J (#553): live-session paint tools ----------------
+    // These drive TexturePaintController in the RUNNING editor (main thread,
+    // no BlockingQueuedConnection), unlike paint_bake which is file-in/file-out.
+    QJsonObject toolPaintAddLayer(const QJsonObject &args);
+    QJsonObject toolPaintDeleteLayer(const QJsonObject &args);
+    QJsonObject toolPaintReorderLayer(const QJsonObject &args);
+    QJsonObject toolPaintMergeDown(const QJsonObject &args);
+    QJsonObject toolPaintFlatten(const QJsonObject &args);
+    QJsonObject toolPaintSetActiveLayer(const QJsonObject &args);
+    QJsonObject toolPaintSetActiveChannel(const QJsonObject &args);
+    QJsonObject toolPaintSetBrushPreset(const QJsonObject &args);
+    QJsonObject toolPaintSetColor(const QJsonObject &args);
+    QJsonObject toolPaintSetGradient(const QJsonObject &args);
+    QJsonObject toolPaintApplyStencil(const QJsonObject &args);
+    QJsonObject toolPaintListLayers(const QJsonObject &args);
+    /// Enter/leave texture-paint mode, so the 12 session tools above are
+    /// reachable without a human clicking the GUI first.
+    QJsonObject toolPaintSetEnabled(const QJsonObject &args);
     /// Slice H: generate a tangent-space normal map from a height/bump
     /// source via Sobel filter.
     QJsonObject toolGenerateNormalMap(const QJsonObject &args);

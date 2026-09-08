@@ -1,6 +1,11 @@
 #include "CLIPipeline.h"
 #include "EmbeddedTextureCache.h"
 #include "PaintBakeTargets.h"
+#include "PaintChannel.h"
+#include "TexturePaintController.h"
+#include "ColorPaletteLibrary.h"
+#include "BrushPresetLibrary.h"
+#include "BrushAssetLibrary.h"
 #include "CloudCLIPipeline.h"
 #include "GamificationManager.h"
 #include "Manager.h"
@@ -1661,6 +1666,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "paint-bake") rc = cmdPaintBake(argc, argv);
+    else if (cmd == "paint") rc = cmdPaint(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "hdri") rc = cmdHdri(argc, argv);
@@ -8482,6 +8488,385 @@ bool CLIPipeline::paintBakeToDirectory(const QString& inputPath,
     }
 
     return true;
+}
+
+int CLIPipeline::cmdPaint(int argc, char* argv[])
+{
+    // Parse:
+    //   paint --list-stamps|--list-presets|--list-palettes [--json]
+    //   paint <file> --layer list [--json]
+    //   paint <file> --bake --engine <t> [--resolution N] [--prefix P] -o <dir>
+    //   paint <file> --apply-stencil <img> --camera "ex,ey,ez,tx,ty,tz"
+    //                [--channel <id>] [--fov D] [--resolution N] -o <out.mesh>
+    QString inputPath, outputPath, engine = QStringLiteral("generic"), prefix;
+    QString stencilPath, cameraSpec, channelId, layerAction;
+    int resolution = 0;
+    double fov = 45.0;
+    bool jsonOutput = false, doBake = false;
+    bool listStamps = false, listPresets = false, listPalettes = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "paint" || arg == "--cli") continue;
+        if (arg == "--list-stamps")   { listStamps = true; continue; }
+        if (arg == "--list-presets")  { listPresets = true; continue; }
+        if (arg == "--list-palettes") { listPalettes = true; continue; }
+        if (arg == "--json")          { jsonOutput = true; continue; }
+        if (arg == "--bake")          { doBake = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) { outputPath = argv[++i]; continue; }
+        // --engine is #553's name for what `paint-bake` calls --target; accept
+        // both so the two commands are interchangeable.
+        if ((arg == "--engine" || arg == "--target") && i + 1 < argc) { engine = argv[++i]; continue; }
+        if (arg == "--prefix" && i + 1 < argc) { prefix = argv[++i]; continue; }
+        // QString::toInt/toDouble return 0 on non-numeric text, so an unchecked
+        // `--fov abc` would build a DEGENERATE camera that projects nothing but
+        // still runs the whole import/export path, and `--resolution abc` would
+        // silently keep the source size. Report a usage error instead.
+        if (arg == "--resolution" && i + 1 < argc) {
+            bool numOk = false;
+            const QString raw(argv[++i]);
+            resolution = raw.toInt(&numOk);
+            if (!numOk) {
+                err() << QStringLiteral("Error: --resolution '%1' is not a number.").arg(raw)
+                      << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--layer" && i + 1 < argc) { layerAction = QString(argv[++i]).toLower(); continue; }
+        if (arg == "--apply-stencil" && i + 1 < argc) { stencilPath = argv[++i]; continue; }
+        if (arg == "--camera" && i + 1 < argc) { cameraSpec = argv[++i]; continue; }
+        if (arg == "--channel" && i + 1 < argc) { channelId = QString(argv[++i]).toLower(); continue; }
+        if (arg == "--fov" && i + 1 < argc) {
+            bool numOk = false;
+            const QString raw(argv[++i]);
+            fov = raw.toDouble(&numOk);
+            if (!numOk || fov <= 0.0 || fov >= 180.0) {
+                err() << QStringLiteral("Error: --fov must be a number in (0,180), got '%1'.")
+                             .arg(raw) << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (!arg.startsWith('-') && inputPath.isEmpty()) { inputPath = arg; continue; }
+    }
+
+    // ---- pure queries: no mesh, no render system ----
+    if (listStamps || listPresets || listPalettes) {
+        QJsonObject root;
+        if (listStamps) {
+            QJsonArray a;
+            for (const auto& info : BrushAssetLibrary::listAssets(BrushAssetLibrary::AssetKind::Stamp)) {
+                if (jsonOutput) {
+                    a.append(QJsonObject{{"name", QString::fromStdString(info.name)},
+                                         {"bundled", info.bundled}});
+                } else {
+                    cliWrite(QStringLiteral("%1%2\n")
+                                 .arg(QString::fromStdString(info.name), -28)
+                                 .arg(info.bundled ? QStringLiteral("(bundled)")
+                                                   : QStringLiteral("(custom)")));
+                }
+            }
+            root["stamps"] = a;
+        }
+        if (listPresets) {
+            QJsonArray a;
+            for (const auto& pr : BrushPresetLibrary::allPresets()) {
+                const bool b = BrushPresetLibrary::isBundled(pr.name);
+                if (jsonOutput) {
+                    a.append(QJsonObject{{"name", QString::fromStdString(pr.name)},
+                                         {"bundled", b}});
+                } else {
+                    cliWrite(QStringLiteral("%1%2\n")
+                                 .arg(QString::fromStdString(pr.name), -28)
+                                 .arg(b ? QStringLiteral("(bundled)")
+                                        : QStringLiteral("(custom)")));
+                }
+            }
+            root["presets"] = a;
+        }
+        if (listPalettes) {
+            QJsonArray a;
+            for (const auto& pal : ColorPaletteLibrary::allPalettes()) {
+                if (jsonOutput) {
+                    QJsonArray sw;
+                    for (const auto& s : pal.swatches) {
+                        sw.append(QStringLiteral("#%1%2%3")
+                                      .arg(s.r, 2, 16, QLatin1Char('0'))
+                                      .arg(s.g, 2, 16, QLatin1Char('0'))
+                                      .arg(s.b, 2, 16, QLatin1Char('0')));
+                    }
+                    a.append(QJsonObject{{"name", QString::fromStdString(pal.name)},
+                                         {"swatches", sw}});
+                } else {
+                    cliWrite(QStringLiteral("%1%2 swatch(es)\n")
+                                 .arg(QString::fromStdString(pal.name), -28)
+                                 .arg(pal.swatches.size()));
+                }
+            }
+            root["palettes"] = a;
+        }
+        if (jsonOutput)
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        return 0;
+    }
+
+    // ---- bake: alias onto the Slice I core so the two cannot diverge ----
+    if (doBake) {
+        if (inputPath.isEmpty() || outputPath.isEmpty()) {
+            err() << "Error: --bake needs <file> and -o <dir>." << Qt::endl;
+            return 2;
+        }
+        QStringList written, inputChannels;
+        QString error;
+        if (!paintBakeToDirectory(inputPath, engine, outputPath, resolution, prefix,
+                                  /*writeSidecar=*/true, written, inputChannels, error)) {
+            err() << error << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["engine"] = engine;
+            root["outputDir"] = outputPath;
+            QJsonArray outs;
+            for (const QString& w : written) outs.append(w);
+            root["written"] = outs;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            cliWrite(QStringLiteral("Baked %1 texture(s) for '%2' into %3\n")
+                         .arg(written.size()).arg(engine, outputPath));
+        }
+        return 0;
+    }
+
+    // ---- layer list ----
+    if (!layerAction.isEmpty()) {
+        if (layerAction != QLatin1String("list")) {
+            err() << QStringLiteral(
+                         "Error: only '--layer list' is supported headlessly.\n"
+                         "Paint layers live in a live in-memory session and are not "
+                         "persisted to a mesh file, so add/merge-down/flatten would "
+                         "write nothing. Use --bake to write painted pixels to disk.")
+                  << Qt::endl;
+            return 2;
+        }
+        if (inputPath.isEmpty()) {
+            err() << "Error: --layer list needs an input <file>." << Qt::endl;
+            return 2;
+        }
+        if (!initOgreHeadless()) {
+            err() << "Failed to initialise the render system." << Qt::endl;
+            return 1;
+        }
+        const QFileInfo fi(inputPath);
+        if (!fi.exists()) {
+            err() << QStringLiteral("Input file not found: %1").arg(inputPath) << Qt::endl;
+            return 1;
+        }
+        MeshImporterExporter::importer({fi.absoluteFilePath()});
+        auto& entities = Manager::getSingleton()->getEntities();
+        if (entities.isEmpty()) {
+            err() << QStringLiteral("Could not import '%1'.").arg(inputPath) << Qt::endl;
+            return 1;
+        }
+        // A freshly imported mesh has no paint session, so paintedChannelIds()
+        // (which inspects live/stashed layer stacks) is always empty here. The
+        // useful answer is which PBR slots the MATERIAL actually binds — that is
+        // what "channels carrying texture data" means for a file on disk.
+        QStringList painted;
+        {
+            // slot name -> channel id. paintChannelForSlotName is file-local to
+            // TexturePaintController, so the mapping is spelled out here; both
+            // albedo and diffuse_map are the BaseColor channel.
+            struct SlotMap { const char* slot; const char* id; };
+            static const SlotMap kSlots[] = {
+                {"albedo",      "basecolor"},
+                {"diffuse_map", "basecolor"},
+                {"normal_map",  "normal"},
+                {"roughness",   "roughness"},
+                {"metallic",    "metallic"},
+                {"ao",          "ao"},
+                {"emissive",    "emissive"},
+            };
+            QSet<QString> seen;
+            for (auto* obj : entities) {
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                auto* ent = static_cast<Ogre::Entity*>(obj);
+                for (unsigned int si = 0; si < ent->getNumSubEntities(); ++si) {
+                    const auto& mat = ent->getSubEntity(si)->getMaterial();
+                    if (!mat || !mat->getTechnique(0) || !mat->getTechnique(0)->getPass(0))
+                        continue;
+                    for (auto* tus : mat->getTechnique(0)->getPass(0)->getTextureUnitStates()) {
+                        if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                            continue;
+                        const QString slot = QString::fromStdString(tus->getName());
+                        if (slot.isEmpty() || tus->getTextureName().empty()) continue;
+                        for (const auto& m : kSlots) {
+                            if (slot != QLatin1String(m.slot)) continue;
+                            const QString id = QString::fromLatin1(m.id);
+                            if (!seen.contains(id)) {
+                                seen.insert(id);
+                                painted << id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["layers"] = QJsonArray{};
+            QJsonArray ch;
+            for (const QString& c : painted) ch.append(c);
+            root["paintedChannels"] = ch;
+            root["note"] = QStringLiteral(
+                "Paint layers are a live-session concept and are not stored in a "
+                "mesh file; a freshly imported mesh has none. 'paintedChannels' "
+                "lists the PBR slots this material binds.");
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            cliWrite(QStringLiteral("Layers: 0 (paint layers are not persisted in a mesh file)\n"));
+            cliWrite(QStringLiteral("Painted channels: %1\n")
+                         .arg(painted.isEmpty() ? QStringLiteral("(none)")
+                                                : painted.join(QStringLiteral(", "))));
+        }
+        return 0;
+    }
+
+    // ---- apply-stencil with an explicit camera ----
+    if (!stencilPath.isEmpty()) {
+        if (inputPath.isEmpty() || outputPath.isEmpty()) {
+            err() << "Error: --apply-stencil needs <file> and -o <out>." << Qt::endl;
+            return 2;
+        }
+        // Validate --channel HERE, before any filesystem or Ogre work: fromId
+        // returns Channel::Count for a typo and setActiveChannel silently
+        // IGNORES an out-of-range value, so an unvalidated flag would project
+        // into whatever channel was active and export a valid-looking but wrong
+        // asset. An invalid FLAG is a usage error (2), so it must be reported
+        // before a missing-input error (1) can mask it.
+        int parsedChannel = -1;
+        if (!channelId.isEmpty()) {
+            const auto ch = PaintChannelNS::fromId(channelId.toStdString());
+            if (ch == PaintChannelNS::Channel::Count
+                || channelId != QLatin1String(PaintChannelNS::id(ch))) {
+                err() << QStringLiteral("Error: unknown --channel '%1' "
+                                        "(basecolor|normal|roughness|metallic|ao|emissive)")
+                             .arg(channelId) << Qt::endl;
+                return 2;
+            }
+            if (ch == PaintChannelNS::Channel::Height) {
+                err() << "Error: 'height' is not a paintable channel (#547) — it "
+                         "shares the Normal session. Use --channel normal."
+                      << Qt::endl;
+                return 2;
+            }
+            parsedChannel = static_cast<int>(ch);
+        }
+        // Six comma-separated floats: eye xyz then target xyz. Required, because
+        // there is no viewport camera to fall back on headlessly.
+        const QStringList parts = cameraSpec.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (parts.size() != 6) {
+            err() << QStringLiteral(
+                         "Error: --camera needs six comma-separated numbers "
+                         "\"ex,ey,ez,tx,ty,tz\" (eye then target); got %1.")
+                         .arg(parts.size())
+                  << Qt::endl;
+            return 2;
+        }
+        bool ok = true;
+        double v[6];
+        for (int i = 0; i < 6; ++i) {
+            v[i] = parts[i].trimmed().toDouble(&ok);
+            if (!ok) {
+                err() << QStringLiteral("Error: --camera value '%1' is not a number.")
+                             .arg(parts[i]) << Qt::endl;
+                return 2;
+            }
+        }
+        if (!initOgreHeadless()) {
+            err() << "Failed to initialise the render system." << Qt::endl;
+            return 1;
+        }
+        const QFileInfo fi(inputPath);
+        if (!fi.exists()) {
+            err() << QStringLiteral("Input file not found: %1").arg(inputPath) << Qt::endl;
+            return 1;
+        }
+        if (!QFileInfo::exists(stencilPath)) {
+            err() << QStringLiteral("Stencil image not found: %1").arg(stencilPath) << Qt::endl;
+            return 1;
+        }
+        MeshImporterExporter::importer({fi.absoluteFilePath()});
+        auto& entities = Manager::getSingleton()->getEntities();
+        if (entities.isEmpty()) {
+            err() << QStringLiteral("Could not import '%1'.").arg(inputPath) << Qt::endl;
+            return 1;
+        }
+        auto* ctrl = TexturePaintController::instance();
+        if (!ctrl) {
+            err() << "Paint controller unavailable." << Qt::endl;
+            return 1;
+        }
+        // Select the entity so the controller's session targets it.
+        for (auto* obj : entities) {
+            if (obj && obj->getMovableType() == "Entity") {
+                SelectionSet::getSingleton()->selectOne(static_cast<Ogre::Entity*>(obj));
+                break;
+            }
+        }
+        if (!channelId.isEmpty())
+            ctrl->setActiveChannel(parsedChannel);
+        if (resolution > 0) ctrl->ensurePaintableTexture(resolution);
+
+        if (!ctrl->projectFromPhotoWithCamera(
+                stencilPath,
+                QVector3D(float(v[0]), float(v[1]), float(v[2])),
+                QVector3D(float(v[3]), float(v[4]), float(v[5])),
+                QVector3D(), fov)) {
+            err() << QStringLiteral(
+                         "Stencil projection wrote no texels. The camera may not see "
+                         "the mesh, or the mesh may have no UV0.")
+                  << Qt::endl;
+            return 1;
+        }
+        // Bake the painted channel into the material, then export, so the
+        // projection survives in the written file.
+        ctrl->bakeChannel(ctrl->activeChannel());
+        // Export the SceneNode (the exporter's unit), format from the output
+        // extension — same call shape as cmdConvert/cmdFix.
+        const QFileInfo outFi(outputPath);
+        Ogre::SceneNode* outNode = entities.first()->getParentSceneNode();
+        if (!outNode) {
+            err() << "Imported entity has no scene node to export." << Qt::endl;
+            return 1;
+        }
+        if (MeshImporterExporter::exporter(outNode, outFi.absoluteFilePath(),
+                                           formatForExtension(outputPath)) != 0) {
+            err() << QStringLiteral("Could not write '%1'.").arg(outputPath) << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["stencil"] = stencilPath;
+            root["output"] = outputPath;
+            root["camera"] = cameraSpec;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            cliWrite(QStringLiteral("Projected '%1' onto '%2' -> %3\n")
+                         .arg(QFileInfo(stencilPath).fileName(),
+                              fi.fileName(), outputPath));
+        }
+        return 0;
+    }
+
+    err() << "Usage: qtmesh paint --list-stamps | --list-presets | --list-palettes [--json]" << Qt::endl;
+    err() << "       qtmesh paint <file> --layer list [--json]" << Qt::endl;
+    err() << "       qtmesh paint <file> --bake --engine <generic|unity|unreal|godot|gltf>" << Qt::endl;
+    err() << "                    [--resolution N] [--prefix P] -o <dir> [--json]" << Qt::endl;
+    err() << "       qtmesh paint <file> --apply-stencil <img> --camera \"ex,ey,ez,tx,ty,tz\"" << Qt::endl;
+    err() << "                    [--channel <id>] [--fov D] [--resolution N] -o <out>" << Qt::endl;
+    return 2;
 }
 
 int CLIPipeline::cmdPaintBake(int argc, char* argv[])
