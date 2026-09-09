@@ -116,6 +116,8 @@ ProjectionPainter::Report ProjectionPainter::project(
     const int outW = opts.resolution > 0 ? opts.resolution : out.width();
     const int outH = opts.resolution > 0 ? opts.resolution : out.height();
     if (outW <= 0 || outH <= 0) { rep.error = "invalid resolution"; return rep; }
+    const float outWf = static_cast<float>(outW);
+    const float outHf = static_cast<float>(outH);
     out.resize(outW, outH);
     out.clear(Ogre::ColourValue(0, 0, 0, 0));   // new-layer buffer starts transparent
 
@@ -137,7 +139,7 @@ ProjectionPainter::Report ProjectionPainter::project(
         // UV0 -> pixel space (top-left origin); each axis scales by its own
         // extent so a non-square target isn't skewed.
         auto toPix = [&](const Ogre::Vector2& uv) {
-            return Ogre::Vector2(uv.x * outW, uv.y * outH);
+            return Ogre::Vector2(uv.x * outWf, uv.y * outHf);
         };
         const Ogre::Vector2 A = toPix(t.uv[0]), B = toPix(t.uv[1]), C = toPix(t.uv[2]);
         int x0 = std::max(0, static_cast<int>(std::floor(std::min({A.x, B.x, C.x}))));
@@ -207,11 +209,14 @@ int ProjectionPainter::projectDab(
     // per-axis pixel radius and take the falloff from NORMALISED distances,
     // matching TexturePaintBuffer::paintBrush. (Using one radius off the
     // smaller axis shrank the dab in UV terms along the longer axis.)
-    const float rPixX = brushRadiusUv * outW;
-    const float rPixY = brushRadiusUv * outH;
+    const float outWf = static_cast<float>(outW);
+    const float outHf = static_cast<float>(outH);
+    const float rPixX = brushRadiusUv * outWf;
+    const float rPixY = brushRadiusUv * outHf;
     const float invRx = 1.0f / std::max(rPixX, 1e-6f);
     const float invRy = 1.0f / std::max(rPixY, 1e-6f);
-    const float cxPix = brushUv.x * outW, cyPix = brushUv.y * outH;
+    const float cxPix = brushUv.x * outWf;
+    const float cyPix = brushUv.y * outHf;
 
     for (const Triangle& t : tris) {
         Ogre::Vector3 nrm = t.normal;
@@ -228,7 +233,7 @@ int ProjectionPainter::projectDab(
         if (pa.behind || pb.behind || pc.behind) continue;
 
         auto toPix = [&](const Ogre::Vector2& uv) {
-            return Ogre::Vector2(uv.x * outW, uv.y * outH);
+            return Ogre::Vector2(uv.x * outWf, uv.y * outHf);
         };
         const Ogre::Vector2 A = toPix(t.uv[0]), B = toPix(t.uv[1]), C = toPix(t.uv[2]);
         // Clamp the scanned box to the brush footprint (perf: only near the dab).
@@ -240,37 +245,47 @@ int ProjectionPainter::projectDab(
         if (std::abs(denom) < 1e-9f) continue;
         const float invDen = 1.0f / denom;
 
+        // One texel of the dab; returns true when it painted. Factored out so
+        // the scan stays two loops deep (the occlusion test would otherwise
+        // nest a 4th level).
+        auto paintTexel = [&](int px, int py) {
+            const float fx = px + 0.5f;
+            const float fy = py + 0.5f;
+            // Round brush falloff in NORMALISED (per-axis) distance, so the
+            // dab is a circle in UV space on any aspect ratio.
+            const float nx = (fx - cxPix) * invRx;
+            const float ny = (fy - cyPix) * invRy;
+            const float dr = std::hypot(nx, ny);
+            if (rPixX <= 0.0f || rPixY <= 0.0f || dr > 1.0f) return false;
+            const float fall = 1.0f - dr;
+
+            const float l0 = ((B.y - C.y) * (fx - C.x) + (C.x - B.x) * (fy - C.y)) * invDen;
+            const float l1 = ((C.y - A.y) * (fx - C.x) + (A.x - C.x) * (fy - C.y)) * invDen;
+            const float l2 = 1.0f - l0 - l1;
+            const float eps = -1e-4f;
+            if (l0 < eps || l1 < eps || l2 < eps) return false;
+
+            const Ogre::Vector2 suv = pa.uv * l0 + pb.uv * l1 + pc.uv * l2;
+            if (suv.x < 0.0f || suv.x > 1.0f || suv.y < 0.0f || suv.y > 1.0f)
+                return false;
+
+            const bool wantDepth = occ && (opts.useOcclusion || opts.depthLimit > 0.0f);
+            if (wantDepth) {
+                const Ogre::Vector3 wp = t.p[0] * l0 + t.p[1] * l1 + t.p[2] * l2;
+                if (classifyDepth(wp, *occ, opts.depthLimit, opts.useOcclusion) != 0)
+                    return false;
+            }
+
+            const float stencilA = haveStencil ? sampleImage(stencil, suv).a : 1.0f;
+            const float a = facing * stencilA * fall * strength;
+            if (a <= 0.0f) return false;
+            compositeOver(out, px, py, brushColor, a);
+            return true;
+        };
+
         for (int py = y0; py <= y1; ++py) {
             for (int px = x0; px <= x1; ++px) {
-                const float fx = px + 0.5f, fy = py + 0.5f;
-                // Round brush falloff in NORMALISED (per-axis) distance, so
-                // the dab is a circle in UV space on any aspect ratio.
-                const float nx = (fx - cxPix) * invRx;
-                const float ny = (fy - cyPix) * invRy;
-                const float dr = std::hypot(nx, ny);
-                if (rPixX <= 0.0f || rPixY <= 0.0f || dr > 1.0f) continue;
-                const float fall = 1.0f - dr;
-
-                const float l0 = ((B.y - C.y) * (fx - C.x) + (C.x - B.x) * (fy - C.y)) * invDen;
-                const float l1 = ((C.y - A.y) * (fx - C.x) + (A.x - C.x) * (fy - C.y)) * invDen;
-                const float l2 = 1.0f - l0 - l1;
-                const float eps = -1e-4f;
-                if (l0 < eps || l1 < eps || l2 < eps) continue;
-
-                const Ogre::Vector2 suv = pa.uv * l0 + pb.uv * l1 + pc.uv * l2;
-                if (suv.x < 0.0f || suv.x > 1.0f || suv.y < 0.0f || suv.y > 1.0f) continue;
-
-                if (occ && (opts.useOcclusion || opts.depthLimit > 0.0f)) {
-                    const Ogre::Vector3 wp = t.p[0] * l0 + t.p[1] * l1 + t.p[2] * l2;
-                    const int cls = classifyDepth(wp, *occ, opts.depthLimit, opts.useOcclusion);
-                    if (cls != 0) continue;
-                }
-
-                const float stencilA = haveStencil ? sampleImage(stencil, suv).a : 1.0f;
-                const float a = facing * stencilA * fall * strength;
-                if (a <= 0.0f) continue;
-                compositeOver(out, px, py, brushColor, a);
-                ++touched;
+                if (paintTexel(px, py)) ++touched;
             }
         }
     }
