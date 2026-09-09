@@ -106,10 +106,17 @@ ProjectionPainter::Report ProjectionPainter::project(
     if (tris.empty()) { rep.error = "no triangles"; return rep; }
     if (source.isNull()) { rep.error = "empty source image"; return rep; }
 
-    const int res = opts.resolution > 0 ? opts.resolution
-                                        : std::max(out.width(), out.height());
-    if (res <= 0) { rep.error = "invalid resolution"; return rep; }
-    out.resize(res, res);
+    // Width and height are tracked SEPARATELY: a NON-SQUARE texture (an
+    // AI-generated diffuse is routinely e.g. 2504x2526) gave a square output
+    // here, and PaintLayerStack::addFromBuffer then resize()d the mismatched
+    // layer to the stack size — which fills with opaque WHITE and discards
+    // every projected texel, so the decal committed as an all-white layer.
+    // opts.resolution (when set) is a SQUARE request; otherwise keep the
+    // caller's buffer aspect.
+    const int outW = opts.resolution > 0 ? opts.resolution : out.width();
+    const int outH = opts.resolution > 0 ? opts.resolution : out.height();
+    if (outW <= 0 || outH <= 0) { rep.error = "invalid resolution"; return rep; }
+    out.resize(outW, outH);
     out.clear(Ogre::ColourValue(0, 0, 0, 0));   // new-layer buffer starts transparent
 
     for (const Triangle& t : tris) {
@@ -127,15 +134,16 @@ ProjectionPainter::Report ProjectionPainter::project(
         const Projected pc = projectToViewportUV(t.p[2], view.viewProj);
         if (pa.behind || pb.behind || pc.behind) continue;
 
-        // UV0 -> pixel space (top-left origin).
+        // UV0 -> pixel space (top-left origin); each axis scales by its own
+        // extent so a non-square target isn't skewed.
         auto toPix = [&](const Ogre::Vector2& uv) {
-            return Ogre::Vector2(uv.x * res, uv.y * res);
+            return Ogre::Vector2(uv.x * outW, uv.y * outH);
         };
         const Ogre::Vector2 A = toPix(t.uv[0]), B = toPix(t.uv[1]), C = toPix(t.uv[2]);
         int x0 = std::max(0, static_cast<int>(std::floor(std::min({A.x, B.x, C.x}))));
-        int x1 = std::min(res - 1, static_cast<int>(std::ceil(std::max({A.x, B.x, C.x}))));
+        int x1 = std::min(outW - 1, static_cast<int>(std::ceil(std::max({A.x, B.x, C.x}))));
         int y0 = std::max(0, static_cast<int>(std::floor(std::min({A.y, B.y, C.y}))));
-        int y1 = std::min(res - 1, static_cast<int>(std::ceil(std::max({A.y, B.y, C.y}))));
+        int y1 = std::min(outH - 1, static_cast<int>(std::ceil(std::max({A.y, B.y, C.y}))));
         const float denom = (B.y - C.y) * (A.x - C.x) + (C.x - B.x) * (A.y - C.y);
         if (std::abs(denom) < 1e-9f) continue;
         const float invDen = 1.0f / denom;
@@ -186,14 +194,19 @@ int ProjectionPainter::projectDab(
     const Ogre::ColourValue& brushColor, float strength,
     TexturePaintBuffer& out, const Options& opts, const OcclusionMap* occ)
 {
-    if (tris.empty() || out.width() <= 0) return 0;
-    const int res = std::max(out.width(), out.height());
+    if (tris.empty() || out.width() <= 0 || out.height() <= 0) return 0;
+    // Per-axis extents — see project(): a non-square target must not be
+    // squashed onto a single square `res`.
+    const int outW = out.width();
+    const int outH = out.height();
     const bool haveStencil = !stencil.isNull();
     int touched = 0;
 
-    // Brush footprint in pixel space (round falloff).
-    const float rPix = brushRadiusUv * res;
-    const float cxPix = brushUv.x * res, cyPix = brushUv.y * res;
+    // Brush footprint in pixel space (round falloff). The radius is a UV
+    // fraction; on a non-square texture use the smaller axis so the dab stays
+    // circular in UV space rather than stretching along the longer one.
+    const float rPix = brushRadiusUv * std::min(outW, outH);
+    const float cxPix = brushUv.x * outW, cyPix = brushUv.y * outH;
 
     for (const Triangle& t : tris) {
         Ogre::Vector3 nrm = t.normal;
@@ -210,14 +223,14 @@ int ProjectionPainter::projectDab(
         if (pa.behind || pb.behind || pc.behind) continue;
 
         auto toPix = [&](const Ogre::Vector2& uv) {
-            return Ogre::Vector2(uv.x * res, uv.y * res);
+            return Ogre::Vector2(uv.x * outW, uv.y * outH);
         };
         const Ogre::Vector2 A = toPix(t.uv[0]), B = toPix(t.uv[1]), C = toPix(t.uv[2]);
         // Clamp the scanned box to the brush footprint (perf: only near the dab).
         int x0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.x, B.x, C.x}), cxPix - rPix))));
-        int x1 = std::min(res - 1, static_cast<int>(std::ceil(std::min(std::max({A.x, B.x, C.x}), cxPix + rPix))));
+        int x1 = std::min(outW - 1, static_cast<int>(std::ceil(std::min(std::max({A.x, B.x, C.x}), cxPix + rPix))));
         int y0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.y, B.y, C.y}), cyPix - rPix))));
-        int y1 = std::min(res - 1, static_cast<int>(std::ceil(std::min(std::max({A.y, B.y, C.y}), cyPix + rPix))));
+        int y1 = std::min(outH - 1, static_cast<int>(std::ceil(std::min(std::max({A.y, B.y, C.y}), cyPix + rPix))));
         const float denom = (B.y - C.y) * (A.x - C.x) + (C.x - B.x) * (A.y - C.y);
         if (std::abs(denom) < 1e-9f) continue;
         const float invDen = 1.0f / denom;

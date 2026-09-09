@@ -165,8 +165,34 @@ int PaintLayerStack::addFromBuffer(const TexturePaintBuffer& src,
     }
     const int w = width();
     const int h = height();
-    if (src.width() != w || src.height() != h)
-        L.buffer.resize(w, h);
+    if (src.width() != w || src.height() != h) {
+        // RESCALE, never bare resize(): TexturePaintBuffer::resize fills the
+        // buffer with 0xFF (opaque WHITE) and drops the content, so a caller
+        // that handed us a differently-sized buffer — e.g. a decal projected
+        // at square resolution onto a NON-SQUARE texture — got a blank white
+        // layer instead of its pixels. Nearest-neighbour keeps this
+        // dependency-free and preserves hard alpha edges (decals/stencils).
+        TexturePaintBuffer scaled;
+        scaled.resize(w, h);
+        if (w > 0 && h > 0 && src.width() > 0 && src.height() > 0) {
+            const auto& s = src.data();
+            auto& d = scaled.data();
+            for (int y = 0; y < h; ++y) {
+                const int sy = std::min(src.height() - 1,
+                                        y * src.height() / h);
+                for (int x = 0; x < w; ++x) {
+                    const int sx = std::min(src.width() - 1,
+                                            x * src.width() / w);
+                    const size_t si =
+                        (static_cast<size_t>(sy) * src.width() + sx) * 4u;
+                    const size_t di = (static_cast<size_t>(y) * w + x) * 4u;
+                    if (si + 3 < s.size() && di + 3 < d.size())
+                        std::memcpy(&d[di], &s[si], 4);
+                }
+            }
+        }
+        L.buffer = std::move(scaled);
+    }
     m_layers.push_back(std::move(L));
     m_activeIndex = layerCount() - 1;
     return m_activeIndex;

@@ -867,7 +867,10 @@ bool TexturePaintController::buildOcclusionForView(const ProjectionPainter::View
 ProjectionPainter::Options TexturePaintController::projectionOptions() const
 {
     ProjectionPainter::Options opts;
-    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    // resolution stays 0 = "keep the target buffer's own size". Setting it to
+    // the width forced a SQUARE output, which on a non-square texture made
+    // PaintLayerStack::addFromBuffer resize (→ opaque white) the committed
+    // layer. Callers size their scratch buffer from the session instead.
     opts.backfaceCull = m_projBackfaceCull;
     opts.useOcclusion = m_projUseOcclusion;
     // depthLimit is a fraction of the bounds radius → world units.
@@ -933,7 +936,9 @@ bool TexturePaintController::projectPhotoWithView(const QImage& src,
     opts.useOcclusion = m_haveProjOcc;   // photo always occludes when we have a map
 
     TexturePaintBuffer scratch;
-    scratch.resize(opts.resolution, opts.resolution);
+    const int sw = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    const int sh = m_buffer.height() > 0 ? m_buffer.height() : sw;
+    scratch.resize(sw, sh);
     const auto rep = ProjectionPainter::project(
         m_projTris, v, src, scratch, opts, m_haveProjOcc ? &m_projOcc : nullptr);
     if (!rep.ok || rep.texelsWritten == 0) return false;
@@ -1257,12 +1262,18 @@ bool TexturePaintController::commitDecal()
     ProjectionPainter::OcclusionMap occ;
     const bool haveOcc = buildOcclusionForView(ci.view, occ);
     ProjectionPainter::Options opts;
-    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    // Leave opts.resolution at 0 (= keep the scratch buffer's own size): the
+    // session buffer matches the model's texture, which is NOT necessarily
+    // square. Forcing a square scratch made PaintLayerStack::addFromBuffer
+    // resize the mismatched layer, which fills opaque WHITE and drops every
+    // projected texel — the "decal commits as an all-white layer" bug.
     opts.backfaceCull = true;
     opts.useOcclusion = haveOcc;
 
     TexturePaintBuffer scratch;
-    scratch.resize(opts.resolution, opts.resolution);
+    const int sw = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    const int sh = m_buffer.height() > 0 ? m_buffer.height() : sw;
+    scratch.resize(sw, sh);
     const auto rep = ProjectionPainter::project(
         m_projTris, ci.view, ci.source, scratch, opts, haveOcc ? &occ : nullptr);
     const bool ok = rep.ok && rep.texelsWritten > 0
@@ -5360,6 +5371,26 @@ QString TexturePaintController::bakeVertexLayerToTextureLayer(int resolution,
     const int painted = VertexColorBaker::bake(mesh, scratch, opts);
     if (painted <= 0)
         return tr("The mesh has no vertex colours to bake, or no UV0 to bake into.");
+
+    // VertexColorBaker is square-only, but the layer stack follows the model's
+    // texture, which may not be. addFromBuffer would then resize() the layer —
+    // which fills opaque WHITE and drops the bake — so rescale to the stack's
+    // aspect here instead.
+    if (m_layerStack.layerCount() > 0
+        && (scratch.width() != m_layerStack.width()
+            || scratch.height() != m_layerStack.height())) {
+        QImage img(scratch.width(), scratch.height(), QImage::Format_RGBA8888);
+        std::memcpy(img.bits(), scratch.data().data(),
+                    static_cast<size_t>(scratch.width()) * scratch.height() * 4);
+        const QImage scaled = img.scaled(m_layerStack.width(), m_layerStack.height(),
+                                         Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation)
+                                  .convertToFormat(QImage::Format_RGBA8888);
+        TexturePaintBuffer resized(scaled.width(), scaled.height());
+        std::memcpy(resized.data().data(), scaled.constBits(),
+                    static_cast<size_t>(scaled.width()) * scaled.height() * 4);
+        scratch = std::move(resized);
+    }
 
     const int idx = m_layerStack.addFromBuffer(
         scratch, tr("Vertex colour bake"), PaintLayerStack::LayerType::Generated);
