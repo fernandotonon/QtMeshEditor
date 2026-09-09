@@ -321,3 +321,22 @@ TEST(PaintLayerStackTest, AddFromBufferPreservesTransparencyWhenRescaling) {
     const Px p = firstPixel(s);
     EXPECT_EQ(p.r, 255);
 }
+
+TEST(PaintLayerStackTest, AddFromBufferWithAnEmptySourceIsTransparentNotWhite) {
+    // A degenerate (zero-sized) source must not become an opaque white layer:
+    // TexturePaintBuffer::resize fills with 0xFF, so the rescale path has to
+    // clear it explicitly. Regression guard for the same white-out class.
+    PaintLayerStack s = seeded();
+    const TexturePaintBuffer empty;           // 0x0
+    const int idx = s.addFromBuffer(empty, QStringLiteral("Empty"),
+                                    PaintLayerStack::LayerType::Generated);
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(s.layer(idx).buffer.width(), kW);
+    EXPECT_EQ(s.layer(idx).buffer.height(), kH);
+    EXPECT_EQ(s.layer(idx).buffer.pixel(0, 0).a, 0.0f)
+        << "an empty source must yield a TRANSPARENT layer, not white";
+    // The red base must still show through.
+    const Px p = firstPixel(s);
+    EXPECT_EQ(p.r, 255);
+    EXPECT_EQ(p.g, 0);
+}

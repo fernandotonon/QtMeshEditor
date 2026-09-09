@@ -22,9 +22,16 @@ void copyBuffer(const TexturePaintBuffer& src, TexturePaintBuffer& dst)
 TexturePaintBuffer rescaleNearest(const TexturePaintBuffer& src, int w, int h)
 {
     TexturePaintBuffer scaled;
+    if (w <= 0 || h <= 0) return scaled;
     scaled.resize(w, h);
-    if (w <= 0 || h <= 0 || src.width() <= 0 || src.height() <= 0)
+    // resize() leaves the buffer OPAQUE WHITE, so a degenerate source must be
+    // cleared to transparent — returning it as-is would reintroduce exactly
+    // the blank-white layer this helper exists to prevent.
+    if (src.width() <= 0 || src.height() <= 0) {
+        scaled.clear(Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.0f));
+        scaled.clearDirty();
         return scaled;
+    }
 
     const auto& s = src.data();
     auto& d = scaled.data();
