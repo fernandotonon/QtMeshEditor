@@ -6,6 +6,7 @@
 #include "ColorPaletteLibrary.h"
 #include "BrushPresetLibrary.h"
 #include "BrushAssetLibrary.h"
+#include "MeshWeldOps.h"
 #include "CloudCLIPipeline.h"
 #include "GamificationManager.h"
 #include "Manager.h"
@@ -784,6 +785,7 @@ void CLIPipeline::printUsage()
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
+        "  --weld-vertices       Weld co-located duplicate vertices + unify seam skin weights\n"
         "  --merge-materials     Remove redundant materials\n"
         "  --all                 Apply all extra fixes\n"
         "  (no flags)            Standard import/export (joins vertices, smooths normals, optimizes)\n"
@@ -2040,6 +2042,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
         }
         if (arg == "--remove-degenerates") { opts.removeDegenerates = true; continue; }
         if (arg == "--merge-materials") { opts.mergeMaterials = true; continue; }
+        if (arg == "--weld-vertices") { opts.weldVertices = true; continue; }
         if (arg == "--all") { allFlag = true; continue; }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
@@ -2049,7 +2052,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh fix <file> [-o <output>] [--remove-degenerates] [--merge-materials] [--all]" << Qt::endl;
+        err() << "Usage: qtmesh fix <file> [-o <output>] [--remove-degenerates] [--merge-materials] [--weld-vertices] [--all]" << Qt::endl;
         return 2;
     }
 
@@ -2066,6 +2069,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     if (allFlag) {
         opts.removeDegenerates = true;
         opts.mergeMaterials = true;
+        opts.weldVertices = true;
     }
 
     QFileInfo outFi(outputPath);
@@ -2111,6 +2115,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     QStringList fixFlags;
     if (opts.removeDegenerates) fixFlags << "remove-degenerates";
     if (opts.mergeMaterials) fixFlags << "merge-materials";
+    if (opts.weldVertices) fixFlags << "weld-vertices";
     SentryReporter::addBreadcrumb("cli.fix", QString("Fix .%1 -> .%2%3")
         .arg(fi.suffix(), outFi.suffix(),
              fixFlags.isEmpty() ? "" : " [" + fixFlags.join(", ") + "]"));
@@ -2121,6 +2126,28 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
         SentryReporter::captureMessage(QString("CLI fix: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << inputPath << Qt::endl;
         return 1;
+    }
+
+    // Weld co-located vertices (index remap of byte-identical duplicates +
+    // unified skin weights across seam twins — the animation-tearing fix).
+    int weldedRefs = 0, weightsUnified = 0, weldFailures = 0;
+    if (opts.weldVertices) {
+        for (Ogre::Entity* entity : entities) {
+            const MeshWeldOps::Report r = MeshWeldOps::apply(entity);
+            if (r.ok) {
+                weldedRefs += r.weldedVertices;
+                weightsUnified += r.weightsUnified;
+            } else {
+                // Never let a failure read as "nothing needed welding" — the
+                // MCP tool surfaces rep.error, so the CLI must too.
+                ++weldFailures;
+                err() << "Warning: weld skipped for '"
+                      << QString::fromStdString(entity->getName()) << "': "
+                      << (r.error.isEmpty() ? QStringLiteral("unknown error")
+                                            : r.error)
+                      << Qt::endl;
+            }
+        }
     }
 
     // Gather "after" counts from Ogre entities
@@ -2149,7 +2176,16 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
         QStringList extras;
         if (opts.removeDegenerates) extras << "remove-degenerates";
         if (opts.mergeMaterials) extras << "merge-materials";
+        if (opts.weldVertices) extras << "weld-vertices";
         report += QString("  Extra: %1\n").arg(extras.join(", "));
+        if (opts.weldVertices) {
+            report += QString("  Weld: %1 index reference(s) remapped, "
+                              "%2 seam vertex weight(s) unified\n")
+                          .arg(weldedRefs).arg(weightsUnified);
+            if (weldFailures > 0)
+                report += QString("        (%1 mesh(es) could not be welded — "
+                                  "see warnings above)\n").arg(weldFailures);
+        }
     }
 
     if (vertsBefore > 0) {

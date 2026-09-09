@@ -269,6 +269,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshWeldOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/WeldVerticesCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIModelCatalog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppStorage.cpp
