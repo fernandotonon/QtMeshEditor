@@ -68,6 +68,25 @@ Authoring tips learned the hard way:
   retarget locks the root's orientation to the standing pose, so a
   hips-pitched crawl retargets as an upright kneel. Bow spine/spine1/spine2
   instead (the crawl clip is the reference).
+- **Keep arms close to the body.** An upper arm held out to the side (world
+  |X| > ~0.35 of its direction vector) sits near the retarget's shoulder
+  singularity, and the arm can INVERT mid-clip — it swings backward while
+  the elbow and legs still look right. The bind is a T-pose, so "arm down"
+  is `r_arm X≈84`, not 72; `X=90` is straight down and `X≈-84` straight up.
+  The approved walk/march clips measure mean |X| ≈ 0.16–0.20; anything much
+  above that is a warning sign.
+- **Watch stacked torso yaw.** Yaw on hips + spine + spine1 accumulates and
+  rotates the whole arm chain: punch and throw had −42° and −50° total,
+  which swung a forward punch out to the side and pushed it into that same
+  singularity. Keep the total under ~15° and let the arm carry the motion.
+- **Envelopes must not unwind.** A strike whose `release` decays back to 0
+  returns the arm to neutral, so the action visibly stops mid-motion. Use a
+  separate `follow` envelope that continues to the end of the clip (see
+  `throw`).
+- **Judge forward/back from the SIDE view** (`--directions 4`, row 1), never
+  the front — a limb travelling at the camera is foreshortened and reads as
+  stationary. Better still, measure it: `probe_dir.py` prints world bone
+  directions with no rendering at all.
 - **Fast strikes need a hold plateau** (trapezoid envelope, not a narrow bump):
   the generate path's 12 fps smooth-bake averages away a peak that lives on a
   single keyframe (this is why the first punch draft lost its snap).

@@ -116,8 +116,8 @@ def run():
             "r_leg": (kneeR + 12.0, 0, 0),
             "l_foot": (-10.0 * swingL + 5.0, 0, 0),
             "r_foot": (-10.0 * swingR + 5.0, 0, 0),
-            "l_arm": (62.0, 0, 30.0 * swingR + 6.0),
-            "r_arm": (62.0, 0, 30.0 * swingL + 6.0),
+            "l_arm": (82.0, 0, 30.0 * swingR + 6.0),
+            "r_arm": (82.0, 0, 30.0 * swingL + 6.0),
             "l_forearm": (0, 0, 55.0 + 12.0 * swingR),
             "r_forearm": (0, 0, 55.0 + 12.0 * swingL),
             "spine": (14.0, 7.0 * swingL, 0),
@@ -178,11 +178,12 @@ def wave():
         wig = _s(3.0 * _seg(t, up_t, down_t)) * raise01
         return {
             # left arm hangs relaxed
-            "l_arm": (72.0, 0, 2.0),
+            "l_arm": (84.0, 0, 2.0),
             "l_forearm": (0, 0, 10.0),
-            # right arm: from hanging to raised well overhead (X 72 -> -58),
-            # rocking with the wave so the whole arm participates
-            "r_arm": (72.0 - 130.0 * raise01 + 9.0 * wig, 0, 4.0 * raise01),
+            # right arm: hanging (X 84, close to the body) -> straight overhead
+            # (X -84). A splayed arm (the old 72 -> -58) sits near the
+            # retarget's shoulder singularity and inverts.
+            "r_arm": (84.0 - 168.0 * raise01 + 9.0 * wig, 0, 4.0 * raise01),
             # the visible wave: forearm curls in-and-out around a half-bent
             # elbow while the arm is up
             "r_forearm": (0, 10.0 * wig, 35.0 * raise01 + 28.0 * wig),
@@ -254,15 +255,15 @@ def punch():
         guard = guard_in * (1.0 - guard_out)
         return {
             # guard: arms down-forward, elbows curled hard (fists up)
-            "l_arm": (72.0 - 22.0 * guard, 0, 26.0 * guard),
+            "l_arm": (84.0 - 20.0 * guard, 0, 26.0 * guard),
             "l_forearm": (0, 0, 100.0 * guard),
             # right arm: guard -> extended straight forward
-            "r_arm": (72.0 - 52.0 * guard - 22.0 * strike, 0,
+            "r_arm": (84.0 - 34.0 * guard - 8.0 * strike, 0,
                       26.0 * guard + 68.0 * strike),
             "r_forearm": (0, 0, 105.0 * guard * (1.0 - strike) + 8.0 * strike),
-            "spine": (6.0 * guard, -22.0 * strike, 0),
-            "spine1": (2.0 * guard, -10.0 * strike, 0),
-            "hips": (2.0 * guard, -10.0 * strike, 0),
+            "spine": (6.0 * guard, -9.0 * strike, 0),
+            "spine1": (2.0 * guard, -4.0 * strike, 0),
+            "hips": (2.0 * guard, -4.0 * strike, 0),
             "head": (2.0 * guard - 2.0 * strike, 4.0 * strike, 0),
             # slight stance: left leg forward, knees soft
             "l_upleg": (14.0 * guard, 0, 3.0 * guard),
@@ -297,9 +298,9 @@ def kick():
             "l_upleg": (-6.0 * prep, 0, 3.0 * prep),
             "l_leg": (10.0 * prep, 0, 0),
             # arms in loose guard, counter-swing
-            "l_arm": (58.0, 0, 22.0 * prep + 10.0 * extend),
+            "l_arm": (82.0, 0, 22.0 * prep + 10.0 * extend),
             "l_forearm": (0, 0, 70.0 * prep),
-            "r_arm": (62.0, 0, 14.0 * prep - 14.0 * extend),
+            "r_arm": (82.0, 0, 14.0 * prep - 14.0 * extend),
             "r_forearm": (0, 0, 55.0 * prep),
             "spine": (-4.0 * extend + 4.0 * prep, 8.0 * extend, 0),
             "hips": (-6.0 * extend + 2.0 * prep, 6.0 * extend, 0),
@@ -399,8 +400,8 @@ def sit():
             "r_leg": (88.0 * d, 0, 0),
             "l_foot": (-4.0 * d, 0, 0),
             "r_foot": (-4.0 * d, 0, 0),
-            "l_arm": (72.0 - 8.0 * d, 0, 14.0 * d),
-            "r_arm": (72.0 - 8.0 * d, 0, 14.0 * d),
+            "l_arm": (84.0 - 6.0 * d, 0, 14.0 * d),
+            "r_arm": (84.0 - 6.0 * d, 0, 14.0 * d),
             "l_forearm": (0, 0, 30.0 * d),
             "r_forearm": (0, 0, 30.0 * d),
             "spine": (12.0 * d - 4.0 * _seg(t, 0.6, 1.0), 0, 0),
@@ -424,24 +425,33 @@ def throw():
     seconds = 1.6
 
     def pose(t):
-        windup = _ease(_seg(t, 0.08, 0.35)) * (1.0 - _ease(_seg(t, 0.42, 0.58)))
-        release = _ease(_seg(t, 0.42, 0.58)) * (1.0 - _ease(_seg(t, 0.72, 0.95)))
-        active = _ease(_seg(t, 0.05, 0.2)) * (1.0 - _ease(_seg(t, 0.8, 1.0)))
+        windup = _ease(_seg(t, 0.08, 0.35)) * (1.0 - _ease(_seg(t, 0.42, 0.55)))
+        # The strike itself: rises fast, then HOLDS (a decaying release made
+        # the arm retreat to neutral, so the throw visibly stopped mid-motion).
+        release = _ease(_seg(t, 0.42, 0.58))
+        # Follow-through: the arm keeps travelling DOWN and ACROSS the body
+        # after the ball leaves, which is what sells the throw. Continues to
+        # the end of the clip instead of unwinding.
+        follow = _ease(_seg(t, 0.55, 0.88))
+        active = _ease(_seg(t, 0.05, 0.2))
         return {
             # right arm: back over the shoulder (X -> raised-back), then
             # whipped forward past horizontal
-            "r_arm": (72.0 - 125.0 * windup - 45.0 * release, 0,
-                      -35.0 * windup + 75.0 * release),
-            "r_forearm": (0, 0, 85.0 * windup + 10.0 * release),
+            # Overhand arc: up-and-back (windup) -> forward past vertical
+            # (release) -> down across the body (follow-through).
+            "r_arm": (84.0 - 150.0 * windup - 30.0 * release + 95.0 * follow, 0,
+                      -30.0 * windup + 70.0 * release - 25.0 * follow),
+            "r_forearm": (0, 0, 85.0 * windup + 8.0 * release + 30.0 * follow),
             "r_hand": (0, 0, -15.0 * windup + 10.0 * release),
             # left arm points at the target during wind-up, tucks on release
-            "l_arm": (72.0 - 35.0 * windup + 20.0 * release, 0,
-                      35.0 * windup - 10.0 * release),
+            "l_arm": (84.0 - 30.0 * windup + 18.0 * release, 0,
+                      30.0 * windup - 10.0 * release),
             "l_forearm": (0, 0, 10.0 + 25.0 * release),
             # torso coils back then uncoils through the throw
-            "spine": (-6.0 * windup + 16.0 * release, 20.0 * windup - 24.0 * release, 0),
-            "spine1": (-3.0 * windup + 8.0 * release, 10.0 * windup - 12.0 * release, 0),
-            "hips": (0, 10.0 * windup - 14.0 * release, 0),
+            "spine": (-6.0 * windup + 14.0 * release + 6.0 * follow,
+                      8.0 * windup - 10.0 * release, 0),
+            "spine1": (-3.0 * windup + 8.0 * release, 4.0 * windup - 5.0 * release, 0),
+            "hips": (0, 4.0 * windup - 6.0 * release, 0),
             "head": (4.0 * windup - 6.0 * release, -12.0 * windup + 8.0 * release, 0),
             # stagger stance: left leg forward on release
             "l_upleg": (8.0 * active + 14.0 * release, 0, 2.0 * active),
@@ -475,8 +485,8 @@ def dance():
             "spine1": (2.0, -6.0 * sway, -2.0 * sway),
             "head": (-3.0, 8.0 * sway, -4.0 * sway),
             # arms: elbows bent, alternating up-down pumps
-            "l_arm": (52.0 - 22.0 * pump, 0, 18.0 + 8.0 * sway),
-            "r_arm": (52.0 + 22.0 * pump, 0, 18.0 - 8.0 * sway),
+            "l_arm": (78.0 - 16.0 * pump, 0, 18.0 + 8.0 * sway),
+            "r_arm": (78.0 + 16.0 * pump, 0, 18.0 - 8.0 * sway),
             "l_forearm": (0, 0, 75.0 + 20.0 * pump),
             "r_forearm": (0, 0, 75.0 - 20.0 * pump),
             # legs: weight shifts with the sway, knees bounce
@@ -571,8 +581,8 @@ def crawl():
             "r_foot": (12.0, 0, 0),
             # arms: ventral swing under the (bowed) shoulders, reaching
             # alternately; anatomical convention (right side auto-mirrored)
-            "l_arm": (26.0, 0, 66.0 - 12.0 * reachL),
-            "r_arm": (26.0, 0, 66.0 - 12.0 * reachR),
+            "l_arm": (58.0, 0, 66.0 - 12.0 * reachL),
+            "r_arm": (58.0, 0, 66.0 - 12.0 * reachR),
             "l_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachL)),
             "r_forearm": (0, 0, 8.0 + 12.0 * max(0.0, reachR)),
             "hips": (0.0, 0, 1.5 * reachL),   # pitch lives on the spine (root lock)
