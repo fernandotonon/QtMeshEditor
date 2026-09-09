@@ -202,10 +202,15 @@ int ProjectionPainter::projectDab(
     const bool haveStencil = !stencil.isNull();
     int touched = 0;
 
-    // Brush footprint in pixel space (round falloff). The radius is a UV
-    // fraction; on a non-square texture use the smaller axis so the dab stays
-    // circular in UV space rather than stretching along the longer one.
-    const float rPix = brushRadiusUv * std::min(outW, outH);
+    // Brush footprint in pixel space (round falloff). brushRadiusUv is a UV
+    // radius, so it must span that same fraction on BOTH axes — derive a
+    // per-axis pixel radius and take the falloff from NORMALISED distances,
+    // matching TexturePaintBuffer::paintBrush. (Using one radius off the
+    // smaller axis shrank the dab in UV terms along the longer axis.)
+    const float rPixX = brushRadiusUv * outW;
+    const float rPixY = brushRadiusUv * outH;
+    const float invRx = 1.0f / std::max(rPixX, 1e-6f);
+    const float invRy = 1.0f / std::max(rPixY, 1e-6f);
     const float cxPix = brushUv.x * outW, cyPix = brushUv.y * outH;
 
     for (const Triangle& t : tris) {
@@ -227,10 +232,10 @@ int ProjectionPainter::projectDab(
         };
         const Ogre::Vector2 A = toPix(t.uv[0]), B = toPix(t.uv[1]), C = toPix(t.uv[2]);
         // Clamp the scanned box to the brush footprint (perf: only near the dab).
-        int x0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.x, B.x, C.x}), cxPix - rPix))));
-        int x1 = std::min(outW - 1, static_cast<int>(std::ceil(std::min(std::max({A.x, B.x, C.x}), cxPix + rPix))));
-        int y0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.y, B.y, C.y}), cyPix - rPix))));
-        int y1 = std::min(outH - 1, static_cast<int>(std::ceil(std::min(std::max({A.y, B.y, C.y}), cyPix + rPix))));
+        int x0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.x, B.x, C.x}), cxPix - rPixX))));
+        int x1 = std::min(outW - 1, static_cast<int>(std::ceil(std::min(std::max({A.x, B.x, C.x}), cxPix + rPixX))));
+        int y0 = std::max(0, static_cast<int>(std::floor(std::max(std::min({A.y, B.y, C.y}), cyPix - rPixY))));
+        int y1 = std::min(outH - 1, static_cast<int>(std::ceil(std::min(std::max({A.y, B.y, C.y}), cyPix + rPixY))));
         const float denom = (B.y - C.y) * (A.x - C.x) + (C.x - B.x) * (A.y - C.y);
         if (std::abs(denom) < 1e-9f) continue;
         const float invDen = 1.0f / denom;
@@ -238,10 +243,13 @@ int ProjectionPainter::projectDab(
         for (int py = y0; py <= y1; ++py) {
             for (int px = x0; px <= x1; ++px) {
                 const float fx = px + 0.5f, fy = py + 0.5f;
-                // Round brush falloff.
-                const float dr = std::hypot(fx - cxPix, fy - cyPix);
-                if (rPix <= 0.0f || dr > rPix) continue;
-                const float fall = 1.0f - (dr / rPix);
+                // Round brush falloff in NORMALISED (per-axis) distance, so
+                // the dab is a circle in UV space on any aspect ratio.
+                const float nx = (fx - cxPix) * invRx;
+                const float ny = (fy - cyPix) * invRy;
+                const float dr = std::hypot(nx, ny);
+                if (rPixX <= 0.0f || rPixY <= 0.0f || dr > 1.0f) continue;
+                const float fall = 1.0f - dr;
 
                 const float l0 = ((B.y - C.y) * (fx - C.x) + (C.x - B.x) * (fy - C.y)) * invDen;
                 const float l1 = ((C.y - A.y) * (fx - C.x) + (A.x - C.x) * (fy - C.y)) * invDen;

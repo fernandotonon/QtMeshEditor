@@ -302,4 +302,16 @@ TEST(ProjectionPainterTest, DabOnNonSquareTargetStaysInBounds) {
     // Centre of a v=0.5 dab lands at y = 0.5*96 = 48, not 0.5*64 = 32.
     EXPECT_GT(out.pixel(32, 48).a, 0.5f) << "dab must centre on the V axis "
                                             "scaled by HEIGHT";
+
+    // brushRadiusUv is a UV radius, so the footprint must span that same
+    // fraction on BOTH axes: 0.25 * 96 = 24 px vertically (a radius taken
+    // from the smaller axis would only reach 16 px and stop short).
+    auto painted = [&](int x, int y) { return out.pixel(x, y).a > 0.01f; };
+    EXPECT_TRUE(painted(32, 48 + 20)) << "vertical footprint must reach "
+                                         "0.25 UV (~24px), not 0.25*width";
+    EXPECT_TRUE(painted(32, 48 - 20));
+    EXPECT_FALSE(painted(32, 48 + 30)) << "and must stop at the UV radius";
+    // Horizontal radius is 0.25 * 64 = 16 px.
+    EXPECT_TRUE(painted(32 + 13, 48));
+    EXPECT_FALSE(painted(32 + 20, 48));
 }
