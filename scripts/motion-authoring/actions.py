@@ -183,7 +183,7 @@ def wave():
             # right arm: hanging (X 84, close to the body) -> straight overhead
             # (X -84). A splayed arm (the old 72 -> -58) sits near the
             # retarget's shoulder singularity and inverts.
-            "r_arm": (84.0 - 150.0 * raise01 + 14.0 * wig, 0, 22.0 * raise01),
+            "r_arm": (84.0 - 146.0 * raise01 + 14.0 * wig, 0, 36.0 * raise01),
             # the visible wave: forearm curls in-and-out around a half-bent
             # elbow while the arm is up
             "r_forearm": (0, 0, 18.0 * raise01 + 46.0 * wig),

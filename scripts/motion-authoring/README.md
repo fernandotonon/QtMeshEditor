@@ -3,8 +3,16 @@
 Offline developer tooling that authors **CC0 template clips for the
 text-to-motion library (#411/#837) from scratch** — procedural keyframes on a
 real Mixamo-convention rig, no third-party motion data. The clips shipped in
-September 2026 (walk, run, idle, wave, jump, punch, kick, march, cheer, sit,
-throw, dance, hang, crawl — 14 in total) were produced with these scripts.
+September 2026 were produced with these scripts. **Seven shipped** (walk,
+idle, wave, jump, march, cheer, hang); march, cheer, hang and wave fill
+actions the corpus does not cover at all.
+
+Seven more (run, punch, kick, sit, throw, dance, crawl) were authored,
+reviewed and **withdrawn** — they never reached the quality of the real
+mocap corpus takes, and a weak template makes the feature worse, not
+better. Those actions are served by corpus clips instead. Treat that as the
+bar: only ship an authored clip that beats what the corpus already has, or
+that fills a genuine gap.
 
 Not shipped; the app never runs Python.
 
