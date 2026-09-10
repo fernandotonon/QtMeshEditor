@@ -54,7 +54,8 @@ body motion on either side:
 | arm      | swing down toward body| twist  | swing forward   |
 | forearm  | —                     | —      | elbow curl      |
 | upleg    | thigh raise forward   | twist  | leg out to side |
-| leg      | knee flexion (heel back) | —   | (never use)     |
+| leg (X−) | **knee flexion** — heel toward buttock | — | (never use) |
+| leg      | **hyperextends** (wrong) | —      | (never use)     |
 | foot     | pitch                 | yaw    | roll            |
 | spine    | bend forward          | twist  | side bend       |
 | head     | look down             | turn   | tilt            |
@@ -68,6 +69,17 @@ Authoring tips learned the hard way:
   retarget locks the root's orientation to the standing pose, so a
   hips-pitched crawl retargets as an upright kneel. Bow spine/spine1/spine2
   instead (the crawl clip is the reference).
+- **The knee only bends ONE way: X-negative.** Positive X hyperextends it, and
+  with the thigh raised it swings the shin UPWARD — which reads as kneeling
+  (a "sit" ends up on its knees) or a backward flick (a "kick" that goes the
+  wrong way). This was wrong in all 14 first-generation clips.
+- **Knees flex on RECOVERY, not on the forward swing.** In a gait cycle the
+  knee bends while the leg is behind and lifting to clear the ground; flexing
+  it as the thigh swings forward drags the foot backward and kills the stride.
+- **Check the FOOT's world position, not just bone directions.** A bone-angle
+  metric can look right while the foot ends up at hip height behind the body.
+  `probe_dir.py` gives directions; the foot-position walk in the same file is
+  what catches kneeling/backward-kick errors.
 - **Keep arms close to the body.** An upper arm held out to the side (world
   |X| > ~0.35 of its direction vector) sits near the retarget's shoulder
   singularity, and the arm can INVERT mid-clip — it swings backward while
