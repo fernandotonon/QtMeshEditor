@@ -116,10 +116,10 @@ def run():
             "r_leg": (kneeR + 12.0, 0, 0),
             "l_foot": (-10.0 * swingL + 5.0, 0, 0),
             "r_foot": (-10.0 * swingR + 5.0, 0, 0),
-            "l_arm": (82.0, 0, 30.0 * swingR + 6.0),
-            "r_arm": (82.0, 0, 30.0 * swingL + 6.0),
-            "l_forearm": (0, 0, 55.0 + 12.0 * swingR),
-            "r_forearm": (0, 0, 55.0 + 12.0 * swingL),
+            "l_arm": (74.0, 0, 46.0 * swingR),
+            "r_arm": (74.0, 0, 46.0 * swingL),
+            "l_forearm": (0, 0, 70.0 + 22.0 * swingR),
+            "r_forearm": (0, 0, 70.0 + 22.0 * swingL),
             "spine": (14.0, 7.0 * swingL, 0),
             "spine1": (6.0, 4.0 * swingL, 0),
             "head": (-10.0, -5.0 * swingL, 0),
@@ -183,10 +183,10 @@ def wave():
             # right arm: hanging (X 84, close to the body) -> straight overhead
             # (X -84). A splayed arm (the old 72 -> -58) sits near the
             # retarget's shoulder singularity and inverts.
-            "r_arm": (84.0 - 168.0 * raise01 + 9.0 * wig, 0, 4.0 * raise01),
+            "r_arm": (84.0 - 150.0 * raise01 + 14.0 * wig, 0, 22.0 * raise01),
             # the visible wave: forearm curls in-and-out around a half-bent
             # elbow while the arm is up
-            "r_forearm": (0, 10.0 * wig, 35.0 * raise01 + 28.0 * wig),
+            "r_forearm": (0, 0, 18.0 * raise01 + 46.0 * wig),
             "r_hand": (0, 0, 12.0 * wig),
             "spine": (0, -4.0 * raise01, -4.0 * raise01),
             "head": (0, 6.0 * raise01, 5.0 * raise01),
@@ -258,8 +258,8 @@ def punch():
             "l_arm": (84.0 - 20.0 * guard, 0, 26.0 * guard),
             "l_forearm": (0, 0, 100.0 * guard),
             # right arm: guard -> extended straight forward
-            "r_arm": (84.0 - 34.0 * guard - 8.0 * strike, 0,
-                      26.0 * guard + 68.0 * strike),
+            "r_arm": (84.0 - 26.0 * guard - 58.0 * strike, 0,
+                      20.0 * guard + 74.0 * strike),
             "r_forearm": (0, 0, 105.0 * guard * (1.0 - strike) + 8.0 * strike),
             "spine": (6.0 * guard, -9.0 * strike, 0),
             "spine1": (2.0 * guard, -4.0 * strike, 0),
@@ -286,13 +286,16 @@ def kick():
     seconds = 1.4
 
     def pose(t):
-        prep = _ease(_seg(t, 0.0, 0.2)) * (1.0 - _ease(_seg(t, 0.75, 1.0)))
-        chamber = _bump(_seg(t, 0.15, 0.5))
-        extend = _bump(_seg(t, 0.35, 0.68))
+        prep = _ease(_seg(t, 0.0, 0.2)) * (1.0 - _ease(_seg(t, 0.82, 1.0)))
+        chamber = _bump(_seg(t, 0.12, 0.46))
+        # HOLD the extension instead of a narrow bump: the strike used to last
+        # ~0.1s, so it was invisible between sampled frames (and the 12fps
+        # smooth-bake in the generate path averaged it away).
+        extend = _ease(_seg(t, 0.36, 0.52)) * (1.0 - _ease(_seg(t, 0.66, 0.82)))
         return {
             # right leg: thigh up (chamber+extend), knee folds then snaps out
-            "r_upleg": (70.0 * max(chamber, extend * 1.1), 0, 4.0 * prep),
-            "r_leg": (95.0 * chamber * (1.0 - extend) + 10.0 * extend, 0, 0),
+            "r_upleg": (52.0 * chamber + 78.0 * extend, 0, 4.0 * prep),
+            "r_leg": (100.0 * chamber * (1.0 - extend) + 3.0 * extend, 0, 0),
             "r_foot": (15.0 * extend, 0, 0),
             # support leg braces
             "l_upleg": (-6.0 * prep, 0, 3.0 * prep),
@@ -394,24 +397,24 @@ def sit():
         settle = _bump(_seg(t, 0.5, 0.8)) * 0.15
         d = min(1.0, down + settle)
         return {
-            "l_upleg": (86.0 * d, 0, 4.0 * d),
-            "r_upleg": (86.0 * d, 0, 4.0 * d),
-            "l_leg": (88.0 * d, 0, 0),
-            "r_leg": (88.0 * d, 0, 0),
+            "l_upleg": (74.0 * d, 0, 4.0 * d),
+            "r_upleg": (74.0 * d, 0, 4.0 * d),
+            "l_leg": (76.0 * d, 0, 0),
+            "r_leg": (76.0 * d, 0, 0),
             "l_foot": (-4.0 * d, 0, 0),
             "r_foot": (-4.0 * d, 0, 0),
             "l_arm": (84.0 - 6.0 * d, 0, 14.0 * d),
             "r_arm": (84.0 - 6.0 * d, 0, 14.0 * d),
             "l_forearm": (0, 0, 30.0 * d),
             "r_forearm": (0, 0, 30.0 * d),
-            "spine": (12.0 * d - 4.0 * _seg(t, 0.6, 1.0), 0, 0),
+            "spine": (6.0 * d - 3.0 * _seg(t, 0.6, 1.0), 0, 0),
             "head": (-6.0 * d + 4.0 * _seg(t, 0.6, 1.0), 0, 0),
-            "hips": (-8.0 * d, 0, 0),
+            "hips": (4.0 * d, 0, 0),
         }
 
     def hips_tr(t):
         down = _ease(_seg(t, 0.1, 0.55))
-        return (0.0, -0.42 * down, 0.0)
+        return (0.0, -0.26 * down, 0.0)
 
     return seconds, pose, hips_tr
 
@@ -439,8 +442,8 @@ def throw():
             # whipped forward past horizontal
             # Overhand arc: up-and-back (windup) -> forward past vertical
             # (release) -> down across the body (follow-through).
-            "r_arm": (84.0 - 150.0 * windup - 30.0 * release + 95.0 * follow, 0,
-                      -30.0 * windup + 70.0 * release - 25.0 * follow),
+            "r_arm": (84.0 - 190.0 * windup - 20.0 * release + 150.0 * follow, 0,
+                      -45.0 * windup + 80.0 * release - 30.0 * follow),
             "r_forearm": (0, 0, 85.0 * windup + 8.0 * release + 30.0 * follow),
             "r_hand": (0, 0, -15.0 * windup + 10.0 * release),
             # left arm points at the target during wind-up, tucks on release
@@ -480,20 +483,20 @@ def dance():
         bounce = abs(_c(p))              # knee bounce, 2 per sway
         pump = _s(p, math.pi / 2)        # arm pump alternation
         return {
-            "hips": (2.0, 8.0 * sway, 6.0 * sway),
-            "spine": (4.0, -10.0 * sway, -5.0 * sway),
+            "hips": (2.0, 14.0 * sway, 11.0 * sway),
+            "spine": (4.0, -16.0 * sway, -9.0 * sway),
             "spine1": (2.0, -6.0 * sway, -2.0 * sway),
             "head": (-3.0, 8.0 * sway, -4.0 * sway),
             # arms: elbows bent, alternating up-down pumps
-            "l_arm": (78.0 - 16.0 * pump, 0, 18.0 + 8.0 * sway),
-            "r_arm": (78.0 + 16.0 * pump, 0, 18.0 - 8.0 * sway),
+            "l_arm": (72.0 - 34.0 * pump, 0, 24.0 + 14.0 * sway),
+            "r_arm": (72.0 + 34.0 * pump, 0, 24.0 - 14.0 * sway),
             "l_forearm": (0, 0, 75.0 + 20.0 * pump),
             "r_forearm": (0, 0, 75.0 - 20.0 * pump),
             # legs: weight shifts with the sway, knees bounce
             "l_upleg": (6.0 + 6.0 * max(0.0, sway), 0, 4.0 + 3.0 * sway),
             "r_upleg": (6.0 + 6.0 * max(0.0, -sway), 0, 4.0 - 3.0 * sway),
-            "l_leg": (10.0 + 14.0 * bounce, 0, 0),
-            "r_leg": (10.0 + 14.0 * bounce, 0, 0),
+            "l_leg": (12.0 + 26.0 * bounce, 0, 0),
+            "r_leg": (12.0 + 26.0 * bounce, 0, 0),
             "l_foot": (-4.0 * bounce, 0, 0),
             "r_foot": (-4.0 * bounce, 0, 0),
         }
