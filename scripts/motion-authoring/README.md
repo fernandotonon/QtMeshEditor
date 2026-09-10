@@ -109,6 +109,13 @@ Authoring tips learned the hard way:
   returns the arm to neutral, so the action visibly stops mid-motion. Use a
   separate `follow` envelope that continues to the end of the clip (see
   `throw`).
+- **Confirm WHICH take you are looking at.** `matchPrompt` samples among all
+  takes of an action weighted by quality, so a freshly-fixed authored clip may
+  not be the one that plays. Check the reported frame count against your
+  clip's; if they differ, you are reviewing a corpus take. Three rounds of
+  "the wave still goes backward" were spent tuning a clip the generator was
+  not selecting — the corpus wave measured 0.26 BEHIND the shoulder while the
+  authored one measured 0.49 in FRONT.
 - **Composed rotations do not compose intuitively — sweep and LOOK.** On the
   raised arm, `Z=36` still pointed backward because the preceding `X` raise
   tilts the axis `Z` then rotates about; it took `Z≈78` to actually reach
