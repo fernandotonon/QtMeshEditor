@@ -246,3 +246,72 @@ TEST(ProjectionPainterTest, DabPaintsWithinFootprintAndAccumulates) {
                                   Ogre::ColourValue(0, 0, 1, 1), 0.5f, out, opts);
     EXPECT_GT(out.pixel(32, 32).a, aAfter1);
 }
+
+// --- non-square targets (the "decal commits as an all-white layer" bug) -----
+
+TEST(ProjectionPainterTest, NonSquareTargetKeepsItsAspect) {
+    // A generated diffuse is routinely non-square (e.g. 2504x2526). The
+    // projection must fill the caller's buffer at ITS size — a square output
+    // gets resize()d downstream, which fills opaque white and drops the decal.
+    auto tris = frontQuad(0.0f, /*faceCamera*/true);
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1),
+                               Ogre::Vector3(0, 0, 5) };
+    TexturePaintBuffer out; out.resize(64, 96);
+    ProjectionPainter::Options opts;    // resolution left 0 = keep buffer size
+    opts.backfaceCull = true;
+    auto rep = ProjectionPainter::project(tris, v, solid(32, Qt::red), out, opts);
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(out.width(), 64);
+    EXPECT_EQ(out.height(), 96) << "a square output would be resized to white "
+                                   "by PaintLayerStack::addFromBuffer";
+    EXPECT_GT(rep.texelsWritten, 0);
+    // The quad covers UV [0..1] on both axes, so the full height is painted:
+    // a square-projected result would leave the bottom third untouched.
+    EXPECT_GT(out.pixel(32, 90).a, 0.5f)
+        << "bottom rows must be covered on a non-square target";
+    EXPECT_GT(out.pixel(32, 48).r, 0.5f);
+}
+
+TEST(ProjectionPainterTest, ExplicitSquareResolutionStillHonoured) {
+    // opts.resolution is a square request — keep that contract for callers
+    // (e.g. bakes) that deliberately ask for a fixed square size.
+    auto tris = frontQuad(0.0f, /*faceCamera*/true);
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1),
+                               Ogre::Vector3(0, 0, 5) };
+    TexturePaintBuffer out; out.resize(10, 200);
+    ProjectionPainter::Options opts; opts.resolution = 48;
+    auto rep = ProjectionPainter::project(tris, v, solid(32, Qt::red), out, opts);
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(out.width(), 48);
+    EXPECT_EQ(out.height(), 48);
+}
+
+TEST(ProjectionPainterTest, DabOnNonSquareTargetStaysInBounds) {
+    auto tris = frontQuad(0.0f, /*faceCamera*/true);
+    ProjectionPainter::View v{ orthoViewProj(), Ogre::Vector3(0, 0, -1),
+                               Ogre::Vector3(0, 0, 5) };
+    TexturePaintBuffer out; out.resize(64, 96);
+    out.clear(Ogre::ColourValue(0, 0, 0, 0));
+    ProjectionPainter::Options opts;
+    const int n = ProjectionPainter::projectDab(
+        tris, v, QImage(), Ogre::Vector2(0.5f, 0.5f), 0.25f,
+        Ogre::ColourValue(1, 0, 0, 1), 1.0f, out, opts);
+    EXPECT_GT(n, 0);
+    EXPECT_EQ(out.width(), 64);
+    EXPECT_EQ(out.height(), 96);
+    // Centre of a v=0.5 dab lands at y = 0.5*96 = 48, not 0.5*64 = 32.
+    EXPECT_GT(out.pixel(32, 48).a, 0.5f) << "dab must centre on the V axis "
+                                            "scaled by HEIGHT";
+
+    // brushRadiusUv is a UV radius, so the footprint must span that same
+    // fraction on BOTH axes: 0.25 * 96 = 24 px vertically (a radius taken
+    // from the smaller axis would only reach 16 px and stop short).
+    auto painted = [&](int x, int y) { return out.pixel(x, y).a > 0.01f; };
+    EXPECT_TRUE(painted(32, 48 + 20)) << "vertical footprint must reach "
+                                         "0.25 UV (~24px), not 0.25*width";
+    EXPECT_TRUE(painted(32, 48 - 20));
+    EXPECT_FALSE(painted(32, 48 + 30)) << "and must stop at the UV radius";
+    // Horizontal radius is 0.25 * 64 = 16 px.
+    EXPECT_TRUE(painted(32 + 13, 48));
+    EXPECT_FALSE(painted(32 + 20, 48));
+}

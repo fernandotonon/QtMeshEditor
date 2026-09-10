@@ -275,3 +275,68 @@ TEST(PaintLayerStackTest, ResizeAllKeepsEveryLayerInStep) {
         EXPECT_EQ(s.layer(i).buffer.height(), 8) << "layer " << i;
     }
 }
+
+// --- mismatched-size layers (the all-white decal bug) -----------------------
+
+TEST(PaintLayerStackTest, AddFromBufferRescalesInsteadOfBlankingToWhite) {
+    // TexturePaintBuffer::resize() fills with 0xFF (opaque white) and drops the
+    // content. addFromBuffer used to call it on any size mismatch, so a decal
+    // projected at a different resolution than the stack committed as a blank
+    // WHITE layer instead of its pixels. It must RESCALE the content instead.
+    PaintLayerStack s = seeded();
+
+    // A differently-sized, fully opaque BLUE source.
+    TexturePaintBuffer src(kW * 2, kH * 3);
+    for (size_t i = 0; i + 3 < src.data().size(); i += 4) {
+        src.data()[i + 0] = 0;   src.data()[i + 1] = 0;
+        src.data()[i + 2] = 255; src.data()[i + 3] = 255;
+    }
+
+    const int idx = s.addFromBuffer(src, QStringLiteral("Decal"),
+                                    PaintLayerStack::LayerType::Generated);
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(s.layer(idx).buffer.width(), kW);
+    EXPECT_EQ(s.layer(idx).buffer.height(), kH);
+
+    const Px p = firstPixel(s);
+    EXPECT_EQ(p.b, 255) << "the layer must keep its BLUE content";
+    EXPECT_EQ(p.r, 0)   << "white (255,255,255) here means the content was "
+                           "discarded by a bare resize()";
+    EXPECT_EQ(p.g, 0);
+}
+
+TEST(PaintLayerStackTest, AddFromBufferPreservesTransparencyWhenRescaling) {
+    // A decal is mostly transparent outside its footprint; rescaling must not
+    // turn those texels opaque (a bare resize made them opaque white).
+    PaintLayerStack s = seeded();
+    TexturePaintBuffer src(kW * 2, kH * 2);   // all zeroes = fully transparent
+    for (auto& b : src.data()) b = 0;
+
+    const int idx = s.addFromBuffer(src, QStringLiteral("Empty decal"),
+                                    PaintLayerStack::LayerType::Generated);
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(s.layer(idx).buffer.pixel(0, 0).a, 0.0f)
+        << "transparent source texels must stay transparent";
+    // The red base must still show through the transparent layer.
+    const Px p = firstPixel(s);
+    EXPECT_EQ(p.r, 255);
+}
+
+TEST(PaintLayerStackTest, AddFromBufferWithAnEmptySourceIsTransparentNotWhite) {
+    // A degenerate (zero-sized) source must not become an opaque white layer:
+    // TexturePaintBuffer::resize fills with 0xFF, so the rescale path has to
+    // clear it explicitly. Regression guard for the same white-out class.
+    PaintLayerStack s = seeded();
+    const TexturePaintBuffer empty;           // 0x0
+    const int idx = s.addFromBuffer(empty, QStringLiteral("Empty"),
+                                    PaintLayerStack::LayerType::Generated);
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(s.layer(idx).buffer.width(), kW);
+    EXPECT_EQ(s.layer(idx).buffer.height(), kH);
+    EXPECT_EQ(s.layer(idx).buffer.pixel(0, 0).a, 0.0f)
+        << "an empty source must yield a TRANSPARENT layer, not white";
+    // The red base must still show through.
+    const Px p = firstPixel(s);
+    EXPECT_EQ(p.r, 255);
+    EXPECT_EQ(p.g, 0);
+}
