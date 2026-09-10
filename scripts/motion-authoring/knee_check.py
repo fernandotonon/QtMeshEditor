@@ -1,8 +1,11 @@
 """Signed knee-bend metric, CALIBRATED against known poses:
-   cross_x > 0  => correct flexion (heel toward buttock)
-   cross_x < 0  => HYPEREXTENSION (knee bending backwards)
-Validated: thigh vertical + knee X-60 -> cross_x +0.889 (correct);
-           thigh vertical + knee X+60 -> cross_x -0.841 (broken)."""
+   cross_x < 0  => correct flexion (heel toward buttock)
+   cross_x > 0  => HYPEREXTENSION (knee bending backwards)
+CALIBRATED BY RENDER (probe/knee_sign_side.png), not by assumption: with
+the character facing screen-left, knee X+70 folds the heel BACK (correct,
+cross_x -0.841) while X-70 swings the shin FORWARD (hyperextension,
+cross_x +0.889). An earlier version of this file had the polarity
+backwards and certified visibly broken clips as fine — twice."""
 import math
 from glbanim import Glb, quat_mul, quat_from_euler, MIXAMO
 _g = Glb('rumba.glb'); _nodes = _g.json['nodes']
@@ -43,4 +46,4 @@ def knee_bend(pose, side='r'):
     ang = math.degrees(math.acos(dot))
     # NB: no left-side sign flip — the LEG chain is not mirrored for X
     # (verified: the same knee X moves both shins the same way), unlike arms.
-    return ang if cross_x > 0 else -ang
+    return ang if cross_x < 0 else -ang

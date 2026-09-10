@@ -69,17 +69,19 @@ Authoring tips learned the hard way:
   retarget locks the root's orientation to the standing pose, so a
   hips-pitched crawl retargets as an upright kneel. Bow spine/spine1/spine2
   instead (the crawl clip is the reference).
-- **The knee only bends ONE way: X-negative.** Positive X hyperextends it, and
-  with the thigh raised it swings the shin UPWARD — which reads as kneeling
-  (a "sit" ends up on its knees) or a backward flick (a "kick" that goes the
-  wrong way). This was wrong in all 14 first-generation clips.
-- **Verify the knee with `knee_check.py`, not by eye or by bone direction.**
-  It returns +deg for correct flexion and −deg for hyperextension, and it is
-  CALIBRATED against two known poses (thigh vertical, knee ∓60°). Every clip
-  should read positive at every frame. Two earlier attempts at this metric had
-  their sign backwards and cheerfully passed broken clips — calibrate first.
-  Note the leg chain is NOT mirrored for X (unlike arms), so both legs use the
-  same sign.
+- **The knee only bends ONE way: X-POSITIVE** (heel toward the buttock).
+  Negative X swings the shin forward — hyperextension, a backwards-bending
+  knee. Establish this with a RENDER, never a derived metric: author one glb
+  with the same bend at both signs and look at the side view
+  (`probe/knee_sign_side.png`). Two separate analytic metrics got this
+  backwards and certified visibly broken clips as correct, costing two full
+  rounds of bad builds.
+- **`knee_check.py` reports +deg for flexion, −deg for hyperextension.** Its
+  polarity is calibrated against the RENDER above, not against an assumption.
+  Small negatives (~−3°) are the rig's bind offset, not a defect. The leg
+  chain is NOT mirrored for X the way the arms are, so both legs use the same
+  sign — an earlier version flipped the left side and invented a phantom
+  left/right disagreement.
 - **Check the FOOT's world position, not just bone directions.** A bone-angle
   metric can look right while the foot ends up at hip height behind the body.
   `probe_dir.py` gives directions; the foot-position walk in the same file is

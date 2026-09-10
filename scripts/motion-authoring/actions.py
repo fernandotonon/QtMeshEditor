@@ -71,8 +71,8 @@ def walk():
         return {
             "l_upleg": (24.0 * swingL - 4.0, 0, 0),
             "r_upleg": (24.0 * swingR - 4.0, 0, 0),
-            "l_leg": (-(kneeL + 6.0), 0, 0),
-            "r_leg": (-(kneeR + 6.0), 0, 0),
+            "l_leg": (kneeL + 6.0, 0, 0),
+            "r_leg": (kneeR + 6.0, 0, 0),
             "l_foot": (-8.0 * swingL, 0, 0),
             "r_foot": (-8.0 * swingR, 0, 0),
             # arms hang (X+78) and swing opposite to their leg
@@ -112,8 +112,8 @@ def run():
         return {
             "l_upleg": (38.0 * swingL + 6.0, 0, 0),
             "r_upleg": (38.0 * swingR + 6.0, 0, 0),
-            "l_leg": (-(kneeL + 12.0), 0, 0),
-            "r_leg": (-(kneeR + 12.0), 0, 0),
+            "l_leg": (kneeL + 12.0, 0, 0),
+            "r_leg": (kneeR + 12.0, 0, 0),
             "l_foot": (-10.0 * swingL + 5.0, 0, 0),
             "r_foot": (-10.0 * swingR + 5.0, 0, 0),
             "l_arm": (82.0, 0, 30.0 * swingR + 6.0),
@@ -154,8 +154,8 @@ def idle():
             "hips": (0, 2.0 * w, 2.0 * w),
             "l_upleg": (-1.5, 0, 2.0 + 1.0 * w),
             "r_upleg": (-1.5, 0, 2.0 - 1.0 * w),
-            "l_leg": (-(3.0), 0, 0),
-            "r_leg": (-(3.0), 0, 0),
+            "l_leg": (3.0, 0, 0),
+            "r_leg": (3.0, 0, 0),
         }
 
     def hips_tr(t):
@@ -214,8 +214,8 @@ def jump():
         return {
             "l_upleg": (legX, 0, 2.0),
             "r_upleg": (legX, 0, 2.0),
-            "l_leg": (-(kneeX), 0, 0),
-            "r_leg": (-(kneeX), 0, 0),
+            "l_leg": (kneeX, 0, 0),
+            "r_leg": (kneeX, 0, 0),
             "l_foot": (-10.0 * crouch + 25.0 * launch - 12.0 * land, 0, 0),
             "r_foot": (-10.0 * crouch + 25.0 * launch - 12.0 * land, 0, 0),
             # arms swing back in crouch, up during launch/air
@@ -268,8 +268,8 @@ def punch():
             # slight stance: left leg forward, knees soft
             "l_upleg": (14.0 * guard, 0, 3.0 * guard),
             "r_upleg": (-6.0 * guard, 0, 3.0 * guard),
-            "l_leg": (-(12.0 * guard), 0, 0),
-            "r_leg": (-(14.0 * guard), 0, 0),
+            "l_leg": (12.0 * guard, 0, 0),
+            "r_leg": (14.0 * guard, 0, 0),
         }
 
     def hips_tr(t):
@@ -292,11 +292,11 @@ def kick():
         return {
             # right leg: thigh up (chamber+extend), knee folds then snaps out
             "r_upleg": (70.0 * max(chamber, extend * 1.1), 0, 4.0 * prep),
-            "r_leg": (-(95.0 * chamber * (1.0 - extend) + 10.0 * extend), 0, 0),
+            "r_leg": (95.0 * chamber * (1.0 - extend) + 10.0 * extend, 0, 0),
             "r_foot": (15.0 * extend, 0, 0),
             # support leg braces
             "l_upleg": (-6.0 * prep, 0, 3.0 * prep),
-            "l_leg": (-(10.0 * prep), 0, 0),
+            "l_leg": (10.0 * prep, 0, 0),
             # arms in loose guard, counter-swing
             "l_arm": (82.0, 0, 22.0 * prep + 10.0 * extend),
             "l_forearm": (0, 0, 70.0 * prep),
@@ -330,8 +330,8 @@ def march():
         return {
             "l_upleg": (55.0 * liftL - 3.0, 0, 0),
             "r_upleg": (55.0 * liftR - 3.0, 0, 0),
-            "l_leg": (-(70.0 * liftL + 4.0), 0, 0),
-            "r_leg": (-(70.0 * liftR + 4.0), 0, 0),
+            "l_leg": (70.0 * liftL + 4.0, 0, 0),
+            "r_leg": (70.0 * liftR + 4.0, 0, 0),
             "l_foot": (5.0 * liftL, 0, 0),
             "r_foot": (5.0 * liftR, 0, 0),
             # stiff straight arm swing, opposite the leg
@@ -370,8 +370,8 @@ def cheer():
             "head": (-8.0 * up, 0, 0),
             "l_upleg": (10.0 * up, 0, 2.0),
             "r_upleg": (10.0 * up, 0, 2.0),
-            "l_leg": (-(16.0 * up), 0, 0),
-            "r_leg": (-(16.0 * up), 0, 0),
+            "l_leg": (16.0 * up, 0, 0),
+            "r_leg": (16.0 * up, 0, 0),
         }
 
     def hips_tr(t):
@@ -396,8 +396,8 @@ def sit():
         return {
             "l_upleg": (86.0 * d, 0, 4.0 * d),
             "r_upleg": (86.0 * d, 0, 4.0 * d),
-            "l_leg": (-(88.0 * d), 0, 0),
-            "r_leg": (-(88.0 * d), 0, 0),
+            "l_leg": (88.0 * d, 0, 0),
+            "r_leg": (88.0 * d, 0, 0),
             "l_foot": (-4.0 * d, 0, 0),
             "r_foot": (-4.0 * d, 0, 0),
             "l_arm": (84.0 - 6.0 * d, 0, 14.0 * d),
@@ -456,8 +456,8 @@ def throw():
             # stagger stance: left leg forward on release
             "l_upleg": (8.0 * active + 14.0 * release, 0, 2.0 * active),
             "r_upleg": (-6.0 * active - 10.0 * release, 0, 2.0 * active),
-            "l_leg": (-(10.0 * active), 0, 0),
-            "r_leg": (-(12.0 * active + 10.0 * release), 0, 0),
+            "l_leg": (10.0 * active, 0, 0),
+            "r_leg": (12.0 * active + 10.0 * release, 0, 0),
         }
 
     def hips_tr(t):
@@ -492,8 +492,8 @@ def dance():
             # legs: weight shifts with the sway, knees bounce
             "l_upleg": (6.0 + 6.0 * max(0.0, sway), 0, 4.0 + 3.0 * sway),
             "r_upleg": (6.0 + 6.0 * max(0.0, -sway), 0, 4.0 - 3.0 * sway),
-            "l_leg": (-(10.0 + 14.0 * bounce), 0, 0),
-            "r_leg": (-(10.0 + 14.0 * bounce), 0, 0),
+            "l_leg": (10.0 + 14.0 * bounce, 0, 0),
+            "r_leg": (10.0 + 14.0 * bounce, 0, 0),
             "l_foot": (-4.0 * bounce, 0, 0),
             "r_foot": (-4.0 * bounce, 0, 0),
         }
@@ -536,8 +536,8 @@ def hang():
             # legs hang loose, knees softly bent, small alternating dangle
             "l_upleg": (6.0 + 3.0 * sway2, 0, 2.0),
             "r_upleg": (6.0 - 3.0 * sway2, 0, 2.0),
-            "l_leg": (-(14.0 + 5.0 * sway2), 0, 0),
-            "r_leg": (-(14.0 - 5.0 * sway2), 0, 0),
+            "l_leg": (14.0 + 5.0 * sway2, 0, 0),
+            "r_leg": (14.0 - 5.0 * sway2, 0, 0),
             "l_foot": (8.0, 0, 0),        # toes pointed (unloaded)
             "r_foot": (8.0, 0, 0),
         }
@@ -575,8 +575,8 @@ def crawl():
             # the ground; the step is a small hip-flex oscillation
             "l_upleg": (26.0 + 12.0 * reachR, 0, 3.0),
             "r_upleg": (26.0 + 12.0 * reachL, 0, 3.0),
-            "l_leg": (-(96.0 - 8.0 * reachR), 0, 0),
-            "r_leg": (-(96.0 - 8.0 * reachL), 0, 0),
+            "l_leg": (96.0 - 8.0 * reachR, 0, 0),
+            "r_leg": (96.0 - 8.0 * reachL, 0, 0),
             "l_foot": (12.0, 0, 0),
             "r_foot": (12.0, 0, 0),
             # arms: ventral swing under the (bowed) shoulders, reaching
