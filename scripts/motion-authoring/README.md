@@ -4,8 +4,8 @@ Offline developer tooling that authors **CC0 template clips for the
 text-to-motion library (#411/#837) from scratch** — procedural keyframes on a
 real Mixamo-convention rig, no third-party motion data. The clips shipped in
 September 2026 were produced with these scripts. **Seven shipped** (walk,
-idle, wave, jump, march, cheer, hang); march, cheer, hang and wave fill
-actions the corpus does not cover at all.
+idle, wave, jump, march, cheer, hang) after reviewer approval; march, cheer
+and hang fill actions the corpus does not cover at all.
 
 Seven more (run, punch, kick, sit, throw, dance, crawl) were authored,
 reviewed and **withdrawn** — they never reached the quality of the real
@@ -109,6 +109,13 @@ Authoring tips learned the hard way:
   returns the arm to neutral, so the action visibly stops mid-motion. Use a
   separate `follow` envelope that continues to the end of the clip (see
   `throw`).
+- **Composed rotations do not compose intuitively — sweep and LOOK.** On the
+  raised arm, `Z=36` still pointed backward because the preceding `X` raise
+  tilts the axis `Z` then rotates about; it took `Z≈78` to actually reach
+  forward. Author a sweep of candidate values, render them in one strip with
+  an unambiguous front marker (a lifted leg works), and read the answer off
+  the image. Deriving it from world-space dot products got the sign right and
+  the magnitude badly wrong, twice.
 - **Judge forward/back from the SIDE view** (`--directions 4`, row 1), never
   the front — a limb travelling at the camera is foreshortened and reads as
   stationary. Better still, measure it: `probe_dir.py` prints world bone
