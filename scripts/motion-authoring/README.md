@@ -73,9 +73,13 @@ Authoring tips learned the hard way:
   with the thigh raised it swings the shin UPWARD — which reads as kneeling
   (a "sit" ends up on its knees) or a backward flick (a "kick" that goes the
   wrong way). This was wrong in all 14 first-generation clips.
-- **Knees flex on RECOVERY, not on the forward swing.** In a gait cycle the
-  knee bends while the leg is behind and lifting to clear the ground; flexing
-  it as the thigh swings forward drags the foot backward and kills the stride.
+- **Verify the knee with `knee_check.py`, not by eye or by bone direction.**
+  It returns +deg for correct flexion and −deg for hyperextension, and it is
+  CALIBRATED against two known poses (thigh vertical, knee ∓60°). Every clip
+  should read positive at every frame. Two earlier attempts at this metric had
+  their sign backwards and cheerfully passed broken clips — calibrate first.
+  Note the leg chain is NOT mirrored for X (unlike arms), so both legs use the
+  same sign.
 - **Check the FOOT's world position, not just bone directions.** A bone-angle
   metric can look right while the foot ends up at hip height behind the body.
   `probe_dir.py` gives directions; the foot-position walk in the same file is

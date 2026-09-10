@@ -5,7 +5,7 @@ Mixamo local-axis conventions (probe renders, 2026-09-08):
   arm    X+ = swing down toward body     Z+ = swing forward   Y+ = twist
   forearm Z+ = elbow curl (anatomical flexion); other axes unused
   upleg  X+ = thigh raise forward        Z+ = leg out to the side
-  leg    X- = knee flexion (heel back); X+ hyperextends
+  leg    X+ = knee flexion (heel back)
   foot   X+ = toe down (plantarflex)
   spine  X+ = bend forward   Y+ = torso twist   Z+ = side bend
   head   X+ = look down      Y+ = turn          Z+ = tilt
@@ -65,11 +65,9 @@ def walk():
         p = cycles * t      # gait phase in cycles
         swingL = _s(p)      # +1 = left thigh forward
         swingR = _s(p, math.pi)
-        # Knee flexes during RECOVERY (leg behind, lifting to clear the
-        # ground), NOT while the thigh swings forward — flexing on the
-        # forward swing drags the foot backward and kills the stride.
-        kneeL = 40.0 * _bump(((p + 0.75) % 1.0))
-        kneeR = 40.0 * _bump(((p + 0.25) % 1.0))
+        # knee flexes during the leg's swing (thigh moving forward)
+        kneeL = 40.0 * _bump((p % 1.0))            # left swing first half
+        kneeR = 40.0 * _bump(((p + 0.5) % 1.0))
         return {
             "l_upleg": (24.0 * swingL - 4.0, 0, 0),
             "r_upleg": (24.0 * swingR - 4.0, 0, 0),
@@ -109,8 +107,8 @@ def run():
         p = cycles * t
         swingL = _s(p)
         swingR = _s(p, math.pi)
-        kneeL = 85.0 * _bump(((p + 0.75) % 1.0))
-        kneeR = 85.0 * _bump(((p + 0.25) % 1.0))
+        kneeL = 85.0 * _bump(p % 1.0)
+        kneeR = 85.0 * _bump((p + 0.5) % 1.0)
         return {
             "l_upleg": (38.0 * swingL + 6.0, 0, 0),
             "r_upleg": (38.0 * swingR + 6.0, 0, 0),
