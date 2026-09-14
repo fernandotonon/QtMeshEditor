@@ -148,6 +148,7 @@ FaceRig/FaceLandmarkDetector.cpp
 FaceRig/FaceRigLandmarks.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
+MotionComposer.cpp
 MotionGenerator.cpp
 MeshSegmenter.cpp
 MeshDepthRenderer.cpp
@@ -387,6 +388,7 @@ FaceRigController.h
 UniRigPredictor.h
 MotionInbetween.h
 MotionLibrary.h
+MotionComposer.h
 MotionGenerator.h
 MeshSegmenter.h
 MeshDepthRenderer.h

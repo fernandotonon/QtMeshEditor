@@ -260,6 +260,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UniRigPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionInbetween.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshSegmenter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
