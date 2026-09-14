@@ -98,11 +98,14 @@ QImage toDepthImage(const std::vector<float>& raw, int w, int h,
     float mx = -std::numeric_limits<float>::max();
     for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
         const float v = raw[i];
-        // No isfinite() check needed here: std::min/max return their SECOND
-        // argument when the comparison is false, so a NaN `v` leaves mn/mx
-        // untouched. Verified by mutation — removing an explicit guard changed
-        // nothing. The per-texel guard below IS load-bearing, because there the
-        // value reaches a 0..255 cast.
+        // Skip EVERY non-finite value, not just NaN. std::min/max do already
+        // shrug off NaN (they return their second argument when the comparison
+        // is false), but an isolated +inf/-inf compares normally and poisons
+        // the range: +inf collapses every finite pixel toward black, and -inf
+        // makes the normalisation inf/inf = NaN on the way to the 0..255 cast.
+        // The inference probe cannot catch this — it only rejects output where
+        // EVERY sampled value is non-finite.
+        if (!std::isfinite(v)) continue;
         mn = std::min(mn, v);
         mx = std::max(mx, v);
     }

@@ -93,14 +93,19 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QRegularExpression>
+#include <QImageReader>
 #include <QTimer>
 #include <QUuid>
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
-#include "PhotoDepth.h"
 #include "TextureUpscaler.h"
 #endif
+// PhotoDepth is ALWAYS included: unlike the headers above it ships non-ONNX
+// stubs (isAvailable() -> false, estimate() -> a "rebuild with -DENABLE_ONNX"
+// error), and cmdMaterialPhotoDepth calls them unconditionally so the default
+// build can report the feature as unavailable instead of failing to compile.
+#include "PhotoDepth.h"
 // RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
 // unconditionally by the #406 describe-material path, so it must NOT sit inside
 // the ENABLE_ONNX guard above — Windows MinGW builds ONNX off and would
@@ -6267,9 +6272,16 @@ int CLIPipeline::cmdMaterialPhotoDepth(const QString& srcPath,
         err() << "Error: " << srcPath << " not found." << Qt::endl;
         return 1;
     }
-    QImage photo(srcPath);
+    // Honour EXIF orientation: a phone JPEG stores portrait rotation in
+    // metadata only, and a plain QImage(path) reads the UNROTATED pixels — the
+    // model would then estimate a sideways scene and the PNG we write carries
+    // no metadata to compensate.
+    QImageReader reader(srcPath);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
     if (photo.isNull()) {
-        err() << "Error: could not read " << srcPath << " as an image." << Qt::endl;
+        err() << "Error: could not read " << srcPath << " as an image ("
+              << reader.errorString() << ")." << Qt::endl;
         return 1;
     }
     if (!PhotoDepth::isAvailable()) {

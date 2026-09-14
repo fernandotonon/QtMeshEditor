@@ -17,10 +17,13 @@ Contract the C++ side (src/PhotoDepth.{h,cpp}) relies on:
     input   pixel_values  float32 [1,3,H,W]   ImageNet-normalised RGB
     output  predicted_depth float32 [1,H,W]   RELATIVE inverse depth,
                                               larger = NEARER
-H and W are dynamic axes (the model is a ViT with interpolated position
-embeddings), but must be multiples of 14 — the patch size. The C++ side resizes
-to a multiple of 14 and normalises the output to 0..255 itself, matching
-MeshDepthRenderer's near=bright convention.
+H and W are PINNED to 518x518 — only the batch axis is dynamic, and the C++
+runtime hard-codes the same size (PhotoDepth::kInputSize). A dynamic-axis export
+traces cleanly but drifts away from the traced resolution (measured 2.3e-02
+relative error at 462 and 4.9e-02 at 392, versus 2.7e-06 at 518) because the ViT
+position-embedding interpolation is only partly captured. The C++ side resizes
+the source to this fixed shape and normalises the output to 0..255 itself,
+matching MeshDepthRenderer's near=bright convention.
 """
 import argparse
 import json
@@ -28,6 +31,8 @@ import sys
 import urllib.request
 
 REPO_SMALL = "depth-anything/Depth-Anything-V2-Small-hf"
+# Must equal PhotoDepth::kInputSize in src/PhotoDepth.h.
+RUNTIME_SIZE = 518
 ALLOWED_LICENSES = {"apache-2.0"}
 PATCH = 14
 
@@ -55,14 +60,31 @@ def main() -> None:
                     help="HF model id (must be permissively licensed)")
     ap.add_argument("-o", "--out", default="da2_small.onnx")
     ap.add_argument("--opset", type=int, default=18)
-    ap.add_argument("--size", type=int, default=518,
-                    help="tracing resolution; must be a multiple of 14")
+    ap.add_argument("--size", type=int, default=RUNTIME_SIZE,
+                    help=f"pinned input resolution; the C++ runtime "
+                         f"(PhotoDepth::kInputSize) hard-codes {RUNTIME_SIZE}, "
+                         f"so --allow-size-mismatch is required to change it")
+    ap.add_argument("--allow-size-mismatch", action="store_true",
+                    help="export at a --size the shipped runtime cannot consume "
+                         "(for experiments only; do NOT host the result)")
     ap.add_argument("--tolerance", type=float, default=2e-3,
                     help="max abs torch-vs-ORT difference accepted")
     args = ap.parse_args()
 
     if args.size % PATCH:
         sys.exit(f"--size must be a multiple of {PATCH} (ViT patch size)")
+    # The graph is PINNED to --size, but PhotoDepth::estimate always builds a
+    # [1,3,518,518] tensor. A 392-pinned artifact hosted under the expected
+    # filename would fail EVERY inference with a dimension mismatch, so refuse
+    # by default rather than produce a parity-checked but unusable model.
+    if args.size != RUNTIME_SIZE and not args.allow_size_mismatch:
+        sys.exit(
+            f"--size {args.size} does not match the runtime's pinned "
+            f"{RUNTIME_SIZE} (PhotoDepth::kInputSize). The exported graph would "
+            f"reject every inference with a dimension mismatch. Pass "
+            f"--allow-size-mismatch only for experiments, and do not host the "
+            f"result; changing this for real means updating kInputSize too."
+        )
 
     lic = check_license(args.repo)
     print(f"[licence] {args.repo}: {lic} — OK")

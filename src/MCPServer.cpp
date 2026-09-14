@@ -1,5 +1,6 @@
 #include "MCPServer.h"
 #include "PhotoDepth.h"
+#include <QImageReader>
 #include "MeshWeldOps.h"
 #include "commands/WeldVerticesCommand.h"
 #include "mainwindow.h"
@@ -3039,10 +3040,15 @@ QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
         return makeErrorResult("'image_path' is required.");
     if (!QFileInfo::exists(srcPath))
         return makeErrorResult(QStringLiteral("image not found: %1").arg(srcPath));
-    const QImage photo(srcPath);
+    // Honour EXIF orientation (see the CLI path): QImage(path) reads the
+    // UNROTATED pixels, so a portrait phone JPEG would be estimated sideways.
+    QImageReader reader(srcPath);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
     if (photo.isNull())
         return makeErrorResult(
-            QStringLiteral("could not read %1 as an image.").arg(srcPath));
+            QStringLiteral("could not read %1 as an image (%2).")
+                .arg(srcPath, reader.errorString()));
 
     const QString model = PhotoDepth::ensureModelBlocking();
     if (model.isEmpty())

@@ -165,3 +165,29 @@ TEST(PhotoDepth, ModelPathLivesUnderTheDepthCache)
     EXPECT_TRUE(PhotoDepth::modelPath().contains(QStringLiteral("depth")));
     EXPECT_TRUE(PhotoDepth::modelPath().endsWith(QStringLiteral("da2_small.onnx")));
 }
+
+TEST(PhotoDepth, InfinitiesDoNotPoisonTheRange)
+{
+    // Distinct from the NaN case: std::min/max shrug off NaN (they return the
+    // second argument when a comparison is false), but +inf/-inf compare
+    // NORMALLY and would take over the range — +inf collapses every finite
+    // pixel toward black, -inf turns the normalisation into inf/inf = NaN on
+    // the way to the 0..255 cast. The inference probe cannot catch this: it
+    // only rejects output where EVERY sampled value is non-finite.
+    const float inf = std::numeric_limits<float>::infinity();
+    std::vector<float> raw = {0.0f, inf, 1.0f, 2.0f};
+    float mn = 0, mx = 0;
+    QImage img = PhotoDepth::toDepthImage(raw, 2, 2, &mn, &mx);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_TRUE(std::isfinite(mn));
+    EXPECT_TRUE(std::isfinite(mx));
+    EXPECT_FLOAT_EQ(mx, 2.0f) << "+inf must not become the range maximum";
+    EXPECT_EQ(qGray(img.pixel(1, 1)), 255) << "the real maximum still maps to white";
+
+    std::vector<float> raw2 = {0.0f, -inf, 1.0f, 2.0f};
+    img = PhotoDepth::toDepthImage(raw2, 2, 2, &mn, &mx);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_TRUE(std::isfinite(mn));
+    EXPECT_FLOAT_EQ(mn, 0.0f) << "-inf must not become the range minimum";
+    EXPECT_EQ(qGray(img.pixel(0, 0)), 0);
+}

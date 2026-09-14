@@ -31,6 +31,7 @@
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PhotoDepth.h"
+#include <QImageReader>
 #include "TextureUpscaler.h"
 #include <QPointer>
 #include <thread>
@@ -4388,10 +4389,16 @@ void MaterialEditorQML::generatePhotoDepth(const QString &photoPath)
         emit photoDepthError(tr("Pick a photo first."));
         return;
     }
-    const QImage photo(src);
+    // Honour EXIF orientation (see CLIPipeline::cmdMaterialPhotoDepth): a
+    // portrait phone JPEG stores its rotation in metadata only, and a plain
+    // QImage(path) would hand the model a sideways scene.
+    QImageReader reader(src);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
     if (photo.isNull()) {
-        emit photoDepthError(tr("Could not read %1 as an image.")
-                                 .arg(QFileInfo(src).fileName()));
+        emit photoDepthError(tr("Could not read %1 as an image (%2).")
+                                 .arg(QFileInfo(src).fileName(),
+                                      reader.errorString()));
         return;
     }
 
