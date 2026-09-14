@@ -141,6 +141,7 @@
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
 #include "AnimationMerger.h"
+#include "MotionComposer.h"
 #include "MotionLibrary.h"
 #include "MotionGenerator.h"
 #include "MotionInbetween.h"
@@ -4612,8 +4613,11 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             ? args.value("variant_index").toInt(-1) : -1;
         if (hasVariant && variantIndex < 0)
             return makeErrorResult("Error: 'variant_index' must be a non-negative integer.");
-        if (!hasVariant && prompt.trimmed().isEmpty())
-            return makeErrorResult("Error: 'prompt' is required (e.g. \"walking\") unless 'variant_index' is given.");
+        // #1010: a `script` timeline also supplies the motion, so it satisfies
+        // this requirement the same way variant_index does.
+        const bool hasScript = args.contains(QStringLiteral("script"));
+        if (!hasVariant && !hasScript && prompt.trimmed().isEmpty())
+            return makeErrorResult("Error: 'prompt' is required (e.g. \"walking\") unless 'variant_index' or 'script' is given.");
 
         QString entityName = args["entity_name"].toString();
         Ogre::Entity* entity = nullptr;
@@ -4641,6 +4645,16 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         std::vector<std::array<float, 3>> clipDirs;
         std::vector<float> clipRootY;          // #838 non-locomotion hip drop
         bool gotClip = false;
+        // #1010 composed path: the optional `script` arg supplies the timeline
+        // directly (an agent can skip prompt parsing); both feed selectForPrompt.
+        const QByteArray scriptJson =
+            args.contains(QStringLiteral("script"))
+                ? (args.value(QStringLiteral("script")).isString()
+                       ? args.value(QStringLiteral("script")).toString().toUtf8()
+                       : QJsonDocument(args.value(QStringLiteral("script")).toObject())
+                             .toJson(QJsonDocument::Compact))
+                : QByteArray();
+        std::vector<QString> composedSteps, unresolvedSteps;
 
         if (useModel) {
             const QString mp = MotionGenerator::ensureModelBlocking();
@@ -4681,13 +4695,29 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 idx = variantIndex;
                 action = lib.clip(idx).action;
             } else {
-                idx = lib.matchPrompt(prompt, &action);
-                if (idx < 0) {
+                // #1010: compose a multi-step prompt (or an explicit `script`
+                // timeline) into one stitched clip; a single action falls
+                // through to matchPrompt unchanged.
+                const auto sel = MotionComposer::selectForPrompt(
+                    prompt, lib, scriptJson);
+                if (!sel.ok) {
                     QString known; for (const QString& a : lib.actions()) known += " " + a;
-                    return makeErrorResult(QString("Error: no motion matched \"%1\". Known actions:%2")
-                                               .arg(prompt, known));
+                    return makeErrorResult(QString("Error: %1. Known actions:%2")
+                                               .arg(sel.error, known));
                 }
+                action = sel.action;
+                quats = sel.quats; fps = sel.fps;
+                worldFrame = lib.isWorldFrame();
+                cmuRest = sel.restWorld.empty() ? lib.cmuRestWorld()
+                                                : sel.restWorld;
+                clipDirs = sel.restDir;
+                clipRootY = sel.rootY;
+                clipSource = QStringLiteral("template");
+                composedSteps = sel.steps;
+                unresolvedSteps = sel.unresolved;
+                idx = -2;   // handled
             }
+            if (idx >= 0) {
             const MotionLibrary::Clip& clip = lib.clip(idx);
             quats = clip.quats; fps = clip.fps;
             worldFrame = lib.isWorldFrame();
@@ -4696,15 +4726,17 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             clipDirs = clip.restDir;
             clipRootY = clip.rootY;
             clipSource = QStringLiteral("template");
-            if (duration > 0.05) {
-                const int want = std::max(2, int(duration * clip.fps));
+            }
+            if (duration > 0.05 && quats.size() >= 2) {
+                const int srcFrames = static_cast<int>(quats.size());
+                const int want = std::max(2, int(duration * fps));
                 std::vector<std::vector<std::array<float,4>>> retimed(want);
                 std::vector<float> retimedY;
-                const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+                const bool hadY = static_cast<int>(clipRootY.size()) == srcFrames;
                 if (hadY) retimedY.resize(want);
                 for (int f = 0; f < want; ++f) {
-                    const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                    const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                    const float src = (srcFrames - 1) * (float(f) / float(want - 1));
+                    const int si = std::min(srcFrames - 1, int(src + 0.5f));
                     retimed[f] = quats[si];
                     if (hadY) retimedY[f] = clipRootY[si];
                 }
@@ -4795,6 +4827,18 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         content["entity"] = QString::fromStdString(entity->getName());
         if (std::abs(armSpace) > 1e-4) content["arm_space_applied"] = armSpaceApplied;
         if (footPinSpans >= 0) content["foot_pin_spans"] = footPinSpans;
+        // #1010: report the composed timeline so a caller sees which takes ran
+        // and which prompt fragments matched nothing (never silently dropped).
+        if (composedSteps.size() > 1) {
+            QJsonArray steps;
+            for (const QString& a : composedSteps) steps.append(a);
+            content["composed_steps"] = steps;
+        }
+        if (!unresolvedSteps.empty()) {
+            QJsonArray un;
+            for (const QString& u : unresolvedSteps) un.append(u);
+            content["unresolved"] = un;
+        }
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
@@ -10483,13 +10527,15 @@ QJsonArray MCPServer::buildToolsList()
         props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
         props["vertical_descent"] = QJsonObject{{"type", "boolean"}, {"description", "Lower the body to the ground on non-locomotion crouch/pickup/sit/crawl/death clips (#838, descent-only). Default true; set false to keep the root at standing height when the descent over-sinks on a given clip. No effect on locomotion actions."}};
         props["variant_index"] = QJsonObject{{"type", "integer"}, {"description", "Select an EXACT clip from the library by index (parity with CLI --variant / the GUI picker) instead of keyword-matching a prompt. Forces the template path. When given, 'prompt' is optional. Out-of-range indices error."}};
+        props["script"] = QJsonObject{{"type", "object"}, {"description", "Composed motion timeline (#1010), skipping prompt parsing: {\"steps\":[{\"action\":\"walk\",\"duration_s\":2.0},{\"action\":\"sit\"},{\"action\":\"wave\",\"repeat\":2}]}. Each 'action' must resolve to a library action (synonyms allowed); unresolvable entries are reported, never silently played. Two or more steps are stitched into ONE continuous clip at their best-matching pose pair with a short crossfade. A plain multi-step 'prompt' composes the same way without this argument."}};
         appendTool(
             "generate_motion",
-            "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
+            "AI text-to-motion (#411/#1010): generate a skeletal animation from a text prompt and "
             "retarget it onto a rigged mesh. MVP approach — matches the prompt to a curated, permissively-"
             "licensed motion clip (CMU MoCap) and retargets it onto the skeleton via the canonical-joint "
             "mapping (same as #409). Pass 'variant_index' to pick an exact clip deterministically. The clip "
-            "library downloads on first use. Requires a humanoid rig; reports which action matched and how "
+            "library downloads on first use. MULTI-STEP prompts (\"walk then sit then wave twice\") or an explicit "
+            "'script' are COMPOSED into one continuous stitched clip. Requires a humanoid rig; reports which action matched and how "
             "many bones/joints were retargeted. (Not generative diffusion — see "
             "docs/TEXT_TO_MOTION_SPIKE_411.md for why the template approach ships first.)",
             props,
