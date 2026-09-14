@@ -99,6 +99,13 @@ public:
         std::vector<std::array<float, 3>> fingerRestDir;
         int fps = 30;
         std::vector<QString> steps;     ///< composed step actions (for logging)
+        /// True when ANY composed step is a vertical-descent action. The
+        /// descent gate is per-CLIP but `rootY` is per-FRAME, and the
+        /// composition carries each step's own values (locomotion frames sit
+        /// at ~0), so opening the gate lowers only the steps that asked for it.
+        /// Without this a composed name like "walk_sit_wave" matches no
+        /// canonical label and the sit silently loses its crouch.
+        bool verticalDescent = false;
         std::vector<QString> unresolved;///< prompt fragments that matched nothing
     };
 

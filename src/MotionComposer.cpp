@@ -367,6 +367,7 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
         sel.fingerRestDir = c.fingerRestDir;
         sel.fps = c.fps;
         sel.steps.push_back(action);
+        sel.verticalDescent = MotionLibrary::isVerticalDescentAction(action);
         return sel;
     }
 
@@ -384,6 +385,11 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
     sel.refRoll = comp.refRoll;
     sel.fps = comp.fps;
     sel.steps = comp.actions;
+    for (const QString& a : comp.actions)
+        if (MotionLibrary::isVerticalDescentAction(a)) {
+            sel.verticalDescent = true;
+            break;
+        }
     // Name the clip after the sequence, e.g. "walk_sit_wave", so repeated
     // generations of different prompts don't collide on one animation name.
     QStringList parts;

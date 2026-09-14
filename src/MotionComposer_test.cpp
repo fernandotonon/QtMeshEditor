@@ -371,3 +371,34 @@ TEST(MotionComposer, SelectionFailsCleanlyOnUnknownPrompt)
     EXPECT_FALSE(sel.ok);
     EXPECT_FALSE(sel.error.isEmpty());
 }
+
+TEST(MotionComposer, ComposedSelectionFlagsVerticalDescent)
+{
+    // A composed action NAME ("walk_sit_wave") matches no canonical label, so
+    // deriving the descent gate from the name silently loses the sit's crouch.
+    // rootY is per-FRAME and the composition carries each step's own values, so
+    // the gate opens if ANY step needs it and locomotion frames (~0) are
+    // unaffected.
+    const MotionLibrary lib = makeLib({{"walk", 16}, {"sit", 16}, {"wave", 16}});
+    const auto withSit = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then sit then wave"), lib);
+    ASSERT_TRUE(withSit.ok) << withSit.error.toStdString();
+    EXPECT_TRUE(withSit.composed);
+    EXPECT_TRUE(withSit.verticalDescent)
+        << "composition contains 'sit' — descent must stay enabled";
+
+    const auto noSit = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then wave"), lib);
+    ASSERT_TRUE(noSit.ok);
+    EXPECT_FALSE(noSit.verticalDescent)
+        << "pure locomotion/gesture composition must not sink the root";
+}
+
+TEST(MotionComposer, SingleClipSelectionFlagsVerticalDescent)
+{
+    const MotionLibrary lib = makeLib({{"walk", 16}, {"sit", 16}});
+    EXPECT_TRUE(MotionComposer::selectForPrompt(QStringLiteral("sit"), lib)
+                    .verticalDescent);
+    EXPECT_FALSE(MotionComposer::selectForPrompt(QStringLiteral("walk"), lib)
+                     .verticalDescent);
+}

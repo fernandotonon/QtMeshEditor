@@ -2252,6 +2252,9 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     std::vector<std::array<float, 3>> clipFingerRest;            // #838
     QString clipSource;
     int composedSteps = 0;   // #1010: >1 when several takes were stitched
+    // #1010: a composed action name ("walk_sit_wave") matches no canonical
+    // label, so the descent gate must come from the SELECTION, not the name.
+    bool selDescent = false;
 
     bool gotClip = false;
     if (useModel) {
@@ -2349,6 +2352,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             }
             clipSource = QStringLiteral("template");
             composedSteps = static_cast<int>(sel.steps.size());
+            selDescent = sel.verticalDescent;
             idx = -2;   // handled; skip the single-clip block below
         }
         if (idx == -1) {
@@ -2376,6 +2380,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             clipFingerRest = clip.fingerRestDir;   // #838 rest ref (per-clip)
         }
         clipSource = QStringLiteral("template");
+        selDescent = MotionLibrary::isVerticalDescentAction(action);
         }   // end single-clip block (idx >= 0)
         // Optionally retime the clip to a requested duration by frame stride/pad.
         // Works for BOTH paths, so it reads the resolved arrays rather than the
@@ -2430,8 +2435,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 clipDirs,
                                                 clipSource == QStringLiteral("model"),
                                                 clipRootY,
-                                                verticalDescent
-                                                && MotionLibrary::isVerticalDescentAction(action),
+                                                verticalDescent && selDescent,
                                                 /*cmuLibraryHandedness=*/true,
                                                 clipRefRoll);
     if (!res.ok) {
@@ -2457,7 +2461,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
 
     // #838: ground crouch/kneel/work clips (drop the root so the lowest foot
     // plants on the floor — fixes the "floating worker"). Descent actions only.
-    if (verticalDescent && MotionLibrary::isVerticalDescentAction(action)) {
+    if (verticalDescent && selDescent) {
         if (AnimationMerger::groundRootToFeet(skel.get(), animName) > 0)
             err() << "(grounded to feet)" << Qt::endl;
     }

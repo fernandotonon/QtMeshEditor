@@ -4655,6 +4655,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                              .toJson(QJsonDocument::Compact))
                 : QByteArray();
         std::vector<QString> composedSteps, unresolvedSteps;
+        bool selDescent = false;
 
         if (useModel) {
             const QString mp = MotionGenerator::ensureModelBlocking();
@@ -4714,6 +4715,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 clipRootY = sel.rootY;
                 clipSource = QStringLiteral("template");
                 composedSteps = sel.steps;
+                selDescent = sel.verticalDescent;
                 unresolvedSteps = sel.unresolved;
                 idx = -2;   // handled
             }
@@ -4726,6 +4728,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             clipDirs = clip.restDir;
             clipRootY = clip.rootY;
             clipSource = QStringLiteral("template");
+            selDescent = MotionLibrary::isVerticalDescentAction(action);
             }
             if (duration > 0.05 && quats.size() >= 2) {
                 const int srcFrames = static_cast<int>(quats.size());
@@ -4757,7 +4760,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipSource == QStringLiteral("model"),
                                                         clipRootY,
                                                         args.value("vertical_descent").toBool(true)
-                                                        && MotionLibrary::isVerticalDescentAction(action));
+                                                        && selDescent);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal
@@ -4772,7 +4775,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         // #838: ground crouch/kneel/work clips (plant the lowest foot on the
         // floor — fixes the "floating worker"). Descent actions only.
         if (args.value("vertical_descent").toBool(true)
-            && MotionLibrary::isVerticalDescentAction(action))
+            && selDescent)
             AnimationMerger::groundRootToFeet(skel.get(), animName);
 
         // #854: optional Mixamo-style arm-space post-process. Echo whether it

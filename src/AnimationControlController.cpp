@@ -2220,6 +2220,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     }
 
     int composedSteps = 0;   // #1010: >1 when several takes were stitched
+    bool selDescent = false;
     if (!gotClip) {
         const QString libPath = MotionLibrary::ensureLibraryBlocking();
         if (libPath.isEmpty())
@@ -2254,6 +2255,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             }
             clipSource = QStringLiteral("template");
             composedSteps = static_cast<int>(sel.steps.size());
+            selDescent = sel.verticalDescent;
             idx = -2;   // handled
         }
         if (idx >= 0) {
@@ -2274,6 +2276,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             clipFingerRest = clip.fingerRestDir;   // #838 (per-clip const)
         }
         clipSource = QStringLiteral("template");
+        selDescent = MotionLibrary::isVerticalDescentAction(action);
         }   // end single-clip block (idx >= 0)
         // Retime works for BOTH paths, so it reads the resolved arrays rather
         // than the library clip (a composed clip has no single source Clip).
@@ -2307,7 +2310,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // Descent applies only to non-locomotion actions AND only when the user
     // left the checkbox on (#838).
     const bool doDescent =
-        verticalDescent && MotionLibrary::isVerticalDescentAction(action);
+        verticalDescent && selDescent;
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
