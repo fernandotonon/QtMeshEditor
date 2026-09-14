@@ -21,6 +21,7 @@
 #endif
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "MotionComposer.h"
 #include "MotionLibrary.h"
 #include "MotionGenerator.h"
 #include "MeshValidator.h"
@@ -2250,6 +2251,10 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838 fingers
     std::vector<std::array<float, 3>> clipFingerRest;            // #838
     QString clipSource;
+    int composedSteps = 0;   // #1010: >1 when several takes were stitched
+    // #1010: a composed action name ("walk_sit_wave") matches no canonical
+    // label, so the descent gate must come from the SELECTION, not the name.
+    bool selDescent = false;
 
     bool gotClip = false;
     if (useModel) {
@@ -2314,14 +2319,49 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             idx = variantIndex;
             action = lib.clip(idx).action;
         } else {
-            idx = lib.matchPrompt(prompt, &action);
+            // #1010 composed path: a MULTI-STEP prompt ("walk then sit then
+            // wave twice") builds one stitched clip from several takes; a
+            // single-action prompt falls through to the original matchPrompt
+            // selection unchanged.
+            const auto sel = MotionComposer::selectForPrompt(prompt, lib);
+            if (!sel.ok) {
+                err() << "Error: " << sel.error << ". Known actions:";
+                for (const QString& a : lib.actions()) err() << " " << a;
+                err() << Qt::endl;
+                return 1;
+            }
+            for (const QString& u : sel.unresolved)
+                err() << "Note: ignored \"" << u << "\" (no matching action)."
+                      << Qt::endl;
+            if (sel.composed) {
+                err() << "Composed " << sel.steps.size() << " steps:";
+                for (const QString& a : sel.steps) err() << " " << a;
+                err() << Qt::endl;
+            }
+            action = sel.action;
+            quats = sel.quats;
+            fps = sel.fps;
+            worldFrame = lib.isWorldFrame();
+            cmuRest = sel.restWorld.empty() ? lib.cmuRestWorld() : sel.restWorld;
+            clipDirs = sel.restDir;
+            clipRefRoll = sel.refRoll;
+            clipRootY = sel.rootY;
+            if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
+                clipFingers = sel.fingers;
+                clipFingerRest = sel.fingerRestDir;
+            }
+            clipSource = QStringLiteral("template");
+            composedSteps = static_cast<int>(sel.steps.size());
+            selDescent = sel.verticalDescent;
+            idx = -2;   // handled; skip the single-clip block below
         }
-        if (idx < 0) {
+        if (idx == -1) {
             err() << "Error: no motion matched \"" << prompt << "\". Known actions:";
             for (const QString& a : lib.actions()) err() << " " << a;
             err() << Qt::endl;
             return 1;
         }
+        if (idx >= 0) {
         const MotionLibrary::Clip& clip = lib.clip(idx);
         quats = clip.quats;
         fps = clip.fps;
@@ -2340,23 +2380,28 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
             clipFingerRest = clip.fingerRestDir;   // #838 rest ref (per-clip)
         }
         clipSource = QStringLiteral("template");
+        selDescent = MotionLibrary::isVerticalDescentAction(action);
+        }   // end single-clip block (idx >= 0)
         // Optionally retime the clip to a requested duration by frame stride/pad.
-        if (duration > 0.05f) {
-            const int want = std::max(2, int(duration * clip.fps));
+        // Works for BOTH paths, so it reads the resolved arrays rather than the
+        // library clip (a composed clip has no single source Clip).
+        if (duration > 0.05f && quats.size() >= 2) {
+            const int srcFrames = static_cast<int>(quats.size());
+            const int want = std::max(2, int(duration * fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
             std::vector<std::vector<std::array<float, 4>>> retimedFingers;
-            const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
+            const bool hadY = static_cast<int>(clipRootY.size()) == srcFrames;
             // The V1 finger side-channel must retime WITH the body, or
             // applyFingerCurl writes finger keys at the source duration while
             // the body plays the retimed one.
             const bool hadFingers =
-                static_cast<int>(clipFingers.size()) == clip.frames;
+                static_cast<int>(clipFingers.size()) == srcFrames;
             if (hadY) retimedY.resize(want);
             if (hadFingers) retimedFingers.resize(want);
             for (int f = 0; f < want; ++f) {
-                const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                const float src = (srcFrames - 1) * (float(f) / float(want - 1));
+                const int si = std::min(srcFrames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
                 if (hadFingers) retimedFingers[f] = clipFingers[si];
@@ -2390,8 +2435,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                                 clipDirs,
                                                 clipSource == QStringLiteral("model"),
                                                 clipRootY,
-                                                verticalDescent
-                                                && MotionLibrary::isVerticalDescentAction(action),
+                                                verticalDescent && selDescent,
                                                 /*cmuLibraryHandedness=*/true,
                                                 clipRefRoll);
     if (!res.ok) {
@@ -2417,7 +2461,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
 
     // #838: ground crouch/kneel/work clips (drop the root so the lowest foot
     // plants on the floor — fixes the "floating worker"). Descent actions only.
-    if (verticalDescent && MotionLibrary::isVerticalDescentAction(action)) {
+    if (verticalDescent && selDescent) {
         if (AnimationMerger::groundRootToFeet(skel.get(), animName) > 0)
             err() << "(grounded to feet)" << Qt::endl;
     }

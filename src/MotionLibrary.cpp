@@ -290,61 +290,86 @@ double MotionLibrary::takeWeight(const QString& action, float quality,
     return w;
 }
 
-int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
+std::vector<int> MotionLibrary::takesForAction(const QString& action) const
 {
-    const QString p = prompt.toLower();
-    auto findAction = [&](const QString& action) -> int {
-        for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
-            if (m_clips[i].action.compare(action, Qt::CaseInsensitive) == 0) return i;
-        return -1;
-    };
+    std::vector<int> hits;
+    for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
+        if (m_clips[static_cast<size_t>(i)].action.compare(action, Qt::CaseInsensitive) == 0)
+            hits.push_back(i);
+    return hits;
+}
 
-    // The v4 library carries SEVERAL takes per action — pick one at random so
-    // repeat generates give variety (real-mocap quality is the draw; variety
-    // is what the generative path was chasing).
-    auto pickAmong = [&](const QString& action) -> int {
-        QList<int> hits;
-        for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
-            if (m_clips[i].action.compare(action, Qt::CaseInsensitive) == 0)
-                hits.append(i);
-        if (hits.isEmpty()) return -1;
-        if (hits.size() == 1) return hits.first();
-        // Quality-weighted sampling (P ∝ quality², #855): keeps take variety
-        // but one weak take no longer poisons its whole action. Libraries
-        // without curation scores (quality defaults to 1) stay uniform.
-        double total = 0.0;
-        QList<double> weights;
-        weights.reserve(hits.size());
-        for (int i : hits) {
-            const auto& c = m_clips[static_cast<size_t>(i)];
-            const double w = takeWeight(c.action, c.quality, c.uprightness);
-            weights.append(w);
-            total += w;
-        }
-        if (total <= 1e-9)
-            return hits.at(QRandomGenerator::global()->bounded(hits.size()));
-        double r = QRandomGenerator::global()->generateDouble() * total;
-        for (int k = 0; k < hits.size(); ++k) {
-            r -= weights.at(k);
-            if (r <= 0.0) return hits.at(k);
-        }
-        return hits.last();
-    };
+int MotionLibrary::pickTake(const QString& action) const
+{
+    const std::vector<int> hits = takesForAction(action);
+    if (hits.empty()) return -1;
+    if (hits.size() == 1) return hits.front();
+    // Quality-weighted sampling (P proportional to quality^2, #855) with the
+    // posture penalty — identical to matchPrompt's rule, shared so the
+    // composer cannot drift from single-clip generation.
+    double total = 0.0;
+    std::vector<double> weights;
+    weights.reserve(hits.size());
+    for (int i : hits) {
+        const auto& c = m_clips[static_cast<size_t>(i)];
+        const double w = takeWeight(c.action, c.quality, c.uprightness);
+        weights.push_back(w);
+        total += w;
+    }
+    if (total <= 1e-9)
+        return hits.at(static_cast<size_t>(
+            QRandomGenerator::global()->bounded(static_cast<int>(hits.size()))));
+    double r = QRandomGenerator::global()->generateDouble() * total;
+    for (size_t k = 0; k < hits.size(); ++k) {
+        r -= weights[k];
+        if (r <= 0.0) return hits[k];
+    }
+    return hits.back();
+}
 
-    // 1. Direct: a library action name appears in the prompt.
-    for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
-        if (p.contains(m_clips[i].action.toLower())) {
-            if (matchedAction) *matchedAction = m_clips[i].action;
-            return pickAmong(m_clips[i].action);
+QString MotionLibrary::resolveAction(const QString& word) const
+{
+    const QString w = word.toLower().trimmed();
+    if (w.isEmpty()) return {};
+    // Direct action-name hit first (matchPrompt's rule 1), longest action
+    // name wins so "strafeleft" beats a bare "strafe" substring.
+    QString best;
+    for (const auto& c : m_clips) {
+        const QString a = c.action.toLower();
+        if (w.contains(a) && a.size() > best.size()) best = c.action;
+    }
+    if (!best.isEmpty()) return best;
+    // Then synonyms (matchPrompt's rule 2).
+    for (const auto& syn : kSynonyms) {
+        if (w.contains(QLatin1String(syn.word))) {
+            const QString a = QString::fromLatin1(syn.action);
+            if (!takesForAction(a).empty()) return a;
         }
     }
-    // 2. Synonyms → action.
-    for (const auto& s : kSynonyms) {
-        if (p.contains(QLatin1String(s.word))) {
-            const int idx = findAction(QString::fromLatin1(s.action));
-            if (idx >= 0) {
-                if (matchedAction) *matchedAction = m_clips[idx].action;
-                return pickAmong(m_clips[idx].action);
+    return {};
+}
+
+int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
+{
+    if (m_clips.empty()) return -1;
+    const QString p = prompt.toLower();
+
+    // 1. Direct: a library action name appears in the prompt.
+    for (const auto& c : m_clips) {
+        if (p.contains(c.action.toLower())) {
+            if (matchedAction) *matchedAction = c.action;
+            return pickTake(c.action);   // shared quality/posture weighting
+        }
+    }
+    // 2. Synonyms -> action.
+    for (const auto& syn : kSynonyms) {
+        if (p.contains(QLatin1String(syn.word))) {
+            const QString a = QString::fromLatin1(syn.action);
+            const std::vector<int> hits = takesForAction(a);
+            if (!hits.empty()) {
+                if (matchedAction)
+                    *matchedAction = m_clips[static_cast<size_t>(hits.front())].action;
+                return pickTake(a);
             }
         }
     }

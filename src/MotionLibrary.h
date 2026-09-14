@@ -127,6 +127,18 @@ public:
     static float meanChestLean(
         const std::vector<std::vector<std::array<float, 4>>>& quats);
 
+    // ---- Vocabulary + take selection (exposed for MotionComposer, #1010) ---
+    // Resolve a single word (or short phrase) to a library action, applying
+    // the same synonym table matchPrompt uses. Empty when nothing matches.
+    // Composition needs this per timeline STEP; matchPrompt only ever answers
+    // for a whole prompt and returns one clip.
+    QString resolveAction(const QString& word) const;
+    // Clip indices for an action, in library order (empty when unknown).
+    std::vector<int> takesForAction(const QString& action) const;
+    // Pick one take of `action` using the quality²/posture weighting
+    // (#855) — the exact rule matchPrompt applies. -1 when unknown.
+    int pickTake(const QString& action) const;
+
     /// Sampling weight for one take of `action`: quality² (the #855 rule)
     /// times a posture penalty — locomotion takes whose torso tips backward
     /// (uprightness < -0.10) are nearly never picked while upright takes of
