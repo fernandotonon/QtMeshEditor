@@ -528,3 +528,41 @@ TEST(MotionComposer, MultiTakeCompositionDropsFingers)
     EXPECT_TRUE(sel.fingers.empty())
         << "fingers from one take must not be applied across a stitched clip";
 }
+
+TEST(MotionComposer, SingleStepScriptIgnoresThePromptText)
+{
+    // A one-step `script` must be honoured on its own terms. The single-clip
+    // shortcut re-runs matchPrompt(prompt), which searches only the PROMPT — so
+    // an MCP caller supplying {"steps":[{"action":"wave"}]} with no prompt hit
+    // "no motion matched", and one supplying an UNRELATED prompt silently got
+    // the prompt's clip instead of the requested action.
+    const MotionLibrary lib = makeLib({{"walk", 12}, {"wave", 12}});
+
+    const auto noPrompt = MotionComposer::selectForPrompt(
+        QString(), lib, R"({"steps":[{"action":"wave"}]})");
+    ASSERT_TRUE(noPrompt.ok) << noPrompt.error.toStdString();
+    ASSERT_EQ(noPrompt.steps.size(), 1u);
+    EXPECT_EQ(noPrompt.steps[0].toStdString(), "wave");
+
+    // Prompt says walk, script says wave — the script wins.
+    const auto mismatched = MotionComposer::selectForPrompt(
+        QStringLiteral("walk"), lib, R"({"steps":[{"action":"wave"}]})");
+    ASSERT_TRUE(mismatched.ok) << mismatched.error.toStdString();
+    ASSERT_EQ(mismatched.steps.size(), 1u);
+    EXPECT_EQ(mismatched.steps[0].toStdString(), "wave")
+        << "an explicit script must not be overridden by the prompt text";
+}
+
+TEST(MotionComposer, EmptyScriptJsonFailsCleanly)
+{
+    // A script whose steps all failed to resolve must report an error, not
+    // silently fall back to the prompt (which would play something the caller
+    // never asked for).
+    const MotionLibrary lib = makeLib({{"walk", 12}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk"), lib, R"({"steps":[{"action":"teleport"}]})");
+    EXPECT_FALSE(sel.ok);
+    EXPECT_FALSE(sel.error.isEmpty());
+    ASSERT_EQ(sel.unresolved.size(), 1u);
+    EXPECT_EQ(sel.unresolved[0].toStdString(), "teleport");
+}

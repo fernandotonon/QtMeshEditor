@@ -383,10 +383,16 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
     // finger side-channel, which a stitched multi-take clip cannot carry
     // coherently). A single step that asks for a REPEAT or a duration still
     // needs the compiler, or "wave twice" silently plays once.
+    // The shortcut re-runs matchPrompt(prompt), which searches only the PROMPT
+    // text — so it is valid ONLY for a prompt-parsed script. An explicit
+    // `script` must be honoured on its own terms: MCP allows a script with no
+    // prompt (which matched nothing) or with an unrelated prompt (which
+    // silently played the prompt's clip instead of the requested action).
     const bool trivialSingle =
-        script.steps.size() == 1 && script.steps.front().repeat <= 1
+        scriptJson.isEmpty()
+        && script.steps.size() == 1 && script.steps.front().repeat <= 1
         && script.steps.front().durationS <= 0.0f;
-    if (script.steps.empty() || trivialSingle) {
+    if ((scriptJson.isEmpty() && script.steps.empty()) || trivialSingle) {
         QString action;
         const int idx = lib.matchPrompt(prompt, &action);
         if (idx < 0) {

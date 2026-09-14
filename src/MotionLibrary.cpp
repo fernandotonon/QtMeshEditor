@@ -257,12 +257,18 @@ bool MotionLibrary::parse(const QByteArray& json)
         // #1009 loop metadata. Prefer values the builder supplied; otherwise
         // derive them here so OLD libraries (every one shipped so far) gain
         // loop points without a regeneration + redownload.
+        // Bounds alone must NOT imply loopable: a supplied range would then
+        // bypass the seam + energy checks below and be repeated on a one-shot.
+        // The flag therefore defaults to FALSE rather than true — a builder
+        // that means "this loops" has to say so. (Requiring `loopable` to be
+        // present as well would be redundant: with a false default the two
+        // guards are behaviourally identical, and no test can tell them apart.)
         if (co.contains("loop_start") && co.contains("loop_end")) {
             clip.loopStart = std::clamp(co.value("loop_start").toInt(0),
                                         0, std::max(0, clip.frames - 1));
             clip.loopEnd = std::clamp(co.value("loop_end").toInt(clip.frames - 1),
                                       clip.loopStart, std::max(0, clip.frames - 1));
-            clip.loopable = co.value("loopable").toBool(true);
+            clip.loopable = co.value("loopable").toBool(false);
         } else if (clip.frames >= 4) {
             const LoopRange lr = findLoopRange(clip.quats);
             clip.loopStart = lr.start;

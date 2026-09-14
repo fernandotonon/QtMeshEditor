@@ -419,3 +419,51 @@ TEST(MotionLibrary, LoopRangeRejectsAStillTailOnAOneShot)
            "(seam " << lr.distance << " passes the gate; coverage "
         << lr.energyCoverage << " must veto it)";
 }
+
+TEST(MotionLibrary, BoundsWithoutTheLoopableFlagAreNotTrusted)
+{
+    // loop_start/loop_end alone must NOT imply loopable — defaulting the flag
+    // to true would let a supplied range bypass the seam + energy checks and be
+    // repeated on a one-shot. Falls back to derivation, which correctly rejects
+    // this monotonic clip.
+    QByteArray json = libWithLoopShapes();
+    json.replace("{\"action\":\"death\",\"source\":\"one\",",
+                 "{\"action\":\"death\",\"source\":\"one\","
+                 "\"loop_start\":2,\"loop_end\":9,");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    EXPECT_FALSE(lib.clip(1).loopable)
+        << "bounds without an explicit loopable flag must not be trusted";
+}
+
+TEST(MotionLibrary, ExplicitLoopableTrueIsHonouredOnAOneShot)
+{
+    // The other direction: a builder that explicitly asserts loopable:true on a
+    // clip our derivation would REJECT must win — that is the whole point of
+    // shipping metadata. Pins that the explicit branch is actually taken, which
+    // the "bounds alone" test cannot (it asserts the same false either way).
+    QByteArray json = libWithLoopShapes();
+    json.replace("{\"action\":\"death\",\"source\":\"one\",",
+                 "{\"action\":\"death\",\"source\":\"one\",\"loopable\":true,"
+                 "\"loop_start\":2,\"loop_end\":9,");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    const auto& c = lib.clip(1);
+    EXPECT_TRUE(c.loopable) << "explicit loopable:true must override derivation";
+    EXPECT_EQ(c.loopStart, 2);
+    EXPECT_EQ(c.loopEnd, 9);
+}
+
+TEST(MotionLibrary, ExplicitLoopableFalseOverridesDerivationOnACycle)
+{
+    // And the inverse: loopable:false on a clip our derivation would ACCEPT
+    // must be respected, so a curator can veto a bad-looking loop.
+    QByteArray json = libWithLoopShapes();
+    json.replace("{\"action\":\"walk\",\"source\":\"cyc\",",
+                 "{\"action\":\"walk\",\"source\":\"cyc\",\"loopable\":false,"
+                 "\"loop_start\":0,\"loop_end\":15,");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    EXPECT_FALSE(lib.clip(0).loopable)
+        << "an explicit loopable:false must veto a derived-loopable cycle";
+}
