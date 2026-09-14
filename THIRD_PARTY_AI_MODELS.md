@@ -184,6 +184,39 @@ the binary). Attribution + licenses for the models and their training data:
   `QTMESH_REMBG_MODEL_BASE_URL` / `QSettings ai/rembgModelBaseUrl`; offline guard
   `QTMESH_REMBG_NO_DOWNLOAD`). Falls back to the raw image when unavailable.
 
+## Depth-Anything-V2-Small — photo depth estimation (issue #1018, epic #818 C4)
+
+- **Model:** `depth-anything/Depth-Anything-V2-Small-hf` exported to ONNX
+  (`depth/da2_small.onnx`, ~99 MB), monocular relative-depth estimation from a
+  single photograph.
+- **Licence: Apache-2.0 — the Small variant ONLY.**
+  **Depth-Anything-V2 Base and Large are `cc-by-nc-4.0` and must NEVER be
+  shipped** (non-commercial, fails the project's permissive-redistribution bar
+  the same way SF3D and Hunyuan3D did). This is not left to reviewer vigilance:
+  `scripts/export-depth-anything-onnx.py` queries the HF model API at export
+  time and **hard-fails** on any licence outside its allow-list, before
+  downloading a single weight.
+- **Used by** `src/PhotoDepth.{h,cpp}`: CLI `qtmesh material --photo-depth
+  <img> [-o out.png] [--depth-letterbox]`. Produces an 8-bit grayscale map with
+  **near = bright**, the same convention `MeshDepthRenderer` emits, so a photo
+  and a rendered mesh can feed `SDWorker::generateTextureControlled`
+  interchangeably. Downloads on first use to `AppData/ai_models/depth/`
+  (override `QTMESH_DEPTH_MODEL_BASE_URL` / `QSettings ai/depthModelBaseUrl`;
+  offline guard `QTMESH_DEPTH_NO_DOWNLOAD`).
+- **Export contract:** input `pixel_values` float32 `[1,3,518,518]`
+  ImageNet-normalised; output `predicted_depth` float32 `[1,518,518]`, larger =
+  nearer. The spatial dims are **pinned, not dynamic**: a dynamic-axis export
+  traces cleanly but drifts from the traced resolution (measured 2.3e-02
+  relative error at 462² and 4.9e-02 at 392², versus 2.7e-06 at 518²) because
+  the ViT position-embedding interpolation is only partly captured. The
+  reference preprocessor resizes every input to 518 anyway, so pinning costs
+  nothing and removes a silent-wrong-answer failure mode.
+- **Parity-verified before upload:** the export script asserts torch-vs-ORT
+  agreement on both noise and a smooth structured image (measured 4.1e-06 and
+  6.9e-06 max abs difference) and refuses to write a graph with any non-finite
+  output. This exists because the UniRig export (#1025) shipped a graph
+  emitting 100% NaN latents that went unnoticed for months.
+
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
 - Three SPAN models from https://github.com/Kim2091/PBRify_Remix — **CC0-1.0**,

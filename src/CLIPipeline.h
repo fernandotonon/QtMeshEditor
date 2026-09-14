@@ -130,6 +130,9 @@ public:
     /// #405: Real-ESRGAN texture upscaling (2x/4x) via ONNX. Reads --texture,
     /// writes the upscaled PNG to -o (or <stem>_upscaled.png). Exit 1 when
     /// built without ENABLE_ONNX.
+    /// #1018: photo -> monocular depth map (Depth-Anything-V2-Small).
+    static int cmdMaterialPhotoDepth(const QString& srcPath, QString outputPath,
+                                     bool letterbox);
     static int cmdMaterialUpscale(const QString& srcPath, QString outputPath,
                                   int scale);
     /// #406: LLM-assisted material authoring. Headless equivalent of the
