@@ -82,6 +82,36 @@ public:
     static Composition compose(const Script& script, const MotionLibrary& lib,
                                int blendFrames = 6);
 
+    /// One resolved clip payload, whatever produced it. Surfaces (CLI, MCP,
+    /// GUI) fill their applyMotionClip arguments from this so the composed and
+    /// single-clip paths cannot drift apart.
+    struct Selection {
+        bool ok = false;
+        QString error;
+        bool composed = false;          ///< multi-step composition ran
+        QString action;                 ///< clip name suffix / reported action
+        std::vector<std::vector<std::array<float, 4>>> quats;
+        std::vector<float> rootY;
+        std::vector<std::array<float, 3>> restDir;
+        std::vector<std::array<float, 4>> restWorld;
+        std::vector<float> refRoll;
+        std::vector<std::vector<std::array<float, 4>>> fingers;
+        std::vector<std::array<float, 3>> fingerRestDir;
+        int fps = 30;
+        std::vector<QString> steps;     ///< composed step actions (for logging)
+        std::vector<QString> unresolved;///< prompt fragments that matched nothing
+    };
+
+    /// Resolve a prompt to a clip payload: COMPOSE when the prompt parses to
+    /// more than one step, otherwise fall back to the library's single-clip
+    /// match so existing one-action behaviour is bit-identical.
+    ///
+    /// `scriptJson` (optional) bypasses parsing and supplies the timeline
+    /// directly — the MCP `script` parameter.
+    static Selection selectForPrompt(const QString& prompt,
+                                     const MotionLibrary& lib,
+                                     const QByteArray& scriptJson = {});
+
     // ---- Pure helpers (exposed for unit tests) -----------------------------
 
     /// Squared canonical-pose distance between two poses: summed quaternion

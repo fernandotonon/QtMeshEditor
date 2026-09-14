@@ -330,3 +330,68 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     if (!out.ok) out.error = QStringLiteral("composition produced no frames");
     return out;
 }
+
+// ---------------------------------------------------------------------------
+// Surface-facing selection
+// ---------------------------------------------------------------------------
+
+MotionComposer::Selection MotionComposer::selectForPrompt(
+    const QString& prompt, const MotionLibrary& lib,
+    const QByteArray& scriptJson)
+{
+    Selection sel;
+    const Script script = scriptJson.isEmpty() ? parse(prompt, lib)
+                                               : parseJson(scriptJson, lib);
+    sel.unresolved = script.unresolved;
+
+    // A single step is the ORIGINAL single-clip path — take it verbatim rather
+    // than routing through compose(), so one-action prompts keep their exact
+    // shipped behaviour (including the finger side-channel, which a stitched
+    // multi-take clip cannot carry coherently).
+    if (script.steps.size() <= 1) {
+        QString action;
+        const int idx = lib.matchPrompt(prompt, &action);
+        if (idx < 0) {
+            sel.error = QStringLiteral("no motion matched \"%1\"").arg(prompt);
+            return sel;
+        }
+        const MotionLibrary::Clip& c = lib.clip(idx);
+        sel.ok = true;
+        sel.action = action;
+        sel.quats = c.quats;
+        sel.rootY = c.rootY;
+        sel.restDir = c.restDir;
+        sel.restWorld = c.restWorld;
+        sel.refRoll = c.refRoll;
+        sel.fingers = c.fingers;
+        sel.fingerRestDir = c.fingerRestDir;
+        sel.fps = c.fps;
+        sel.steps.push_back(action);
+        return sel;
+    }
+
+    const Composition comp = compose(script, lib);
+    if (!comp.ok) {
+        sel.error = comp.error;
+        return sel;
+    }
+    sel.ok = true;
+    sel.composed = true;
+    sel.quats = comp.quats;
+    sel.rootY = comp.rootY;
+    sel.restDir = comp.restDir;
+    sel.restWorld = comp.restWorld;
+    sel.refRoll = comp.refRoll;
+    sel.fps = comp.fps;
+    sel.steps = comp.actions;
+    // Name the clip after the sequence, e.g. "walk_sit_wave", so repeated
+    // generations of different prompts don't collide on one animation name.
+    QStringList parts;
+    for (const QString& a : comp.actions)
+        if (parts.isEmpty() || parts.back() != a) parts << a;
+    sel.action = parts.join(QLatin1Char('_'));
+    // Fingers are deliberately NOT carried across a composition: the V1
+    // side-channel is per-clip and splicing two takes' curls at a seam would
+    // apply one take's finger timing to the other's body.
+    return sel;
+}

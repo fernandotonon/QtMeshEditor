@@ -322,3 +322,52 @@ TEST(MotionComposer, EmptyScriptFailsCleanly)
     EXPECT_FALSE(comp.ok);
     EXPECT_FALSE(comp.error.isEmpty());
 }
+
+// ---- surface-facing selection ----------------------------------------------
+
+TEST(MotionComposer, SelectionFallsBackToSingleClipForOneAction)
+{
+    // A one-action prompt must keep the EXACT shipped behaviour, including the
+    // finger side-channel that a stitched multi-take clip cannot carry.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk forward"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_FALSE(sel.composed);
+    EXPECT_EQ(sel.action.toStdString(), "walk");
+    EXPECT_EQ(sel.quats.size(), 20u);     // the take, untouched
+}
+
+TEST(MotionComposer, SelectionComposesMultiStepPrompt)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then sit then wave"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_TRUE(sel.composed);
+    EXPECT_EQ(sel.steps.size(), 3u);
+    // Clip name reflects the sequence so different prompts don't collide.
+    EXPECT_EQ(sel.action.toStdString(), "walk_sit_wave");
+    EXPECT_GT(sel.quats.size(), 20u);
+    // Fingers are intentionally dropped across a composition.
+    EXPECT_TRUE(sel.fingers.empty());
+}
+
+TEST(MotionComposer, SelectionAcceptsAJsonScript)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QString(), lib, R"({"steps":[{"action":"walk"},{"action":"wave"}]})");
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_TRUE(sel.composed);
+    EXPECT_EQ(sel.steps.size(), 2u);
+}
+
+TEST(MotionComposer, SelectionFailsCleanlyOnUnknownPrompt)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("juggle chainsaws"), lib);
+    EXPECT_FALSE(sel.ok);
+    EXPECT_FALSE(sel.error.isEmpty());
+}
