@@ -1,4 +1,5 @@
 #include "MCPServer.h"
+#include "PhotoDepth.h"
 #include "MeshWeldOps.h"
 #include "commands/WeldVerticesCommand.h"
 #include "mainwindow.h"
@@ -667,6 +668,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
+        {QStringLiteral("photo_depth"), &MCPServer::toolPhotoDepth},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -909,6 +911,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
             {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("photo_depth"), QStringLiteral("pbr_synth")},
             {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
             {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
             {QStringLiteral("paint_bake"), QStringLiteral("texture_atlas")},
@@ -936,7 +939,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
         QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap_selection"), QStringLiteral("retopologize"),
         QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_mesh_texture"),
-        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("create_primitive"),
+        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("photo_depth"), QStringLiteral("create_primitive"),
         QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
         QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"), QStringLiteral("motion_in_between"), QStringLiteral("generate_motion"),
@@ -3019,6 +3022,58 @@ QJsonObject MCPServer::toolUpscaleTexture(const QJsonObject &args)
         "Upscaled '%1' by %2x.").arg(QFileInfo(srcPath).fileName()).arg(scale));
     result["outputPath"] = out;
     result["scale"] = scale;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without photo depth estimation "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString srcPath = args.value("image_path").toString();
+    if (srcPath.trimmed().isEmpty())
+        return makeErrorResult("'image_path' is required.");
+    if (!QFileInfo::exists(srcPath))
+        return makeErrorResult(QStringLiteral("image not found: %1").arg(srcPath));
+    const QImage photo(srcPath);
+    if (photo.isNull())
+        return makeErrorResult(
+            QStringLiteral("could not read %1 as an image.").arg(srcPath));
+
+    const QString model = PhotoDepth::ensureModelBlocking();
+    if (model.isEmpty())
+        return makeErrorResult(
+            "Depth model unavailable (offline, or QTMESH_DEPTH_NO_DOWNLOAD is set).");
+
+    PhotoDepth::Options opts;
+    opts.letterbox = args.value("letterbox").toBool(false);
+    const PhotoDepth::Result r = PhotoDepth::estimate(photo, model, opts);
+    if (!r.ok)
+        return makeErrorResult(QStringLiteral("depth estimation failed: %1")
+                                   .arg(r.error));
+
+    const QFileInfo fi(srcPath);
+    QString out = args.value("output_path").toString();
+    if (out.trimmed().isEmpty())
+        out = QDir(fi.absolutePath())
+                  .filePath(fi.completeBaseName() + QStringLiteral("_depth.png"));
+    if (!r.depth.save(out))
+        return makeErrorResult(QStringLiteral("could not write %1").arg(out));
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Estimated depth for '%1' (%2x%3, near = bright).")
+            .arg(fi.fileName()).arg(r.depth.width()).arg(r.depth.height()));
+    result["outputPath"] = out;
+    result["width"] = r.depth.width();
+    result["height"] = r.depth.height();
+    // Raw relative-depth range before normalisation — a near-zero span means
+    // the model found no structure, which a caller may want to act on.
+    result["rawMin"] = r.rawMin;
+    result["rawMax"] = r.rawMax;
     return result;
 #endif
 }
@@ -11196,6 +11251,36 @@ QJsonArray MCPServer::buildToolsList()
             "gracefully when the model is unavailable/offline.",
             props,
             QJsonArray{"texture_path"}
+        );
+    }
+
+    // photo_depth (#1018)
+    {
+        QJsonObject props;
+        props["image_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the PHOTOGRAPH to estimate depth for. The map is written "
+             "next to it as <stem>_depth.png unless output_path is given."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description", "Optional explicit output path for the depth PNG."}};
+        props["letterbox"] = QJsonObject{{"type", "boolean"},
+            {"description",
+             "Preserve the source aspect ratio by padding into the model's "
+             "square input instead of stretching (default false, matching the "
+             "reference pipeline)."}};
+        appendTool(
+            "photo_depth",
+            "Monocular depth estimation from a PHOTO (issue #1018) via "
+            "Depth-Anything-V2-Small (Apache-2.0; Base/Large are CC-BY-NC and "
+            "are never shipped). Returns an 8-bit grayscale map where NEAR is "
+            "BRIGHT — the same convention the mesh-depth renderer emits, so a "
+            "photo and a rendered mesh are interchangeable as ControlNet "
+            "conditioning images for generate_mesh_texture. This ESTIMATES "
+            "depth from a 2-D image; it does not render depth from a scene "
+            "mesh. The ~99 MB model downloads on first use. Reports the raw "
+            "relative-depth range, so a caller can detect a featureless result.",
+            props,
+            QJsonArray{"image_path"}
         );
     }
 #endif // ENABLE_ONNX

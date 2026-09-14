@@ -30,6 +30,7 @@
 #endif
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
+#include "PhotoDepth.h"
 #include "TextureUpscaler.h"
 #include <QPointer>
 #include <thread>
@@ -4361,6 +4362,73 @@ void MaterialEditorQML::generatePbrFromDiffuse()
     }
 
     emit pbrSynthCompleted(res.toVariantMap());
+#endif
+}
+
+bool MaterialEditorQML::aiPhotoDepthAvailable() const
+{
+    return PhotoDepth::isAvailable();
+}
+
+QString MaterialEditorQML::lastPhotoDepthPath() const
+{
+    return m_lastPhotoDepth;
+}
+
+void MaterialEditorQML::generatePhotoDepth(const QString &photoPath)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(photoPath);
+    emit photoDepthError(tr("Photo depth is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    QString src = photoPath;
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit photoDepthError(tr("Pick a photo first."));
+        return;
+    }
+    const QImage photo(src);
+    if (photo.isNull()) {
+        emit photoDepthError(tr("Could not read %1 as an image.")
+                                 .arg(QFileInfo(src).fileName()));
+        return;
+    }
+
+    emit photoDepthStarted();
+    // Resolve the model on THIS (GUI) thread: ensureModelBlocking spins a
+    // QEventLoop over ModelDownloader's queued signals, which needs a running
+    // event loop — the same constraint the #405 upscale path documents.
+    const QString model = PhotoDepth::ensureModelBlocking();
+    if (model.isEmpty()) {
+        emit photoDepthError(
+            tr("Depth model unavailable (offline, or downloads disabled)."));
+        return;
+    }
+
+    const QFileInfo fi(src);
+    const QString outPath = QDir(fi.absolutePath())
+        .filePath(fi.completeBaseName() + QStringLiteral("_depth.png"));
+
+    QPointer<MaterialEditorQML> self(this);
+    // Inference is pure CPU and takes a second or two on a large photo — run it
+    // off the GUI thread and marshal the result back, as the upscale path does.
+    std::thread([self, photo, model, outPath]() {
+        const PhotoDepth::Result res = PhotoDepth::estimate(photo, model);
+        const bool ok = res.ok && !res.depth.isNull()
+                        && res.depth.save(outPath, "PNG");
+        const QString err = res.ok ? QString() : res.error;
+        QMetaObject::invokeMethod(qApp, [self, ok, err, outPath]() {
+            if (!self) return;
+            if (ok) {
+                self->m_lastPhotoDepth = outPath;
+                emit self->photoDepthCompleted(outPath);
+            } else {
+                emit self->photoDepthError(
+                    err.isEmpty() ? tr("Could not write the depth map.") : err);
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
 #endif
 }
 
