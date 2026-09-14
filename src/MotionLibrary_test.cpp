@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <gtest/gtest.h>
 
 #include "MotionLibrary.h"
@@ -279,4 +280,142 @@ TEST(MotionLibrary, TakeWeightPenalizesBackleaningLocomotion)
     // Non-locomotion actions legitimately tip (sit/crawl/death) — no penalty.
     EXPECT_NEAR(MotionLibrary::takeWeight("sit", 1.0f, -0.6f), 1.0, 1e-9);
     EXPECT_NEAR(MotionLibrary::takeWeight("death", 0.8f, -0.9f), 0.64, 1e-6);
+}
+
+// ---- #1009 loop metadata ----------------------------------------------------
+
+namespace {
+// A clip that returns exactly to its opening pose (a true cycle) vs one that
+// ends somewhere else (a one-shot).
+QByteArray libWithLoopShapes()
+{
+    auto pose = [](double ang) {
+        const double h = ang * 0.5;
+        QByteArray p = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) p += ",";
+            p += "[" + QByteArray::number(std::sin(h), 'g', 8) + ",0,0,"
+               + QByteArray::number(std::cos(h), 'g', 8) + "]";
+        }
+        return p + "]";
+    };
+    // one-shot WITH A STILL TAIL — the real shape that defeats a
+    // seam-distance-only metric: it moves, then holds a final pose for a third
+    // of the clip, so many late frame pairs are near-identical.
+    QByteArray tail = "[";
+    for (int f = 0; f < 24; ++f) {
+        if (f) tail += ",";
+        const double t = double(f) / 15.0;     // reaches 1.0 at f=15
+        tail += pose(t < 1.0 ? t * 2.0 : 2.0); // then holds
+    }
+    tail += "]";
+    // cycle: 0 -> 1 -> 0 (ends where it began)
+    QByteArray cyc = "[";
+    for (int f = 0; f < 16; ++f) {
+        if (f) cyc += ",";
+        const double t = double(f) / 15.0;
+        cyc += pose(t <= 0.5 ? t * 2.0 : (1.0 - t) * 2.0);
+    }
+    cyc += "]";
+    // one-shot: 0 -> 1 monotonically (ends far from the start)
+    QByteArray one = "[";
+    for (int f = 0; f < 16; ++f) {
+        if (f) one += ",";
+        one += pose(double(f) / 15.0 * 2.0);
+    }
+    one += "]";
+
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"source\":\"cyc\",\"quats\":" + cyc + "},";
+    json += "{\"action\":\"death\",\"source\":\"one\",\"quats\":" + one + "},";
+    json += "{\"action\":\"pickup\",\"source\":\"tail\",\"quats\":" + tail + "}";
+    json += "]}";
+    return json;
+}
+} // namespace
+
+TEST(MotionLibrary, LoopRangeFindsTheCycleAndRejectsTheOneShot)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(libWithLoopShapes())) << lib.error().toStdString();
+    ASSERT_EQ(lib.clipCount(), 3);
+
+    const auto& cyc = lib.clip(0);
+    const auto& one = lib.clip(1);
+    EXPECT_TRUE(cyc.loopable) << "a clip returning to its opening pose loops";
+    EXPECT_FALSE(one.loopable) << "a monotonic one-shot must not be marked loopable";
+    EXPECT_LT(cyc.loopStart, cyc.loopEnd);
+}
+
+TEST(MotionLibrary, LoopRangePrefersACycleOverAStillTail)
+{
+    // The trap this metric exists to avoid: most clips open AND close near a
+    // rest pose, so seam distance alone marks a one-shot's motionless tail as a
+    // perfect loop. Measured on the shipped library before the fix: a death
+    // take "looped" over 8% of its frames with 0.16 energy. The chosen range
+    // must cover the clip's actual motion.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(libWithLoopShapes()));
+    const auto lr = MotionLibrary::findLoopRange(lib.clip(0).quats);
+    EXPECT_GT(lr.energyCoverage, 0.5)
+        << "loop range covers " << (lr.energyCoverage * 100.0)
+        << "% of the clip's motion — a rest-pose match, not a cycle";
+    EXPECT_GT(lr.span, 0.5);
+}
+
+TEST(MotionLibrary, FramePoseDistanceIgnoresQuaternionSign)
+{
+    std::vector<std::array<float, 4>> a(22, {0.0f, 0.0f, 0.0f, 1.0f});
+    std::vector<std::array<float, 4>> b(22, {0.0f, 0.0f, 0.0f, -1.0f});
+    EXPECT_NEAR(MotionLibrary::framePoseDistance(a, a), 0.0, 1e-9);
+    EXPECT_NEAR(MotionLibrary::framePoseDistance(a, b), 0.0, 1e-6);
+}
+
+TEST(MotionLibrary, ExplicitLoopMetadataOverridesDetection)
+{
+    // A builder that ships loop_start/loop_end must win over the derived value.
+    QByteArray json = libWithLoopShapes();
+    json.replace("{\"action\":\"death\",\"source\":\"one\",",
+                 "{\"action\":\"death\",\"source\":\"one\",\"loopable\":true,"
+                 "\"loop_start\":2,\"loop_end\":9,");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    const auto& c = lib.clip(1);
+    EXPECT_TRUE(c.loopable);
+    EXPECT_EQ(c.loopStart, 2);
+    EXPECT_EQ(c.loopEnd, 9);
+}
+
+TEST(MotionLibrary, LoopRangeRejectsAStillTailOnAOneShot)
+{
+    // Kills the seam-distance-only metric. This clip moves for 15 frames then
+    // HOLDS its final pose for 8 more, so dozens of late frame pairs are
+    // near-identical and score a "perfect" seam. Only an energy-coverage term
+    // rejects them. This is the exact shape measured on the shipped library,
+    // where a death take "looped" over 8% of its frames carrying 0.16 energy
+    // while a real run cycle carried 74.9.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(libWithLoopShapes())) << lib.error().toStdString();
+    ASSERT_EQ(lib.clipCount(), 3);
+    const auto& tailClip = lib.clip(2);
+    ASSERT_EQ(tailClip.action.toStdString(), "pickup");
+
+    const auto lr = MotionLibrary::findLoopRange(tailClip.quats);
+    // The clip genuinely has no good loop, so the RANGE may legitimately land
+    // on the tail — what must not happen is calling it loopable. Seam quality
+    // alone says yes here (the held pose seams at 0.39, inside the gate); only
+    // the energy-coverage condition rejects it.
+    EXPECT_LT(lr.energyCoverage, 0.5)
+        << "the only well-seaming range covers most of the motion — fixture no "
+           "longer reproduces the still-tail trap";
+    EXPECT_FALSE(tailClip.loopable)
+        << "a one-shot that merely holds its end pose must not be loopable "
+           "(seam " << lr.distance << " passes the gate; coverage "
+        << lr.energyCoverage << " must veto it)";
 }

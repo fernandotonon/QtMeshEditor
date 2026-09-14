@@ -80,6 +80,16 @@ public:
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;
+        /// #1009 loop metadata. `loopStart`/`loopEnd` bound the sub-range that
+        /// repeats most cleanly — the frame pair with the smallest canonical
+        /// pose distance, so splicing end→start does not pop. Computed at parse
+        /// time when the library JSON does not supply them (older libraries),
+        /// or read from `loop_start`/`loop_end`/`loopable` when it does.
+        /// `loopable` is false when even the best pair is too far apart for a
+        /// seamless repeat (a one-shot action like death or pickup).
+        bool loopable = false;
+        int loopStart = 0;
+        int loopEnd = 0;         ///< inclusive; 0 when the clip is too short
     };
 
     MotionLibrary() = default;
@@ -138,6 +148,27 @@ public:
     // Pick one take of `action` using the quality²/posture weighting
     // (#855) — the exact rule matchPrompt applies. -1 when unknown.
     int pickTake(const QString& action) const;
+
+    /// #1009: find the cleanest repeat range in a canonical clip — the (start,
+    /// end) frame pair minimising pose distance, searched over pairs at least
+    /// `minLen` frames apart. Returns {start, end, distance}; `end` is
+    /// inclusive. Pure — exposed for unit tests.
+    struct LoopRange {
+        int start = 0;
+        int end = 0;            ///< inclusive
+        double distance = 0.0;  ///< canonical pose distance across the seam
+        double span = 0.0;      ///< (end-start+1)/frames
+        double energyCoverage = 0.0;  ///< fraction of the clip's motion inside
+    };
+    static LoopRange findLoopRange(
+        const std::vector<std::vector<std::array<float, 4>>>& quats,
+        int minLen = 8);
+
+    /// Squared canonical-pose distance between two frames (summed quaternion
+    /// geodesic, sign-insensitive). Pure — exposed for unit tests.
+    static double framePoseDistance(
+        const std::vector<std::array<float, 4>>& a,
+        const std::vector<std::array<float, 4>>& b);
 
     /// Sampling weight for one take of `action`: quality² (the #855 rule)
     /// times a posture penalty — locomotion takes whose torso tips backward

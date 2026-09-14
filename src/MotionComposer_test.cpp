@@ -372,6 +372,34 @@ TEST(MotionComposer, SelectionFailsCleanlyOnUnknownPrompt)
     EXPECT_FALSE(sel.error.isEmpty());
 }
 
+TEST(MotionComposer, SingleStepRepeatStillComposes)
+{
+    // Regression: selectForPrompt short-circuits a lone step to matchPrompt,
+    // which knows nothing about `repeat` — so "wave twice" silently played
+    // ONCE (verified on the real library: 73 frames for both). Only a step
+    // with no repeat AND no duration may take that shortcut.
+    const MotionLibrary lib = makeLib({{"wave", 20}});
+    const auto once = MotionComposer::selectForPrompt(QStringLiteral("wave"), lib);
+    const auto twice = MotionComposer::selectForPrompt(
+        QStringLiteral("wave twice"), lib);
+    ASSERT_TRUE(once.ok);
+    ASSERT_TRUE(twice.ok);
+    EXPECT_FALSE(once.composed);            // plain single action: shortcut
+    EXPECT_TRUE(twice.composed);            // repeat must reach the compiler
+    EXPECT_GT(twice.quats.size(), once.quats.size());
+}
+
+TEST(MotionComposer, SingleStepDurationStillComposes)
+{
+    // Same shortcut trap for a duration-only single step.
+    const MotionLibrary lib = makeLib({{"walk", 60}});
+    const auto cut = MotionComposer::selectForPrompt(
+        QStringLiteral("walk for 1 second"), lib);
+    ASSERT_TRUE(cut.ok);
+    EXPECT_TRUE(cut.composed);
+    EXPECT_EQ(cut.quats.size(), 30u);       // 1s at 30fps, not the full 60
+}
+
 TEST(MotionComposer, ComposedSelectionFlagsVerticalDescent)
 {
     // A composed action NAME ("walk_sit_wave") matches no canonical label, so
@@ -401,4 +429,102 @@ TEST(MotionComposer, SingleClipSelectionFlagsVerticalDescent)
                     .verticalDescent);
     EXPECT_FALSE(MotionComposer::selectForPrompt(QStringLiteral("walk"), lib)
                      .verticalDescent);
+}
+
+// ---- review findings on #1024 ---------------------------------------------
+
+TEST(MotionComposer, SingleTakeRepeatKeepsFingerSideChannel)
+{
+    // Regression guard: making "wave twice" compose (so the repeat is honoured)
+    // must NOT drop the V1 finger side-channel. Fingers cannot ride a clip
+    // stitched from SEVERAL takes (one take's curl timing would land on
+    // another's body), but a single take repeated is still one take.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"wave", 12}});
+    // Give the clip a finger channel: frames x 30 slots.
+    QByteArray fing = "[";
+    for (int f = 0; f < 12; ++f) {
+        if (f) fing += ",";
+        fing += "[";
+        for (int j = 0; j < 30; ++j) { if (j) fing += ","; fing += "[0,0,0,1]"; }
+        fing += "]";
+    }
+    fing += "]";
+    json.replace("\"quats\":", "\"fingers\":" + fing + ",\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_FALSE(lib.clip(0).fingers.empty()) << "fixture must carry fingers";
+
+    const auto twice = MotionComposer::selectForPrompt(
+        QStringLiteral("wave twice"), lib);
+    ASSERT_TRUE(twice.ok) << twice.error.toStdString();
+    EXPECT_TRUE(twice.composed);
+    EXPECT_FALSE(twice.fingers.empty())
+        << "a single take repeated must keep its finger channel";
+    EXPECT_EQ(twice.fingers.size(), twice.quats.size())
+        << "finger frames must stay in step with body frames";
+}
+
+TEST(MotionComposer, RepeatIsHonouredWhenDurationCutsBeforeTheLoopStart)
+{
+    // A loopable clip whose loop starts late, combined with a duration short
+    // enough to cut before loopStart: every pass after the first had
+    // from > to, so it contributed NOTHING and the clip silently played once.
+    // The fixture must be LOOPABLE with a LATE loopStart, or the guarded branch
+    // is never entered. Explicit loop_start/loop_end in the JSON is the only
+    // way to pin that shape deterministically.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"walk", 40}});
+    json.replace("\"quats\":",
+                 "\"loopable\":true,\"loop_start\":20,\"loop_end\":39,\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_TRUE(lib.clip(0).loopable);
+    ASSERT_EQ(lib.clip(0).loopStart, 20);
+
+    MotionComposer::Script script;
+    MotionComposer::Step st;
+    st.action = QStringLiteral("walk");
+    st.repeat = 3;
+    st.durationS = 0.1f;              // 3 frames at 30fps — well before loopStart
+    script.steps.push_back(st);
+
+    const auto c = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(c.ok) << c.error.toStdString();
+    MotionComposer::Script once = script;
+    once.steps[0].repeat = 1;
+    const auto c1 = MotionComposer::compose(once, lib);
+    ASSERT_TRUE(c1.ok);
+    EXPECT_GT(c.frames(), c1.frames())
+        << "repeat=3 produced " << c.frames() << " frames, same as repeat=1 ("
+        << c1.frames() << ") — later passes were empty";
+}
+
+TEST(MotionComposer, MultiTakeCompositionDropsFingers)
+{
+    // The other half of the finger rule, and the dangerous direction: across
+    // SEVERAL takes the seam blend reflows the body while the V1 finger channel
+    // cannot follow, so carrying one take's curls onto another take's pose is
+    // worse than shipping no fingers. Guards against singleTake being forced on.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"wave", 12}, {"walk", 12}});
+    QByteArray fing = "[";
+    for (int f = 0; f < 12; ++f) {
+        if (f) fing += ",";
+        fing += "[";
+        for (int j = 0; j < 30; ++j) { if (j) fing += ","; fing += "[0,0,0,1]"; }
+        fing += "]";
+    }
+    fing += "]";
+    // Both clips carry fingers, so a naive implementation would emit them.
+    json.replace("\"quats\":", "\"fingers\":" + fing + ",\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_FALSE(lib.clip(0).fingers.empty());
+    ASSERT_FALSE(lib.clip(1).fingers.empty());
+
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("wave then walk"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    ASSERT_TRUE(sel.composed);
+    EXPECT_FALSE(sel.singleTake) << "two takes were stitched";
+    EXPECT_TRUE(sel.fingers.empty())
+        << "fingers from one take must not be applied across a stitched clip";
 }

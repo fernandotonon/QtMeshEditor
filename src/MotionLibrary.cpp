@@ -4,6 +4,7 @@
 #include <QRandomGenerator>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
 
@@ -27,6 +28,17 @@ constexpr const char* kDefaultBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/motion/";
 constexpr const char* kBaseUrlSettingsKey = "ai/motionLibraryBaseUrl";
 constexpr int kCanonJoints = 22;
+// #1009: summed squared quaternion geodesic (radians^2 over all joints) below
+// which a start/end pair reads as a seamless repeat. CALIBRATED on the shipped
+// 122-clip library, and the two groups separate by orders of magnitude:
+//   loopable   — every *loop-named clip <= 0.18; wave 0.0006, walk 0.0008,
+//                jump 0.006, idle 0.016, run 0.13, attack 0.46
+//   one-shot   — death 18.7 (median), pickup 36.1, landright 4.1
+// 1.0 sits in the empty band between them with margin on both sides.
+constexpr double kLoopSeamMaxDistance = 1.0;
+// A loop must also carry most of the clip's motion. Without this a one-shot
+// that merely HOLDS its end pose looks perfectly loopable over its still tail.
+constexpr double kLoopMinEnergyCoverage = 0.5;
 
 // Synonyms → a canonical action keyword. Maps prompt words onto the library's
 // actions so e.g. "jog"/"sprint" pick "run", "stand"/"idle" pick "idle".
@@ -242,6 +254,28 @@ bool MotionLibrary::parse(const QByteArray& json)
         // keep a neutral 0 so the posture penalty can never misfire on a
         // parent-relative chest value.
         clip.uprightness = m_worldFrame ? meanChestLean(clip.quats) : 0.0f;
+        // #1009 loop metadata. Prefer values the builder supplied; otherwise
+        // derive them here so OLD libraries (every one shipped so far) gain
+        // loop points without a regeneration + redownload.
+        if (co.contains("loop_start") && co.contains("loop_end")) {
+            clip.loopStart = std::clamp(co.value("loop_start").toInt(0),
+                                        0, std::max(0, clip.frames - 1));
+            clip.loopEnd = std::clamp(co.value("loop_end").toInt(clip.frames - 1),
+                                      clip.loopStart, std::max(0, clip.frames - 1));
+            clip.loopable = co.value("loopable").toBool(true);
+        } else if (clip.frames >= 4) {
+            const LoopRange lr = findLoopRange(clip.quats);
+            clip.loopStart = lr.start;
+            clip.loopEnd = lr.end;
+            // Threshold in squared-radians summed over the joints. A clean
+            // repeat needs the two ends to be near-identical; one-shot actions
+            // (death, pickup) never get close and stay non-loopable.
+            // BOTH conditions: a tight seam AND a range that actually spans
+            // the clip's motion. A one-shot holding its final pose satisfies
+            // the seam alone (measured: 0.39 over a 6.7%-energy tail).
+            clip.loopable = lr.distance < kLoopSeamMaxDistance
+                            && lr.energyCoverage > kLoopMinEnergyCoverage;
+        }
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
@@ -288,6 +322,93 @@ double MotionLibrary::takeWeight(const QString& action, float quality,
     if (locomotion && uprightness < -0.10f)
         w *= 0.02;   // backpedal-look take: only picked when nothing else
     return w;
+}
+
+double MotionLibrary::framePoseDistance(
+    const std::vector<std::array<float, 4>>& a,
+    const std::vector<std::array<float, 4>>& b)
+{
+    const size_t n = std::min(a.size(), b.size());
+    double sum = 0.0;
+    for (size_t j = 0; j < n; ++j) {
+        // |dot| — q and -q are the same rotation, so a sign-sensitive metric
+        // would rank an identical pose as maximally distant.
+        double d = std::abs(static_cast<double>(a[j][0]) * b[j][0]
+                          + static_cast<double>(a[j][1]) * b[j][1]
+                          + static_cast<double>(a[j][2]) * b[j][2]
+                          + static_cast<double>(a[j][3]) * b[j][3]);
+        d = std::clamp(d, 0.0, 1.0);
+        const double ang = 2.0 * std::acos(d);
+        sum += ang * ang;
+    }
+    return sum;
+}
+
+MotionLibrary::LoopRange MotionLibrary::findLoopRange(
+    const std::vector<std::vector<std::array<float, 4>>>& quats, int minLen)
+{
+    LoopRange best;
+    const int n = static_cast<int>(quats.size());
+    if (n < 2) return best;
+    minLen = std::max(2, minLen);
+    if (n <= minLen) {              // too short to hold a sub-loop
+        best.start = 0;
+        best.end = n - 1;
+        best.distance = framePoseDistance(quats.front(), quats.back());
+        best.span = 1.0;
+        return best;
+    }
+    // Per-frame motion, prefix-summed so each candidate range's energy is O(1).
+    std::vector<double> cum(static_cast<size_t>(n), 0.0);
+    for (int f = 1; f < n; ++f)
+        cum[static_cast<size_t>(f)] =
+            cum[static_cast<size_t>(f - 1)]
+            + framePoseDistance(quats[static_cast<size_t>(f - 1)],
+                                quats[static_cast<size_t>(f)]);
+
+    // Seam distance ALONE is not a loop test: most clips open and close near a
+    // rest pose, and a one-shot that HOLDS its final pose has dozens of
+    // near-identical late pairs. Measured on the shipped library, a death take
+    // scored a "perfect" loop over a still 8% tail (0.16 energy) while a real
+    // run cycle carried 74.9.
+    //
+    // Seam quality is therefore a GATE, not a term to trade against coverage:
+    // blending the two lets a tail with a flawless seam (score 0.133) beat a
+    // true cycle with a loose one (0.111). Among ranges whose seam is good
+    // enough to splice, take the one covering the most motion.
+    const double totalEnergy = cum.back();
+    auto scan = [&](double seamGate) {
+        bool found = false;
+        double bestCoverage = -1.0;
+        for (int i = 0; i + minLen <= n - 1; ++i) {
+            for (int j = i + minLen; j < n; ++j) {
+                const double d = framePoseDistance(quats[static_cast<size_t>(i)],
+                                                   quats[static_cast<size_t>(j)]);
+                if (d > seamGate) continue;
+                const double energy =
+                    cum[static_cast<size_t>(j)] - cum[static_cast<size_t>(i)];
+                const double coverage =
+                    totalEnergy > 1e-9 ? energy / totalEnergy : 0.0;
+                if (coverage > bestCoverage) {
+                    bestCoverage = coverage;
+                    best.distance = d;
+                    best.start = i;
+                    best.end = j;
+                    best.span = double(j - i + 1) / double(n);
+                    best.energyCoverage = coverage;
+                    found = true;
+                }
+            }
+        }
+        return found;
+    };
+    // Try the splice-quality gate first; if NOTHING in the clip seams that
+    // well (a true one-shot), fall back to reporting the widest-coverage range
+    // with its real — large — seam distance, so the caller's loopable test
+    // rejects it on the distance rather than on a missing answer.
+    if (!scan(kLoopSeamMaxDistance))
+        scan(std::numeric_limits<double>::max());
+    return best;
 }
 
 std::vector<int> MotionLibrary::takesForAction(const QString& action) const
