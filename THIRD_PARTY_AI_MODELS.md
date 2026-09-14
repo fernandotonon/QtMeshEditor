@@ -20,7 +20,8 @@ the binary). Attribution + licenses for the models and their training data:
 > [`QtMeshEditor-facemesh-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx),
 > [`QtMeshEditor-faceblendshapes-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-faceblendshapes-onnx),
 > [`QtMeshEditor-blazepose-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-blazepose-onnx),
-> [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx)
+> [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx),
+> [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx)
 > (plus the in-house
 > [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
 > [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
@@ -196,6 +197,11 @@ the binary). Attribution + licenses for the models and their training data:
   `scripts/export-depth-anything-onnx.py` queries the HF model API at export
   time and **hard-fails** on any licence outside its allow-list, before
   downloading a single weight.
+- **Mirror repo:**
+  [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx)
+  (standalone model card + I/O contract; the runtime downloads from the
+  aggregate repo under `depth/`). Refresh with
+  `scripts/sync-hf-model-repos.sh depthanything`.
 - **Used by** `src/PhotoDepth.{h,cpp}`: CLI `qtmesh material --photo-depth
   <img> [-o out.png] [--depth-letterbox]`. Produces an 8-bit grayscale map with
   **near = bright**, the same convention `MeshDepthRenderer` emits, so a photo

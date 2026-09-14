@@ -61,6 +61,7 @@ declare -A REPOS=(
   [faceblendshapes]=QtMeshEditor-faceblendshapes-onnx
   [blazepose]=QtMeshEditor-blazepose-onnx
   [poselandmarks]=QtMeshEditor-poselandmarks-onnx
+  [depthanything]=QtMeshEditor-depthanything-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -81,6 +82,7 @@ declare -A FILES=(
   [faceblendshapes]="mocap/face/face_blendshapes.onnx"
   [blazepose]="mocap/pose/pose_detector.onnx"
   [poselandmarks]="mocap/pose/pose_landmarks.onnx"
+  [depthanything]="depth/da2_small.onnx"
 )
 
 sync_one() {
