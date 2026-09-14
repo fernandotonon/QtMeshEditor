@@ -221,6 +221,7 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     struct Piece {
         std::vector<std::vector<std::array<float, 4>>> quats;
         std::vector<float> rootY;
+        std::vector<std::vector<std::array<float, 4>>> fingers;
         QString action;
     };
     std::vector<Piece> pieces;
@@ -249,12 +250,35 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
         Piece p;
         p.action = st.action;
         const bool haveRootY = c.rootY.size() == c.quats.size();
-        // `repeat` splices the take end-to-start; the seam blend below then
-        // smooths each junction the same way it smooths between actions.
-        for (int r = 0; r < std::max(1, st.repeat); ++r) {
-            for (int f = 0; f < keep; ++f) {
+        // V1 side-channel fingers travel WITH their own take's frames, so a
+        // repeated single take keeps them perfectly in step.
+        const bool haveFingers = c.fingers.size() == c.quats.size();
+        const int reps = std::max(1, st.repeat);
+        // #1009: repeat over the clip's LOOP RANGE when it has one, so "wave
+        // twice" cycles the wave itself instead of replaying the lead-in and
+        // settle each time. Non-loopable takes (one-shots like death/pickup)
+        // repeat whole, which is the only sensible reading of "do it twice".
+        // The loop slice must fall INSIDE the kept range, or later passes get
+        // from > to and contribute nothing — "wave twice" with a short duration
+        // silently played once. When the duration cuts before loopStart there
+        // is no cycle left to repeat, so fall back to repeating what was kept.
+        const bool useLoop = reps > 1 && c.loopable
+                             && c.loopEnd > c.loopStart
+                             && c.loopEnd < static_cast<int>(c.quats.size())
+                             && c.loopStart < keep;
+        for (int r = 0; r < reps; ++r) {
+            // First pass plays from the top so the action's entry is kept;
+            // later passes replay only the cycle.
+            const int from = (useLoop && r > 0) ? c.loopStart : 0;
+            const int to = (useLoop && r + 1 < reps)
+                               ? std::min(keep - 1, c.loopEnd)
+                               : keep - 1;
+            if (from > to) continue;   // belt-and-braces: never an empty pass
+            for (int f = from; f <= to; ++f) {
                 p.quats.push_back(c.quats[static_cast<size_t>(f)]);
                 if (haveRootY) p.rootY.push_back(c.rootY[static_cast<size_t>(f)]);
+                if (haveFingers)
+                    p.fingers.push_back(c.fingers[static_cast<size_t>(f)]);
             }
         }
         if (!p.quats.empty()) pieces.push_back(std::move(p));
@@ -275,6 +299,7 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     out.restDir = seed.restDir;
     out.restWorld = seed.restWorld;
     out.refRoll = seed.refRoll;
+    out.fingerRestDir = seed.fingerRestDir;
 
     // ---- 2. Stitch ---------------------------------------------------------
     const bool wantRootY =
@@ -284,6 +309,14 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     out.quats = pieces.front().quats;
     if (wantRootY) out.rootY = pieces.front().rootY;
     out.actions.push_back(pieces.front().action);
+    // Fingers survive only a SINGLE-take composition (one action, possibly
+    // repeated). Across several takes the seam blend reflows the body while the
+    // finger channel cannot follow, so one take's curls would land on another's
+    // pose — worse than no fingers at all.
+    out.singleTake = pieces.size() == 1;
+    if (out.singleTake
+        && pieces.front().fingers.size() == pieces.front().quats.size())
+        out.fingers = pieces.front().fingers;
 
     for (size_t i = 1; i < pieces.size(); ++i) {
         const Piece& nextP = pieces[i];
@@ -344,11 +377,22 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
                                                : parseJson(scriptJson, lib);
     sel.unresolved = script.unresolved;
 
-    // A single step is the ORIGINAL single-clip path — take it verbatim rather
-    // than routing through compose(), so one-action prompts keep their exact
-    // shipped behaviour (including the finger side-channel, which a stitched
-    // multi-take clip cannot carry coherently).
-    if (script.steps.size() <= 1) {
+    // A single step with no repeat/duration is the ORIGINAL single-clip path —
+    // take it verbatim rather than routing through compose(), so plain
+    // one-action prompts keep their exact shipped behaviour (including the
+    // finger side-channel, which a stitched multi-take clip cannot carry
+    // coherently). A single step that asks for a REPEAT or a duration still
+    // needs the compiler, or "wave twice" silently plays once.
+    // The shortcut re-runs matchPrompt(prompt), which searches only the PROMPT
+    // text — so it is valid ONLY for a prompt-parsed script. An explicit
+    // `script` must be honoured on its own terms: MCP allows a script with no
+    // prompt (which matched nothing) or with an unrelated prompt (which
+    // silently played the prompt's clip instead of the requested action).
+    const bool trivialSingle =
+        scriptJson.isEmpty()
+        && script.steps.size() == 1 && script.steps.front().repeat <= 1
+        && script.steps.front().durationS <= 0.0f;
+    if ((scriptJson.isEmpty() && script.steps.empty()) || trivialSingle) {
         QString action;
         const int idx = lib.matchPrompt(prompt, &action);
         if (idx < 0) {
@@ -368,6 +412,7 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
         sel.fps = c.fps;
         sel.steps.push_back(action);
         sel.verticalDescent = MotionLibrary::isVerticalDescentAction(action);
+        sel.singleTake = true;
         return sel;
     }
 
@@ -385,6 +430,9 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
     sel.refRoll = comp.refRoll;
     sel.fps = comp.fps;
     sel.steps = comp.actions;
+    sel.singleTake = comp.singleTake;
+    sel.fingers = comp.fingers;
+    sel.fingerRestDir = comp.fingerRestDir;
     for (const QString& a : comp.actions)
         if (MotionLibrary::isVerticalDescentAction(a)) {
             sel.verticalDescent = true;
@@ -396,8 +444,5 @@ MotionComposer::Selection MotionComposer::selectForPrompt(
     for (const QString& a : comp.actions)
         if (parts.isEmpty() || parts.back() != a) parts << a;
     sel.action = parts.join(QLatin1Char('_'));
-    // Fingers are deliberately NOT carried across a composition: the V1
-    // side-channel is per-clip and splicing two takes' curls at a seam would
-    // apply one take's finger timing to the other's body.
     return sel;
 }

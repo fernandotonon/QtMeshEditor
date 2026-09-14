@@ -56,6 +56,11 @@ public:
         int jointCount = 22;
         std::vector<QString> actions;    ///< one entry per composed step
         std::vector<int> seamFrames;     ///< frame index of each junction
+        /// V1 finger side-channel, carried ONLY when the whole composition came
+        /// from one take (see Selection::singleTake).
+        std::vector<std::vector<std::array<float, 4>>> fingers;
+        std::vector<std::array<float, 3>> fingerRestDir;
+        bool singleTake = false;
         int frames() const { return static_cast<int>(quats.size()); }
     };
 
@@ -99,6 +104,11 @@ public:
         std::vector<std::array<float, 3>> fingerRestDir;
         int fps = 30;
         std::vector<QString> steps;     ///< composed step actions (for logging)
+        /// True when every frame came from ONE library take (a single action,
+        /// possibly repeated). Fingers ride along in that case; a clip stitched
+        /// from SEVERAL takes drops them, because one take's curl timing would
+        /// land on another take's body.
+        bool singleTake = false;
         /// True when ANY composed step is a vertical-descent action. The
         /// descent gate is per-CLIP but `rootY` is per-FRAME, and the
         /// composition carries each step's own values (locomotion frames sit
