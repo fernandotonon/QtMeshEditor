@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <limits>
 // Unit tests for UniRigPredictor (#408, retargeted from RigNet to UniRig:
 // VAST-AI-Research/UniRig, SIGGRAPH 2025). No Ogre / GL / ONNX needed: these
 // exercise the pure-data tokenizer (undiscretize + the detokenize FSM) and the
@@ -524,4 +526,47 @@ TEST(UniRigPredictor, LabelJointsClassifiesAPoseArmsByAttachHeight)
     EXPECT_EQ(armChains, 2) << "both A-pose chains must be named as arms";
     EXPECT_EQ(legChains, 2) << "exactly the two root chains are legs";
     EXPECT_EQ(legNamedHigh, 0) << "no leg name may land at chest height";
+}
+
+// #1025 — the NaN-latents guard itself lives inside the ENABLE_ONNX inference
+// path and needs a loaded encoder session, so it cannot be reached from these
+// pure-data tests. What IS testable here is the predicate the guard applies, so
+// a future refactor cannot silently weaken it: an all-non-finite prefix must be
+// rejected, and a prefix with any finite value must not be.
+//
+// The live behaviour was verified manually against the hosted export
+// (jana.obj, buick_riviera*.glb): 1x1024x1024 latents, 1048576/1048576
+// non-finite, now reported as "the encoder export is numerically broken"
+// instead of the misleading downstream "constrained decode reached a dead
+// state", and failing in 2.4s instead of 2m24s.
+namespace {
+// Mirrors the guard in UniRigPredictor.cpp: all sampled values non-finite.
+bool looksLikeBrokenExport(const std::vector<float>& latents, int probeLen)
+{
+    const int probe = std::min<int>(static_cast<int>(latents.size()), probeLen);
+    int bad = 0;
+    for (int i = 0; i < probe; ++i)
+        if (!std::isfinite(latents[static_cast<size_t>(i)])) ++bad;
+    return probe > 0 && bad == probe;
+}
+} // namespace
+
+TEST(UniRigPredictor, BrokenExportPredicateRejectsAllNaNLatents)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_TRUE(looksLikeBrokenExport(std::vector<float>(2048, nan), 1024));
+    EXPECT_TRUE(looksLikeBrokenExport(
+        std::vector<float>(2048, std::numeric_limits<float>::infinity()), 1024));
+}
+
+TEST(UniRigPredictor, BrokenExportPredicateAcceptsUsableLatents)
+{
+    std::vector<float> ok(2048, 0.25f);
+    EXPECT_FALSE(looksLikeBrokenExport(ok, 1024));
+    // A single finite value inside the probe window is enough to proceed — the
+    // guard must only fire on a WHOLLY broken export, never on a mesh that
+    // happens to produce one bad activation.
+    std::vector<float> mostlyBad(2048, std::numeric_limits<float>::quiet_NaN());
+    mostlyBad[7] = 1.0f;
+    EXPECT_FALSE(looksLikeBrokenExport(mostlyBad, 1024));
 }

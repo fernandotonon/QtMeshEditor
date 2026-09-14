@@ -959,6 +959,27 @@ UniRigPredictor::Result UniRigPredictor::predict(
             return failResult(QStringLiteral(
                 "UniRig: encoder produced no latent prefix."));
 
+        // #1025: guard against a numerically broken encoder export. The hosted
+        // encoder.onnx currently emits 100% NaN latents on every input (shape
+        // correct, values not) — independent of mesh and of execution provider.
+        // Without this check the failure surfaces far downstream as
+        // "constrained decode reached a dead state", which points at the FSM
+        // and sent one investigation chasing the tokenizer. Sample a prefix
+        // rather than the whole 1M-element tensor: a broken export is NaN from
+        // the first value, so a short scan is enough and costs nothing.
+        {
+            const int64_t probe = std::min<int64_t>(numLatents * hidden, 1024);
+            int64_t bad = 0;
+            for (int64_t i = 0; i < probe; ++i)
+                if (!std::isfinite(latentData[i])) ++bad;
+            if (bad == probe)
+                return failResult(QStringLiteral(
+                    "UniRig: the encoder export is numerically broken — it "
+                    "produced non-finite (NaN) latents for every sampled value. "
+                    "This is a bad model export, not a mesh problem; see #1025. "
+                    "Re-export with torch-parity assertions."));
+        }
+
         // Own the latent bytes (encOuts is reused/invalidated as we proceed).
         latents.assign(
             latentData, latentData + static_cast<size_t>(numLatents) * hidden);
