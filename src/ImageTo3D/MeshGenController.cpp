@@ -465,6 +465,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         return options.contains(QLatin1String(key))
             ? options.value(QLatin1String(key)).toBool() : def;
     };
+    // #1016: matting tier. "best" = BiRefNet 1024² (MIT, ~930 MB, ~3x crisper
+    // edges on hair/fur); anything else keeps U²-Net 320². Only meaningful when
+    // background removal is on.
+    const bool wantBestMatte =
+        options.value(QLatin1String("matting")).toString().toLower()
+            == QLatin1String("best");
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
@@ -580,7 +586,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // --- Worker thread: model download + background removal + inference --------
     // Everything here is pure data (no Ogre). Progress is emitted via a queued
     // connection so the GUI thread updates the bar.
-    m_pending->worker = std::thread([this, image, res, rembg,
+    m_pending->worker = std::thread([this, image, res, rembg, wantBestMatte,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
@@ -617,6 +623,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // rembg model unused, so the GUI checkbox only governs the Tripo
         // backends.
         opts.removeBackground = useT2 || (rembg && useSG);
+        opts.mattingQuality  = wantBestMatte
+            ? BackgroundRemover::Quality::Best
+            : BackgroundRemover::Quality::Fast;
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;

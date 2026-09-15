@@ -129,6 +129,7 @@ MeshGenPredictor::Result predictTrellis2(
     t2.textureSize      = opts.textureSize;
     t2.bakeNormalMap    = opts.bakeNormalMap;
     t2.removeBackground = opts.removeBackground;
+    t2.mattingQuality   = opts.mattingQuality;   // #1016
     t2.mock             = opts.trellis2Mock;
     t2.sourceKeepDir    = opts.trellis2SourceKeepDir;
     t2.sourceKeepBaseName = opts.trellis2SourceKeepBaseName;
@@ -323,8 +324,14 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         if (opts.removeBackground) {
             // TripoSG's reference pipeline composites the cut-out over WHITE
             // (unlike TripoSR's gray-128) — see docs/TRIPOSG_EXPORT_NOTES.md.
-            const QString bgModel = BackgroundRemover::ensureModelBlocking();
+            // Resolve for the requested tier; Best silently degrades to Fast
+            // when BiRefNet is not downloaded (normal at ~930 MB), and the
+            // resolved tier is fed back so the matte matches the model.
+            BackgroundRemover::Quality usedQ = opts.mattingQuality;
+            const QString bgModel =
+                BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &usedQ);
             BackgroundRemover::Options bg;
+            bg.quality = usedQ;   // #1016: the tier that actually resolved
             bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
             const BackgroundRemover::Result br =
                 BackgroundRemover::removeBackground(image, bgModel, bg);

@@ -105,6 +105,7 @@
 // stubs (isAvailable() -> false, estimate() -> a "rebuild with -DENABLE_ONNX"
 // error), and cmdMaterialPhotoDepth calls them unconditionally so the default
 // build can report the feature as unavailable instead of failing to compile.
+#include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
 // RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
 // unconditionally by the #406 describe-material path, so it must NOT sit inside
@@ -11460,6 +11461,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool vertexColor = true;
     bool noModel = false;
     bool removeBg = false;
+    bool mattingBest = false;   // #1016 BiRefNet tier
     bool smooth = true;         // quality pass defaults ON
     bool refine = true;
     bool bake = true;
@@ -11483,6 +11485,19 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
+        // #1016: matting tier. --matting best uses BiRefNet 1024² (MIT, ~930 MB,
+        // ~3x crisper edges); default fast keeps U²-Net 320². Implies --remove-bg
+        // so `--matting best` alone does what it says.
+        if (arg == "--matting" && i + 1 < argc) {
+            const QString v = QString(argv[++i]).toLower();
+            if (v == "best") { mattingBest = true; removeBg = true; }
+            else if (v == "fast") { mattingBest = false; }
+            else {
+                err() << "Error: --matting must be 'fast' or 'best'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--no-smooth") { smooth = false; continue; }
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
@@ -11778,6 +11793,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.sdfResolution   = resolution;
     opts.vertexColor     = vertexColor;
     opts.removeBackground = removeBg;
+    opts.mattingQuality = mattingBest
+        ? BackgroundRemover::Quality::Best
+        : BackgroundRemover::Quality::Fast;
     opts.quality         = quality;
     opts.smoothMesh      = smooth;
     opts.refineSurface   = refine;

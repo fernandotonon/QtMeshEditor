@@ -371,6 +371,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                        ? BackgroundRemover::modelPath() : QString());
             BackgroundRemover::Options bg;
             bg.keepAlpha = true;
+            bg.quality = opts.mattingQuality;   // #1016 Fast/Best tier
             const BackgroundRemover::Result cut =
                 BackgroundRemover::removeBackground(subject, model, bg);
             if (cut.ok) {

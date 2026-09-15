@@ -1,6 +1,7 @@
 #ifndef TRELLIS2_PREDICTOR_H
 #define TRELLIS2_PREDICTOR_H
 
+#include "BackgroundRemover.h"
 #include "MeshGenPredictor.h"   // shared Result / Stage / ProgressFn contract
 
 #include <QImage>
@@ -54,8 +55,13 @@ public:
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
-        bool removeBackground = true;   // U²-Net alpha matte (skipped if the
-                                        // input already carries real alpha)
+        bool removeBackground = true;   // alpha matte (skipped if the input
+                                        // already carries real alpha)
+        // #1016: which matting model. Fast = U²-Net 320² (default); Best =
+        // BiRefNet 1024² (MIT, ~930 MB, ~3x crisper edges). Best degrades to
+        // Fast when its model is unavailable.
+        BackgroundRemover::Quality mattingQuality =
+            BackgroundRemover::Quality::Fast;
         // Phase 9: persist the raw generation (QTM3D) here so textures/LODs can
         // be re-baked later without re-running inference. Empty = don't keep.
         QString sourceKeepDir;
