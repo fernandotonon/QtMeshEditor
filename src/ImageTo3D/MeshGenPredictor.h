@@ -104,6 +104,15 @@ public:
         // to vertex colours (Result::warning set) if the unwrap/bake fails.
         bool bakeTexture = true;
         int  textureSize = 1024;
+        // #1017: after baking, AI-fill the texels no chart covered (the atlas
+        // gutter) with LaMa, so bilinear filtering and MIPs pull continued
+        // texture across UV seams instead of the dilation pass's smeared
+        // border colour. OFF by default: the model is a ~200 MB first-use
+        // download and several CPU-seconds, which a caller should opt into
+        // rather than discover. Falls back silently to the dilated bake when
+        // the model is unavailable — a seam fill is a refinement, never a
+        // reason to fail a generation.
+        bool inpaintSeams = false;
 
         // ---- Backend selection ------------------------------------------------
         // TripoSG ignores the colour/bake options (geometry-only model) and

@@ -23,6 +23,8 @@
 #   triposr    → QtMeshEditor-triposr-onnx     (MIT,    Stability/Tripo TripoSR)
 #   triposg    → QtMeshEditor-triposg-onnx     (MIT,    VAST-AI TripoSG; int8 tier NOT mirrored — deprecated)
 #   u2net      → QtMeshEditor-u2net-onnx       (Apache, U²-Net / rembg)
+#   birefnet   → QtMeshEditor-birefnet-onnx    (MIT,    BiRefNet high-quality matting)
+#   lama       → QtMeshEditor-lama-onnx        (Apache, LaMa texture inpainting)
 #   smolvlm    → QtMeshEditor-smolvlm-gguf     (Apache, HuggingFaceTB SmolVLM Q8_0)
 #   motion     → QtMeshEditor-t2m              (CC0,    in-house; template clip library)
 #   segveg     → QtMeshEditor-mesh-segmentation-vegetation (CC-BY-4.0, in-house #818 B2)
@@ -62,6 +64,8 @@ declare -A REPOS=(
   [blazepose]=QtMeshEditor-blazepose-onnx
   [poselandmarks]=QtMeshEditor-poselandmarks-onnx
   [depthanything]=QtMeshEditor-depthanything-onnx
+  [birefnet]=QtMeshEditor-birefnet-onnx
+  [lama]=QtMeshEditor-lama-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -83,6 +87,8 @@ declare -A FILES=(
   [blazepose]="mocap/pose/pose_detector.onnx"
   [poselandmarks]="mocap/pose/pose_landmarks.onnx"
   [depthanything]="depth/da2_small.onnx"
+  [birefnet]="rembg/birefnet.onnx"
+  [lama]="pbr/lama.onnx"
 )
 
 sync_one() {

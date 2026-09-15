@@ -1,6 +1,7 @@
 #include "MCPServer.h"
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
+#include "TextureInpaint.h"
 #include <QImageReader>
 #include "MeshWeldOps.h"
 #include "commands/WeldVerticesCommand.h"
@@ -671,6 +672,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
         {QStringLiteral("photo_depth"), &MCPServer::toolPhotoDepth},
+        {QStringLiteral("inpaint_texture"), &MCPServer::toolInpaintTexture},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -914,6 +916,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
             {QStringLiteral("photo_depth"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("inpaint_texture"), QStringLiteral("pbr_synth")},
             {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
             {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
             {QStringLiteral("paint_bake"), QStringLiteral("texture_atlas")},
@@ -941,7 +944,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
         QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap_selection"), QStringLiteral("retopologize"),
         QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_mesh_texture"),
-        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("photo_depth"), QStringLiteral("create_primitive"),
+        QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("photo_depth"), QStringLiteral("inpaint_texture"), QStringLiteral("create_primitive"),
         QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
         QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"), QStringLiteral("motion_in_between"), QStringLiteral("generate_motion"),
@@ -2830,6 +2833,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("smooth")) opts.smoothMesh = args["smooth"].toBool(true);
     if (args.contains("refine")) opts.refineSurface = args["refine"].toBool(true);
     if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
+    // #1017: opt-in UV-seam fill (LaMa; ~200 MB first-use download).
+    if (args.contains("inpaint_seams")) opts.inpaintSeams = args["inpaint_seams"].toBool(false);
     if (args.contains("texture_size")) {
         opts.textureSize = args["texture_size"].toInt(1024);
         if (opts.textureSize < 64 || opts.textureSize > 8192)
@@ -3084,6 +3089,79 @@ QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
     // the model found no structure, which a caller may want to act on.
     result["rawMin"] = r.rawMin;
     result["rawMax"] = r.rawMax;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without texture inpainting "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString srcPath = args.value("texture_path").toString();
+    if (srcPath.trimmed().isEmpty())
+        return makeErrorResult("'texture_path' is required.");
+    if (!QFileInfo::exists(srcPath))
+        return makeErrorResult(QStringLiteral("texture not found: %1").arg(srcPath));
+    const QString maskPath = args.value("mask_path").toString();
+    if (maskPath.trimmed().isEmpty())
+        return makeErrorResult("'mask_path' is required.");
+    if (!QFileInfo::exists(maskPath))
+        return makeErrorResult(QStringLiteral("mask not found: %1").arg(maskPath));
+
+    const QImage texture(srcPath);
+    if (texture.isNull())
+        return makeErrorResult(
+            QStringLiteral("could not read %1 as an image.").arg(srcPath));
+    const QImage mask(maskPath);
+    if (mask.isNull())
+        return makeErrorResult(
+            QStringLiteral("could not read %1 as an image.").arg(maskPath));
+
+    // Validate options BEFORE the blocking model fetch: ensureModelBlocking
+    // can spend minutes on a ~200 MB first-use download, and a caller with a
+    // bad argument should not wait for it to learn that. Matches
+    // toolGeneratePbrMaps / toolUpscaleTexture.
+    TextureInpaint::Options opts;
+    if (args.contains("mask_dilate")) {
+        const int d = args.value("mask_dilate").toInt(opts.maskDilatePx);
+        if (d < 0)
+            return makeErrorResult("'mask_dilate' must be >= 0.");
+        opts.maskDilatePx = d;
+    }
+
+    const QString model = TextureInpaint::ensureModelBlocking();
+    if (model.isEmpty())
+        return makeErrorResult(
+            "Inpaint model unavailable (offline, or QTMESH_INPAINT_NO_DOWNLOAD "
+            "is set).");
+    const TextureInpaint::Result r =
+        TextureInpaint::inpaint(texture, mask, model, opts);
+    if (!r.ok)
+        return makeErrorResult(QStringLiteral("inpainting failed: %1")
+                                   .arg(r.error));
+
+    const QFileInfo fi(srcPath);
+    QString out = args.value("output_path").toString();
+    if (out.trimmed().isEmpty())
+        out = QDir(fi.absolutePath())
+                  .filePath(fi.completeBaseName() + QStringLiteral("_inpainted.png"));
+    if (!r.image.save(out))
+        return makeErrorResult(QStringLiteral("could not write %1").arg(out));
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Inpainted '%1' (%2x%3, %4 texels filled).")
+            .arg(fi.fileName()).arg(r.image.width()).arg(r.image.height())
+            .arg(r.maskedTexels));
+    result["outputPath"] = out;
+    result["width"] = r.image.width();
+    result["height"] = r.image.height();
+    // How many texels were actually filled — a caller that expected a large
+    // region and sees a handful knows its mask polarity is inverted.
+    result["maskedTexels"] = r.maskedTexels;
     return result;
 #endif
 }
@@ -10744,6 +10822,7 @@ QJsonArray MCPServer::buildToolsList()
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the Python sidecar (Linux + NVIDIA GPU) — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
         props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by the other backends."}};
@@ -11292,6 +11371,42 @@ QJsonArray MCPServer::buildToolsList()
             "relative-depth range, so a caller can detect a featureless result.",
             props,
             QJsonArray{"image_path"}
+        );
+    }
+    // inpaint_texture (#1017)
+    {
+        QJsonObject props;
+        props["texture_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the texture to fill. The result is written next to it as "
+             "<stem>_inpainted.png unless output_path is given."}};
+        props["mask_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the mask image. WHITE (any non-zero pixel) marks texels "
+             "to REPLACE; black marks texels to keep. Resized to the texture "
+             "with nearest-neighbour if the sizes differ. Getting the polarity "
+             "backwards repaints the whole texture, so the response reports how "
+             "many texels were filled."}};
+        props["mask_dilate"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Grow the mask by N texels before filling (default 2). A mask that "
+             "stops exactly at the bad pixels leaves the model conditioned on "
+             "the half-bad texels just outside it, which drags the artifact "
+             "back in."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description", "Optional explicit output path for the PNG."}};
+        appendTool(
+            "inpaint_texture",
+            "Fill masked regions of a texture with plausible, seamlessly "
+            "continued content (issue #1017) via LaMa (Apache-2.0 code AND "
+            "weights). Use it to repair UV-island seams left uncovered by a "
+            "bake, or to erase a blemish from a texture. Unmasked texels are "
+            "preserved bit-exact, so this is safe to run on a finished texture. "
+            "Distinct from generate_pbr_maps, which DERIVES new maps from a "
+            "diffuse; this REPAIRS the image it is given. The ~200 MB model "
+            "downloads on first use.",
+            props,
+            QJsonArray{"texture_path", "mask_path"}
         );
     }
 #endif // ENABLE_ONNX

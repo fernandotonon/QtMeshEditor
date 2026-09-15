@@ -2,7 +2,8 @@
 
 #include "MarchingCubes.h"
 #include "MeshRefine.h"       // Taubin smoothing + iso-surface reprojection
-#include "MeshGenBaker.h"     // xatlas unwrap + diffuse texture bake
+#include "MeshGenBaker.h"      // xatlas unwrap + diffuse texture bake
+#include "TextureInpaint.h"     // #1017 UV-seam fill (LaMa)
 #include "PbrMapSynth.h"      // toNCHW (image → planar [0,1])
 #include "BackgroundRemover.h"
 #include "OnnxRuntimeSettings.h"
@@ -624,6 +625,34 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                 out.texture       = baked.texture;
                 out.vertexCount   = baked.vertexCount;
                 out.triangleCount = baked.triangleCount;
+
+                // #1017: AI-fill the atlas gutter. The baker's dilation pass
+                // smears chart-border colour outward so filtering does not
+                // drag the clear colour into a seam, but it does not CONTINUE
+                // the texture — inpainting the uncovered texels does.
+                // Coverage is sized to the baked texture, NOT to
+                // Options::textureSize (xatlas picks its own atlas dims).
+                if (opts.inpaintSeams && !baked.coverage.empty()
+                    && TextureInpaint::isAvailable()) {
+                    const QImage mask = TextureInpaint::maskFromCoverage(
+                        baked.coverage, out.texture.width(),
+                        out.texture.height());
+                    const QString model = TextureInpaint::ensureModelBlocking();
+                    if (!mask.isNull() && !model.isEmpty()) {
+                        const TextureInpaint::Result ip =
+                            TextureInpaint::inpaint(out.texture, mask, model);
+                        if (ip.ok && !ip.image.isNull())
+                            out.texture = ip.image;
+                        else
+                            // A seam fill is a refinement; never fail a whole
+                            // generation over it.
+                            out.warning = QStringLiteral(
+                                "seam inpaint skipped (%1)").arg(ip.error);
+                    } else if (model.isEmpty()) {
+                        out.warning = QStringLiteral(
+                            "seam inpaint skipped (LaMa model unavailable)");
+                    }
+                }
             } else if (baked.cancelled) {
                 return fail(QStringLiteral("cancelled"));
             } else {

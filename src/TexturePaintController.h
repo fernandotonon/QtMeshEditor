@@ -751,6 +751,25 @@ public:
     Q_INVOKABLE int fillMaskWithBG();
     /// Delete = set selected pixels to fully transparent black (0,0,0,0).
     Q_INVOKABLE int deleteMaskPixels();
+    /// #1017: AI-fill the selection with LaMa. Unlike the fill/delete actions
+    /// above, this needs the SURROUNDING pixels as context, so it composites
+    /// the whole layer stack, inpaints, and writes the result back into the
+    /// active layer inside the mask only. Returns the pixel count filled, or a
+    /// negative code on failure: -1 no session/selection, -2 model unavailable,
+    /// -3 inference failed. (0 would be indistinguishable from "empty mask".)
+    Q_INVOKABLE int inpaintMaskPixels();
+    /// True when the LaMa model is already on disk, so inpaintMaskPixels()
+    /// will NOT spend minutes on a ~200 MB first-use download. The QML uses it
+    /// to say "Downloading model…" instead of freezing behind an unexplained
+    /// pause — model acquisition is the long pole; inference itself is a few
+    /// CPU-seconds, on par with the sibling bake actions, which are also
+    /// synchronous. (ensureModelBlocking runs a nested QEventLoop and is
+    /// main-thread-only, so it cannot simply be moved to a worker.)
+    Q_INVOKABLE bool inpaintModelPresent() const;
+    /// True when this build can inpaint at all (ENABLE_ONNX) — the QML button
+    /// binds its visibility to this rather than showing a control that can only
+    /// ever report an error.
+    Q_INVOKABLE bool inpaintAvailable() const;
     /// @}
 
     /// Walk every UV-mapped triangle and return the local-space
