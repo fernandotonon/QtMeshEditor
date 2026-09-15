@@ -397,10 +397,21 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             if (cut.ok) {
                 subject = cut.image;
                 matteReady = true;
-            } else
+                // #1016: say which matting model ran. Without this the tier
+                // bug was invisible — a failed matte just looked like a mesh
+                // with a backdrop slab, with nothing in the log to explain it.
+                fprintf(stderr, "[trellis2] matte: %s (%s)\n",
+                        usedQ == BackgroundRemover::Quality::Best
+                            ? "BiRefNet 1024" : "U2Net 320",
+                        qPrintable(QFileInfo(model).fileName()));
+            } else {
+                fprintf(stderr, "[trellis2] matte FAILED (%s) — the whole frame "
+                        "is treated as foreground; the background will be "
+                        "reconstructed as geometry\n", qPrintable(cut.error));
                 warning = QStringLiteral(
                     "background removal unavailable (%1); the whole frame is "
                     "treated as foreground.").arg(cut.error);
+            }
         } else {
             warning = QStringLiteral(
                 "built without ENABLE_ONNX — no U²-Net background removal; "
