@@ -215,6 +215,21 @@ TEST(TextureInpaint, CountMaskedHandlesNullAndEmpty)
     EXPECT_EQ(TextureInpaint::countMasked(m), 16);
 }
 
+TEST(TextureInpaint, OptionsDefaultToSafeValues)
+{
+    // maskDilatePx > 0 matters: a mask ending exactly at the bad pixels leaves
+    // the model conditioned on the half-bad texels just outside it.
+    // compositeMaskedOnly is what makes unmasked preservation structural rather
+    // than a property of the graph, so a default of false would quietly make
+    // output quality depend on the model behaving.
+    const TextureInpaint::Options o;
+    EXPECT_EQ(o.tileSize, TextureInpaint::kInputSize);
+    EXPECT_GT(o.maskDilatePx, 0);
+    EXPECT_TRUE(o.compositeMaskedOnly);
+    EXPECT_GT(o.overlap, 0);
+    EXPECT_LT(o.overlap, o.tileSize);
+}
+
 #ifndef ENABLE_ONNX
 TEST(TextureInpaint, NonOnnxBuildReportsWhyInsteadOfPassingThrough)
 {

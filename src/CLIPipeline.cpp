@@ -11563,6 +11563,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool smooth = true;         // quality pass defaults ON
     bool refine = true;
     bool bake = true;
+    bool inpaintSeams = false;   // #1017: opt-in UV-seam fill
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
@@ -11599,6 +11600,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-smooth") { smooth = false; continue; }
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
+        if (arg == "--inpaint-seams") { inpaintSeams = true; continue; }   // #1017
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
         if (arg == "--backend") {
@@ -11898,6 +11900,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.smoothMesh      = smooth;
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
+    opts.inpaintSeams    = inpaintSeams;
     opts.textureSize     = textureSize;
     opts.backend         = backend;
     opts.flowSteps       = flowSteps;

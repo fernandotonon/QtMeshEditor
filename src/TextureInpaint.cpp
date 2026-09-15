@@ -226,23 +226,38 @@ QString ensureModelBlocking()
     const QString url = base + QString::fromLatin1(kModelFile);
     QEventLoop loop;
     bool ok = false, timedOut = false;
+    // `settled` guards a real race: ModelDownloader::startDownload emits
+    // downloadError SYNCHRONOUSLY when another download is already active, so
+    // the handler's loop.quit() would run BEFORE exec() and be lost — leaving
+    // this stuck for the full timeout and then cancelling the unrelated
+    // download that was already running. Record that we settled, and skip
+    // exec() entirely in that case.
+    bool settled = false;
     auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
         [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = true; loop.quit(); }
+            if (name == QString::fromLatin1(kModelLabel)) {
+                ok = true; settled = true; loop.quit();
+            }
         });
     auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
         [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = false; loop.quit(); }
+            if (name == QString::fromLatin1(kModelLabel)) {
+                ok = false; settled = true; loop.quit();
+            }
         });
     QTimer timeout;
     timeout.setSingleShot(true);
     QObject::connect(&timeout, &QTimer::timeout, &loop,
-                     [&]() { timedOut = true; loop.quit(); });
+                     [&]() { timedOut = true; settled = true; loop.quit(); });
     timeout.start(900000);   // 15 min — the model is ~200 MB
     dl->startDownload(url, dst, QString::fromLatin1(kModelLabel));
-    loop.exec();
+    if (!settled)            // still in flight — wait for it
+        loop.exec();
     QObject::disconnect(onDone);
     QObject::disconnect(onErr);
+    // Only cancel on OUR timeout: a synchronous rejection means someone else's
+    // download owns the downloader, and cancelling it would be a cross-caller
+    // side effect.
     if (timedOut) dl->cancelDownload();
     return (ok && !timedOut && QFileInfo::exists(dst)) ? dst : QString();
 }
@@ -271,6 +286,23 @@ bool runTile(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc,
     auto in0 = session.GetInputNameAllocated(0, alloc);
     auto in1 = session.GetInputNameAllocated(1, alloc);
     auto out0 = session.GetOutputNameAllocated(0, alloc);
+    // Bind by NAME, not by index. The graph we host lists image-then-mask, but
+    // nothing in ONNX guarantees that order, and a mask-first graph would get
+    // the 3-channel tensor in its 1-channel slot. That fails deterministically
+    // rather than silently, but it fails at INFERENCE time on the user's
+    // machine — and the export verifier cannot catch it, since it runs the
+    // graph with a name-keyed dict and never exercises index order.
+    {
+        const QByteArray n0(in0.get()), n1(in1.get());
+        if (n0 == "mask" && n1 == "image") {
+            std::swap(ins[0], ins[1]);
+        } else if (n0 != "image" || n1 != "mask") {
+            err = QStringLiteral("inpaint model has unexpected input names "
+                                 "('%1', '%2'); expected 'image' and 'mask'.")
+                      .arg(QString::fromUtf8(n0), QString::fromUtf8(n1));
+            return false;
+        }
+    }
     const char* inNames[]  = {in0.get(), in1.get()};
     const char* outNames[] = {out0.get()};
 
@@ -365,9 +397,28 @@ Result inpaint(const QImage& texture, const QImage& maskIn,
                     }
                 }
 
+                // Skip inference on a tile with nothing to fill. With 512px
+                // tiles a 4096² texture visits 81 tiles, and a small mask
+                // touches only a few — running the model on the rest is pure
+                // latency. Feeding the SOURCE pixels into the accumulator
+                // leaves the final composite identical, because every
+                // destination pixel in such a tile is unmasked and therefore
+                // restored from the source anyway.
                 std::vector<float> outT;
                 QString err;
-                if (!runTile(session, alloc, rgbTile, maskTile, tile, outT, err)) {
+                if (countMasked(maskTile) == 0) {
+                    const size_t tplane0 = static_cast<size_t>(tile) * tile;
+                    outT.assign(tplane0 * 3, 0.0f);
+                    for (int yy = 0; yy < tile; ++yy) {
+                        const uchar* sl = rgbTile.constScanLine(yy);
+                        for (int xx = 0; xx < tile; ++xx)
+                            for (int c = 0; c < 3; ++c)
+                                outT[c * tplane0
+                                     + static_cast<size_t>(yy) * tile + xx] =
+                                    static_cast<float>(sl[xx * 3 + c]);
+                    }
+                } else if (!runTile(session, alloc, rgbTile, maskTile, tile,
+                                    outT, err)) {
                     r.error = err;
                     return r;
                 }
@@ -429,7 +480,31 @@ Result inpaint(const QImage& texture, const QImage& maskIn,
             }
         }
 
-        r.image = result;
+        // The model is RGB-only, so an RGBA source would otherwise come back
+        // fully opaque — silently flattening a cutout texture and breaking the
+        // very bit-exactness promised above. Restore the source alpha, and set
+        // the INPAINTED texels opaque: they now carry invented colour, and
+        // leaving them transparent would make the fill invisible.
+        if (texture.hasAlphaChannel()) {
+            const QImage srcRgba =
+                texture.convertToFormat(QImage::Format_RGBA8888);
+            QImage out(W, H, QImage::Format_RGBA8888);
+            for (int y = 0; y < H; ++y) {
+                const uchar* ml = mask.constScanLine(y);
+                const uchar* rl = result.constScanLine(y);
+                const uchar* al = srcRgba.constScanLine(y);
+                uchar* ol = out.scanLine(y);
+                for (int x = 0; x < W; ++x) {
+                    ol[x * 4 + 0] = rl[x * 3 + 0];
+                    ol[x * 4 + 1] = rl[x * 3 + 1];
+                    ol[x * 4 + 2] = rl[x * 3 + 2];
+                    ol[x * 4 + 3] = ml[x] ? 255 : al[x * 4 + 3];
+                }
+            }
+            r.image = out;
+        } else {
+            r.image = result;
+        }
         r.ok = true;
         r.usedModel = true;
         return r;

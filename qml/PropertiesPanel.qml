@@ -5170,7 +5170,9 @@ Rectangle {
             // minutes, so a silent button would read as "nothing happened".
             property string inpaintStatus: ""
             function runInpaint() {
-                texPaintCol.inpaintStatus = "Inpainting\u2026"
+                texPaintCol.inpaintStatus = TexturePaintController.inpaintModelPresent()
+                        ? "Inpainting\u2026"
+                        : "Downloading model (~200 MB)\u2026"
                 // Let the label paint before the blocking call (model download
                 // + inference both run on this thread).
                 Qt.callLater(function() {
@@ -5418,7 +5420,7 @@ Rectangle {
                             { label: "Fill FG",   action: "fillFG",   needsMask: true,  hint: "Replace selection with foreground color" },
                             { label: "Fill BG",   action: "fillBG",   needsMask: true,  hint: "Replace selection with background color" },
                             { label: "Delete",    action: "delete",   needsMask: true,  hint: "Clear selection to transparent" },
-                            { label: "Inpaint",   action: "inpaint",  needsMask: true,  hint: "AI-fill the selection from its surroundings (LaMa; downloads ~200 MB on first use)" },
+                            { label: "Inpaint",   action: "inpaint",  needsMask: true,  needsInpaint: true, hint: "AI-fill the selection from its surroundings (LaMa; downloads ~200 MB on first use)" },
                             { label: "Invert",    action: "invert",   needsMask: false, hint: "Invert the selection" },
                             { label: "All",       action: "all",      needsMask: false, hint: "Select every pixel" },
                             { label: "None",      action: "none",     needsMask: true,  hint: "Clear the selection" }
@@ -5428,6 +5430,10 @@ Rectangle {
                             color: actionMa.containsMouse
                                 ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                                 : PropertiesPanelController.headerColor
+                            // A button that can only ever report "needs an
+                            // ONNX build" is worse than no button.
+                            visible: !modelData.needsInpaint
+                                     || TexturePaintController.inpaintAvailable()
                             opacity: (modelData.needsMask && !texPaintCol.hasMask) ? 0.45 : 1.0
                             border.color: PropertiesPanelController.borderColor; border.width: 1
                             Text {

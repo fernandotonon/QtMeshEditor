@@ -402,12 +402,17 @@ Window {
         Button {
             // #1017: AI-fill the selection from its surroundings.
             text: "Inpaint"
-            enabled: editorWindow.hasMask
+            // The header documents this binding: a button that can only ever
+            // report "needs an ONNX build" is worse than no button.
+            visible: TexturePaintController.inpaintAvailable()
+            enabled: visible && editorWindow.hasMask
             ToolTip.text: "AI-fill the selection from its surroundings (LaMa).\nDownloads ~200 MB on first use."
             ToolTip.visible: hovered
             ToolTip.delay: 400
             onClicked: {
-                editorWindow.inpaintStatus = "Inpainting\u2026"
+                editorWindow.inpaintStatus = TexturePaintController.inpaintModelPresent()
+                        ? "Inpainting\u2026"
+                        : "Downloading model (~200 MB)\u2026"
                 Qt.callLater(function() {
                     var n = TexturePaintController.inpaintMaskPixels()
                     if (n > 0) editorWindow.inpaintStatus = "Inpainted " + n + " px"

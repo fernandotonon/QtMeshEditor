@@ -6879,6 +6879,11 @@ bool TexturePaintController::inpaintAvailable() const
     return TextureInpaint::isAvailable();
 }
 
+bool TexturePaintController::inpaintModelPresent() const
+{
+    return TextureInpaint::modelPresent();
+}
+
 int TexturePaintController::inpaintMaskPixels()
 {
     // #1017: AI-fill the selection. The fill/delete siblings above only need
@@ -6969,6 +6974,11 @@ int TexturePaintController::inpaintMaskPixels()
         (m_sessionEntity ? m_sessionEntity->getName() : std::string()),
         static_cast<int>(m_activeChannel),
         QStringLiteral("Inpaint selection")));
+    // The layer changed outside a stroke, so the cached stroke baseline is
+    // now stale — beginStroke() reuses a non-empty baseline as its undo
+    // snapshot, and undoing the NEXT stroke would then also revert this
+    // inpaint. Every other out-of-stroke layer mutator clears it too.
+    m_layerStrokeBaseline.clear();
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Inpaint: filled %1 px").arg(px));
     flushDirtyToOgre();

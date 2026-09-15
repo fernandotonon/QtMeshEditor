@@ -2833,6 +2833,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("smooth")) opts.smoothMesh = args["smooth"].toBool(true);
     if (args.contains("refine")) opts.refineSurface = args["refine"].toBool(true);
     if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
+    // #1017: opt-in UV-seam fill (LaMa; ~200 MB first-use download).
+    if (args.contains("inpaint_seams")) opts.inpaintSeams = args["inpaint_seams"].toBool(false);
     if (args.contains("texture_size")) {
         opts.textureSize = args["texture_size"].toInt(1024);
         if (opts.textureSize < 64 || opts.textureSize > 8192)
@@ -3119,12 +3121,10 @@ QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
         return makeErrorResult(
             QStringLiteral("could not read %1 as an image.").arg(maskPath));
 
-    const QString model = TextureInpaint::ensureModelBlocking();
-    if (model.isEmpty())
-        return makeErrorResult(
-            "Inpaint model unavailable (offline, or QTMESH_INPAINT_NO_DOWNLOAD "
-            "is set).");
-
+    // Validate options BEFORE the blocking model fetch: ensureModelBlocking
+    // can spend minutes on a ~200 MB first-use download, and a caller with a
+    // bad argument should not wait for it to learn that. Matches
+    // toolGeneratePbrMaps / toolUpscaleTexture.
     TextureInpaint::Options opts;
     if (args.contains("mask_dilate")) {
         const int d = args.value("mask_dilate").toInt(opts.maskDilatePx);
@@ -3132,6 +3132,12 @@ QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
             return makeErrorResult("'mask_dilate' must be >= 0.");
         opts.maskDilatePx = d;
     }
+
+    const QString model = TextureInpaint::ensureModelBlocking();
+    if (model.isEmpty())
+        return makeErrorResult(
+            "Inpaint model unavailable (offline, or QTMESH_INPAINT_NO_DOWNLOAD "
+            "is set).");
     const TextureInpaint::Result r =
         TextureInpaint::inpaint(texture, mask, model, opts);
     if (!r.ok)
@@ -10816,6 +10822,7 @@ QJsonArray MCPServer::buildToolsList()
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the Python sidecar (Linux + NVIDIA GPU) — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
         props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by the other backends."}};
