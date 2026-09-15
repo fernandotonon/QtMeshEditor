@@ -510,6 +510,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // and could re-enter generate(), racing over m_pending. setBusy disables it.
     m_cancel = false;
     setBusy(true);
+    // #1016: set once the matte model has been ensured, so the generic
+    // pre-ensure below does not repeat a failed (and slow) Best download.
+    bool matteEnsured = false;
     emit progress(QStringLiteral("prep"), 0, 1);
 
     // Ensure the chosen backend's models on the MAIN thread first —
@@ -527,9 +530,16 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // event loop); the worker-side predictor only reads it. #1016: ensure
         // the REQUESTED tier — pre-ensuring Fast while the predictor then asks
         // for Best leaves BiRefNet uncached and silently degrades the matte.
-        BackgroundRemover::ensureModelBlocking(
+        // resolveModelBlocking (not ensureModelBlocking) so a failed ~930 MB
+        // BiRefNet fetch still leaves U²-Net cached: the worker cannot download
+        // (no nested event loop off the main thread), so without the Fast
+        // fallback HERE it would find nothing and skip matting entirely.
+        matteEnsured = true;
+        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(
             wantBestMatte ? BackgroundRemover::Quality::Best
-                          : BackgroundRemover::Quality::Fast);
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ);
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -559,10 +569,16 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
     }
-    if (removeBackground)
-        BackgroundRemover::ensureModelBlocking(    // best-effort; falls back if absent
+    // Skip when the TRELLIS.2 branch above already ensured it: repeating a
+    // failed Best fetch would burn a SECOND ~930 MB / 40-minute timeout before
+    // generation even starts.
+    if (removeBackground && !matteEnsured) {
+        BackgroundRemover::Quality ensuredQ2 = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(   // best-effort, Best -> Fast
             wantBestMatte ? BackgroundRemover::Quality::Best
-                          : BackgroundRemover::Quality::Fast);
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ2);
+    }
 
     // The optional post-bake upscale runs on the WORKER, so its model must be
     // ensured here on the main thread (event loop) first. Best-effort: an empty
