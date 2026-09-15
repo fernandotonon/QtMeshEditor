@@ -198,6 +198,7 @@ private:
     /// Issue #405: Real-ESRGAN 2x/4x texture super-resolution. Writes
     /// <stem>_upscaled.png next to the source; model downloaded on first use.
     QJsonObject toolUpscaleTexture(const QJsonObject &args);
+    QJsonObject toolPhotoDepth(const QJsonObject &args);   // #1018
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);

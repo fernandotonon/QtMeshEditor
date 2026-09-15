@@ -588,6 +588,21 @@ public slots:
     /// Request cancellation of an in-flight upscale (checked per tile).
     Q_INVOKABLE void cancelUpscale();
 
+    // #1018: monocular depth from a PHOTO (Depth-Anything-V2-Small).
+    // Distinct from the mesh-rendered depth used by #403 — this estimates
+    // depth from a 2-D image, so a reference photo can condition the SD
+    // ControlNet path. Both emit the same near=bright grayscale.
+    // aiPhotoDepthAvailable() is true only on an ENABLE_ONNX build.
+    Q_INVOKABLE bool aiPhotoDepthAvailable() const;
+    /// Estimate depth for `photoPath` and write <stem>_depth.png beside it.
+    /// Runs on a worker thread (the ~99 MB model may download on first use);
+    /// emits photoDepthStarted / photoDepthCompleted(depthPath) /
+    /// photoDepthError. The resulting path is also remembered as the
+    /// ControlNet source for the next mesh-texture generation.
+    Q_INVOKABLE void generatePhotoDepth(const QString &photoPath);
+    /// Last depth map produced by generatePhotoDepth (empty when none).
+    Q_INVOKABLE QString lastPhotoDepthPath() const;
+
     // Issue #403: mesh-aware texture generation. Same as
     // generateTextureFromPrompt but renders the selected entity's
     // depth map and conditions generation on it via a ControlNet
@@ -738,6 +753,10 @@ signals:
     void upscaleDownloading();                       // first-run model fetch in progress
     void upscaleProgress(int tilesDone, int tilesTotal);
     void upscaleCompleted(const QString &outputPath);
+    // #1018 photo depth
+    void photoDepthStarted();
+    void photoDepthCompleted(const QString &depthPath);
+    void photoDepthError(const QString &message);
     void upscaleError(const QString &error);
     /** Non-fatal informational message during generation (e.g. degraded mode);
         unlike sdGenerationError it must NOT abort or reset the in-flight run. */
@@ -832,6 +851,7 @@ private:
     // progress callback. shared_ptr so the detached worker keeps it alive even
     // if a new upscale starts; atomic for cross-thread access.
     std::shared_ptr<std::atomic_bool> m_upscaleCancel;
+    QString m_lastPhotoDepth;   // #1018: last depth map produced
     double m_scrollAnimUSpeed = 0.0;
     double m_scrollAnimVSpeed = 0.0;
     

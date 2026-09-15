@@ -278,6 +278,7 @@ GroupBox {
         // apply it via other tools even when in-app application of
         // the texture to certain materials isn't working yet).
         RowLayout {
+            id: depthRow
             Layout.fillWidth: true
             // #404: synthesize normal/roughness/height from the current diffuse.
             // Only shown on an ONNX build; disabled until a real texture is set.
@@ -343,8 +344,44 @@ GroupBox {
                 onClicked: { pbrStatus.text = "Cancelling…"; MaterialEditorQML.cancelUpscale() }
             }
 
+            // #1018: monocular depth from a PHOTO (Depth-Anything-V2-Small).
+            // Unlike the #403 mesh-depth path this needs no selected mesh — it
+            // estimates depth from any 2-D image, so a reference photo can
+            // condition the ControlNet texture generation below. Writes
+            // <stem>_depth.png next to the chosen photo.
+            property bool depthRunning: false
+            ThemedButton {
+                text: "Depth from photo…"
+                visible: MaterialEditorQML.aiPhotoDepthAvailable() && !parent.depthRunning
+                onClicked: {
+                    const src = MaterialEditorQML.openFileDialog()
+                    if (src && src.length > 0) {
+                        parent.depthRunning = true
+                        pbrStatus.text = "Estimating depth…"
+                        MaterialEditorQML.generatePhotoDepth(src)
+                    }
+                }
+            }
+            ThemedLabel {
+                text: "Estimating depth…"
+                visible: parent.depthRunning
+                elide: Text.ElideRight
+            }
+
             Connections {
                 target: MaterialEditorQML
+                // #1018 photo depth
+                function onPhotoDepthStarted() { pbrStatus.text = "Estimating depth…" }
+                function onPhotoDepthCompleted(depthPath) {
+                    depthRow.depthRunning = false
+                    // Show the file name, not the whole path — the panel is narrow.
+                    const name = depthPath.split("/").pop()
+                    pbrStatus.text = "Depth map written: " + name
+                }
+                function onPhotoDepthError(message) {
+                    depthRow.depthRunning = false
+                    pbrStatus.text = "Depth failed: " + message
+                }
                 function onPbrSynthCompleted(result) {
                     pbrStatus.text = result.fromCache ? "PBR maps ready (cached)."
                                                       : "PBR maps generated."

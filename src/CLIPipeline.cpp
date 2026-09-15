@@ -93,6 +93,7 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QRegularExpression>
+#include <QImageReader>
 #include <QTimer>
 #include <QUuid>
 #ifdef ENABLE_ONNX
@@ -100,6 +101,11 @@
 #include "PbrMapSynth.h"
 #include "TextureUpscaler.h"
 #endif
+// PhotoDepth is ALWAYS included: unlike the headers above it ships non-ONNX
+// stubs (isAvailable() -> false, estimate() -> a "rebuild with -DENABLE_ONNX"
+// error), and cmdMaterialPhotoDepth calls them unconditionally so the default
+// build can report the feature as unavailable instead of failing to compile.
+#include "PhotoDepth.h"
 // RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
 // unconditionally by the #406 describe-material path, so it must NOT sit inside
 // the ENABLE_ONNX guard above — Windows MinGW builds ONNX off and would
@@ -5264,6 +5270,8 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     QString describePrompt, llmModel;
     // #404 PBR map synthesis from a diffuse texture.
     QString pbrAlbedo;
+    QString photoDepthSrc;   // #1018: photo -> monocular depth map
+    bool depthLetterbox = false;
     bool generatePbr = false;
     int pbrTileSize = 256;
     bool pbrNoNormal = false, pbrNoRoughness = false, pbrNoHeight = false;
@@ -5306,6 +5314,11 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             continue;
         }
         if (arg == "--generate-pbr") { generatePbr = true; continue; }
+        if (arg == "--photo-depth" && i + 1 < argc) {   // #1018
+            photoDepthSrc = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--depth-letterbox") { depthLetterbox = true; continue; }
         if (arg == "--upscale" && i + 1 < argc) {
             bool usOk = false;
             upscaleFactor = QString(argv[++i]).toInt(&usOk);
@@ -5364,6 +5377,11 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     // Depth-conditioned mesh-aware texture generation (issue #403). Distinct
     // enough (async SD worker, model loading, depth RTT) to live in its own
     // helper; presets continue below.
+    // #1018: monocular depth from a PHOTO (Depth-Anything-V2-Small).
+    if (!photoDepthSrc.isEmpty()) {
+        return cmdMaterialPhotoDepth(photoDepthSrc, outputPath, depthLetterbox);
+    }
+
     // #405: Real-ESRGAN texture upscaling (--texture in, -o out).
     if (upscaleFactor != 0) {
         return cmdMaterialUpscale(pbrAlbedo, outputPath, upscaleFactor);
@@ -6240,6 +6258,66 @@ int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,
         .arg(QFileInfo(albedoPath).fileName()).arg(bound).arg(outFi.fileName()));
     return 0;
 #endif
+}
+
+int CLIPipeline::cmdMaterialPhotoDepth(const QString& srcPath,
+                                       QString outputPath, bool letterbox)
+{
+    // #1018 (epic #818 C4): estimate a depth map from a PHOTO, for use as a
+    // ControlNet conditioning image. Distinct from `MeshDepthRenderer`, which
+    // renders depth from a mesh already in the scene; both emit the same
+    // near=bright grayscale so either can feed the SD texture path.
+    const QFileInfo fi(srcPath);
+    if (!fi.exists()) {
+        err() << "Error: " << srcPath << " not found." << Qt::endl;
+        return 1;
+    }
+    // Honour EXIF orientation: a phone JPEG stores portrait rotation in
+    // metadata only, and a plain QImage(path) reads the UNROTATED pixels — the
+    // model would then estimate a sideways scene and the PNG we write carries
+    // no metadata to compensate.
+    QImageReader reader(srcPath);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
+    if (photo.isNull()) {
+        err() << "Error: could not read " << srcPath << " as an image ("
+              << reader.errorString() << ")." << Qt::endl;
+        return 1;
+    }
+    if (!PhotoDepth::isAvailable()) {
+        err() << "Error: photo depth needs an ONNX build "
+                 "(rebuild with -DENABLE_ONNX)." << Qt::endl;
+        return 1;
+    }
+    const QString model = PhotoDepth::ensureModelBlocking();
+    if (model.isEmpty()) {
+        err() << "Error: the Depth-Anything-V2-Small model is unavailable "
+                 "(offline, or QTMESH_DEPTH_NO_DOWNLOAD is set)." << Qt::endl;
+        return 1;
+    }
+
+    PhotoDepth::Options opts;
+    opts.letterbox = letterbox;
+    const auto r = PhotoDepth::estimate(photo, model, opts);
+    if (!r.ok) {
+        err() << "Error: " << r.error << Qt::endl;
+        return 1;
+    }
+
+    if (outputPath.isEmpty())
+        outputPath = QDir(fi.absolutePath())
+                         .filePath(fi.completeBaseName() + "_depth.png");
+    if (!r.depth.save(outputPath)) {
+        err() << "Error: could not write " << outputPath << Qt::endl;
+        return 1;
+    }
+    cliWrite(QString("Wrote depth map: %1 (%2x%3, near = bright)\n")
+                 .arg(QFileInfo(outputPath).fileName())
+                 .arg(r.depth.width()).arg(r.depth.height()));
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.photo_depth"),
+                                  QStringLiteral("photo_depth %1x%2")
+                                      .arg(photo.width()).arg(photo.height()));
+    return 0;
 }
 
 int CLIPipeline::cmdMaterialUpscale(const QString& srcPath, QString outputPath,

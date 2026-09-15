@@ -225,6 +225,7 @@ ImageTo3D/MeshGenController.cpp
 ImageTo3D/BackgroundRemover.cpp
 ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
+PhotoDepth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
 MemoryEstimator.cpp
@@ -389,6 +390,7 @@ UniRigPredictor.h
 MotionInbetween.h
 MotionLibrary.h
 MotionComposer.h
+PhotoDepth.h
 MotionGenerator.h
 MeshSegmenter.h
 MeshDepthRenderer.h
