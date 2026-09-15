@@ -254,3 +254,48 @@ TEST(BackgroundRemoverTest, MissingFastModelStillNamesU2Net)
     EXPECT_FALSE(r.ok);
     EXPECT_TRUE(r.error.contains(QStringLiteral("U2Net"))) << r.error.toStdString();
 }
+
+TEST(BackgroundRemoverTest, BestTierAgainstAFastModelFailsLoudly)
+{
+    // THE #1016 FIELD BUG. The GUI checkbox set Options::quality = Best while
+    // the caller still resolved the DEFAULT (Fast) model path, so a 1024x1024
+    // tensor was fed into U²-Net's fixed 320x320 graph. ORT threw, removeBackground
+    // returned ok=false, and TRELLIS.2 carried on with NO matte — reconstructing
+    // the studio backdrop as a flat slab behind the subject.
+    //
+    // The contract that prevents a silent repeat: a tier/model mismatch must
+    // FAIL (ok=false with a reason), never quietly return an unmatted image
+    // that looks like a successful cut-out.
+    const QString fastModel =
+        BackgroundRemover::modelPath(BackgroundRemover::Quality::Fast);
+    if (!BackgroundRemover::isAvailable() || !QFileInfo::exists(fastModel))
+        GTEST_SKIP() << "needs an ONNX build with the U2Net model cached";
+
+    QImage img(256, 256, QImage::Format_RGB888);
+    img.fill(Qt::white);
+    for (int y = 80; y < 176; ++y)
+        for (int x = 80; x < 176; ++x)
+            img.setPixel(x, y, qRgb(20, 20, 20));
+
+    BackgroundRemover::Options bad;
+    bad.quality = BackgroundRemover::Quality::Best;   // 1024² preprocessing…
+    const auto r = BackgroundRemover::removeBackground(img, fastModel, bad);
+    // …against the 320² U2Net graph.
+    EXPECT_FALSE(r.ok) << "a tier/model mismatch must not report success";
+    EXPECT_FALSE(r.error.isEmpty()) << "and must say why";
+}
+
+TEST(BackgroundRemoverTest, ResolveDegradesBestToFastWhenUncached)
+{
+    // resolveModelBlocking is what callers use to avoid the mismatch above: it
+    // reports the tier it actually resolved, so the caller can pass a matching
+    // Options::quality instead of assuming Best.
+    BackgroundRemover::Quality got = BackgroundRemover::Quality::Best;
+    const QString path =
+        BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Best, &got);
+    if (path.isEmpty()) GTEST_SKIP() << "no matting model cached at all";
+    // Whatever came back, the reported tier must match the file on disk.
+    EXPECT_EQ(path, BackgroundRemover::modelPath(got))
+        << "resolved path and reported tier disagree — the exact mismatch that "
+           "silently disabled background removal";
+}

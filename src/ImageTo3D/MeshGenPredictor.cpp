@@ -374,9 +374,13 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
     // Falls back to the original image if the model/ONNX is unavailable.
     QImage subject = image;
     if (opts.removeBackground) {
-        const QString bgModel = BackgroundRemover::ensureModelBlocking();
+        // #1016: resolve for the requested tier (Best -> Fast when uncached).
+        BackgroundRemover::Quality mq2 = opts.mattingQuality;
+        const QString bgModel =
+            BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &mq2);
         const BackgroundRemover::Result br =
-            BackgroundRemover::removeBackground(image, bgModel, {});
+            BackgroundRemover::removeBackground(image, bgModel, [&]{
+                BackgroundRemover::Options o; o.quality = mq2; return o; }());
         subject = br.image;   // cleaned on success, original on fallback
     }
 

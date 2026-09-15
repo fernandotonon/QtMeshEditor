@@ -524,8 +524,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
         // The alpha-matte model must be ensured HERE (main thread — nested
-        // event loop); the worker-side predictor only reads it.
-        BackgroundRemover::ensureModelBlocking();
+        // event loop); the worker-side predictor only reads it. #1016: ensure
+        // the REQUESTED tier — pre-ensuring Fast while the predictor then asks
+        // for Best leaves BiRefNet uncached and silently degrades the matte.
+        BackgroundRemover::ensureModelBlocking(
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast);
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -556,7 +560,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         }
     }
     if (removeBackground)
-        BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
+        BackgroundRemover::ensureModelBlocking(    // best-effort; falls back if absent
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast);
 
     // The optional post-bake upscale runs on the WORKER, so its model must be
     // ensured here on the main thread (event loop) first. Best-effort: an empty
@@ -607,8 +613,19 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
-            const QString bgModel = BackgroundRemover::modelPath();
-            const auto br = BackgroundRemover::removeBackground(image, bgModel, {});
+            // #1016: pick the model for the requested tier, degrading to Fast
+            // when Best is not cached. Passing a Best tier with a Fast model
+            // feeds a 1024² tensor into U²-Net's fixed 320² graph — inference
+            // throws and the matte is silently lost.
+            BackgroundRemover::Quality mq =
+                wantBestMatte ? BackgroundRemover::Quality::Best
+                              : BackgroundRemover::Quality::Fast;
+            if (!BackgroundRemover::modelPresent(mq))
+                mq = BackgroundRemover::Quality::Fast;
+            BackgroundRemover::Options bgo;
+            bgo.quality = mq;
+            const QString bgModel = BackgroundRemover::modelPath(mq);
+            const auto br = BackgroundRemover::removeBackground(image, bgModel, bgo);
             subject = br.image;
             post(QStringLiteral("background"), 1, 1);
         }

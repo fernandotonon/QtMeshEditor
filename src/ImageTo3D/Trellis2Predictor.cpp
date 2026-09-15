@@ -365,13 +365,33 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 QCoreApplication::instance()
                 && QThread::currentThread()
                        == QCoreApplication::instance()->thread();
-            const QString model = onMainThread
-                ? BackgroundRemover::ensureModelBlocking()
-                : (BackgroundRemover::modelPresent()
-                       ? BackgroundRemover::modelPath() : QString());
+            // #1016: resolve the model FOR THE REQUESTED TIER. Using the
+            // default (Fast) path here while asking BackgroundRemover for Best
+            // fed a 1024² tensor into U²-Net's fixed 320² graph: inference
+            // threw, the matte silently failed, and TRELLIS.2 reconstructed the
+            // backdrop as a flat slab behind the subject.
+            BackgroundRemover::Quality usedQ = opts.mattingQuality;
+            QString model;
+            if (onMainThread) {
+                model = BackgroundRemover::resolveModelBlocking(
+                    opts.mattingQuality, &usedQ);
+            } else {
+                // A worker thread cannot spin ensureModelBlocking's nested
+                // event loop, so only read what is already on disk — and fall
+                // back to Fast when the requested tier is not cached, rather
+                // than handing back a path for the wrong model.
+                if (BackgroundRemover::modelPresent(opts.mattingQuality)) {
+                    model = BackgroundRemover::modelPath(opts.mattingQuality);
+                } else if (BackgroundRemover::modelPresent(
+                               BackgroundRemover::Quality::Fast)) {
+                    model = BackgroundRemover::modelPath(
+                        BackgroundRemover::Quality::Fast);
+                    usedQ = BackgroundRemover::Quality::Fast;
+                }
+            }
             BackgroundRemover::Options bg;
             bg.keepAlpha = true;
-            bg.quality = opts.mattingQuality;   // #1016 Fast/Best tier
+            bg.quality = usedQ;   // #1016: MUST match the model actually loaded
             const BackgroundRemover::Result cut =
                 BackgroundRemover::removeBackground(subject, model, bg);
             if (cut.ok) {
