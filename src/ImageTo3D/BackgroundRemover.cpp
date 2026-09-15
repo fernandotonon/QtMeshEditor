@@ -70,11 +70,6 @@ bool BackgroundRemover::modelPresent(Quality q)
     return QFileInfo::exists(modelPath(q));
 }
 
-#ifndef ENABLE_ONNX
-
-bool BackgroundRemover::isAvailable() { return false; }
-QString BackgroundRemover::ensureModelBlocking(Quality) { return {}; }
-
 QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual)
 {
     if (actual) *actual = wanted;
@@ -88,6 +83,11 @@ QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual)
     if (!path.isEmpty() && actual) *actual = Quality::Fast;
     return path;
 }
+
+#ifndef ENABLE_ONNX
+
+bool BackgroundRemover::isAvailable() { return false; }
+QString BackgroundRemover::ensureModelBlocking(Quality) { return {}; }
 
 BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& image,
                                                              const QString&,
