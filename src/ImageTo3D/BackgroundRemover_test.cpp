@@ -61,7 +61,16 @@ TEST(BackgroundRemoverTest, SegmentsWhenModelPresentElseFallsBack)
                          && QFileInfo::exists(BackgroundRemover::modelPath());
     if (present && r.ok) {
         EXPECT_TRUE(r.usedModel);
-        EXPECT_EQ(r.image.size(), img.size());
+        // NOT the input size: with a model present the default
+        // foregroundRatio (0.85) crops to the subject bbox and re-pads to a
+        // SQUARE, so a 128x128 input with a 48x48 subject legitimately comes
+        // back smaller. Asserting equality here only passed because CI has no
+        // cached model and always took the fallback branch — it fails the
+        // moment a developer has run background removal once. Assert the real
+        // contract: a valid square image that still contains the subject.
+        EXPECT_FALSE(r.image.isNull());
+        EXPECT_EQ(r.image.width(), r.image.height()) << "re-padded to a square";
+        EXPECT_GT(r.image.width(), 0);
     } else {
         // No ONNX / no model: contract is ok=false + the ORIGINAL image returned.
         EXPECT_FALSE(r.ok);
@@ -191,4 +200,57 @@ TEST(BackgroundRemoverTest, RescueSkipsBusyBackground)
 
     BackgroundRemover::applyUniformBackgroundRescue(f.img, f.alpha);
     EXPECT_EQ(f.a(160, 105), 0.0f);   // gate closed → alpha untouched
+}
+
+// ---- #1016 BiRefNet Best tier ----------------------------------------------
+
+TEST(BackgroundRemoverTest, TierSelectsDistinctModelFiles)
+{
+    // The two tiers must resolve to DIFFERENT files under the same cache dir —
+    // a copy/paste slip that pointed Best at u2net.onnx would silently ship the
+    // old matte while reporting the new tier.
+    const QString fast = BackgroundRemover::modelPath(BackgroundRemover::Quality::Fast);
+    const QString best = BackgroundRemover::modelPath(BackgroundRemover::Quality::Best);
+    EXPECT_NE(fast, best);
+    EXPECT_TRUE(fast.endsWith(QStringLiteral("u2net.onnx")));
+    EXPECT_TRUE(best.endsWith(QStringLiteral("birefnet.onnx")));
+    EXPECT_TRUE(fast.contains(QStringLiteral("ai_models")));
+    EXPECT_TRUE(best.contains(QStringLiteral("rembg")));
+}
+
+TEST(BackgroundRemoverTest, DefaultQualityIsFast)
+{
+    // Every pre-#1016 caller constructs Options{} and must keep the shipped
+    // behaviour — Best is ~930 MB and several seconds on CPU, so it can only be
+    // opt-in.
+    BackgroundRemover::Options o;
+    EXPECT_EQ(o.quality, BackgroundRemover::Quality::Fast);
+}
+
+TEST(BackgroundRemoverTest, ResultReportsTheTierThatActuallyRan)
+{
+    // A Best request that fell back to Fast must not look like it produced the
+    // better matte. With a missing model the call fails, but qualityUsed still
+    // reflects what was attempted.
+    QImage img(16, 16, QImage::Format_RGB888);
+    img.fill(Qt::gray);
+    BackgroundRemover::Options o;
+    o.quality = BackgroundRemover::Quality::Best;
+    const auto r = BackgroundRemover::removeBackground(
+        img, QStringLiteral("/no/such/birefnet.onnx"), o);
+    EXPECT_FALSE(r.ok);
+    EXPECT_EQ(r.qualityUsed, BackgroundRemover::Quality::Best);
+    // The message must name the tier the caller asked for, not always "U2Net".
+    EXPECT_TRUE(r.error.contains(QStringLiteral("BiRefNet"))) << r.error.toStdString();
+}
+
+TEST(BackgroundRemoverTest, MissingFastModelStillNamesU2Net)
+{
+    QImage img(16, 16, QImage::Format_RGB888);
+    img.fill(Qt::gray);
+    BackgroundRemover::Options o;   // default Fast
+    const auto r = BackgroundRemover::removeBackground(
+        img, QStringLiteral("/no/such/u2net.onnx"), o);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("U2Net"))) << r.error.toStdString();
 }

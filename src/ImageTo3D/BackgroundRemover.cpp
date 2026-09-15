@@ -32,6 +32,25 @@ constexpr const char* kModelLabel = "U2Net background-removal model";
 
 constexpr int kNet = 320;   // u2net input size
 
+// #1016 BiRefNet (Best tier): MIT, 1024² input, ~930 MB. Same ImageNet
+// normalisation and NCHW layout as U²-Net, so only the edge length differs.
+constexpr const char* kBiRefNetFile = "birefnet.onnx";
+constexpr const char* kBiRefNetLabel = "BiRefNet background-removal model";
+constexpr int kBiRefNet = 1024;
+
+int netSizeFor(BackgroundRemover::Quality q)
+{
+    return q == BackgroundRemover::Quality::Best ? kBiRefNet : kNet;
+}
+const char* modelFileFor(BackgroundRemover::Quality q)
+{
+    return q == BackgroundRemover::Quality::Best ? kBiRefNetFile : kModelFile;
+}
+const char* modelLabelFor(BackgroundRemover::Quality q)
+{
+    return q == BackgroundRemover::Quality::Best ? kBiRefNetLabel : kModelLabel;
+}
+
 QString modelDir()
 {
     return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("rembg/"));
@@ -41,20 +60,34 @@ QString modelDir()
 
 BackgroundRemover::Options::Options() = default;
 
-QString BackgroundRemover::modelPath()
+QString BackgroundRemover::modelPath(Quality q)
 {
-    return QDir(modelDir()).filePath(QString::fromLatin1(kModelFile));
+    return QDir(modelDir()).filePath(QString::fromLatin1(modelFileFor(q)));
 }
 
-bool BackgroundRemover::modelPresent()
+bool BackgroundRemover::modelPresent(Quality q)
 {
-    return QFileInfo::exists(modelPath());
+    return QFileInfo::exists(modelPath(q));
 }
 
 #ifndef ENABLE_ONNX
 
 bool BackgroundRemover::isAvailable() { return false; }
-QString BackgroundRemover::ensureModelBlocking() { return {}; }
+QString BackgroundRemover::ensureModelBlocking(Quality) { return {}; }
+
+QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual)
+{
+    if (actual) *actual = wanted;
+    QString path = ensureModelBlocking(wanted);
+    if (!path.isEmpty() || wanted == Quality::Fast)
+        return path;
+    // Best asked for but unavailable: fall back rather than refuse to cut out a
+    // subject at all. BiRefNet is ~930 MB, so "not downloaded yet" is a normal
+    // state, not an error.
+    path = ensureModelBlocking(Quality::Fast);
+    if (!path.isEmpty() && actual) *actual = Quality::Fast;
+    return path;
+}
 
 BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& image,
                                                              const QString&,
@@ -71,9 +104,9 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 
 bool BackgroundRemover::isAvailable() { return true; }
 
-QString BackgroundRemover::ensureModelBlocking()
+QString BackgroundRemover::ensureModelBlocking(Quality q)
 {
-    const QString dst = modelPath();
+    const QString dst = modelPath(q);
     if (QFileInfo::exists(dst))
         return dst;
     if (!qEnvironmentVariableIsEmpty("QTMESH_REMBG_NO_DOWNLOAD"))
@@ -96,22 +129,24 @@ QString BackgroundRemover::ensureModelBlocking()
     if (!dl) return {};
 
     QDir().mkpath(QFileInfo(dst).absolutePath());
-    const QString url = base + QString::fromLatin1(kModelFile);
+    const QString url = base + QString::fromLatin1(modelFileFor(q));
     QEventLoop loop;
     bool ok = false, timedOut = false;
     auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
         [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = true; loop.quit(); }
+            if (name == QString::fromLatin1(modelLabelFor(q))) { ok = true; loop.quit(); }
         });
     auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
         [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = false; loop.quit(); }
+            if (name == QString::fromLatin1(modelLabelFor(q))) { ok = false; loop.quit(); }
         });
     QTimer timeout;
     timeout.setSingleShot(true);
     QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    timeout.start(600000);   // 10 min — u2net is ~170 MB
-    dl->startDownload(url, dst, QString::fromLatin1(kModelLabel));
+    // U²-Net is ~170 MB; BiRefNet is ~930 MB, so the Best tier needs a much
+    // longer window or a slow connection times out mid-download.
+    timeout.start(q == Quality::Best ? 2400000 : 600000);   // 40 min / 10 min
+    dl->startDownload(url, dst, QString::fromLatin1(modelLabelFor(q)));
     loop.exec();
     QObject::disconnect(onDone);
     QObject::disconnect(onErr);
@@ -125,9 +160,16 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 {
     Result r;
     r.image = image;
+    // The caller passes an explicit model path, so it also chose the tier;
+    // report back which one actually ran (a Best request that fell back to Fast
+    // must not look like it produced the better matte).
+    r.qualityUsed = opts.quality;
     if (image.isNull()) { r.error = QStringLiteral("empty image"); return r; }
     if (!QFileInfo::exists(modelPath)) {
-        r.error = QStringLiteral("U2Net model not found — using image as-is.");
+        r.error = QStringLiteral("%1 model not found — using image as-is.")
+                      .arg(opts.quality == Quality::Best
+                               ? QStringLiteral("BiRefNet")
+                               : QStringLiteral("U2Net"));
         return r;
     }
 
@@ -143,24 +185,27 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-        // --- Preprocess: RGB → 320×320 → NCHW, ImageNet normalize --------------
+        // --- Preprocess: RGB → net² → NCHW, ImageNet normalize -----------------
+        // Both tiers share this exactly; only the edge length differs (U²-Net
+        // 320, BiRefNet 1024).
+        const int net = netSizeFor(opts.quality);
         const QImage small = image.convertToFormat(QImage::Format_RGB888)
-                                  .scaled(kNet, kNet, Qt::IgnoreAspectRatio,
+                                  .scaled(net, net, Qt::IgnoreAspectRatio,
                                           Qt::SmoothTransformation);
         const float mean[3] = {0.485f, 0.456f, 0.406f};
         const float stdv[3] = {0.229f, 0.224f, 0.225f};
-        std::vector<float> in(static_cast<size_t>(3) * kNet * kNet);
-        const size_t plane = static_cast<size_t>(kNet) * kNet;
-        for (int y = 0; y < kNet; ++y) {
+        std::vector<float> in(static_cast<size_t>(3) * net * net);
+        const size_t plane = static_cast<size_t>(net) * net;
+        for (int y = 0; y < net; ++y) {
             const uchar* line = small.constScanLine(y);
-            for (int x = 0; x < kNet; ++x) {
+            for (int x = 0; x < net; ++x) {
                 const uchar* px = line + x * 3;
                 for (int c = 0; c < 3; ++c)
-                    in[c * plane + static_cast<size_t>(y) * kNet + x] =
+                    in[c * plane + static_cast<size_t>(y) * net + x] =
                         (px[c] / 255.0f - mean[c]) / stdv[c];
             }
         }
-        const int64_t inShape[4] = {1, 3, kNet, kNet};
+        const int64_t inShape[4] = {1, 3, net, net};
         Ort::Value inTensor = Ort::Value::CreateTensor<float>(
             mem, in.data(), in.size(), inShape, 4);
 
@@ -172,7 +217,7 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 
         // Validate the output tensor before reading it: a corrupt/wrong model could
         // return a non-float or too-small buffer, and the mask walk below would read
-        // out of bounds. Require a float tensor with at least kNet*kNet elements.
+        // out of bounds. Require a float tensor with at least net*net elements.
         {
             const auto ti = out[0].GetTensorTypeAndShapeInfo();
             if (ti.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
@@ -193,13 +238,13 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
         QImage rgb = image.convertToFormat(QImage::Format_RGB888);
         auto sampleMask = [&](float fx, float fy) -> float {
             // fx,fy in [0,1); bilinear on the 320² normalized mask.
-            const float gx = std::clamp(fx * (kNet - 1), 0.0f, float(kNet - 1));
-            const float gy = std::clamp(fy * (kNet - 1), 0.0f, float(kNet - 1));
+            const float gx = std::clamp(fx * (net - 1), 0.0f, float(net - 1));
+            const float gy = std::clamp(fy * (net - 1), 0.0f, float(net - 1));
             const int x0 = int(gx), y0 = int(gy);
-            const int x1 = std::min(x0 + 1, kNet - 1), y1 = std::min(y0 + 1, kNet - 1);
+            const int x1 = std::min(x0 + 1, net - 1), y1 = std::min(y0 + 1, net - 1);
             const float tx = gx - x0, ty = gy - y0;
             auto m = [&](int xx, int yy) {
-                return (mask[static_cast<size_t>(yy) * kNet + xx] - lo) / range;
+                return (mask[static_cast<size_t>(yy) * net + xx] - lo) / range;
             };
             const float top = m(x0, y0) * (1 - tx) + m(x1, y0) * tx;
             const float bot = m(x0, y1) * (1 - tx) + m(x1, y1) * tx;
