@@ -365,21 +365,53 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 QCoreApplication::instance()
                 && QThread::currentThread()
                        == QCoreApplication::instance()->thread();
-            const QString model = onMainThread
-                ? BackgroundRemover::ensureModelBlocking()
-                : (BackgroundRemover::modelPresent()
-                       ? BackgroundRemover::modelPath() : QString());
+            // #1016: resolve the model FOR THE REQUESTED TIER. Using the
+            // default (Fast) path here while asking BackgroundRemover for Best
+            // fed a 1024² tensor into U²-Net's fixed 320² graph: inference
+            // threw, the matte silently failed, and TRELLIS.2 reconstructed the
+            // backdrop as a flat slab behind the subject.
+            BackgroundRemover::Quality usedQ = opts.mattingQuality;
+            QString model;
+            if (onMainThread) {
+                model = BackgroundRemover::resolveModelBlocking(
+                    opts.mattingQuality, &usedQ);
+            } else {
+                // A worker thread cannot spin ensureModelBlocking's nested
+                // event loop, so only read what is already on disk — and fall
+                // back to Fast when the requested tier is not cached, rather
+                // than handing back a path for the wrong model.
+                if (BackgroundRemover::modelPresent(opts.mattingQuality)) {
+                    model = BackgroundRemover::modelPath(opts.mattingQuality);
+                } else if (BackgroundRemover::modelPresent(
+                               BackgroundRemover::Quality::Fast)) {
+                    model = BackgroundRemover::modelPath(
+                        BackgroundRemover::Quality::Fast);
+                    usedQ = BackgroundRemover::Quality::Fast;
+                }
+            }
             BackgroundRemover::Options bg;
             bg.keepAlpha = true;
+            bg.quality = usedQ;   // #1016: MUST match the model actually loaded
             const BackgroundRemover::Result cut =
                 BackgroundRemover::removeBackground(subject, model, bg);
             if (cut.ok) {
                 subject = cut.image;
                 matteReady = true;
-            } else
+                // #1016: say which matting model ran. Without this the tier
+                // bug was invisible — a failed matte just looked like a mesh
+                // with a backdrop slab, with nothing in the log to explain it.
+                fprintf(stderr, "[trellis2] matte: %s (%s)\n",
+                        usedQ == BackgroundRemover::Quality::Best
+                            ? "BiRefNet 1024" : "U2Net 320",
+                        qPrintable(QFileInfo(model).fileName()));
+            } else {
+                fprintf(stderr, "[trellis2] matte FAILED (%s) — the whole frame "
+                        "is treated as foreground; the background will be "
+                        "reconstructed as geometry\n", qPrintable(cut.error));
                 warning = QStringLiteral(
                     "background removal unavailable (%1); the whole frame is "
                     "treated as foreground.").arg(cut.error);
+            }
         } else {
             warning = QStringLiteral(
                 "built without ENABLE_ONNX — no U²-Net background removal; "

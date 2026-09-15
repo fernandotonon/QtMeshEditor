@@ -2313,6 +2313,16 @@ Rectangle {
                 text: "Remove background"
                 checked: true
             }
+            // #1016: matting tier. BiRefNet (1024²) cuts hair/fur far cleaner
+            // than U²-Net (320²) — measured ~3x fewer ambiguous edge pixels —
+            // but it is a ~930 MB download and several CPU-seconds, so it is
+            // opt-in. Only meaningful while background removal is on.
+            InspectorCheck {
+                id: mgBestMatte
+                text: "High-quality matte (BiRefNet, ~930 MB)"
+                checked: false
+                enabled: mgRemoveBg.checked || mgBackendCombo.t2Selected
+            }
             InspectorCheck {
                 id: mgSmooth
                 text: "Smooth mesh (Taubin)"
@@ -2475,6 +2485,7 @@ Rectangle {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
                     }
+                    genOptions["matting"] = mgBestMatte.checked ? "best" : "fast"
                     MeshGenController.generateSelected(
                         mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
                         genOptions)

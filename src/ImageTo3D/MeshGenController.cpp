@@ -465,6 +465,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         return options.contains(QLatin1String(key))
             ? options.value(QLatin1String(key)).toBool() : def;
     };
+    // #1016: matting tier. "best" = BiRefNet 1024² (MIT, ~930 MB, ~3x crisper
+    // edges on hair/fur); anything else keeps U²-Net 320². Only meaningful when
+    // background removal is on.
+    const bool wantBestMatte =
+        options.value(QLatin1String("matting")).toString().toLower()
+            == QLatin1String("best");
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
@@ -504,6 +510,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // and could re-enter generate(), racing over m_pending. setBusy disables it.
     m_cancel = false;
     setBusy(true);
+    // #1016: set once the matte model has been ensured, so the generic
+    // pre-ensure below does not repeat a failed (and slow) Best download.
+    bool matteEnsured = false;
     emit progress(QStringLiteral("prep"), 0, 1);
 
     // Ensure the chosen backend's models on the MAIN thread first —
@@ -518,8 +527,19 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
         // The alpha-matte model must be ensured HERE (main thread — nested
-        // event loop); the worker-side predictor only reads it.
-        BackgroundRemover::ensureModelBlocking();
+        // event loop); the worker-side predictor only reads it. #1016: ensure
+        // the REQUESTED tier — pre-ensuring Fast while the predictor then asks
+        // for Best leaves BiRefNet uncached and silently degrades the matte.
+        // resolveModelBlocking (not ensureModelBlocking) so a failed ~930 MB
+        // BiRefNet fetch still leaves U²-Net cached: the worker cannot download
+        // (no nested event loop off the main thread), so without the Fast
+        // fallback HERE it would find nothing and skip matting entirely.
+        matteEnsured = true;
+        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ);
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -549,8 +569,16 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
     }
-    if (removeBackground)
-        BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
+    // Skip when the TRELLIS.2 branch above already ensured it: repeating a
+    // failed Best fetch would burn a SECOND ~930 MB / 40-minute timeout before
+    // generation even starts.
+    if (removeBackground && !matteEnsured) {
+        BackgroundRemover::Quality ensuredQ2 = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(   // best-effort, Best -> Fast
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ2);
+    }
 
     // The optional post-bake upscale runs on the WORKER, so its model must be
     // ensured here on the main thread (event loop) first. Best-effort: an empty
@@ -580,7 +608,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // --- Worker thread: model download + background removal + inference --------
     // Everything here is pure data (no Ogre). Progress is emitted via a queued
     // connection so the GUI thread updates the bar.
-    m_pending->worker = std::thread([this, image, res, rembg,
+    m_pending->worker = std::thread([this, image, res, rembg, wantBestMatte,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
@@ -601,8 +629,19 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
-            const QString bgModel = BackgroundRemover::modelPath();
-            const auto br = BackgroundRemover::removeBackground(image, bgModel, {});
+            // #1016: pick the model for the requested tier, degrading to Fast
+            // when Best is not cached. Passing a Best tier with a Fast model
+            // feeds a 1024² tensor into U²-Net's fixed 320² graph — inference
+            // throws and the matte is silently lost.
+            BackgroundRemover::Quality mq =
+                wantBestMatte ? BackgroundRemover::Quality::Best
+                              : BackgroundRemover::Quality::Fast;
+            if (!BackgroundRemover::modelPresent(mq))
+                mq = BackgroundRemover::Quality::Fast;
+            BackgroundRemover::Options bgo;
+            bgo.quality = mq;
+            const QString bgModel = BackgroundRemover::modelPath(mq);
+            const auto br = BackgroundRemover::removeBackground(image, bgModel, bgo);
             subject = br.image;
             post(QStringLiteral("background"), 1, 1);
         }
@@ -617,6 +656,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // rembg model unused, so the GUI checkbox only governs the Tripo
         // backends.
         opts.removeBackground = useT2 || (rembg && useSG);
+        opts.mattingQuality  = wantBestMatte
+            ? BackgroundRemover::Quality::Best
+            : BackgroundRemover::Quality::Fast;
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
