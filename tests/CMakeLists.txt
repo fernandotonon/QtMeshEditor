@@ -263,6 +263,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PhotoDepth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PhotoDepth_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshSegmenter.cpp

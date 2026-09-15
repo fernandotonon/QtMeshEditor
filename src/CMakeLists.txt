@@ -226,6 +226,7 @@ ImageTo3D/BackgroundRemover.cpp
 ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
 PhotoDepth.cpp
+TextureInpaint.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
 MemoryEstimator.cpp
@@ -391,6 +392,7 @@ MotionInbetween.h
 MotionLibrary.h
 MotionComposer.h
 PhotoDepth.h
+TextureInpaint.h
 MotionGenerator.h
 MeshSegmenter.h
 MeshDepthRenderer.h

@@ -107,6 +107,7 @@
 // build can report the feature as unavailable instead of failing to compile.
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
+#include "TextureInpaint.h"
 // RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
 // unconditionally by the #406 describe-material path, so it must NOT sit inside
 // the ENABLE_ONNX guard above — Windows MinGW builds ONNX off and would
@@ -5273,6 +5274,10 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     QString pbrAlbedo;
     QString photoDepthSrc;   // #1018: photo -> monocular depth map
     bool depthLetterbox = false;
+    // #1017: LaMa texture inpainting (shares --texture as the input image).
+    bool inpaint = false;
+    QString inpaintMask;
+    int inpaintDilatePx = -1;   // <0 = keep TextureInpaint's default
     bool generatePbr = false;
     int pbrTileSize = 256;
     bool pbrNoNormal = false, pbrNoRoughness = false, pbrNoHeight = false;
@@ -5320,6 +5325,21 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             continue;
         }
         if (arg == "--depth-letterbox") { depthLetterbox = true; continue; }
+        if (arg == "--inpaint") { inpaint = true; continue; }   // #1017
+        if (arg == "--mask" && i + 1 < argc) {
+            inpaintMask = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--mask-dilate" && i + 1 < argc) {
+            bool mdOk = false;
+            inpaintDilatePx = QString(argv[++i]).toInt(&mdOk);
+            if (!mdOk || inpaintDilatePx < 0) {
+                err() << "Error: --mask-dilate must be a non-negative integer."
+                      << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--upscale" && i + 1 < argc) {
             bool usOk = false;
             upscaleFactor = QString(argv[++i]).toInt(&usOk);
@@ -5381,6 +5401,12 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     // #1018: monocular depth from a PHOTO (Depth-Anything-V2-Small).
     if (!photoDepthSrc.isEmpty()) {
         return cmdMaterialPhotoDepth(photoDepthSrc, outputPath, depthLetterbox);
+    }
+
+    // #1017: LaMa texture inpainting (--texture + --mask in, -o out).
+    if (inpaint || !inpaintMask.isEmpty()) {
+        return cmdMaterialInpaint(pbrAlbedo, inpaintMask, outputPath,
+                                  inpaintDilatePx);
     }
 
     // #405: Real-ESRGAN texture upscaling (--texture in, -o out).
@@ -6318,6 +6344,78 @@ int CLIPipeline::cmdMaterialPhotoDepth(const QString& srcPath,
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.photo_depth"),
                                   QStringLiteral("photo_depth %1x%2")
                                       .arg(photo.width()).arg(photo.height()));
+    return 0;
+}
+
+int CLIPipeline::cmdMaterialInpaint(const QString& srcPath,
+                                    const QString& maskPath,
+                                    QString outputPath, int maskDilatePx)
+{
+    // #1017 (epic #818 C3): fill masked regions of a texture with LaMa. The
+    // headless twin of the paint-mode Inpaint brush; also the path a bake's
+    // UV-seam fill uses when driven from a script.
+    const QFileInfo fi(srcPath);
+    if (srcPath.isEmpty() || maskPath.isEmpty()) {
+        err() << "Error: inpaint requires --texture <image> and --mask <image>."
+              << Qt::endl;
+        return 2;
+    }
+    if (!fi.exists()) {
+        err() << "Error: " << srcPath << " not found." << Qt::endl;
+        return 1;
+    }
+    if (!QFileInfo::exists(maskPath)) {
+        err() << "Error: " << maskPath << " not found." << Qt::endl;
+        return 1;
+    }
+    const QImage texture(srcPath);
+    if (texture.isNull()) {
+        err() << "Error: could not read " << srcPath << " as an image."
+              << Qt::endl;
+        return 1;
+    }
+    const QImage mask(maskPath);
+    if (mask.isNull()) {
+        err() << "Error: could not read " << maskPath << " as an image."
+              << Qt::endl;
+        return 1;
+    }
+    if (!TextureInpaint::isAvailable()) {
+        err() << "Error: texture inpainting needs an ONNX build "
+                 "(rebuild with -DENABLE_ONNX)." << Qt::endl;
+        return 1;
+    }
+    const QString model = TextureInpaint::ensureModelBlocking();
+    if (model.isEmpty()) {
+        err() << "Error: the LaMa inpainting model is unavailable "
+                 "(offline, or QTMESH_INPAINT_NO_DOWNLOAD is set)." << Qt::endl;
+        return 1;
+    }
+
+    TextureInpaint::Options opts;
+    if (maskDilatePx >= 0) opts.maskDilatePx = maskDilatePx;
+    const auto r = TextureInpaint::inpaint(texture, mask, model, opts);
+    if (!r.ok) {
+        err() << "Error: " << r.error << Qt::endl;
+        return 1;
+    }
+
+    if (outputPath.isEmpty())
+        outputPath = QDir(fi.absolutePath())
+                         .filePath(fi.completeBaseName() + "_inpainted.png");
+    if (!r.image.save(outputPath)) {
+        err() << "Error: could not write " << outputPath << Qt::endl;
+        return 1;
+    }
+    cliWrite(QString("Wrote inpainted texture: %1 (%2x%3, %4 texels filled)\n")
+                 .arg(QFileInfo(outputPath).fileName())
+                 .arg(r.image.width()).arg(r.image.height())
+                 .arg(r.maskedTexels));
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.texture_inpaint"),
+                                  QStringLiteral("inpaint %1x%2 masked=%3")
+                                      .arg(texture.width())
+                                      .arg(texture.height())
+                                      .arg(r.maskedTexels));
     return 0;
 }
 

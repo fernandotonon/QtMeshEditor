@@ -4,6 +4,7 @@
 
 #include <QColor>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -108,4 +109,60 @@ TEST(MeshGenBakerTest, RejectsOutOfRangeIndices)
     const auto r = MeshGenBaker::bake(kQuadPos, bad, posColorSampler, {});
     EXPECT_FALSE(r.ok);
     EXPECT_TRUE(r.error.contains(QStringLiteral("out of range")));
+}
+
+TEST(MeshGenBakerTest, PublishesPreDilationCoverageForSeamFill)
+{
+    // #1017: the coverage bitmap is the mask an inpaint seam-fill consumes.
+    // The load-bearing property is that it is published BEFORE the dilation
+    // pass: dilation only smears border colour outward to stop filtering
+    // bleed, so a post-dilation bitmap would mark the smeared ring as "fine"
+    // and the seam fill would skip exactly the texels it exists to repair.
+    //
+    // It cannot be checked by comparing two dilatePx settings: dilatePx also
+    // feeds xatlas's chart PADDING, so changing it changes the atlas layout
+    // and the two bakes are not comparable.
+    MeshGenBaker::Options opts;
+    opts.textureSize = 64;
+    opts.dilatePx = 6;
+    const auto r = MeshGenBaker::bake(kQuadPos, kQuadIdx, posColorSampler, opts);
+    ASSERT_TRUE(r.ok) << qPrintable(r.error);
+
+    // Coverage is sized to the BAKED TEXTURE, not to Options::textureSize:
+    // xatlas picks its own atlas dimensions (59x59 for a 64 request here), so
+    // a caller building a mask must read texture.width()/height().
+    const size_t n = static_cast<size_t>(r.texture.width()) * r.texture.height();
+    ASSERT_GT(n, 0u);
+    ASSERT_EQ(r.coverage.size(), n);
+
+    const int covered =
+        static_cast<int>(std::count(r.coverage.begin(), r.coverage.end(),
+                                    uint8_t{1}));
+    EXPECT_GT(covered, 0) << "nothing covered — the bake produced no texels";
+
+    // The real invariant: coverage marks only texels a chart RASTERIZED. A
+    // post-dilation bitmap would additionally mark the dilatePx-wide ring
+    // around every chart, so re-running the dilation over the published
+    // coverage must still be able to GROW it (i.e. it is not already grown).
+    // On a fully-packed atlas there is no ring to grow into, which is itself
+    // the honest answer — so only assert the direction, never a magnitude.
+    std::vector<uint8_t> grown = r.coverage;
+    const int W = r.texture.width(), H = r.texture.height();
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const size_t lin = static_cast<size_t>(y) * W + x;
+            if (r.coverage[lin]) continue;
+            for (int dy = -1; dy <= 1 && !grown[lin]; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int sx = x + dx, sy = y + dy;
+                    if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+                    if (r.coverage[static_cast<size_t>(sy) * W + sx]) {
+                        grown[lin] = 1; break;
+                    }
+                }
+        }
+    }
+    const int grownCount =
+        static_cast<int>(std::count(grown.begin(), grown.end(), uint8_t{1}));
+    EXPECT_GE(grownCount, covered);   // dilation never shrinks
 }

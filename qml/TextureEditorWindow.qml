@@ -39,6 +39,8 @@ Window {
     property bool   hasSession: TexturePaintController.hasActiveSession
     property bool   hasMask: TexturePaintController.hasSelectionMask
     property int    maskCount: TexturePaintController.selectedPixelCount
+    // #1017: last inpaint outcome (blank until the button is used).
+    property string inpaintStatus: ""
     property real   hoverU: -1
     property real   hoverV: -1
 
@@ -396,6 +398,34 @@ Window {
             text: "Delete"
             enabled: editorWindow.hasMask
             onClicked: TexturePaintController.deleteMaskPixels()
+        }
+        Button {
+            // #1017: AI-fill the selection from its surroundings.
+            text: "Inpaint"
+            enabled: editorWindow.hasMask
+            ToolTip.text: "AI-fill the selection from its surroundings (LaMa).\nDownloads ~200 MB on first use."
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            onClicked: {
+                editorWindow.inpaintStatus = "Inpainting\u2026"
+                Qt.callLater(function() {
+                    var n = TexturePaintController.inpaintMaskPixels()
+                    if (n > 0) editorWindow.inpaintStatus = "Inpainted " + n + " px"
+                    else if (n === 0) editorWindow.inpaintStatus = "Nothing to inpaint"
+                    else if (n === -2) editorWindow.inpaintStatus =
+                        TexturePaintController.inpaintAvailable()
+                            ? "Model unavailable (offline?)" : "Needs an ONNX build"
+                    else if (n === -3) editorWindow.inpaintStatus = "Inpainting failed"
+                    else editorWindow.inpaintStatus = "Select a region first"
+                })
+            }
+        }
+        Text {
+            visible: editorWindow.inpaintStatus !== ""
+            text: editorWindow.inpaintStatus
+            color: palette.text
+            font.pixelSize: 11
+            verticalAlignment: Text.AlignVCenter
         }
         Button {
             text: "Invert"

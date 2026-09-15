@@ -223,6 +223,54 @@ the binary). Attribution + licenses for the models and their training data:
   output. This exists because the UniRig export (#1025) shipped a graph
   emitting 100% NaN latents that went unnoticed for months.
 
+## LaMa — texture inpainting (issue #1017, epic #818 C3)
+
+- **Model:** LaMa (large-mask inpainting) exported to ONNX, hosted as
+  `pbr/lama.onnx` (~200 MB). Fills masked regions of a texture with plausible,
+  seamlessly continued content.
+- **Algorithm/paper:** Suvorov et al., *"Resolution-robust Large Mask Inpainting
+  with Fourier Convolutions"*, WACV 2022.
+- **Licence: Apache-2.0 — code AND weights**, so it clears the project's
+  permissive-redistribution bar (the same test TripoSR / UniRig / BiRefNet
+  passed). Source graph: [`Carve/LaMa-ONNX`](https://huggingface.co/Carve/LaMa-ONNX).
+  `scripts/export-lama-onnx.py` queries the HF model API and **hard-fails** on
+  any licence outside its allow-list before downloading a weight.
+- **WHICH FILE — the plainly-named `lama.onnx` in that repo is BROKEN.** It
+  fails ONNX Runtime shape inference on a `DFT` node (LaMa's Fourier
+  convolution) and cannot be loaded at all:
+  `Op (DFT) [ShapeInferenceError] one-sided DFT requires real input`. The
+  sibling **`lama_fp32.onnx` loads and runs correctly**, and is what we fetch
+  and re-host under the plain name. The export script asserts this by loading
+  the graph and printing an actionable message if it is the broken one — the
+  trap is otherwise invisible until first use in the field.
+- **Mirror repo:**
+  [`QtMeshEditor-lama-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-lama-onnx)
+  (standalone model card + I/O contract; the runtime downloads from the
+  aggregate repo under `pbr/`). Refresh with
+  `scripts/sync-hf-model-repos.sh lama`.
+- **Used by** `src/TextureInpaint.{h,cpp}`: CLI `qtmesh material --texture
+  <img> --inpaint --mask <mask.png> [-o out.png] [--mask-dilate N]`, MCP
+  `inpaint_texture`, and the texture-paint **Inpaint** button (fills the current
+  smart selection). Downloads on first use to `AppData/ai_models/pbr/`
+  (override `QTMESH_INPAINT_MODEL_BASE_URL` / `QSettings ai/inpaintModelBaseUrl`;
+  offline guard `QTMESH_INPAINT_NO_DOWNLOAD`).
+- **Export contract (measured, not documented upstream):**
+  input `image` float32 `[1,3,512,512]` RGB **scaled to [0,1]**;
+  input `mask` float32 `[1,1,512,512]`, 1 = inpaint, 0 = keep;
+  output `output` float32 `[1,3,512,512]` RGB **already in 0..255**.
+  Note the **asymmetry** — in [0,1], out 0..255. Feeding an un-scaled image
+  produces a near-white result (measured mean 246.6 vs a correct 128.6) with no
+  error raised, so both the export script and `TextureInpaint_test.cpp` assert
+  it. The spatial dims are pinned, so larger textures are processed in
+  overlapping 512² tiles with a feathered seam blend (the `PbrMapSynth`
+  approach).
+- **Verified before upload:** the export script refuses to host a graph that
+  does not load, emits non-finite values, alters unmasked texels (measured
+  leakage MAE 0.0000), or leaves the masked region unchanged (a pass-through
+  would satisfy every other check). Measured on a thin-seam mask — the real
+  UV-bleed case — LaMa reconstructs held-out ground truth to **MAE 9.15 / 255
+  (3.6%)** with zero leakage.
+
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
 - Three SPAN models from https://github.com/Kim2091/PBRify_Remix — **CC0-1.0**,

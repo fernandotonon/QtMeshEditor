@@ -1,4 +1,6 @@
 #include "TexturePaintController.h"
+
+#include "TextureInpaint.h"
 #include "PaintBakeTargets.h"
 #include "BrushPresetLibrary.h"
 
@@ -6870,6 +6872,108 @@ int TexturePaintController::deleteMaskPixels()
     flushDirtyToOgre();
     updateEmbeddedTextureCache();
     return affected;
+}
+
+bool TexturePaintController::inpaintAvailable() const
+{
+    return TextureInpaint::isAvailable();
+}
+
+int TexturePaintController::inpaintMaskPixels()
+{
+    // #1017: AI-fill the selection. The fill/delete siblings above only need
+    // the selected pixels, but an inpainter is CONTEXT-driven — it has to see
+    // what surrounds the hole. So this composites the whole stack, runs the
+    // model on that, and writes the result back into the active layer inside
+    // the mask only.
+    if (!hasActiveSession() || !hasSelectionMask()) return -1;
+    if (!TextureInpaint::isAvailable()) return -2;
+
+    auto& layerBuf = activePaintBuffer();
+    const int W = layerBuf.width(), H = layerBuf.height();
+    if (W <= 0 || H <= 0) return -1;
+    if (m_mask.width() != W || m_mask.height() != H) return -1;
+
+    const QString model = TextureInpaint::ensureModelBlocking();
+    if (model.isEmpty()) return -2;
+
+    // Flatten what the user actually SEES. Inpainting the bare active layer
+    // would condition the model on transparent surroundings and fill the hole
+    // with the layer's own emptiness.
+    TexturePaintBuffer flat(W, H);
+    m_layerStack.compositeTo(flat);
+    const auto& flatPx = flat.data();
+
+    QImage src(W, H, QImage::Format_RGB888);
+    for (int y = 0; y < H; ++y) {
+        uchar* line = src.scanLine(y);
+        for (int x = 0; x < W; ++x) {
+            const size_t off =
+                (static_cast<size_t>(y) * W + x) * 4u;
+            line[x * 3 + 0] = flatPx[off + 0];
+            line[x * 3 + 1] = flatPx[off + 1];
+            line[x * 3 + 2] = flatPx[off + 2];
+        }
+    }
+
+    QImage maskImg(W, H, QImage::Format_Grayscale8);
+    {
+        const auto& md = m_mask.data();
+        for (int y = 0; y < H; ++y) {
+            uchar* line = maskImg.scanLine(y);
+            for (int x = 0; x < W; ++x)
+                line[x] = md[static_cast<size_t>(y) * W + x] ? 255 : 0;
+        }
+    }
+
+    const TextureInpaint::Result r =
+        TextureInpaint::inpaint(src, maskImg, model);
+    if (!r.ok || r.image.isNull()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Inpaint selection FAILED: %1").arg(r.error));
+        return -3;
+    }
+
+    const QImage filled = r.image.convertToFormat(QImage::Format_RGB888);
+    auto before = layerBuf.data();
+    int px = 0;
+    {
+        const auto& md = m_mask.data();
+        auto& dst = layerBuf.data();
+        const auto& bb = m_mask.bbox();
+        for (int y = bb.y0; y < bb.y1; ++y) {
+            const uchar* fl = filled.constScanLine(y);
+            for (int x = bb.x0; x < bb.x1; ++x) {
+                const size_t i = static_cast<size_t>(y) * W + x;
+                if (!md[i]) continue;
+                const size_t off = i * 4u;
+                dst[off + 0] = fl[x * 3 + 0];
+                dst[off + 1] = fl[x * 3 + 1];
+                dst[off + 2] = fl[x * 3 + 2];
+                // The filled region must be OPAQUE: the model returns colour
+                // with no alpha channel, and leaving a transparent texel's
+                // alpha at 0 would make the new colour invisible — presenting
+                // as "the inpaint did nothing".
+                dst[off + 3] = 255;
+                ++px;
+            }
+        }
+        if (px > 0) layerBuf.markDirty(bb.x0, bb.y0, bb.x1, bb.y1);
+    }
+    if (px <= 0) return 0;
+
+    const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
+    UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
+        this, layerIdx, std::move(before), layerBuf.data(),
+        layerBuf.width(), layerBuf.height(),
+        (m_sessionEntity ? m_sessionEntity->getName() : std::string()),
+        static_cast<int>(m_activeChannel),
+        QStringLiteral("Inpaint selection")));
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Inpaint: filled %1 px").arg(px));
+    flushDirtyToOgre();
+    updateEmbeddedTextureCache();
+    return px;
 }
 
 void TexturePaintController::scheduleMaskOverlayRefresh()

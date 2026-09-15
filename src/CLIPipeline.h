@@ -133,6 +133,11 @@ public:
     /// #1018: photo -> monocular depth map (Depth-Anything-V2-Small).
     static int cmdMaterialPhotoDepth(const QString& srcPath, QString outputPath,
                                      bool letterbox);
+    /// #1017: LaMa texture inpainting. Reads --texture and --mask (white =
+    /// inpaint), writes the filled texture to -o (or <stem>_inpainted.png).
+    /// Exit 1 when built without ENABLE_ONNX.
+    static int cmdMaterialInpaint(const QString& srcPath, const QString& maskPath,
+                                  QString outputPath, int maskDilatePx);
     static int cmdMaterialUpscale(const QString& srcPath, QString outputPath,
                                   int scale);
     /// #406: LLM-assisted material authoring. Headless equivalent of the

@@ -5166,6 +5166,29 @@ Rectangle {
             property string maskOverlayUri: TexturePaintController.maskOverlayDataUri
             property bool hasMask: TexturePaintController.hasSelectionMask
             property int maskCount: TexturePaintController.selectedPixelCount
+            // #1017: last inpaint outcome. The model download alone can take
+            // minutes, so a silent button would read as "nothing happened".
+            property string inpaintStatus: ""
+            function runInpaint() {
+                texPaintCol.inpaintStatus = "Inpainting\u2026"
+                // Let the label paint before the blocking call (model download
+                // + inference both run on this thread).
+                Qt.callLater(function() {
+                    var n = TexturePaintController.inpaintMaskPixels()
+                    if (n > 0)
+                        texPaintCol.inpaintStatus = "Inpainted " + n + " px"
+                    else if (n === 0)
+                        texPaintCol.inpaintStatus = "Nothing to inpaint"
+                    else if (n === -2)
+                        texPaintCol.inpaintStatus = TexturePaintController.inpaintAvailable()
+                            ? "Inpaint model unavailable (offline?)"
+                            : "Inpainting needs an ONNX build"
+                    else if (n === -3)
+                        texPaintCol.inpaintStatus = "Inpainting failed"
+                    else
+                        texPaintCol.inpaintStatus = "Select a region first"
+                })
+            }
             property real smartTolerance: TexturePaintController.smartSelectTolerance
             property int layerCount: TexturePaintController.layerCount
             property int activeLayerIndex: TexturePaintController.activeLayerIndex
@@ -5395,6 +5418,7 @@ Rectangle {
                             { label: "Fill FG",   action: "fillFG",   needsMask: true,  hint: "Replace selection with foreground color" },
                             { label: "Fill BG",   action: "fillBG",   needsMask: true,  hint: "Replace selection with background color" },
                             { label: "Delete",    action: "delete",   needsMask: true,  hint: "Clear selection to transparent" },
+                            { label: "Inpaint",   action: "inpaint",  needsMask: true,  hint: "AI-fill the selection from its surroundings (LaMa; downloads ~200 MB on first use)" },
                             { label: "Invert",    action: "invert",   needsMask: false, hint: "Invert the selection" },
                             { label: "All",       action: "all",      needsMask: false, hint: "Select every pixel" },
                             { label: "None",      action: "none",     needsMask: true,  hint: "Clear the selection" }
@@ -5428,6 +5452,8 @@ Rectangle {
                                         TexturePaintController.fillMaskWithBG()
                                     else if (modelData.action === "delete")
                                         TexturePaintController.deleteMaskPixels()
+                                    else if (modelData.action === "inpaint")
+                                        texPaintCol.runInpaint()
                                     else if (modelData.action === "invert")
                                         TexturePaintController.invertSelectionMask()
                                     else if (modelData.action === "all")
@@ -5438,6 +5464,16 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // #1017 inpaint outcome (blank until the button is used).
+                Text {
+                    width: parent.width
+                    visible: texPaintCol.inpaintStatus !== ""
+                    text: texPaintCol.inpaintStatus
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
                 }
             }
 
