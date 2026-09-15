@@ -266,10 +266,11 @@ TEST(BackgroundRemoverTest, BestTierAgainstAFastModelFailsLoudly)
     // The contract that prevents a silent repeat: a tier/model mismatch must
     // FAIL (ok=false with a reason), never quietly return an unmatted image
     // that looks like a successful cut-out.
+    // Does NOT GTEST_SKIP — CI treats a skipped test as a failure (see the
+    // note on SegmentsWhenModelPresentElseFallsBack), and the matting models
+    // are not cached on a runner. Both branches assert a real contract.
     const QString fastModel =
         BackgroundRemover::modelPath(BackgroundRemover::Quality::Fast);
-    if (!BackgroundRemover::isAvailable() || !QFileInfo::exists(fastModel))
-        GTEST_SKIP() << "needs an ONNX build with the U2Net model cached";
 
     QImage img(256, 256, QImage::Format_RGB888);
     img.fill(Qt::white);
@@ -280,9 +281,14 @@ TEST(BackgroundRemoverTest, BestTierAgainstAFastModelFailsLoudly)
     BackgroundRemover::Options bad;
     bad.quality = BackgroundRemover::Quality::Best;   // 1024² preprocessing…
     const auto r = BackgroundRemover::removeBackground(img, fastModel, bad);
-    // …against the 320² U2Net graph.
+    // …against the 320² U2Net graph. With the model present ORT rejects the
+    // shape; without it the path check rejects first. EITHER WAY the call must
+    // fail rather than return an unmatted image that looks like a clean cut.
     EXPECT_FALSE(r.ok) << "a tier/model mismatch must not report success";
     EXPECT_FALSE(r.error.isEmpty()) << "and must say why";
+    // The original image is handed back untouched on failure, never a
+    // half-processed one.
+    EXPECT_EQ(r.image.size(), img.size());
 }
 
 TEST(BackgroundRemoverTest, ResolveDegradesBestToFastWhenUncached)
@@ -290,12 +296,21 @@ TEST(BackgroundRemoverTest, ResolveDegradesBestToFastWhenUncached)
     // resolveModelBlocking is what callers use to avoid the mismatch above: it
     // reports the tier it actually resolved, so the caller can pass a matching
     // Options::quality instead of assuming Best.
+    // No GTEST_SKIP: on a runner with no cached model the resolver returns an
+    // empty path, which is itself a contract worth asserting — it must not
+    // hand back a path for a model that is not there.
     BackgroundRemover::Quality got = BackgroundRemover::Quality::Best;
     const QString path =
         BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Best, &got);
-    if (path.isEmpty()) GTEST_SKIP() << "no matting model cached at all";
-    // Whatever came back, the reported tier must match the file on disk.
-    EXPECT_EQ(path, BackgroundRemover::modelPath(got))
-        << "resolved path and reported tier disagree — the exact mismatch that "
-           "silently disabled background removal";
+    if (path.isEmpty()) {
+        // Nothing cached (the CI case): neither tier may claim to be present.
+        EXPECT_FALSE(BackgroundRemover::modelPresent(BackgroundRemover::Quality::Best));
+        EXPECT_FALSE(BackgroundRemover::modelPresent(BackgroundRemover::Quality::Fast));
+    } else {
+        // Whatever came back, the reported tier must match the file on disk —
+        // a disagreement is the exact mismatch that silently disabled
+        // background removal.
+        EXPECT_EQ(path, BackgroundRemover::modelPath(got));
+        EXPECT_TRUE(QFileInfo::exists(path));
+    }
 }
