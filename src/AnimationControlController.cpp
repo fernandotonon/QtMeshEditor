@@ -2201,13 +2201,17 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // then sit") comes back as a single averaged pose — every action at once.
     // Composition lives only on the template path, so route there and SAY SO;
     // silently handing back a blend is the failure mode this fixes.
+    // Recorded, NOT emitted here: the QML handler assigns the status text
+    // (`genStatus.text = message`), so an interim emit is overwritten by the
+    // success message below and the user would see "template" with no reason.
+    // Fold it into the FINAL message instead.
+    QString modelSkipNote;
     const bool multiStep = MotionComposer::promptHasMultipleSteps(prompt);
     if (useModel && multiStep) {
         useModel = false;
-        emit generateMotionStatus(
-            QStringLiteral("Multi-step prompt — using the template library "
-                           "(the trained model generates a single motion)."),
-            false);
+        modelSkipNote = QStringLiteral(
+            " — multi-step prompt, so the template library was used "
+            "(the trained model generates a single motion)");
     }
 
     if (useModel) {
@@ -2433,9 +2437,12 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     const QString composedNote = composedSteps > 1
         ? QStringLiteral(", composed from %1 steps").arg(composedSteps)
         : QString();
-    const QString msg = QStringLiteral("Generated '%1' (%2) — %3 bones, %4 frames (%5s)%6")
+    // #1034: a user who CHECKED "use trained model" and got the template path
+    // must be told why, in the message that actually survives.
+    if (!modelSkipNote.isEmpty()) out["modelSkipped"] = modelSkipNote.trimmed();
+    const QString msg = QStringLiteral("Generated '%1' (%2) — %3 bones, %4 frames (%5s)%6%7")
         .arg(action, clipSource).arg(res.tracksWritten).arg(res.frames)
-        .arg(res.length, 0, 'f', 1).arg(composedNote);
+        .arg(res.length, 0, 'f', 1).arg(composedNote, modelSkipNote);
     emit generateMotionStatus(msg, false);
     return out;
 }
