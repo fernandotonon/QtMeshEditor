@@ -34,11 +34,12 @@ public:
     void abort() override {}
 
     /// #1036: model a server that honoured `Range: bytes=<first>-`.
-    FakeNetworkReply* withPartialContent(qint64 first, qint64 last, qint64 total)
+    FakeNetworkReply* withPartialContent(qint64 first, qint64 last, qint64 total,
+                                         const QByteArray& unit = QByteArrayLiteral("bytes"))
     {
         setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 206);
         setRawHeader("Content-Range",
-                     QByteArray("bytes ") + QByteArray::number(first) + '-'
+                     unit + ' ' + QByteArray::number(first) + '-'
                      + QByteArray::number(last) + '/' + QByteArray::number(total));
         return this;
     }
@@ -621,10 +622,10 @@ TEST_F(ModelDownloaderTest, ResumeAgainst206WithMatchingRangeAppends)
     EXPECT_EQ(downloader->m_resumeOffset, 9) << "an honoured resume must keep its offset";
 }
 
-TEST_F(ModelDownloaderTest, ResumeAgainst206WithWrongStartRestartsFromZero)
+TEST_F(ModelDownloaderTest, ResumeAgainst206CoveringWholeResourceRestartsFromZero)
 {
-    // 206 but the window does not start at our offset: appending is still
-    // wrong (bytes would land in the wrong place). Treat like an ignored Range.
+    // 206 whose window is 0..total-1 is the FULL body wearing a partial
+    // status. Not what we asked for, but complete — so truncate and take it.
     const QString partialPath = tempFilePath("resume206bad.bin.part");
     QFile seed(partialPath);
     ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
@@ -667,4 +668,72 @@ TEST_F(ModelDownloaderTest, FreshDownloadNeverRunsTheResumeCheck)
     QFile out(path);
     ASSERT_TRUE(out.open(QIODevice::ReadOnly));
     EXPECT_EQ(out.readAll(), QByteArray("hello"));
+}
+
+
+TEST_F(ModelDownloaderTest, ResumeAgainst206WithUppercaseBytesUnitIsHonoured)
+{
+    // RFC 9110: the range unit is case-insensitive. "Bytes 9-12/13" is a
+    // valid honoured resume and MUST append — misreading it as "ignored" would
+    // truncate and keep only the suffix: an incomplete file that a no-digest
+    // caller then renames and caches. (Review on #1039.)
+    const QString partialPath = tempFilePath("resumeBytes.bin.part");
+    QFile seed(partialPath);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write("FIRSTPART");             // 9 bytes
+    seed.close();
+
+    downloader->m_currentModelName = "ResumeBytes";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 9;
+    downloader->m_bytesReceived = 9;
+    downloader->m_resumeUnverified = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("REST", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(9, 12, 13, QByteArrayLiteral("Bytes"));
+    downloader->m_currentReply = reply;
+
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->onReadyRead();
+    downloader->m_outputFile->flush();
+
+    QFile out(partialPath);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    EXPECT_EQ(out.readAll(), QByteArray("FIRSTPARTREST"))
+        << "an honoured resume with an uppercase unit was treated as ignored";
+    EXPECT_EQ(downloader->m_resumeOffset, 9);
+    EXPECT_EQ(errorSpy.count(), 0);
+}
+
+TEST_F(ModelDownloaderTest, ResumeAgainst206WithForeignPartialWindowAbortsAndDiscards)
+{
+    // 206 with a window that is neither ours nor the whole resource is a
+    // genuinely PARTIAL body we did not ask for. Writing it from byte 0 would
+    // produce an incomplete file, so this must FAIL, not "recover": error
+    // emitted, .part removed so the next attempt starts clean, nothing renamed.
+    const QString partialPath = tempFilePath("resumeForeign.bin.part");
+    QFile seed(partialPath);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write("ABCDE");                 // 5 bytes
+    seed.close();
+
+    downloader->m_currentModelName = "ResumeForeign";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 5;
+    downloader->m_bytesReceived = 5;
+    downloader->m_resumeUnverified = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("MID", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(3, 5, 10);   // bytes 3..5 of a 10-byte resource
+    downloader->m_currentReply = reply;
+
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->onReadyRead();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("partial range"))
+        << errorSpy.at(0).at(1).toString().toStdString();
+    EXPECT_FALSE(QFileInfo::exists(partialPath)) << "foreign-window .part must not survive to be resumed";
 }
