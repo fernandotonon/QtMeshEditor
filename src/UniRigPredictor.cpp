@@ -727,6 +727,57 @@ QString UniRigPredictor::ensureModelBlocking()
 #endif  // ENABLE_ONNX
 }
 
+// ---- Public entry + chooser: defined for EVERY build (review on #1048 — they
+// lived inside the ENABLE_ONNX branch and the default non-ONNX configuration
+// failed to link). Only predictOnce, the inference itself, is guarded.
+const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, const Result& random)
+{
+    if (fps.ok != random.ok) return fps.ok ? fps : random;
+    return random.joints.size() > fps.joints.size() ? random : fps;
+}
+
+UniRigPredictor::Result UniRigPredictor::predict(
+        const float* positions, int vertexCount,
+        const uint32_t* indices, int indexCount,
+        const QString& encoderModelPath,
+        const QString& decoderModelPath,
+        const QString& embedModelPath,
+        const Options& opts,
+        const ProgressFn& progress)
+{
+    Options::QuerySampling mode = opts.querySampling;
+    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
+    if (env == "fps") mode = Options::QuerySampling::Fps;
+    else if (env == "random") mode = Options::QuerySampling::Random;
+    else if (env == "both") mode = Options::QuerySampling::Both;
+
+    if (mode != Options::QuerySampling::Both)
+        return predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
+                           decoderModelPath, embedModelPath, opts, progress,
+                           mode == Options::QuerySampling::Fps);
+
+    // Both: the encoder's frozen query slots make the point ORDER part of the
+    // input, and no single ordering wins across categories (see Options).
+    // Cancellation (progress returned false → error "cancelled") ends the whole
+    // call: no second decode, and never "pick" a finished run over a cancel.
+    auto cancelled = [](const Result& r) { return !r.ok && r.error == QLatin1String("cancelled"); };
+    const Result fps = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
+                                   decoderModelPath, embedModelPath, opts, progress, true);
+    if (cancelled(fps)) return fps;
+    const Result rnd = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
+                                   decoderModelPath, embedModelPath, opts, progress, false);
+    if (cancelled(rnd)) return rnd;
+    const Result& winner = pickRicher(fps, rnd);
+    const Result& other  = (&winner == &fps) ? rnd : fps;
+    Result chosen = winner;
+    chosen.alternativeJoints = other.ok ? static_cast<int>(other.joints.size()) : -1;
+    if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
+        fprintf(stderr, "[unirig] query sampling: fps=%s(%zu joints) random=%s(%zu joints) -> %s\n",
+                fps.ok ? "ok" : "fail", fps.joints.size(), rnd.ok ? "ok" : "fail", rnd.joints.size(),
+                qPrintable(chosen.querySampling));
+    return chosen;
+}
+
 #ifndef ENABLE_ONNX
 
 UniRigPredictor::Result UniRigPredictor::predictOnce(
@@ -851,49 +902,6 @@ SampledCloud sampleSurface(const std::vector<float>& nverts, int vertexCount,
 }
 
 } // namespace
-
-const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, const Result& random)
-{
-    if (fps.ok != random.ok) return fps.ok ? fps : random;
-    return random.joints.size() > fps.joints.size() ? random : fps;
-}
-
-UniRigPredictor::Result UniRigPredictor::predict(
-        const float* positions, int vertexCount,
-        const uint32_t* indices, int indexCount,
-        const QString& encoderModelPath,
-        const QString& decoderModelPath,
-        const QString& embedModelPath,
-        const Options& opts,
-        const ProgressFn& progress)
-{
-    Options::QuerySampling mode = opts.querySampling;
-    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
-    if (env == "fps") mode = Options::QuerySampling::Fps;
-    else if (env == "random") mode = Options::QuerySampling::Random;
-    else if (env == "both") mode = Options::QuerySampling::Both;
-
-    if (mode != Options::QuerySampling::Both)
-        return predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                           decoderModelPath, embedModelPath, opts, progress,
-                           mode == Options::QuerySampling::Fps);
-
-    // Both: the encoder's frozen query slots make the point ORDER part of the
-    // input, and no single ordering wins across categories (see Options).
-    const Result fps = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                                   decoderModelPath, embedModelPath, opts, progress, true);
-    const Result rnd = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                                   decoderModelPath, embedModelPath, opts, progress, false);
-    const Result& winner = pickRicher(fps, rnd);
-    const Result& other  = (&winner == &fps) ? rnd : fps;
-    Result chosen = winner;
-    chosen.alternativeJoints = other.ok ? static_cast<int>(other.joints.size()) : -1;
-    if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
-        fprintf(stderr, "[unirig] query sampling: fps=%s(%zu joints) random=%s(%zu joints) -> %s\n",
-                fps.ok ? "ok" : "fail", fps.joints.size(), rnd.ok ? "ok" : "fail", rnd.joints.size(),
-                qPrintable(chosen.querySampling));
-    return chosen;
-}
 
 UniRigPredictor::Result UniRigPredictor::predictOnce(
         const float* positions, int vertexCount,
