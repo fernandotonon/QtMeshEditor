@@ -120,8 +120,16 @@ void ModelDownloader::startDownload(const QString &url, const QString &destinati
         // them for their full timeout (the #1017 review race). Deferring one
         // event-loop turn lands the error inside exec() for all 21 consumers
         // without touching any of them.
+        // Redact before it leaves this class (review: CWE-200). Every base URL
+        // is user-configurable, so an override like
+        // https://user:token@mirror/…?token=… is plausible, and this text
+        // reaches the GUI status line via AIModelCatalog. Keep scheme, host and
+        // path — that is what a user needs to see what they misconfigured.
+        const QString shownUrl = QUrl(url).toString(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
         const QString err = QString("Refusing to download %1: %2. URL: %3")
-                                .arg(modelName, rejection, url);
+                                .arg(modelName, rejection,
+                                     shownUrl.isEmpty() ? QStringLiteral("(malformed)") : shownUrl);
         QMetaObject::invokeMethod(this, [this, modelName, err]() {
             emit downloadError(modelName, err);
         }, Qt::QueuedConnection);

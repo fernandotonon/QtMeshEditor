@@ -520,3 +520,22 @@ TEST_F(ModelDownloaderTest, HostRulesForFileAndHttps)
     EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("https://"));
     EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("::not a url::"));
 }
+
+
+TEST_F(ModelDownloaderTest, RejectedUrlErrorRedactsCredentialsAndQuery)
+{
+    // A user-configured override may carry credentials; the refusal text
+    // reaches the GUI status line, so secrets must not ride along. The host
+    // and path MUST survive, or the user cannot see what they misconfigured.
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->startDownload("http://alice:s3cretPW@mirror.example.invalid/models/m.bin?token=TOK123#frag",
+                              tempFilePath("m.bin"), "LeakModel");
+    app->processEvents();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    const QString msg = errorSpy.at(0).at(1).toString();
+    EXPECT_FALSE(msg.contains("s3cretPW")) << msg.toStdString();
+    EXPECT_FALSE(msg.contains("TOK123"))   << msg.toStdString();
+    EXPECT_FALSE(msg.contains("alice"))    << msg.toStdString();
+    EXPECT_TRUE (msg.contains("mirror.example.invalid/models/m.bin")) << msg.toStdString();
+}
