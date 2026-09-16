@@ -60,13 +60,40 @@ ModelDownloader::~ModelDownloader()
     cancelDownload();
 }
 
+namespace {
+// Empty = allowed; otherwise the reason, phrased for the user.
+QString downloadUrlRejectionReason(const QString &url)
+{
+    const QUrl parsed(url);
+    if (!parsed.isValid())
+        return QStringLiteral("the URL is malformed");
+    const QString scheme = parsed.scheme().toLower();
+    if (scheme == QLatin1String("file")) {
+        // file:// is for tests and a LOCAL mirror only. A non-empty host
+        // ("file://server/share/model.onnx") is a UNC path on Windows — an
+        // SMB fetch over the network wearing a local scheme, which would walk
+        // straight around the https-only rule (review on #1038).
+        const QString host = parsed.host().toLower();
+        if (host.isEmpty() || host == QLatin1String("localhost")) return {};
+        return QStringLiteral("file:// URLs must be local — 'file://%1/…' would "
+                              "fetch from a remote share").arg(parsed.host());
+    }
+    if (scheme == QLatin1String("https")) {
+        if (parsed.host().isEmpty())
+            return QStringLiteral("the https:// URL has no host");
+        return {};
+    }
+    // Everything else — notably plain http, which a MITM can rewrite
+    // byte-for-byte — is refused.
+    return QStringLiteral("scheme '%1' is not https:// (plain http can be tampered "
+                          "with in transit)")
+        .arg(scheme.isEmpty() ? QStringLiteral("(none)") : scheme);
+}
+} // namespace
+
 bool ModelDownloader::isAllowedDownloadUrl(const QString &url)
 {
-    const QString scheme = QUrl(url).scheme().toLower();
-    // https: the only transport we trust for a model. file: so tests and a
-    // local mirror work without a server. Everything else — notably plain
-    // http, which a MITM can rewrite byte-for-byte — is refused.
-    return scheme == QLatin1String("https") || scheme == QLatin1String("file");
+    return downloadUrlRejectionReason(url).isEmpty();
 }
 
 void ModelDownloader::startDownload(const QString &url, const QString &destinationPath,
@@ -80,25 +107,21 @@ void ModelDownloader::startDownload(const QString &url, const QString &destinati
 
     // #1029: refuse before touching the filesystem, so a rejected URL leaves
     // no .part file and no created directory behind.
-    if (!isAllowedDownloadUrl(url)) {
-        const QString scheme = QUrl(url).scheme();
+    const QString rejection = downloadUrlRejectionReason(url);
+    if (!rejection.isEmpty()) {
         // qCritical, not qWarning: the CLI message handler drops warnings unless
         // --verbose, and every consumer discards downloadError's text, so a
         // warning here would leave the user with a generic "offline?" and no
         // way to learn the real cause. A security refusal must always surface.
-        qCritical() << "ModelDownloader: refusing" << modelName << "— scheme"
-                   << (scheme.isEmpty() ? QStringLiteral("(none)") : scheme)
-                   << "is not https:// (or file://)";
+        qCritical() << "ModelDownloader: refusing" << modelName << "—" << rejection;
         // QUEUED, not direct: every consumer connects its handlers, calls
         // startDownload, then enters a nested QEventLoop. A synchronous emit
         // here would run their loop.quit() BEFORE exec() and be lost, hanging
         // them for their full timeout (the #1017 review race). Deferring one
         // event-loop turn lands the error inside exec() for all 21 consumers
         // without touching any of them.
-        const QString err = QString(
-            "Refusing to download over '%1' — model downloads must use https:// "
-            "(plain http can be tampered with in transit). URL: %2")
-            .arg(scheme.isEmpty() ? QStringLiteral("(no scheme)") : scheme, url);
+        const QString err = QString("Refusing to download %1: %2. URL: %3")
+                                .arg(modelName, rejection, url);
         QMetaObject::invokeMethod(this, [this, modelName, err]() {
             emit downloadError(modelName, err);
         }, Qt::QueuedConnection);
@@ -260,6 +283,7 @@ void ModelDownloader::cancelDownload()
     m_currentDestinationPath.clear();
     m_currentModelName.clear();
     m_tempFilePath.clear();
+    m_expectedSha256.clear();   // #1029: never let one download's digest leak into the next
     m_bytesReceived = 0;
     m_bytesTotal = 0;
     m_progress = 0.0f;
@@ -339,12 +363,32 @@ void ModelDownloader::onDownloadFinished()
             if (!integrityOk) {
                 qCritical() << "ModelDownloader: SHA-256 mismatch for" << m_currentModelName
                            << "—" << why << "— deleting partial file";
-                QFile::remove(m_tempFilePath);   // never leave a poisoned .part to resume from
+                // Never leave a poisoned .part to resume from. QFile::remove CAN
+                // fail (locked file, read-only directory); if it does, TRUNCATE
+                // the file so a later resume starts from byte 0 instead of
+                // appending to garbage — a later legacy (no-digest) download
+                // would otherwise rename the resumed result unverified
+                // (review: CWE-459). Report whichever cleanup happened.
+                QString cleanup;
+                if (!QFile::remove(m_tempFilePath)) {
+                    QFile trunc(m_tempFilePath);
+                    if (trunc.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                        trunc.close();
+                        cleanup = QStringLiteral(" Could not delete the partial file; it was "
+                                                 "truncated to 0 bytes so it cannot be resumed from.");
+                    } else {
+                        cleanup = QStringLiteral(" WARNING: could not delete or truncate the "
+                                                 "partial file at %1 — remove it manually before "
+                                                 "retrying.").arg(m_tempFilePath);
+                        qCritical() << "ModelDownloader: could not delete or truncate poisoned partial"
+                                    << m_tempFilePath;
+                    }
+                }
                 emit downloadError(m_currentModelName,
                     QString("Integrity check failed for %1: %2. The downloaded file was "
                             "discarded — it did not match the expected SHA-256, so it was "
-                            "either corrupted in transit or is not the published model.")
-                        .arg(m_currentModelName, why));
+                            "either corrupted in transit or is not the published model.%3")
+                        .arg(m_currentModelName, why, cleanup));
             }
         }
 
@@ -376,6 +420,7 @@ void ModelDownloader::onDownloadFinished()
     m_currentDestinationPath.clear();
     m_currentModelName.clear();
     m_tempFilePath.clear();
+    m_expectedSha256.clear();   // #1029: never let one download's digest leak into the next
     m_resumeOffset = 0;
     m_downloadSpeed = 0.0f;
 

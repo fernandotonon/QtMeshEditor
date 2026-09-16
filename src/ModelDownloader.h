@@ -36,8 +36,9 @@ public:
 
 public slots:
     /// Start a download. #1029 (CWE-494):
-    ///  - `url` MUST be https:// (or file:// for local testing). Plain http and
-    ///    every other scheme are rejected before any file is touched — a model
+    ///  - `url` MUST be https://<host> (or a host-less file:// for local
+    ///    testing — see isAllowedDownloadUrl). Plain http and every other
+    ///    scheme are rejected before any file is touched — a model
     ///    is executable-adjacent input, and every base URL is user-overridable
     ///    via env/QSettings, so an unverified scheme is an injection point.
     ///  - `expectedSha256` (lowercase/uppercase hex, optional) is verified
@@ -50,7 +51,11 @@ public slots:
                                    const QString &modelName,
                                    const QString &expectedSha256 = QString());
 
-    /// True iff `url` would be accepted by startDownload (https:// or file://).
+    /// True iff `url` would be accepted by startDownload:
+    ///   https://<host>/…                (host required)
+    ///   file:///… or file://localhost/… (LOCAL only — a file:// URL with any
+    ///                                    other host is a UNC/SMB remote fetch
+    ///                                    on Windows and is refused)
     /// Pure, so callers/tests can check a base URL before wiring it up.
     static bool isAllowedDownloadUrl(const QString &url);
     Q_INVOKABLE void pauseDownload();

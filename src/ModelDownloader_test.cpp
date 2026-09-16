@@ -67,6 +67,10 @@ protected:
         // Ensure clean state: cancel any lingering download
         downloader->cancelDownload();
         app->processEvents();
+        // #1029: the digest is set by startDownload, which these tests bypass
+        // when they drive onDownloadFinished directly — so a stale value from
+        // a prior test would otherwise leak in under shuffled ordering.
+        downloader->m_expectedSha256.clear();
     }
 
     void TearDown() override {
@@ -477,4 +481,42 @@ TEST_F(ModelDownloaderTest, EmptyDigestKeepsLegacyBehaviourForExistingConsumers)
     downloader->onDownloadFinished();
     EXPECT_EQ(completedSpy.count(), 1);
     EXPECT_TRUE(QFileInfo::exists(finalPath));
+}
+
+
+TEST_F(ModelDownloaderTest, FileUrlWithRemoteHostIsRefusedAsRemote)
+{
+    // file://server/share/model.onnx is a UNC path on Windows — an SMB fetch
+    // over the network wearing a local scheme. Letting it through would walk
+    // straight around the https-only rule, so it is refused BEFORE any
+    // filesystem side effect, and the error must say WHY (a message about
+    // "scheme" would be nonsense for a file:// URL).
+    const QString dest = tempFilePath("unc/model.onnx");
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    QSignalSpy startedSpy(downloader, &ModelDownloader::downloadStarted);
+
+    downloader->startDownload("file://evil-host/share/model.onnx", dest, "UncModel");
+    app->processEvents();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("remote"))
+        << errorSpy.at(0).at(1).toString().toStdString();
+    EXPECT_EQ(startedSpy.count(), 0);
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_FALSE(QFileInfo::exists(dest + ".part"));
+    EXPECT_FALSE(QFileInfo(dest).absoluteDir().exists());
+}
+
+TEST_F(ModelDownloaderTest, HostRulesForFileAndHttps)
+{
+    // file:// only LOCAL (no host, or localhost); https:// must have a host.
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file:///tmp/mirror/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file://localhost/tmp/mirror/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file://LOCALHOST/tmp/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("file://evil-host/share/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("file://10.0.0.5/share/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("https://huggingface.co/x/resolve/main/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("https:///no-host/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("https://"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("::not a url::"));
 }
