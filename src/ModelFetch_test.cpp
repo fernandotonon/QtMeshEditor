@@ -174,6 +174,29 @@ TEST_F(ModelFetchTest, ExistingCorruptFileWithoutUrlIsDeletedAndReported)
     EXPECT_FALSE(QFileInfo::exists(dst)) << "a known-corrupt model must never be left to be loaded";
 }
 
+TEST_F(ModelFetchTest, VerifyOnlyRequestNeverTouchesTheDownloader)
+{
+    // The offline (*_NO_DOWNLOAD) shape: URL empty, digest known. A matching
+    // cached file is ok — and the downloader singleton is never involved, so a
+    // worker thread can run this without giving the singleton thread affinity
+    // (review on #1025). A mismatch deletes the file and fails without network.
+    const QString dst = writeFile("offline.onnx", "MODEL-BYTES");
+    QSignalSpy started(dl, &ModelDownloader::downloadStarted);
+    ModelFetch::Request r; r.destination = dst; r.label = "V";
+    r.expectedSha256 = shaHex("MODEL-BYTES");
+    const auto ok = ModelFetch::ensureBlocking(r);
+    EXPECT_TRUE(ok.ok) << ok.error.toStdString();
+    EXPECT_EQ(started.count(), 0);
+
+    const QString bad = writeFile("offline_bad.onnx", "GARBAGE-BYT");
+    r.destination = bad;
+    const auto out = ModelFetch::ensureBlocking(r);
+    EXPECT_FALSE(out.ok);
+    EXPECT_TRUE(out.replacedCorrupt);
+    EXPECT_FALSE(QFileInfo::exists(bad));
+    EXPECT_EQ(started.count(), 0) << "no URL: never a download attempt";
+}
+
 TEST_F(ModelFetchTest, EmptyInputsFailFast)
 {
     ModelFetch::Request r; r.label = "X";

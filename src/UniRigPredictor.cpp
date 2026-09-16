@@ -606,12 +606,12 @@ QString UniRigPredictor::ensureModelBlocking()
     const QString enc = encoderModelPath();
     const QString dec = decoderModelPath();
     const QString emb = embedModelPath();
-    const bool allPresent = QFileInfo::exists(enc) && QFileInfo::exists(dec) && QFileInfo::exists(emb);
-
-    // Offline / test guard — never hit the network when set. (Existence only:
-    // a digest mismatch could not be re-fetched under this guard anyway.)
-    if (!qEnvironmentVariableIsEmpty("QTMESH_UNIRIG_NO_DOWNLOAD"))
-        return allPresent ? enc : QString();
+    // Offline / test guard — never hit the network when set. Cached files are
+    // STILL digest-verified below (review on #1025: an offline user holding the
+    // exact corrupted file this fix targets must fall back, not trust it); the
+    // request simply carries no URL, so a mismatch deletes the file and fails
+    // instead of re-fetching.
+    const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_UNIRIG_NO_DOWNLOAD");
 
     // Resolve the download base URL (QSettings override → env → default HF repo).
     QString base;
@@ -626,9 +626,12 @@ QString UniRigPredictor::ensureModelBlocking()
     }
     if (base.isEmpty()) return {};
     if (!base.endsWith('/')) base += '/';
-
-    auto* dl = ModelDownloader::instance();
-    if (!dl) return {};
+    // NB: no ModelDownloader::instance() here. The GUI runs this on a detached
+    // worker (AutoRigController), and touching the singleton from there would
+    // create its QNetworkAccessManager/timer with affinity to a thread that
+    // exits right after inference (review). ModelFetch reaches the downloader
+    // only when a download is actually needed; a fully cached, verified set
+    // never does.
 
     // #1025: digests are known only for the default hosting.
     const bool defaultHosting = (base == QString::fromLatin1(kDefaultModelBaseUrl));
@@ -642,7 +645,7 @@ QString UniRigPredictor::ensureModelBlocking()
                          const QString& label) -> bool {
         QDir().mkpath(QFileInfo(dest).absolutePath());
         ModelFetch::Request req;
-        req.url = base + fileName;
+        req.url = noDownload ? QString() : base + fileName;   // empty URL = verify only
         req.destination = dest;
         req.label = label;
         req.timeoutMs = 1800000;
