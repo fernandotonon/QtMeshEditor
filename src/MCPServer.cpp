@@ -3059,10 +3059,11 @@ QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
             QStringLiteral("could not read %1 as an image (%2).")
                 .arg(srcPath, reader.errorString()));
 
-    const QString model = PhotoDepth::ensureModelBlocking();
+    QString why;
+    const QString model = PhotoDepth::ensureModelBlocking(&why);
     if (model.isEmpty())
-        return makeErrorResult(
-            "Depth model unavailable (offline, or QTMESH_DEPTH_NO_DOWNLOAD is set).");
+        return makeErrorResult(QStringLiteral("Depth model unavailable: %1").arg(
+            why.isEmpty() ? QStringLiteral("offline, or QTMESH_DEPTH_NO_DOWNLOAD is set") : why));
 
     PhotoDepth::Options opts;
     opts.letterbox = args.value("letterbox").toBool(false);
@@ -3133,11 +3134,11 @@ QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
         opts.maskDilatePx = d;
     }
 
-    const QString model = TextureInpaint::ensureModelBlocking();
+    QString why;
+    const QString model = TextureInpaint::ensureModelBlocking(&why);
     if (model.isEmpty())
-        return makeErrorResult(
-            "Inpaint model unavailable (offline, or QTMESH_INPAINT_NO_DOWNLOAD "
-            "is set).");
+        return makeErrorResult(QStringLiteral("Inpaint model unavailable: %1").arg(
+            why.isEmpty() ? QStringLiteral("offline, or QTMESH_INPAINT_NO_DOWNLOAD is set") : why));
     const TextureInpaint::Result r =
         TextureInpaint::inpaint(texture, mask, model, opts);
     if (!r.ok)

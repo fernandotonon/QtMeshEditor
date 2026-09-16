@@ -2,6 +2,7 @@
 
 #include "AppStorage.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #ifdef ENABLE_ONNX
 #include "OnnxRuntimeSettings.h"
 #include <onnxruntime_cxx_api.h>
@@ -147,7 +148,11 @@ QImage cropLetterbox(const QImage& square, int srcW, int srcH)
 #ifndef ENABLE_ONNX
 
 bool isAvailable() { return false; }
-QString ensureModelBlocking() { return {}; }
+QString ensureModelBlocking(QString* error)
+{
+    if (error) *error = QStringLiteral("photo depth needs an ONNX build (rebuild with -DENABLE_ONNX)");
+    return {};
+}
 
 Result estimate(const QImage&, const QString&, const Options&)
 {
@@ -161,11 +166,14 @@ Result estimate(const QImage&, const QString&, const Options&)
 
 bool isAvailable() { return true; }
 
-QString ensureModelBlocking()
+QString ensureModelBlocking(QString* error)
 {
     const QString dst = modelPath();
     if (QFileInfo::exists(dst)) return dst;
-    if (!qEnvironmentVariableIsEmpty("QTMESH_DEPTH_NO_DOWNLOAD")) return {};
+    if (!qEnvironmentVariableIsEmpty("QTMESH_DEPTH_NO_DOWNLOAD")) {
+        if (error) *error = QStringLiteral("downloads disabled by QTMESH_DEPTH_NO_DOWNLOAD");
+        return {};
+    }
 
     QString base;
     {
@@ -185,27 +193,19 @@ QString ensureModelBlocking()
 
     QDir().mkpath(QFileInfo(dst).absolutePath());
     const QString url = base + QString::fromLatin1(kModelFile);
-    QEventLoop loop;
-    bool ok = false, timedOut = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = true; loop.quit(); }
-        });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) { ok = false; loop.quit(); }
-        });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop,
-                     [&]() { timedOut = true; loop.quit(); });
-    timeout.start(600000);   // 10 min — the model is ~99 MB
-    dl->startDownload(url, dst, QString::fromLatin1(kModelLabel));
-    loop.exec();
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut) dl->cancelDownload();
-    return (ok && !timedOut && QFileInfo::exists(dst)) ? dst : QString();
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dst;
+    req.label = QString::fromLatin1(kModelLabel);
+    req.timeoutMs = 600000;
+    // #1037: one shared blocking wait — keeps the downloader's own error text
+    // and the synchronous-rejection guard every consumer used to lack.
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    if (!fo.ok) {
+        if (error) *error = fo.error;
+        return {};
+    }
+    return fo.path;
 }
 
 Result estimate(const QImage& photo, const QString& modelFile,

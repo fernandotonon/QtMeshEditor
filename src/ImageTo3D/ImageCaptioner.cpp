@@ -8,6 +8,7 @@
 
 #ifdef ENABLE_MTMD
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include <QEventLoop>
 #include <QObject>
 #include <QSettings>
@@ -85,27 +86,15 @@ QString ensureModelBlocking()
         const QString label =
             QStringLiteral("Caption %1").arg(QString::fromLatin1(fileName));
         const QString url = base + QString::fromLatin1(fileName);
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-            [&]() { timedOut = true; loop.quit(); });
-        timeout.start(1800000);   // 30 min — the pair is < 600 MB
-        dl->startDownload(url, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut) dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = url;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 1800000;
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        return fo.ok;
     };
 
     if (!QFileInfo::exists(modelPath())  && !downloadOne(kModelFile,  modelPath()))  return {};

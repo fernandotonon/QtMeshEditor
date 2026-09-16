@@ -92,7 +92,8 @@ bool modelPresent();
 
 /// Download the model if absent and return its path (empty on failure).
 /// Blocking, main-thread only (nested QEventLoop), like every other predictor.
-QString ensureModelBlocking();
+/// `error` (optional) receives the downloader's own reason on failure (#1037).
+QString ensureModelBlocking(QString* error = nullptr);
 
 // ── pure helpers (always compiled, unit-tested directly) ────────────────────
 

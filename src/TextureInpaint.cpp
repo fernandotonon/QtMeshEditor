@@ -2,6 +2,7 @@
 
 #include "AppStorage.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #ifdef ENABLE_ONNX
 #include "OnnxRuntimeSettings.h"
 #include <onnxruntime_cxx_api.h>
@@ -186,7 +187,11 @@ QImage maskFromCoverage(const std::vector<uint8_t>& covered, int w, int h)
 #ifndef ENABLE_ONNX
 
 bool isAvailable() { return false; }
-QString ensureModelBlocking() { return {}; }
+QString ensureModelBlocking(QString* error)
+{
+    if (error) *error = QStringLiteral("texture inpainting needs an ONNX build (rebuild with -DENABLE_ONNX)");
+    return {};
+}
 
 Result inpaint(const QImage&, const QImage&, const QString&, const Options&)
 {
@@ -200,11 +205,14 @@ Result inpaint(const QImage&, const QImage&, const QString&, const Options&)
 
 bool isAvailable() { return true; }
 
-QString ensureModelBlocking()
+QString ensureModelBlocking(QString* error)
 {
     const QString dst = modelPath();
     if (QFileInfo::exists(dst)) return dst;
-    if (!qEnvironmentVariableIsEmpty("QTMESH_INPAINT_NO_DOWNLOAD")) return {};
+    if (!qEnvironmentVariableIsEmpty("QTMESH_INPAINT_NO_DOWNLOAD")) {
+        if (error) *error = QStringLiteral("downloads disabled by QTMESH_INPAINT_NO_DOWNLOAD");
+        return {};
+    }
 
     QString base;
     {
@@ -224,42 +232,19 @@ QString ensureModelBlocking()
 
     QDir().mkpath(QFileInfo(dst).absolutePath());
     const QString url = base + QString::fromLatin1(kModelFile);
-    QEventLoop loop;
-    bool ok = false, timedOut = false;
-    // `settled` guards a real race: ModelDownloader::startDownload emits
-    // downloadError SYNCHRONOUSLY when another download is already active, so
-    // the handler's loop.quit() would run BEFORE exec() and be lost — leaving
-    // this stuck for the full timeout and then cancelling the unrelated
-    // download that was already running. Record that we settled, and skip
-    // exec() entirely in that case.
-    bool settled = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) {
-                ok = true; settled = true; loop.quit();
-            }
-        });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(kModelLabel)) {
-                ok = false; settled = true; loop.quit();
-            }
-        });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop,
-                     [&]() { timedOut = true; settled = true; loop.quit(); });
-    timeout.start(900000);   // 15 min — the model is ~200 MB
-    dl->startDownload(url, dst, QString::fromLatin1(kModelLabel));
-    if (!settled)            // still in flight — wait for it
-        loop.exec();
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    // Only cancel on OUR timeout: a synchronous rejection means someone else's
-    // download owns the downloader, and cancelling it would be a cross-caller
-    // side effect.
-    if (timedOut) dl->cancelDownload();
-    return (ok && !timedOut && QFileInfo::exists(dst)) ? dst : QString();
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dst;
+    req.label = QString::fromLatin1(kModelLabel);
+    req.timeoutMs = 900000;
+    // #1037: one shared blocking wait — keeps the downloader's own error text
+    // and the synchronous-rejection guard every consumer used to lack.
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    if (!fo.ok) {
+        if (error) *error = fo.error;
+        return {};
+    }
+    return fo.path;
 }
 
 namespace {
