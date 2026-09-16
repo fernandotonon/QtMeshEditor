@@ -32,6 +32,17 @@ constexpr const char* kDefaultModelBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/unirig/";
 constexpr const char* kBaseUrlSettingsKey = "ai/unirigModelBaseUrl";
 constexpr const char* kEncoderLabel = "UniRig encoder model";
+// #1025: SHA-256 of the files at kDefaultModelBaseUrl (the HF LFS oids). The
+// hosted encoder was FINE all along; the copy on the reporting machine had a
+// corrupted ~8.6 MB region (309,884 bytes differing from HF, same size) that
+// loaded without complaint and produced NaN latents on every input — so
+// `--algo unirig` silently fell back to the template rig for months. With
+// these, ModelFetch verifies an existing file before use and re-fetches a
+// mismatch. They apply ONLY to the default hosting: a QTMESH_UNIRIG_MODEL_BASE_URL
+// / QSettings mirror may legitimately serve a different export.
+constexpr const char* kEncoderSha256 = "857d23810a5175365fae237fda6a8d9cf9942de9eb138d3093052306f22d132b";
+constexpr const char* kDecoderSha256 = "4b6dcb97eccff70b2c8d0740170eef78601f10b77ab5b3a4230791922dd9178d";
+constexpr const char* kEmbedSha256   = "c84e6bcf78e47d4395c24627542f382a0c14cdfaa46f20dd5c5f5704e3952fb3";
 constexpr const char* kDecoderLabel = "UniRig decoder model";
 constexpr const char* kEmbedLabel   = "UniRig embed model";
 
@@ -559,6 +570,14 @@ QString UniRigPredictor::embedModelPath()
         QStringLiteral("unirig/") + QString::fromLatin1(kEmbedFile));
 }
 
+QString UniRigPredictor::expectedSha256(const QString& fileName)
+{
+    if (fileName == QLatin1String(kEncoderFile)) return QString::fromLatin1(kEncoderSha256);
+    if (fileName == QLatin1String(kDecoderFile)) return QString::fromLatin1(kDecoderSha256);
+    if (fileName == QLatin1String(kEmbedFile))   return QString::fromLatin1(kEmbedSha256);
+    return {};
+}
+
 bool UniRigPredictor::modelsPresent()
 {
     return QFileInfo::exists(encoderModelPath())
@@ -587,12 +606,12 @@ QString UniRigPredictor::ensureModelBlocking()
     const QString enc = encoderModelPath();
     const QString dec = decoderModelPath();
     const QString emb = embedModelPath();
-    if (QFileInfo::exists(enc) && QFileInfo::exists(dec) && QFileInfo::exists(emb))
-        return enc;
+    const bool allPresent = QFileInfo::exists(enc) && QFileInfo::exists(dec) && QFileInfo::exists(emb);
 
-    // Offline / test guard — never hit the network when set.
+    // Offline / test guard — never hit the network when set. (Existence only:
+    // a digest mismatch could not be re-fetched under this guard anyway.)
     if (!qEnvironmentVariableIsEmpty("QTMESH_UNIRIG_NO_DOWNLOAD"))
-        return {};
+        return allPresent ? enc : QString();
 
     // Resolve the download base URL (QSettings override → env → default HF repo).
     QString base;
@@ -611,35 +630,37 @@ QString UniRigPredictor::ensureModelBlocking()
     auto* dl = ModelDownloader::instance();
     if (!dl) return {};
 
-    // Download one file, blocking via a local event loop (same pattern as
-    // AIAssistManager::ensureModelBlocking / RigNetPredictor), with a hard
-    // timeout so a stalled connection can't hang the synchronous rig call.
-    auto downloadOne = [&](const QString& fileName, const QString& dest,
-                           const QString& label) -> bool {
+    // #1025: digests are known only for the default hosting.
+    const bool defaultHosting = (base == QString::fromLatin1(kDefaultModelBaseUrl));
+
+    // Ensure one file — present-and-verified, or downloaded — blocking via
+    // ModelFetch with a hard timeout so a stalled connection can't hang the
+    // synchronous rig call. Every file goes through this even when it exists:
+    // with a digest, "exists" is not "usable" (a corrupted download of the
+    // encoder sat on disk producing NaN for months).
+    auto ensureOne = [&](const QString& fileName, const QString& dest,
+                         const QString& label) -> bool {
         QDir().mkpath(QFileInfo(dest).absolutePath());
-        const QString url = base + fileName;
         ModelFetch::Request req;
-        req.url = url;
+        req.url = base + fileName;
         req.destination = dest;
         req.label = label;
         req.timeoutMs = 1800000;
+        if (defaultHosting) req.expectedSha256 = expectedSha256(fileName);
         // #1037: one shared blocking wait — keeps the downloader's own error text
         // and the synchronous-rejection guard every consumer used to lack.
         const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        if (fo.replacedCorrupt)
+            qWarning().noquote() << "UniRig:" << label << (fo.ok ? "was corrupt on disk and has been re-downloaded"
+                                                                  : "was corrupt on disk; re-download failed:") << (fo.ok ? "" : fo.error);
         return fo.ok;
     };
 
-    if (!QFileInfo::exists(enc) &&
-        !downloadOne(QString::fromLatin1(kEncoderFile), enc,
-                     QString::fromLatin1(kEncoderLabel)))
+    if (!ensureOne(QString::fromLatin1(kEncoderFile), enc, QString::fromLatin1(kEncoderLabel)))
         return {};
-    if (!QFileInfo::exists(dec) &&
-        !downloadOne(QString::fromLatin1(kDecoderFile), dec,
-                     QString::fromLatin1(kDecoderLabel)))
+    if (!ensureOne(QString::fromLatin1(kDecoderFile), dec, QString::fromLatin1(kDecoderLabel)))
         return {};
-    if (!QFileInfo::exists(emb) &&
-        !downloadOne(QString::fromLatin1(kEmbedFile), emb,
-                     QString::fromLatin1(kEmbedLabel)))
+    if (!ensureOne(QString::fromLatin1(kEmbedFile), emb, QString::fromLatin1(kEmbedLabel)))
         return {};
 
     // ALL THREE must exist for success.
@@ -945,13 +966,18 @@ UniRigPredictor::Result UniRigPredictor::predict(
             return failResult(QStringLiteral(
                 "UniRig: encoder produced no latent prefix."));
 
-        // #1025: guard against a numerically broken encoder export. The hosted
-        // encoder.onnx currently emits 100% NaN latents on every input (shape
-        // correct, values not) — independent of mesh and of execution provider.
-        // Without this check the failure surfaces far downstream as
+        // #1025: guard against a numerically broken encoder. The reporting
+        // machine's encoder.onnx emitted 100% NaN latents on every input —
+        // independent of mesh and execution provider — and the cause turned
+        // out to be a CORRUPTED LOCAL DOWNLOAD (a ~8.6 MB region differing
+        // from the hosted file, same size; two weight matrices in resblocks.2
+        // held NaN/±3e38), not the export: the hosted graph is finite and
+        // sane. ensureModelBlocking now verifies the published digests, so this
+        // should no longer trigger; it stays as the last line of defence
+        // because without it the failure surfaces far downstream as
         // "constrained decode reached a dead state", which points at the FSM
         // and sent one investigation chasing the tokenizer. Sample a prefix
-        // rather than the whole 1M-element tensor: a broken export is NaN from
+        // rather than the whole 1M-element tensor: a broken graph is NaN from
         // the first value, so a short scan is enough and costs nothing.
         {
             const int64_t probe = std::min<int64_t>(numLatents * hidden, 1024);

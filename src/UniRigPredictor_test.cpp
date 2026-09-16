@@ -16,6 +16,7 @@
 //   static double undiscretize(int bin);
 
 #include <gtest/gtest.h>
+#include <QRegularExpression>
 
 #include <QString>
 #include <array>
@@ -569,4 +570,19 @@ TEST(UniRigPredictor, BrokenExportPredicateAcceptsUsableLatents)
     std::vector<float> mostlyBad(2048, std::numeric_limits<float>::quiet_NaN());
     mostlyBad[7] = 1.0f;
     EXPECT_FALSE(looksLikeBrokenExport(mostlyBad, 1024));
+}
+
+// #1025: the default-hosted files carry published digests; a corrupt download
+// is detected by ModelFetch before the graph is ever loaded.
+TEST(UniRigPredictorDigests, DefaultHostedFilesHaveDistinctSha256)
+{
+    const QString e = UniRigPredictor::expectedSha256("encoder.onnx");
+    const QString d = UniRigPredictor::expectedSha256("decoder.onnx");
+    const QString m = UniRigPredictor::expectedSha256("embed.onnx");
+    for (const QString& s : {e, d, m}) {
+        EXPECT_EQ(s.size(), 64);
+        EXPECT_TRUE(QRegularExpression("^[0-9a-f]{64}$").match(s).hasMatch()) << s.toStdString();
+    }
+    EXPECT_NE(e, d); EXPECT_NE(d, m); EXPECT_NE(e, m);
+    EXPECT_TRUE(UniRigPredictor::expectedSha256("other.onnx").isEmpty());
 }
