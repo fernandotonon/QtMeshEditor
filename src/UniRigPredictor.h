@@ -171,14 +171,18 @@ public:
                           const Options& opts = {},
                           const ProgressFn& progress = {});
 private:
-    // One decode with a fixed point ordering (fpsFrontLoad → FPS-first cloud).
-    static Result predictOnce(const float* positions, int vertexCount,
+    /// #1046 Both mode: predict() once with querySampling forced to Fps and
+    /// once to Random, keep the richer skeleton (pickRicher); a cancellation
+    /// ends the whole call. Defined for every build; predict() handles the
+    /// inference under ENABLE_ONNX.
+    static Result predictBoth(const float* positions, int vertexCount,
                               const uint32_t* indices, int indexCount,
                               const QString& encoderModelPath,
                               const QString& decoderModelPath,
                               const QString& embedModelPath,
-                              const Options& opts, const ProgressFn& progress,
-                              bool fpsFrontLoad);
+                              const Options& opts, const ProgressFn& progress);
+    /// Options::querySampling with the QTMESH_UNIRIG_QUERIES override applied.
+    static Options::QuerySampling resolveQuerySampling(const Options& opts);
 public:
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----

@@ -586,58 +586,83 @@ bool UniRigPredictor::modelsPresent()
         && QFileInfo::exists(embedModelPath());
 }
 
-void UniRigPredictor::frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
-                                              int count, int k, int pool)
-{
-    if (count <= 2 || k <= 1) return;
-    if (static_cast<int>(pts.size()) < count * 3) return;
-    const bool haveNrm = static_cast<int>(nrm.size()) >= count * 3;
-    if (pool <= 0 || pool > count) pool = count;
-    k = std::min(k, pool);
+namespace {
 
-    // Deterministic seed: the point farthest from the centroid (an extremity —
-    // exactly what FPS should reach first), not a random index.
-    double cx = 0, cy = 0, cz = 0;
-    for (int i = 0; i < pool; ++i) { cx += pts[3*i]; cy += pts[3*i+1]; cz += pts[3*i+2]; }
-    cx /= pool; cy /= pool; cz /= pool;
-    int seed = 0; double best = -1.0;
+// FPS seed: the pool point farthest from the pool centroid — an extremity,
+// exactly what farthest-point sampling should reach first (deterministic,
+// like upstream's random_start=False at inference).
+int farthestFromCentroid(const std::vector<float>& pts, int pool)
+{
+    std::array<double, 3> c = {0.0, 0.0, 0.0};
+    for (int i = 0; i < pool; ++i)
+        for (int a = 0; a < 3; ++a) c[a] += pts[3*i + a];
+    for (double& v : c) v /= pool;
+    int seed = 0;
+    double best = -1.0;
     for (int i = 0; i < pool; ++i) {
-        const double dx = pts[3*i] - cx, dy = pts[3*i+1] - cy, dz = pts[3*i+2] - cz;
-        const double d = dx*dx + dy*dy + dz*dz;
+        double d = 0.0;
+        for (int a = 0; a < 3; ++a) { const double t = pts[3*i + a] - c[a]; d += t * t; }
         if (d > best) { best = d; seed = i; }
     }
+    return seed;
+}
 
-    // Greedy FPS: O(count * k) distance updates — 65536 x 2048 is ~134M
-    // multiply-adds, well under a second, and dwarfed by the encoder itself.
-    std::vector<float> minD(static_cast<size_t>(pool), std::numeric_limits<float>::max());
-    std::vector<char> chosen(static_cast<size_t>(count), 0);
-    std::vector<int> order; order.reserve(static_cast<size_t>(k));
+// Greedy farthest-point order over the first `pool` points: O(pool * k)
+// distance updates — 65536 x 2048 is ~134M multiply-adds, well under a
+// second and dwarfed by the encoder. Marks the selected points in `chosen`.
+std::vector<int> greedyFarthestPointOrder(const std::vector<float>& pts, int pool, int k,
+                                          int seed, std::vector<char>& chosen)
+{
+    std::vector minD(static_cast<size_t>(pool), std::numeric_limits<float>::max());
+    std::vector<int> order;
+    order.reserve(static_cast<size_t>(k));
     int cur = seed;
     for (int it = 0; it < k; ++it) {
-        chosen[cur] = 1; order.push_back(cur);
-        const float px = pts[3*cur], py = pts[3*cur+1], pz = pts[3*cur+2];
-        int next = -1; float far = -1.0f;
+        chosen[cur] = 1;
+        order.push_back(cur);
+        int next = -1;
+        float far = -1.0f;
         for (int i = 0; i < pool; ++i) {
             if (chosen[i]) continue;
-            const float dx = pts[3*i] - px, dy = pts[3*i+1] - py, dz = pts[3*i+2] - pz;
-            const float d = dx*dx + dy*dy + dz*dz;
-            if (d < minD[i]) minD[i] = d;
+            float d = 0.0f;
+            for (int a = 0; a < 3; ++a) { const float t = pts[3*i + a] - pts[3*cur + a]; d += t * t; }
+            minD[i] = std::min(minD[i], d);
             if (minD[i] > far) { far = minD[i]; next = i; }
         }
         if (next < 0) break;
         cur = next;
     }
+    return order;
+}
 
-    std::vector<float> newPts; newPts.reserve(pts.size());
-    std::vector<float> newNrm; if (haveNrm) newNrm.reserve(nrm.size());
-    auto appendPoint = [&](int i) {
-        newPts.insert(newPts.end(), pts.begin() + 3*i, pts.begin() + 3*i + 3);
-        if (haveNrm) newNrm.insert(newNrm.end(), nrm.begin() + 3*i, nrm.begin() + 3*i + 3);
-    };
-    for (int i : order) appendPoint(i);
-    for (int i = 0; i < count; ++i) if (!chosen[i]) appendPoint(i);
-    pts.swap(newPts);
-    if (haveNrm) nrm.swap(newNrm);
+// Rebuild an xyz-triple array as [order..., then every unchosen point in place].
+void reorderTriples(std::vector<float>& v, const std::vector<int>& order,
+                    const std::vector<char>& chosen, int count)
+{
+    std::vector<float> out;
+    out.reserve(v.size());
+    auto append = [&](int i) { out.insert(out.end(), v.begin() + 3*i, v.begin() + 3*i + 3); };
+    for (int i : order) append(i);
+    for (int i = 0; i < count; ++i) if (!chosen[i]) append(i);
+    v.swap(out);
+}
+
+} // namespace
+
+void UniRigPredictor::frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
+                                              int count, int k, int pool)
+{
+    if (count <= 2 || k <= 1) return;
+    if (static_cast<int>(pts.size()) < count * 3) return;
+    if (pool <= 0 || pool > count) pool = count;
+    k = std::min(k, pool);
+
+    std::vector<char> chosen(static_cast<size_t>(count), 0);
+    const std::vector<int> order =
+        greedyFarthestPointOrder(pts, pool, k, farthestFromCentroid(pts, pool), chosen);
+    reorderTriples(pts, order, chosen, count);
+    if (static_cast<int>(nrm.size()) >= count * 3)
+        reorderTriples(nrm, order, chosen, count);   // normals travel with their points
 }
 
 int UniRigPredictor::sampleBudgetForMesh(int vertexCount, int requested)
@@ -736,7 +761,16 @@ const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, co
     return random.joints.size() > fps.joints.size() ? random : fps;
 }
 
-UniRigPredictor::Result UniRigPredictor::predict(
+UniRigPredictor::Options::QuerySampling UniRigPredictor::resolveQuerySampling(const Options& opts)
+{
+    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
+    if (env == "fps")    return Options::QuerySampling::Fps;
+    if (env == "random") return Options::QuerySampling::Random;
+    if (env == "both")   return Options::QuerySampling::Both;
+    return opts.querySampling;
+}
+
+UniRigPredictor::Result UniRigPredictor::predictBoth(
         const float* positions, int vertexCount,
         const uint32_t* indices, int indexCount,
         const QString& encoderModelPath,
@@ -745,27 +779,19 @@ UniRigPredictor::Result UniRigPredictor::predict(
         const Options& opts,
         const ProgressFn& progress)
 {
-    Options::QuerySampling mode = opts.querySampling;
-    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
-    if (env == "fps") mode = Options::QuerySampling::Fps;
-    else if (env == "random") mode = Options::QuerySampling::Random;
-    else if (env == "both") mode = Options::QuerySampling::Both;
-
-    if (mode != Options::QuerySampling::Both)
-        return predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                           decoderModelPath, embedModelPath, opts, progress,
-                           mode == Options::QuerySampling::Fps);
-
     // Both: the encoder's frozen query slots make the point ORDER part of the
     // input, and no single ordering wins across categories (see Options).
     // Cancellation (progress returned false → error "cancelled") ends the whole
     // call: no second decode, and never "pick" a finished run over a cancel.
     auto cancelled = [](const Result& r) { return !r.ok && r.error == QLatin1String("cancelled"); };
-    const Result fps = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                                   decoderModelPath, embedModelPath, opts, progress, true);
+    Options one = opts;
+    one.querySampling = Options::QuerySampling::Fps;
+    const Result fps = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
     if (cancelled(fps)) return fps;
-    const Result rnd = predictOnce(positions, vertexCount, indices, indexCount, encoderModelPath,
-                                   decoderModelPath, embedModelPath, opts, progress, false);
+    one.querySampling = Options::QuerySampling::Random;
+    const Result rnd = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
     if (cancelled(rnd)) return rnd;
     const Result& winner = pickRicher(fps, rnd);
     const Result& other  = (&winner == &fps) ? rnd : fps;
@@ -780,10 +806,10 @@ UniRigPredictor::Result UniRigPredictor::predict(
 
 #ifndef ENABLE_ONNX
 
-UniRigPredictor::Result UniRigPredictor::predictOnce(
+UniRigPredictor::Result UniRigPredictor::predict(
         const float*, int, const uint32_t*, int,
         const QString&, const QString&, const QString&, const Options&,
-        const ProgressFn&, bool)
+        const ProgressFn&)
 {
     return failResult(QStringLiteral(
         "UniRig needs an ONNX-enabled build — rebuild with -DENABLE_ONNX "
@@ -903,16 +929,23 @@ SampledCloud sampleSurface(const std::vector<float>& nverts, int vertexCount,
 
 } // namespace
 
-UniRigPredictor::Result UniRigPredictor::predictOnce(
+UniRigPredictor::Result UniRigPredictor::predict(
         const float* positions, int vertexCount,
         const uint32_t* indices, int indexCount,
         const QString& encoderModelPath,
         const QString& decoderModelPath,
         const QString& embedModelPath,
         const Options& opts,
-        const ProgressFn& progress,
-        bool fpsFrontLoad)
+        const ProgressFn& progress)
 {
+    // #1046: which points occupy the encoder's frozen query slots (see
+    // Options::QuerySampling). Both = run this function twice via predictBoth.
+    const Options::QuerySampling mode = resolveQuerySampling(opts);
+    if (mode == Options::QuerySampling::Both)
+        return predictBoth(positions, vertexCount, indices, indexCount, encoderModelPath,
+                           decoderModelPath, embedModelPath, opts, progress);
+    const bool fpsFrontLoad = (mode == Options::QuerySampling::Fps);
+
     if (!positions || vertexCount < 4)
         return failResult(QStringLiteral("UniRig: mesh has too few vertices."));
     if (!QFileInfo::exists(encoderModelPath))
