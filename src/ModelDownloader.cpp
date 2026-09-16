@@ -1,5 +1,8 @@
 #include "ModelDownloader.h"
+#include "updater/UpdateVerifier.h"   // #1029: reuse the tested SHA-256 check
 #include <QFileInfo>
+#include <QUrl>
+#include <QMetaObject>
 #include <QDir>
 #include <QDebug>
 
@@ -34,12 +37,51 @@ ModelDownloader::~ModelDownloader()
     cancelDownload();
 }
 
-void ModelDownloader::startDownload(const QString &url, const QString &destinationPath, const QString &modelName)
+bool ModelDownloader::isAllowedDownloadUrl(const QString &url)
+{
+    const QString scheme = QUrl(url).scheme().toLower();
+    // https: the only transport we trust for a model. file: so tests and a
+    // local mirror work without a server. Everything else — notably plain
+    // http, which a MITM can rewrite byte-for-byte — is refused.
+    return scheme == QLatin1String("https") || scheme == QLatin1String("file");
+}
+
+void ModelDownloader::startDownload(const QString &url, const QString &destinationPath,
+                                    const QString &modelName,
+                                    const QString &expectedSha256)
 {
     if (m_isDownloading) {
         emit downloadError(modelName, "A download is already in progress");
         return;
     }
+
+    // #1029: refuse before touching the filesystem, so a rejected URL leaves
+    // no .part file and no created directory behind.
+    if (!isAllowedDownloadUrl(url)) {
+        const QString scheme = QUrl(url).scheme();
+        // qCritical, not qWarning: the CLI message handler drops warnings unless
+        // --verbose, and every consumer discards downloadError's text, so a
+        // warning here would leave the user with a generic "offline?" and no
+        // way to learn the real cause. A security refusal must always surface.
+        qCritical() << "ModelDownloader: refusing" << modelName << "— scheme"
+                   << (scheme.isEmpty() ? QStringLiteral("(none)") : scheme)
+                   << "is not https:// (or file://)";
+        // QUEUED, not direct: every consumer connects its handlers, calls
+        // startDownload, then enters a nested QEventLoop. A synchronous emit
+        // here would run their loop.quit() BEFORE exec() and be lost, hanging
+        // them for their full timeout (the #1017 review race). Deferring one
+        // event-loop turn lands the error inside exec() for all 21 consumers
+        // without touching any of them.
+        const QString err = QString(
+            "Refusing to download over '%1' — model downloads must use https:// "
+            "(plain http can be tampered with in transit). URL: %2")
+            .arg(scheme.isEmpty() ? QStringLiteral("(no scheme)") : scheme, url);
+        QMetaObject::invokeMethod(this, [this, modelName, err]() {
+            emit downloadError(modelName, err);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    m_expectedSha256 = expectedSha256.trimmed();
 
     m_currentUrl = url;
     m_currentDestinationPath = destinationPath;
@@ -257,12 +299,35 @@ void ModelDownloader::onDownloadFinished()
             m_outputFile = nullptr;
         }
 
+        // #1029: verify the WHOLE finished .part file on disk, never a running
+        // hash in onReadyRead — a resumed download appends to bytes this
+        // process never saw, so only the file itself is authoritative.
+        // Verify BEFORE the rename: a mismatched file must never reach the
+        // destination path, where the next launch would trust and load it.
+        bool integrityOk = true;
+        if (!m_expectedSha256.isEmpty()) {
+            QString why;
+            integrityOk = UpdateVerifier::verifySha256Hex(m_tempFilePath, m_expectedSha256, &why);
+            if (!integrityOk) {
+                qCritical() << "ModelDownloader: SHA-256 mismatch for" << m_currentModelName
+                           << "—" << why << "— deleting partial file";
+                QFile::remove(m_tempFilePath);   // never leave a poisoned .part to resume from
+                emit downloadError(m_currentModelName,
+                    QString("Integrity check failed for %1: %2. The downloaded file was "
+                            "discarded — it did not match the expected SHA-256, so it was "
+                            "either corrupted in transit or is not the published model.")
+                        .arg(m_currentModelName, why));
+            }
+        }
+
         // Rename temp file to final destination
-        if (QFile::exists(m_currentDestinationPath)) {
+        if (integrityOk && QFile::exists(m_currentDestinationPath)) {
             QFile::remove(m_currentDestinationPath);
         }
 
-        if (QFile::rename(m_tempFilePath, m_currentDestinationPath)) {
+        if (!integrityOk) {
+            // handled above; fall through to the shared cleanup
+        } else if (QFile::rename(m_tempFilePath, m_currentDestinationPath)) {
             qDebug() << "ModelDownloader: Download completed:" << m_currentDestinationPath;
             emit downloadCompleted(m_currentModelName, m_currentDestinationPath);
         } else {
