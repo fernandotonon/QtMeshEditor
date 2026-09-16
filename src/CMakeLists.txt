@@ -60,6 +60,7 @@ LLMWorker.cpp
 LLMManager.cpp
 OnnxRuntimeSettings.cpp
 ModelDownloader.cpp
+ModelFetch.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
 MCPSettingsDialog.cpp
@@ -335,6 +336,7 @@ LLMWorker.h
 LLMManager.h
 OnnxRuntimeSettings.h
 ModelDownloader.h
+ModelFetch.h
 LLMSettingsWidget.h
 MCPServer.h
 MCPSettingsDialog.h
