@@ -737,3 +737,36 @@ TEST_F(ModelDownloaderTest, ResumeAgainst206WithForeignPartialWindowAbortsAndDis
         << errorSpy.at(0).at(1).toString().toStdString();
     EXPECT_FALSE(QFileInfo::exists(partialPath)) << "foreign-window .part must not survive to be resumed";
 }
+
+
+// ---- #1036: the Content-Range parser, tested directly -----------------------
+
+TEST_F(ModelDownloaderTest, ContentRangeParserHandlesUnitCaseAndUnknownTotal)
+{
+    qint64 f = 0, l = 0, t = 0;
+    EXPECT_TRUE(ModelDownloader::parseContentRange("bytes 9-12/13", f, l, t));
+    EXPECT_EQ(f, 9); EXPECT_EQ(l, 12); EXPECT_EQ(t, 13);
+    // RFC 9110 §14.1: unit is case-insensitive.
+    EXPECT_TRUE(ModelDownloader::parseContentRange("Bytes 9-12/13", f, l, t));
+    EXPECT_EQ(f, 9); EXPECT_EQ(l, 12); EXPECT_EQ(t, 13);
+    EXPECT_TRUE(ModelDownloader::parseContentRange("BYTES 0-2/3", f, l, t));
+    EXPECT_EQ(f, 0); EXPECT_EQ(l, 2); EXPECT_EQ(t, 3);
+    // "*" = total unknown => -1, but first/last still parse.
+    EXPECT_TRUE(ModelDownloader::parseContentRange("bytes 5-7/*", f, l, t));
+    EXPECT_EQ(f, 5); EXPECT_EQ(l, 7); EXPECT_EQ(t, -1);
+    // Surrounding/extra whitespace is tolerated.
+    EXPECT_TRUE(ModelDownloader::parseContentRange("  bytes  9-12/13  ", f, l, t));
+    EXPECT_EQ(f, 9);
+}
+
+TEST_F(ModelDownloaderTest, ContentRangeParserRejectsMalformedHeaders)
+{
+    qint64 f = 1, l = 1, t = 1;
+    for (const char* h : {"", "bytes", "bytes 9", "bytes 9-12", "bytes -12/13",
+                          "bytes 9/13", "items 9-12/13", "9-12/13", "bytes abc-12/13"}) {
+        EXPECT_FALSE(ModelDownloader::parseContentRange(h, f, l, t)) << "accepted: '" << h << "'";
+    }
+    // On rejection the outputs are reset, never left at caller garbage.
+    ModelDownloader::parseContentRange("items 9-12/13", f, l, t);
+    EXPECT_EQ(f, -1); EXPECT_EQ(l, -1); EXPECT_EQ(t, -1);
+}

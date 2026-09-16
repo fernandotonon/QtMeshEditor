@@ -313,10 +313,37 @@ void ModelDownloader::cancelDownload()
     }
 }
 
-void ModelDownloader::onReadyRead()
+bool ModelDownloader::parseContentRange(const QByteArray& header,
+                                        qint64& first, qint64& last, qint64& total)
 {
-    if (!m_outputFile || !m_currentReply) return;
+    first = -1;
+    last = -1;
+    total = -1;
+    const QByteArray cr = header.trimmed();
+    // RFC 9110 §14.1: the range unit is CASE-INSENSITIVE — "Bytes 9-12/13" is
+    // a valid honoured resume (review on #1039).
+    const qsizetype sp = cr.indexOf(' ');
+    if (sp <= 0 || cr.left(sp).compare(QByteArrayLiteral("bytes"), Qt::CaseInsensitive) != 0)
+        return false;
+    const QByteArray range = cr.mid(sp + 1).trimmed();
+    const qsizetype dash = range.indexOf('-');
+    const qsizetype slash = range.indexOf('/');
+    if (dash <= 0 || slash <= dash)
+        return false;
+    bool okFirst = false;
+    bool okLast = false;
+    bool okTotal = false;
+    const qint64 f = range.left(dash).trimmed().toLongLong(&okFirst);
+    const qint64 l = range.mid(dash + 1, slash - dash - 1).trimmed().toLongLong(&okLast);
+    const qint64 t = range.mid(slash + 1).trimmed().toLongLong(&okTotal);   // "*" => unknown
+    if (okFirst) first = f;
+    if (okLast) last = l;
+    if (okTotal) total = t;
+    return okFirst && okLast;
+}
 
+bool ModelDownloader::verifyResumeResponse()
+{
     // #1036: a resume sends `Range: bytes=N-`, but nothing guaranteed the
     // server HONOURED it. One that ignores Range (file:// always does; any
     // proxy/CDN that strips the header will) answers 200 with the WHOLE body,
@@ -324,82 +351,67 @@ void ModelDownloader::onReadyRead()
     // reproduced: a 29-byte stale prefix yielded a 208,044,845-byte file that
     // still LOADED and ran (ORT parsed the garbage as an unknown protobuf
     // field). A load success proves nothing; only the response can tell us
-    // which bytes these are. So on the first bytes of a resumed request we
-    // require 206 + a Content-Range that starts exactly at our offset;
-    // anything else means "this is the full body" — truncate and restart
-    // from byte 0, never append. Checked ONCE, on first readyRead, because the
+    // which bytes these are. Checked ONCE, on the first readyRead, because the
     // status/headers are available then and re-checking per chunk is waste.
-    if (m_resumeUnverified) {
-        m_resumeUnverified = false;
-        const int status = m_currentReply->attribute(
-            QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        // Content-Range: <unit> <first>-<last>/<total>. RFC 9110 §14.1: the
-        // unit is CASE-INSENSITIVE ("Bytes 9-12/13" is valid — review on
-        // #1039), so a case-sensitive prefix match would misread a perfectly
-        // honoured resume as "ignored" and, worse, fall into the truncate
-        // path with a PARTIAL body — an incomplete file a no-digest caller
-        // would then rename.
-        qint64 first = -1, last = -1, total = -1;
-        if (status == 206) {
-            const QByteArray cr = m_currentReply->rawHeader("Content-Range").trimmed();
-            const int sp = cr.indexOf(' ');
-            if (sp > 0 && cr.left(sp).compare(QByteArrayLiteral("bytes"), Qt::CaseInsensitive) == 0) {
-                const QByteArray range = cr.mid(sp + 1).trimmed();
-                const int dash = range.indexOf('-');
-                const int slash = range.indexOf('/');
-                bool ok1 = false, ok2 = false, ok3 = false;
-                if (dash > 0 && slash > dash) {
-                    first = range.left(dash).trimmed().toLongLong(&ok1);
-                    last  = range.mid(dash + 1, slash - dash - 1).trimmed().toLongLong(&ok2);
-                    total = range.mid(slash + 1).trimmed().toLongLong(&ok3);   // "*" fails ok3 => -1
-                }
-                if (!ok1) first = -1;
-                if (!ok2) last = -1;
-                if (!ok3) total = -1;
-            }
-        }
-        const bool honoured = status == 206 && first == m_resumeOffset;
-        // A 206 whose window is the WHOLE resource (0..total-1) is a full body
-        // wearing a partial status — safe to truncate and take. Any OTHER 206
-        // window is a genuinely partial body we did not ask for: writing it
-        // from byte 0 would yield an INCOMPLETE file, so that case must fail,
-        // not "recover".
-        const bool fullBodyDisguised = status == 206 && first == 0 && total > 0 && last == total - 1;
-        if (!honoured && status == 206 && !fullBodyDisguised) {
-            qCritical() << "ModelDownloader: unusable 206 for" << m_currentModelName
-                        << "— asked from byte" << m_resumeOffset << "got Content-Range first="
-                        << first << "last=" << last << "total=" << total << "— aborting";
-            m_outputFile->close();
-            QFile::remove(m_tempFilePath);   // next attempt must start clean, not resume this
-            m_currentReply->abort();
-            emit downloadError(m_currentModelName,
-                QString("The server answered the resume request with a partial range that "
-                        "does not match (asked from byte %1, got %2-%3/%4); the partial file "
-                        "was discarded — retry to download from the start.")
-                    .arg(m_resumeOffset).arg(first).arg(last).arg(total));
-            return;
-        }
-        if (!honoured) {
-            qWarning() << "ModelDownloader: server ignored Range for" << m_currentModelName
-                       << "(status" << status << ") — discarding" << m_resumeOffset
-                       << "stale bytes and restarting from 0";
-            // Reopen truncated: the Append-mode handle would keep writing after
-            // the stale prefix. A failed reopen is fatal for this download —
-            // appending would be worse than stopping.
-            m_outputFile->close();
-            if (!m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                emit downloadError(m_currentModelName,
-                    QString("Server ignored the resume request and the partial file "
-                            "could not be reset: %1").arg(m_tempFilePath));
-                m_currentReply->abort();
-                return;
-            }
-            // The whole body is arriving; progress must not add the offset.
-            m_resumeOffset = 0;
-            m_bytesReceived = 0;
-        }
+    m_resumeUnverified = false;
+    const int status = m_currentReply->attribute(
+        QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    qint64 first = -1;
+    qint64 last = -1;
+    qint64 total = -1;
+    const bool parsed = status == 206
+        && parseContentRange(m_currentReply->rawHeader("Content-Range"), first, last, total);
+    if (parsed && first == m_resumeOffset)
+        return true;   // honoured: keep appending
+
+    // A 206 whose window is the WHOLE resource (0..total-1) is a full body
+    // wearing a partial status — safe to truncate and take. Any OTHER 206
+    // window is a genuinely partial body we did not ask for: writing it from
+    // byte 0 would yield an INCOMPLETE file, so that case must fail, not
+    // "recover".
+    if (const bool fullBodyDisguised = parsed && first == 0 && total > 0 && last == total - 1;
+        status == 206 && !fullBodyDisguised) {
+        qCritical() << "ModelDownloader: unusable 206 for" << m_currentModelName
+                    << "— asked from byte" << m_resumeOffset << "got Content-Range first="
+                    << first << "last=" << last << "total=" << total << "— aborting";
+        m_outputFile->close();
+        QFile::remove(m_tempFilePath);   // next attempt must start clean, not resume this
+        m_currentReply->abort();
+        emit downloadError(m_currentModelName,
+            QString("The server answered the resume request with a partial range that "
+                    "does not match (asked from byte %1, got %2-%3/%4); the partial file "
+                    "was discarded — retry to download from the start.")
+                .arg(m_resumeOffset).arg(first).arg(last).arg(total));
+        return false;
     }
 
+    // Full body (200, or a 206 covering everything): discard the stale prefix
+    // and restart from byte 0 — never append.
+    qWarning() << "ModelDownloader: server ignored Range for" << m_currentModelName
+               << "(status" << status << ") — discarding" << m_resumeOffset
+               << "stale bytes and restarting from 0";
+    // Reopen truncated: the Append-mode handle would keep writing after the
+    // stale prefix. A failed reopen is fatal for this download — appending
+    // would be worse than stopping.
+    m_outputFile->close();
+    if (!m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        emit downloadError(m_currentModelName,
+            QString("Server ignored the resume request and the partial file "
+                    "could not be reset: %1").arg(m_tempFilePath));
+        m_currentReply->abort();
+        return false;
+    }
+    // The whole body is arriving; progress must not add the offset.
+    m_resumeOffset = 0;
+    m_bytesReceived = 0;
+    return true;
+}
+
+void ModelDownloader::onReadyRead()
+{
+    if (!m_outputFile || !m_currentReply) return;
+    if (m_resumeUnverified && !verifyResumeResponse())
+        return;   // aborted — an unusable partial window
     QByteArray data = m_currentReply->readAll();
     m_outputFile->write(data);
 }

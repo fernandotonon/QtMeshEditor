@@ -34,6 +34,13 @@ public:
     qint64 bytesTotal() const { return m_bytesTotal; }
     float downloadSpeed() const { return m_downloadSpeed; }
 
+    /// #1036: parse `Content-Range: <unit> <first>-<last>/<total|*>`. The unit
+    /// is case-insensitive (RFC 9110 §14.1). Returns false unless first AND
+    /// last parsed; `total` is -1 for "*" (unknown). Pure — unit-tested directly.
+    static bool parseContentRange(const QByteArray& header,
+                                  qint64& first, qint64& last, qint64& total);
+    // NB: plain `public:`, NOT a slot — moc cannot register qint64& as a meta type.
+
 public slots:
     /// Start a download. #1029 (CWE-494):
     ///  - `url` MUST be https://<host> (or a host-less file:// for local
@@ -106,6 +113,11 @@ private:
     /// #1036: true until the FIRST readyRead of a resumed request has proven
     /// the server honoured our Range header (206 + matching Content-Range).
     bool m_resumeUnverified = false;
+    /// #1036: on the first bytes of a resumed request, decide whether the
+    /// server honoured our Range. Returns true to keep writing (appending, or
+    /// restarted from byte 0 after a truncate), false when the download was
+    /// aborted because the body is a partial window we cannot use.
+    bool verifyResumeResponse();
 
     bool m_isDownloading = false;
     bool m_isPaused = false;
