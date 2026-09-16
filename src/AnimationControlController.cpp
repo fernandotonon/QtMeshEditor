@@ -2183,6 +2183,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
+    // #1023/#954: per-role bind->reference roll. The CLI has always passed
+    // this; the GUI did not, so an identical prompt produced a DIFFERENT roll
+    // treatment here than from `qtmesh anim --generate`.
+    std::vector<float> clipRefRoll;
     std::vector<float> clipRootY;
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
     std::vector<std::array<float, 3>> clipFingerRest;             // #838
@@ -2248,6 +2252,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             worldFrame = lib.isWorldFrame();
             cmuRest = sel.restWorld.empty() ? lib.cmuRestWorld() : sel.restWorld;
             clipDirs = sel.restDir;
+            clipRefRoll = sel.refRoll;   // #1023
             clipRootY = sel.rootY;
             if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
                 clipFingers = sel.fingers;
@@ -2267,6 +2272,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRefRoll = clip.refRoll;   // #1023 bind-anchored roll
         clipRootY = clip.rootY;
         // V2 (schema v4, 52 joints): fingers retarget as canonical joints via
         // the body path — don't ALSO fire the applyFingerCurl side-channel
@@ -2317,7 +2323,9 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
                                                       clipSource == QStringLiteral("model"),
-                                                      clipRootY, doDescent);
+                                                      clipRootY, doDescent,
+                                                      /*cmuLibraryHandedness=*/true,
+                                                      clipRefRoll);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

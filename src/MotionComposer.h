@@ -51,7 +51,13 @@ public:
         std::vector<float> rootY;        ///< per-frame descent, empty when flat
         std::vector<std::array<float, 3>> restDir;   ///< from the first take
         std::vector<std::array<float, 4>> restWorld; ///< from the first take
-        std::vector<float> refRoll;                  ///< from the first take
+        /// #1023: per-clip bind->reference roll, carried ONLY for a
+        /// single-take composition. Takes disagree (measured up to 226 deg),
+        /// and applyMotionClip applies it as one constant across every frame,
+        /// so a stitched clip would wear the first take's baseline throughout.
+        /// Empty on a multi-take composition (legacy path) until a per-frame
+        /// baseline exists.
+        std::vector<float> refRoll;
         int fps = 30;
         int jointCount = 22;
         std::vector<QString> actions;    ///< one entry per composed step

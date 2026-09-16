@@ -298,8 +298,9 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     // bind-referenced path rather than the standing-pose fallback.
     out.restDir = seed.restDir;
     out.restWorld = seed.restWorld;
-    out.refRoll = seed.refRoll;
     out.fingerRestDir = seed.fingerRestDir;
+    // refRoll is assigned below, gated on singleTake — unlike restDir/restWorld
+    // it is NOT a rig-level constant (see the note there).
 
     // ---- 2. Stitch ---------------------------------------------------------
     const bool wantRootY =
@@ -317,6 +318,21 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     if (out.singleTake
         && pieces.front().fingers.size() == pieces.front().quats.size())
         out.fingers = pieces.front().fingers;
+
+    // #1023 review: refRoll survives only a SINGLE-take composition, for the
+    // same reason fingers do. restDir/restWorld describe the SOURCE RIG and
+    // are shared by every take, so carrying the first is correct; refRoll is
+    // the per-clip bind->REFERENCE roll and the reference frame is chosen per
+    // extraction, so takes genuinely disagree — measured up to 3.94 rad (226
+    // deg) between library clips, and 2.13 rad (122 deg) between run and
+    // punch, a pairing a composed prompt can actually produce.
+    // applyMotionClip adds refRoll as one per-role constant across EVERY
+    // frame, so a multi-take clip would apply the first take's baseline over
+    // the others' segments. Correct handling is a PER-FRAME baseline, which
+    // needs a new applyMotionClip parameter; until then, emitting nothing is
+    // strictly better than emitting a known-wrong constant (empty => the
+    // pre-#954 legacy path, which shipped for months).
+    if (out.singleTake) out.refRoll = seed.refRoll;
 
     for (size_t i = 1; i < pieces.size(); ++i) {
         const Piece& nextP = pieces[i];

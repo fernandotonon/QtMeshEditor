@@ -4786,6 +4786,10 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         int fps = 30; bool worldFrame = false;
         std::vector<std::array<float, 4>> cmuRest;
         std::vector<std::array<float, 3>> clipDirs;
+        // #1023/#954: per-role bind->reference roll. The CLI has always passed
+        // this; MCP did not, so an identical prompt produced a DIFFERENT roll
+        // treatment here than from `qtmesh anim --generate`.
+        std::vector<float> clipRefRoll;
         std::vector<float> clipRootY;          // #838 non-locomotion hip drop
         bool gotClip = false;
         // #1010 composed path: the optional `script` arg supplies the timeline
@@ -4855,6 +4859,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 cmuRest = sel.restWorld.empty() ? lib.cmuRestWorld()
                                                 : sel.restWorld;
                 clipDirs = sel.restDir;
+                clipRefRoll = sel.refRoll;   // #1023
                 clipRootY = sel.rootY;
                 clipSource = QStringLiteral("template");
                 composedSteps = sel.steps;
@@ -4869,6 +4874,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                              : clip.restWorld;
             clipDirs = clip.restDir;
+            clipRefRoll = clip.refRoll;   // #1023 bind-anchored roll
             clipRootY = clip.rootY;
             clipSource = QStringLiteral("template");
             selDescent = MotionLibrary::isVerticalDescentAction(action);
@@ -4903,7 +4909,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                         clipSource == QStringLiteral("model"),
                                                         clipRootY,
                                                         args.value("vertical_descent").toBool(true)
-                                                        && selDescent);
+                                                        && selDescent,
+                                                        /*cmuLibraryHandedness=*/true,
+                                                        clipRefRoll);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         // #837 quality post-pass (ON by default): sparse-bake temporal
