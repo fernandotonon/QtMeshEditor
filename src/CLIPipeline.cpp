@@ -2688,8 +2688,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         // --model (no arg, anim subcommand): opt into the EXPERIMENTAL trained
         // text-to-motion model for --generate; falls back to the template library
-        // automatically if the model is unavailable.
-        if (arg == "--model" && generateMode) { generateUseModel = true; continue; }
+        // automatically if the model is unavailable. Recorded regardless of
+        // position: it used to require generateMode to be ALREADY true, so
+        // `--model --generate "..."` silently ran the template path — a
+        // flag-order trap with no diagnostic. Validated after the loop.
+        if (arg == "--model") { generateUseModel = true; continue; }
         // --variant N: curation harness — render a SPECIFIC template clip index
         // (from `qtmesh anim <file> --list-variants`) instead of the random pick.
         if (arg == "--variant" && i + 1 < argc) {
@@ -2814,6 +2817,12 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.
+    if (generateUseModel && !generateMode) {
+        err() << "Error: --model applies only to --generate (it selects the trained "
+                 "text-to-motion model)." << Qt::endl;
+        return 2;
+    }
+
     if (generateMode) {
         if (generatePrompt.trimmed().isEmpty()) {
             err() << "Error: --generate requires a prompt, e.g. --generate \"walking\"." << Qt::endl;
