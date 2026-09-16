@@ -185,7 +185,7 @@ export const highlightFeatures = [
   },
   {
     title: 'REST API',
-    body: 'Drive mesh and scene operations from external tools and automation scripts.'
+    body: 'Drive mesh and scene operations from external tools and automation scripts. Opt-in and loopback-only by default; tools run via POST, with an optional bearer token for shared machines.'
   },
   {
     title: 'MCP / AI agent integration',
