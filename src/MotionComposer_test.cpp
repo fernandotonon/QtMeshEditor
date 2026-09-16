@@ -629,3 +629,45 @@ TEST(MotionComposer, SelectForPromptPropagatesTheRefRollGate)
     ASSERT_TRUE(many.composed);
     EXPECT_TRUE(many.refRoll.empty()) << "a stitched clip drops it";
 }
+
+// ---- #1034: library-free multi-step detection ------------------------------
+
+TEST(MotionComposer, PromptHasMultipleStepsMatchesTheParserSplit)
+{
+    // The trained-model path consults this BEFORE loading the library, so it
+    // must agree with parse()'s own segmentation or the two disagree about
+    // where a prompt divides.
+    const MotionLibrary lib = makeLib({{"walk", 10}, {"sit", 10}, {"wave", 10}});
+    for (const char* p : {"walk then sit",
+                          "walk, sit",
+                          "walk and sit",
+                          "walk then sit then wave"}) {
+        const QString prompt = QString::fromLatin1(p);
+        EXPECT_TRUE(MotionComposer::promptHasMultipleSteps(prompt)) << p;
+        EXPECT_GT(MotionComposer::parse(prompt, lib).steps.size(), 1u) << p;
+    }
+}
+
+TEST(MotionComposer, SingleActionPromptIsNotMultiStep)
+{
+    // A lone action — with or without a repeat/duration — is ONE take, so the
+    // model path must stay available for it. Reporting true here would
+    // silently disable the trained model for every ordinary prompt.
+    const MotionLibrary lib = makeLib({{"wave", 10}, {"walk", 10}});
+    for (const char* p : {"wave", "wave twice", "walk for 3 seconds"}) {
+        const QString prompt = QString::fromLatin1(p);
+        EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(prompt)) << p;
+    }
+}
+
+TEST(MotionComposer, MultiStepDetectionNeedsNoLibraryAndIsConservative)
+{
+    // Deliberately counts SEGMENTS, not resolvable actions: an unknown second
+    // fragment still means the prompt asked for a sequence, and the template
+    // path is the one that can report the unresolved fragment.
+    EXPECT_TRUE(MotionComposer::promptHasMultipleSteps(
+        QStringLiteral("walk then flibbertigibbet")));
+    EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(QStringLiteral("")));
+    EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(
+        QStringLiteral("flibbertigibbet")));
+}

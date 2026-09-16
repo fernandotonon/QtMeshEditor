@@ -2265,6 +2265,16 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     bool selDescent = false;
 
     bool gotClip = false;
+    // #1034: the trained model consumes the WHOLE prompt as one text condition
+    // and emits ONE clip, so a sequenced prompt comes back as a single averaged
+    // pose. Composition lives only on the template path — route there and say
+    // so on stderr rather than silently returning a blend.
+    if (useModel && MotionComposer::promptHasMultipleSteps(prompt)) {
+        useModel = false;
+        err() << "Note: multi-step prompt — using the template library "
+                 "(the trained model generates a single motion)." << Qt::endl;
+    }
+
     if (useModel) {
         const QString mp = MotionGenerator::ensureModelBlocking();
         if (mp.isEmpty()) {

@@ -82,6 +82,21 @@ public:
     /// take alone: composing is then equivalent to the old single-clip path.
     static Script parse(const QString& prompt, const MotionLibrary& lib);
 
+    /// #1034: does this prompt describe MORE THAN ONE step?
+    ///
+    /// Splits on the same connectives `parse` uses ("then", ",", "and", …) but
+    /// needs NO MotionLibrary, so a caller can ask before paying for the
+    /// library download/parse. Deliberately conservative: it counts segments,
+    /// not resolvable actions, so "walk then flibbertigibbet" reports true and
+    /// the caller routes to the path that can at least report the unresolved
+    /// fragment. A single action with a repeat or duration ("wave twice") is
+    /// NOT multi-step — one take covers it.
+    ///
+    /// Exists because the trained-model path (MotionGenerator) consumes the
+    /// whole prompt as one text condition and emits one clip, silently
+    /// blending a sequenced prompt into a single averaged pose.
+    static bool promptHasMultipleSteps(const QString& prompt);
+
     /// Parse a MotionScript JSON payload (the shape an LLM or an MCP caller
     /// supplies directly): {"steps":[{"action":"walk","repeat":1,
     /// "duration_s":2.0}, …]}. Actions still resolve through the library, so an

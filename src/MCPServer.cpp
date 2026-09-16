@@ -4777,7 +4777,17 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
 
         const double duration = args.value("duration").toDouble(0.0);
         // A variant_index forces the template path (no model, no random match).
-        const bool useModel = !hasVariant && args.value("model").toBool(false);
+        bool useModel = !hasVariant && args.value("model").toBool(false);
+        // #1034: the trained model consumes the WHOLE prompt as one text
+        // condition and emits ONE clip, so a sequenced prompt comes back as a
+        // single averaged pose. Composition lives only on the template path.
+        QString modelSkipNote;
+        if (useModel && MotionComposer::promptHasMultipleSteps(prompt)) {
+            useModel = false;
+            modelSkipNote = QStringLiteral(
+                "multi-step prompt — used the template library "
+                "(the trained model generates a single motion)");
+        }
 
         // Acquire the canonical clip: EXPERIMENTAL trained model first (when
         // model:true), else the reliable TEMPLATE library (also the fallback).
@@ -4993,6 +5003,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             for (const QString& u : unresolvedSteps) un.append(u);
             content["unresolved"] = un;
         }
+        // #1034: a caller that asked for model:true and got the template path
+        // must be told WHY, or it reads as the flag being ignored.
+        if (!modelSkipNote.isEmpty()) content["model_skipped"] = modelSkipNote;
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
             QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));

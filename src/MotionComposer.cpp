@@ -110,6 +110,14 @@ MotionComposer::Script MotionComposer::parse(const QString& prompt,
     return out;
 }
 
+bool MotionComposer::promptHasMultipleSteps(const QString& prompt)
+{
+    // Same splitter parse() uses, so the two can never disagree about where a
+    // prompt divides — but library-free, so the model path can consult it
+    // before deciding whether to load the library at all.
+    return segment(prompt).size() > 1;
+}
+
 MotionComposer::Script MotionComposer::parseJson(const QByteArray& json,
                                                  const MotionLibrary& lib)
 {

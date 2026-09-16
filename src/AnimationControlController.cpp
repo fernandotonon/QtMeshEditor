@@ -2196,6 +2196,20 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // path and that exact clip (no model, no random matchAmong).
     if (variantIndex >= 0) useModel = false;
 
+    // #1034: the trained model consumes the WHOLE prompt as one text condition
+    // and emits ONE clip, so a sequenced prompt ("walk then punch, wave twice
+    // then sit") comes back as a single averaged pose — every action at once.
+    // Composition lives only on the template path, so route there and SAY SO;
+    // silently handing back a blend is the failure mode this fixes.
+    const bool multiStep = MotionComposer::promptHasMultipleSteps(prompt);
+    if (useModel && multiStep) {
+        useModel = false;
+        emit generateMotionStatus(
+            QStringLiteral("Multi-step prompt — using the template library "
+                           "(the trained model generates a single motion)."),
+            false);
+    }
+
     if (useModel) {
         const QString mp = MotionGenerator::ensureModelBlocking();
         if (!mp.isEmpty()) {
