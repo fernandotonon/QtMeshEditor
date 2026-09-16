@@ -2767,6 +2767,16 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             positional << arg;
     }
 
+    // --model is meaningful only with --generate. Validate here, straight after
+    // parsing, so it is rejected on EVERY path — including the Alembic
+    // `<clip>.abc --info` early return below (review on the flag-order PR).
+    if (generateUseModel && !generateMode) {
+        err() << "Error: --model applies only to --generate (it selects the trained "
+                 "text-to-motion model)." << Qt::endl;
+        return 2;
+    }
+
+
     if (positional.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         return 2;
@@ -2817,12 +2827,6 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.
-    if (generateUseModel && !generateMode) {
-        err() << "Error: --model applies only to --generate (it selects the trained "
-                 "text-to-motion model)." << Qt::endl;
-        return 2;
-    }
-
     if (generateMode) {
         if (generatePrompt.trimmed().isEmpty()) {
             err() << "Error: --generate requires a prompt, e.g. --generate \"walking\"." << Qt::endl;
