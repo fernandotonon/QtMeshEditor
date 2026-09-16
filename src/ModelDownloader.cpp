@@ -142,6 +142,7 @@ void ModelDownloader::startDownload(const QString &url, const QString &destinati
     m_currentModelName = modelName;
     m_tempFilePath = destinationPath + ".part";
     m_resumeOffset = 0;
+    m_expectedTotalBytes = -1;
     m_bytesReceived = 0;
     m_bytesTotal = 0;
     m_progress = 0.0f;
@@ -299,6 +300,8 @@ void ModelDownloader::cancelDownload()
     m_progress = 0.0f;
     m_downloadSpeed = 0.0f;
     m_resumeOffset = 0;
+    m_expectedTotalBytes = -1;
+    m_resumeUnverified = false;
 
     emit isDownloadingChanged();
     emit currentModelNameChanged();
@@ -361,8 +364,14 @@ bool ModelDownloader::verifyResumeResponse()
     qint64 total = -1;
     const bool parsed = status == 206
         && parseContentRange(m_currentReply->rawHeader("Content-Range"), first, last, total);
-    if (parsed && first == m_resumeOffset)
+    // Honoured = starts where we asked AND reaches the resource end (review:
+    // `bytes 9-10/13` starts right but leaves 11-12 missing — appending it and
+    // renaming on finish would promote an incomplete file). An unknown total
+    // ("*") cannot be checked here; the size check at finish stays unknown too.
+    if (parsed && first == m_resumeOffset && (total < 0 || last == total - 1)) {
+        m_expectedTotalBytes = total;
         return true;   // honoured: keep appending
+    }
 
     // A 206 whose window is the WHOLE resource (0..total-1) is a full body
     // wearing a partial status — safe to truncate and take. Any OTHER 206
@@ -374,10 +383,7 @@ bool ModelDownloader::verifyResumeResponse()
         qCritical() << "ModelDownloader: unusable 206 for" << m_currentModelName
                     << "— asked from byte" << m_resumeOffset << "got Content-Range first="
                     << first << "last=" << last << "total=" << total << "— aborting";
-        m_outputFile->close();
-        QFile::remove(m_tempFilePath);   // next attempt must start clean, not resume this
-        m_currentReply->abort();
-        emit downloadError(m_currentModelName,
+        discardPartialAndFail(
             QString("The server answered the resume request with a partial range that "
                     "does not match (asked from byte %1, got %2-%3/%4); the partial file "
                     "was discarded — retry to download from the start.")
@@ -404,7 +410,63 @@ bool ModelDownloader::verifyResumeResponse()
     // The whole body is arriving; progress must not add the offset.
     m_resumeOffset = 0;
     m_bytesReceived = 0;
+    // Its size is what the response says it is (a 206 covering 0..total-1
+    // carries the total; a 200 carries Content-Length), -1 when neither.
+    if (parsed && total > 0) m_expectedTotalBytes = total;
+    else {
+        const QVariant cl = m_currentReply->header(QNetworkRequest::ContentLengthHeader);
+        m_expectedTotalBytes = cl.isValid() && cl.toLongLong() > 0 ? cl.toLongLong() : -1;
+    }
     return true;
+}
+
+void ModelDownloader::discardPartialAndFail(const QString& message)
+{
+    const QString name = m_currentModelName;
+    m_speedTimer->stop();
+    if (m_outputFile) {
+        m_outputFile->close();
+        delete m_outputFile;
+        m_outputFile = nullptr;
+    }
+    // Remove the poisoned partial; if removal fails, truncate it so a later
+    // attempt starts from byte 0 instead of resuming from garbage (the same
+    // fallback the SHA-256 path uses). Then reset the resume bookkeeping —
+    // review: resumeDownload() derives its offset from m_bytesReceived, and a
+    // stale value would re-request the old range against a fresh, empty file.
+    if (!m_tempFilePath.isEmpty() && !QFile::remove(m_tempFilePath)) {
+        QFile trunc(m_tempFilePath);
+        if (trunc.open(QIODevice::WriteOnly | QIODevice::Truncate)) trunc.close();
+        else qCritical() << "ModelDownloader: could not delete or truncate" << m_tempFilePath;
+    }
+    m_bytesReceived = 0;
+    m_resumeOffset = 0;
+    m_expectedTotalBytes = -1;
+    m_resumeUnverified = false;
+    if (QNetworkReply* reply = m_currentReply) {
+        // abort() delivers errorOccurred + finished synchronously for a
+        // same-thread reply; the flag makes both handlers step aside so this
+        // remains the only cleanup and the only downloadError. Detach the
+        // pointer FIRST so a handler that does run can never leave us holding
+        // a reply it already released.
+        m_currentReply = nullptr;
+        m_abortingInternally = true;
+        reply->abort();
+        m_abortingInternally = false;
+        reply->deleteLater();
+    }
+    m_isDownloading = false;
+    m_isPaused = false;
+    m_currentUrl.clear();
+    m_currentDestinationPath.clear();
+    m_currentModelName.clear();
+    m_tempFilePath.clear();
+    m_expectedSha256.clear();
+    m_downloadSpeed = 0.0f;
+    emit isDownloadingChanged();
+    emit currentModelNameChanged();
+    emit downloadSpeedChanged();
+    emit downloadError(name, message);
 }
 
 void ModelDownloader::onReadyRead()
@@ -440,6 +502,7 @@ void ModelDownloader::onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal
 
 void ModelDownloader::onDownloadFinished()
 {
+    if (m_abortingInternally) return;   // discardPartialAndFail() owns this cleanup
     m_speedTimer->stop();
 
     if (m_currentReply && m_currentReply->error() == QNetworkReply::NoError) {
@@ -449,6 +512,59 @@ void ModelDownloader::onDownloadFinished()
             m_outputFile->close();
             delete m_outputFile;
             m_outputFile = nullptr;
+        }
+
+        // #1036 review, completeness before promotion. Two ways a "successful"
+        // finish can still be an incomplete file:
+        // (a) the resume reply finished WITHOUT ever delivering data — the
+        //     verification in onReadyRead never ran, so the stale .part is
+        //     unvetted (a 200/206 with an empty body, e.g. a server that treats
+        //     an out-of-range Range as "nothing to send");
+        // (b) the body was shorter than the size the response committed to.
+        // Neither is "NoError" to QNAM, and without a digest nothing else would
+        // catch it — the reproduced #1036 file LOADED. Keep the .part: it is a
+        // valid prefix, so the next startDownload resumes it (and re-verifies).
+        QString incomplete;
+        const qint64 actual = QFileInfo(m_tempFilePath).size();
+        if (m_resumeUnverified) {
+            incomplete = QStringLiteral("the server answered the resume request without any "
+                                        "data, so the partial file could not be verified");
+        } else {
+            qint64 expected = m_expectedTotalBytes;
+            if (expected < 0 && m_resumeOffset == 0) {
+                const QVariant cl = m_currentReply->header(QNetworkRequest::ContentLengthHeader);
+                if (cl.isValid() && cl.toLongLong() > 0) expected = cl.toLongLong();
+            }
+            if (expected >= 0 && actual != expected)
+                incomplete = QStringLiteral("received %1 of %2 bytes").arg(actual).arg(expected);
+            else if (expected < 0 && m_expectedSha256.isEmpty())
+                qWarning() << "ModelDownloader:" << m_currentModelName
+                           << "— the server declared no size and no digest is configured; "
+                              "completeness of the" << actual << "byte file cannot be verified";
+        }
+        if (!incomplete.isEmpty()) {
+            qCritical() << "ModelDownloader: incomplete download for" << m_currentModelName
+                        << "—" << incomplete << "— not promoting the partial file";
+            emit downloadError(m_currentModelName,
+                QString("Download of %1 is incomplete: %2. The partial file was kept and "
+                        "will be resumed on the next attempt.").arg(m_currentModelName, incomplete));
+            m_resumeUnverified = false;
+            // shared cleanup below; the .part stays in place for a resume
+            if (m_currentReply) { m_currentReply->deleteLater(); m_currentReply = nullptr; }
+            m_isDownloading = false;
+            m_isPaused = false;
+            m_currentUrl.clear();
+            m_currentDestinationPath.clear();
+            m_currentModelName.clear();
+            m_tempFilePath.clear();
+            m_expectedSha256.clear();
+            m_resumeOffset = 0;
+            m_expectedTotalBytes = -1;
+            m_downloadSpeed = 0.0f;
+            emit isDownloadingChanged();
+            emit currentModelNameChanged();
+            emit downloadSpeedChanged();
+            return;
         }
 
         // #1029: verify the WHOLE finished .part file on disk, never a running
@@ -527,6 +643,7 @@ void ModelDownloader::onDownloadFinished()
     m_tempFilePath.clear();
     m_expectedSha256.clear();   // #1029: never let one download's digest leak into the next
     m_resumeOffset = 0;
+    m_expectedTotalBytes = -1;
     m_downloadSpeed = 0.0f;
 
     emit isDownloadingChanged();
@@ -536,8 +653,8 @@ void ModelDownloader::onDownloadFinished()
 
 void ModelDownloader::onDownloadError(QNetworkReply::NetworkError error)
 {
-    if (error == QNetworkReply::OperationCanceledError && m_isPaused) {
-        // This is expected when pausing
+    if (error == QNetworkReply::OperationCanceledError && (m_isPaused || m_abortingInternally)) {
+        // Expected: pausing, or our own abort inside discardPartialAndFail()
         return;
     }
 

@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QCryptographicHash>
 #include <QThread>
@@ -31,7 +32,19 @@ public:
         setFinished(errorCode == QNetworkReply::NoError);
     }
 
-    void abort() override {}
+    /// #1036 review: a real same-thread reply delivers errorOccurred + finished
+    /// SYNCHRONOUSLY from abort(). Off by default (older tests never abort);
+    /// the single-error test turns it on to prove the handlers step aside.
+    bool signalOnAbort = false;
+    void abort() override
+    {
+        if (!signalOnAbort) return;
+        setError(QNetworkReply::OperationCanceledError, QStringLiteral("Operation canceled"));
+        emit errorOccurred(QNetworkReply::OperationCanceledError);
+        setFinished(true);
+        emit finished();
+    }
+    void withContentLength(qint64 n) { setHeader(QNetworkRequest::ContentLengthHeader, n); }
 
     /// #1036: model a server that honoured `Range: bytes=<first>-`.
     FakeNetworkReply* withPartialContent(qint64 first, qint64 last, qint64 total,
@@ -740,6 +753,220 @@ TEST_F(ModelDownloaderTest, ResumeAgainst206WithForeignPartialWindowAbortsAndDis
 
 
 // ---- #1036: the Content-Range parser, tested directly -----------------------
+
+// --- #1036 review round: completeness before promotion, one error per failure ---
+
+namespace {
+void seedPartial(const QString& path, const QByteArray& bytes)
+{
+    QFile seed(path);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write(bytes);
+    seed.close();
+}
+} // namespace
+
+TEST_F(ModelDownloaderTest, ResumeAgainst206ShortWindowIsRejectedNotAppended)
+{
+    // `bytes 9-10/13` starts where we asked but stops short of the end: taking
+    // it and renaming on finish would promote a 11-byte file as the 13-byte
+    // model. Reviewer's exact case.
+    const QString partialPath = tempFilePath("shortwin.bin.part");
+    seedPartial(partialPath, "FIRSTPART");   // 9
+    downloader->m_currentModelName = "ShortWin";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 9;
+    downloader->m_bytesReceived = 9;
+    downloader->m_resumeUnverified = true;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("RE", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(9, 10, 13);
+    downloader->m_currentReply = reply;
+    QSignalSpy errors(downloader, &ModelDownloader::downloadError);
+
+    downloader->onReadyRead();
+
+    EXPECT_EQ(errors.count(), 1);
+    EXPECT_FALSE(QFile::exists(partialPath)) << "an unusable window must not leave a resumable prefix";
+    EXPECT_EQ(downloader->m_resumeOffset, 0);
+    EXPECT_EQ(downloader->m_bytesReceived, 0);
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_EQ(downloader->m_currentReply, nullptr);
+}
+
+TEST_F(ModelDownloaderTest, ForeignWindowEmitsExactlyOneErrorEvenWhenAbortSignalsSynchronously)
+{
+    // Reviewer: abort() runs onDownloadError() (and finished) before returning,
+    // so the old code emitted a generic error, ran a cleanup, and THEN emitted
+    // the range-mismatch error. One failure, one downloadError.
+    const QString partialPath = tempFilePath("oneerr.bin.part");
+    seedPartial(partialPath, "ABCDE");
+    downloader->m_currentModelName = "OneErr";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 5;
+    downloader->m_bytesReceived = 5;
+    downloader->m_resumeUnverified = true;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("XYZ", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(100, 102, 500);   // foreign window
+    reply->signalOnAbort = true;
+    downloader->m_currentReply = reply;
+    // Wire the reply exactly as resumeDownload() does — without these the
+    // synchronous abort signals reach nobody and the test proves nothing
+    // (a mutant with the guard removed passed the first version of this test).
+    QObject::connect(reply, &QNetworkReply::finished, downloader, &ModelDownloader::onDownloadFinished);
+    QObject::connect(reply, &QNetworkReply::errorOccurred, downloader, &ModelDownloader::onDownloadError);
+    QSignalSpy errors(downloader, &ModelDownloader::downloadError);
+    QSignalSpy completed(downloader, &ModelDownloader::downloadCompleted);
+    QSignalSpy downloadingChanged(downloader, &ModelDownloader::isDownloadingChanged);
+
+    downloader->onReadyRead();
+
+    ASSERT_EQ(errors.count(), 1) << "exactly one downloadError for one failure";
+    EXPECT_EQ(downloadingChanged.count(), 1)
+        << "one cleanup: onDownloadFinished must step aside during our own abort";
+    EXPECT_TRUE(errors.at(0).at(1).toString().contains("does not match"));
+    EXPECT_EQ(completed.count(), 0);
+    EXPECT_FALSE(QFile::exists(partialPath));
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_FALSE(downloader->m_isPaused) << "a discarded partial is not resumable";
+}
+
+TEST_F(ModelDownloaderTest, FinishedWithoutBodyWhileResumeUnverifiedDoesNotRename)
+{
+    // Reviewer: an empty successful reply emits finished without readyRead, so
+    // the verification never ran — the stale .part must not be promoted.
+    const QString dest = tempFilePath("nobody.bin");
+    const QString partialPath = dest + ".part";
+    seedPartial(partialPath, "STALEPREFIX");
+    downloader->m_currentModelName = "NoBody";
+    downloader->m_currentDestinationPath = dest;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 11;
+    downloader->m_bytesReceived = 11;
+    downloader->m_resumeUnverified = true;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    downloader->m_currentReply = new FakeNetworkReply(QByteArray(), QNetworkReply::NoError, {}, downloader);
+    QSignalSpy errors(downloader, &ModelDownloader::downloadError);
+    QSignalSpy completed(downloader, &ModelDownloader::downloadCompleted);
+
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(completed.count(), 0);
+    EXPECT_FALSE(QFile::exists(dest)) << "stale prefix must not become the model";
+    ASSERT_EQ(errors.count(), 1);
+    EXPECT_TRUE(errors.at(0).at(1).toString().contains("without any data"));
+    EXPECT_TRUE(QFile::exists(partialPath)) << "kept: a valid prefix for the next resume";
+}
+
+TEST_F(ModelDownloaderTest, HonouredResumeWithShortBodyIsNotRenamed)
+{
+    // Range honoured (9-12/13) but the connection delivered only 3 of the 4
+    // bytes: the .part is 12 bytes against a committed total of 13.
+    const QString dest = tempFilePath("shortbody.bin");
+    const QString partialPath = dest + ".part";
+    seedPartial(partialPath, "FIRSTPART");   // 9
+    downloader->m_currentModelName = "ShortBody";
+    downloader->m_currentDestinationPath = dest;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 9;
+    downloader->m_bytesReceived = 9;
+    downloader->m_resumeUnverified = true;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("RES", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(9, 12, 13);
+    downloader->m_currentReply = reply;
+    QSignalSpy errors(downloader, &ModelDownloader::downloadError);
+    QSignalSpy completed(downloader, &ModelDownloader::downloadCompleted);
+
+    downloader->onReadyRead();
+    EXPECT_EQ(downloader->m_expectedTotalBytes, 13);
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(completed.count(), 0);
+    EXPECT_FALSE(QFile::exists(dest));
+    ASSERT_EQ(errors.count(), 1);
+    EXPECT_TRUE(errors.at(0).at(1).toString().contains("received 12 of 13 bytes"));
+    EXPECT_EQ(QFileInfo(partialPath).size(), 12) << "kept for resume";
+}
+
+TEST_F(ModelDownloaderTest, FreshDownloadShorterThanContentLengthIsNotRenamed)
+{
+    const QString dest = tempFilePath("freshshort.bin");
+    const QString partialPath = dest + ".part";
+    downloader->m_currentModelName = "FreshShort";
+    downloader->m_currentDestinationPath = dest;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate));
+    auto* reply = new FakeNetworkReply("1234", QNetworkReply::NoError, {}, downloader);
+    reply->withContentLength(10);
+    downloader->m_currentReply = reply;
+    QSignalSpy errors(downloader, &ModelDownloader::downloadError);
+
+    downloader->onReadyRead();
+    downloader->onDownloadFinished();
+
+    EXPECT_FALSE(QFile::exists(dest));
+    ASSERT_EQ(errors.count(), 1);
+    EXPECT_TRUE(errors.at(0).at(1).toString().contains("received 4 of 10 bytes"));
+}
+
+TEST_F(ModelDownloaderTest, FreshDownloadMatchingContentLengthIsRenamed)
+{
+    const QString dest = tempFilePath("freshok.bin");
+    const QString partialPath = dest + ".part";
+    downloader->m_currentModelName = "FreshOk";
+    downloader->m_currentDestinationPath = dest;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate));
+    auto* reply = new FakeNetworkReply("1234567890", QNetworkReply::NoError, {}, downloader);
+    reply->withContentLength(10);
+    downloader->m_currentReply = reply;
+    QSignalSpy completed(downloader, &ModelDownloader::downloadCompleted);
+
+    downloader->onReadyRead();
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(completed.count(), 1);
+    EXPECT_TRUE(QFile::exists(dest));
+}
+
+TEST_F(ModelDownloaderTest, UnknownLengthWithoutDigestIsAcceptedWithWarning)
+{
+    // Documented compatibility choice: a server that declares no size (chunked
+    // transfer) and no configured digest leaves nothing to check against, so
+    // the file is accepted with a warning rather than refused. HF/GitHub and
+    // QNAM's file:// backend always send Content-Length, so the strict path is
+    // the one real downloads take.
+    const QString dest = tempFilePath("nolen.bin");
+    const QString partialPath = dest + ".part";
+    downloader->m_currentModelName = "NoLen";
+    downloader->m_currentDestinationPath = dest;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_isDownloading = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate));
+    downloader->m_currentReply = new FakeNetworkReply("abc", QNetworkReply::NoError, {}, downloader);
+    QSignalSpy completed(downloader, &ModelDownloader::downloadCompleted);
+
+    downloader->onReadyRead();
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(completed.count(), 1);
+    EXPECT_TRUE(QFile::exists(dest));
+}
 
 TEST_F(ModelDownloaderTest, ContentRangeParserHandlesUnitCaseAndUnknownTotal)
 {
