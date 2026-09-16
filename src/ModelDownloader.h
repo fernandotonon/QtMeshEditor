@@ -103,6 +103,9 @@ private:
     QString m_currentModelName;
     QString m_tempFilePath;
     QString m_expectedSha256;   ///< #1029 — empty = no verification
+    /// #1036: true until the FIRST readyRead of a resumed request has proven
+    /// the server honoured our Range header (206 + matching Content-Range).
+    bool m_resumeUnverified = false;
 
     bool m_isDownloading = false;
     bool m_isPaused = false;

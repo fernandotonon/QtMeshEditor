@@ -181,6 +181,7 @@ void ModelDownloader::startDownload(const QString &url, const QString &destinati
         QString rangeHeader = QString("bytes=%1-").arg(m_resumeOffset);
         request.setRawHeader("Range", rangeHeader.toUtf8());
     }
+    m_resumeUnverified = m_resumeOffset > 0;   // #1036: prove the Range was honoured
 
     m_currentReply = m_networkManager->get(request);
 
@@ -248,6 +249,7 @@ void ModelDownloader::resumeDownload()
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     QString rangeHeader = QString("bytes=%1-").arg(m_resumeOffset);
     request.setRawHeader("Range", rangeHeader.toUtf8());
+    m_resumeUnverified = true;   // #1036
 
     m_currentReply = m_networkManager->get(request);
 
@@ -313,10 +315,62 @@ void ModelDownloader::cancelDownload()
 
 void ModelDownloader::onReadyRead()
 {
-    if (m_outputFile && m_currentReply) {
-        QByteArray data = m_currentReply->readAll();
-        m_outputFile->write(data);
+    if (!m_outputFile || !m_currentReply) return;
+
+    // #1036: a resume sends `Range: bytes=N-`, but nothing guaranteed the
+    // server HONOURED it. One that ignores Range (file:// always does; any
+    // proxy/CDN that strips the header will) answers 200 with the WHOLE body,
+    // and appending that after the stale .part produced a corrupt model —
+    // reproduced: a 29-byte stale prefix yielded a 208,044,845-byte file that
+    // still LOADED and ran (ORT parsed the garbage as an unknown protobuf
+    // field). A load success proves nothing; only the response can tell us
+    // which bytes these are. So on the first bytes of a resumed request we
+    // require 206 + a Content-Range that starts exactly at our offset;
+    // anything else means "this is the full body" — truncate and restart
+    // from byte 0, never append. Checked ONCE, on first readyRead, because the
+    // status/headers are available then and re-checking per chunk is waste.
+    if (m_resumeUnverified) {
+        m_resumeUnverified = false;
+        const int status = m_currentReply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        bool honoured = false;
+        if (status == 206) {
+            // Content-Range: bytes <first>-<last>/<total>  — <first> must be
+            // exactly our offset, or the server chose a different window and
+            // appending is still wrong.
+            const QByteArray cr = m_currentReply->rawHeader("Content-Range").trimmed();
+            const QByteArray prefix = QByteArrayLiteral("bytes ");
+            if (cr.startsWith(prefix)) {
+                const int dash = cr.indexOf('-', prefix.size());
+                bool ok = false;
+                const qint64 first = (dash > 0)
+                    ? cr.mid(prefix.size(), dash - prefix.size()).toLongLong(&ok) : -1;
+                honoured = ok && first == m_resumeOffset;
+            }
+        }
+        if (!honoured) {
+            qWarning() << "ModelDownloader: server ignored Range for" << m_currentModelName
+                       << "(status" << status << ") — discarding" << m_resumeOffset
+                       << "stale bytes and restarting from 0";
+            // Reopen truncated: the Append-mode handle would keep writing after
+            // the stale prefix. A failed reopen is fatal for this download —
+            // appending would be worse than stopping.
+            m_outputFile->close();
+            if (!m_outputFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                emit downloadError(m_currentModelName,
+                    QString("Server ignored the resume request and the partial file "
+                            "could not be reset: %1").arg(m_tempFilePath));
+                m_currentReply->abort();
+                return;
+            }
+            // The whole body is arriving; progress must not add the offset.
+            m_resumeOffset = 0;
+            m_bytesReceived = 0;
+        }
     }
+
+    QByteArray data = m_currentReply->readAll();
+    m_outputFile->write(data);
 }
 
 void ModelDownloader::onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)

@@ -20,6 +20,10 @@ public:
                               QObject* parent = nullptr)
         : QNetworkReply(parent), m_payload(payload)
     {
+        // #1036: default to a plain 200 with no Content-Range — exactly what a
+        // server that ignores Range returns. Tests that model an honoured
+        // resume call withPartialContent() explicitly.
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
         open(QIODevice::ReadOnly | QIODevice::Unbuffered);
         setUrl(QUrl("https://example.invalid/model.bin"));
         if (errorCode != QNetworkReply::NoError)
@@ -28,6 +32,16 @@ public:
     }
 
     void abort() override {}
+
+    /// #1036: model a server that honoured `Range: bytes=<first>-`.
+    FakeNetworkReply* withPartialContent(qint64 first, qint64 last, qint64 total)
+    {
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 206);
+        setRawHeader("Content-Range",
+                     QByteArray("bytes ") + QByteArray::number(first) + '-'
+                     + QByteArray::number(last) + '/' + QByteArray::number(total));
+        return this;
+    }
 
     qint64 bytesAvailable() const override
     {
@@ -538,4 +552,119 @@ TEST_F(ModelDownloaderTest, RejectedUrlErrorRedactsCredentialsAndQuery)
     EXPECT_FALSE(msg.contains("TOK123"))   << msg.toStdString();
     EXPECT_FALSE(msg.contains("alice"))    << msg.toStdString();
     EXPECT_TRUE (msg.contains("mirror.example.invalid/models/m.bin")) << msg.toStdString();
+}
+
+
+// ---- #1036: a resume must PROVE the server honoured Range -------------------
+
+TEST_F(ModelDownloaderTest, ResumeAgainst200RestartsFromZeroInsteadOfAppending)
+{
+    // The reproduced corruption: stale .part + a server that ignores Range
+    // (200, full body) => full body appended after the stale prefix. The
+    // result must be the payload ALONE.
+    const QString partialPath = tempFilePath("resume200.bin.part");
+    QFile seed(partialPath);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write("STALEPREFIX");           // 11 bytes the server never saw
+    seed.close();
+
+    downloader->m_currentModelName = "Resume200";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 11;
+    downloader->m_bytesReceived = 11;
+    downloader->m_resumeUnverified = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    downloader->m_currentReply = new FakeNetworkReply("FULLBODY", QNetworkReply::NoError, {}, downloader);
+
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->onReadyRead();
+    downloader->m_outputFile->flush();
+
+    QFile out(partialPath);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    EXPECT_EQ(out.readAll(), QByteArray("FULLBODY"))
+        << "stale prefix survived — the full body was appended, not written from 0";
+    EXPECT_EQ(downloader->m_resumeOffset, 0) << "progress would add a phantom offset";
+    EXPECT_EQ(downloader->m_bytesReceived, 0);
+    EXPECT_FALSE(downloader->m_resumeUnverified);
+    EXPECT_EQ(errorSpy.count(), 0) << "a 200 is recoverable, not an error";
+}
+
+TEST_F(ModelDownloaderTest, ResumeAgainst206WithMatchingRangeAppends)
+{
+    // The honoured case must be untouched: 206 + Content-Range starting at our
+    // offset => append, keep the offset.
+    const QString partialPath = tempFilePath("resume206.bin.part");
+    QFile seed(partialPath);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write("FIRSTPART");             // 9 bytes
+    seed.close();
+
+    downloader->m_currentModelName = "Resume206";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 9;
+    downloader->m_bytesReceived = 9;
+    downloader->m_resumeUnverified = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("REST", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(9, 12, 13);
+    downloader->m_currentReply = reply;
+
+    downloader->onReadyRead();
+    downloader->m_outputFile->flush();
+
+    QFile out(partialPath);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    EXPECT_EQ(out.readAll(), QByteArray("FIRSTPARTREST"));
+    EXPECT_EQ(downloader->m_resumeOffset, 9) << "an honoured resume must keep its offset";
+}
+
+TEST_F(ModelDownloaderTest, ResumeAgainst206WithWrongStartRestartsFromZero)
+{
+    // 206 but the window does not start at our offset: appending is still
+    // wrong (bytes would land in the wrong place). Treat like an ignored Range.
+    const QString partialPath = tempFilePath("resume206bad.bin.part");
+    QFile seed(partialPath);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write("ABCDE");                 // 5 bytes
+    seed.close();
+
+    downloader->m_currentModelName = "Resume206Bad";
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_resumeOffset = 5;
+    downloader->m_bytesReceived = 5;
+    downloader->m_resumeUnverified = true;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::Append));
+    auto* reply = new FakeNetworkReply("XYZ", QNetworkReply::NoError, {}, downloader);
+    reply->withPartialContent(0, 2, 3);  // server restarted from 0 on its own
+    downloader->m_currentReply = reply;
+
+    downloader->onReadyRead();
+    downloader->m_outputFile->flush();
+
+    QFile out(partialPath);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    EXPECT_EQ(out.readAll(), QByteArray("XYZ"));
+    EXPECT_EQ(downloader->m_resumeOffset, 0);
+}
+
+TEST_F(ModelDownloaderTest, FreshDownloadNeverRunsTheResumeCheck)
+{
+    // No resume => no Range => the 200 is exactly what we asked for. The
+    // check must not fire and must not truncate a fresh write.
+    const QString path = tempFilePath("fresh.bin.part");
+    downloader->m_resumeOffset = 0;
+    downloader->m_resumeUnverified = false;
+    downloader->m_outputFile = new QFile(path, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly));
+    downloader->m_currentReply = new FakeNetworkReply("hello", QNetworkReply::NoError, {}, downloader);
+
+    downloader->onReadyRead();
+    downloader->m_outputFile->flush();
+    QFile out(path);
+    ASSERT_TRUE(out.open(QIODevice::ReadOnly));
+    EXPECT_EQ(out.readAll(), QByteArray("hello"));
 }
