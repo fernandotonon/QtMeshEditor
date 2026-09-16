@@ -1,5 +1,6 @@
 #include "UniRigPredictor.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 
 #include <QDir>
@@ -617,30 +618,15 @@ QString UniRigPredictor::ensureModelBlocking()
                            const QString& label) -> bool {
         QDir().mkpath(QFileInfo(dest).absolutePath());
         const QString url = base + fileName;
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-            [&]() { timedOut = true; loop.quit(); });
-        // 30 min — UniRig is large (~1.44 GB across the 3 files; the decoder
-        // alone is 1.2 GB), so a generous cap for slow links; a truly dead
-        // connection still can't hang the synchronous rig call forever.
-        timeout.start(1800000);
-        dl->startDownload(url, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut) dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = url;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 1800000;
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        return fo.ok;
     };
 
     if (!QFileInfo::exists(enc) &&
