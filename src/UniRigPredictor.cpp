@@ -754,7 +754,7 @@ QString UniRigPredictor::ensureModelBlocking()
 
 // ---- Public entry + chooser: defined for EVERY build (review on #1048 — they
 // lived inside the ENABLE_ONNX branch and the default non-ONNX configuration
-// failed to link). Only predictOnce, the inference itself, is guarded.
+// failed to link). Only the ONNX predict() body, the inference itself, is guarded.
 const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, const Result& random)
 {
     if (fps.ok != random.ok) return fps.ok ? fps : random;
