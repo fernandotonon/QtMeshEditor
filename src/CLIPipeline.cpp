@@ -6326,10 +6326,12 @@ int CLIPipeline::cmdMaterialPhotoDepth(const QString& srcPath,
                  "(rebuild with -DENABLE_ONNX)." << Qt::endl;
         return 1;
     }
-    const QString model = PhotoDepth::ensureModelBlocking();
+    QString why;
+    const QString model = PhotoDepth::ensureModelBlocking(&why);
     if (model.isEmpty()) {
-        err() << "Error: the Depth-Anything-V2-Small model is unavailable "
-                 "(offline, or QTMESH_DEPTH_NO_DOWNLOAD is set)." << Qt::endl;
+        err() << "Error: the Depth-Anything-V2-Small model is unavailable: "
+              << (why.isEmpty() ? QStringLiteral("offline, or QTMESH_DEPTH_NO_DOWNLOAD is set") : why)
+              << Qt::endl;
         return 1;
     }
 
@@ -6395,10 +6397,12 @@ int CLIPipeline::cmdMaterialInpaint(const QString& srcPath,
                  "(rebuild with -DENABLE_ONNX)." << Qt::endl;
         return 1;
     }
-    const QString model = TextureInpaint::ensureModelBlocking();
+    QString why;
+    const QString model = TextureInpaint::ensureModelBlocking(&why);
     if (model.isEmpty()) {
-        err() << "Error: the LaMa inpainting model is unavailable "
-                 "(offline, or QTMESH_INPAINT_NO_DOWNLOAD is set)." << Qt::endl;
+        err() << "Error: the LaMa inpainting model is unavailable: "
+              << (why.isEmpty() ? QStringLiteral("offline, or QTMESH_INPAINT_NO_DOWNLOAD is set") : why)
+              << Qt::endl;
         return 1;
     }
 
