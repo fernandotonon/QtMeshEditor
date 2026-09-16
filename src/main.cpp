@@ -33,6 +33,7 @@
 #include "PropertiesPanelController.h"
 #include "ThemeManager.h"
 #include "MCPServer.h"
+#include <QHostAddress>
 #include "SentryReporter.h"
 #include "CLIPipeline.h"
 #include "AppConsoleLog.h"
@@ -171,6 +172,8 @@ int main(int argc, char *argv[])
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;
     int httpPort = 8080;
+    QString httpToken;      // #984: --http-token <secret> (else QTMESH_HTTP_TOKEN / QSettings)
+    QString httpBind;       // #984: --http-bind <addr>   (else QTMESH_HTTP_BIND / loopback)
     for (int i = 1; i < argc; ++i) {
         QString arg = QString(argv[i]);
         if (arg == "--mcp" || arg == "-mcp") {
@@ -179,8 +182,24 @@ int main(int argc, char *argv[])
             mcpWithGuiMode = true;
         } else if (arg == "--http-port" && i + 1 < argc) {
             httpPort = QString(argv[++i]).toInt();
+        } else if (arg == "--http-token" && i + 1 < argc) {
+            httpToken = QString(argv[++i]);
+        } else if (arg == "--http-bind" && i + 1 < argc) {
+            httpBind = QString(argv[++i]);
         }
     }
+    // Applies the CLI overrides before startHttp(); anything not given falls
+    // back to the env/QSettings resolution inside MCPServer.
+    auto configureHttp = [&](MCPServer &server) {
+        if (!httpToken.isEmpty()) server.setHttpToken(httpToken);
+        if (!httpBind.isEmpty()) {
+            const QHostAddress addr(httpBind);
+            if (addr.isNull())
+                qWarning() << "--http-bind" << httpBind << "is not a valid address — binding loopback";
+            else
+                server.setHttpBindAddress(addr);
+        }
+    };
 
     // When running in MCP mode, redirect stdout to stderr so that
     // Ogre/Qt debug output doesn't interfere with MCP JSON-RPC protocol.
@@ -216,6 +235,7 @@ int main(int argc, char *argv[])
         // Note: In standalone MCP mode, we don't have a MainWindow
         server.setOutputFd(savedStdoutFd);
         server.start();
+        configureHttp(server);
         server.startHttp(httpPort);
 
         return a.exec();
@@ -448,6 +468,7 @@ int main(int argc, char *argv[])
             mcpServer->setMainWindow(&w);
             mcpServer->setOutputFd(savedStdoutFd);
             mcpServer->start();
+            configureHttp(*mcpServer);
             mcpServer->startHttp(httpPort);
             w.setMCPServer(mcpServer);  // MainWindow takes ownership
             qDebug() << "MCP Server started alongside GUI";

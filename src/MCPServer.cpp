@@ -1,4 +1,5 @@
 #include "MCPServer.h"
+#include <QSettings>
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
 #include "TextureInpaint.h"
@@ -12889,15 +12890,120 @@ QJsonObject MCPServer::buildToolDefinition(const QString &name, const QString &d
 
 // HTTP REST API
 
+namespace {
+
+// Constant-time byte comparison so a token check does not leak how many
+// leading bytes matched through response timing.
+bool constantTimeEquals(const QByteArray &a, const QByteArray &b)
+{
+    if (a.size() != b.size()) return false;
+    unsigned char diff = 0;
+    for (int i = 0; i < a.size(); ++i)
+        diff |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    return diff == 0;
+}
+
+// One writer for every JSON reply so status line, CORS and framing cannot
+// drift between the branches.
+void writeHttpJson(QTcpSocket *socket, int status, const char *reason,
+                   const QJsonObject &json, const QByteArray &extraHeaders = {})
+{
+    const QByteArray body = QJsonDocument(json).toJson(QJsonDocument::Compact);
+    QByteArray resp;
+    resp.append(QStringLiteral("HTTP/1.1 %1 %2\r\n").arg(status).arg(QLatin1String(reason)).toUtf8());
+    resp.append("Content-Type: application/json\r\n");
+    resp.append("Access-Control-Allow-Origin: *\r\n");
+    resp.append(extraHeaders);
+    resp.append("Connection: close\r\n");
+    resp.append(QStringLiteral("Content-Length: %1\r\n").arg(body.size()).toUtf8());
+    resp.append("\r\n");
+    resp.append(body);
+    socket->write(resp);
+    socket->flush();
+    socket->deleteLater();
+}
+
+} // namespace
+
+void MCPServer::setHttpToken(const QString &token)
+{
+    m_httpToken = token;
+    m_httpTokenExplicit = true;
+}
+
+QString MCPServer::httpToken() const { return m_httpToken; }
+
+void MCPServer::setHttpBindAddress(const QHostAddress &address)
+{
+    m_httpBindAddress = address;
+    m_httpBindExplicit = true;
+}
+
+QHostAddress MCPServer::httpBindAddress() const
+{
+    return m_httpServer ? m_httpServer->serverAddress() : m_httpBindAddress;
+}
+
+QString MCPServer::resolveHttpToken()
+{
+    const QByteArray env = qgetenv("QTMESH_HTTP_TOKEN");
+    if (!env.trimmed().isEmpty()) return QString::fromUtf8(env.trimmed());
+    QSettings settings;
+    return settings.value(QStringLiteral("mcp/httpToken")).toString().trimmed();
+}
+
+QHostAddress MCPServer::resolveHttpBindAddress()
+{
+    const QString env = QString::fromUtf8(qgetenv("QTMESH_HTTP_BIND")).trimmed();
+    if (env.isEmpty()) return QHostAddress(QHostAddress::LocalHost);
+    QHostAddress addr(env);
+    if (addr.isNull()) {
+        qWarning() << "QTMESH_HTTP_BIND" << env << "is not a valid address — binding loopback";
+        return QHostAddress(QHostAddress::LocalHost);
+    }
+    return addr;
+}
+
+bool MCPServer::httpRequestAuthorized(const QString &headerBlock, const QString &token)
+{
+    if (token.isEmpty()) return false;
+    const QByteArray expected = token.toUtf8();
+    for (const QString &line : headerBlock.split(QStringLiteral("\r\n"))) {
+        const int colon = line.indexOf(QLatin1Char(':'));
+        if (colon <= 0) continue;
+        const QString name = line.left(colon).trimmed();
+        const QString value = line.mid(colon + 1).trimmed();
+        if (name.compare(QLatin1String("Authorization"), Qt::CaseInsensitive) == 0) {
+            const int space = value.indexOf(QLatin1Char(' '));
+            if (space <= 0) continue;
+            if (value.left(space).compare(QLatin1String("Bearer"), Qt::CaseInsensitive) != 0) continue;
+            if (constantTimeEquals(value.mid(space + 1).trimmed().toUtf8(), expected)) return true;
+        } else if (name.compare(QLatin1String("X-Api-Key"), Qt::CaseInsensitive) == 0) {
+            if (constantTimeEquals(value.toUtf8(), expected)) return true;
+        }
+    }
+    return false;
+}
+
 bool MCPServer::startHttp(int port)
 {
     m_httpPort = port;
+    if (!m_httpTokenExplicit) m_httpToken = resolveHttpToken();
+    if (!m_httpBindExplicit) m_httpBindAddress = resolveHttpBindAddress();
     m_httpServer = new QTcpServer(this);
     connect(m_httpServer, &QTcpServer::newConnection, this, &MCPServer::onHttpConnection);
 
-    if (m_httpServer->listen(QHostAddress::Any, m_httpPort)) {
+    if (m_httpServer->listen(m_httpBindAddress, m_httpPort)) {
         m_httpPort = m_httpServer->serverPort(); // update to actual port (important when port=0)
-        qDebug() << "HTTP REST API listening on port" << m_httpPort;
+        qDebug() << "HTTP REST API listening on" << m_httpServer->serverAddress().toString()
+                 << "port" << m_httpPort
+                 << (m_httpToken.isEmpty() ? "(no token — open to any local process)"
+                                           : "(token required)");
+        if (!m_httpServer->serverAddress().isLoopback() && m_httpToken.isEmpty()) {
+            qWarning() << "HTTP REST API is bound to a non-loopback address WITHOUT a token: "
+                          "anyone who can reach this port can run every tool. Set "
+                          "QTMESH_HTTP_TOKEN (or --http-token).";
+        }
         return true;
     } else {
         qWarning() << "Failed to start HTTP server on port" << m_httpPort
@@ -12973,11 +13079,21 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
         QByteArray resp = "HTTP/1.1 204 No Content\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-                          "Access-Control-Allow-Headers: Content-Type\r\n"
+                          "Access-Control-Allow-Headers: Content-Type, Authorization, X-Api-Key\r\n"
                           "Connection: close\r\n\r\n";
         socket->write(resp);
         socket->flush();
         socket->deleteLater();
+        return;
+    }
+
+    // #984: when a token is configured, every request past the preflight must
+    // present it — listing included, since the surface itself is information.
+    if (!m_httpToken.isEmpty() && !httpRequestAuthorized(headers, m_httpToken)) {
+        writeHttpJson(socket, 401, "Unauthorized",
+                      QJsonObject{{"error", "Unauthorized: send the configured token as "
+                                            "'Authorization: Bearer <token>' or 'X-Api-Key: <token>'"}},
+                      "WWW-Authenticate: Bearer realm=\"qtmesh\"\r\n");
         return;
     }
 
@@ -13010,15 +13126,19 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
             }
         }
     }
-    // Route: GET /api/tools/:name - call tool with no args
+    // Route: GET /api/tools/:name — REFUSED (#984). A GET used to execute the
+    // tool with no arguments, so any link, prefetcher or <img src> could
+    // decimate a mesh or delete a light. Tools run only via POST.
     else if (method == "GET" && path.startsWith("/api/tools/")) {
-        toolName = path.mid(11);
-        int qmark = toolName.indexOf('?');
-        if (qmark >= 0) toolName = toolName.left(qmark);
+        writeHttpJson(socket, 405, "Method Not Allowed",
+                      QJsonObject{{"error", "Tools are executed with POST /api/tools/<name> "
+                                            "(a JSON body carries the arguments); GET does not run tools."}},
+                      "Allow: POST\r\n");
+        return;
     }
     else {
         httpStatus = 404;
-        responseJson["error"] = "Not found. Use GET /api/tools or POST /api/tools/<name>";
+        responseJson["error"] = "Not found. Use GET /api/tools (list) or POST /api/tools/<name> (execute)";
     }
 
     // If we need to call a tool, defer it so socket events are fully drained first

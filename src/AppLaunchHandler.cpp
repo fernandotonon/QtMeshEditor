@@ -38,10 +38,17 @@ bool isCliSubcommand(const QString& arg)
     return kSubcommands.contains(arg);
 }
 
+// Flags that take a value — the value must not be mistaken for a launch path.
+bool isGuiModeValueFlag(const QString& arg)
+{
+    return arg == QStringLiteral("--http-port") || arg == QStringLiteral("--http-token")
+        || arg == QStringLiteral("--http-bind");
+}
+
 bool isGuiModeFlag(const QString& arg)
 {
     return arg == QStringLiteral("--mcp") || arg == QStringLiteral("-mcp")
-        || arg == QStringLiteral("--with-mcp") || arg == QStringLiteral("--http-port");
+        || arg == QStringLiteral("--with-mcp") || isGuiModeValueFlag(arg);
 }
 
 } // namespace
@@ -109,13 +116,17 @@ QStringList AppLaunchHandler::collectGuiLaunchPaths(const QStringList& arguments
     QStringList paths;
     for (int i = 1; i < arguments.size(); ++i) {
         const QString& arg = arguments.at(i);
-        if (arg.startsWith(QLatin1Char('-')))
-            continue;
+        // Value-taking flags FIRST: the generic '-' skip below used to run
+        // before this branch, so the ++i never executed and the VALUE was
+        // examined as a launch path (#984 — a --http-token naming an existing
+        // mesh would have been opened in the editor).
         if (isGuiModeFlag(arg)) {
-            if (arg == QStringLiteral("--http-port") && i + 1 < arguments.size())
+            if (isGuiModeValueFlag(arg) && i + 1 < arguments.size())
                 ++i;
             continue;
         }
+        if (arg.startsWith(QLatin1Char('-')))
+            continue;
         if (isCliSubcommand(arg))
             break;
 

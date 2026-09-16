@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QTcpSocket>
+#include <QSettings>
 #include <QTcpServer>
 #include <QSignalSpy>
 #include <QElapsedTimer>
@@ -1962,6 +1963,11 @@ protected:
         // HTTP tests only need MCPServer — not full Ogre.
         // Tool calls that need Ogre will return errors, which is fine for
         // testing the HTTP routing and response handling.
+        // #984: the token/bind resolution reads the environment + QSettings —
+        // scrub both so a developer's shell cannot flip the open-access cases.
+        qunsetenv("QTMESH_HTTP_TOKEN");
+        qunsetenv("QTMESH_HTTP_BIND");
+        QSettings().remove(QStringLiteral("mcp/httpToken"));
         server = std::make_unique<MCPServer>();
     }
 
@@ -2118,22 +2124,31 @@ TEST_F(MCPServerHttpTest, PostToolCall)
     EXPECT_TRUE(response.contains("application/json"));
 }
 
-// --- HTTP GET /api/tools/<name> (no body) ---
+// --- HTTP GET /api/tools/<name> — refused (#984) ---
 
-TEST_F(MCPServerHttpTest, GetToolCallNoBody)
+TEST_F(MCPServerHttpTest, GetToolCallIsRefusedWith405AndRunsNothing)
 {
     server->setOgreInitFailed(true);
 
     ASSERT_TRUE(server->startHttp(0));
     int port = server->httpPort();
 
+    // Before #984 this executed list_materials with no arguments — and would
+    // equally have executed decimate_mesh or delete_light from a bare link.
     QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
                          "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
     ASSERT_FALSE(response.isEmpty());
-    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_EQ(getHttpStatus(response), 405);
+    EXPECT_TRUE(response.contains("Allow: POST"));
+    const QJsonObject json = parseHttpResponse(response);
+    EXPECT_TRUE(json.contains("error"));
+    EXPECT_TRUE(json["error"].toString().contains("POST"));
+    // Nothing was dispatched: no tool result shape (content/isError) leaks out.
+    EXPECT_FALSE(json.contains("content"));
+    EXPECT_FALSE(json.contains("isError"));
 }
 
 // --- HTTP OPTIONS (CORS preflight) ---
@@ -2238,13 +2253,14 @@ TEST_F(MCPServerHttpTest, GetToolCallWithQueryStringStripsSuffix)
     ASSERT_TRUE(server->startHttp(0));
     int port = server->httpPort();
 
+    // A query string does not turn a GET into an execution either (#984).
     QByteArray request = "GET /api/tools/list_materials?format=json HTTP/1.1\r\n"
                          "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
     ASSERT_FALSE(response.isEmpty());
-    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_EQ(getHttpStatus(response), 405);
     EXPECT_TRUE(response.contains("application/json"));
 }
 
@@ -2256,8 +2272,8 @@ TEST_F(MCPServerHttpTest, BusyToolRequestReturns503)
     server->m_httpBusy = true;
     int port = server->httpPort();
 
-    QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
-                         "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    QByteArray request = "POST /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
@@ -4556,6 +4572,169 @@ TEST_F(MCPServerHttpTest, StartHttp_PortAlreadyInUseReturnsFalse)
 
     EXPECT_FALSE(server->startHttp(usedPort));
     EXPECT_EQ(server->m_httpServer, nullptr);
+}
+
+// ==========================================================================
+// #984 — HTTP API hardening: token + bind address
+// ==========================================================================
+
+namespace {
+QByteArray postListMaterials(const QByteArray &extraHeaders = {})
+{
+    return "POST /api/tools/list_materials HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+           + extraHeaders + "Content-Length: 0\r\nConnection: close\r\n\r\n";
+}
+} // namespace
+
+TEST_F(MCPServerHttpTest, TokenConfigured_PostWithoutTokenIs401)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(server->httpPort(), postListMaterials());
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 401);
+    EXPECT_TRUE(response.contains("WWW-Authenticate: Bearer"));
+    EXPECT_FALSE(parseHttpResponse(response).contains("content"));   // tool did not run
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_WrongTokenIs401)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    // Same length as the real token — the compare must not pass on length alone.
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("Authorization: Bearer s3cret-tokeX\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 401);
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_BearerTokenIsAccepted)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("Authorization: Bearer s3cret-token\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(parseHttpResponse(response).contains("content"));    // reached the tool
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_XApiKeyIsAccepted)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("x-api-key: s3cret-token\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_ListingRequiresTokenToo)
+{
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    QByteArray response = sendHttpRequest(server->httpPort(),
+        "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 401);
+
+    response = sendHttpRequest(server->httpPort(),
+        "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer s3cret-token\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(parseHttpResponse(response).contains("tools"));
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_CorsPreflightNeedsNoTokenAndAdvertisesAuthHeaders)
+{
+    // A browser preflight cannot carry credentials by spec; refusing it would
+    // make the token unusable from any web client.
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(server->httpPort(),
+        "OPTIONS /api/tools/list_materials HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Origin: http://localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 204);
+    EXPECT_TRUE(response.contains("Authorization"));
+    EXPECT_TRUE(response.contains("X-Api-Key"));
+}
+
+TEST_F(MCPServerHttpTest, NoTokenConfigured_StaysOpenForLocalCallers)
+{
+    // Default behaviour is unchanged: no token → no 401 (existing harnesses).
+    server->setOgreInitFailed(true);
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->httpToken().isEmpty());
+    const QByteArray response = sendHttpRequest(server->httpPort(), postListMaterials());
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+TEST_F(MCPServerHttpTest, TokenResolution_EnvWinsOverSettings_ExplicitWinsOverBoth)
+{
+    QSettings().setValue(QStringLiteral("mcp/httpToken"), QStringLiteral("from-settings"));
+    EXPECT_EQ(MCPServer::resolveHttpToken(), QStringLiteral("from-settings"));
+
+    qputenv("QTMESH_HTTP_TOKEN", "from-env ");
+    EXPECT_EQ(MCPServer::resolveHttpToken(), QStringLiteral("from-env"));   // trimmed
+
+    // startHttp() picks the resolved token up when none was set explicitly…
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_EQ(server->httpToken(), QStringLiteral("from-env"));
+    server->stopHttp();
+
+    // …and an explicit setter beats env + settings.
+    auto other = std::make_unique<MCPServer>();
+    other->setHttpToken("explicit");
+    ASSERT_TRUE(other->startHttp(0));
+    EXPECT_EQ(other->httpToken(), QStringLiteral("explicit"));
+    other->stopHttp();
+
+    qunsetenv("QTMESH_HTTP_TOKEN");
+    QSettings().remove(QStringLiteral("mcp/httpToken"));
+    EXPECT_TRUE(MCPServer::resolveHttpToken().isEmpty());
+}
+
+TEST_F(MCPServerHttpTest, BindAddress_DefaultIsLoopback_AnyIsOptIn)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->httpBindAddress().isLoopback())
+        << server->httpBindAddress().toString().toStdString();
+    server->stopHttp();
+
+    auto exposed = std::make_unique<MCPServer>();
+    exposed->setHttpBindAddress(QHostAddress::Any);
+    ASSERT_TRUE(exposed->startHttp(0));
+    EXPECT_FALSE(exposed->httpBindAddress().isLoopback());
+    exposed->stopHttp();
+
+    qputenv("QTMESH_HTTP_BIND", "not an address");
+    EXPECT_TRUE(MCPServer::resolveHttpBindAddress().isLoopback());   // invalid → safe default
+    qputenv("QTMESH_HTTP_BIND", "0.0.0.0");
+    EXPECT_FALSE(MCPServer::resolveHttpBindAddress().isLoopback());
+    qunsetenv("QTMESH_HTTP_BIND");
+}
+
+TEST(MCPServerHttpAuthParse, BearerAndApiKeyParsing)
+{
+    using M = MCPServer;
+    EXPECT_TRUE (M::httpRequestAuthorized("Host: x\r\nAuthorization: Bearer abc\r\n", "abc"));
+    EXPECT_TRUE (M::httpRequestAuthorized("authorization:   bearer   abc  \r\n", "abc"));   // case + spaces
+    EXPECT_TRUE (M::httpRequestAuthorized("X-API-KEY: abc\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Basic abc\r\n", "abc"));         // wrong scheme
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer ab\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer abcd\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer abd\r\n", "abc"));  // same length, wrong bytes
+    EXPECT_FALSE(M::httpRequestAuthorized("X-Api-Key: abd\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer\r\n", "abc"));            // no value
+    EXPECT_FALSE(M::httpRequestAuthorized("X-Api-Key: abc\r\n", ""));                      // empty token never authorizes
+    EXPECT_FALSE(M::httpRequestAuthorized("", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Cookie: token=abc\r\n", "abc"));                // other header
 }
 
 TEST_F(MCPServerProtocolTest, HandleResourcesReadCurrentMaterialUsesMaterialEditorTextWhenAvailable)

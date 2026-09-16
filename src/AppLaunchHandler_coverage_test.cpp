@@ -223,8 +223,10 @@ TEST(AppLaunchHandlerCoverageTest, DefaultImportExtensions_NotEmpty)
 TEST(AppLaunchHandlerCoverageTest, Collect_HttpPortSkipsPortNumber)
 {
     // "--http-port" is a GUI-mode flag; the numeric arg right after must be
-    // consumed by the ++i advance and never treated as a path. The port number
-    // also is not importable, but the ++i guarantees it's skipped entirely.
+    // consumed by the ++i advance and never treated as a path. NB a port number
+    // is not importable anyway, so this case alone cannot tell the skip from a
+    // no-op — Collect_HttpTokenAndBindValuesAreSkipped uses a REAL file as the
+    // value for that (it caught the skip being dead code, #984).
     const QStringList args = {
         QStringLiteral("QtMeshEditor"),
         QStringLiteral("--http-port"),
@@ -241,6 +243,34 @@ TEST(AppLaunchHandlerCoverageTest, Collect_HttpPortAtEndNoFollowingArg)
         QStringLiteral("--http-port"),
     };
     EXPECT_TRUE(AppLaunchHandler::collectGuiLaunchPaths(args).isEmpty());
+}
+
+TEST(AppLaunchHandlerCoverageTest, Collect_HttpTokenAndBindValuesAreSkipped)
+{
+    // #984: --http-token / --http-bind take a value like --http-port does. The
+    // value is skipped even when it names a REAL importable file — otherwise a
+    // token that happens to look like a path would be opened in the editor.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString decoy = dir.filePath(QStringLiteral("token.obj"));
+    QFile obj(decoy);
+    ASSERT_TRUE(obj.open(QIODevice::WriteOnly));
+    obj.write("v 0 0 0\n");
+    obj.close();
+
+    const QStringList args = {
+        QStringLiteral("QtMeshEditor"),
+        QStringLiteral("--with-mcp"),
+        QStringLiteral("--http-token"), decoy,
+        QStringLiteral("--http-bind"),  QStringLiteral("0.0.0.0"),
+    };
+    EXPECT_TRUE(AppLaunchHandler::collectGuiLaunchPaths(args).isEmpty());
+
+    // …while a real file AFTER the value pairs is still collected.
+    const QStringList withFile = args + QStringList{decoy};
+    const QStringList paths = AppLaunchHandler::collectGuiLaunchPaths(withFile);
+    ASSERT_EQ(paths.size(), 1);
+    EXPECT_EQ(paths.front(), QFileInfo(decoy).absoluteFilePath());
 }
 
 TEST(AppLaunchHandlerCoverageTest, Collect_HttpPortThenRealFileStillCollected)

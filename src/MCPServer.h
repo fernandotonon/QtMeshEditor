@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QHostAddress>
 #include <QMap>
 #include <QTimer>
 #include <functional>
@@ -90,6 +91,35 @@ public:
      * @brief Get the configured HTTP port
      */
     int httpPort() const;
+
+    // ---- HTTP API hardening (#984) ----
+    // The HTTP API can drive EVERY tool, mutating ones included, so it is
+    // loopback-only and (optionally) token-protected. Tools execute only via
+    // POST /api/tools/<name>; a GET there is answered 405 and runs nothing.
+
+    /** Shared secret for the HTTP API. Empty = no authentication (the
+     *  default). When set, every /api request except the CORS preflight must
+     *  carry `Authorization: Bearer <token>` or `X-Api-Key: <token>`, else 401.
+     *  An explicit value wins over the env/QSettings resolution done by
+     *  startHttp(). */
+    void setHttpToken(const QString &token);
+    QString httpToken() const;
+
+    /** Interface the HTTP server binds. Default is loopback (127.0.0.1);
+     *  pass QHostAddress::Any to expose it (e.g. inside a container with a
+     *  mapped port) — then a token is strongly advised. */
+    void setHttpBindAddress(const QHostAddress &address);
+    QHostAddress httpBindAddress() const;
+
+    /** Token from `QTMESH_HTTP_TOKEN`, else QSettings `mcp/httpToken`, else empty. */
+    static QString resolveHttpToken();
+    /** Bind address from `QTMESH_HTTP_BIND` (e.g. "0.0.0.0"), else loopback. */
+    static QHostAddress resolveHttpBindAddress();
+    /** True when the raw request header block carries `token` as a Bearer
+     *  Authorization or X-Api-Key value (header names and the Bearer scheme are
+     *  case-insensitive; the comparison is constant-time). An empty `token`
+     *  never authorizes. Pure — unit-tested without a socket. */
+    static bool httpRequestAuthorized(const QString &headerBlock, const QString &token);
 
     /**
      * @brief Check if server is running
@@ -517,6 +547,10 @@ private:
     void handleHttpRequest(QTcpSocket *socket);
     QTcpServer *m_httpServer = nullptr;
     int m_httpPort = 8080;
+    QString m_httpToken;
+    bool m_httpTokenExplicit = false;
+    QHostAddress m_httpBindAddress = QHostAddress::LocalHost;
+    bool m_httpBindExplicit = false;
     QMap<QTcpSocket*, QByteArray> m_httpBuffers;
 
     // Member variables
