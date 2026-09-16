@@ -1,10 +1,33 @@
 #include "ModelDownloader.h"
-#include "updater/UpdateVerifier.h"   // #1029: reuse the tested SHA-256 check
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QUrl>
 #include <QMetaObject>
 #include <QDir>
 #include <QDebug>
+
+namespace {
+// #1029: streamed SHA-256 of a file. Deliberately NOT the updater's
+// sha256HexOfFile — that lives in qtmesh_updater, which is only built and
+// linked when ENABLE_AUTO_UPDATER is ON, while ModelDownloader compiles
+// unconditionally; reusing it broke the -DENABLE_AUTO_UPDATER=OFF link
+// (review on #1038). Six lines of Qt API beat coupling every model download
+// to the optional updater and its libsodium dependency.
+QString sha256HexOfFile(const QString& path, QString* err)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (err) *err = QStringLiteral("cannot open %1 for hashing").arg(path);
+        return {};
+    }
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    if (!h.addData(&f)) {
+        if (err) *err = QStringLiteral("read error while hashing %1").arg(path);
+        return {};
+    }
+    return QString::fromLatin1(h.result().toHex());
+}
+} // namespace
 
 ModelDownloader* ModelDownloader::s_instance = nullptr;
 
@@ -307,7 +330,12 @@ void ModelDownloader::onDownloadFinished()
         bool integrityOk = true;
         if (!m_expectedSha256.isEmpty()) {
             QString why;
-            integrityOk = UpdateVerifier::verifySha256Hex(m_tempFilePath, m_expectedSha256, &why);
+            const QString actual = sha256HexOfFile(m_tempFilePath, &why);
+            integrityOk = !actual.isEmpty()
+                          && actual.compare(m_expectedSha256, Qt::CaseInsensitive) == 0;
+            if (!integrityOk && why.isEmpty())
+                why = QStringLiteral("expected %1…, got %2…")
+                          .arg(m_expectedSha256.left(12), actual.left(12));
             if (!integrityOk) {
                 qCritical() << "ModelDownloader: SHA-256 mismatch for" << m_currentModelName
                            << "—" << why << "— deleting partial file";
