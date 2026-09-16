@@ -412,7 +412,12 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     // not (AnimationMerger::applyMotionClip) — so correct labels do NOT mirror
     // the motion. Decoupling label-side from retarget-side is the fix for "labels
     // flipped vs animation mirrored" being in tension.
-    auto side = [&](int i) { return -joints[i].pos[SIDE]; };
+    // Measured RELATIVE TO THE ROOT (review on #1013): a rig whose local origin
+    // is off its sagittal plane — every joint at, say, x > 0 — would otherwise
+    // put all four limbs on one "side", mis-naming them AND failing the
+    // plausibility check below; translation must not change either.
+    const double sideOrigin = joints[root].pos[SIDE];
+    auto side = [&](int i) { return -(joints[i].pos[SIDE] - sideOrigin); };
     // setName ENFORCES UNIQUENESS — Ogre::Skeleton::createBone rejects duplicate
     // names ("RightArm already exists"). When the geometric classification lands
     // two joints on the same anatomical role (e.g. a clavicle + upper-arm both

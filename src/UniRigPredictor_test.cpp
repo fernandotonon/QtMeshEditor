@@ -782,3 +782,17 @@ TEST(UniRigLabeling, TemplateMapsToLabelingWithBipedForcingHumanoid)
     EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Quadruped), L::Generic);
     EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Generic),   L::Generic);
 }
+
+// Review on #1013: side must be judged relative to the root, so translating a
+// valid humanoid entirely off the sagittal plane changes neither its names
+// nor its plausibility.
+TEST(UniRigLabeling, TranslatedHumanoidKeepsSidesAndPlausibility)
+{
+    auto j = syntheticHumanoid();
+    for (auto& x : j) { x.pos[0] += 5.0; x.pos[2] += 2.0; }   // whole rig at x in [4.35, 5.65]
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_TRUE(hasName(j, "LeftArm"));  EXPECT_TRUE(hasName(j, "RightArm"));
+    EXPECT_TRUE(hasName(j, "LeftUpLeg")); EXPECT_TRUE(hasName(j, "RightUpLeg"));
+    // and the character's LEFT is still the −X side of the ROOT
+    for (const auto& x : j) if (x.name == "LeftArm") EXPECT_LT(x.pos[0], 5.0);
+}
