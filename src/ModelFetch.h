@@ -15,11 +15,12 @@
 //     "SHA-256 mismatch, file discarded", "already in progress" — never
 //     reaches the user, who is told "unavailable (offline?)" and sent
 //     debugging their network.
-//  2. Only ONE of them (TextureInpaint) guards the synchronous-rejection
-//     race: ModelDownloader::startDownload emits downloadError SYNCHRONOUSLY
-//     when another download is active, so a handler's loop.quit() runs
-//     BEFORE loop.exec() and is lost — the caller then hangs for its full
-//     timeout. The other nineteen have that bug latent.
+//  2. Only THREE of them (TextureInpaint, FaceRig/ArkitTemplate,
+//     FaceRig/FaceLandmarkDetector) guard the synchronous-rejection race:
+//     ModelDownloader::startDownload emits downloadError SYNCHRONOUSLY when
+//     another download is active, so a handler's loop.quit() runs BEFORE
+//     loop.exec() and is lost — the caller then hangs for its full timeout.
+//     The other seventeen have that bug latent.
 //
 // Consumers keep what genuinely varies — base-URL resolution (env var,
 // QSettings key, default), the *_NO_DOWNLOAD guard, the timeout — and pass
