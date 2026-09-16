@@ -66,6 +66,16 @@ public:
         // Up axis: 0=X, 1=Y, 2=Z (default +Y). UniRig is trained +Y-up; a
         // non-Y up axis is rotated into +Y for inference and back out after.
         int upAxis = 1;
+        // #1046: which points occupy the encoder's frozen query slots.
+        //   Fps    — farthest-point sample front-loaded (the paper's sampling;
+        //            rescued a biped rat 6→24 joints and a car's wheel clusters)
+        //   Random — the surface sample as drawn (a tree got 64 branch joints
+        //            here where Fps collapsed it to a 7-joint stick)
+        //   Both   — run both and keep the richer skeleton (tie → Fps). Costs a
+        //            second decode; the default because neither ordering wins
+        //            across categories. Env override: QTMESH_UNIRIG_QUERIES=fps|random|both.
+        enum class QuerySampling { Random, Fps, Both };
+        QuerySampling querySampling = QuerySampling::Both;
     };
 
     struct Joint {
@@ -79,7 +89,14 @@ public:
         bool ok = false;
         QString error;                           // populated when !ok
         std::vector<Joint> joints;               // parent-ordered (root first)
+        QString querySampling;                   // "fps" | "random" — which ordering produced it (#1046)
+        int alternativeJoints = -1;              // joint count of the discarded ordering under Both, else -1
     };
+    /// #1046: choose between the two query-sampling runs — the one that decoded
+    /// (if only one did), else the richer skeleton, tie → `fps` (the paper's
+    /// sampling). On every mesh measured the visibly better rig was the one
+    /// with more joints; the decode under-produces rather than over-produces.
+    static const Result& pickRicher(const Result& fps, const Result& random);
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per
     // call against the two model paths.)
@@ -108,6 +125,21 @@ public:
     // Encoder surface-sample budget. `requested` > 0 clamps to [4096, 65536];
     // 0 picks an automatic budget that scales down on very large meshes.
     static int sampleBudgetForMesh(int vertexCount, int requested = 0);
+    /// #1046: reorder a point cloud (xyz triples in `pts`, parallel `nrm`) so
+    /// its first `k` points are a greedy farthest-point sample of the whole
+    /// cloud (FPS order), the rest following in their original order. The
+    /// hosted encoder export froze its farthest-point-sampling indices at
+    /// trace time — 4096 indices, 1794 unique, all < 2048 — so the perceiver's
+    /// QUERY points are whatever happens to sit in the first 2048 input slots.
+    /// Front-loading an FPS subset there restores the paper's coverage-
+    /// maximising queries without a re-export. Pure; unit-tested.
+    /// `pool` (default: all) limits the FPS CANDIDATES to the first `pool`
+    /// points — upstream FPS-selects from ~8192 surface samples, and selecting
+    /// from a 65536-point cloud pushes queries to extremities far harder than
+    /// the model saw in training. Every point is kept either way.
+    static void frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
+                                        int count, int k, int pool = -1);
+
 
     // Ensure ALL THREE models exist on disk, downloading whichever is missing on
     // first use (blocks via a local event loop, like
@@ -138,6 +170,16 @@ public:
                           const QString& embedModelPath,
                           const Options& opts = {},
                           const ProgressFn& progress = {});
+private:
+    // One decode with a fixed point ordering (fpsFrontLoad → FPS-first cloud).
+    static Result predictOnce(const float* positions, int vertexCount,
+                              const uint32_t* indices, int indexCount,
+                              const QString& encoderModelPath,
+                              const QString& decoderModelPath,
+                              const QString& embedModelPath,
+                              const Options& opts, const ProgressFn& progress,
+                              bool fpsFrontLoad);
+public:
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----
     // These replicate UniRig's src/tokenizer/tokenizer_part.py exactly and are
