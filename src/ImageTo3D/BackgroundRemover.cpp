@@ -13,6 +13,7 @@
 
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 #include <QEventLoop>
 #include <QSettings>
@@ -130,28 +131,16 @@ QString BackgroundRemover::ensureModelBlocking(Quality q)
 
     QDir().mkpath(QFileInfo(dst).absolutePath());
     const QString url = base + QString::fromLatin1(modelFileFor(q));
-    QEventLoop loop;
-    bool ok = false, timedOut = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(modelLabelFor(q))) { ok = true; loop.quit(); }
-        });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == QString::fromLatin1(modelLabelFor(q))) { ok = false; loop.quit(); }
-        });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    // U²-Net is ~170 MB; BiRefNet is ~930 MB, so the Best tier needs a much
-    // longer window or a slow connection times out mid-download.
-    timeout.start(q == Quality::Best ? 2400000 : 600000);   // 40 min / 10 min
-    dl->startDownload(url, dst, QString::fromLatin1(modelLabelFor(q)));
-    loop.exec();
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut) dl->cancelDownload();
-    return (ok && !timedOut && QFileInfo::exists(dst)) ? dst : QString();
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dst;
+    req.label = QString::fromLatin1(modelLabelFor(q));
+    req.timeoutMs = q == Quality::Best ? 2400000 : 600000;
+    // #1037: one shared blocking wait — keeps the downloader's own error text
+    // and the synchronous-rejection guard every consumer used to lack.
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    if (!fo.ok) return {};
+    return fo.path;
 }
 
 BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& image,

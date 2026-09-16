@@ -1,6 +1,7 @@
 #include "MotionGenerator.h"
 
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
@@ -109,26 +110,16 @@ QString MotionGenerator::ensureModelBlocking()
                      const QString& label) -> bool {
         if (QFileInfo::exists(dest)) return true;
         QDir().mkpath(QFileInfo(dest).absolutePath());
-        QEventLoop loop;
-        bool ok = false;
-        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer guard;
-        guard.setSingleShot(true);
-        QObject::connect(&guard, &QTimer::timeout, &loop, [&]{ ok = false; loop.quit(); });
-        guard.start(180000);
-        // startDownload(url, destinationPath, modelName) — same order as the
-        // other consumers; completion/error signals fire under `label`.
-        dl->startDownload(base + fileName, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone); QObject::disconnect(onErr);
-        return ok && QFileInfo::exists(dest);
+        // #1037: one shared blocking wait — keeps the downloader's own error
+        // text and the synchronous-rejection guard this lambda used to lack.
+        // (It also cancels the download on OUR timeout, which the old `guard`
+        // timer never did — the transfer kept running in the background.)
+        ModelFetch::Request req;
+        req.url = base + fileName;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 180000;
+        return ModelFetch::ensureBlocking(req).ok;
     };
 
     if (!fetch(QStringLiteral("t2m.onnx"), modelPath(),
