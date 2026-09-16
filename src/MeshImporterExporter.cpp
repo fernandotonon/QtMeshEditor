@@ -980,6 +980,19 @@ static void splitLargeMeshesForExport(aiScene* scene)
 // `remapAiMeshMorphTargets` after to keep the arrays parallel.
 //
 // `new` allocations cross the Assimp C-API ownership boundary
+// #921: Assimp's glTF2 exporter DOES know how to write per-target names
+// (`mesh.extras.targetNames`, the convention Blender/Godot/three.js read,
+// filled from aiAnimMesh::mName) — but only when the export property
+// GLTF2_TARGETNAMES_EXP is set. It never was, so every glb we wrote carried
+// nameless blend shapes and needed the `<file>.arkit.json` sidecar. Every
+// glTF/glb export site passes these; other exporters ignore the property.
+static Assimp::ExportProperties assimpExportProperties()
+{
+    Assimp::ExportProperties props;
+    props.SetPropertyBool("GLTF2_TARGETNAMES_EXP", true);
+    return props;
+}
+
 // (aiScene's dtor frees mAnimMeshes), so smart pointers don't fit
 // here — same convention every other aiScene field uses in this
 // file.
@@ -4343,9 +4356,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             // Split >65535-vertex meshes so Assimp's exporters don't truncate
             // the vertex accessors at 65536 (which tears large meshes apart).
             splitLargeMeshesForExport(scene);
+            const Assimp::ExportProperties exportProps = assimpExportProperties();
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
-                                             exportFlags);
+                                             exportFlags, &exportProps);
             if (result != AI_SUCCESS)
             {
                 auto msg = QString("Assimp export to %1 failed (code %2): %3")
@@ -4374,13 +4388,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     injectMorphWeightAnimations(file.filePath(), e,
                                                 /*isBinary=*/formatId == "glb2");
 
-                // Morph-target NAME sidecar: Assimp's glTF2 exporter also
-                // drops `targetNames`, so a rigged mesh re-imported from this
-                // export would degrade to "Shape_N" names. Persist the
-                // ordered pose names next to the file (the same
-                // `<file>.arkit.json` the CLI/MCP face-rig paths write); the
-                // importer restores them on load.
-                if (e->getMesh() && e->getMesh()->getPoseCount() > 0)
+                // Morph-target NAME sidecar for formats whose exporter cannot
+                // carry the names. glTF/glb now carry them natively
+                // (`mesh.extras.targetNames`, #921) and FBX writes them per
+                // blend-shape channel, so this is for the remaining formats;
+                // the importer still reads sidecars written by older builds.
+                const bool namesTravelNatively = formatId == "gltf2" || formatId == "glb2";
+                if (!namesTravelNatively && e->getMesh() && e->getMesh()->getPoseCount() > 0)
                 {
                     std::vector<QString> poseNames;
                     QSet<QString> seen;
@@ -4657,9 +4671,10 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
                 (formatId == "x") ? 0 : aiProcess_FlipUVs;
             // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
             splitLargeMeshesForExport(scene);
+            const Assimp::ExportProperties exportProps = assimpExportProperties();
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),
                                                 file.filePath().toStdString().c_str(),
-                                                exportFlags);
+                                                exportFlags, &exportProps);
             if (aiResult == AI_SUCCESS) {
                 result = 0;
                 // For FBX, prefer a single-file export. Assimp FBX export may still
@@ -5063,8 +5078,9 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
         splitLargeMeshesForExport(scene);
         // Both Ogre and glTF are right-handed — no ConvertToLeftHanded
+        const Assimp::ExportProperties exportProps = assimpExportProperties();
         aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
-                                         file.filePath().toStdString().c_str(), 0);
+                                         file.filePath().toStdString().c_str(), 0, &exportProps);
         if (result != AI_SUCCESS)
         {
             auto msg = QString("Scene export failed (code %1): %2")

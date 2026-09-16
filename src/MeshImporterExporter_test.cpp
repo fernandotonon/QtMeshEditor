@@ -1810,18 +1810,10 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfWritesMorphTargetsIntoFile)
     ASSERT_TRUE(QFileInfo::exists(outFile));
 
     // Parse the .gltf JSON and assert structurally: at least one
-    // mesh primitive has a non-empty `targets` array. Asserting on
-    // the file structure (not on a full reimport) keeps this test
-    // focused on the *exporter* contract we control — Assimp's
-    // reader pipeline has its own edge cases that belong with a
-    // separate end-to-end test.
-    //
-    // Note: Assimp 6.0's glTF2 exporter doesn't reliably emit
-    // `mesh.extras.targetNames` even when `aiAnimMesh::mName` is
-    // set; downstream tools that need names can recover them from
-    // our JSON sidecar (future slice) or by re-binding from the
-    // source mesh. The morph *geometry* — the value of this PR —
-    // is what we lock down here.
+    // mesh primitive has a non-empty `targets` array, AND (#921) the
+    // mesh carries `extras.targetNames` in pose order — Assimp only
+    // writes them under GLTF2_TARGETNAMES_EXP, which the exporter
+    // now sets; without it every glb we wrote had nameless shapes.
     QFile gltf(outFile);
     ASSERT_TRUE(gltf.open(QIODevice::ReadOnly));
     QJsonDocument doc = QJsonDocument::fromJson(gltf.readAll());
@@ -1848,8 +1840,38 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfWritesMorphTargetsIntoFile)
     EXPECT_EQ(totalTargets, 2)
         << "Both morph targets should land in primitive.targets";
 
+    // #921: per-target names travel natively — no sidecar needed for glTF.
+    int meshesWithNames = 0;
+    for (const QJsonValue& meshVal : meshes) {
+        const QJsonObject m = meshVal.toObject();
+        if (m.value("primitives").toArray().first().toObject().value("targets").toArray().isEmpty())
+            continue;
+        const QJsonArray names = m.value("extras").toObject().value("targetNames").toArray();
+        ASSERT_EQ(names.size(), 2) << "mesh.extras.targetNames must list every target";
+        EXPECT_EQ(names.at(0).toString(), QStringLiteral("JawOpen"));
+        EXPECT_EQ(names.at(1).toString(), QStringLiteral("Smile"));
+        ++meshesWithNames;
+    }
+    EXPECT_GT(meshesWithNames, 0);
+    EXPECT_FALSE(QFileInfo::exists(outFile + ".arkit.json"))
+        << "glTF carries the names itself; the sidecar is for formats that cannot";
+
+    // …and they survive a re-import as the Ogre pose names (Assimp reads
+    // targetNames into aiAnimMesh::mName, which MeshProcessor prefers).
     SelectionSet::getSingleton()->clearList();
     Manager::getSingleton()->destroySceneNode(node);
+    auto* manager = Manager::getSingleton();
+    MeshImporterExporter::importer({outFile});
+    ASSERT_FALSE(manager->getSceneNodes().isEmpty());
+    auto* importedNode = manager->getSceneNodes().last();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(importedNode->getName()));
+    auto* importedEntity = manager->getSceneMgr()->getEntity(importedNode->getName());
+    std::vector<std::string> importedNames;
+    for (const Ogre::Pose* p : importedEntity->getMesh()->getPoseList())
+        importedNames.push_back(p->getName());
+    EXPECT_EQ(importedNames, (std::vector<std::string>{"JawOpen", "Smile"}));
+    manager->destroySceneNode(importedNode);
+
     Ogre::MeshManager::getSingleton().remove(mesh);
     mesh.reset();
 }
