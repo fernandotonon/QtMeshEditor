@@ -73,6 +73,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/OnnxRuntimeSettings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelFetch.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelFetch_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp

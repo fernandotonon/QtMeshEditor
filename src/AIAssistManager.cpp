@@ -4,6 +4,7 @@
 #include "NormalMapGenerator.h"
 #include "TextureUpscaler.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "SentryReporter.h"
 #include <QStandardPaths>
 #include <QDir>
@@ -139,31 +140,15 @@ bool AIAssistManager::ensureModelBlocking(Map map)
     // async; drive it with a local event loop. The download label is per-map so
     // we only react to our own.
     const QString label = QString::fromLatin1(mapDownloadLabel(map));
-    QEventLoop loop;
-    bool ok = false;
-    auto onDone = connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = true; loop.quit(); }
-        });
-    auto onErr = connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = false; loop.quit(); }
-        });
-    // Hard timeout so a hung/stalled connection (DNS stall, unresponsive host)
-    // can't block the synchronous synthesize call forever — the map then
-    // reports the graceful "model not available" error / roughness falls back.
-    bool timedOut = false;
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    timeout.start(120000);  // 120s — generous for a ~1.6 MB model on slow links
-    dl->startDownload(url, dest, label);
-    loop.exec();
-    disconnect(onDone);
-    disconnect(onErr);
-    if (timedOut && dl)
-        dl->cancelDownload();
-    return ok && !timedOut && QFileInfo::exists(dest);
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dest;
+    req.label = label;
+    req.timeoutMs = 120000;
+    // #1037: one shared blocking wait — keeps the downloader's own error text
+    // and the synchronous-rejection guard every consumer used to lack.
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    return fo.ok;
 }
 
 void AIAssistManager::ensureModel()

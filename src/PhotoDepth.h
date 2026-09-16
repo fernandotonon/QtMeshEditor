@@ -66,7 +66,8 @@ bool modelPresent();
 /// Returns the path, or empty when offline/disabled/failed. Honours
 /// QTMESH_DEPTH_NO_DOWNLOAD and the base-URL override
 /// QTMESH_DEPTH_MODEL_BASE_URL / QSettings ai/depthModelBaseUrl.
-QString ensureModelBlocking();
+/// `error` (optional) receives the downloader's own reason on failure (#1037).
+QString ensureModelBlocking(QString* error = nullptr);
 
 /// True only when built with ENABLE_ONNX.
 bool isAvailable();
