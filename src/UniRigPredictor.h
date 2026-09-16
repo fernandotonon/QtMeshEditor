@@ -181,9 +181,10 @@ private:
                               const QString& decoderModelPath,
                               const QString& embedModelPath,
                               const Options& opts, const ProgressFn& progress);
-    /// Options::querySampling with the QTMESH_UNIRIG_QUERIES override applied.
-    static Options::QuerySampling resolveQuerySampling(const Options& opts);
 public:
+    /// Options::querySampling with the QTMESH_UNIRIG_QUERIES override applied —
+    /// the env only NARROWS the default Both (an explicit Fps/Random wins). Pure.
+    static Options::QuerySampling resolveQuerySampling(const Options& opts);
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----
     // These replicate UniRig's src/tokenizer/tokenizer_part.py exactly and are

@@ -763,11 +763,15 @@ const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, co
 
 UniRigPredictor::Options::QuerySampling UniRigPredictor::resolveQuerySampling(const Options& opts)
 {
+    // An explicit single ordering always wins — predictBoth() sets Fps/Random
+    // on its inner calls, and letting the env re-resolve those to Both would
+    // recurse without end (QTMESH_UNIRIG_QUERIES=both crashed in 1 s). The env
+    // therefore only narrows the default Both.
+    if (opts.querySampling != Options::QuerySampling::Both) return opts.querySampling;
     const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
     if (env == "fps")    return Options::QuerySampling::Fps;
     if (env == "random") return Options::QuerySampling::Random;
-    if (env == "both")   return Options::QuerySampling::Both;
-    return opts.querySampling;
+    return Options::QuerySampling::Both;
 }
 
 UniRigPredictor::Result UniRigPredictor::predictBoth(

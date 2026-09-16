@@ -664,3 +664,23 @@ TEST(UniRigPredictorFps, PickRicherPrefersSuccessThenJointCountThenFps)
     rnd.ok = false; fps.ok = true; fps.joints.resize(1);
     EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps");
 }
+
+// The env override must only narrow the default Both — an explicit single
+// ordering (what predictBoth sets on its inner calls) must win, or
+// QTMESH_UNIRIG_QUERIES=both recurses forever.
+TEST(UniRigPredictorFps, EnvOverrideNarrowsBothButNeverWidensAnExplicitMode)
+{
+    using Q = UniRigPredictor::Options::QuerySampling;
+    UniRigPredictor::Options both; both.querySampling = Q::Both;
+    UniRigPredictor::Options fps;  fps.querySampling  = Q::Fps;
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps);
+    qputenv("QTMESH_UNIRIG_QUERIES", "random");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Random);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "explicit mode wins over the env";
+    qputenv("QTMESH_UNIRIG_QUERIES", "both");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "inner Fps call must not be widened back to Both";
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
+}
