@@ -684,6 +684,7 @@ TEST(UniRigPredictorFps, EnvOverrideNarrowsBothButNeverWidensAnExplicitMode)
     EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
     EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "inner Fps call must not be widened back to Both";
     qunsetenv("QTMESH_UNIRIG_QUERIES");
+}
 
 // #1013: the humanoid labeller must SAY when the geometry does not read as a
 // humanoid, and Auto must then fall back to neutral names.
