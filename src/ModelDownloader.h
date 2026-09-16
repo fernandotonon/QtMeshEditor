@@ -35,7 +35,29 @@ public:
     float downloadSpeed() const { return m_downloadSpeed; }
 
 public slots:
-    Q_INVOKABLE void startDownload(const QString &url, const QString &destinationPath, const QString &modelName);
+    /// Start a download. #1029 (CWE-494):
+    ///  - `url` MUST be https://<host> (or a host-less file:// for local
+    ///    testing — see isAllowedDownloadUrl). Plain http and every other
+    ///    scheme are rejected before any file is touched — a model
+    ///    is executable-adjacent input, and every base URL is user-overridable
+    ///    via env/QSettings, so an unverified scheme is an injection point.
+    ///  - `expectedSha256` (lowercase/uppercase hex, optional) is verified
+    ///    against the finished file BEFORE it is renamed into place; on a
+    ///    mismatch the partial file is deleted and downloadError is emitted, so
+    ///    a corrupted or substituted fetch can never be cached and loaded later.
+    ///    Empty = no integrity check (the pre-#1029 behaviour, kept so the
+    ///    existing 21 consumers and the QML callers work unchanged).
+    Q_INVOKABLE void startDownload(const QString &url, const QString &destinationPath,
+                                   const QString &modelName,
+                                   const QString &expectedSha256 = QString());
+
+    /// True iff `url` would be accepted by startDownload:
+    ///   https://<host>/…                (host required)
+    ///   file:///… or file://localhost/… (LOCAL only — a file:// URL with any
+    ///                                    other host is a UNC/SMB remote fetch
+    ///                                    on Windows and is refused)
+    /// Pure, so callers/tests can check a base URL before wiring it up.
+    static bool isAllowedDownloadUrl(const QString &url);
     Q_INVOKABLE void pauseDownload();
     Q_INVOKABLE void resumeDownload();
     Q_INVOKABLE void cancelDownload();
@@ -80,6 +102,7 @@ private:
     QString m_currentDestinationPath;
     QString m_currentModelName;
     QString m_tempFilePath;
+    QString m_expectedSha256;   ///< #1029 — empty = no verification
 
     bool m_isDownloading = false;
     bool m_isPaused = false;

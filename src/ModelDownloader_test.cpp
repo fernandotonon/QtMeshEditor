@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QCryptographicHash>
 #include <QThread>
 #include <QTimer>
 #include <cstring>
@@ -66,6 +67,10 @@ protected:
         // Ensure clean state: cancel any lingering download
         downloader->cancelDownload();
         app->processEvents();
+        // #1029: the digest is set by startDownload, which these tests bypass
+        // when they drive onDownloadFinished directly — so a stale value from
+        // a prior test would otherwise leak in under shuffled ordering.
+        downloader->m_expectedSha256.clear();
     }
 
     void TearDown() override {
@@ -339,4 +344,198 @@ TEST_F(ModelDownloaderTest, OnDownloadFinishedRenameFailureEmitsError)
     ASSERT_EQ(errorSpy.count(), 1);
     EXPECT_EQ(errorSpy.at(0).at(0).toString(), QString("RenameFailModel"));
     EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("Failed to rename downloaded file"));
+}
+
+
+// ---- #1029: transport + integrity (CWE-494) ---------------------------------
+
+TEST_F(ModelDownloaderTest, RejectsPlainHttpBeforeTouchingTheFilesystem)
+{
+    // Every model base URL is user-overridable (env / QSettings), so a plain
+    // http source is a byte-for-byte MITM injection point. Must be refused
+    // BEFORE any side effect: no .part, no created directory.
+    const QString dest = tempFilePath("nested/dir/http-model.bin");
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    QSignalSpy startedSpy(downloader, &ModelDownloader::downloadStarted);
+
+    downloader->startDownload("http://example.invalid/model.bin", dest, "HttpModel");
+    // The rejection is QUEUED (see startDownload) so a consumer's nested
+    // QEventLoop receives it; nothing may have fired synchronously.
+    EXPECT_EQ(errorSpy.count(), 0) << "must not emit synchronously — that loses the caller's loop.quit()";
+    app->processEvents();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    EXPECT_EQ(errorSpy.at(0).at(0).toString(), QString("HttpModel"));
+    EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("https://"));
+    EXPECT_EQ(startedSpy.count(), 0);
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_FALSE(QFileInfo::exists(dest + ".part"));
+    EXPECT_FALSE(QFileInfo(dest).absoluteDir().exists())
+        << "a refused URL must not create the destination directory";
+}
+
+TEST_F(ModelDownloaderTest, RejectsSchemelessAndExoticSchemes)
+{
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    for (const char* u : {"example.invalid/model.bin", "ftp://x/m.bin", "javascript:1"}) {
+        downloader->startDownload(QString::fromLatin1(u), tempFilePath("x.bin"), "Bad");
+    }
+    app->processEvents();
+    EXPECT_EQ(errorSpy.count(), 3);
+    EXPECT_FALSE(downloader->isDownloading());
+}
+
+TEST_F(ModelDownloaderTest, AllowedUrlPredicateMatchesTheGate)
+{
+    // The pure predicate is what a consumer checks up front; it must agree
+    // with what startDownload actually refuses.
+    EXPECT_TRUE(ModelDownloader::isAllowedDownloadUrl("https://huggingface.co/x/y/resolve/main/m.onnx"));
+    EXPECT_TRUE(ModelDownloader::isAllowedDownloadUrl("HTTPS://Example.invalid/m.bin"));
+    EXPECT_TRUE(ModelDownloader::isAllowedDownloadUrl("file:///tmp/local-mirror/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("http://example.invalid/m.bin"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("ftp://example.invalid/m.bin"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl(""));
+}
+
+TEST_F(ModelDownloaderTest, Sha256MismatchDiscardsPartialAndNeverRenames)
+{
+    // The load-bearing property: a file that fails verification must NEVER
+    // reach the destination path, where the next launch would trust and load
+    // it, and must not linger as a .part the resume logic would append to.
+    const QString partialPath = tempFilePath("bad.bin.part");
+    const QString finalPath = tempFilePath("bad.bin");
+
+    downloader->m_isDownloading = true;
+    downloader->m_currentModelName = "TamperedModel";
+    downloader->m_currentDestinationPath = finalPath;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_expectedSha256 =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly));
+    downloader->m_outputFile->write("payload");
+    downloader->m_currentReply = new FakeNetworkReply({}, QNetworkReply::NoError, {}, downloader);
+
+    QSignalSpy completedSpy(downloader, &ModelDownloader::downloadCompleted);
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(completedSpy.count(), 0) << "must not report success on a bad digest";
+    ASSERT_EQ(errorSpy.count(), 1);
+    EXPECT_EQ(errorSpy.at(0).at(0).toString(), QString("TamperedModel"));
+    EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("SHA-256"));
+    EXPECT_FALSE(QFileInfo::exists(finalPath)) << "tampered file reached the destination";
+    EXPECT_FALSE(QFileInfo::exists(partialPath)) << "poisoned .part left behind for resume";
+    EXPECT_FALSE(downloader->isDownloading());
+}
+
+TEST_F(ModelDownloaderTest, Sha256MatchRenamesAndCompletes)
+{
+    const QString partialPath = tempFilePath("good.bin.part");
+    const QString finalPath = tempFilePath("good.bin");
+    const QByteArray payload = "payload";
+    const QString digest = QString::fromLatin1(
+        QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+
+    downloader->m_isDownloading = true;
+    downloader->m_currentModelName = "GoodModel";
+    downloader->m_currentDestinationPath = finalPath;
+    downloader->m_tempFilePath = partialPath;
+    // Uppercase on purpose: HF's LFS oid is lowercase, but a hand-typed
+    // manifest may not be, and the compare is documented case-insensitive.
+    downloader->m_expectedSha256 = digest.toUpper();
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly));
+    downloader->m_outputFile->write(payload);
+    downloader->m_currentReply = new FakeNetworkReply({}, QNetworkReply::NoError, {}, downloader);
+
+    QSignalSpy completedSpy(downloader, &ModelDownloader::downloadCompleted);
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->onDownloadFinished();
+
+    EXPECT_EQ(errorSpy.count(), 0);
+    ASSERT_EQ(completedSpy.count(), 1);
+    EXPECT_EQ(completedSpy.at(0).at(1).toString(), finalPath);
+    EXPECT_TRUE(QFileInfo::exists(finalPath));
+}
+
+TEST_F(ModelDownloaderTest, EmptyDigestKeepsLegacyBehaviourForExistingConsumers)
+{
+    // 21 consumers and two QML call sites pass no digest today; they must keep
+    // working unchanged (this is the same case as the pre-existing
+    // OnDownloadFinishedRenamesTempFileAndEmitsCompleted, pinned explicitly
+    // against the new member).
+    downloader->m_expectedSha256.clear();
+    const QString partialPath = tempFilePath("legacy.bin.part");
+    const QString finalPath = tempFilePath("legacy.bin");
+    downloader->m_isDownloading = true;
+    downloader->m_currentModelName = "LegacyModel";
+    downloader->m_currentDestinationPath = finalPath;
+    downloader->m_tempFilePath = partialPath;
+    downloader->m_outputFile = new QFile(partialPath, downloader);
+    ASSERT_TRUE(downloader->m_outputFile->open(QIODevice::WriteOnly));
+    downloader->m_outputFile->write("anything");
+    downloader->m_currentReply = new FakeNetworkReply({}, QNetworkReply::NoError, {}, downloader);
+
+    QSignalSpy completedSpy(downloader, &ModelDownloader::downloadCompleted);
+    downloader->onDownloadFinished();
+    EXPECT_EQ(completedSpy.count(), 1);
+    EXPECT_TRUE(QFileInfo::exists(finalPath));
+}
+
+
+TEST_F(ModelDownloaderTest, FileUrlWithRemoteHostIsRefusedAsRemote)
+{
+    // file://server/share/model.onnx is a UNC path on Windows — an SMB fetch
+    // over the network wearing a local scheme. Letting it through would walk
+    // straight around the https-only rule, so it is refused BEFORE any
+    // filesystem side effect, and the error must say WHY (a message about
+    // "scheme" would be nonsense for a file:// URL).
+    const QString dest = tempFilePath("unc/model.onnx");
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    QSignalSpy startedSpy(downloader, &ModelDownloader::downloadStarted);
+
+    downloader->startDownload("file://evil-host/share/model.onnx", dest, "UncModel");
+    app->processEvents();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("remote"))
+        << errorSpy.at(0).at(1).toString().toStdString();
+    EXPECT_EQ(startedSpy.count(), 0);
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_FALSE(QFileInfo::exists(dest + ".part"));
+    EXPECT_FALSE(QFileInfo(dest).absoluteDir().exists());
+}
+
+TEST_F(ModelDownloaderTest, HostRulesForFileAndHttps)
+{
+    // file:// only LOCAL (no host, or localhost); https:// must have a host.
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file:///tmp/mirror/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file://localhost/tmp/mirror/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("file://LOCALHOST/tmp/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("file://evil-host/share/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("file://10.0.0.5/share/m.onnx"));
+    EXPECT_TRUE (ModelDownloader::isAllowedDownloadUrl("https://huggingface.co/x/resolve/main/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("https:///no-host/m.onnx"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("https://"));
+    EXPECT_FALSE(ModelDownloader::isAllowedDownloadUrl("::not a url::"));
+}
+
+
+TEST_F(ModelDownloaderTest, RejectedUrlErrorRedactsCredentialsAndQuery)
+{
+    // A user-configured override may carry credentials; the refusal text
+    // reaches the GUI status line, so secrets must not ride along. The host
+    // and path MUST survive, or the user cannot see what they misconfigured.
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    downloader->startDownload("http://alice:s3cretPW@mirror.example.invalid/models/m.bin?token=TOK123#frag",
+                              tempFilePath("m.bin"), "LeakModel");
+    app->processEvents();
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    const QString msg = errorSpy.at(0).at(1).toString();
+    EXPECT_FALSE(msg.contains("s3cretPW")) << msg.toStdString();
+    EXPECT_FALSE(msg.contains("TOK123"))   << msg.toStdString();
+    EXPECT_FALSE(msg.contains("alice"))    << msg.toStdString();
+    EXPECT_TRUE (msg.contains("mirror.example.invalid/models/m.bin")) << msg.toStdString();
 }
