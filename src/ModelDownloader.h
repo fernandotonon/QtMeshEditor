@@ -34,6 +34,13 @@ public:
     qint64 bytesTotal() const { return m_bytesTotal; }
     float downloadSpeed() const { return m_downloadSpeed; }
 
+    /// #1036: parse `Content-Range: <unit> <first>-<last>/<total|*>`. The unit
+    /// is case-insensitive (RFC 9110 §14.1). Returns false unless first AND
+    /// last parsed; `total` is -1 for "*" (unknown). Pure — unit-tested directly.
+    static bool parseContentRange(const QByteArray& header,
+                                  qint64& first, qint64& last, qint64& total);
+    // NB: plain `public:`, NOT a slot — moc cannot register qint64& as a meta type.
+
 public slots:
     /// Start a download. #1029 (CWE-494):
     ///  - `url` MUST be https://<host> (or a host-less file:// for local
@@ -103,6 +110,26 @@ private:
     QString m_currentModelName;
     QString m_tempFilePath;
     QString m_expectedSha256;   ///< #1029 — empty = no verification
+    /// #1036: true until the FIRST readyRead of a resumed request has proven
+    /// the server honoured our Range header (206 + matching Content-Range).
+    bool m_resumeUnverified = false;
+    /// #1036 review: the resource size the response committed to (206 total,
+    /// or a full body's Content-Length). -1 = unknown. Checked against the
+    /// finished .part before the rename — a short body must never be promoted.
+    qint64 m_expectedTotalBytes = -1;
+    /// True while WE abort the reply: abort() delivers errorOccurred/finished
+    /// synchronously, and without this the handlers would emit a second
+    /// downloadError and run a second cleanup (review).
+    bool m_abortingInternally = false;
+    /// #1036: on the first bytes of a resumed request, decide whether the
+    /// server honoured our Range. Returns true to keep writing (appending, or
+    /// restarted from byte 0 after a truncate), false when the download was
+    /// aborted because the body is a partial window we cannot use.
+    bool verifyResumeResponse();
+    /// The ONE path for "this partial file is unusable": remove (or truncate)
+    /// the .part, reset the resume bookkeeping, abort the reply silently, end
+    /// the download and emit exactly one downloadError.
+    void discardPartialAndFail(const QString& message);
 
     bool m_isDownloading = false;
     bool m_isPaused = false;
