@@ -11429,10 +11429,16 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
         err() << "Error: export failed." << Qt::endl;
         return 1;
     }
-    // Sidecar with the ordered ARKit names (Assimp's glTF exporter drops
-    // targetNames), so `qtmesh mocap --face` / re-import can rebind by index.
-    FaceRig::writeArkitSidecar(QFileInfo(outputPath).absoluteFilePath(),
-                               rep.shapeNames);
+    // Sidecar with the ordered ARKit names for formats that cannot carry them.
+    // glTF/glb carry `mesh.extras.targetNames` natively since #921 (and FBX
+    // names each blend-shape channel), so only the remaining formats need it;
+    // the importer still honours sidecars written by older builds.
+    {
+        const QString ext = QFileInfo(outputPath).suffix().toLower();
+        if (ext != QLatin1String("glb") && ext != QLatin1String("gltf"))
+            FaceRig::writeArkitSidecar(QFileInfo(outputPath).absoluteFilePath(),
+                                       rep.shapeNames);
+    }
 
     if (jsonOutput) {
         QJsonObject j;

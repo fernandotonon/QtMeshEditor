@@ -298,10 +298,11 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     MeshProcessor meshProcessor(skeleton, isZup, m_nodeBakeRotation);
 
     // ARKit blendshape name sidecar (`<file>.arkit.json`, schema
-    // qtmesh-arkit-blendshapes-v1): Assimp's glTF2 exporter drops
-    // `targetNames`, so shapes in a re-imported glb arrive nameless and would
-    // degrade to "Shape_N". Restore the authored ARKit names from the sidecar
-    // the face-rig exporters write next to the mesh.
+    // qtmesh-arkit-blendshapes-v1). glTF/glb written since #921 carry
+    // `mesh.extras.targetNames` natively (Assimp reads them into
+    // aiAnimMesh::mName, which MeshProcessor prefers), so this is for files
+    // written by older builds and for formats whose exporter cannot carry
+    // names; native names always win over the hints.
     {
         QFile sidecar(QString::fromStdString(path) + ".arkit.json");
         if (sidecar.exists() && sidecar.open(QIODevice::ReadOnly)) {
