@@ -320,7 +320,7 @@ Split View|Skeleton Animation Controls
 - **Performance capture** — video/webcam → facial morph animation (ARKit blendshapes), head pose, and full-body skeletal capture onto humanoid rigs; live preview + record in the editor, `qtmesh mocap` on the CLI (`-DENABLE_MOCAP` builds)
 - **AI chat** — natural language scene editing via local LLMs
 - **MCP server** — 57+ tools for AI agents (Claude, Cursor, etc.), including HDR/IBL (`set_hdr_environment`, `set_tonemap`, …) and QtMesh Cloud (`cloud_*`)
-- **REST API** — opt-in HTTP interface for external automation (`--with-mcp --http-port 8080`). Bound to **localhost** by default; tools execute only via `POST /api/tools/<name>` (`GET /api/tools` lists them); set `QTMESH_HTTP_TOKEN` (or `--http-token`) to require `Authorization: Bearer <token>` on every request, and `--http-bind 0.0.0.0` only when you mean to expose it
+- **REST API** — opt-in HTTP interface for external automation (`--with-mcp --http-port 8080`). Bound to **localhost** by default; tools execute only via `POST /api/tools/<name>` (`GET /api/tools` lists them); set `QTMESH_HTTP_TOKEN` (or `--http-token-file <path>`; a secret on the command line is refused, since `ps` shows it to every local user) to require `Authorization: Bearer <token>` on every request, and `--http-bind 0.0.0.0` only when you mean to expose it
 
 ---
 

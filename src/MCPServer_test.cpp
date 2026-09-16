@@ -4700,6 +4700,34 @@ TEST_F(MCPServerHttpTest, TokenResolution_EnvWinsOverSettings_ExplicitWinsOverBo
     EXPECT_TRUE(MCPServer::resolveHttpToken().isEmpty());
 }
 
+TEST_F(MCPServerHttpTest, TokenFile_TrimmedContentOrError)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString good = dir.filePath(QStringLiteral("token"));
+    { QFile f(good); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("  s3cret-token\n\n"); }
+    QString err;
+    EXPECT_EQ(MCPServer::readHttpTokenFile(good, &err), QStringLiteral("s3cret-token"));
+    EXPECT_TRUE(err.isEmpty());
+
+    const QString blank = dir.filePath(QStringLiteral("blank"));
+    { QFile f(blank); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("\n   \n"); }
+    EXPECT_TRUE(MCPServer::readHttpTokenFile(blank, &err).isEmpty());
+    EXPECT_TRUE(err.contains("empty"));
+
+    err.clear();
+    EXPECT_TRUE(MCPServer::readHttpTokenFile(dir.filePath(QStringLiteral("missing")), &err).isEmpty());
+    EXPECT_FALSE(err.isEmpty());
+
+    // The file-sourced token protects the API exactly like an explicit one.
+    server->setOgreInitFailed(true);
+    server->setHttpToken(MCPServer::readHttpTokenFile(good));
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_EQ(getHttpStatus(sendHttpRequest(server->httpPort(), postListMaterials())), 401);
+    EXPECT_EQ(getHttpStatus(sendHttpRequest(server->httpPort(),
+                  postListMaterials("Authorization: Bearer s3cret-token\r\n"))), 200);
+}
+
 TEST_F(MCPServerHttpTest, BindAddress_DefaultIsLoopback_AnyIsOptIn)
 {
     ASSERT_TRUE(server->startHttp(0));

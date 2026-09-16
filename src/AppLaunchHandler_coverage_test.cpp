@@ -245,9 +245,41 @@ TEST(AppLaunchHandlerCoverageTest, Collect_HttpPortAtEndNoFollowingArg)
     EXPECT_TRUE(AppLaunchHandler::collectGuiLaunchPaths(args).isEmpty());
 }
 
+TEST(AppLaunchHandlerCoverageTest, Cli_HttpOptionValuesNeverRouteToCli)
+{
+    // #984 review: a token (file) that happens to equal a subcommand, or a value
+    // of "--cli", must not turn a GUI/MCP launch into a CLI run.
+    {
+        char a0[] = "QtMeshEditor", a1[] = "--with-mcp", a2[] = "--http-token-file", a3[] = "scan";
+        char* argv[] = {a0, a1, a2, a3};
+        EXPECT_FALSE(AppLaunchHandler::isCliInvocation(4, argv));
+    }
+    {
+        char a0[] = "QtMeshEditor", a1[] = "--http-token", a2[] = "scan";   // refused by main(), still consumed here
+        char* argv[] = {a0, a1, a2};
+        EXPECT_FALSE(AppLaunchHandler::isCliInvocation(3, argv));
+    }
+    {
+        char a0[] = "QtMeshEditor", a1[] = "--http-token-file", a2[] = "--cli";
+        char* argv[] = {a0, a1, a2};
+        EXPECT_FALSE(AppLaunchHandler::isCliInvocation(3, argv));
+    }
+    {
+        char a0[] = "QtMeshEditor", a1[] = "--http-bind", a2[] = "0.0.0.0", a3[] = "--http-port", a4[] = "9000";
+        char* argv[] = {a0, a1, a2, a3, a4};
+        EXPECT_FALSE(AppLaunchHandler::isCliInvocation(5, argv));
+    }
+    {
+        // …while a REAL subcommand after the value pairs is still detected.
+        char a0[] = "QtMeshEditor", a1[] = "--http-port", a2[] = "9000", a3[] = "info";
+        char* argv[] = {a0, a1, a2, a3};
+        EXPECT_TRUE(AppLaunchHandler::isCliInvocation(4, argv));
+    }
+}
+
 TEST(AppLaunchHandlerCoverageTest, Collect_HttpTokenAndBindValuesAreSkipped)
 {
-    // #984: --http-token / --http-bind take a value like --http-port does. The
+    // #984: --http-token-file / --http-bind take a value like --http-port does. The
     // value is skipped even when it names a REAL importable file — otherwise a
     // token that happens to look like a path would be opened in the editor.
     QTemporaryDir dir;
@@ -261,8 +293,8 @@ TEST(AppLaunchHandlerCoverageTest, Collect_HttpTokenAndBindValuesAreSkipped)
     const QStringList args = {
         QStringLiteral("QtMeshEditor"),
         QStringLiteral("--with-mcp"),
-        QStringLiteral("--http-token"), decoy,
-        QStringLiteral("--http-bind"),  QStringLiteral("0.0.0.0"),
+        QStringLiteral("--http-token-file"), decoy,
+        QStringLiteral("--http-bind"),       QStringLiteral("0.0.0.0"),
     };
     EXPECT_TRUE(AppLaunchHandler::collectGuiLaunchPaths(args).isEmpty());
 

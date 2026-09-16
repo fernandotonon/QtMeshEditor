@@ -172,8 +172,9 @@ int main(int argc, char *argv[])
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;
     int httpPort = 8080;
-    QString httpToken;      // #984: --http-token <secret> (else QTMESH_HTTP_TOKEN / QSettings)
-    QString httpBind;       // #984: --http-bind <addr>   (else QTMESH_HTTP_BIND / loopback)
+    QString httpTokenFile;  // #984: --http-token-file <path> (else QTMESH_HTTP_TOKEN / QSettings)
+    QString httpBind;       // #984: --http-bind <addr>        (else QTMESH_HTTP_BIND / loopback)
+    bool httpTokenOnArgv = false;
     for (int i = 1; i < argc; ++i) {
         QString arg = QString(argv[i]);
         if (arg == "--mcp" || arg == "-mcp") {
@@ -182,16 +183,39 @@ int main(int argc, char *argv[])
             mcpWithGuiMode = true;
         } else if (arg == "--http-port" && i + 1 < argc) {
             httpPort = QString(argv[++i]).toInt();
-        } else if (arg == "--http-token" && i + 1 < argc) {
-            httpToken = QString(argv[++i]);
+        } else if (arg == "--http-token-file" && i + 1 < argc) {
+            httpTokenFile = QString(argv[++i]);
+        } else if (arg == "--http-token") {
+            // Refused (review on #984): a secret on the command line is visible
+            // to every local user via ps / /proc/<pid>/cmdline for the whole
+            // session, which defeats the token on exactly the shared machines
+            // it is meant for. Refuse loudly rather than start unprotected.
+            httpTokenOnArgv = true;
+            if (i + 1 < argc) ++i;
         } else if (arg == "--http-bind" && i + 1 < argc) {
             httpBind = QString(argv[++i]);
         }
     }
+    if (httpTokenOnArgv) {
+        fprintf(stderr, "Error: --http-token <secret> is not accepted — a secret on the command line is "
+                        "visible to other local users (ps). Use --http-token-file <path>, the "
+                        "QTMESH_HTTP_TOKEN environment variable, or QSettings mcp/httpToken.\n");
+        return 2;
+    }
     // Applies the CLI overrides before startHttp(); anything not given falls
-    // back to the env/QSettings resolution inside MCPServer.
-    auto configureHttp = [&](MCPServer &server) {
-        if (!httpToken.isEmpty()) server.setHttpToken(httpToken);
+    // back to the env/QSettings resolution inside MCPServer. Returns false when
+    // a token file was requested but cannot be read — the caller must then NOT
+    // start the HTTP server (down beats up-and-unprotected).
+    auto configureHttp = [&](MCPServer &server) -> bool {
+        if (!httpTokenFile.isEmpty()) {
+            QString err;
+            const QString token = MCPServer::readHttpTokenFile(httpTokenFile, &err);
+            if (token.isEmpty()) {
+                qCritical().noquote() << err << "— HTTP API NOT started";
+                return false;
+            }
+            server.setHttpToken(token);
+        }
         if (!httpBind.isEmpty()) {
             const QHostAddress addr(httpBind);
             if (addr.isNull())
@@ -199,6 +223,7 @@ int main(int argc, char *argv[])
             else
                 server.setHttpBindAddress(addr);
         }
+        return true;
     };
 
     // When running in MCP mode, redirect stdout to stderr so that
@@ -235,8 +260,8 @@ int main(int argc, char *argv[])
         // Note: In standalone MCP mode, we don't have a MainWindow
         server.setOutputFd(savedStdoutFd);
         server.start();
-        configureHttp(server);
-        server.startHttp(httpPort);
+        if (configureHttp(server))
+            server.startHttp(httpPort);
 
         return a.exec();
     }
@@ -468,8 +493,8 @@ int main(int argc, char *argv[])
             mcpServer->setMainWindow(&w);
             mcpServer->setOutputFd(savedStdoutFd);
             mcpServer->start();
-            configureHttp(*mcpServer);
-            mcpServer->startHttp(httpPort);
+            if (configureHttp(*mcpServer))
+                mcpServer->startHttp(httpPort);
             w.setMCPServer(mcpServer);  // MainWindow takes ownership
             qDebug() << "MCP Server started alongside GUI";
         }

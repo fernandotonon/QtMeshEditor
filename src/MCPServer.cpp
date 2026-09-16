@@ -12952,6 +12952,27 @@ QString MCPServer::resolveHttpToken()
     return settings.value(QStringLiteral("mcp/httpToken")).toString().trimmed();
 }
 
+QString MCPServer::readHttpTokenFile(const QString &path, QString *error)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (error) *error = QStringLiteral("cannot read HTTP token file %1: %2").arg(path, f.errorString());
+        return {};
+    }
+    // A secret file should not be readable by other local users — that would
+    // recreate the argv leak this option exists to avoid. Warn, don't refuse:
+    // the platform's permission model may not map onto these bits.
+    const QFileDevice::Permissions perms = f.permissions();
+    if (perms & (QFileDevice::ReadGroup | QFileDevice::ReadOther))
+        qWarning() << "HTTP token file" << path << "is readable by other users — consider chmod 600";
+    const QString token = QString::fromUtf8(f.read(4096)).trimmed();
+    if (token.isEmpty()) {
+        if (error) *error = QStringLiteral("HTTP token file %1 is empty").arg(path);
+        return {};
+    }
+    return token;
+}
+
 QHostAddress MCPServer::resolveHttpBindAddress()
 {
     const QString env = QString::fromUtf8(qgetenv("QTMESH_HTTP_BIND")).trimmed();

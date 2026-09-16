@@ -113,6 +113,11 @@ public:
 
     /** Token from `QTMESH_HTTP_TOKEN`, else QSettings `mcp/httpToken`, else empty. */
     static QString resolveHttpToken();
+    /** Read a token from a file (`--http-token-file`): whole content trimmed of
+     *  surrounding whitespace/newlines. Empty result + `error` set when the
+     *  file is missing, unreadable or blank. The secret is never placed on the
+     *  command line, where every local user could read it via `ps`. */
+    static QString readHttpTokenFile(const QString &path, QString *error = nullptr);
     /** Bind address from `QTMESH_HTTP_BIND` (e.g. "0.0.0.0"), else loopback. */
     static QHostAddress resolveHttpBindAddress();
     /** True when the raw request header block carries `token` as a Bearer
