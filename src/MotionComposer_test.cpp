@@ -49,9 +49,18 @@ QByteArray libWithActions(const std::vector<std::pair<QString, int>>& actions)
             fr += poseAt(4.0 * double(c) + 0.02 * double(f));
         }
         fr += "]";
+        // #1023: a DISTINCT per-clip refRoll, so a test can tell WHICH
+        // take's baseline (if any) survived a composition.
+        QByteArray rr = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) rr += ",";
+            rr += QByteArray::number(0.1 * double(c + 1), 'g', 8);
+        }
+        rr += "]";
         json += "{\"action\":\"" + actions[c].first.toUtf8()
               + "\",\"source\":\"test " + QByteArray::number(int(c))
-              + "\",\"quats\":" + fr + "}";
+              + "\",\"refRoll\":" + rr
+              + ",\"quats\":" + fr + "}";
     }
     json += "]}";
     return json;
@@ -565,4 +574,58 @@ TEST(MotionComposer, EmptyScriptJsonFailsCleanly)
     EXPECT_FALSE(sel.error.isEmpty());
     ASSERT_EQ(sel.unresolved.size(), 1u);
     EXPECT_EQ(sel.unresolved[0].toStdString(), "teleport");
+}
+
+// ---- #1023: refRoll across composition -------------------------------------
+
+TEST(MotionComposer, SingleTakeCompositionKeepsItsRefRoll)
+{
+    // One action (even repeated) has exactly one reference frame, so its
+    // bind->reference roll is valid for every frame and must be carried.
+    const MotionLibrary lib = makeLib({{"wave", 20}, {"walk", 20}});
+    const auto script = MotionComposer::parse(QStringLiteral("wave twice"), lib);
+    const auto comp = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(comp.ok) << comp.error.toStdString();
+    ASSERT_TRUE(comp.singleTake);
+    ASSERT_EQ(comp.refRoll.size(), 22u);
+    // The fixture gives clip 0 ("wave") a refRoll of 0.1 on every role.
+    EXPECT_NEAR(comp.refRoll[1], 0.1f, 1e-4f);
+}
+
+TEST(MotionComposer, MultiTakeCompositionDropsRefRoll)
+{
+    // refRoll is the per-clip bind->REFERENCE roll, and applyMotionClip adds
+    // it as ONE per-role constant across every frame. Takes disagree (measured
+    // up to 226 deg in the shipped library), so carrying the first take's
+    // vector would wear the wrong baseline over every later segment. Emitting
+    // nothing selects the legacy path, which is strictly better than a
+    // known-wrong constant — until a per-frame baseline exists.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}});
+    const auto script = MotionComposer::parse(
+        QStringLiteral("walk then sit"), lib);
+    ASSERT_EQ(script.steps.size(), 2u);
+    const auto comp = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(comp.ok) << comp.error.toStdString();
+    ASSERT_FALSE(comp.singleTake);
+    EXPECT_TRUE(comp.refRoll.empty())
+        << "a stitched clip must not wear one take's roll baseline";
+    // NB restDir/restWorld are NOT asserted here: this fixture library ships
+    // neither, so the assertion would test the fixture rather than the gate.
+    // Their carry-the-first-take behaviour is deliberately unchanged — they
+    // describe the source SKELETON, shared by every take.
+}
+
+TEST(MotionComposer, SelectForPromptPropagatesTheRefRollGate)
+{
+    // The gate must survive the Selection wrapper the surfaces actually call.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}});
+    const auto one = MotionComposer::selectForPrompt(QStringLiteral("walk"), lib);
+    ASSERT_TRUE(one.ok) << one.error.toStdString();
+    EXPECT_FALSE(one.refRoll.empty()) << "a single take keeps its roll baseline";
+
+    const auto many =
+        MotionComposer::selectForPrompt(QStringLiteral("walk then sit"), lib);
+    ASSERT_TRUE(many.ok) << many.error.toStdString();
+    ASSERT_TRUE(many.composed);
+    EXPECT_TRUE(many.refRoll.empty()) << "a stitched clip drops it";
 }
