@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "UniRigPredictor.h"
+#include "AutoRig.h"
 #include "MotionInbetween.h"
 
 namespace {
@@ -683,4 +684,101 @@ TEST(UniRigPredictorFps, EnvOverrideNarrowsBothButNeverWidensAnExplicitMode)
     EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
     EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "inner Fps call must not be widened back to Both";
     qunsetenv("QTMESH_UNIRIG_QUERIES");
+
+// #1013: the humanoid labeller must SAY when the geometry does not read as a
+// humanoid, and Auto must then fall back to neutral names.
+namespace {
+UniRigPredictor::Joint mkJ(double x, double y, double z, int parent, int id)
+{
+    UniRigPredictor::Joint j; j.pos = {x, y, z}; j.parent = parent;
+    j.name = QStringLiteral("joint_%1").arg(id); return j;
+}
+std::vector<UniRigPredictor::Joint> syntheticHumanoid()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    return { J(0,0,0,-1), J(0,.3,0,0), J(0,.6,0,1), J(0,.8,0,2), J(0,.95,0,3),
+             J(-.2,.6,0,2), J(-.45,.6,0,5), J(-.65,.6,0,6),
+             J(.2,.6,0,2),  J(.45,.6,0,8),  J(.65,.6,0,9),
+             J(-.1,-.1,0,0), J(-.1,-.5,0,11), J(-.1,-.9,0,12),
+             J(.1,-.1,0,0),  J(.1,-.5,0,14),  J(.1,-.9,0,15) };
+}
+// A car: a long chain along +Z (its length) with four short chains dropping to
+// the wheels. The labeller reads the long axis as "up" → not a humanoid.
+std::vector<UniRigPredictor::Joint> syntheticCar()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = { J(0,0.3,-1.0,-1), J(0,0.3,-0.3,0), J(0,0.3,0.3,1), J(0,0.3,1.0,2) };
+    for (int side = -1; side <= 1; side += 2) for (int end : {0, 3}) {
+        const int a = static_cast<int>(j.size());
+        j.push_back(J(side*0.5, 0.15, j[end].pos[2], end));
+        j.push_back(J(side*0.5, 0.0,  j[end].pos[2], a));
+    }
+    return j;
+}
+// A tree: a vertical trunk with six branches fanning out at the top.
+std::vector<UniRigPredictor::Joint> syntheticTree()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = { J(0,0,0,-1), J(0,.4,0,0), J(0,.8,0,1), J(0,1.2,0,2) };
+    for (int b = 0; b < 6; ++b) {
+        const double ang = b * 1.0471975512;
+        const int a = static_cast<int>(j.size());
+        j.push_back(J(.3*std::cos(ang), 1.4, .3*std::sin(ang), 2));
+        j.push_back(J(.6*std::cos(ang), 1.6, .6*std::sin(ang), a));
+    }
+    return j;
+}
+bool hasName(const std::vector<UniRigPredictor::Joint>& j, const char* nm)
+{ for (const auto& x : j) if (x.name == QLatin1String(nm)) return true; return false; }
+bool anyHumanoidName(const std::vector<UniRigPredictor::Joint>& j)
+{ for (const auto& x : j) if (x.name.contains("Arm") || x.name.contains("Leg") || x.name == "Hips" || x.name == "Head") return true; return false; }
+} // namespace
+
+TEST(UniRigLabeling, HumanoidIsPlausibleAndKeepsAnatomicalNamesUnderAuto)
+{
+    auto j = syntheticHumanoid();
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    auto k = syntheticHumanoid();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(k, 1, UniRigPredictor::Labeling::Auto), "humanoid");
+    EXPECT_TRUE(hasName(k, "Hips")); EXPECT_TRUE(hasName(k, "LeftArm")); EXPECT_TRUE(hasName(k, "RightUpLeg"));
+}
+
+TEST(UniRigLabeling, CarAndTreeAreNotPlausibleAndGetNeutralNamesUnderAuto)
+{
+    auto car = syntheticCar();
+    EXPECT_FALSE(UniRigPredictor::labelJointsAnatomically(car, 1)) << "its long axis is not the up axis";
+    auto car2 = syntheticCar();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(car2, 1, UniRigPredictor::Labeling::Auto), "generic");
+    EXPECT_FALSE(anyHumanoidName(car2)) << "no Neck/Head/LeftFoot on a car";
+    EXPECT_EQ(car2[0].name, "root");
+
+    auto tree = syntheticTree();
+    EXPECT_FALSE(UniRigPredictor::labelJointsAnatomically(tree, 1)) << "six branches are not two arms";
+    auto tree2 = syntheticTree();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(tree2, 1, UniRigPredictor::Labeling::Auto), "generic");
+    EXPECT_FALSE(anyHumanoidName(tree2));
+}
+
+TEST(UniRigLabeling, ForcedModesAndGenericUniqueness)
+{
+    auto car = syntheticCar();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(car, 1, UniRigPredictor::Labeling::Humanoid), "humanoid");
+    EXPECT_TRUE(anyHumanoidName(car)) << "forced humanoid = the pre-#1013 behaviour";
+    auto hum = syntheticHumanoid();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(hum, 1, UniRigPredictor::Labeling::Generic), "generic");
+    EXPECT_FALSE(anyHumanoidName(hum));
+    std::set<QString> names; for (const auto& x : hum) names.insert(x.name);
+    EXPECT_EQ(names.size(), hum.size()) << "generic names must be unique (Ogre rejects duplicates)";
+    EXPECT_EQ(hum[0].name, "root"); EXPECT_EQ(hum[1].name, "bone_01");
+    // detokenize keeps its legacy default (Humanoid) so existing tests hold
+    (void)UniRigPredictor::detokenize({}, 1.0, {0, 0, 0});
+}
+
+TEST(UniRigLabeling, TemplateMapsToLabelingWithBipedForcingHumanoid)
+{
+    using L = UniRigPredictor::Labeling; using T = AutoRig::Template;
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Humanoid),  L::Auto);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Biped),     L::Humanoid);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Quadruped), L::Generic);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Generic),   L::Generic);
 }

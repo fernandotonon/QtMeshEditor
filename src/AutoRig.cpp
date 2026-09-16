@@ -683,12 +683,23 @@ std::vector<int> AutoRig::rigPriorPartLabels(Ogre::Entity* entity,
     return labels;
 }
 
+UniRigPredictor::Labeling AutoRig::uniRigLabelingForTemplate(Template tmpl)
+{
+    switch (tmpl) {
+    case Template::Humanoid: return UniRigPredictor::Labeling::Auto;
+    case Template::Biped:    return UniRigPredictor::Labeling::Humanoid;
+    default:                 return UniRigPredictor::Labeling::Generic;
+    }
+}
+
 std::vector<AutoRig::Joint> AutoRig::predictUniRig(
         const std::vector<float>& verts,
         const std::vector<uint32_t>& indices,
         int upAxis,
         const std::function<bool(int,int)>& progress,
-        QString* outError)
+        QString* outError,
+        Template tmpl,
+        QString* outLabeling)
 {
     std::vector<Joint> out;
     const int vcount = static_cast<int>(verts.size() / 3);
@@ -704,6 +715,12 @@ std::vector<AutoRig::Joint> AutoRig::predictUniRig(
     }
     UniRigPredictor::Options rnOpts;
     rnOpts.upAxis = upAxis;
+    // #1013: --skeleton doubles as the category hint for UniRig.
+    //   humanoid  → Auto (humanoid names only if the geometry reads as one)
+    //   biped     → Humanoid forced ("I know it is bipedal" — e.g. a cartoon
+    //               rat whose arm chains the plausibility check rejects)
+    //   quadruped / generic → neutral names outright.
+    rnOpts.labeling = uniRigLabelingForTemplate(tmpl);
     const auto rn = UniRigPredictor::predict(
         verts.data(), vcount,
         indices.empty() ? nullptr : indices.data(), static_cast<int>(indices.size()),
@@ -714,6 +731,7 @@ std::vector<AutoRig::Joint> AutoRig::predictUniRig(
             ? QStringLiteral("UniRig prediction returned no usable skeleton") : rn.error;
         return out;
     }
+    if (outLabeling) *outLabeling = rn.labeling;
     out.reserve(rn.joints.size());
     for (const auto& j : rn.joints) {
         Joint pj; pj.name = j.name; pj.parent = j.parent; pj.pos = j.pos; pj.recenter = false;
@@ -794,6 +812,7 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
             placed = opts.prePredictedJoints;
             for (auto& j : placed) j.recenter = false;
             report.algorithmUsed = Algorithm::UniRig;
+            report.jointLabeling = opts.prePredictedLabeling;
             mlUsed = true;
         } else if (!UniRigPredictor::isAvailable()) {
             reason = QStringLiteral("UniRig needs an ONNX-enabled build");
@@ -812,6 +831,8 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
                                   sharedBase, ownOffset[si], indices);
                 UniRigPredictor::Options rnOpts;
                 rnOpts.upAxis = opts.upAxis;
+                // #1013: --skeleton doubles as the category hint (see predictUniRig).
+                rnOpts.labeling = uniRigLabelingForTemplate(opts.tmpl);
                 const auto rn = UniRigPredictor::predict(
                     verts.data(), vcount,
                     indices.empty() ? nullptr : indices.data(),
@@ -827,6 +848,7 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
                         placed.push_back(std::move(pj));
                     }
                     report.algorithmUsed = Algorithm::UniRig;
+                    report.jointLabeling = rn.labeling;
                     mlUsed = true;
                 } else {
                     reason = rn.error.isEmpty()
@@ -1053,6 +1075,7 @@ QJsonObject AutoRig::reportToJson(const Report& r)
     o["verticesSampled"]  = r.verticesSampled;
     o["jointsRecentered"] = r.jointsRecentered;
     if (!r.fallbackReason.isEmpty()) o["fallbackReason"] = r.fallbackReason;
+    if (!r.jointLabeling.isEmpty()) o["jointLabeling"] = r.jointLabeling;   // #1013
     if (!r.error.isEmpty()) o["error"] = r.error;
     return o;
 }

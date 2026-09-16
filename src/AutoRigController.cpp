@@ -244,10 +244,12 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                 return true;
             };
             QString err;
+            QString labeling;   // #1013: which naming UniRig applied
             std::vector<AutoRig::Joint> joints =
-                AutoRig::predictUniRig(verts, indices, upAxisVal, progress, &err);
+                AutoRig::predictUniRig(verts, indices, upAxisVal, progress, &err,
+                                       AutoRig::templateFromString(templateName), &labeling);
             // Back to the main thread: build the skeleton (Ogre) or report.
-            QMetaObject::invokeMethod(qApp, [self, joints, err, entName,
+            QMetaObject::invokeMethod(qApp, [self, joints, err, labeling, entName,
                                              templateName, upAxisVal, alsoSkin, cancel]() {
                 if (!self) return;
                 self->m_rigDownloading = false;
@@ -263,8 +265,8 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                                                err, templateName, upAxisVal, alsoSkin);
                     return;
                 }
-                self->finishUniRigOnMain(QString::fromStdString(entName), joints,
-                                         templateName, upAxisVal, alsoSkin);
+                self->finishUniRigOnMain(QString::fromStdString(entName), joints, 
+                                         templateName, upAxisVal, alsoSkin, labeling);
             }, Qt::QueuedConnection);
         }).detach();
 
@@ -367,7 +369,7 @@ void AutoRigController::emitRigResult(const AutoRig::Report& report, bool skinne
 void AutoRigController::finishUniRigOnMain(const QString& entityName,
                                            const std::vector<AutoRig::Joint>& joints,
                                            const QString& templateName, int upAxis,
-                                           bool alsoSkin)
+                                           bool alsoSkin, const QString& labeling)
 {
     // MAIN thread: build the Ogre skeleton from worker-predicted joints via the
     // undoable command (using the prePredictedJoints escape hatch so it skips
@@ -377,6 +379,7 @@ void AutoRigController::finishUniRigOnMain(const QString& entityName,
     opts.tmpl = AutoRig::templateFromString(templateName);
     opts.upAxis = upAxis;
     opts.prePredictedJoints = joints;
+    opts.prePredictedLabeling = labeling;   // #1013
 
     AutoRig::Report report; bool skinned = false;
     try {

@@ -147,7 +147,7 @@ double UniRigPredictor::undiscretize(int bin)
 
 UniRigPredictor::Result UniRigPredictor::detokenize(
         const std::vector<int>& idsIn, double scale,
-        const std::array<double, 3>& centre)
+        const std::array<double, 3>& centre, Labeling labeling)
 {
     // Strip leading BOS / trailing PAD; drop the terminal EOS.
     std::vector<int> ids = idsIn;
@@ -271,16 +271,45 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
     // the mesh up-axis afterward). The ONNX predict() path re-labels with the
     // real up-axis after restoring it; for the detokenize-only path (tests /
     // non-ONNX) we label in +Y so the names are still anatomical.
-    labelJointsAnatomically(r.joints, /*upAxis=*/1);
+    r.labeling = applyLabeling(r.joints, /*upAxis=*/1, labeling);
 
     r.ok = true;
     return r;
 }
 
-void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
+void UniRigPredictor::labelJointsGeneric(std::vector<Joint>& joints)
+{
+    // Parent-before-child order is guaranteed by the detokenizer, so a plain
+    // index walk names parents before children; the root(s) are "root" (a
+    // second root gets "root_1" — Ogre rejects duplicate bone names).
+    int roots = 0, k = 0;
+    for (auto& j : joints) {
+        if (j.parent < 0) j.name = roots++ == 0 ? QStringLiteral("root")
+                                                : QStringLiteral("root_%1").arg(roots - 1);
+        else j.name = QStringLiteral("bone_%1").arg(++k, 2, 10, QLatin1Char('0'));
+    }
+}
+
+QString UniRigPredictor::applyLabeling(std::vector<Joint>& joints, int upAxis, Labeling labeling)
+{
+    if (labeling == Labeling::Generic) { labelJointsGeneric(joints); return QStringLiteral("generic"); }
+    const bool plausible = labelJointsAnatomically(joints, upAxis);
+    if (labeling == Labeling::Auto && !plausible) {
+        // #1013: the humanoid labeller stamps Hips/Neck/Head/LeftFoot on a car
+        // (its long axis reads as the spine) and RightArm_3 on a tree. When the
+        // geometry does not read as a humanoid, neutral names are the honest
+        // answer — and text-to-motion then refuses the rig with its
+        // "humanoid rigs only" message instead of animating a wheel as a foot.
+        labelJointsGeneric(joints);
+        return QStringLiteral("generic");
+    }
+    return QStringLiteral("humanoid");
+}
+
+bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
 {
     const int n = static_cast<int>(joints.size());
-    if (n == 0) return;
+    if (n == 0) return false;
 
     // ---- PATH 1: UniRig's OWN ordered name template (configs/skeleton/mixamo.yaml).
     // UniRig emits body joints in a FIXED canonical order and tags each joint's
@@ -324,7 +353,7 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
                 // hand-part joints keep their positional name (finger detail —
                 // not needed for the canonical body retarget).
             }
-            return;   // template applied — done
+            return true;   // the model's own humanoid template applied — a humanoid by construction
         }
         // else: parts unreliable for this rig → geometric path below.
     }
@@ -466,6 +495,8 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     for (int i = 0; i < n; ++i) { topUp2 = std::max(topUp2, up(i)); botUp2 = std::min(botUp2, up(i)); }
     const double bodyH = std::max(1e-6, topUp2 - botUp2);
 
+    // #1013 plausibility bookkeeping: how many chains landed on each role/side.
+    int armL = 0, armR = 0, legL = 0, legR = 0;
     // Limb roots = unclaimed children of any spine joint OR the root.
     std::vector<int> attach = spine; attach.push_back(root);
     for (int a : attach) {
@@ -493,6 +524,7 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
             else
                 isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
             const bool left  = (side(chain.front()) >= 0.0);
+            (isArm ? (left ? armL : armR) : (left ? legL : legR)) += 1;
             const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
             const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
             const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
@@ -537,6 +569,13 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
                     i, joints[i].parent, joints[i].pos[0], joints[i].pos[1],
                     joints[i].pos[2], up(i), side(i), joints[i].name.toUtf8().constData());
     }
+
+    // #1013: a plausible humanoid stands along the caller's up axis (a car's
+    // LONG axis is what the detector picks as "up", so U != upAxis) and has
+    // exactly one Left and one Right chain read as arm and as leg (a tree has
+    // several "arms"; a quadruped has no arms at all).
+    const bool upAgrees = (upAxis < 0 || upAxis > 2) || (U == upAxis);
+    return upAgrees && armL == 1 && armR == 1 && legL == 1 && legR == 1;
 }
 
 bool UniRigPredictor::isAvailable()
@@ -1495,7 +1534,7 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // up-axis rotation that toModelUp applied to the input. (The static
         // works in the model's axis convention by contract.)
         // =====================================================================
-        Result r = detokenize(tokens, half, centre);
+        Result r = detokenize(tokens, half, centre, opts.labeling);
         r.querySampling = fpsFrontLoad ? QStringLiteral("fps") : QStringLiteral("random");
         if (!r.ok) return r;
         for (auto& jt : r.joints) {
