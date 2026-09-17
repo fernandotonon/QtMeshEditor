@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QLineEdit>
+#include <QFocusEvent>
 #include <QMouseEvent>
 #include <QWidget>
 
@@ -17,8 +18,10 @@ class RecordingWidget : public QWidget
 public:
     using QWidget::QWidget;
     int presses = 0;
+    int focusIns = 0;
 protected:
     void mousePressEvent(QMouseEvent* e) override { ++presses; QWidget::mousePressEvent(e); }
+    void focusInEvent(QFocusEvent* e) override { ++focusIns; QWidget::focusInEvent(e); }
 };
 } // namespace
 
@@ -42,12 +45,17 @@ TEST(ClickFocusFilter, MousePressMovesWidgetFocusToTheWatchedWidget)
     EXPECT_EQ(window.focusWidget(), target) << "the press must move widget focus to the clicked widget";
     EXPECT_EQ(target->presses, 1) << "the filter never consumes the event — the widget (and the QML scene behind it) still gets the press";
 
-    // a press on an already-focused widget is a no-op (no focus churn)
+    // a press on an ALREADY-focused widget must still deliver a fresh FocusIn:
+    // that is the "clicked outside the app, came back, caret dead" case — the
+    // widget kept its focus flag but the QML scene needs the event.
+    const int focusInsBefore = target->focusIns;
     QMouseEvent again(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2),
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(target, &again);
+    QCoreApplication::processEvents();
     EXPECT_EQ(window.focusWidget(), target);
     EXPECT_EQ(target->presses, 2);
+    EXPECT_GT(target->focusIns, focusInsBefore) << "re-asserting focus must produce a FocusIn even when already focused";
 
     // other event types are ignored
     other->setFocus(Qt::OtherFocusReason);

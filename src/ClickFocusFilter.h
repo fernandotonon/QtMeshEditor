@@ -28,8 +28,17 @@ public:
     bool eventFilter(QObject* watched, QEvent* event) override
     {
         if (event->type() == QEvent::MouseButtonPress) {
-            if (auto* w = qobject_cast<QWidget*>(watched); w && !w->hasFocus())
+            if (auto* w = qobject_cast<QWidget*>(watched)) {
+                // Re-assert focus even when the widget already IS the window's
+                // focus widget: after the application was deactivated (a click
+                // in another app) and reactivated by clicking here, the widget
+                // keeps its focus flag but the QML scene behind it never sees a
+                // fresh FocusIn, so the text field's caret stays dead until a
+                // detour via the viewport. clearFocus()+setFocus() forces the
+                // FocusOut/FocusIn pair that QQuickWidget forwards to its scene.
+                if (w->hasFocus()) w->clearFocus();
                 w->setFocus(Qt::MouseFocusReason);
+            }
         }
         return false;   // never consume — the QML scene still needs the press
     }
