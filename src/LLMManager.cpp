@@ -53,6 +53,7 @@ void LLMManager::initializeWorkerThread()
 
     // Connect worker signals
     connect(m_worker, &LLMWorker::modelLoaded, this, &LLMManager::onWorkerModelLoaded);
+    connect(m_worker, &LLMWorker::contextReady, this, &LLMManager::onWorkerContextReady);
     connect(m_worker, &LLMWorker::modelLoadError, this, &LLMManager::onWorkerModelLoadError);
     connect(m_worker, &LLMWorker::modelUnloaded, this, &LLMManager::onWorkerModelUnloaded);
     connect(m_worker, &LLMWorker::generationStarted, this, &LLMManager::onWorkerGenerationStarted);
@@ -612,7 +613,7 @@ void LLMManager::loadSettings()
     QSettings settings;
     settings.beginGroup("LLM");
     m_modelsDirectory = settings.value("modelsDirectory", getDefaultModelsDirectory()).toString();
-    m_settings.contextSize = settings.value("contextSize", 4096).toInt();
+    m_settings.contextSize = settings.value("contextSize", 8192).toInt();
     m_settings.maxTokens = settings.value("maxTokens", 2048).toInt();
     m_settings.temperature = settings.value("temperature", 0.7).toFloat();
     m_settings.gpuLayers = settings.value("gpuLayers", 99).toInt();
@@ -708,6 +709,13 @@ void LLMManager::onWorkerModelLoaded(const QString &modelPath)
     saveSettings(); // Save last loaded model
 }
 
+void LLMManager::onWorkerContextReady(int nCtx)
+{
+    if (m_effectiveContextSize == nCtx) return;
+    m_effectiveContextSize = nCtx;
+    emit effectiveContextSizeChanged();
+}
+
 void LLMManager::onWorkerModelLoadError(const QString &error)
 {
     qWarning() << "LLMManager: Model load error:" << error;
@@ -721,6 +729,10 @@ void LLMManager::onWorkerModelLoadError(const QString &error)
 
 void LLMManager::onWorkerModelUnloaded()
 {
+    if (m_effectiveContextSize != 0) {
+        m_effectiveContextSize = 0;
+        emit effectiveContextSizeChanged();
+    }
     qDebug() << "LLMManager: Model unloaded";
     // Don't clear the model name if we're loading a new model (switching models)
     if (!m_isLoading) {

@@ -444,7 +444,7 @@ TEST_F(LLMManagerTest, DefaultSettingsValues)
 {
     // Create fresh settings to check defaults - LLMSettings struct has hardcoded defaults
     LLMSettings defaults;
-    EXPECT_EQ(defaults.contextSize, 4096);
+    EXPECT_EQ(defaults.contextSize, 8192);   // raised from 4096 for the AI agent's tool-doc prompts (#1052)
     EXPECT_EQ(defaults.maxTokens, 2048);
     EXPECT_FLOAT_EQ(defaults.temperature, 0.7f);
     EXPECT_EQ(defaults.gpuLayers, 99);

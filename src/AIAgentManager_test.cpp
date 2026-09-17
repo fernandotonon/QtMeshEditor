@@ -95,6 +95,8 @@ public:
     }
     void stop() override { stoppedFlag = true; QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit stopped(); }); }
     bool pending() const override { return pendingFlag; }
+    int contextTokens() const override { return ctxTokens; }
+    int ctxTokens = 0;
     bool isAvailable = true;
     bool stoppedFlag = false;
     bool pendingFlag = false;
@@ -549,4 +551,31 @@ TEST_F(AgentFixture, TraceLogRecordsPromptsRepliesAndToolResults)
     EXPECT_TRUE(log.contains("==== tool get_scene_info success ===="));
     EXPECT_TRUE(log.contains("Scene Information: Entities: 1")) << "raw tool text is in the trace (but never in the prompt)";
     EXPECT_TRUE(log.contains("==== finished completed ===="));
+}
+
+TEST_F(AgentFixture, PromptIsTrimmedToTheModelsContextWindow)
+{
+    // A big scene listing + history, with a small window: the prompt must
+    // shrink (history first, then extra capabilities, then the scene) and
+    // still carry the tool docs the request needs.
+    QString bigScene;
+    for (int i = 0; i < 200; ++i) bigScene += QStringLiteral("  - Prop_%1 (material: Wood)\n").arg(i);
+    m->setContextProvider([bigScene]() { return bigScene; });
+
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("look around"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString unbounded = planner->systemPrompts.last();
+    EXPECT_TRUE(unbounded.contains("Prop_199")) << "no window → nothing trimmed";
+
+    planner->ctxTokens = 2500;
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("rig it as a humanoid"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString bounded = planner->systemPrompts.last();
+    EXPECT_LT(AIAgentManager::estimateTokens(bounded), 2500 - 700) << "fits window minus reply";
+    EXPECT_FALSE(bounded.contains("Previous tasks")) << "history is the first thing to go";
+    EXPECT_TRUE(bounded.contains("- auto_rig:")) << "the routed capability's docs survive";
+    EXPECT_TRUE(bounded.contains("...(truncated)")) << "the long scene listing was cut";
+    EXPECT_EQ(m->state(), State::Completed);
 }

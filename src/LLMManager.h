@@ -49,6 +49,9 @@ class LLMManager : public QObject
 
     // Settings properties for QML binding
     Q_PROPERTY(int contextSize READ contextSize WRITE setContextSize NOTIFY settingsChanged)
+    // The window the loaded model actually got (setting clamped to the model's
+    // training limit); 0 while no model is loaded.
+    Q_PROPERTY(int effectiveContextSize READ effectiveContextSize NOTIFY effectiveContextSizeChanged)
     Q_PROPERTY(int maxTokens READ maxTokens WRITE setMaxTokens NOTIFY settingsChanged)
     Q_PROPERTY(float temperature READ temperature WRITE setTemperature NOTIFY settingsChanged)
     Q_PROPERTY(int gpuLayers READ gpuLayers WRITE setGpuLayers NOTIFY settingsChanged)
@@ -75,6 +78,7 @@ public:
 
     // Settings accessors for QML
     int contextSize() const { return m_settings.contextSize; }
+    int effectiveContextSize() const { return m_effectiveContextSize; }
     void setContextSize(int value);
     int maxTokens() const { return m_settings.maxTokens; }
     void setMaxTokens(int value);
@@ -131,6 +135,7 @@ signals:
     void availableModelsChanged();
     void modelsDirectoryChanged();
     void settingsChanged();
+    void effectiveContextSizeChanged();
     void autoLoadModelChanged();
     void lastModelNameChanged();
 
@@ -162,6 +167,7 @@ private slots:
     void onWorkerModelLoaded(const QString &modelPath);
     void onWorkerModelLoadError(const QString &error);
     void onWorkerModelUnloaded();
+    void onWorkerContextReady(int nCtx);
     void onWorkerGenerationStarted();
     void onWorkerGenerationProgress(const QString &partialText, float progress);
     void onWorkerGenerationCompleted(const QString &fullText);
@@ -181,6 +187,7 @@ private:
     QList<ModelInfo> m_recommendedModels;
     LLMSettings m_settings;
     bool m_isLoading = false;
+    int  m_effectiveContextSize = 0;
     bool m_autoLoadModel = false;
     bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active
 

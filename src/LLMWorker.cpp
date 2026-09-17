@@ -277,12 +277,19 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
         return;
     }
 
-    // Check if prompt fits in context
-    if (static_cast<int>(tokens.size()) > m_settings.contextSize - 4) {
+    // Check if the prompt fits the context ACTUALLY created (the requested
+    // size is clamped to the model's training limit in initializeContext —
+    // checking against the setting let an oversized prompt through, and
+    // llama_decode then failed with an opaque "Failed to decode prompt").
+    // Leave a little headroom so at least some tokens can be generated.
+    const int windowTokens = m_nCtx > 0 ? m_nCtx : m_settings.contextSize;
+    if (static_cast<int>(tokens.size()) + 32 > windowTokens) {
         m_isGenerating.store(false);
-        emit generationError(QString("Prompt too long: %1 tokens, max: %2")
+        emit generationError(QString("Prompt too long: %1 tokens, but the model's context window is %2. "
+                                     "Raise 'Context size' in AI → AI Model Settings (then reload the model) "
+                                     "or shorten the request.")
                                  .arg(tokens.size())
-                                 .arg(m_settings.contextSize - 4));
+                                 .arg(windowTokens));
         return;
     }
 
@@ -447,12 +454,15 @@ bool LLMWorker::initializeContext()
         return false;
     }
 
-    qDebug() << "LLMWorker: Context initialized successfully";
+    m_nCtx = static_cast<int>(llama_n_ctx(m_ctx));
+    qDebug() << "LLMWorker: Context initialized successfully, n_ctx =" << m_nCtx;
+    emit contextReady(m_nCtx);
     return true;
 }
 
 void LLMWorker::cleanupContext()
 {
+    m_nCtx = 0;
     if (m_ctx) {
         llama_free(m_ctx);
         m_ctx = nullptr;

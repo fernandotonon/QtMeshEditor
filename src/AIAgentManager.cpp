@@ -53,6 +53,11 @@ public:
     }
     void stop() override { if (m_pending) LLMManager::instance()->stopGeneration(); }
     bool pending() const override { return m_pending; }
+    int contextTokens() const override
+    {
+        auto* llm = LLMManager::instance();
+        return llm->effectiveContextSize() > 0 ? llm->effectiveContextSize() : llm->contextSize();
+    }
 private:
     bool m_pending = false;
 };
@@ -332,7 +337,7 @@ QString AIAgentManager::sceneContext() const
     return m_contextProvider ? m_contextProvider() : QString();
 }
 
-QString AIAgentManager::systemPrompt(const QStringList& capabilityIds) const
+QString AIAgentManager::systemPrompt(const QStringList& capabilityIds, bool withHistory, int sceneChars) const
 {
     QString s = QStringLiteral(
         "You are the planner of QtMeshEditor's AI agent. You control a 3D mesh editor by choosing tool calls.\n"
@@ -355,10 +360,44 @@ QString AIAgentManager::systemPrompt(const QStringList& capabilityIds) const
         "7. Colours are [R,G,B] arrays in 0..1 (red = [1,0,0]). To recolour an object: create_material with a diffuse colour, then apply_material to the object.\n")
         .arg(m_registry.promptIndex(), capabilityIds.join(", "), m_registry.promptToolsFor(capabilityIds))
         .arg(m_limits.maxSteps);
-    const QString history = conversationContext();
+    const QString history = withHistory ? conversationContext() : QString();
     if (!history.isEmpty()) s += QStringLiteral("\n%1\n").arg(history);
-    const QString ctx = sceneContext();
+    QString ctx = sceneContext();
+    if (sceneChars >= 0 && ctx.size() > sceneChars) ctx = ctx.left(sceneChars) + QStringLiteral("\n  ...(truncated)");
     if (!ctx.isEmpty()) s += QStringLiteral("\nScene state:\n%1\n").arg(ctx);
+    return s;
+}
+
+QString AIAgentManager::systemPromptWithinBudget(const QString& userPrompt, int replyTokens)
+{
+    const int window = m_planner ? m_planner->contextTokens() : 0;
+    QString full = systemPrompt(m_docCapabilities);
+    if (window <= 0) return full;
+    const int budget = window - replyTokens - estimateTokens(userPrompt) - 200;   // template + margin
+    if (estimateTokens(full) <= budget) return full;
+
+    // 1. history is the least essential context
+    QString s = systemPrompt(m_docCapabilities, false);
+    QString trimmed = QStringLiteral("dropped history");
+    // 2. capabilities beyond the most relevant (routing order = relevance)
+    for (int keep = qMin(3, static_cast<int>(m_docCapabilities.size())); estimateTokens(s) > budget && keep >= 1; --keep) {
+        m_docCapabilities = m_docCapabilities.mid(0, keep);
+        s = systemPrompt(m_docCapabilities, false);
+        trimmed += QStringLiteral(", capabilities→%1").arg(m_docCapabilities.join('+'));
+    }
+    // 3. a long scene listing
+    if (estimateTokens(s) > budget) {
+        s = systemPrompt(m_docCapabilities, false, 1200);
+        trimmed += QStringLiteral(", scene→1200 chars");
+    }
+    // 4. last resort: hard-cut (the model then works with partial docs)
+    if (estimateTokens(s) > budget && budget > 0) {
+        s = s.left(budget * 3);
+        trimmed += QStringLiteral(", hard cut");
+    }
+    trace(QStringLiteral("prompt budget"), QStringLiteral("window %1 tokens, budget %2, full ~%3 → ~%4 (%5)")
+                                               .arg(window).arg(budget).arg(estimateTokens(full)).arg(estimateTokens(s)).arg(trimmed));
+    SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("prompt trimmed to fit %1-token window: %2").arg(window).arg(trimmed));
     return s;
 }
 
@@ -369,7 +408,7 @@ void AIAgentManager::requestPlan(const QString& extraInstruction)
     QString user = QStringLiteral("Task: %1\n").arg(m_plan.goal);
     if (!extraInstruction.isEmpty()) user += extraInstruction + '\n';
     user += QStringLiteral("JSON:");
-    const QString sys = systemPrompt(m_docCapabilities);
+    const QString sys = systemPromptWithinBudget(user, 700);
     trace(QStringLiteral("plan request (system)"), sys);
     trace(QStringLiteral("plan request (user)"), user);
     m_planner->request(sys, user, 700);
@@ -403,7 +442,7 @@ void AIAgentManager::requestReplan(int failedIndex)
         .arg(failedIndex + 1).arg(failed.tool, failed.error.left(300),
              QString::fromUtf8(QJsonDocument(failed.arguments).toJson(QJsonDocument::Compact)));
     trace(QStringLiteral("replan request (user)"), user);
-    m_planner->request(systemPrompt(m_docCapabilities), user, 700);
+    m_planner->request(systemPromptWithinBudget(user, 700), user, 700);
 }
 
 namespace {

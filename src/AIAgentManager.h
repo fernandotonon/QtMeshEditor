@@ -60,6 +60,9 @@ public:
     /// True while a request is outstanding (including after stop() until the
     /// backend has delivered its stopped/completed/failed signal).
     virtual bool    pending() const { return false; }
+    /// Context window in tokens (0 = unknown/unlimited). Prompts are trimmed
+    /// to fit it.
+    virtual int     contextTokens() const { return 0; }
 signals:
     void completed(const QString& text);
     void failed(const QString& error);
@@ -154,6 +157,8 @@ public:
     Q_INVOKABLE void confirmPendingStep(bool approve, bool alwaysAllow = false);
 
     // ---- pure helpers (unit-tested) ----
+    /// Conservative token estimate (~3 chars/token) used to fit prompts into the window.
+    static int estimateTokens(const QString& text) { return static_cast<int>(text.size() / 3) + 1; }
     static QString extractJsonObject(const QString& text);
     /// Parses a planner reply into `out`. `needCapabilities` receives the
     /// ids when the model asked for more docs instead of planning;
@@ -195,7 +200,11 @@ private:
     void ensurePlanner();
     void requestPlan(const QString& extraInstruction = QString());
     void requestReplan(int failedIndex);
-    QString systemPrompt(const QStringList& capabilityIds) const;
+    QString systemPrompt(const QStringList& capabilityIds, bool withHistory = true, int sceneChars = -1) const;
+    /// systemPrompt() shrunk until `system + user + reply` fits the planner's
+    /// context window: history dropped first, then capabilities beyond the
+    /// most relevant, then the scene state, then the tool docs themselves.
+    QString systemPromptWithinBudget(const QString& userPrompt, int replyTokens);
     QString sceneContext() const;
     void adoptPlan(AIAgent::Plan plan);
     void executeNext();
