@@ -180,11 +180,11 @@ static QString captureLodControllerError(const std::function<void()> &operation)
 MCPServer::MCPServer(QObject *parent)
     : QObject(parent)
 {
-#ifdef Q_OS_WIN
-    // Set stdin/stdout to binary mode on Windows
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-#endif
+    // NB: no stdio side effects here — the object is now constructed on every
+    // GUI launch as the in-process tool dispatcher (#1052), and a Windows GUI
+    // process has no console: `_setmode(_fileno(stdout))` on an invalid fd
+    // trips the CRT invalid-parameter handler. The binary-mode switch lives
+    // in start(), the stdio transport.
 }
 
 MCPServer::~MCPServer()
@@ -204,6 +204,11 @@ void MCPServer::setOutputFd(int fd)
 
 void MCPServer::start()
 {
+#ifdef Q_OS_WIN
+    // Set stdin/stdout to binary mode on Windows (stdio JSON-RPC transport only)
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (m_running) return;
 
     m_stdinFd = fileno(stdin);

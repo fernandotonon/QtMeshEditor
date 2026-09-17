@@ -151,6 +151,12 @@ TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesAndOverwritesOnly)
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("decimate_mesh", {{"entity_name", "Wolf"}}, exists).contains("rewrites the geometry"));
     EXPECT_EQ(AICapabilityRegistry::destructiveReason("export_mesh", {{"output_path", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("export_mesh", {{"output_path", "/tmp/new.glb"}}, exists).isEmpty()) << "a new file is not destructive";
+    // any tool with an output-shaped key is covered, not an allowlist
+    EXPECT_EQ(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/new.glb"}}, exists).isEmpty()) << "an INPUT path that exists is not an overwrite";
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("read_file", {{"path", "/tmp/existing.glb"}}, exists).isEmpty()) << "read-only tools never overwrite";
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("cloud_upload", {{"file_path", "/tmp/existing.glb"}}, exists).isEmpty()) << "ambiguous key on a non-writer is an input";
+    EXPECT_EQ(AICapabilityRegistry::destructiveReason("save_scene", {{"path", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("create_primitive", {{"type", "box"}}, exists).isEmpty());
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("get_scene_info", {}, exists).isEmpty());
 }

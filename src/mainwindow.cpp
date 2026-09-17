@@ -759,11 +759,21 @@ MainWindow::MainWindow(QWidget *parent) :
                     [this]() { m_editHintLabel->setVisible(false); });
             });
 
+    // The MCP server object doubles as the in-process TOOL DISPATCHER for
+    // the AI chat/agent (callTool needs no transport). Create it always so
+    // the agent has an executor on a fresh install (review finding on
+    // #1052: with MCP/enabled=false every agent message failed with "tool
+    // server not available"); the HTTP transport stays opt-in below.
+    if (!m_mcpServer) {
+        m_mcpServer = new MCPServer(this);
+        m_mcpServer->setMainWindow(this);
+        AIChatManager::instance()->setMcpServer(m_mcpServer);
+    }
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
     int mcpPort = mcpSettings.value("MCP/port", 8080).toInt();
-    if (mcpEnabled && !m_mcpServer) {
+    if (mcpEnabled && !m_mcpServer->isHttpRunning()) {
         startMCPServer(mcpPort);
     }
 

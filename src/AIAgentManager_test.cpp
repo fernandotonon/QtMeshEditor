@@ -87,14 +87,16 @@ public:
     bool available() const override { return isAvailable; }
     void request(const QString& sys, const QString& user, int) override
     {
-        systemPrompts << sys; userPrompts << user;
-        if (replies.isEmpty()) { QTimer::singleShot(0, this, [this]() { emit failed("no scripted reply"); }); return; }
+        systemPrompts << sys; userPrompts << user; pendingFlag = true;
+        if (replies.isEmpty()) { QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit failed("no scripted reply"); }); return; }
         const QString r = replies.takeFirst();
-        QTimer::singleShot(0, this, [this, r]() { if (!stoppedFlag) emit completed(r); });
+        QTimer::singleShot(0, this, [this, r]() { if (!stoppedFlag) { pendingFlag = false; emit completed(r); } });
     }
-    void stop() override { stoppedFlag = true; QTimer::singleShot(0, this, [this]() { emit stopped(); }); }
+    void stop() override { stoppedFlag = true; QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit stopped(); }); }
+    bool pending() const override { return pendingFlag; }
     bool isAvailable = true;
     bool stoppedFlag = false;
+    bool pendingFlag = false;
     QStringList replies, systemPrompts, userPrompts;
 };
 
@@ -292,6 +294,32 @@ TEST_F(AgentFixture, ReplanBudgetExhaustedFailsCleanly)
     EXPECT_EQ(undo.text(1), "later");
 }
 
+TEST_F(AgentFixture, RepairThatDoesNotFitTheStepCapFailsInsteadOfCompleting)
+{
+    // Plan already AT the cap; the last step fails; the repair needs one more
+    // step. Skipped entries do not count, but this repair still does not fit.
+    Limits lim; lim.maxSteps = 2; lim.maxAttemptsPerStep = 1; m->setLimits(lim);
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Wood"}}}});
+    exec->scripted["apply_material"] << err("Error: no Gold");
+    ASSERT_TRUE(m->startTask("gold box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed) << "a discarded repair must not read as success";
+    EXPECT_TRUE(m->lastError().contains("step limit")) << m->lastError().toStdString();
+    EXPECT_EQ(exec->calls, QStringList({"create_primitive", "apply_material"}));
+
+    // With room (a skipped pending step frees its slot) the repair runs.
+    AIAgentManager::kill(); SetUp();
+    lim.maxSteps = 3; m->setLimits(lim);
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}, {"get_scene_info", {}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Wood"}}}});
+    exec->scripted["apply_material"] << err("Error: no Gold") << ok("Applied Wood");
+    ASSERT_TRUE(m->startTask("gold box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
+    EXPECT_EQ(exec->callArgs.last()["material"].toString(), "Wood");
+}
+
 TEST_F(AgentFixture, CancellationStopsBetweenStepsAndDuringPlanning)
 {
     planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"create_primitive", {{"type", "box"}, {"name", "B"}}}, {"create_primitive", {{"type", "box"}, {"name", "C"}}}});
@@ -308,8 +336,9 @@ TEST_F(AgentFixture, CancellationStopsBetweenStepsAndDuringPlanning)
     planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
     ASSERT_TRUE(m->startTask("a box"));
     m->cancel();
-    ASSERT_TRUE(pumpToEnd(m));
-    EXPECT_EQ(m->state(), State::Cancelled);
+    EXPECT_EQ(m->state(), State::Cancelled) << "the UI learns immediately";
+    EXPECT_TRUE(m->plannerPending()) << "but the LLM request is still draining — the facade must keep ignoring v1 callbacks";
+    ASSERT_TRUE(pumpUntil(m, [this]() { return !m->plannerPending(); }));
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     EXPECT_TRUE(exec->calls.isEmpty());
 }

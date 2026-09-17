@@ -75,6 +75,14 @@ void AIChatManager::wireAgent()
     agent->setContextProvider([this]() { return sceneSummaryForAgent(); });
 }
 
+// The agent owns the LLM while a task runs AND while a cancelled/finished
+// planner request is still draining out of the worker thread — a late
+// completion must not be mistaken for a v1 reply and start a new loop.
+bool AIChatManager::agentOwnsGeneration() const
+{
+    return m_agentDriving || (m_agentWired && AIAgentManager::instance()->plannerPending());
+}
+
 QString AIChatManager::sceneSummaryForAgent() const
 {
     if (!m_mcpServer) return {};
@@ -222,14 +230,14 @@ static QString cleanGeneratedText(const QString& raw)
 
 void AIChatManager::onGenerationProgress(const QString& partial, float /*progress*/)
 {
-    if (m_agentDriving) return;   // the agent owns this generation
+    if (agentOwnsGeneration()) return;   // the agent owns this generation
     m_streamingText = cleanGeneratedText(partial);
     emit streamingTextChanged();
 }
 
 void AIChatManager::onGenerationCompleted(const QString& fullText)
 {
-    if (m_agentDriving) return;
+    if (agentOwnsGeneration()) return;
     m_streamingText.clear();
     emit streamingTextChanged();
 
@@ -238,7 +246,7 @@ void AIChatManager::onGenerationCompleted(const QString& fullText)
 
 void AIChatManager::onGenerationError(const QString& error)
 {
-    if (m_agentDriving) return;
+    if (agentOwnsGeneration()) return;
     m_streamingText.clear();
     m_isGenerating = false;
     emit streamingTextChanged();
@@ -248,7 +256,7 @@ void AIChatManager::onGenerationError(const QString& error)
 
 void AIChatManager::onGenerationStopped()
 {
-    if (m_agentDriving) return;
+    if (agentOwnsGeneration()) return;
     if (!m_streamingText.isEmpty()) {
         appendMessage("assistant", m_streamingText);
         m_streamingText.clear();

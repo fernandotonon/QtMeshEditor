@@ -382,16 +382,27 @@ QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJson
         if (irreversible) r += QStringLiteral(" (not undoable)");
         return r;
     }
-    static const QSet<QString> writers = {"export_mesh", "export_pose", "save_scene", "save_pose_library",
-                                          "paint_bake", "pack_textures", "pack_atlas", "generate_isometric_sprites",
-                                          "generate_normal_map", "upscale_texture", "inpaint_texture", "photo_depth"};
-    if (writers.contains(tool)) {
-        for (const char* k : {"output_path", "output", "path", "file", "file_path", "out", "destination"}) {
-            if (!args.contains(k)) continue;
-            const QString p = args[k].toVariant().toString();
-            if (!p.isEmpty() && fileExists && fileExists(p))
-                return QStringLiteral("overwrites existing file %1").arg(p);
-        }
+    // Overwrites: ANY non-read-only tool whose arguments name an OUTPUT path
+    // that already exists. Keys are matched by shape (output*, out, dest*,
+    // *_output, export_path, save_path, target_path) rather than by a
+    // per-tool allowlist, so a new exporting tool is covered the day it is
+    // added (review finding: generate_mesh_from_image's `output` was missed
+    // by the old list). The ambiguous keys `path`/`file`/`file_path` count
+    // only for tools that are exporters/bakers by name — read_file and
+    // cloud_upload take them as INPUTS.
+    if (isReadOnly(tool)) return {};
+    static const QRegularExpression outputKey(
+        R"(^(?:output(?:_?(?:path|file|dir|mesh|image|texture))?|out|dest(?:ination)?(?:_?path)?|export_path|save_path|target_path|[a-z_]+_output)$)",
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression writerTool(R"(^(?:export_|save_|paint_bake|pack_|generate_|upscale_|inpaint_|photo_depth|bake_))");
+    for (auto it = args.begin(); it != args.end(); ++it) {
+        const bool byShape = outputKey.match(it.key()).hasMatch();
+        const bool ambiguous = (it.key() == QLatin1String("path") || it.key() == QLatin1String("file")
+                                || it.key() == QLatin1String("file_path")) && writerTool.match(tool).hasMatch();
+        if (!byShape && !ambiguous) continue;
+        const QString p = it.value().toVariant().toString();
+        if (!p.isEmpty() && fileExists && fileExists(p))
+            return QStringLiteral("overwrites existing file %1").arg(p);
     }
     return {};
 }

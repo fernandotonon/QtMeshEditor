@@ -207,7 +207,7 @@ Rectangle {
         id: planCard
         anchors { bottom: confirmBar.top; left: parent.left; right: parent.right; margins: visible ? 6 : 0 }
         visible: AIChatManager.agentMode && AIAgentManager.plan.length > 0
-                 && (root.agentBusy || root.planCardPinned)
+                 && (root.agentBusy || planCard.planCardPinned)
         height: visible ? planCol.implicitHeight + 12 : 0
         radius: 4
         color: PropertiesPanelController.headerColor

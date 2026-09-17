@@ -57,6 +57,9 @@ public:
     virtual QString modelName() const { return {}; }
     virtual void    request(const QString& systemPrompt, const QString& userPrompt, int maxTokens) = 0;
     virtual void    stop() = 0;
+    /// True while a request is outstanding (including after stop() until the
+    /// backend has delivered its stopped/completed/failed signal).
+    virtual bool    pending() const { return false; }
 signals:
     void completed(const QString& text);
     void failed(const QString& error);
@@ -123,6 +126,10 @@ public:
     bool trustedMode() const { return m_trustedMode; }
     void setTrustedMode(bool on);
     QString recommendedModelName() const;
+    /// True while the planner backend still owns an LLM generation — after a
+    /// cancel the stop is asynchronous, and the facade must keep ignoring
+    /// LLMManager callbacks until that request drains (review finding).
+    bool plannerPending() const;
     /// True when the loaded model is one we consider capable of the agent's
     /// multi-step tool protocol (drives the panel's "tip" banner).
     Q_INVOKABLE static bool modelIsRecommended(const QString& modelName);

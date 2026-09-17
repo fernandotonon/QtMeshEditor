@@ -90,6 +90,7 @@ private:
     bool m_agentDriving = false;   // AIAgentManager owns the LLM right now — ignore v1 callbacks
     bool m_agentWired   = false;
     void wireAgent();
+    bool agentOwnsGeneration() const;
 };
 
 #endif // AICHATMANAGER_H

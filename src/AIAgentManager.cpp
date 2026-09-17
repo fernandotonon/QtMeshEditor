@@ -43,6 +43,7 @@ public:
         LLMManager::instance()->generateText(systemPrompt, userPrompt, maxTokens);
     }
     void stop() override { if (m_pending) LLMManager::instance()->stopGeneration(); }
+    bool pending() const override { return m_pending; }
 private:
     bool m_pending = false;
 };
@@ -131,6 +132,11 @@ void AIAgentManager::setTrustedMode(bool on)
     settings.setValue(QLatin1String(kTrustedModeKey), on);
     SentryReporter::addBreadcrumb("ai.agent.confirm", on ? "trusted mode ON" : "trusted mode OFF");
     emit trustedModeChanged();
+}
+
+bool AIAgentManager::plannerPending() const
+{
+    return m_planner && m_planner->pending();
 }
 
 QString AIAgentManager::recommendedModelName() const
@@ -482,10 +488,22 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
         return;
     }
     if (done) { finish(steps.isEmpty() && m_plan.allDone() ? State::Completed : State::Failed, summary); return; }
-    // Replace the remaining pending steps with the repaired tail.
+    // Replace the remaining pending steps with the repaired tail. Only steps
+    // that RAN (or will run) count toward the cap — skipped ones are dead
+    // entries kept for the transcript. A repair that does not fit is a
+    // failure, never a silent "completed" (review finding on #1052).
     for (Step& s : m_plan.steps) if (s.status == Step::Pending) s.status = Step::Skipped;
-    int room = m_limits.maxSteps - m_plan.steps.size();
-    for (Step& s : steps) { if (room-- <= 0) break; m_plan.steps.push_back(s); }
+    int retained = 0;
+    for (const Step& s : m_plan.steps) if (s.status != Step::Skipped) ++retained;
+    const int room = m_limits.maxSteps - retained;
+    if (room <= 0 || steps.size() > room) {
+        m_lastError = QStringLiteral("step limit (%1) reached — the repaired plan needs %2 more step(s) but only %3 fit")
+                          .arg(m_limits.maxSteps).arg(steps.size()).arg(qMax(0, room));
+        emit planChanged();
+        finish(State::Failed);
+        return;
+    }
+    for (Step& s : steps) m_plan.steps.push_back(s);
     emit planChanged();
     say(QStringLiteral("Adjusted the plan: %1 new step(s).").arg(steps.size()));
     QTimer::singleShot(0, this, &AIAgentManager::executeNext);
@@ -535,7 +553,11 @@ void AIAgentManager::executeNext()
         finish(State::Completed);
         return;
     }
-    if (idx >= m_limits.maxSteps) {
+    // Cap on steps that actually RUN (skipped entries are dead transcript
+    // rows) — the same rule the replan capacity check uses.
+    int retainedBefore = 0;
+    for (int i = 0; i < idx; ++i) if (m_plan.steps[i].status != Step::Skipped) ++retainedBefore;
+    if (retainedBefore >= m_limits.maxSteps) {
         m_lastError = QStringLiteral("step limit (%1) reached").arg(m_limits.maxSteps);
         finish(State::Failed);
         return;
