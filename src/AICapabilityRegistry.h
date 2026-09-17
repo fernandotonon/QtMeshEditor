@@ -43,7 +43,7 @@ public:
     explicit AICapabilityRegistry(const QJsonArray& toolList);
 
     bool isEmpty() const { return m_tools.isEmpty(); }
-    int  toolCount() const { return m_tools.size(); }
+    int  toolCount() const { return static_cast<int>(m_tools.size()); }
 
     QStringList capabilityIds() const;
     const Capability* capability(const QString& id) const;

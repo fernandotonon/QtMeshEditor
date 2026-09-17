@@ -1,6 +1,8 @@
 #include "AICapabilityRegistry.h"
 
 #include <QFileInfo>
+#include <array>
+#include <vector>
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSet>
@@ -11,7 +13,7 @@ struct CapDef { const char* id; const char* title; const char* description; };
 
 // Display order = the order the planner reads them in. Everyday scene work
 // first, heavy AI last.
-const CapDef kCapDefs[] = {
+const std::vector<CapDef> kCapDefs = {
     {"scene",          "Scene & objects",       "inspect the scene, create primitives, move/scale/rotate, duplicate, delete, group, validate meshes"},
     {"scene_io",       "Files & import/export", "load meshes, export/save scenes and poses, list/search/read files"},
     {"view",           "Camera & screenshots",  "camera moves, screenshots of the viewport, debug overlays (skeleton, normals, weights, info)"},
@@ -92,7 +94,7 @@ QString capForPrefix(const QString& tool)
 }
 
 struct Keyword { const char* word; const char* cap; };
-const Keyword kKeywords[] = {
+const std::vector<Keyword> kKeywords = {
     {"rig", "rigging"}, {"skeleton", "rigging"}, {"skin", "rigging"}, {"bone", "rigging"}, {"weights", "rigging"},
     {"blendshape", "rigging"}, {"arkit", "rigging"}, {"unirig", "rigging"},
     {"segment", "segmentation"}, {"parts", "segmentation"}, {"split", "segmentation"}, {"explode", "segmentation"},
@@ -139,7 +141,7 @@ const QHash<QString, QString>& AICapabilityRegistry::taxonomy()
 AICapabilityRegistry::AICapabilityRegistry(const QJsonArray& toolList)
 {
     for (const CapDef& d : kCapDefs) {
-        m_capIndex.insert(QLatin1String(d.id), m_capabilities.size());
+        m_capIndex.insert(QLatin1String(d.id), static_cast<int>(m_capabilities.size()));
         m_capabilities.push_back({QLatin1String(d.id), QLatin1String(d.title), QLatin1String(d.description), {}});
     }
     for (const QJsonValue& v : toolList) {
@@ -209,7 +211,7 @@ QString AICapabilityRegistry::toolDoc(const QString& tool) const
     const ToolInfo& info = it.value();
     QString desc = info.description.simplified();
     // One line: everything up to the first sentence end, capped.
-    const int dot = desc.indexOf(QLatin1String(". "));
+    const qsizetype dot = desc.indexOf(QLatin1String(". "));
     if (dot > 40) desc = desc.left(dot + 1);
     if (desc.size() > 220) desc = desc.left(217) + QLatin1String("...");
     QString s = QStringLiteral("- %1: %2\n").arg(info.name, desc);
@@ -240,23 +242,26 @@ QString AICapabilityRegistry::promptToolsFor(const QStringList& capabilityIds) c
     return s;
 }
 
+namespace {
+// Whole-word-ish match for short keys, plain substring for phrases/extensions.
+bool keywordHits(const QString& word, const QString& request)
+{
+    if (word.contains(' ') || word.startsWith('.')) return request.contains(word);
+    static QHash<QString, QRegularExpression> cache;
+    auto it = cache.find(word);
+    if (it == cache.end())
+        it = cache.insert(word, QRegularExpression(QStringLiteral("\\b%1").arg(QRegularExpression::escape(word))));
+    return it->match(request).hasMatch();
+}
+} // namespace
+
 QStringList AICapabilityRegistry::routeByKeywords(const QString& request) const
 {
     const QString r = request.toLower();
     QHash<QString, int> score;
     for (const Keyword& k : kKeywords) {
         const QString w = QLatin1String(k.word);
-        // whole-word-ish match for short keys, substring for phrases
-        bool hit = false;
-        if (w.contains(' ') || w.startsWith('.')) hit = r.contains(w);
-        else {
-            static QHash<QString, QRegularExpression> cache;
-            auto it = cache.find(w);
-            if (it == cache.end())
-                it = cache.insert(w, QRegularExpression(QStringLiteral("\\b%1").arg(QRegularExpression::escape(w))));
-            hit = it->match(r).hasMatch();
-        }
-        if (hit) score[QLatin1String(k.cap)] += (w.size() >= 6 ? 2 : 1);
+        if (keywordHits(w, r)) score[QLatin1String(k.cap)] += (w.size() >= 6 ? 2 : 1);
     }
     QStringList caps;
     for (const Capability& c : m_capabilities)
@@ -270,24 +275,110 @@ QStringList AICapabilityRegistry::routeByKeywords(const QString& request) const
     return caps;
 }
 
+namespace {
+
+// Each coercer returns false with `why` set when the value cannot become the
+// schema type; on success `v` holds the (possibly coerced) value and a
+// warning is appended when a coercion happened.
+bool coerceString(QJsonValue& v, const QString& key, QStringList* warnings, QString* why)
+{
+    if (v.isString() || v.isNull()) return true;
+    if (!v.isDouble() && !v.isBool()) { *why = QStringLiteral("expected a string"); return false; }
+    v = v.toVariant().toString();
+    if (warnings) *warnings << QStringLiteral("'%1' coerced to string").arg(key);
+    return true;
+}
+
+bool coerceNumber(QJsonValue& v, const QString& key, bool integer, QStringList* warnings, QString* why)
+{
+    if (v.isString()) {
+        bool ok = false;
+        const double d = v.toString().trimmed().toDouble(&ok);
+        if (!ok) { *why = QStringLiteral("expected a number, got '%1'").arg(v.toString()); return false; }
+        v = d;
+        if (warnings) *warnings << QStringLiteral("'%1' coerced to number").arg(key);
+    } else if (!v.isDouble()) {
+        *why = QStringLiteral("expected a number");
+        return false;
+    }
+    if (integer && v.toDouble() != double(qint64(v.toDouble()))) { *why = QStringLiteral("expected an integer"); return false; }
+    return true;
+}
+
+bool coerceBoolean(QJsonValue& v, const QString& key, QStringList* warnings, QString* why)
+{
+    if (v.isBool()) return true;
+    if (v.isDouble()) { v = (v.toDouble() != 0.0); return true; }
+    if (!v.isString()) { *why = QStringLiteral("expected a boolean"); return false; }
+    static const QStringList yes = {"true", "yes", "1"};
+    static const QStringList no  = {"false", "no", "0"};
+    const QString s = v.toString().trimmed().toLower();
+    if (yes.contains(s)) v = true;
+    else if (no.contains(s)) v = false;
+    else { *why = QStringLiteral("expected true/false"); return false; }
+    if (warnings) *warnings << QStringLiteral("'%1' coerced to boolean").arg(key);
+    return true;
+}
+
+bool coerceArray(QJsonValue& v, const QString& key, QStringList* warnings, QString* why)
+{
+    if (v.isArray()) return true;
+    if (!v.isString()) { *why = QStringLiteral("expected an array"); return false; }
+    // "[1, 2, 3]" or "1,2,3" from a chatty model
+    QString s = v.toString().trimmed();
+    if (!s.startsWith('[')) s = '[' + s + ']';
+    const QJsonDocument d = QJsonDocument::fromJson(s.toUtf8());
+    if (!d.isArray()) { *why = QStringLiteral("expected an array"); return false; }
+    v = d.array();
+    if (warnings) *warnings << QStringLiteral("'%1' parsed into an array").arg(key);
+    return true;
+}
+
+bool coerceToType(QJsonValue& v, const QString& key, const QString& type, QStringList* warnings, QString* why)
+{
+    if (type == QLatin1String("string"))  return coerceString(v, key, warnings, why);
+    if (type == QLatin1String("number"))  return coerceNumber(v, key, false, warnings, why);
+    if (type == QLatin1String("integer")) return coerceNumber(v, key, true, warnings, why);
+    if (type == QLatin1String("boolean")) return coerceBoolean(v, key, warnings, why);
+    if (type == QLatin1String("array"))   return coerceArray(v, key, warnings, why);
+    if (type == QLatin1String("object") && !v.isObject()) { *why = QStringLiteral("expected an object"); return false; }
+    return true;   // untyped or object
+}
+
+bool matchEnum(QJsonValue& v, const QJsonObject& def, QString* why)
+{
+    if (!def.contains("enum")) return true;
+    QStringList vals;
+    for (const QJsonValue& e : def["enum"].toArray()) {
+        if (e.toVariant().toString() == v.toVariant().toString()) { v = e; return true; }
+        vals << e.toVariant().toString();
+    }
+    *why = QStringLiteral("'%1' is not one of %2").arg(v.toVariant().toString(), vals.join('|'));
+    return false;
+}
+
+} // namespace
+
 bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObject& args,
                                              QJsonObject* out, QString* error,
                                              QStringList* warnings) const
 {
     const auto it = m_tools.constFind(tool);
-    if (it == m_tools.constEnd()) { if (error) *error = QStringLiteral("unknown tool '%1'").arg(tool); return false; }
+    if (it == m_tools.constEnd()) {
+        if (error) *error = QStringLiteral("unknown tool '%1'").arg(tool);
+        return false;
+    }
     const QJsonObject schema = it->schema;
     const QJsonObject props = schema["properties"].toObject();
-    QJsonObject result;
 
     for (const QJsonValue& r : schema["required"].toArray()) {
         const QString key = r.toString();
-        if (!args.contains(key) || args[key].isNull()) {
-            if (error) *error = QStringLiteral("missing required argument '%1'").arg(key);
-            return false;
-        }
+        if (args.contains(key) && !args[key].isNull()) continue;
+        if (error) *error = QStringLiteral("missing required argument '%1'").arg(key);
+        return false;
     }
 
+    QJsonObject result;
     for (auto a = args.begin(); a != args.end(); ++a) {
         const QString key = a.key();
         QJsonValue v = a.value();
@@ -297,57 +388,10 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
             continue;
         }
         const QJsonObject def = props[key].toObject();
-        const QString type = def["type"].toString();
-        auto fail = [&](const QString& why) {
+        QString why;
+        if (!coerceToType(v, key, def["type"].toString(), warnings, &why) || !matchEnum(v, def, &why)) {
             if (error) *error = QStringLiteral("argument '%1': %2").arg(key, why);
             return false;
-        };
-        if (type == QLatin1String("string")) {
-            if (v.isDouble() || v.isBool()) {
-                v = v.toVariant().toString();
-                if (warnings) *warnings << QStringLiteral("'%1' coerced to string").arg(key);
-            } else if (!v.isString() && !v.isNull()) return fail(QStringLiteral("expected a string"));
-        } else if (type == QLatin1String("number") || type == QLatin1String("integer")) {
-            if (v.isString()) {
-                bool ok = false; const double d = v.toString().trimmed().toDouble(&ok);
-                if (!ok) return fail(QStringLiteral("expected a number, got '%1'").arg(v.toString()));
-                v = d;
-                if (warnings) *warnings << QStringLiteral("'%1' coerced to number").arg(key);
-            } else if (!v.isDouble()) return fail(QStringLiteral("expected a number"));
-            if (type == QLatin1String("integer") && v.toDouble() != double(qint64(v.toDouble())))
-                return fail(QStringLiteral("expected an integer"));
-        } else if (type == QLatin1String("boolean")) {
-            if (v.isString()) {
-                const QString s = v.toString().trimmed().toLower();
-                if (s == QLatin1String("true") || s == QLatin1String("yes") || s == QLatin1String("1")) v = true;
-                else if (s == QLatin1String("false") || s == QLatin1String("no") || s == QLatin1String("0")) v = false;
-                else return fail(QStringLiteral("expected true/false"));
-                if (warnings) *warnings << QStringLiteral("'%1' coerced to boolean").arg(key);
-            } else if (v.isDouble()) {
-                v = (v.toDouble() != 0.0);
-            } else if (!v.isBool()) return fail(QStringLiteral("expected a boolean"));
-        } else if (type == QLatin1String("array")) {
-            if (v.isString()) {
-                // "[1, 2, 3]" or "1,2,3" from a chatty model
-                QString s = v.toString().trimmed();
-                if (!s.startsWith('[')) s = '[' + s + ']';
-                const QJsonDocument d = QJsonDocument::fromJson(s.toUtf8());
-                if (!d.isArray()) return fail(QStringLiteral("expected an array"));
-                v = d.array();
-                if (warnings) *warnings << QStringLiteral("'%1' parsed into an array").arg(key);
-            } else if (!v.isArray()) return fail(QStringLiteral("expected an array"));
-        } else if (type == QLatin1String("object")) {
-            if (!v.isObject()) return fail(QStringLiteral("expected an object"));
-        }
-        if (def.contains("enum")) {
-            bool found = false;
-            for (const QJsonValue& e : def["enum"].toArray())
-                if (e.toVariant().toString() == v.toVariant().toString()) { found = true; v = e; break; }
-            if (!found) {
-                QStringList vals;
-                for (const QJsonValue& e : def["enum"].toArray()) vals << e.toVariant().toString();
-                return fail(QStringLiteral("'%1' is not one of %2").arg(v.toVariant().toString(), vals.join('|')));
-            }
         }
         result[key] = v;
     }
@@ -355,8 +399,10 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
     return true;
 }
 
-QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJsonObject& args,
-                                                const std::function<bool(const QString&)>& fileExists)
+namespace {
+
+// Tools that delete data or rewrite geometry, with the argument naming the target.
+QString deleteReason(const QString& tool, const QJsonObject& args)
 {
     static const QHash<QString, QString> deletes = {
         {"delete_entity", "entity_name"}, {"delete_light", "name"}, {"remove_skeleton", "entity_name"},
@@ -367,44 +413,64 @@ QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJson
         {"explode_mesh_parts", "entity_name"}, {"join_mesh_parts", ""}, {"decimate_mesh", "entity_name"},
         {"retopologize", "entity_name"}, {"weld_vertices", "entity_name"},
     };
-    if (const auto it = deletes.constFind(tool); it != deletes.constEnd()) {
-        QString target;
-        if (!it.value().isEmpty()) target = args[it.value()].toVariant().toString();
-        if (target.isEmpty()) {
-            for (const char* k : {"entity_name", "name", "mesh", "node", "clip"})
-                if (args.contains(k)) { target = args[k].toVariant().toString(); break; }
-        }
-        const bool irreversible = tool.startsWith(QLatin1String("cloud_")) || tool.startsWith(QLatin1String("ps1rip_"));
-        QString verb = tool.startsWith(QLatin1String("delete")) || tool.startsWith(QLatin1String("remove"))
-                       || tool.startsWith(QLatin1String("clear")) ? QStringLiteral("deletes") : QStringLiteral("rewrites the geometry of");
-        QString r = target.isEmpty() ? QStringLiteral("%1 %2").arg(tool, verb == "deletes" ? "deletes data" : "rewrites geometry")
-                                     : QStringLiteral("%1 '%2'").arg(verb, target);
-        if (irreversible) r += QStringLiteral(" (not undoable)");
-        return r;
+    const auto it = deletes.constFind(tool);
+    if (it == deletes.constEnd()) return {};
+    QString target;
+    if (!it.value().isEmpty()) target = args[it.value()].toVariant().toString();
+    static const char* const kTargetKeys[] = {"entity_name", "name", "mesh", "node", "clip"};
+    for (const char* k : kTargetKeys) {
+        if (!target.isEmpty()) break;
+        if (args.contains(QLatin1String(k))) target = args[QLatin1String(k)].toVariant().toString();
     }
-    // Overwrites: ANY non-read-only tool whose arguments name an OUTPUT path
-    // that already exists. Keys are matched by shape (output*, out, dest*,
-    // *_output, export_path, save_path, target_path) rather than by a
-    // per-tool allowlist, so a new exporting tool is covered the day it is
-    // added (review finding: generate_mesh_from_image's `output` was missed
-    // by the old list). The ambiguous keys `path`/`file`/`file_path` count
-    // only for tools that are exporters/bakers by name — read_file and
-    // cloud_upload take them as INPUTS.
-    if (isReadOnly(tool)) return {};
+    const bool isDelete = tool.startsWith(QLatin1String("delete")) || tool.startsWith(QLatin1String("remove"))
+                       || tool.startsWith(QLatin1String("clear"));
+    QString r;
+    if (target.isEmpty())
+        r = QStringLiteral("%1 %2").arg(tool, isDelete ? QStringLiteral("deletes data") : QStringLiteral("rewrites geometry"));
+    else
+        r = QStringLiteral("%1 '%2'").arg(isDelete ? QStringLiteral("deletes") : QStringLiteral("rewrites the geometry of"), target);
+    const bool irreversible = tool.startsWith(QLatin1String("cloud_")) || tool.startsWith(QLatin1String("ps1rip_"));
+    if (irreversible) r += QStringLiteral(" (not undoable)");
+    return r;
+}
+
+// Overwrites: ANY non-read-only tool whose arguments name an OUTPUT path
+// that already exists. Keys are matched by shape (output*, out, dest*,
+// *_output, export_path, save_path, target_path) rather than by a
+// per-tool allowlist, so a new exporting tool is covered the day it is
+// added (review finding: generate_mesh_from_image's `output` was missed
+// by the old list). The ambiguous keys `path`/`file`/`file_path` count
+// only for tools that are exporters/bakers by name — read_file and
+// cloud_upload take them as INPUTS.
+QString overwriteReason(const QString& tool, const QJsonObject& args,
+                        const std::function<bool(const QString&)>& fileExists)
+{
+    if (!fileExists) return {};
     static const QRegularExpression outputKey(
         R"(^(?:output(?:_?(?:path|file|dir|mesh|image|texture))?|out|dest(?:ination)?(?:_?path)?|export_path|save_path|target_path|[a-z_]+_output)$)",
         QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression writerTool(R"(^(?:export_|save_|paint_bake|pack_|generate_|upscale_|inpaint_|photo_depth|bake_))");
+    static const QStringList ambiguousKeys = {"path", "file", "file_path"};
+    const bool writer = writerTool.match(tool).hasMatch();
     for (auto it = args.begin(); it != args.end(); ++it) {
         const bool byShape = outputKey.match(it.key()).hasMatch();
-        const bool ambiguous = (it.key() == QLatin1String("path") || it.key() == QLatin1String("file")
-                                || it.key() == QLatin1String("file_path")) && writerTool.match(tool).hasMatch();
+        const bool ambiguous = writer && ambiguousKeys.contains(it.key());
         if (!byShape && !ambiguous) continue;
         const QString p = it.value().toVariant().toString();
-        if (!p.isEmpty() && fileExists && fileExists(p))
-            return QStringLiteral("overwrites existing file %1").arg(p);
+        if (!p.isEmpty() && fileExists(p)) return QStringLiteral("overwrites existing file %1").arg(p);
     }
     return {};
+}
+
+} // namespace
+
+QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJsonObject& args,
+                                                const std::function<bool(const QString&)>& fileExists)
+{
+    const QString del = deleteReason(tool, args);
+    if (!del.isEmpty()) return del;
+    if (isReadOnly(tool)) return {};
+    return overwriteReason(tool, args, fileExists);
 }
 
 QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJsonObject& args)

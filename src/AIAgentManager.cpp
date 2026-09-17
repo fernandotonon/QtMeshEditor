@@ -26,13 +26,19 @@ public:
     {
         auto* llm = LLMManager::instance();
         connect(llm, &LLMManager::generationCompleted, this, [this](const QString& t) {
-            if (!m_pending) return; m_pending = false; emit completed(t);
+            if (!m_pending) return;
+            m_pending = false;
+            emit completed(t);
         });
         connect(llm, &LLMManager::generationError, this, [this](const QString& e) {
-            if (!m_pending) return; m_pending = false; emit failed(e);
+            if (!m_pending) return;
+            m_pending = false;
+            emit failed(e);
         });
         connect(llm, &LLMManager::generationStopped, this, [this]() {
-            if (!m_pending) return; m_pending = false; emit stopped();
+            if (!m_pending) return;
+            m_pending = false;
+            emit stopped();
         });
     }
     bool available() const override { return LLMManager::instance()->isModelLoaded(); }
@@ -327,30 +333,37 @@ void AIAgentManager::requestReplan(int failedIndex)
     m_planner->request(systemPrompt(m_docCapabilities), user, 700);
 }
 
+namespace {
+// First balanced {...} in `t`, honouring braces inside JSON strings.
+QString firstBalancedObject(const QString& t)
+{
+    const qsizetype start = t.indexOf('{');
+    if (start < 0) return {};
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (qsizetype i = start; i < t.size(); ++i) {
+        const QChar c = t[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') inString = false;
+            continue;
+        }
+        if (c == '"') inString = true;
+        else if (c == '{') ++depth;
+        else if (c == '}' && --depth == 0) return t.mid(start, i - start + 1);
+    }
+    return {};
+}
+} // namespace
+
 QString AIAgentManager::extractJsonObject(const QString& text)
 {
-    // First balanced {...}; tolerate a missing opening brace (models primed
-    // with "{" sometimes omit it) by trying the prefixed variant second.
-    auto balanced = [](const QString& t) -> QString {
-        const int start = t.indexOf('{');
-        if (start < 0) return {};
-        int depth = 0; bool inStr = false; bool esc = false;
-        for (int i = start; i < t.size(); ++i) {
-            const QChar c = t[i];
-            if (inStr) {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == '{') ++depth;
-            else if (c == '}') { if (--depth == 0) return t.mid(start, i - start + 1); }
-        }
-        return {};
-    };
-    QString block = balanced(text);
-    if (block.isEmpty()) block = balanced('{' + text.trimmed());
+    // Tolerate a missing opening brace (models primed with "{" sometimes
+    // omit it) by trying the prefixed variant second.
+    QString block = firstBalancedObject(text);
+    if (block.isEmpty()) block = firstBalancedObject('{' + text.trimmed());
     return block;
 }
 
@@ -428,70 +441,78 @@ bool AIAgentManager::parseReplanReply(const QString& text, QVector<Step>* steps,
 void AIAgentManager::onPlannerCompleted(const QString& text)
 {
     if (m_awaiting == Awaiting::None) return;
-    if (m_cancelRequested) { m_awaiting = Awaiting::None; return; }
     const Awaiting what = m_awaiting;
     m_awaiting = Awaiting::None;
+    if (m_cancelRequested) return;
+    if (what == Awaiting::Plan) handlePlanReply(text);
+    else handleReplanReply(text);
+}
 
-    if (what == Awaiting::Plan) {
-        Plan plan; QStringList need; QString answer; QString err;
-        if (!parsePlanReply(text, &plan, &need, &answer, &err)) {
-            if (++m_plannerRetries <= m_limits.maxPlannerRetries) {
-                SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("malformed plan, retry %1").arg(m_plannerRetries));
-                requestPlan(QStringLiteral("Your previous reply was not valid: %1. Reply with the JSON object only.").arg(err));
-                return;
-            }
-            m_lastError = QStringLiteral("the model could not produce a valid plan (%1)").arg(err);
-            say(QStringLiteral("I could not turn that into a plan: %1.").arg(err));
-            finish(State::Failed);
-            return;
-        }
-        if (!need.isEmpty()) {
-            // Dynamic discovery: the planner asked for docs it did not have.
-            QStringList added;
-            for (const QString& id : need)
-                if (m_registry.capability(id) && !m_docCapabilities.contains(id)) { m_docCapabilities << id; added << id; }
-            if (added.isEmpty() || ++m_plannerRetries > m_limits.maxPlannerRetries + 1) {
-                m_lastError = QStringLiteral("the model asked for unknown capabilities: %1").arg(need.join(", "));
-                say(QStringLiteral("I could not find tools for: %1.").arg(need.join(", ")));
-                finish(State::Failed);
-                return;
-            }
-            SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("expanded capabilities: %1").arg(added.join(", ")));
-            requestPlan();
-            return;
-        }
-        if (!answer.isEmpty()) {
-            // A question answered from context — no tools needed.
-            m_plan.title = QStringLiteral("AI: answer");
-            finish(State::Completed, answer);
-            return;
-        }
-        plan.goal = m_plan.goal;
-        plan.capabilities = m_docCapabilities;
-        if (plan.title.isEmpty()) plan.title = plan.goal.left(48);
-        if (!plan.title.startsWith(QLatin1String("AI:"))) plan.title = QStringLiteral("AI: ") + plan.title;
-        if (plan.steps.size() > m_limits.maxSteps) plan.steps.resize(m_limits.maxSteps);
-        adoptPlan(std::move(plan));
-        return;
+// Dynamic discovery: the planner asked for docs it did not have. Returns
+// false when nothing new could be added (unknown ids or already provided).
+bool AIAgentManager::expandCapabilities(const QStringList& need)
+{
+    QStringList added;
+    for (const QString& id : need) {
+        if (!m_registry.capability(id) || m_docCapabilities.contains(id)) continue;
+        m_docCapabilities << id;
+        added << id;
     }
+    if (added.isEmpty()) return false;
+    SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("expanded capabilities: %1").arg(added.join(", ")));
+    return true;
+}
 
-    // ---- replan ----
-    QVector<Step> steps; bool done = false; QString summary; QString err;
-    if (!parseReplanReply(text, &steps, &done, &summary, &err)) {
-        if (++m_plannerRetries <= m_limits.maxPlannerRetries) {
-            requestReplan(m_replanFailedIndex);
-            --m_replans;   // a retry of the same replan round does not count
+void AIAgentManager::handlePlanReply(const QString& text)
+{
+    Plan plan;
+    QStringList need;
+    QString answer;
+    QString err;
+    if (!parsePlanReply(text, &plan, &need, &answer, &err)) {
+        ++m_plannerRetries;
+        if (m_plannerRetries <= m_limits.maxPlannerRetries) {
+            SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("malformed plan, retry %1").arg(m_plannerRetries));
+            requestPlan(QStringLiteral("Your previous reply was not valid: %1. Reply with the JSON object only.").arg(err));
             return;
         }
-        m_lastError = QStringLiteral("the model could not repair the plan (%1)").arg(err);
+        m_lastError = QStringLiteral("the model could not produce a valid plan (%1)").arg(err);
+        say(QStringLiteral("I could not turn that into a plan: %1.").arg(err));
         finish(State::Failed);
         return;
     }
-    if (done) { finish(steps.isEmpty() && m_plan.allDone() ? State::Completed : State::Failed, summary); return; }
-    // Replace the remaining pending steps with the repaired tail. Only steps
-    // that RAN (or will run) count toward the cap — skipped ones are dead
-    // entries kept for the transcript. A repair that does not fit is a
-    // failure, never a silent "completed" (review finding on #1052).
+    if (!need.isEmpty()) {
+        ++m_plannerRetries;
+        const bool expanded = expandCapabilities(need);
+        if (!expanded || m_plannerRetries > m_limits.maxPlannerRetries + 1) {
+            m_lastError = QStringLiteral("the model asked for unknown capabilities: %1").arg(need.join(", "));
+            say(QStringLiteral("I could not find tools for: %1.").arg(need.join(", ")));
+            finish(State::Failed);
+            return;
+        }
+        requestPlan();
+        return;
+    }
+    if (!answer.isEmpty()) {
+        // A question answered from context — no tools needed.
+        m_plan.title = QStringLiteral("AI: answer");
+        finish(State::Completed, answer);
+        return;
+    }
+    plan.goal = m_plan.goal;
+    plan.capabilities = m_docCapabilities;
+    if (plan.title.isEmpty()) plan.title = plan.goal.left(48);
+    if (!plan.title.startsWith(QLatin1String("AI:"))) plan.title = QStringLiteral("AI: ") + plan.title;
+    if (plan.steps.size() > m_limits.maxSteps) plan.steps.resize(m_limits.maxSteps);
+    adoptPlan(std::move(plan));
+}
+
+// Replace the remaining pending steps with the repaired tail. Only steps
+// that RAN (or will run) count toward the cap — skipped ones are dead
+// entries kept for the transcript. A repair that does not fit is a
+// failure, never a silent "completed" (review finding on #1052).
+void AIAgentManager::appendRepairedTail(const QVector<Step>& steps)
+{
     for (Step& s : m_plan.steps) if (s.status == Step::Pending) s.status = Step::Skipped;
     int retained = 0;
     for (const Step& s : m_plan.steps) if (s.status != Step::Skipped) ++retained;
@@ -503,13 +524,38 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
         finish(State::Failed);
         return;
     }
-    if (m_replanFailedIndex >= 0 && m_replanFailedIndex < m_plan.steps.size()
-        && m_plan.steps[m_replanFailedIndex].status == Step::Failed)
+    const bool failedIndexValid = m_replanFailedIndex >= 0 && m_replanFailedIndex < m_plan.steps.size();
+    if (failedIndexValid && m_plan.steps[m_replanFailedIndex].status == Step::Failed)
         m_plan.steps[m_replanFailedIndex].status = Step::Repaired;   // the tail takes over
-    for (Step& s : steps) m_plan.steps.push_back(s);
+    for (const Step& s : steps) m_plan.steps.push_back(s);
     emit planChanged();
     say(QStringLiteral("Adjusted the plan: %1 new step(s).").arg(steps.size()));
     QTimer::singleShot(0, this, &AIAgentManager::executeNext);
+}
+
+void AIAgentManager::handleReplanReply(const QString& text)
+{
+    QVector<Step> steps;
+    bool done = false;
+    QString summary;
+    QString err;
+    if (!parseReplanReply(text, &steps, &done, &summary, &err)) {
+        ++m_plannerRetries;
+        if (m_plannerRetries <= m_limits.maxPlannerRetries) {
+            requestReplan(m_replanFailedIndex);
+            --m_replans;   // a retry of the same replan round does not count
+            return;
+        }
+        m_lastError = QStringLiteral("the model could not repair the plan (%1)").arg(err);
+        finish(State::Failed);
+        return;
+    }
+    if (done) {
+        const bool complete = steps.isEmpty() && m_plan.allDone();
+        finish(complete ? State::Completed : State::Failed, summary);
+        return;
+    }
+    appendRepairedTail(steps);
 }
 
 void AIAgentManager::onPlannerFailed(const QString& error)
@@ -715,7 +761,10 @@ void AIAgentManager::finish(State terminal, const QString& plannerSummary)
     }
     m_lastSummary = summary;
     setState(terminal);
-    SentryReporter::addBreadcrumb(terminal == State::Completed ? "ai.agent.done" : (terminal == State::Cancelled ? "ai.agent.cancel" : "ai.agent.fail"),
+    const char* crumb = "ai.agent.fail";
+    if (terminal == State::Completed) crumb = "ai.agent.done";
+    else if (terminal == State::Cancelled) crumb = "ai.agent.cancel";
+    SentryReporter::addBreadcrumb(crumb,
                                   QStringLiteral("%1 steps, %2 replans").arg(m_plan.steps.size()).arg(m_replans),
                                   terminal == State::Failed ? "error" : "info");
     say(summary);

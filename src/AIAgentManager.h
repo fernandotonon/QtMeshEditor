@@ -171,6 +171,12 @@ private slots:
     void onPlannerStopped();
 
 private:
+    void handlePlanReply(const QString& text);
+    void handleReplanReply(const QString& text);
+    bool expandCapabilities(const QStringList& need);
+    void appendRepairedTail(const QVector<AIAgent::Step>& steps);
+
+private:
     explicit AIAgentManager(QObject* parent = nullptr);
     ~AIAgentManager() override;
 

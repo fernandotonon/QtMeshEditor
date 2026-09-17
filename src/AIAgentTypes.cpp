@@ -74,77 +74,84 @@ QJsonObject Plan::toJson() const
 }
 
 // ---------------------------------------------------------------------------
+// observationFromToolResult — split into one helper per concern so each
+// stays readable (and under Sonar's nesting/complexity gates).
 
-Observation observationFromToolResult(int stepIndex, const QString& tool,
-                                      const QJsonObject& toolResult)
+namespace {
+
+QString resultText(const QJsonObject& toolResult)
 {
-    Observation ob;
-    ob.stepIndex = stepIndex;
-    ob.tool = tool;
-
     QString text;
     const QJsonArray content = toolResult["content"].toArray();
     for (const QJsonValue& v : content) {
         const QJsonObject c = v.toObject();
-        if (c["type"].toString() == QLatin1String("text") || c.contains("text")) {
-            if (!text.isEmpty()) text += '\n';
-            text += c["text"].toString();
-        }
+        if (c["type"].toString() != QLatin1String("text") && !c.contains("text")) continue;
+        if (!text.isEmpty()) text += '\n';
+        text += c["text"].toString();
     }
     if (text.isEmpty() && !content.isEmpty())
         text = QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Compact));
     if (text.isEmpty() && toolResult.contains("error"))
         text = toolResult["error"].toString();
-    ob.raw = text;
+    return text;
+}
 
+void parseErrorStatus(const QJsonObject& toolResult, const QString& text, Observation& ob)
+{
     const bool isError = toolResult["isError"].toBool()
         || text.trimmed().startsWith(QLatin1String("Error"), Qt::CaseInsensitive);
     ob.status = isError ? QStringLiteral("error") : QStringLiteral("success");
-    if (isError) {
-        ob.error = text.section('\n', 0, 0).trimmed();
-        if (ob.error.isEmpty()) ob.error = QStringLiteral("tool reported an error");
-    }
+    if (!isError) return;
+    ob.error = text.section('\n', 0, 0).trimmed();
+    if (ob.error.isEmpty()) ob.error = QStringLiteral("tool reported an error");
+}
 
-    // ---- facts: "<Label>: <number>" lines the info tools print ----
+// "<Label>: <number>" lines the info tools print.
+void parseLabelledNumbers(const QString& text, Observation& ob)
+{
     static const QRegularExpression kv(
         R"((?im)^\s*[-*]?\s*(vertices|triangles|faces|submeshes|materials|bones|animations|entities|scene nodes|joints|bone count|influences)\s*:\s*([0-9][0-9,\.]*))");
     auto it = kv.globalMatch(text);
     while (it.hasNext()) {
         const auto m = it.next();
-        QString key = m.captured(1).toLower().replace(' ', '_');
-        const QString num = m.captured(2);
-        QString cleaned = num; cleaned.remove(',');
+        const QString key = m.captured(1).toLower().replace(' ', '_');
+        QString cleaned = m.captured(2);
+        cleaned.remove(',');
         bool ok = false;
         const double d = cleaned.toDouble(&ok);
         if (ok && !ob.facts.contains(key)) ob.facts[key] = d;
     }
-    // JSON payloads: lift a few well-known top-level keys
-    if (text.trimmed().startsWith('{')) {
-        const QJsonObject j = QJsonDocument::fromJson(text.trimmed().toUtf8()).object();
-        for (const char* k : {"boneCount", "vertexCount", "triangleCount", "algorithm",
-                              "template", "skinned", "applied", "fallbackReason",
-                              "jointLabeling", "faceCount", "partCount"}) {
-            if (j.contains(k)) ob.facts[QLatin1String(k)] = j[k];
-        }
-        if (j.contains("isError") && j["isError"].toBool()) {
-            ob.status = QStringLiteral("error");
-            if (ob.error.isEmpty()) {
-                ob.error = j.contains("error") ? j["error"].toString() : j["message"].toString();
-                if (ob.error.isEmpty()) ob.error = QStringLiteral("tool reported an error");
-            }
-        }
-    }
     static const QRegularExpression hasSkel(R"((?i)\b(has skeleton|skinned|rigged)\b\s*[:=]?\s*(true|yes|false|no))");
-    if (const auto m = hasSkel.match(text); m.hasMatch()) {
-        const QString v = m.captured(2).toLower();
-        ob.facts["hasSkeleton"] = (v == QLatin1String("true") || v == QLatin1String("yes"));
-    }
+    const auto m = hasSkel.match(text);
+    if (!m.hasMatch()) return;
+    const QString v = m.captured(2).toLower();
+    ob.facts["hasSkeleton"] = (v == QLatin1String("true") || v == QLatin1String("yes"));
+}
 
-    // ---- artifacts: created scene objects and written files ----
-    // A written/created file: a path token (no spaces) with a 3D/image extension,
-    // on a line that says created/exported/saved/wrote/generated/loaded.
+// JSON payloads: lift a few well-known top-level keys and the error reason.
+void parseJsonFacts(const QString& text, Observation& ob)
+{
+    const QString trimmed = text.trimmed();
+    if (!trimmed.startsWith('{')) return;
+    const QJsonObject j = QJsonDocument::fromJson(trimmed.toUtf8()).object();
+    static const char* const kKeys[] = {"boneCount", "vertexCount", "triangleCount", "algorithm",
+                                        "template", "skinned", "applied", "fallbackReason",
+                                        "jointLabeling", "faceCount", "partCount"};
+    for (const char* k : kKeys)
+        if (j.contains(QLatin1String(k))) ob.facts[QLatin1String(k)] = j[QLatin1String(k)];
+    if (!j["isError"].toBool()) return;
+    ob.status = QStringLiteral("error");
+    if (!ob.error.isEmpty()) return;
+    ob.error = j.contains("error") ? j["error"].toString() : j["message"].toString();
+    if (ob.error.isEmpty()) ob.error = QStringLiteral("tool reported an error");
+}
+
+// Written files (a path token with a 3D/image extension on a created/exported/
+// saved/... line) and created scene objects.
+void parseArtifacts(const QString& text, Observation& ob)
+{
     static const QRegularExpression created(R"((?im)^[^\n]*\b(?:created|exported|saved|loaded|wrote|written|generated)\b[^\n]*?((?:[A-Za-z]:)?[^\s'"()]+\.(?:glb|gltf|fbx|obj|mesh|dae|stl|ply|png|jpg|jpeg|json|abc|mp4)))");
-    it = created.globalMatch(text);
+    auto it = created.globalMatch(text);
     while (it.hasNext()) {
         const QString a = it.next().captured(1).trimmed();
         if (!a.isEmpty() && !ob.artifacts.contains(a)) ob.artifacts << a;
@@ -153,52 +160,89 @@ Observation observationFromToolResult(int stepIndex, const QString& tool,
     it = createdName.globalMatch(text);
     while (it.hasNext()) {
         const QString a = it.next().captured(1).trimmed();
-        if (!a.isEmpty() && !ob.artifacts.contains(a) && !a.contains('.')) ob.artifacts << a;
+        if (!a.isEmpty() && !a.contains('.') && !ob.artifacts.contains(a)) ob.artifacts << a;
     }
+}
 
-    // ---- warnings ----
+void parseWarnings(const QString& text, Observation& ob)
+{
     static const QRegularExpression warn(R"((?im)^\s*(?:warning|note|fallback)[^\n]*)");
-    it = warn.globalMatch(text);
+    auto it = warn.globalMatch(text);
     while (it.hasNext()) ob.warnings << it.next().captured(0).trimmed().left(200);
-    if (ob.facts.contains("fallbackReason") && !ob.facts["fallbackReason"].toString().isEmpty())
-        ob.warnings << QStringLiteral("fallback: %1").arg(ob.facts["fallbackReason"].toString().left(160));
+    const QString fallback = ob.facts["fallbackReason"].toString();
+    if (!fallback.isEmpty()) ob.warnings << QStringLiteral("fallback: %1").arg(fallback.left(160));
+}
 
+// One "facts" fragment for the summary line of a succeeded step.
+QString factsFragment(const Observation& ob)
+{
+    QStringList bits;
+    for (auto it = ob.facts.begin(); it != ob.facts.end(); ++it) {
+        const QJsonValue v = it.value();
+        if (v.isDouble()) bits << QStringLiteral("%1 %2").arg(QString::number(v.toDouble(), 'g', 10), it.key());
+        else if (v.isBool()) bits << QStringLiteral("%1=%2").arg(it.key(), v.toBool() ? "yes" : "no");
+        else if (v.isString() && !v.toString().isEmpty() && it.key() != QLatin1String("fallbackReason"))
+            bits << QStringLiteral("%1=%2").arg(it.key(), v.toString().left(40));
+    }
+    if (!ob.artifacts.isEmpty()) bits << QStringLiteral("→ %1").arg(ob.artifacts.join(", "));
+    return bits.join(", ");
+}
+
+const Observation* successObservationFor(const QVector<Observation>& observations, int stepIndex)
+{
+    for (const Observation& ob : observations)
+        if (ob.stepIndex == stepIndex && ob.status == QLatin1String("success")) return &ob;
+    return nullptr;
+}
+
+QString summaryHeadline(const Plan& plan, State finalState, int ok, int failed)
+{
+    const int total = static_cast<int>(plan.steps.size());
+    switch (finalState) {
+    case State::Completed: return QStringLiteral("Done — %1 of %2 steps succeeded.").arg(ok).arg(total);
+    case State::Cancelled: return QStringLiteral("Cancelled after %1 of %2 steps.").arg(ok + failed).arg(total);
+    case State::Failed:    return QStringLiteral("Stopped — %1 of %2 steps succeeded, %3 failed.").arg(ok).arg(total).arg(failed);
+    default:               return QStringLiteral("%1 of %2 steps done.").arg(ok).arg(total);
+    }
+}
+
+} // namespace
+
+Observation observationFromToolResult(int stepIndex, const QString& tool,
+                                      const QJsonObject& toolResult)
+{
+    Observation ob;
+    ob.stepIndex = stepIndex;
+    ob.tool = tool;
+    const QString text = resultText(toolResult);
+    ob.raw = text;
+    parseErrorStatus(toolResult, text, ob);
+    parseLabelledNumbers(text, ob);
+    parseJsonFacts(text, ob);
+    parseArtifacts(text, ob);
+    parseWarnings(text, ob);
     return ob;
 }
 
 QString summarize(const Plan& plan, const QVector<Observation>& observations, State finalState)
 {
-    int ok = 0, failed = 0, skipped = 0;
+    int ok = 0;
+    int failed = 0;
+    int skipped = 0;
     for (const Step& s : plan.steps) {
         if (s.status == Step::Succeeded) ++ok;
         else if (s.status == Step::Failed) ++failed;
         else if (s.status == Step::Skipped) ++skipped;
     }
-    QString head;
-    switch (finalState) {
-    case State::Completed: head = QStringLiteral("Done — %1 of %2 steps succeeded.").arg(ok).arg(plan.steps.size()); break;
-    case State::Cancelled: head = QStringLiteral("Cancelled after %1 of %2 steps.").arg(ok + failed).arg(plan.steps.size()); break;
-    case State::Failed:    head = QStringLiteral("Stopped — %1 of %2 steps succeeded, %3 failed.").arg(ok).arg(plan.steps.size()).arg(failed); break;
-    default:               head = QStringLiteral("%1 of %2 steps done.").arg(ok).arg(plan.steps.size()); break;
-    }
-    QStringList lines{head};
+    QStringList lines{summaryHeadline(plan, finalState, ok, failed)};
     for (int i = 0; i < plan.steps.size(); ++i) {
         const Step& s = plan.steps[i];
         QString line = QStringLiteral("%1. %2 — %3").arg(i + 1).arg(s.tool, Step::statusName(s.status));
-        if ((s.status == Step::Failed || s.status == Step::Repaired) && !s.error.isEmpty()) line += QStringLiteral(" (%1)").arg(s.error.left(120));
-        for (const Observation& ob : observations) {
-            if (ob.stepIndex != i || ob.status != QLatin1String("success")) continue;
-            QStringList bits;
-            for (auto it = ob.facts.begin(); it != ob.facts.end(); ++it) {
-                const QJsonValue v = it.value();
-                if (v.isDouble()) bits << QStringLiteral("%1 %2").arg(QString::number(v.toDouble(), 'g', 10), it.key());
-                else if (v.isBool()) bits << QStringLiteral("%1=%2").arg(it.key(), v.toBool() ? "yes" : "no");
-                else if (v.isString() && !v.toString().isEmpty() && it.key() != QLatin1String("fallbackReason"))
-                    bits << QStringLiteral("%1=%2").arg(it.key(), v.toString().left(40));
-            }
-            if (!ob.artifacts.isEmpty()) bits << QStringLiteral("→ %1").arg(ob.artifacts.join(", "));
-            if (!bits.isEmpty()) line += QStringLiteral(": ") + bits.join(", ");
-            break;
+        const bool showError = (s.status == Step::Failed || s.status == Step::Repaired) && !s.error.isEmpty();
+        if (showError) line += QStringLiteral(" (%1)").arg(s.error.left(120));
+        if (const Observation* ob = successObservationFor(observations, i)) {
+            const QString facts = factsFragment(*ob);
+            if (!facts.isEmpty()) line += QStringLiteral(": ") + facts;
         }
         lines << line;
     }

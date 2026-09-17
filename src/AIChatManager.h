@@ -87,7 +87,7 @@ private:
 
     // Agent-mode state (#1021)
     bool m_agentMode    = true;
-    bool m_agentDriving = false;   // AIAgentManager owns the LLM right now — ignore v1 callbacks
+    bool m_agentDriving = false;   // the agent owns the LLM right now, so the v1 callbacks stay silent
     bool m_agentWired   = false;
     void wireAgent();
     bool agentOwnsGeneration() const;
