@@ -431,6 +431,33 @@ QString snakeCase(const QString& key)
 // move a recognisable alias onto the schema's name — the MCP handlers accept
 // several of these spellings anyway, so the validator must not be stricter
 // than the tool. Only keys that are NOT themselves schema properties move.
+// pass 1: snake_case every key that is not a property as spelled
+QJsonObject snakeCaseKeys(const QJsonObject& props, const QJsonObject& args, QStringList* warnings)
+{
+    QJsonObject out;
+    for (auto a = args.begin(); a != args.end(); ++a) {
+        QString key = a.key();
+        const QString snake = props.contains(key) ? key : snakeCase(key);
+        if (snake != key && warnings && props.contains(snake))
+            *warnings << QStringLiteral("'%1' read as '%2'").arg(key, snake);
+        out[snake] = a.value();
+    }
+    return out;
+}
+
+// pass 2: fill a missing schema key from the first alias the model used instead
+void fillFromAliases(const QJsonObject& props, const QString& want, const QStringList& aliases,
+                     QJsonObject& out, QStringList* warnings)
+{
+    if (out.contains(want)) return;
+    for (const QString& alias : aliases) {
+        if (!out.contains(alias) || props.contains(alias)) continue;
+        out[want] = out.take(alias);
+        if (warnings) *warnings << QStringLiteral("'%1' read as '%2'").arg(alias, want);
+        return;
+    }
+}
+
 QJsonObject normaliseAliases(const QJsonObject& props, const QJsonObject& args, QStringList* warnings)
 {
     static const QHash<QString, QStringList> synonyms = {
@@ -443,30 +470,9 @@ QJsonObject normaliseAliases(const QJsonObject& props, const QJsonObject& args, 
         {"template",    {"skeleton", "skeleton_type", "rig_template"}},
         {"type",        {"primitive", "primitive_type", "kind", "shape"}},
     };
-    QJsonObject out;
-    // pass 1: snake_case every key that is not a property as spelled
-    for (auto a = args.begin(); a != args.end(); ++a) {
-        QString key = a.key();
-        if (!props.contains(key)) {
-            const QString snake = snakeCase(key);
-            if (snake != key) {
-                if (warnings && props.contains(snake)) *warnings << QStringLiteral("'%1' read as '%2'").arg(key, snake);
-                key = snake;
-            }
-        }
-        out[key] = a.value();
-    }
-    // pass 2: fill missing schema keys from aliases the model used instead
-    for (auto p = props.begin(); p != props.end(); ++p) {
-        const QString want = p.key();
-        if (out.contains(want)) continue;
-        for (const QString& alias : synonyms.value(want)) {
-            if (!out.contains(alias) || props.contains(alias)) continue;
-            out[want] = out.take(alias);
-            if (warnings) *warnings << QStringLiteral("'%1' read as '%2'").arg(alias, want);
-            break;
-        }
-    }
+    QJsonObject out = snakeCaseKeys(props, args, warnings);
+    for (auto p = props.begin(); p != props.end(); ++p)
+        fillFromAliases(props, p.key(), synonyms.value(p.key()), out, warnings);
     return out;
 }
 

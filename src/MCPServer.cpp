@@ -3181,6 +3181,42 @@ QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
 #endif
 }
 
+namespace {
+// "  - <entity> (material: <name>)" for the scene summary.
+QString sceneEntityLine(const Ogre::Entity* entity)
+{
+    QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
+    if (entity->getNumSubEntities() == 0) return info;
+    const Ogre::SubEntity* subEnt = entity->getSubEntity(0);
+    if (subEnt && subEnt->getMaterial())
+        info += QString(" (material: %1)").arg(QString::fromStdString(subEnt->getMaterial()->getName()));
+    return info;
+}
+
+// Entities attached to a node. Manager::getEntities() static_casts every
+// attached movable (crashes on ManualObjects) — check the type explicitly.
+QStringList sceneEntityLines(const Ogre::SceneNode* node)
+{
+    QStringList lines;
+    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+        const Ogre::MovableObject* obj = node->getAttachedObject(i);
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        lines << sceneEntityLine(static_cast<const Ogre::Entity*>(obj));
+    }
+    return lines;
+}
+
+QStringList selectedSceneNodeNames()
+{
+    QStringList names;
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel) return names;
+    for (Ogre::SceneNode* n : sel->getNodesSelectionList())
+        if (n) names << QString::fromStdString(n->getName());
+    return names;
+}
+} // namespace
+
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
@@ -3198,36 +3234,15 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             it.getNext();
             materialCount++;
         }
-        // Build scene node list and entity list by iterating nodes directly.
-        // Manager::getEntities() uses static_cast<Entity*> on all attached objects,
-        // which crashes on ManualObjects. Check movable type explicitly.
         QStringList nodeNames;
         QStringList entityInfo;
-        int entityCount = 0;
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             nodeNames << QString::fromStdString(node->getName());
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
-                entityCount++;
-                QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
-                if (entity->getNumSubEntities() > 0) {
-                    Ogre::SubEntity* subEnt = entity->getSubEntity(0);
-                    if (subEnt && subEnt->getMaterial()) {
-                        info += QString(" (material: %1)").arg(
-                            QString::fromStdString(subEnt->getMaterial()->getName()));
-                    }
-                }
-                entityInfo << info;
-            }
+            entityInfo << sceneEntityLines(node);
         }
-        QStringList selectedNames;
-        if (SelectionSet* sel = SelectionSet::getSingleton()) {
-            for (Ogre::SceneNode* n : sel->getNodesSelectionList())
-                if (n) selectedNames << QString::fromStdString(n->getName());
-        }
+        const int entityCount = static_cast<int>(entityInfo.size());
+        const QStringList selectedNames = selectedSceneNodeNames();
         const QString sceneInfo = QString(
             "Scene Information:\n"
             "- Scene Nodes: %1\n"
