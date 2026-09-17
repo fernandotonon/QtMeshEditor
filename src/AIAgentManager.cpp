@@ -7,6 +7,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSettings>
@@ -216,6 +217,42 @@ QString AIAgentManager::recommendedModelName() const
     return QLatin1String(kRecommendedModel);
 }
 
+QString AIAgentManager::subjectFromGoal(const QString& goal)
+{
+    static const QStringList leading = {"create", "make", "generate", "build", "design", "model", "add", "spawn", "give",
+                                        "me", "us", "a", "an", "the", "please", "new", "3d", "mesh", "of", "some"};
+    static const QStringList trailing = {"scene", "model", "mesh", "please", "me", "for", "now", "3d", "object", "asset"};
+    // compare words without their punctuation ("please." is still "please")
+    static const QString punct = QStringLiteral(".!?,;:");
+    const auto bare = [](QString w) { w = w.toLower(); while (!w.isEmpty() && punct.contains(w.back())) w.chop(1); return w; };
+    QStringList words = goal.simplified().split(' ', Qt::SkipEmptyParts);
+    while (!words.isEmpty() && leading.contains(bare(words.first()))) words.removeFirst();
+    while (!words.isEmpty() && trailing.contains(bare(words.last()))) words.removeLast();
+    // keep the user's punctuation out of an image prompt
+    QString subject = words.join(' ');
+    while (!subject.isEmpty() && punct.contains(subject.back())) subject.chop(1);
+    return subject.isEmpty() ? goal.simplified() : subject;
+}
+
+QString AIAgentManager::repairMissingImageInput(AIAgent::Step& step, const QString& goal,
+                                                const std::function<bool(const QString&)>& fileExists)
+{
+    if (step.tool != QLatin1String("generate_mesh_from_image")) return {};
+    const QString image = step.arguments.value(QStringLiteral("image_path")).toString().trimmed();
+    if (image.isEmpty()) return {};
+    const bool exists = fileExists ? fileExists(image) : QFileInfo::exists(image);
+    if (exists) return {};
+    step.arguments.remove(QStringLiteral("image_path"));
+    QString prompt = step.arguments.value(QStringLiteral("prompt")).toString().trimmed();
+    if (prompt.isEmpty()) {
+        prompt = subjectFromGoal(goal);
+        step.arguments.insert(QStringLiteral("prompt"), prompt);
+        return QStringLiteral("[generate_mesh_from_image] image '%1' does not exist — generating the image from the request instead: prompt \"%2\"")
+            .arg(image, prompt);
+    }
+    return QStringLiteral("[generate_mesh_from_image] image '%1' does not exist — generating from the prompt \"%2\" alone").arg(image, prompt);
+}
+
 bool AIAgentManager::isRecommendedModelName(const QString& modelName)
 {
     // Models known to hold a multi-step JSON tool protocol together: the
@@ -358,7 +395,8 @@ QString AIAgentManager::systemPrompt(const QStringList& capabilityIds, bool with
         "4. Use exact object/material names from the scene state. Call get_scene_info first only when a needed name is unknown.\n"
         "5. Never repeat a step.\n"
         "6. Tools described as acting on 'the selected mesh' (auto_rig, compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, retopologize, remove_skeleton, ...) use the CURRENT SELECTION: call select_entity {\"name\": ...} first unless the scene state already shows it selected.\n"
-        "7. Colours are [R,G,B] arrays in 0..1 (red = [1,0,0]). To recolour an object: create_material with a diffuse colour, then apply_material to the object.\n")
+        "7. Colours are [R,G,B] arrays in 0..1 (red = [1,0,0]). To recolour an object: create_material with a diffuse colour, then apply_material to the object.\n"
+        "8. Never invent file paths. generate_mesh_from_image takes EITHER the user's real image in image_path OR, when the user gave no image, a description of the object in prompt (text → image → 3D). To create something that does not exist yet, use prompt.\n")
         .arg(m_registry.promptIndex(), capabilityIds.join(", "), m_registry.promptToolsFor(capabilityIds))
         .arg(m_limits.maxSteps);
     const QString history = withHistory ? conversationContext() : QString();
@@ -432,12 +470,20 @@ void AIAgentManager::requestReplan(int failedIndex)
     QJsonArray planArr;
     for (const Step& s : m_plan.steps) planArr.append(s.toJson());
     const Step& failed = m_plan.steps[failedIndex];
+    // A missing file is almost always an INVENTED path — guessing another one
+    // (Downloads/x.png → Downloads/x.jpg) never helps; say so explicitly.
+    static const QRegularExpression missingFile(QStringLiteral("not found|does not exist|no such file"), QRegularExpression::CaseInsensitiveOption);
+    const QString pathHint = missingFile.match(failed.error).hasMatch()
+        ? QStringLiteral("That file does not exist — do NOT guess another path. Use a tool option that creates the input instead "
+                         "(generate_mesh_from_image {\"prompt\": \"<describe the object>\"} generates the image from text), "
+                         "or ask the user for the file in the summary.\n")
+        : QString();
     QString user = QStringLiteral(
         "Original task: %1\n"
         "Plan so far: %2\n"
         "Observations:\n%3\n"
         "Step %4 (%5) failed: %6\n"
-        "Its arguments were: %7 — fix the call (check the parameter names in the tool list above), do not resend it unchanged.\n"
+        "Its arguments were: %7 — fix the call (check the parameter names in the tool list above), do not resend it unchanged.\n%8"
         "Reply with ONE JSON object: {\"steps\": [remaining steps to run now, fixed], \"done\": false}\n"
         "or {\"done\": true, \"summary\": \"what was achieved / why it cannot be completed\"}.\n"
         "Do not repeat steps that already succeeded. Do not repeat the failing call unchanged.\n"
@@ -445,7 +491,8 @@ void AIAgentManager::requestReplan(int failedIndex)
         .arg(m_plan.goal, QString::fromUtf8(QJsonDocument(planArr).toJson(QJsonDocument::Compact)),
              obsLines.join('\n'))
         .arg(failedIndex + 1).arg(failed.tool, failed.error.left(300),
-             QString::fromUtf8(QJsonDocument(failed.arguments).toJson(QJsonDocument::Compact)));
+             QString::fromUtf8(QJsonDocument(failed.arguments).toJson(QJsonDocument::Compact)))
+        .arg(pathHint);
     trace(QStringLiteral("replan request (user)"), user);
     m_planner->request(systemPromptWithinBudget(user, 700), user, 700);
 }
@@ -797,6 +844,12 @@ void AIAgentManager::executeNext()
         return;
     }
     s.arguments = coerced;
+    if (const QString note = repairMissingImageInput(s, m_plan.goal); !note.isEmpty()) {
+        sayTool(note);
+        trace(QStringLiteral("harness repair"), note);
+        SentryReporter::addBreadcrumb("ai.agent.step", QStringLiteral("harness repair: %1").arg(note));
+        emit planChanged();
+    }
 
     // ---- safety rail: destructive steps need a confirmation unless trusted ----
     const QString reason = AICapabilityRegistry::destructiveReason(s.tool, s.arguments);

@@ -10902,7 +10902,7 @@ QJsonArray MCPServer::buildToolsList()
     // handler gates the local TripoSR/TripoSG paths on ENABLE_ONNX itself).
     {
         QJsonObject props;
-        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a 2D IMAGE file (.png, .jpg, .jpeg, .webp, .bmp) — a photo or rendering of a single object, ideally background-removed. NOT a 3D mesh: to work on an existing .obj/.glb/.fbx use load_mesh instead. Required unless 'prompt' is given."}};
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a 2D IMAGE file (.png, .jpg, .jpeg, .webp, .bmp) — a photo or rendering of a single object, ideally background-removed. NOT a 3D mesh: to work on an existing .obj/.glb/.fbx use load_mesh instead. Only a file that really exists — never guess a path; without an image, use 'prompt'. Required unless 'prompt' is given."}};
         props["prompt"] = QJsonObject{{"type", "string"}, {"description", "Prompt-to-3D: generate the source image from this text (FLUX.2-klein-4B via stable-diffusion.cpp — download it in AI Model Settings; needs a stable-diffusion build). Combined WITH image_path, the prompt EDITS that image (FLUX.2 reference conditioning) and the edit becomes the input."}};
         props["image_model"] = QJsonObject{{"type", "string"}, {"description", "With 'prompt': override the image-generation model (an SD checkpoint name from the sd_models directory; default: FLUX.2-klein-4B when downloaded, else the last-used SD model)."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};

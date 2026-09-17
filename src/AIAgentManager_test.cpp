@@ -60,6 +60,7 @@ public:
             tool("auto_rig", "Rig.", {{"template", prop("string", "t")}}),
             tool("delete_entity", "Delete.", {{"entity_name", prop("string", "e")}}, {"entity_name"}),
             tool("export_mesh", "Export.", {{"output_path", prop("string", "p")}}, {"output_path"}),
+            tool("generate_mesh_from_image", "Image or prompt to 3D.", {{"image_path", prop("string", "img")}, {"prompt", prop("string", "text")}}),
         };
     }
     QJsonObject callTool(const QString& name, const QJsonObject& args) override
@@ -619,4 +620,52 @@ TEST_F(AgentFixture, PromptIsTrimmedToTheModelsContextWindow)
     EXPECT_TRUE(bounded.contains("- auto_rig:")) << "the routed capability's docs survive";
     EXPECT_TRUE(bounded.contains("...(truncated)")) << "the long scene listing was cut";
     EXPECT_EQ(m->state(), State::Completed);
+}
+
+// Field finding (F-22 session): the planner INVENTED
+// ~/Downloads/f22_raptor.png, the tool said "image not found", and the
+// repair rounds guessed .jpg, then .png again — six failures, nothing made.
+// The harness now drops a non-existent image and turns the request into the
+// tool's text prompt before the call runs.
+TEST(AIAgentSubject, SubjectFromGoalStripsCreationVerbsAndTrailingScene)
+{
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("create a f22 raptor scene"), "f22 raptor");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("Make me a red dragon, please."), "red dragon");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("generate a 3d model of a goblin warrior"), "goblin warrior");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("wolf"), "wolf");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("create a scene"), "create a scene") << "nothing left → the goal itself";
+}
+
+TEST(AIAgentSubject, RepairMissingImageInputTurnsAnInventedPathIntoAPrompt)
+{
+    auto missing = [](const QString&) { return false; };
+    auto present = [](const QString&) { return true; };
+    AIAgent::Step s; s.tool = "generate_mesh_from_image"; s.arguments = {{"image_path", "/Users/x/Downloads/f22_raptor.png"}};
+    const QString note = AIAgentManager::repairMissingImageInput(s, "create a f22 raptor scene", missing);
+    EXPECT_FALSE(note.isEmpty());
+    EXPECT_FALSE(s.arguments.contains("image_path"));
+    EXPECT_EQ(s.arguments.value("prompt").toString(), "f22 raptor");
+    // an image that exists is the user's — untouched
+    AIAgent::Step real; real.tool = "generate_mesh_from_image"; real.arguments = {{"image_path", "/photos/car.png"}};
+    EXPECT_TRUE(AIAgentManager::repairMissingImageInput(real, "make a car", present).isEmpty());
+    EXPECT_EQ(real.arguments.value("image_path").toString(), "/photos/car.png");
+    // a missing image WITH a prompt: keep the prompt, drop the path
+    AIAgent::Step both; both.tool = "generate_mesh_from_image"; both.arguments = {{"image_path", "/nope.png"}, {"prompt", "a jet"}};
+    EXPECT_FALSE(AIAgentManager::repairMissingImageInput(both, "create a jet", missing).isEmpty());
+    EXPECT_FALSE(both.arguments.contains("image_path"));
+    EXPECT_EQ(both.arguments.value("prompt").toString(), "a jet");
+    // other tools are never touched
+    AIAgent::Step other; other.tool = "load_mesh"; other.arguments = {{"image_path", "/nope.png"}};
+    EXPECT_TRUE(AIAgentManager::repairMissingImageInput(other, "x", missing).isEmpty());
+}
+
+TEST_F(AgentFixture, InventedImagePathIsRepairedBeforeTheToolRunsAndTheTaskSucceeds)
+{
+    planner->replies << planJson({{"generate_mesh_from_image", {{"image_path", "/nonexistent_qtmesh_dir/f22_raptor.png"}}}});
+    ASSERT_TRUE(m->startTask("create a f22 raptor scene"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastError().toStdString();
+    ASSERT_EQ(exec->calls, QStringList({"generate_mesh_from_image"}));
+    EXPECT_FALSE(exec->callArgs.first().contains("image_path")) << "the invented path never reaches the tool";
+    EXPECT_EQ(exec->callArgs.first().value("prompt").toString(), "f22 raptor");
 }

@@ -140,6 +140,18 @@ public:
     /// EVERY model, the 30B included).
     Q_INVOKABLE bool modelIsRecommended(const QString& modelName) const { return isRecommendedModelName(modelName); }
     static bool isRecommendedModelName(const QString& modelName);
+
+    /// The thing the user wants made, out of a request like "create a f22
+    /// raptor scene" → "f22 raptor": leading creation verbs/articles and a
+    /// trailing "scene"/"model" are dropped. Falls back to the goal itself.
+    static QString subjectFromGoal(const QString& goal);
+    /// Harness-side repair for the planner's favourite invention: a
+    /// generate_mesh_from_image call naming an image that does not exist.
+    /// The path is dropped and, when no prompt was given, the request's
+    /// subject becomes the text prompt (text → image → 3D). Returns the
+    /// transcript note, or an empty string when nothing was changed.
+    static QString repairMissingImageInput(AIAgent::Step& step, const QString& goal,
+                                           const std::function<bool(const QString&)>& fileExists = {});
     const AICapabilityRegistry& registry() const { return m_registry; }
 
     /// Conversation memory across tasks (#1021c): the last few requests and
