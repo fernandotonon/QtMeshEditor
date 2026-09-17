@@ -21,6 +21,9 @@ class AIChatManager : public QObject
     Q_PROPERTY(bool modelAvailable      READ modelAvailable    NOTIFY modelAvailableChanged)
     Q_PROPERTY(QString streamingText    READ streamingText     NOTIFY streamingTextChanged)
     Q_PROPERTY(QString currentModelName READ currentModelName  NOTIFY currentModelNameChanged)
+    // #1021: multi-step requests go through AIAgentManager (plan → execute →
+    // observe → replan, one undo group, confirmations). Off = the v1 loop.
+    Q_PROPERTY(bool agentMode READ agentMode WRITE setAgentMode NOTIFY agentModeChanged)
 
 public:
     static AIChatManager* instance();
@@ -34,11 +37,15 @@ public:
     QString currentModelName()  const;
 
     Q_INVOKABLE void sendMessage(const QString& text);
+    bool agentMode() const { return m_agentMode; }
+    void setAgentMode(bool on);
+    /// Scene summary injected into every planner prompt (#1021c). Public for tests.
+    QString sceneSummaryForAgent() const;
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE void stopGeneration();
 
     // Called by MainWindow after MCPServer is created
-    void setMcpServer(MCPServer* server) { m_mcpServer = server; }
+    void setMcpServer(MCPServer* server);
 
 signals:
     void messagesChanged();
@@ -46,6 +53,7 @@ signals:
     void modelAvailableChanged();
     void streamingTextChanged();
     void currentModelNameChanged();
+    void agentModeChanged();
 
 private slots:
     void onGenerationProgress(const QString& partial, float progress);
@@ -76,6 +84,12 @@ private:
     static const int kMaxToolLoops  = 10;
     static const int kMaxJsonRetries = 2;  // retry if model outputs malformed JSON
     QStringList m_lastToolSignatures; // compact JSON of tool calls from previous round
+
+    // Agent-mode state (#1021)
+    bool m_agentMode    = true;
+    bool m_agentDriving = false;   // AIAgentManager owns the LLM right now — ignore v1 callbacks
+    bool m_agentWired   = false;
+    void wireAgent();
 };
 
 #endif // AICHATMANAGER_H

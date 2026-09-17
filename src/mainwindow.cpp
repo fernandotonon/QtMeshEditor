@@ -137,6 +137,7 @@
 #include "SkinWeightController.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
+#include "AIAgentManager.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
@@ -880,6 +881,7 @@ MainWindow::~MainWindow()
         PaintChannelPresets::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        AIAgentManager::kill();
         ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
@@ -1166,6 +1168,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AIAgentManager>("AIChatPanel", 1, 0, "AIAgentManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIAgentManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

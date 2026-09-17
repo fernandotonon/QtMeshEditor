@@ -16,6 +16,9 @@ Rectangle {
             Qt.callLater(() => inputField.forceActiveFocus())
     }
 
+    readonly property bool agentBusy: AIAgentManager.busy
+    readonly property bool awaitingConfirm: AIAgentManager.state === "awaiting_confirmation"
+
     // ---- Header bar ----
     Rectangle {
         id: header
@@ -28,10 +31,66 @@ Rectangle {
             spacing: 6
 
             Text {
-                text: "AI Chat"
+                text: AIChatManager.agentMode ? "AI Agent" : "AI Chat"
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 13; font.bold: true
                 Layout.fillWidth: true
+            }
+
+            // Agent mode toggle (#1021): plan → execute → observe, one undo group.
+            Rectangle {
+                width: agentToggleText.implicitWidth + 12; height: 20; radius: 3
+                color: AIChatManager.agentMode
+                       ? PropertiesPanelController.highlightColor
+                       : PropertiesPanelController.buttonColor
+                border.color: PropertiesPanelController.borderColor
+                ToolTip.visible: agentToggleArea.containsMouse
+                ToolTip.delay: 500
+                ToolTip.text: AIChatManager.agentMode
+                    ? "Agent mode: multi-step plans, structured observations, one undo group per task, confirmations for destructive steps. Click for the simple chat loop."
+                    : "Simple chat loop (one tool per reply). Click for agent mode."
+                Text {
+                    id: agentToggleText
+                    anchors.centerIn: parent
+                    text: "agent"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: agentToggleArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    enabled: !AIChatManager.isGenerating
+                    onClicked: AIChatManager.agentMode = !AIChatManager.agentMode
+                }
+            }
+
+            // Trusted mode (#1021d): skip confirmations for destructive steps.
+            Rectangle {
+                visible: AIChatManager.agentMode
+                width: trustText.implicitWidth + 12; height: 20; radius: 3
+                color: AIAgentManager.trustedMode ? "#aa5533" : PropertiesPanelController.buttonColor
+                border.color: PropertiesPanelController.borderColor
+                ToolTip.visible: trustArea.containsMouse
+                ToolTip.delay: 500
+                ToolTip.text: AIAgentManager.trustedMode
+                    ? "Trusted mode ON: the agent deletes and overwrites without asking. Click to require confirmations again."
+                    : "Destructive steps (delete, overwrite a file, rewrite geometry) ask for confirmation. Click to trust the agent for this machine."
+                Text {
+                    id: trustText
+                    anchors.centerIn: parent
+                    text: AIAgentManager.trustedMode ? "trusted" : "ask"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: trustArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: AIAgentManager.trustedMode = !AIAgentManager.trustedMode
+                }
             }
 
             // Model status dot
@@ -47,7 +106,7 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 elide: Text.ElideMiddle
-                Layout.maximumWidth: 160
+                Layout.maximumWidth: 120
             }
 
             // Clear button
@@ -69,12 +128,35 @@ Rectangle {
         }
     }
 
+    // ---- Model recommendation (#1021e) ----
+    Rectangle {
+        id: modelHint
+        anchors { top: header.bottom; left: parent.left; right: parent.right }
+        visible: AIChatManager.agentMode && AIChatManager.modelAvailable
+                 && AIChatManager.currentModelName.indexOf("7b") < 0
+                 && AIChatManager.currentModelName.indexOf("7B") < 0
+                 && AIChatManager.currentModelName.indexOf("12b") < 0
+                 && AIChatManager.currentModelName.indexOf("12B") < 0
+        height: visible ? hintText.implicitHeight + 8 : 0
+        color: Qt.rgba(1, 0.8, 0.3, 0.08)
+        Text {
+            id: hintText
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 8 }
+            wrapMode: Text.Wrap
+            font.pixelSize: 9
+            opacity: 0.75
+            color: PropertiesPanelController.textColor
+            text: "Tip: small models struggle with multi-step tool calls. " + AIAgentManager.recommendedModelName
+                  + " is the recommended agent model (AI → AI Model Settings → Recommended)."
+        }
+    }
+
     // ---- Single selectable conversation area ----
     Flickable {
         id: msgFlick
         anchors {
-            top: header.bottom; left: parent.left; right: parent.right
-            bottom: thinkingRow.top; bottomMargin: 0
+            top: modelHint.bottom; left: parent.left; right: parent.right
+            bottom: planCard.top; bottomMargin: 0
         }
         clip: true
         contentWidth: width
@@ -108,9 +190,6 @@ Rectangle {
                 }
             }
 
-            // When the user finishes selecting (mouse released with no selection),
-            // return focus to the input field. Use onActiveFocusChanged instead of
-            // onSelectedTextChanged to avoid stealing focus mid-drag.
             onActiveFocusChanged: {
                 if (!activeFocus && selectedText.length === 0)
                     Qt.callLater(() => inputField.forceActiveFocus())
@@ -126,13 +205,127 @@ Rectangle {
         }
     }
 
+    // ---- Plan card (#1021b): live step list of the running/last agent task ----
+    Rectangle {
+        id: planCard
+        anchors { bottom: confirmBar.top; left: parent.left; right: parent.right; margins: visible ? 6 : 0 }
+        visible: AIChatManager.agentMode && AIAgentManager.plan.length > 0
+                 && (root.agentBusy || root.planCardPinned)
+        height: visible ? planCol.implicitHeight + 12 : 0
+        radius: 4
+        color: PropertiesPanelController.headerColor
+        border.color: PropertiesPanelController.borderColor
+        property bool planCardPinned: false
+
+        Column {
+            id: planCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
+            spacing: 2
+            RowLayout {
+                width: parent.width
+                Text {
+                    text: AIAgentManager.planTitle.length > 0 ? AIAgentManager.planTitle : "Plan"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11; font.bold: true
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: AIAgentManager.state
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.6
+                    font.pixelSize: 9
+                }
+            }
+            Repeater {
+                model: AIAgentManager.plan
+                Row {
+                    spacing: 6
+                    width: planCol.width
+                    Text {
+                        width: 14
+                        text: modelData.status === "succeeded" ? "✓"
+                            : modelData.status === "failed"    ? "✗"
+                            : modelData.status === "running"   ? "▶"
+                            : modelData.status === "skipped"   ? "–" : "○"
+                        color: modelData.status === "succeeded" ? "#66cc66"
+                             : modelData.status === "failed"    ? "#dd5555"
+                             : modelData.status === "running"   ? PropertiesPanelController.accentColor
+                             : PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        width: parent.width - 20
+                        text: (modelData.index + 1) + ". " + modelData.tool
+                              + (modelData.why.length > 0 ? " — " + modelData.why : "")
+                              + (modelData.status === "failed" && modelData.error.length > 0 ? "  (" + modelData.error + ")" : "")
+                        color: PropertiesPanelController.textColor
+                        opacity: modelData.status === "skipped" ? 0.5 : 0.9
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                        maximumLineCount: 2
+                        wrapMode: Text.Wrap
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Confirmation bar (#1021d) ----
+    Rectangle {
+        id: confirmBar
+        anchors { bottom: thinkingRow.top; left: parent.left; right: parent.right; margins: visible ? 6 : 0 }
+        visible: root.awaitingConfirm
+        height: visible ? confirmCol.implicitHeight + 12 : 0
+        radius: 4
+        color: Qt.rgba(0.9, 0.5, 0.2, 0.15)
+        border.color: "#cc7733"
+
+        Column {
+            id: confirmCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
+            spacing: 6
+            Text {
+                width: parent.width
+                wrapMode: Text.Wrap
+                text: "⚠ " + AIAgentManager.pendingConfirmation + ". Allow?"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Flow {
+                width: parent.width
+                spacing: 6
+                Repeater {
+                    model: [
+                        { label: "Allow",        approve: true,  always: false },
+                        { label: "Always allow", approve: true,  always: true  },
+                        { label: "Skip step",    approve: false, always: false }
+                    ]
+                    Rectangle {
+                        width: btnText.implicitWidth + 16; height: 22; radius: 3
+                        color: btnArea.containsMouse ? PropertiesPanelController.accentColor : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text { id: btnText; anchors.centerIn: parent; text: modelData.label; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea {
+                            id: btnArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: AIAgentManager.confirmPendingStep(modelData.approve, modelData.always)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Thinking dots (no tokens yet) ----
     Row {
         id: thinkingRow
         anchors { bottom: inputRow.top; left: parent.left; leftMargin: 12; bottomMargin: 6 }
         height: visible ? 14 : 0
         spacing: 4
-        visible: AIChatManager.isGenerating
+        visible: AIChatManager.isGenerating && !root.awaitingConfirm
 
         Repeater {
             model: 3
@@ -147,6 +340,14 @@ Rectangle {
                     PauseAnimation  { duration: index * 150 }
                 }
             }
+        }
+        Text {
+            visible: AIChatManager.agentMode && root.agentBusy
+            text: AIAgentManager.state
+            color: PropertiesPanelController.textColor
+            opacity: 0.5
+            font.pixelSize: 9
+            anchors.verticalCenter: parent.verticalCenter
         }
     }
 
@@ -166,7 +367,8 @@ Rectangle {
                       leftMargin: 8; rightMargin: 6 }
             height: Math.min(implicitHeight, 80)
             placeholderText: AIChatManager.modelAvailable
-                             ? "Ask AI to do something…"
+                             ? (AIChatManager.agentMode ? "Describe a task — e.g. \"load the wolf, rig it as a quadruped and export a glb\""
+                                                        : "Ask AI to do something…")
                              : "Load an AI model first (AI → AI Model Settings)"
             color: PropertiesPanelController.textColor
             background: null
@@ -231,13 +433,18 @@ Rectangle {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Ask me to control the editor"
+            text: AIChatManager.agentMode ? "Give me a task — I plan it, run it step by step, and it undoes as one"
+                                          : "Ask me to control the editor"
             color: PropertiesPanelController.textColor
-            font.pixelSize: 13; opacity: 0.7
+            font.pixelSize: 12; opacity: 0.7
+            horizontalAlignment: Text.AlignHCenter
+            width: root.width - 40
+            wrapMode: Text.Wrap
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "\"make the selected mesh twice as large\""
+            text: AIChatManager.agentMode ? "\"segment the wolf, rig it as a quadruped and skin it\""
+                                          : "\"make the selected mesh twice as large\""
             color: PropertiesPanelController.textColor
             font.pixelSize: 11; opacity: 0.45; font.italic: true
         }
@@ -268,11 +475,12 @@ Rectangle {
             var isTool = msg.isTool
             var role   = msg.role
             var roleColor, roleLabel
-            if (isTool)             { roleColor = "#88cc88"; roleLabel = "⚙ tool" }
-            else if (role === "user"){ roleColor = "#88aacc"; roleLabel = "you" }
-            else                    { roleColor = "#aaaaaa"; roleLabel = "assistant" }
+            if (isTool)                  { roleColor = "#88cc88"; roleLabel = "⚙ tool" }
+            else if (role === "user")    { roleColor = "#88aacc"; roleLabel = "you" }
+            else if (role === "plan")    { roleColor = "#ccaa66"; roleLabel = "plan" }
+            else                         { roleColor = "#aaaaaa"; roleLabel = "assistant" }
 
-            // Assistant messages may be structured JSON — render appropriately.
+            // Assistant messages may be structured JSON (v1 loop) — render appropriately.
             var displayText = msg.text
             if (role === "assistant" && !isTool) {
                 var trimmed = msg.text.trim()
@@ -299,7 +507,7 @@ Rectangle {
             }
         }
 
-        // In-progress streaming text
+        // In-progress streaming text (v1 loop only)
         if (AIChatManager.streamingText.length > 0) {
             if (msgs.length > 0) html += "<br>"
             html += '<font color="#aaaaaa"><small><b>assistant</b></small></font><br>'

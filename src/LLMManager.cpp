@@ -139,7 +139,7 @@ void LLMManager::populateRecommendedModels()
         "Qwen 2.5 7B Q4_K_M",
         "qwen2.5-7b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 7B. Strong instruction following and tool use.",
+        "Qwen 2.5 7B. Strong instruction following and tool use — recommended for the AI agent (multi-step tool calling). Apache-2.0.",
         4700000000, // ~4.7GB
         false
     });
