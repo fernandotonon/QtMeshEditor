@@ -165,6 +165,11 @@ public:
     static SkinWeightsReport computeAndApply(Ogre::Entity* entity,
                                              const SkinWeightsOptions& opts = {},
                                              Algorithm algo = Algorithm::SkinTokens);
+    /// #1013: RIGID binding for vehicles/props — every vertex follows exactly
+    /// one bone (closest-point-on-bone, 1 influence, no distance cap so nothing
+    /// is left unbound, no Laplacian smoothing). Use with Algorithm::InverseDistance:
+    /// `computeAndApply(e, SkinWeights::rigidOptions(), SkinWeights::Algorithm::InverseDistance)`.
+    static SkinWeightsOptions rigidOptions();
 
     // Pure-data variant: bone segments + vertex positions →
     // sparse weight list (per vertex: K (bone_index, weight)

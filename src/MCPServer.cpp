@@ -2380,6 +2380,8 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
 
     if (args.contains("skin") && !args["skin"].isBool())
         return makeErrorResult("Error: 'skin' must be a boolean.");
+    if (args.contains("rigid") && !args["rigid"].isBool())
+        return makeErrorResult("Error: 'rigid' must be a boolean.");
 
     AutoRig::Options opts;
     if (args.contains("template")) {
@@ -2437,7 +2439,12 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
                 QStringLiteral("Auto-rig failed: %1").arg(report.error));
 
         if (alsoSkin) {
-            const auto sw = SkinWeights::computeAndApply(entity, {});
+            // #1013: rigid=true or a vehicle template → one bone per vertex.
+            const bool useRigid = args.value("rigid").toBool(false) || AutoRig::templateIsRigid(opts.tmpl);
+            const auto sw = useRigid
+                ? SkinWeights::computeAndApply(entity, SkinWeights::rigidOptions(),
+                                               SkinWeights::Algorithm::InverseDistance)
+                : SkinWeights::computeAndApply(entity, {});
             skinned = sw.applied;
             // A requested skin that failed is a hard error — don't export an
             // unskinned asset and report success.
@@ -11179,8 +11186,14 @@ QJsonArray MCPServer::buildToolsList()
         props["template"] = QJsonObject{{"type", "string"},
             {"description",
              "Skeleton template: 'humanoid' (19-bone, default), 'biped', "
-             "'quadruped', or 'generic' (3-joint spine fallback). Used by the "
-             "'pinocchio' algorithm (and as the 'unirig' fallback)."}};
+             "'quadruped', 'generic' (3-joint spine fallback), or 'vehicle' "
+             "(chassis + 2 axles + 4 wheels snapped to the lowest geometry per "
+             "quadrant; implies rigid skinning). Used by the 'pinocchio' "
+             "algorithm, as the 'unirig' fallback, and as UniRig's category hint "
+             "for joint naming."}};
+        props["rigid"] = QJsonObject{{"type", "boolean"},
+            {"description", "With skin=true: bind every vertex to ONE bone (vehicles/props) "
+                            "instead of the soft default. Implied by template 'vehicle'."}};
         props["algo"] = QJsonObject{{"type", "string"},
             {"description",
              "Skeleton-prediction backend: 'pinocchio' (native template embedding, "

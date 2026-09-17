@@ -122,6 +122,9 @@ private:
     void refreshMarkerOverlays();
     // Build the Ogre skeleton on the MAIN thread from worker-predicted joints
     // (the back half of the threaded UniRig path), then emit the result.
+    /// #1013: start the async skin pass with the preset the template implies
+    /// (rigid for vehicles, soft otherwise). Returns the controller's result.
+    bool chainSkinForTemplate(const QString& templateName);
     void finishUniRigOnMain(const QString& entityName,
                             const std::vector<AutoRig::Joint>& joints,
                             const QString& templateName, int upAxis,

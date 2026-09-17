@@ -61,7 +61,9 @@ public:
         Humanoid,    // pelvis/spine/head + 2 arms + 2 legs (≈ Mixamo-lite)
         Biped,       // simplified humanoid: spine + 2 legs + stub arms
         Quadruped,   // spine + 4 legs + head + tail
-        Generic      // a simple 3-joint spine chain (fallback for anything)
+        Generic,     // a simple 3-joint spine chain (fallback for anything)
+        Vehicle      // #1013: chassis root + 2 axles + 4 wheels, wheels snapped
+                     // to the lowest geometry of each quadrant (fitVehicle)
     };
 
     // Skeleton-prediction backend (issue #408).
@@ -218,6 +220,16 @@ public:
     /// forced (the user asserts a biped — the way to name a cartoon rat whose
     /// arm chains the plausibility check rejects), quadruped/generic → Generic.
     static UniRigPredictor::Labeling uniRigLabelingForTemplate(Template tmpl);
+    /// #1013: the Vehicle template is fitted from geometry, not by box-mapping:
+    /// the longer in-plane axis is the car's length, and each wheel joint is
+    /// the centroid of the lowest 30% of the mesh in its (front/back × left/
+    /// right) quadrant — axles are the midpoints of their wheel pair, the
+    /// chassis root sits at the body centre. A quadrant without low geometry
+    /// keeps the box-mapped default. Pure; unit-tested.
+    static std::vector<Joint> fitVehicle(const float* verts, int vertexCount, const Options& opts);
+    /// True for templates whose parts move rigidly (vehicles/props): the skin
+    /// chain then uses SkinWeights::rigidOptions() instead of the soft default.
+    static bool templateIsRigid(Template tmpl) { return tmpl == Template::Vehicle; }
     static std::vector<Joint> predictUniRig(
         const std::vector<float>& verts,
         const std::vector<uint32_t>& indices,

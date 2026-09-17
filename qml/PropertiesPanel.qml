@@ -66,7 +66,7 @@ Rectangle {
 
     // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
     // (replaces the old modal AutoRigDialog) ----
-    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
+    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic", "vehicle"]
     property int    rigTemplateIndex: 0
     property var    rigAlgos: ["pinocchio", "unirig"]
     property int    rigAlgoIndex: 0             // pinocchio (offline) default
