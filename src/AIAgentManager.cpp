@@ -503,6 +503,9 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
         finish(State::Failed);
         return;
     }
+    if (m_replanFailedIndex >= 0 && m_replanFailedIndex < m_plan.steps.size()
+        && m_plan.steps[m_replanFailedIndex].status == Step::Failed)
+        m_plan.steps[m_replanFailedIndex].status = Step::Repaired;   // the tail takes over
     for (Step& s : steps) m_plan.steps.push_back(s);
     emit planChanged();
     say(QStringLiteral("Adjusted the plan: %1 new step(s).").arg(steps.size()));
@@ -549,6 +552,15 @@ void AIAgentManager::executeNext()
     const int idx = m_plan.nextPendingIndex();
     if (idx < 0) {
         setState(State::Verifying);
+        // An unrepaired FAILED step is a failed task; user-denied (Skipped)
+        // steps are intentional and do not count against completion.
+        bool anyFailed = false;
+        for (const Step& s : m_plan.steps) if (s.status == Step::Failed) anyFailed = true;
+        if (anyFailed) {
+            if (m_lastError.isEmpty()) m_lastError = QStringLiteral("a step failed and could not be repaired");
+            finish(State::Failed);
+            return;
+        }
         SentryReporter::addBreadcrumb("ai.agent.verify", QStringLiteral("all %1 steps done").arg(m_plan.steps.size()));
         finish(State::Completed);
         return;
@@ -623,7 +635,9 @@ void AIAgentManager::runStep(int idx)
     const QJsonObject result = m_executor->callTool(s.tool, s.arguments);
 
     // Cancel may have been requested from inside the tool call (GUI event
-    // processing) — honour it before observing.
+    // processing runs during a long tool) — cancel() already finished the
+    // task, so do not resurrect it by observing the late result.
+    if (m_cancelRequested || AIAgent::isTerminal(m_state)) return;
     setState(State::Observing);
     Observation ob = observationFromToolResult(idx, s.tool, result);
     m_observations << ob;
@@ -683,6 +697,7 @@ void AIAgentManager::handleStepFailure(int idx, const Observation& ob)
 
 void AIAgentManager::finish(State terminal, const QString& plannerSummary)
 {
+    if (AIAgent::isTerminal(m_state)) return;   // idempotent: one taskFinished, one summary
     closeUndoGroup();
     m_awaiting = Awaiting::None;
     m_currentStep = -1;

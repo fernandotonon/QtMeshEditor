@@ -126,7 +126,13 @@ Observation observationFromToolResult(int stepIndex, const QString& tool,
                               "jointLabeling", "faceCount", "partCount"}) {
             if (j.contains(k)) ob.facts[QLatin1String(k)] = j[k];
         }
-        if (j.contains("isError") && j["isError"].toBool()) ob.status = QStringLiteral("error");
+        if (j.contains("isError") && j["isError"].toBool()) {
+            ob.status = QStringLiteral("error");
+            if (ob.error.isEmpty()) {
+                ob.error = j.contains("error") ? j["error"].toString() : j["message"].toString();
+                if (ob.error.isEmpty()) ob.error = QStringLiteral("tool reported an error");
+            }
+        }
     }
     static const QRegularExpression hasSkel(R"((?i)\b(has skeleton|skinned|rigged)\b\s*[:=]?\s*(true|yes|false|no))");
     if (const auto m = hasSkel.match(text); m.hasMatch()) {
@@ -179,7 +185,7 @@ QString summarize(const Plan& plan, const QVector<Observation>& observations, St
     for (int i = 0; i < plan.steps.size(); ++i) {
         const Step& s = plan.steps[i];
         QString line = QStringLiteral("%1. %2 — %3").arg(i + 1).arg(s.tool, Step::statusName(s.status));
-        if (s.status == Step::Failed && !s.error.isEmpty()) line += QStringLiteral(" (%1)").arg(s.error.left(120));
+        if ((s.status == Step::Failed || s.status == Step::Repaired) && !s.error.isEmpty()) line += QStringLiteral(" (%1)").arg(s.error.left(120));
         for (const Observation& ob : observations) {
             if (ob.stepIndex != i || ob.status != QLatin1String("success")) continue;
             QStringList bits;

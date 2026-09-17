@@ -244,7 +244,8 @@ Rectangle {
                         text: modelData.status === "succeeded" ? "✓"
                             : modelData.status === "failed"    ? "✗"
                             : modelData.status === "running"   ? "▶"
-                            : modelData.status === "skipped"   ? "–" : "○"
+                            : modelData.status === "skipped"   ? "–"
+                            : modelData.status === "repaired"  ? "↻" : "○"
                         color: modelData.status === "succeeded" ? "#66cc66"
                              : modelData.status === "failed"    ? "#dd5555"
                              : modelData.status === "running"   ? PropertiesPanelController.accentColor
@@ -257,7 +258,7 @@ Rectangle {
                               + (modelData.why.length > 0 ? " — " + modelData.why : "")
                               + (modelData.status === "failed" && modelData.error.length > 0 ? "  (" + modelData.error + ")" : "")
                         color: PropertiesPanelController.textColor
-                        opacity: modelData.status === "skipped" ? 0.5 : 0.9
+                        opacity: (modelData.status === "skipped" || modelData.status === "repaired") ? 0.5 : 0.9
                         font.pixelSize: 10
                         elide: Text.ElideRight
                         maximumLineCount: 2

@@ -253,7 +253,7 @@ TEST_F(AgentFixture, PersistentFailureTriggersOneReplanAndTheRepairedTailSucceed
     EXPECT_TRUE(planner->userPrompts[1].contains("Step 2 (apply_material) failed"));
     // old pending step marked skipped, repaired step appended
     ASSERT_EQ(m->plan().steps.size(), 3);
-    EXPECT_EQ(m->plan().steps[1].status, Step::Failed);
+    EXPECT_EQ(m->plan().steps[1].status, Step::Repaired) << "a failed step with an appended replacement is not an unrepaired failure";
     EXPECT_EQ(m->plan().steps[2].status, Step::Succeeded);
 }
 
@@ -323,11 +323,16 @@ TEST_F(AgentFixture, RepairThatDoesNotFitTheStepCapFailsInsteadOfCompleting)
 TEST_F(AgentFixture, CancellationStopsBetweenStepsAndDuringPlanning)
 {
     planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"create_primitive", {{"type", "box"}, {"name", "B"}}}, {"create_primitive", {{"type", "box"}, {"name", "C"}}}});
+    // cancel() fires INSIDE the synchronous tool call (a long tool pumps GUI events)
     exec->onCall = [this](const QString&) { if (exec->calls.size() == 1) m->cancel(); };
+    QSignalSpy finished(m, &AIAgentManager::taskFinished);
     ASSERT_TRUE(m->startTask("three boxes"));
     ASSERT_TRUE(pumpToEnd(m));
-    EXPECT_EQ(m->state(), State::Cancelled);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_EQ(m->state(), State::Cancelled) << "the late tool result must not resurrect the task";
     EXPECT_EQ(exec->calls.size(), 1) << "no further tool calls after cancel";
+    EXPECT_EQ(finished.count(), 1) << "finish() is idempotent — one taskFinished, one summary";
+    EXPECT_EQ(transcript.filter(QRegularExpression("^assistant: Cancelled")).size(), 1);
     EXPECT_TRUE(m->lastSummary().startsWith("Cancelled after")) << m->lastSummary().toStdString();
     EXPECT_FALSE(m->busy());
 
@@ -480,6 +485,10 @@ TEST(AIAgentObservation, ParsesFactsArtifactsAndErrorsFromToolText)
     EXPECT_EQ(ob.error, "Error: material 'Gold' not found");
     EXPECT_TRUE(ob.raw.contains("Available: Wood")) << "raw is kept for the transcript";
     EXPECT_FALSE(ob.toPromptLine().contains("Available: Wood")) << "but never copied into the prompt";
+
+    ob = observationFromToolResult(4, "segment_mesh", ok("{\"isError\":true,\"error\":\"no mesh selected\"}"));
+    EXPECT_EQ(ob.status, "error");
+    EXPECT_EQ(ob.error, "no mesh selected") << "a JSON isError payload carries its reason into the replan prompt";
 
     ob = observationFromToolResult(3, "auto_rig", ok("{\"applied\":true,\"boneCount\":19,\"fallbackReason\":\"UniRig unavailable\"}"));
     EXPECT_EQ(ob.facts["boneCount"].toInt(), 19);

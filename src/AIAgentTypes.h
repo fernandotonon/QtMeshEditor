@@ -55,7 +55,9 @@ inline bool isTerminal(State s)
 }
 
 struct Step {
-    enum Status { Pending, Running, Succeeded, Failed, Skipped };
+    // Repaired = it failed, and a replan appended a replacement that takes
+    // over; it is neither a pending failure nor an intentional skip.
+    enum Status { Pending, Running, Succeeded, Failed, Skipped, Repaired };
 
     QString     tool;          // MCP tool name
     QJsonObject arguments;     // validated/coerced before execution
@@ -72,6 +74,7 @@ struct Step {
         case Succeeded: return QStringLiteral("succeeded");
         case Failed:    return QStringLiteral("failed");
         case Skipped:   return QStringLiteral("skipped");
+        case Repaired:  return QStringLiteral("repaired");
         }
         return QStringLiteral("unknown");
     }
