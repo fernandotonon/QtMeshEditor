@@ -51,6 +51,15 @@
 // callers never see the model's internal scale.
 class UniRigPredictor {
 public:
+    /// #1013: how predicted joints are NAMED.
+    ///   Humanoid — always the geometric humanoid labeller (Hips/Spine/Left…),
+    ///              the pre-#1013 behaviour; stamps humanoid names on cars.
+    ///   Generic  — hierarchical neutral names (root, bone_01, …).
+    ///   Auto     — humanoid names only when the labeller finds a plausible
+    ///              humanoid (detected up == the given up axis, exactly one
+    ///              left + one right arm chain and leg chain); else Generic.
+    enum class Labeling { Auto, Humanoid, Generic };
+
     struct Options {
         // Out-of-line ctor so the `{}` default arg on predict() resolves to a
         // constructor call, not class-definition-time aggregate init of this
@@ -76,6 +85,9 @@ public:
         //            across categories. Env override: QTMESH_UNIRIG_QUERIES=fps|random|both.
         enum class QuerySampling { Random, Fps, Both };
         QuerySampling querySampling = QuerySampling::Both;
+        // #1013: joint naming policy (see Labeling). AutoRig maps --skeleton
+        // humanoid/biped → Auto and quadruped/generic → Generic.
+        Labeling labeling = Labeling::Auto;
     };
 
     struct Joint {
@@ -91,6 +103,7 @@ public:
         std::vector<Joint> joints;               // parent-ordered (root first)
         QString querySampling;                   // "fps" | "random" — which ordering produced it (#1046)
         int alternativeJoints = -1;              // joint count of the discarded ordering under Both, else -1
+        QString labeling;                        // "humanoid" | "generic" — naming actually applied (#1013)
     };
     /// #1046: choose between the two query-sampling runs — the one that decoded
     /// (if only one did), else the richer skeleton, tie → `fps` (the paper's
@@ -203,7 +216,8 @@ public:
     // axis for inference must rotate the returned joints back themselves.
     static Result detokenize(const std::vector<int>& ids,
                              double scale,
-                             const std::array<double, 3>& centre);
+                             const std::array<double, 3>& centre,
+                             Labeling labeling = Labeling::Humanoid);
 
     // Assign anatomical bone names (Hips / Spine / Neck / Head / {Left,Right}
     // {Arm,ForeArm,Hand,UpLeg,Leg,Foot}, Mixamo-style) to a predicted joint set
@@ -213,7 +227,17 @@ public:
     // Pure-data + unit-testable. `upAxis` (0=X,1=Y,2=Z, default +Y) is the body's
     // up direction; the character's LEFT is +X by convention. Joints it can't
     // confidently classify keep their original name. Mutates `joints[].name`.
-    static void labelJointsAnatomically(std::vector<Joint>& joints, int upAxis = 1);
+    /// Returns whether the result is a PLAUSIBLE humanoid (#1013): the axis it
+    /// detected as "up" agrees with `upAxis`, and exactly one Left and one
+    /// Right chain were classified as arm and as leg. A car (its long axis is
+    /// mistaken for the spine) and a tree (many "arms") both return false.
+    static bool labelJointsAnatomically(std::vector<Joint>& joints, int upAxis = 1);
+    /// #1013: neutral hierarchical names — the root "root", every other joint
+    /// "bone_NN" in parent-before-child order. Unique by construction. Pure.
+    static void labelJointsGeneric(std::vector<Joint>& joints);
+    /// #1013: apply `labeling` — returns the naming actually used
+    /// ("humanoid" | "generic").
+    static QString applyLabeling(std::vector<Joint>& joints, int upAxis, Labeling labeling);
 };
 
 #endif // UNIRIG_PREDICTOR_H

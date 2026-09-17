@@ -125,7 +125,8 @@ private:
     void finishUniRigOnMain(const QString& entityName,
                             const std::vector<AutoRig::Joint>& joints,
                             const QString& templateName, int upAxis,
-                            bool alsoSkin);
+                            bool alsoSkin,
+                            const QString& labeling = QString());
     // Worker said UniRig is unavailable/failed → rig with the template instead
     // (main thread), surfacing the reason as a fallback note.
     void finishUniRigFallback(const QString& entityName, const QString& reason,
