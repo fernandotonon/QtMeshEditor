@@ -134,8 +134,12 @@ public:
     /// LLMManager callbacks until that request drains (review finding).
     bool plannerPending() const;
     /// True when the loaded model is one we consider capable of the agent's
-    /// multi-step tool protocol (drives the panel's "tip" banner).
-    Q_INVOKABLE static bool modelIsRecommended(const QString& modelName);
+    /// multi-step tool protocol (drives the panel's "tip" banner). Instance
+    /// method on purpose: QML cannot call a static Q_INVOKABLE on a singleton
+    /// (the binding silently evaluated to undefined and the tip showed for
+    /// EVERY model, the 30B included).
+    Q_INVOKABLE bool modelIsRecommended(const QString& modelName) const { return isRecommendedModelName(modelName); }
+    static bool isRecommendedModelName(const QString& modelName);
     const AICapabilityRegistry& registry() const { return m_registry; }
 
     /// Conversation memory across tasks (#1021c): the last few requests and

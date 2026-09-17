@@ -1,4 +1,5 @@
 #include "LLMWorker.h"
+#include <QFileInfo>
 #include <QDebug>
 #include <QThread>
 
@@ -331,7 +332,16 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
 
         if (llama_decode(m_ctx, batch) != 0) {
             m_isGenerating.store(false);
-            emit generationError("Failed to decode prompt");
+            // llama_decode fails when a compute/KV buffer cannot be allocated —
+            // on Apple Silicon that is the GPU working-set budget (~75% of RAM),
+            // so a 17 GB MoE + an 8k KV cache on a 24 GB Mac lands here even
+            // though the weights loaded.
+            emit generationError(QString("The model could not process the prompt (llama_decode failed at token %1 of %2, "
+                                         "context window %3). This usually means the model does not fit in memory: "
+                                         "try a smaller model, a smaller context size, or fewer GPU layers "
+                                         "(AI → AI Model Settings). Model: %4")
+                                     .arg(i).arg(n_tokens).arg(windowTokens)
+                                     .arg(QFileInfo(m_modelPath).fileName()));
             return;
         }
     }

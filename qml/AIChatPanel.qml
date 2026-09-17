@@ -143,8 +143,8 @@ Rectangle {
             font.pixelSize: 9
             opacity: 0.75
             color: PropertiesPanelController.textColor
-            text: "Tip: small models struggle with multi-step tool calls. " + AIAgentManager.recommendedModelName
-                  + " is the recommended agent model (AI → AI Model Settings → Recommended)."
+            text: "Tip: the loaded model (" + AIChatManager.currentModelName + ") is small for multi-step tool calls. "
+                  + AIAgentManager.recommendedModelName + " is the recommended agent model (AI → AI Model Settings → Recommended)."
         }
     }
 

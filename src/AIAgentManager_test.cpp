@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaMethod>
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTimer>
@@ -501,13 +502,21 @@ TEST(AIAgentObservation, ParsesFactsArtifactsAndErrorsFromToolText)
 
 TEST(AIAgentManagerModels, RecommendedModelCheckIsCaseInsensitiveAndSizeAware)
 {
-    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen3-4B-Instruct-2507-Q4_K_M.gguf"));
-    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen2.5-7B-Instruct-Q4_K_M.gguf"));
-    EXPECT_TRUE(AIAgentManager::modelIsRecommended("google_gemma-3-12b-it-Q4_K_M.gguf"));
-    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
-    EXPECT_FALSE(AIAgentManager::modelIsRecommended("gemma-3-1b-it-Q4_K_M.gguf"));
-    EXPECT_FALSE(AIAgentManager::modelIsRecommended("qwen2.5-3b-instruct-q4_k_m.gguf"));
-    EXPECT_FALSE(AIAgentManager::modelIsRecommended(""));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3-4B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen2.5-7B-Instruct-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("google_gemma-3-12b-it-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("gemma-3-1b-it-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("qwen2.5-3b-instruct-q4_k_m.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName(""));
+    // the QML-facing wrapper must be an INSTANCE invokable (a static one is not callable from QML)
+    AIAgentManager::kill();
+    EXPECT_TRUE(AIAgentManager::instance()->modelIsRecommended("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    const QMetaObject* mo = &AIAgentManager::staticMetaObject;
+    const int idx = mo->indexOfMethod("modelIsRecommended(QString)");
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(mo->method(idx).methodType(), QMetaMethod::Method);
+    AIAgentManager::kill();
 }
 
 TEST_F(AgentFixture, PreviousTurnsAndTheirObjectsAreInjectedIntoLaterPrompts)

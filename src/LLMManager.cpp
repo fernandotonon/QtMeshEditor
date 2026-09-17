@@ -193,7 +193,7 @@ void LLMManager::populateRecommendedModels()
         "Qwen3 30B-A3B Instruct 2507 Q4_K_M",
         "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
         "https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
-        "Qwen3 30B mixture-of-experts (3B active): the strongest local tool caller, fast per token, needs ~20 GB RAM. Apache-2.0.",
+        "Qwen3 30B mixture-of-experts (3B active): the strongest local tool caller, fast per token. Needs 32 GB RAM — on a 24 GB Mac the 17 GB weights load but the GPU budget cannot hold the KV cache (\"could not process the prompt\"). Apache-2.0.",
         18550000000, // ~17.3GB
         false
     });

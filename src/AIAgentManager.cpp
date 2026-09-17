@@ -215,7 +215,7 @@ QString AIAgentManager::recommendedModelName() const
     return QLatin1String(kRecommendedModel);
 }
 
-bool AIAgentManager::modelIsRecommended(const QString& modelName)
+bool AIAgentManager::isRecommendedModelName(const QString& modelName)
 {
     // Models known to hold a multi-step JSON tool protocol together: the
     // Qwen Instruct line at 4B+ and anything 7B+/MoE. Substring match on the
