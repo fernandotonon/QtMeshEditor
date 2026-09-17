@@ -11,6 +11,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -585,6 +586,85 @@ bool UniRigPredictor::modelsPresent()
         && QFileInfo::exists(embedModelPath());
 }
 
+namespace {
+
+// FPS seed: the pool point farthest from the pool centroid — an extremity,
+// exactly what farthest-point sampling should reach first (deterministic,
+// like upstream's random_start=False at inference).
+int farthestFromCentroid(const std::vector<float>& pts, int pool)
+{
+    std::array<double, 3> c = {0.0, 0.0, 0.0};
+    for (int i = 0; i < pool; ++i)
+        for (int a = 0; a < 3; ++a) c[a] += pts[3*i + a];
+    for (double& v : c) v /= pool;
+    int seed = 0;
+    double best = -1.0;
+    for (int i = 0; i < pool; ++i) {
+        double d = 0.0;
+        for (int a = 0; a < 3; ++a) { const double t = pts[3*i + a] - c[a]; d += t * t; }
+        if (d > best) { best = d; seed = i; }
+    }
+    return seed;
+}
+
+// Greedy farthest-point order over the first `pool` points: O(pool * k)
+// distance updates — 65536 x 2048 is ~134M multiply-adds, well under a
+// second and dwarfed by the encoder. Marks the selected points in `chosen`.
+std::vector<int> greedyFarthestPointOrder(const std::vector<float>& pts, int pool, int k,
+                                          int seed, std::vector<char>& chosen)
+{
+    std::vector minD(static_cast<size_t>(pool), std::numeric_limits<float>::max());
+    std::vector<int> order;
+    order.reserve(static_cast<size_t>(k));
+    int cur = seed;
+    for (int it = 0; it < k; ++it) {
+        chosen[cur] = 1;
+        order.push_back(cur);
+        int next = -1;
+        float far = -1.0f;
+        for (int i = 0; i < pool; ++i) {
+            if (chosen[i]) continue;
+            float d = 0.0f;
+            for (int a = 0; a < 3; ++a) { const float t = pts[3*i + a] - pts[3*cur + a]; d += t * t; }
+            minD[i] = std::min(minD[i], d);
+            if (minD[i] > far) { far = minD[i]; next = i; }
+        }
+        if (next < 0) break;
+        cur = next;
+    }
+    return order;
+}
+
+// Rebuild an xyz-triple array as [order..., then every unchosen point in place].
+void reorderTriples(std::vector<float>& v, const std::vector<int>& order,
+                    const std::vector<char>& chosen, int count)
+{
+    std::vector<float> out;
+    out.reserve(v.size());
+    auto append = [&](int i) { out.insert(out.end(), v.begin() + 3*i, v.begin() + 3*i + 3); };
+    for (int i : order) append(i);
+    for (int i = 0; i < count; ++i) if (!chosen[i]) append(i);
+    v.swap(out);
+}
+
+} // namespace
+
+void UniRigPredictor::frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
+                                              int count, int k, int pool)
+{
+    if (count <= 2 || k <= 1) return;
+    if (static_cast<int>(pts.size()) < count * 3) return;
+    if (pool <= 0 || pool > count) pool = count;
+    k = std::min(k, pool);
+
+    std::vector<char> chosen(static_cast<size_t>(count), 0);
+    const std::vector<int> order =
+        greedyFarthestPointOrder(pts, pool, k, farthestFromCentroid(pts, pool), chosen);
+    reorderTriples(pts, order, chosen, count);
+    if (static_cast<int>(nrm.size()) >= count * 3)
+        reorderTriples(nrm, order, chosen, count);   // normals travel with their points
+}
+
 int UniRigPredictor::sampleBudgetForMesh(int vertexCount, int requested)
 {
     if (requested > 0)
@@ -670,6 +750,62 @@ QString UniRigPredictor::ensureModelBlocking()
     return (QFileInfo::exists(enc) && QFileInfo::exists(dec)
             && QFileInfo::exists(emb)) ? enc : QString();
 #endif  // ENABLE_ONNX
+}
+
+// ---- Public entry + chooser: defined for EVERY build (review on #1048 — they
+// lived inside the ENABLE_ONNX branch and the default non-ONNX configuration
+// failed to link). Only the ONNX predict() body, the inference itself, is guarded.
+const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, const Result& random)
+{
+    if (fps.ok != random.ok) return fps.ok ? fps : random;
+    return random.joints.size() > fps.joints.size() ? random : fps;
+}
+
+UniRigPredictor::Options::QuerySampling UniRigPredictor::resolveQuerySampling(const Options& opts)
+{
+    // An explicit single ordering always wins — predictBoth() sets Fps/Random
+    // on its inner calls, and letting the env re-resolve those to Both would
+    // recurse without end (QTMESH_UNIRIG_QUERIES=both crashed in 1 s). The env
+    // therefore only narrows the default Both.
+    if (opts.querySampling != Options::QuerySampling::Both) return opts.querySampling;
+    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
+    if (env == "fps")    return Options::QuerySampling::Fps;
+    if (env == "random") return Options::QuerySampling::Random;
+    return Options::QuerySampling::Both;
+}
+
+UniRigPredictor::Result UniRigPredictor::predictBoth(
+        const float* positions, int vertexCount,
+        const uint32_t* indices, int indexCount,
+        const QString& encoderModelPath,
+        const QString& decoderModelPath,
+        const QString& embedModelPath,
+        const Options& opts,
+        const ProgressFn& progress)
+{
+    // Both: the encoder's frozen query slots make the point ORDER part of the
+    // input, and no single ordering wins across categories (see Options).
+    // Cancellation (progress returned false → error "cancelled") ends the whole
+    // call: no second decode, and never "pick" a finished run over a cancel.
+    auto cancelled = [](const Result& r) { return !r.ok && r.error == QLatin1String("cancelled"); };
+    Options one = opts;
+    one.querySampling = Options::QuerySampling::Fps;
+    const Result fps = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
+    if (cancelled(fps)) return fps;
+    one.querySampling = Options::QuerySampling::Random;
+    const Result rnd = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
+    if (cancelled(rnd)) return rnd;
+    const Result& winner = pickRicher(fps, rnd);
+    const Result& other  = (&winner == &fps) ? rnd : fps;
+    Result chosen = winner;
+    chosen.alternativeJoints = other.ok ? static_cast<int>(other.joints.size()) : -1;
+    if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
+        fprintf(stderr, "[unirig] query sampling: fps=%s(%zu joints) random=%s(%zu joints) -> %s\n",
+                fps.ok ? "ok" : "fail", fps.joints.size(), rnd.ok ? "ok" : "fail", rnd.joints.size(),
+                qPrintable(chosen.querySampling));
+    return chosen;
 }
 
 #ifndef ENABLE_ONNX
@@ -806,6 +942,14 @@ UniRigPredictor::Result UniRigPredictor::predict(
         const Options& opts,
         const ProgressFn& progress)
 {
+    // #1046: which points occupy the encoder's frozen query slots (see
+    // Options::QuerySampling). Both = run this function twice via predictBoth.
+    const Options::QuerySampling mode = resolveQuerySampling(opts);
+    if (mode == Options::QuerySampling::Both)
+        return predictBoth(positions, vertexCount, indices, indexCount, encoderModelPath,
+                           decoderModelPath, embedModelPath, opts, progress);
+    const bool fpsFrontLoad = (mode == Options::QuerySampling::Fps);
+
     if (!positions || vertexCount < 4)
         return failResult(QStringLiteral("UniRig: mesh has too few vertices."));
     if (!QFileInfo::exists(encoderModelPath))
@@ -860,6 +1004,21 @@ UniRigPredictor::Result UniRigPredictor::predict(
         sampleSurface(nverts, vertexCount, indices, indexCount, sampleBudget);
     if (cloud.count < 1)
         return failResult(QStringLiteral("UniRig: failed to sample mesh surface."));
+
+    // #1046: the encoder's query positions are frozen at the first 2048 slots
+    // (see frontLoadFarthestPoints). With fpsFrontLoad, a farthest-point sample
+    // over the WHOLE cloud sits there (upstream: fps over all 65536 points,
+    // ratio 1/4, deterministic start at inference) — thin limbs and tails
+    // included. Restricting the FPS pool to the first 4096/8192 points was
+    // measured and is worse on every mesh (rat 24→13, tree 64→23 collapsed
+    // onto a line), so there is no pool knob.
+    if (fpsFrontLoad) {
+        const auto t0 = std::chrono::steady_clock::now();
+        frontLoadFarthestPoints(cloud.pts, cloud.nrm, cloud.count, 2048);
+        if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
+            fprintf(stderr, "[unirig] FPS front-load of %d points: %.0f ms\n", cloud.count,
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_unirig");
@@ -1337,6 +1496,7 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // works in the model's axis convention by contract.)
         // =====================================================================
         Result r = detokenize(tokens, half, centre);
+        r.querySampling = fpsFrontLoad ? QStringLiteral("fps") : QStringLiteral("random");
         if (!r.ok) return r;
         for (auto& jt : r.joints) {
             std::array<double,3> local = { (jt.pos[0] - centre[0]) / (half > 1e-12 ? half : 1.0),

@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 #include <QRegularExpression>
+#include <random>
 
 #include <QString>
 #include <array>
@@ -585,4 +586,101 @@ TEST(UniRigPredictorDigests, DefaultHostedFilesHaveDistinctSha256)
     }
     EXPECT_NE(e, d); EXPECT_NE(d, m); EXPECT_NE(e, m);
     EXPECT_TRUE(UniRigPredictor::expectedSha256("other.onnx").isEmpty());
+}
+
+// #1046: the first k points after front-loading must cover the cloud far
+// better than the first k points of the raw (random) order, normals must stay
+// paired with their points, and nothing may be lost or duplicated.
+TEST(UniRigPredictorFps, FrontLoadedPrefixCoversTheCloud)
+{
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> U(-1.f, 1.f);
+    const int n = 6000, k = 128;
+    std::vector<float> pts(n * 3), nrm(n * 3);
+    for (int i = 0; i < n; ++i) {
+        // an elongated shape with a thin "tail": most points in a body blob,
+        // 20 along a long thin spike, and NONE of them within the first k
+        // indices — so the raw prefix cannot see the tail while FPS must.
+        const bool tail = (i % 300 == 299);
+        pts[3*i]   = tail ? 3.f + U(rng) * 0.05f : U(rng) * 0.5f;
+        pts[3*i+1] = tail ? U(rng) * 0.02f : U(rng) * 0.5f;
+        pts[3*i+2] = tail ? U(rng) * 0.02f : U(rng) * 0.5f;
+        for (int c = 0; c < 3; ++c) nrm[3*i+c] = pts[3*i+c];   // normals == points: pairing probe
+    }
+    auto coverageRadius = [&](const std::vector<float>& p) {
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            double best = 1e30;
+            for (int j = 0; j < k; ++j) {
+                const double dx = p[3*i]-p[3*j], dy = p[3*i+1]-p[3*j+1], dz = p[3*i+2]-p[3*j+2];
+                best = std::min(best, dx*dx+dy*dy+dz*dz);
+            }
+            worst = std::max(worst, best);
+        }
+        return std::sqrt(worst);
+    };
+    const double before = coverageRadius(pts);
+    std::vector<float> p2 = pts, n2 = nrm;
+    UniRigPredictor::frontLoadFarthestPoints(p2, n2, n, k);
+    const double after = coverageRadius(p2);
+    // The raw prefix misses the tail entirely (coverage radius ~ the tail's
+    // length, ~2.5); FPS reaches it, leaving only the body's packing radius.
+    EXPECT_GT(before, 2.0) << "fixture: the raw prefix must not reach the tail";
+    EXPECT_LT(after, 0.5) << "before=" << before << " after=" << after;
+    bool tailInPrefix = false;
+    for (int j = 0; j < k; ++j) if (p2[3*j] > 2.5f) tailInPrefix = true;
+    EXPECT_TRUE(tailInPrefix) << "FPS must reach the thin tail within the prefix";
+    EXPECT_EQ(p2, n2) << "normals must move with their points";
+    std::vector<float> a = pts, b = p2; std::sort(a.begin(), a.end()); std::sort(b.begin(), b.end());
+    EXPECT_EQ(a, b) << "must be a permutation of the input";
+    // pool: candidates limited to the first `pool` points, nothing dropped
+    std::vector<float> p3 = pts, n3 = nrm;
+    UniRigPredictor::frontLoadFarthestPoints(p3, n3, n, k, 1000);
+    EXPECT_EQ(p3.size(), pts.size());
+    { std::vector<float> a2 = pts, b2 = p3; std::sort(a2.begin(), a2.end()); std::sort(b2.begin(), b2.end()); EXPECT_EQ(a2, b2); }
+    // the tail (indices 299, 599, 899 lie inside the 1000-point pool) is still reached
+    bool tailInPrefix3 = false;
+    for (int j = 0; j < k; ++j) if (p3[3*j] > 2.5f) tailInPrefix3 = true;
+    EXPECT_TRUE(tailInPrefix3);
+    std::vector<float> tiny = {0,0,0, 1,1,1}, tn = tiny;
+    UniRigPredictor::frontLoadFarthestPoints(tiny, tn, 2, 2048);
+    EXPECT_EQ(tiny, (std::vector<float>{0,0,0, 1,1,1})) << "degenerate input is a no-op";
+}
+
+// #1046: Both-mode chooser — a failed run never wins, the richer skeleton
+// wins, ties go to fps (the paper's sampling).
+TEST(UniRigPredictorFps, PickRicherPrefersSuccessThenJointCountThenFps)
+{
+    UniRigPredictor::Result fps, rnd;
+    fps.ok = true; fps.joints.resize(24); fps.querySampling = "fps";
+    rnd.ok = true; rnd.joints.resize(6);  rnd.querySampling = "random";
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps");
+    rnd.joints.resize(64);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "random");
+    rnd.joints.resize(24);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps") << "tie -> fps";
+    fps.ok = false;
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "random") << "a failed run never wins";
+    rnd.ok = false; fps.ok = true; fps.joints.resize(1);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps");
+}
+
+// The env override must only narrow the default Both — an explicit single
+// ordering (what predictBoth sets on its inner calls) must win, or
+// QTMESH_UNIRIG_QUERIES=both recurses forever.
+TEST(UniRigPredictorFps, EnvOverrideNarrowsBothButNeverWidensAnExplicitMode)
+{
+    using Q = UniRigPredictor::Options::QuerySampling;
+    UniRigPredictor::Options both; both.querySampling = Q::Both;
+    UniRigPredictor::Options fps;  fps.querySampling  = Q::Fps;
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps);
+    qputenv("QTMESH_UNIRIG_QUERIES", "random");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Random);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "explicit mode wins over the env";
+    qputenv("QTMESH_UNIRIG_QUERIES", "both");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "inner Fps call must not be widened back to Both";
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
 }
