@@ -625,6 +625,25 @@ QString overwriteReason(const QString& tool, const QJsonObject& args,
     return {};
 }
 
+// Outbound / account actions: nothing is deleted or overwritten locally, but
+// the data leaves the machine (an upload) or the signed-in account changes,
+// and neither can be undone with Ctrl+Z — so an untrusted agent must ask
+// (review finding: cloud_upload dispatched without confirmation).
+QString outboundReason(const QString& tool, const QJsonObject& args)
+{
+    if (tool == QLatin1String("cloud_upload")) {
+        const QString file = args.value(QStringLiteral("file")).toVariant().toString();
+        const QString project = args.value(QStringLiteral("name")).toVariant().toString();
+        QString r = file.isEmpty() ? QStringLiteral("uploads a mesh and its dependencies to QtMesh Cloud")
+                                   : QStringLiteral("uploads '%1' and its dependencies to QtMesh Cloud").arg(file);
+        if (!project.isEmpty()) r += QStringLiteral(" as project '%1'").arg(project);
+        return r + QStringLiteral(" (leaves this machine; not undoable)");
+    }
+    if (tool == QLatin1String("cloud_login"))  return QStringLiteral("signs in to QtMesh Cloud and stores the credential");
+    if (tool == QLatin1String("cloud_logout")) return QStringLiteral("signs out of QtMesh Cloud and revokes the session");
+    return {};
+}
+
 } // namespace
 
 QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJsonObject& args,
@@ -632,6 +651,8 @@ QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJson
 {
     const QString del = deleteReason(tool, args);
     if (!del.isEmpty()) return del;
+    const QString out = outboundReason(tool, args);
+    if (!out.isEmpty()) return out;
     if (isReadOnly(tool)) return {};
     return overwriteReason(tool, args, fileExists);
 }

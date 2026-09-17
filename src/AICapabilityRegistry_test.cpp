@@ -232,7 +232,7 @@ TEST(AICapabilityRegistry, ArrayItemsAreCheckedAgainstTheItemsSchema)
     ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", QJsonArray{1, "x"}}}, &out, &err));
 }
 
-TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesAndOverwritesOnly)
+TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesOverwritesAndOutboundActions)
 {
     auto exists = [](const QString& p) { return p == "/tmp/existing.glb"; };
     EXPECT_EQ(AICapabilityRegistry::destructiveReason("delete_entity", {{"entity_name", "Cube"}}, exists), "deletes 'Cube'");
@@ -245,7 +245,14 @@ TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesAndOverwritesOnly)
     EXPECT_EQ(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/new.glb"}}, exists).isEmpty()) << "an INPUT path that exists is not an overwrite";
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("read_file", {{"path", "/tmp/existing.glb"}}, exists).isEmpty()) << "read-only tools never overwrite";
-    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("cloud_upload", {{"file_path", "/tmp/existing.glb"}}, exists).isEmpty()) << "ambiguous key on a non-writer is an input";
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("load_mesh", {{"path", "/tmp/existing.glb"}}, exists).isEmpty()) << "ambiguous key on a non-writer is an input";
+    // outbound: the data leaves the machine — always asks, existing file or not
+    const QString up = AICapabilityRegistry::destructiveReason("cloud_upload", {{"file", "/tmp/new.glb"}, {"name", "Hero"}}, exists);
+    EXPECT_TRUE(up.contains("uploads '/tmp/new.glb'") && up.contains("'Hero'") && up.contains("not undoable")) << up.toStdString();
+    EXPECT_FALSE(AICapabilityRegistry::destructiveReason("cloud_upload", {}, exists).isEmpty()) << "even with no arguments named";
+    EXPECT_FALSE(AICapabilityRegistry::destructiveReason("cloud_login", {{"api_key", "x"}}, exists).isEmpty());
+    EXPECT_FALSE(AICapabilityRegistry::destructiveReason("cloud_logout", {}, exists).isEmpty());
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("cloud_status", {}, exists).isEmpty()) << "read-only cloud tools stay silent";
     EXPECT_EQ(AICapabilityRegistry::destructiveReason("save_scene", {{"path", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("create_primitive", {{"type", "box"}}, exists).isEmpty());
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("get_scene_info", {}, exists).isEmpty());
