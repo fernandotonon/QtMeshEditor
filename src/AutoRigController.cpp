@@ -289,7 +289,10 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
         // (the default ML skinner takes minutes — a synchronous chain
         // froze the UI). Separate undo entry; result via its signals.
         skinned = false;
-        if (report.applied && alsoSkin)
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
             skinned = chainSkinForTemplate(templateName);
     } catch (const Ogre::Exception& e) {
         m_busy = false;
@@ -400,7 +403,10 @@ void AutoRigController::finishUniRigOnMain(const QString& entityName,
         // Chained skinning runs ASYNC (see autoRigSelected) — its
         // result arrives via SkinWeightsController's signals.
         skinned = false;
-        if (report.applied && alsoSkin)
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
             skinned = chainSkinForTemplate(templateName);
     } catch (const std::exception& e) {
         report.applied = false;
@@ -426,7 +432,10 @@ void AutoRigController::finishUniRigFallback(const QString& entityName, const QS
         // Chained skinning runs ASYNC (see autoRigSelected) — its
         // result arrives via SkinWeightsController's signals.
         skinned = false;
-        if (report.applied && alsoSkin)
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
             skinned = chainSkinForTemplate(templateName);
     } catch (const std::exception& e) {
         report.applied = false;

@@ -3607,24 +3607,42 @@ Rectangle {
                         + "skip them for a plain proportional template."
                 }
 
-                // ---- Template-only controls (hidden when UniRig is selected) ----
-                // Skeleton type — used by Pinocchio (and as the UniRig fallback).
+                // Skeleton type — the template Pinocchio embeds, and for UniRig
+                // (#1013) the CATEGORY HINT: biped forces humanoid joint names,
+                // quadruped/generic use generic names, and vehicle skips the
+                // model entirely for the geometric chassis/axle/wheel rig (UniRig
+                // rigs a car as a human lying along it). It used to be hidden in
+                // UniRig mode, which left the hint stuck on "humanoid".
                 Text {
-                    visible: !rigIdle.isUnirig
-                    text: "Skeleton type"
+                    text: rigIdle.isUnirig ? "Skeleton type (category hint)" : "Skeleton type"
                     color: PropertiesPanelController.textColor
                     opacity: 0.8
                     font.pixelSize: 10
                 }
                 Flow {
                     width: parent.width
-                    visible: !rigIdle.isUnirig
                     spacing: 4
                     RigSegments {
                         options: root.rigTemplates
                         index: root.rigTemplateIndex
                         onPicked: function(i) { root.rigTemplateIndex = i }
                     }
+                }
+                Text {
+                    width: parent.width
+                    visible: rigIdle.isUnirig
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 9
+                    text: root.rigTemplates[root.rigTemplateIndex] === "vehicle"
+                        ? "Vehicle: the model is skipped — cars come out of UniRig as a lying human. "
+                          + "A geometric Chassis / axles / 4-wheel rig is used and bound rigidly (one bone per vertex)."
+                        : (root.rigTemplates[root.rigTemplateIndex] === "biped"
+                            ? "Biped: humanoid joint names are forced on the predicted skeleton."
+                            : (root.rigTemplates[root.rigTemplateIndex] === "humanoid"
+                                ? "Humanoid: joints get humanoid names only when the predicted skeleton reads as one."
+                                : "Generic bone names (root, bone_01, …) — nothing is assumed about the anatomy."))
                 }
 
                 Flow {
