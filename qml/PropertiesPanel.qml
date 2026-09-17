@@ -213,11 +213,14 @@ Rectangle {
         }
     }
 
-    component RigSegments: Row {
+    // A wrapping segmented picker: options flow onto new lines when the panel
+    // is narrower than the row (5 skeleton types no longer clip at the edge).
+    component RigSegments: Flow {
         id: rseg
         property var options: []
         property int index: 0
         signal picked(int i)
+        width: parent ? parent.width : implicitWidth
         spacing: 4
         Repeater {
             model: rseg.options
