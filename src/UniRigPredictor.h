@@ -99,6 +99,11 @@ public:
     static QString embedModelPath();     // AppData/ai_models/unirig/embed.onnx
     // True when all three model files already exist on disk (no download needed).
     static bool modelsPresent();
+    /// #1025: published SHA-256 (HF LFS oid) of one of the three default-hosted
+    /// files ("encoder.onnx" / "decoder.onnx" / "embed.onnx"); empty for any
+    /// other name. Applied by ensureModelBlocking() only when the base URL is
+    /// the default hosting.
+    static QString expectedSha256(const QString& fileName);
 
     // Encoder surface-sample budget. `requested` > 0 clamps to [4096, 65536];
     // 0 picks an automatic budget that scales down on very large meshes.

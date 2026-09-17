@@ -29,6 +29,11 @@ QString sha256HexOfFile(const QString& path, QString* err)
 }
 } // namespace
 
+QString ModelDownloader::sha256HexOfFile(const QString &path, QString *error)
+{
+    return ::sha256HexOfFile(path, error);
+}
+
 ModelDownloader* ModelDownloader::s_instance = nullptr;
 
 ModelDownloader* ModelDownloader::instance()

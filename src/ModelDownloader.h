@@ -65,6 +65,10 @@ public slots:
     ///                                    on Windows and is refused)
     /// Pure, so callers/tests can check a base URL before wiring it up.
     static bool isAllowedDownloadUrl(const QString &url);
+    /** SHA-256 hex digest of a file on disk (streamed). Empty + `error` on I/O
+     *  failure. Shared with ModelFetch so an already-downloaded model can be
+     *  checked against its published digest (#1025). */
+    static QString sha256HexOfFile(const QString &path, QString *error = nullptr);
     Q_INVOKABLE void pauseDownload();
     Q_INVOKABLE void resumeDownload();
     Q_INVOKABLE void cancelDownload();

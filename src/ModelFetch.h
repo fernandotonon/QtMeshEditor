@@ -41,6 +41,9 @@ struct Request {
 struct Outcome {
     bool ok = false;
     bool timedOut = false;
+    /// #1025: the destination existed but did not match `expectedSha256`; it was
+    /// deleted and fetched again (ok tells whether the re-fetch succeeded).
+    bool replacedCorrupt = false;
     QString path;            ///< == Request::destination when ok
     /// The downloader's own reason on failure ("Refusing to download …",
     /// "Integrity check failed …", "A download is already in progress"), or
@@ -48,7 +51,12 @@ struct Outcome {
     QString error;
 };
 
-/// If `destination` already exists: ok immediately, nothing touched.
+/// If `destination` already exists and no digest is given: ok immediately,
+/// nothing touched. If a digest IS given, the existing file is hashed (once per
+/// size+mtime, cached for the process) and a mismatch deletes it and re-fetches
+/// — #1025: a silently corrupted 216 MB download sat on disk for months and was
+/// loaded and trusted on every run, so "exists" alone is not "usable" when the
+/// publisher's digest is known.
 /// Otherwise download it and block until completed / failed / timed out.
 Outcome ensureBlocking(const Request& req);
 
