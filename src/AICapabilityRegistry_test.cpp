@@ -39,6 +39,7 @@ QJsonArray sampleTools()
         tool("decimate_mesh", "Decimate.", {{"entity_name", prop("string", "Entity")}, {"reduction", prop("number", "0..1")}, {"count", prop("integer", "n")}}),
         tool("ps1rip_status", "Ripper status.", {}),
         tool("my_vendor_thing", "Unmapped tool.", {}),
+        tool("join_mesh_parts", "Join.", {{"entity_names", QJsonObject{{"type", "array"}, {"description", "names"}, {"items", QJsonObject{{"type", "string"}}}}}}),
     };
 }
 
@@ -47,7 +48,7 @@ QJsonArray sampleTools()
 TEST(AICapabilityRegistry, GroupsToolsByCapabilityAndParksUnknownOnesInOther)
 {
     AICapabilityRegistry reg(sampleTools());
-    EXPECT_EQ(reg.toolCount(), 9);
+    EXPECT_EQ(reg.toolCount(), 10);
     EXPECT_EQ(reg.capabilityOf("auto_rig"), "rigging");
     EXPECT_EQ(reg.capabilityOf("create_primitive"), "scene");
     EXPECT_EQ(reg.capabilityOf("export_mesh"), "scene_io");
@@ -131,6 +132,11 @@ TEST(AICapabilityRegistry, ValidateArgumentsCoercesChattyModelOutput)
     EXPECT_TRUE(err.contains("expected an integer"));
     EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"reduction", "half"}}, &out, &err));
 
+    // integers: finite, integral and inside qint64 — never a UB conversion
+    EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"count", 1e100}}, &out, &err));
+    EXPECT_TRUE(err.contains("expected an integer")) << err.toStdString();
+    EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"count", "inf"}}, &out, &err));
+
     ASSERT_TRUE(reg.validateArguments("auto_rig", {{"skin", "yes"}}, &out, &err, &warn));
     EXPECT_TRUE(out["skin"].toBool());
     EXPECT_FALSE(reg.validateArguments("auto_rig", {{"skin", "maybe"}}, &out, &err));
@@ -140,6 +146,17 @@ TEST(AICapabilityRegistry, ValidateArgumentsCoercesChattyModelOutput)
     ASSERT_TRUE(reg.validateArguments("get_scene_info", {{"verbose", true}}, &out, &err, &warn));
     EXPECT_TRUE(out.contains("verbose"));
     EXPECT_EQ(warn.size(), 1);
+}
+
+TEST(AICapabilityRegistry, ArrayItemsAreCheckedAgainstTheItemsSchema)
+{
+    AICapabilityRegistry reg(sampleTools());
+    QJsonObject out; QString err;
+    ASSERT_TRUE(reg.validateArguments("join_mesh_parts", {{"entity_names", QJsonArray{"A", "B"}}}, &out, &err)) << err.toStdString();
+    EXPECT_FALSE(reg.validateArguments("join_mesh_parts", {{"entity_names", QJsonArray{"A", 3}}}, &out, &err));
+    EXPECT_TRUE(err.contains("item 2: expected string")) << err.toStdString();
+    // arrays without an items schema are still accepted as-is
+    ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", QJsonArray{1, "x"}}}, &out, &err));
 }
 
 TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesAndOverwritesOnly)

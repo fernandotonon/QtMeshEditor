@@ -85,7 +85,7 @@ private:
     static const int kMaxJsonRetries = 2;  // retry if model outputs malformed JSON
     QStringList m_lastToolSignatures; // compact JSON of tool calls from previous round
 
-    // Agent-mode state (#1021)
+    // State for agent mode, issue 1021.
     bool m_agentMode    = true;
     bool m_agentDriving = false;   // the agent owns the LLM right now, so the v1 callbacks stay silent
     bool m_agentWired   = false;

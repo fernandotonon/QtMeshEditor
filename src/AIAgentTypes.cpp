@@ -1,6 +1,7 @@
 #include "AIAgentTypes.h"
 
 #include <QJsonDocument>
+#include <array>
 #include <QRegularExpression>
 
 namespace AIAgent {
@@ -134,9 +135,9 @@ void parseJsonFacts(const QString& text, Observation& ob)
     const QString trimmed = text.trimmed();
     if (!trimmed.startsWith('{')) return;
     const QJsonObject j = QJsonDocument::fromJson(trimmed.toUtf8()).object();
-    static const char* const kKeys[] = {"boneCount", "vertexCount", "triangleCount", "algorithm",
-                                        "template", "skinned", "applied", "fallbackReason",
-                                        "jointLabeling", "faceCount", "partCount"};
+    static const std::array<const char*, 11> kKeys = {"boneCount", "vertexCount", "triangleCount", "algorithm",
+                                                      "template", "skinned", "applied", "fallbackReason",
+                                                      "jointLabeling", "faceCount", "partCount"};
     for (const char* k : kKeys)
         if (j.contains(QLatin1String(k))) ob.facts[QLatin1String(k)] = j[QLatin1String(k)];
     if (!j["isError"].toBool()) return;
@@ -197,7 +198,7 @@ const Observation* successObservationFor(const QVector<Observation>& observation
 
 QString summaryHeadline(const Plan& plan, State finalState, int ok, int failed)
 {
-    const int total = static_cast<int>(plan.steps.size());
+    const auto total = static_cast<int>(plan.steps.size());
     switch (finalState) {
     case State::Completed: return QStringLiteral("Done — %1 of %2 steps succeeded.").arg(ok).arg(total);
     case State::Cancelled: return QStringLiteral("Cancelled after %1 of %2 steps.").arg(ok + failed).arg(total);

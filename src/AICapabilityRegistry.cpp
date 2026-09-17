@@ -2,6 +2,7 @@
 
 #include <QFileInfo>
 #include <array>
+#include <cmath>
 #include <vector>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -188,9 +189,13 @@ QJsonObject AICapabilityRegistry::schemaFor(const QString& tool) const
 QStringList AICapabilityRegistry::toolsFor(const QStringList& capabilityIds) const
 {
     QStringList out;
-    for (const QString& id : capabilityIds)
-        if (const Capability* c = capability(id))
-            for (const QString& t : c->tools) if (!out.contains(t)) out << t;
+    for (const QString& id : capabilityIds) {
+        const Capability* c = capability(id);
+        if (!c) continue;
+        for (const QString& t : c->tools) {
+            if (!out.contains(t)) out << t;
+        }
+    }
     return out;
 }
 
@@ -301,7 +306,31 @@ bool coerceNumber(QJsonValue& v, const QString& key, bool integer, QStringList* 
         *why = QStringLiteral("expected a number");
         return false;
     }
-    if (integer && v.toDouble() != double(qint64(v.toDouble()))) { *why = QStringLiteral("expected an integer"); return false; }
+    if (!integer) return true;
+    const double number = v.toDouble();
+    constexpr double kMaxExclusive = 9223372036854775808.0;   // 2^63
+    const bool integral = std::isfinite(number) && std::trunc(number) == number
+                       && number >= -kMaxExclusive && number < kMaxExclusive;
+    if (!integral) { *why = QStringLiteral("expected an integer"); return false; }
+    return true;
+}
+
+// `items.type` of an array schema (string/number/integer/boolean): every
+// element must match (review finding — a wrong-typed element used to pass).
+bool checkArrayItems(const QJsonValue& v, const QJsonObject& def, QString* why)
+{
+    const QString itemType = def["items"].toObject()["type"].toString();
+    if (itemType.isEmpty()) return true;
+    const QJsonArray arr = v.toArray();
+    for (qsizetype i = 0; i < arr.size(); ++i) {
+        const QJsonValue e = arr.at(i);
+        bool ok = true;
+        if (itemType == QLatin1String("string")) ok = e.isString();
+        else if (itemType == QLatin1String("number") || itemType == QLatin1String("integer")) ok = e.isDouble();
+        else if (itemType == QLatin1String("boolean")) ok = e.isBool();
+        else if (itemType == QLatin1String("object")) ok = e.isObject();
+        if (!ok) { *why = QStringLiteral("item %1: expected %2").arg(i + 1).arg(itemType); return false; }
+    }
     return true;
 }
 
@@ -389,7 +418,10 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
         }
         const QJsonObject def = props[key].toObject();
         QString why;
-        if (!coerceToType(v, key, def["type"].toString(), warnings, &why) || !matchEnum(v, def, &why)) {
+        const bool valid = coerceToType(v, key, def["type"].toString(), warnings, &why)
+                        && matchEnum(v, def, &why)
+                        && (!v.isArray() || checkArrayItems(v, def, &why));
+        if (!valid) {
             if (error) *error = QStringLiteral("argument '%1': %2").arg(key, why);
             return false;
         }
@@ -417,7 +449,7 @@ QString deleteReason(const QString& tool, const QJsonObject& args)
     if (it == deletes.constEnd()) return {};
     QString target;
     if (!it.value().isEmpty()) target = args[it.value()].toVariant().toString();
-    static const char* const kTargetKeys[] = {"entity_name", "name", "mesh", "node", "clip"};
+    static const std::array<const char*, 5> kTargetKeys = {"entity_name", "name", "mesh", "node", "clip"};
     for (const char* k : kTargetKeys) {
         if (!target.isEmpty()) break;
         if (args.contains(QLatin1String(k))) target = args[QLatin1String(k)].toVariant().toString();

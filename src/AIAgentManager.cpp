@@ -352,7 +352,10 @@ QString firstBalancedObject(const QString& t)
         }
         if (c == '"') inString = true;
         else if (c == '{') ++depth;
-        else if (c == '}' && --depth == 0) return t.mid(start, i - start + 1);
+        else if (c == '}') {
+            --depth;
+            if (depth == 0) return t.mid(start, i - start + 1);
+        }
     }
     return {};
 }
@@ -367,17 +370,47 @@ QString AIAgentManager::extractJsonObject(const QString& text)
     return block;
 }
 
-bool AIAgentManager::parsePlanReply(const QString& text, Plan* out, QStringList* needCapabilities,
-                                    QString* answer, QString* error)
+namespace {
+
+// The JSON object of a planner reply, or false with `error` set.
+bool parseReplyObject(const QString& text, QJsonObject* out, QString* error)
 {
-    const QString block = extractJsonObject(text);
+    const QString block = AIAgentManager::extractJsonObject(text);
     QJsonParseError perr;
     const QJsonDocument doc = QJsonDocument::fromJson(block.toUtf8(), &perr);
     if (block.isEmpty() || perr.error != QJsonParseError::NoError || !doc.isObject()) {
         if (error) *error = QStringLiteral("reply is not a JSON object");
         return false;
     }
-    const QJsonObject o = doc.object();
+    *out = doc.object();
+    return true;
+}
+
+// One planned step; accepts the v1 field names (command/args) too.
+Step stepFromJson(const QJsonObject& so)
+{
+    Step s;
+    s.tool = so["tool"].toString();
+    if (s.tool.isEmpty()) s.tool = so["command"].toString();
+    s.tool = s.tool.trimmed();
+    s.arguments = so["arguments"].toObject();
+    if (s.arguments.isEmpty()) s.arguments = so["args"].toObject();
+    s.why = so["why"].toString().simplified();
+    return s;
+}
+
+void setError(QString* error, const QString& text)
+{
+    if (error) *error = text;
+}
+
+} // namespace
+
+bool AIAgentManager::parsePlanReply(const QString& text, Plan* out, QStringList* needCapabilities,
+                                    QString* answer, QString* error)
+{
+    QJsonObject o;
+    if (!parseReplyObject(text, &o, error)) return false;
     if (o.contains("need_capabilities")) {
         QStringList ids;
         for (const QJsonValue& v : o["need_capabilities"].toArray()) ids << v.toString();
@@ -387,22 +420,23 @@ bool AIAgentManager::parsePlanReply(const QString& text, Plan* out, QStringList*
     }
     const QJsonArray steps = o["steps"].toArray();
     if (steps.isEmpty()) {
-        const QString summary = o["summary"].toString().isEmpty() ? o["response"].toString() : o["summary"].toString();
-        if (summary.isEmpty()) { if (error) *error = QStringLiteral("plan has no steps"); return false; }
+        QString summary = o["summary"].toString();
+        if (summary.isEmpty()) summary = o["response"].toString();
+        if (summary.isEmpty()) {
+            setError(error, QStringLiteral("plan has no steps"));
+            return false;
+        }
         if (answer) *answer = summary;
         return true;
     }
     Plan p;
     p.title = o["title"].toString().simplified();
     for (const QJsonValue& v : steps) {
-        const QJsonObject so = v.toObject();
-        Step s;
-        s.tool = so["tool"].toString().isEmpty() ? so["command"].toString() : so["tool"].toString();
-        s.tool = s.tool.trimmed();
-        s.arguments = so["arguments"].toObject();
-        if (s.arguments.isEmpty()) s.arguments = so["args"].toObject();
-        s.why = so["why"].toString().simplified();
-        if (s.tool.isEmpty()) { if (error) *error = QStringLiteral("a step has no tool name"); return false; }
+        const Step s = stepFromJson(v.toObject());
+        if (s.tool.isEmpty()) {
+            setError(error, QStringLiteral("a step has no tool name"));
+            return false;
+        }
         p.steps.push_back(s);
     }
     if (out) *out = p;
@@ -412,26 +446,18 @@ bool AIAgentManager::parsePlanReply(const QString& text, Plan* out, QStringList*
 bool AIAgentManager::parseReplanReply(const QString& text, QVector<Step>* steps, bool* done,
                                       QString* summary, QString* error)
 {
-    const QString block = extractJsonObject(text);
-    QJsonParseError perr;
-    const QJsonDocument doc = QJsonDocument::fromJson(block.toUtf8(), &perr);
-    if (block.isEmpty() || perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        if (error) *error = QStringLiteral("reply is not a JSON object");
-        return false;
-    }
-    const QJsonObject o = doc.object();
+    QJsonObject o;
+    if (!parseReplyObject(text, &o, error)) return false;
     const bool isDone = o["done"].toBool(false);
     QVector<Step> out;
     for (const QJsonValue& v : o["steps"].toArray()) {
-        const QJsonObject so = v.toObject();
-        Step s;
-        s.tool = (so["tool"].toString().isEmpty() ? so["command"].toString() : so["tool"].toString()).trimmed();
-        s.arguments = so["arguments"].toObject();
-        if (s.arguments.isEmpty()) s.arguments = so["args"].toObject();
-        s.why = so["why"].toString().simplified();
+        const Step s = stepFromJson(v.toObject());
         if (!s.tool.isEmpty()) out.push_back(s);
     }
-    if (!isDone && out.isEmpty()) { if (error) *error = QStringLiteral("replan has no steps and is not done"); return false; }
+    if (!isDone && out.isEmpty()) {
+        setError(error, QStringLiteral("replan has no steps and is not done"));
+        return false;
+    }
     if (steps) *steps = out;
     if (done) *done = isDone;
     if (summary) *summary = o["summary"].toString();
@@ -513,9 +539,11 @@ void AIAgentManager::handlePlanReply(const QString& text)
 // failure, never a silent "completed" (review finding on #1052).
 void AIAgentManager::appendRepairedTail(const QVector<Step>& steps)
 {
-    for (Step& s : m_plan.steps) if (s.status == Step::Pending) s.status = Step::Skipped;
     int retained = 0;
-    for (const Step& s : m_plan.steps) if (s.status != Step::Skipped) ++retained;
+    for (Step& s : m_plan.steps) {
+        if (s.status == Step::Pending) s.status = Step::Skipped;
+        if (s.status != Step::Skipped) ++retained;
+    }
     const int room = m_limits.maxSteps - retained;
     if (room <= 0 || steps.size() > room) {
         m_lastError = QStringLiteral("step limit (%1) reached — the repaired plan needs %2 more step(s) but only %3 fit")
