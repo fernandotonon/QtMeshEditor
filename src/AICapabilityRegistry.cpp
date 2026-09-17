@@ -94,45 +94,6 @@ QString capForPrefix(const QString& tool)
     return {};
 }
 
-struct Keyword { const char* word; const char* cap; };
-const std::vector<Keyword> kKeywords = {
-    {"rig", "rigging"}, {"skeleton", "rigging"}, {"skin", "rigging"}, {"bone", "rigging"}, {"weights", "rigging"},
-    {"blendshape", "rigging"}, {"arkit", "rigging"}, {"unirig", "rigging"},
-    {"segment", "segmentation"}, {"parts", "segmentation"}, {"split", "segmentation"}, {"explode", "segmentation"},
-    {"join", "segmentation"},
-    {"anim", "animation"}, {"keyframe", "animation"}, {"play", "animation"}, {"clip", "animation"},
-    {"sprite", "animation"}, {"isometric", "animation"},
-    {"walk", "motion_ai"}, {"run", "motion_ai"}, {"dance", "motion_ai"}, {"idle", "motion_ai"}, {"motion", "motion_ai"},
-    {"wave", "motion_ai"}, {"jump", "motion_ai"}, {"in-between", "motion_ai"}, {"inbetween", "motion_ai"},
-    {"material", "materials"}, {"color", "materials"}, {"colour", "materials"}, {"shiny", "materials"},
-    {"metal", "materials"}, {"texture", "materials"}, {"glossy", "materials"}, {"matte", "materials"},
-    {"pbr", "textures_ai"}, {"upscale", "textures_ai"}, {"inpaint", "textures_ai"}, {"normal map", "textures_ai"},
-    {"roughness", "textures_ai"}, {"atlas", "textures_ai"}, {"depth", "textures_ai"},
-    {"light", "lighting"}, {"hdr", "lighting"}, {"environment", "lighting"}, {"shadow", "lighting"}, {"tonemap", "lighting"},
-    {"lod", "mesh_optimize"}, {"decimate", "mesh_optimize"}, {"simplify", "mesh_optimize"}, {"retopo", "mesh_optimize"},
-    {"optimi", "mesh_optimize"}, {"weld", "mesh_optimize"}, {"triangle", "mesh_optimize"}, {"polycount", "mesh_optimize"},
-    {"uv", "uv"}, {"unwrap", "uv"}, {"seam", "uv"},
-    {"generate", "generation_3d"}, {"image to 3d", "generation_3d"}, {"from image", "generation_3d"},
-    {"from photo", "generation_3d"}, {"prompt", "generation_3d"}, {"create a 3d", "generation_3d"}, {"model of", "generation_3d"},
-    // "create a f22 raptor scene" / "make me a dragon": creating something that is not a primitive
-    {"create", "generation_3d"}, {"make", "generation_3d"}, {"build", "generation_3d"}, {"scene", "generation_3d"},
-    {"a 3d", "generation_3d"}, {"character", "generation_3d"}, {"creature", "generation_3d"}, {"vehicle", "generation_3d"},
-    {"load", "scene_io"}, {"import", "scene_io"}, {"open", "scene_io"}, {"export", "scene_io"}, {"save", "scene_io"},
-    {"file", "scene_io"}, {".glb", "scene_io"}, {".fbx", "scene_io"}, {".obj", "scene_io"}, {"folder", "scene_io"},
-    {"screenshot", "view"}, {"camera", "view"}, {"look at", "view"}, {"render", "view"}, {"show me", "view"},
-    {"zoom", "view"}, {"normals", "view"},
-    {"morph", "morph_pose"}, {"pose", "morph_pose"}, {"expression", "morph_pose"},
-    {"paint", "paint"}, {"brush", "paint"}, {"layer", "paint"}, {"stencil", "paint"},
-    {"mocap", "mocap"}, {"webcam", "mocap"}, {"video", "mocap"}, {"capture", "mocap"},
-    {"cloud", "cloud"}, {"upload", "cloud"},
-    {"ps1", "ps1"}, {"playstation", "ps1"},
-    {"node anim", "node_animation"}, {"spin", "node_animation"}, {"rotate over time", "node_animation"},
-    {"delete", "scene"}, {"remove", "scene"}, {"move", "scene"}, {"scale", "scene"}, {"rotate", "scene"},
-    {"duplicate", "scene"}, {"copy", "scene"}, {"box", "scene"}, {"cube", "scene"}, {"sphere", "scene"},
-    {"cylinder", "scene"}, {"plane", "scene"}, {"primitive", "scene"}, {"validate", "scene"}, {"check", "scene"},
-    {"scene", "scene"}, {"select", "scene"}, {"bigger", "scene"}, {"smaller", "scene"}, {"larger", "scene"},
-    {"twice", "scene"}, {"half", "scene"}, {"mesh", "scene"}, {"object", "scene"}, {"info", "scene"},
-};
 
 } // namespace
 
@@ -158,6 +119,20 @@ AICapabilityRegistry::AICapabilityRegistry(const QJsonArray& toolList)
         if (cap.isEmpty()) cap = QStringLiteral("other");
         m_capabilities[m_capIndex.value(cap)].tools << name;
     }
+    // Lexical router over the same docs the planner reads (name + description
+    // + parameter docs), so routing and prompt vocabulary cannot drift.
+    QVector<AIToolRouter::ToolDoc> docs;
+    for (const Capability& c : m_capabilities) {
+        for (const QString& t : c.tools) {
+            const ToolInfo& info = m_tools[t];
+            QString text = info.description;
+            const QJsonObject props = info.schema["properties"].toObject();
+            for (auto p = props.begin(); p != props.end(); ++p)
+                text += ' ' + p.key() + ' ' + p.value().toObject()["description"].toString();
+            docs.push_back({t, c.id, text});
+        }
+    }
+    m_router = AIToolRouter(docs);
 }
 
 QStringList AICapabilityRegistry::capabilityIds() const
@@ -250,37 +225,23 @@ QString AICapabilityRegistry::promptToolsFor(const QStringList& capabilityIds) c
     return s;
 }
 
-namespace {
-// Whole-word-ish match for short keys, plain substring for phrases/extensions.
-bool keywordHits(const QString& word, const QString& request)
+AIToolRouter::Route AICapabilityRegistry::route(const QString& request, const QStringList& extraTerms) const
 {
-    if (word.contains(' ') || word.startsWith('.')) return request.contains(word);
-    static QHash<QString, QRegularExpression> cache;
-    auto it = cache.find(word);
-    if (it == cache.end())
-        it = cache.insert(word, QRegularExpression(QStringLiteral("\\b%1").arg(QRegularExpression::escape(word))));
-    return it->match(request).hasMatch();
+    QString q = request;
+    if (!extraTerms.isEmpty()) q += ' ' + extraTerms.join(' ');
+    AIToolRouter::Route r = m_router.route(q);
+    if (r.capabilities.isEmpty() && capability(QStringLiteral("scene"))) r.capabilities << QStringLiteral("scene");
+    return r;
 }
-} // namespace
 
-QStringList AICapabilityRegistry::routeByKeywords(const QString& request) const
+QString AICapabilityRegistry::promptToolsFor(const QStringList& capabilityIds, const AIToolRouter::Route& route) const
 {
-    const QString r = request.toLower();
-    QHash<QString, int> score;
-    for (const Keyword& k : kKeywords) {
-        const QString w = QLatin1String(k.word);
-        if (keywordHits(w, r)) score[QLatin1String(k.cap)] += (w.size() >= 6 ? 2 : 1);
+    QString s;
+    for (const QString& id : capabilityIds) {
+        if (!capability(id)) continue;
+        for (const QString& t : m_router.shortlist(route, id)) s += toolDoc(t);
     }
-    QStringList caps;
-    for (const Capability& c : m_capabilities)
-        if (!c.tools.isEmpty() && score.value(c.id) > 0) caps << c.id;
-    std::stable_sort(caps.begin(), caps.end(), [&](const QString& a, const QString& b) {
-        return score.value(a) > score.value(b);
-    });
-    if (caps.size() > 4) caps = caps.mid(0, 4);
-    if (!caps.contains(QStringLiteral("scene")) && capability(QStringLiteral("scene")))
-        caps << QStringLiteral("scene");   // inspection tools are always useful
-    return caps;
+    return s;
 }
 
 namespace {

@@ -93,7 +93,11 @@ public:
     void request(const QString& sys, const QString& user, int) override
     {
         systemPrompts << sys; userPrompts << user; pendingFlag = true;
-        if (replies.isEmpty()) { QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit failed("no scripted reply"); }); return; }
+        if (failNextRequest || replies.isEmpty()) {
+            failNextRequest = false;
+            QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit failed("no scripted reply"); });
+            return;
+        }
         const QString r = replies.takeFirst();
         QTimer::singleShot(0, this, [this, r]() { if (!stoppedFlag) { pendingFlag = false; emit completed(r); } });
     }
@@ -101,6 +105,7 @@ public:
     bool pending() const override { return pendingFlag; }
     int contextTokens() const override { return ctxTokens; }
     int ctxTokens = 0;
+    bool failNextRequest = false;
     bool isAvailable = true;
     bool stoppedFlag = false;
     bool pendingFlag = false;
@@ -153,6 +158,7 @@ struct AgentFixture : public ::testing::Test {
         m->setPlanner(planner);
         m->setUndoStack(&undo);
         m->setTrustedMode(false);
+        m->setIntentKeywordsEnabled(false);   // the fake tool list has little vocabulary; the intent test turns it on
         QObject::connect(m, &AIAgentManager::chatMessage, [this](const QString& role, const QString& text, bool) {
             transcript << role + ": " + text;
         });
@@ -457,6 +463,42 @@ TEST_F(AgentFixture, RepeatedRequestForAlreadyProvidedDocsIsNudgedNotFailed)
     ASSERT_TRUE(pumpToEnd(m));
     EXPECT_EQ(m->state(), State::Failed);
     EXPECT_TRUE(m->lastError().contains("kept asking")) << m->lastError().toStdString();
+}
+
+// Global users: a request in any language first gets an English-keyword
+// round from the LLM, and the lexical router routes on those. English
+// requests with lexical signal skip that round.
+TEST_F(AgentFixture, NonEnglishRequestGetsAnIntentKeywordRoundBeforePlanning)
+{
+    m->setIntentKeywordsEnabled(true);
+    planner->replies << "generate mesh, image prompt, material colour";           // intent keywords
+    planner->replies << planJson({{"auto_rig", {{"template", "generic"}}}});     // then the plan
+    ASSERT_TRUE(m->startTask("cria um dragão vermelho"));   // no English word → no lexical signal
+    ASSERT_TRUE(pumpToEnd(m));
+    ASSERT_EQ(planner->userPrompts.size(), 2);
+    EXPECT_TRUE(planner->userPrompts[0].contains("Keywords:")) << "first round asks for English keywords";
+    EXPECT_TRUE(planner->systemPrompts[0].contains("ENGLISH keywords"));
+    EXPECT_TRUE(planner->userPrompts[1].startsWith("Task:")) << "second round is the plan";
+    EXPECT_EQ(m->state(), State::Completed);
+
+    // an English request with lexical signal plans immediately
+    AIAgentManager::kill(); SetUp();
+    m->setIntentKeywordsEnabled(true);
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("rig the wolf"));
+    ASSERT_TRUE(pumpToEnd(m));
+    ASSERT_EQ(planner->userPrompts.size(), 1);
+    EXPECT_TRUE(planner->userPrompts[0].startsWith("Task:"));
+    EXPECT_TRUE(planner->systemPrompts[0].contains("- auto_rig:"));
+
+    // if the keyword round fails, the lexical route is used and planning proceeds
+    AIAgentManager::kill(); SetUp();
+    m->setIntentKeywordsEnabled(true);
+    planner->failNextRequest = true;                            // the intent round errors out
+    planner->replies << planJson({{"get_scene_info", {}}});   // the plan round still has its reply
+    ASSERT_TRUE(m->startTask("何がありますか"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
 }
 
 TEST_F(AgentFixture, QuestionIsAnsweredWithoutRunningTools)
