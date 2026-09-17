@@ -139,6 +139,10 @@ public:
 signals:
     void messageReceived(const QJsonObject &message);
     void errorOccurred(const QString &error);
+    /// Progress of a long-running (heavy) tool, for in-app callers that drive
+    /// tools synchronously — the AI agent shows it in the chat panel. `done`/
+    /// `total` are units of the current stage; total <= 0 means "indeterminate".
+    void toolProgress(const QString &tool, const QString &stage, int done, int total);
 
 private slots:
     void onReadyRead();

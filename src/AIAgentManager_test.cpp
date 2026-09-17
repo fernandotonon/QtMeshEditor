@@ -669,3 +669,28 @@ TEST_F(AgentFixture, InventedImagePathIsRepairedBeforeTheToolRunsAndTheTaskSucce
     EXPECT_FALSE(exec->callArgs.first().contains("image_path")) << "the invented path never reaches the tool";
     EXPECT_EQ(exec->callArgs.first().value("prompt").toString(), "f22 raptor");
 }
+
+// A heavy tool (image → 3D) runs for minutes on the main thread; without a
+// progress relay the whole window looked frozen. The manager exposes the
+// running tool's stage so the chat panel can draw a bar.
+TEST_F(AgentFixture, HeavyToolProgressIsExposedWhileBusyAndClearedBetweenSteps)
+{
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty());
+    // a report while idle is ignored (a non-agent tool run reports too)
+    m->reportToolProgress("baking the texture", 1, 4);
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty()) << "not busy → no bar";
+
+    // during a step the fraction is exposed; the executor reports mid-call
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
+    exec->onCall = [this](const QString&) {
+        m->reportToolProgress("building the surface", 1, 4);
+        EXPECT_EQ(m->stepProgressLabel(), "building the surface");
+        EXPECT_DOUBLE_EQ(m->stepProgress(), 0.25);
+        m->reportToolProgress("indeterminate stage", 0, 0);
+        EXPECT_LT(m->stepProgress(), 0.0) << "total <= 0 → indeterminate";
+    };
+    ASSERT_TRUE(m->startTask("make a box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty()) << "cleared once the tool returned";
+}

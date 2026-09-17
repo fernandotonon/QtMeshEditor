@@ -68,7 +68,17 @@ private:
 // ---------------------------------------------------------------------------
 // McpToolExecutor
 
-McpToolExecutor::McpToolExecutor(MCPServer* server) : m_server(server) {}
+McpToolExecutor::McpToolExecutor(MCPServer* server) : m_server(server)
+{
+    // A heavy tool (image → 3D) runs synchronously on the main thread and
+    // reports its stages as it goes; relay them to the manager so the chat
+    // panel can draw a progress bar instead of looking frozen.
+    if (server)
+        QObject::connect(server, &MCPServer::toolProgress, AIAgentManager::instance(),
+                         [](const QString&, const QString& stage, int done, int total) {
+                             AIAgentManager::instance()->reportToolProgress(stage, done, total);
+                         });
+}
 McpToolExecutor::~McpToolExecutor() = default;
 
 QJsonArray McpToolExecutor::toolList()
@@ -215,6 +225,20 @@ bool AIAgentManager::plannerPending() const
 QString AIAgentManager::recommendedModelName() const
 {
     return QLatin1String(kRecommendedModel);
+}
+
+void AIAgentManager::reportToolProgress(const QString& stage, int done, int total)
+{
+    if (!busy()) return;   // a stray report from a non-agent tool run
+    setStepProgress(stage, total > 0 ? qBound(0.0, double(done) / double(total), 1.0) : -1.0);
+}
+
+void AIAgentManager::setStepProgress(const QString& label, double fraction)
+{
+    if (m_stepProgressLabel == label && qFuzzyCompare(m_stepProgress + 2.0, fraction + 2.0)) return;
+    m_stepProgressLabel = label;
+    m_stepProgress = fraction;
+    emit stepProgressChanged();
 }
 
 QString AIAgentManager::subjectFromGoal(const QString& goal)
@@ -891,7 +915,9 @@ void AIAgentManager::runStep(int idx)
     SentryReporter::addBreadcrumb("ai.agent.step", QStringLiteral("%1/%2 %3 (attempt %4)").arg(idx + 1).arg(m_plan.steps.size()).arg(s.tool).arg(s.attempts));
 
     openUndoGroupIfNeeded(s.tool);
+    setStepProgress(QString(), -1.0);
     const QJsonObject result = m_executor->callTool(s.tool, s.arguments);
+    setStepProgress(QString(), -1.0);   // the tool returned — no bar between steps
 
     // Cancel may have been requested from inside the tool call (GUI event
     // processing runs during a long tool) — cancel() already finished the

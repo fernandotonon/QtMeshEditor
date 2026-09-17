@@ -289,6 +289,39 @@ Rectangle {
                     }
                 }
             }
+
+            // Heavy tools (image → 3D) run for minutes on the main thread and
+            // report their stages; without this the panel looked frozen.
+            Item {
+                width: planCol.width
+                height: visible ? 18 : 0
+                visible: root.agentBusy && AIAgentManager.stepProgressLabel.length > 0
+                Text {
+                    id: progressLabel
+                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter }
+                    text: AIAgentManager.stepProgressLabel
+                          + (AIAgentManager.stepProgress >= 0
+                             ? "  " + Math.round(AIAgentManager.stepProgress * 100) + "%" : "…")
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.8
+                    font.pixelSize: 10
+                }
+                Rectangle {
+                    anchors { left: progressLabel.right; leftMargin: 8; right: parent.right
+                              verticalCenter: parent.verticalCenter }
+                    height: 4; radius: 2
+                    color: PropertiesPanelController.borderColor
+                    Rectangle {
+                        height: parent.height; radius: parent.radius
+                        color: PropertiesPanelController.accentColor
+                        // indeterminate (total unknown) → a full faint bar
+                        width: AIAgentManager.stepProgress >= 0
+                               ? parent.width * AIAgentManager.stepProgress : parent.width
+                        opacity: AIAgentManager.stepProgress >= 0 ? 1.0 : 0.35
+                        Behavior on width { NumberAnimation { duration: 120 } }
+                    }
+                }
+            }
         }
     }
 

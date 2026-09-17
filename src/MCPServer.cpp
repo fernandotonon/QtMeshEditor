@@ -90,6 +90,7 @@
 #include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
 #ifdef ENABLE_PS1_RIP
@@ -2817,8 +2818,23 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             .filePath(QStringLiteral("mcp_prompt_%1.png")
                           .arg(QDateTime::currentMSecsSinceEpoch()));
         QDir().mkpath(QFileInfo(srcPng).absolutePath());
+        // The image phase already spins nested event loops (so the window
+        // keeps painting); relay SD's sampling ticks so the bar moves here too.
+#ifdef ENABLE_STABLE_DIFFUSION
+        QMetaObject::Connection sdConn;
+        if (SDManager* sd = SDManager::instance()) {
+            sdConn = connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+                emit toolProgress(QStringLiteral("generate_mesh_from_image"),
+                                  QStringLiteral("generating the image"),
+                                  sd->generationStep(), sd->generationTotalSteps());
+            });
+        }
+#endif
         const int rc = CLIPipeline::generateSourceImageFromPrompt(
             genPrompt, args.value("image_model").toString(), srcPng, refImage);
+#ifdef ENABLE_STABLE_DIFFUSION
+        if (sdConn) disconnect(sdConn);
+#endif
         if (rc != 0)
             return makeErrorResult(
                 "Image generation from prompt failed — download FLUX.2-klein-4B "
@@ -2966,9 +2982,38 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (image.isNull())
         return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
 
+    // In-app callers (the AI agent) drive tools synchronously on the MAIN
+    // thread, so a multi-minute generation used to freeze the whole UI. The
+    // predictor calls this back many times per stage: report it (the chat
+    // panel draws a bar) and pump the GUI so the window keeps painting and
+    // Cancel/Stop stays clickable. The heavy work itself stays on this thread
+    // — MeshGenBuilder below is Ogre and main-thread-only — and the pump is
+    // EXCLUDE_USER_INPUT_EVENTS, so no click can re-enter a tool mid-run.
+    QElapsedTimer pumpClock; pumpClock.start();
+    auto reportProgress = [this, &pumpClock](MeshGenPredictor::Stage stage, int done, int total) -> bool {
+        if (total > 0) {
+            static const QHash<MeshGenPredictor::Stage, QString> names = {
+                {MeshGenPredictor::Stage::Encode,  QStringLiteral("encoding the image")},
+                {MeshGenPredictor::Stage::Denoise, QStringLiteral("denoising")},
+                {MeshGenPredictor::Stage::Decode,  QStringLiteral("building the surface")},
+                {MeshGenPredictor::Stage::Refine,  QStringLiteral("refining the surface")},
+                {MeshGenPredictor::Stage::Bake,    QStringLiteral("baking the texture")},
+                {MeshGenPredictor::Stage::Color,   QStringLiteral("colouring")},
+            };
+            emit toolProgress(QStringLiteral("generate_mesh_from_image"),
+                              names.value(stage, QStringLiteral("working")), done, total);
+        }
+        // ~20 Hz is enough to stay responsive without slowing the pipeline.
+        if (pumpClock.elapsed() >= 50) {
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+        }
+        return true;   // never cancels from here
+    };
+
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(opts.quality),
-        MeshGenPredictor::decoderModelPath(), opts);
+        MeshGenPredictor::decoderModelPath(), opts, reportProgress);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
             ? QStringLiteral("image-to-3D failed") : res.error);

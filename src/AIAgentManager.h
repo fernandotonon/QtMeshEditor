@@ -96,6 +96,11 @@ class AIAgentManager : public QObject
     Q_PROPERTY(bool trustedMode READ trustedMode WRITE setTrustedMode NOTIFY trustedModeChanged)
     Q_PROPERTY(QString lastSummary READ lastSummary NOTIFY stateChanged)
     Q_PROPERTY(QString recommendedModelName READ recommendedModelName CONSTANT)
+    /// Live progress of the running step's tool ("baking the texture"), empty
+    /// when the step reports none. The panel shows a bar while it is set.
+    Q_PROPERTY(QString stepProgressLabel READ stepProgressLabel NOTIFY stepProgressChanged)
+    /// 0..1 within the current stage; < 0 while indeterminate.
+    Q_PROPERTY(double stepProgress READ stepProgress NOTIFY stepProgressChanged)
 
 public:
     static AIAgentManager* instance();
@@ -126,6 +131,10 @@ public:
     QString lastSummary() const { return m_lastSummary; }
     int replanCount() const { return m_replans; }
     QString lastError() const { return m_lastError; }
+    /// Relay from a heavy tool's progress callback (MCPServer::toolProgress).
+    void reportToolProgress(const QString& stage, int done, int total);
+    QString stepProgressLabel() const { return m_stepProgressLabel; }
+    double  stepProgress() const { return m_stepProgress; }
     bool trustedMode() const { return m_trustedMode; }
     void setTrustedMode(bool on);
     QString recommendedModelName() const;
@@ -193,6 +202,7 @@ signals:
     /// A line for the chat transcript: role = "assistant" | "tool" | "plan".
     void chatMessage(const QString& role, const QString& text, bool isTool);
     void stepFinished(int index, bool ok);
+    void stepProgressChanged();
     void taskFinished(bool ok, const QString& summary);
 
 private slots:
@@ -238,6 +248,8 @@ private:
     AgentPlannerBackend*  m_planner = nullptr;
     QUndoStack*           m_undoStack = nullptr;
     std::function<QString()> m_contextProvider;
+    QString m_stepProgressLabel;
+    double  m_stepProgress = -1.0;
     AICapabilityRegistry  m_registry;
     AIAgent::Limits       m_limits;
 
@@ -265,6 +277,7 @@ private:
     QString conversationContext() const;
     void noteTouchedObjects(const AIAgent::Step& step, const AIAgent::Observation& ob);
     void trace(const QString& kind, const QString& text);
+    void setStepProgress(const QString& label, double fraction);
     bool m_traceFresh = false;
 };
 
