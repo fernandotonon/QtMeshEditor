@@ -434,6 +434,7 @@ PartOpsController.h
 MeshValidator.h
 MeshWeldOps.h
 AIChatManager.h
+ClickFocusFilter.h
 AIAgentManager.h
 AIAgentTypes.h
 AICapabilityRegistry.h

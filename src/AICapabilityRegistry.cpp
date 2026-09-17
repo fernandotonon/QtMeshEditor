@@ -398,6 +398,61 @@ bool coerceToType(QJsonValue& v, const QString& key, const QString& type, QStrin
     return true;   // untyped or object
 }
 
+// camelCase → snake_case ("materialName" → "material_name").
+QString snakeCase(const QString& key)
+{
+    QString out;
+    for (const QChar c : key) {
+        if (c.isUpper()) { out += '_'; out += c.toLower(); }
+        else out += c;
+    }
+    return out;
+}
+
+// Small models rename parameters freely ("material_name" for "material",
+// "entity" for "mesh"). Before rejecting a call for a MISSING required key,
+// move a recognisable alias onto the schema's name — the MCP handlers accept
+// several of these spellings anyway, so the validator must not be stricter
+// than the tool. Only keys that are NOT themselves schema properties move.
+QJsonObject normaliseAliases(const QJsonObject& props, const QJsonObject& args, QStringList* warnings)
+{
+    static const QHash<QString, QStringList> synonyms = {
+        {"material",    {"material_name", "mat", "material_id"}},
+        {"mesh",        {"mesh_name", "entity", "entity_name", "node", "node_name", "object", "target"}},
+        {"entity_name", {"entity", "mesh", "mesh_name", "node", "node_name", "object", "name"}},
+        {"name",        {"entity_name", "node_name", "mesh_name", "entity", "mesh", "object", "material_name"}},
+        {"path",        {"file", "file_path", "filepath", "output", "output_path"}},
+        {"output_path", {"output", "out", "path", "file", "file_path", "destination"}},
+        {"template",    {"skeleton", "skeleton_type", "rig_template"}},
+        {"type",        {"primitive", "primitive_type", "kind", "shape"}},
+    };
+    QJsonObject out;
+    // pass 1: snake_case every key that is not a property as spelled
+    for (auto a = args.begin(); a != args.end(); ++a) {
+        QString key = a.key();
+        if (!props.contains(key)) {
+            const QString snake = snakeCase(key);
+            if (snake != key) {
+                if (warnings && props.contains(snake)) *warnings << QStringLiteral("'%1' read as '%2'").arg(key, snake);
+                key = snake;
+            }
+        }
+        out[key] = a.value();
+    }
+    // pass 2: fill missing schema keys from aliases the model used instead
+    for (auto p = props.begin(); p != props.end(); ++p) {
+        const QString want = p.key();
+        if (out.contains(want)) continue;
+        for (const QString& alias : synonyms.value(want)) {
+            if (!out.contains(alias) || props.contains(alias)) continue;
+            out[want] = out.take(alias);
+            if (warnings) *warnings << QStringLiteral("'%1' read as '%2'").arg(alias, want);
+            break;
+        }
+    }
+    return out;
+}
+
 bool matchEnum(QJsonValue& v, const QJsonObject& def, QString* why)
 {
     if (!def.contains("enum")) return true;
@@ -412,7 +467,7 @@ bool matchEnum(QJsonValue& v, const QJsonObject& def, QString* why)
 
 } // namespace
 
-bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObject& args,
+bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObject& rawArgs,
                                              QJsonObject* out, QString* error,
                                              QStringList* warnings) const
 {
@@ -423,11 +478,16 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
     }
     const QJsonObject schema = it->schema;
     const QJsonObject props = schema["properties"].toObject();
+    const QJsonObject args = normaliseAliases(props, rawArgs, warnings);
 
     for (const QJsonValue& r : schema["required"].toArray()) {
         const QString key = r.toString();
         if (args.contains(key) && !args[key].isNull()) continue;
-        if (error) *error = QStringLiteral("missing required argument '%1'").arg(key);
+        if (error) {
+            QStringList passed = args.keys();
+            *error = QStringLiteral("missing required argument '%1' (you passed: %2)")
+                         .arg(key, passed.isEmpty() ? QStringLiteral("nothing") : passed.join(", "));
+        }
         return false;
     }
 

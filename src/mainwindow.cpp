@@ -138,6 +138,7 @@
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
 #include "AIAgentManager.h"
+#include "ClickFocusFilter.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
@@ -1373,6 +1374,10 @@ void MainWindow::initToolBar()
         // StrongFocus: a single click inside the dock routes keyboard events into QML
         // without requiring a prior click in the viewport.
         chatWidget->setFocusPolicy(Qt::StrongFocus);
+        // ...and make that true after focus has moved to ANOTHER QQuickWidget
+        // (the Inspector): the QML field took the click but widget focus did
+        // not follow, so typing went nowhere until a detour via the viewport.
+        chatWidget->installEventFilter(new ClickFocusFilter(chatWidget));
         markLazyQml(chatWidget, QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);

@@ -156,6 +156,33 @@ TEST(AICapabilityRegistry, ValidateArgumentsCoercesChattyModelOutput)
     EXPECT_EQ(warn.size(), 1);
 }
 
+// The Luigi transcript: the model wrote material_name and was rejected twice
+// for a missing 'material' although the tool itself accepts material_name.
+TEST(AICapabilityRegistry, AliasesAndCamelCaseAreMappedOntoSchemaNamesBeforeRejecting)
+{
+    AICapabilityRegistry reg(sampleTools());
+    QJsonObject out; QString err; QStringList warn;
+    // apply_material in the sample has no schema; use the ones we have: transform_mesh{name required}
+    ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"entity_name", "Cube"}}, &out, &err, &warn)) << err.toStdString();
+    EXPECT_EQ(out["name"].toString(), "Cube");
+    EXPECT_FALSE(out.contains("entity_name"));
+    EXPECT_TRUE(warn.join(" ").contains("'entity_name' read as 'name'"));
+
+    ASSERT_TRUE(reg.validateArguments("export_mesh", {{"output", "/tmp/x.glb"}}, &out, &err, &warn));
+    EXPECT_EQ(out["output_path"].toString(), "/tmp/x.glb");
+    ASSERT_TRUE(reg.validateArguments("export_mesh", {{"outputPath", "/tmp/y.glb"}}, &out, &err, &warn)) << "camelCase";
+    EXPECT_EQ(out["output_path"].toString(), "/tmp/y.glb");
+    ASSERT_TRUE(reg.validateArguments("delete_entity", {{"mesh", "Cube"}}, &out, &err, &warn));
+    EXPECT_EQ(out["entity_name"].toString(), "Cube");
+
+    // when nothing usable was passed, the rejection lists what WAS passed so the model can fix it
+    EXPECT_FALSE(reg.validateArguments("transform_mesh", {{"colour", "red"}}, &out, &err));
+    EXPECT_TRUE(err.contains("missing required argument 'name' (you passed: colour)")) << err.toStdString();
+    // an alias never overrides an explicitly passed schema key
+    ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Real"}, {"entity_name", "Alias"}}, &out, &err, &warn));
+    EXPECT_EQ(out["name"].toString(), "Real");
+}
+
 TEST(AICapabilityRegistry, ArrayItemsAreCheckedAgainstTheItemsSchema)
 {
     AICapabilityRegistry reg(sampleTools());

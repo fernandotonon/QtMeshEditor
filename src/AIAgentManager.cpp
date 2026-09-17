@@ -389,13 +389,15 @@ void AIAgentManager::requestReplan(int failedIndex)
         "Plan so far: %2\n"
         "Observations:\n%3\n"
         "Step %4 (%5) failed: %6\n"
+        "Its arguments were: %7 — fix the call (check the parameter names in the tool list above), do not resend it unchanged.\n"
         "Reply with ONE JSON object: {\"steps\": [remaining steps to run now, fixed], \"done\": false}\n"
         "or {\"done\": true, \"summary\": \"what was achieved / why it cannot be completed\"}.\n"
         "Do not repeat steps that already succeeded. Do not repeat the failing call unchanged.\n"
         "JSON:")
         .arg(m_plan.goal, QString::fromUtf8(QJsonDocument(planArr).toJson(QJsonDocument::Compact)),
              obsLines.join('\n'))
-        .arg(failedIndex + 1).arg(failed.tool, failed.error.left(300));
+        .arg(failedIndex + 1).arg(failed.tool, failed.error.left(300),
+             QString::fromUtf8(QJsonDocument(failed.arguments).toJson(QJsonDocument::Compact)));
     trace(QStringLiteral("replan request (user)"), user);
     m_planner->request(systemPrompt(m_docCapabilities), user, 700);
 }

@@ -280,6 +280,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshWeldOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/WeldVerticesCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ClickFocusFilter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAgentManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAgentTypes.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AICapabilityRegistry.cpp
