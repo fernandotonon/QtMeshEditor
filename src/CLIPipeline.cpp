@@ -884,7 +884,7 @@ void CLIPipeline::printUsage()
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
-        "  rig <file> [--skeleton humanoid|biped|quadruped|generic] [--algo pinocchio|unirig]\n"
+        "  rig <file> [--skeleton humanoid|biped|quadruped|generic|vehicle] [--algo pinocchio|unirig] [--rigid]\n"
         "             [--up-axis x|y|z] [--skin] -o <out> [--json]\n"
         "                                    Auto-rig an UNRIGGED mesh: embed a skeleton template into the\n"
         "                                    mesh interior (#407). Default algo: pinocchio (offline,\n"
@@ -892,7 +892,7 @@ void CLIPipeline::printUsage()
         "                                    to pinocchio when its models/ONNX are unavailable. --skin also\n"
         "                                    computes skin weights in the same pass (chains `qtmesh skin`).\n"
         "                                    Works best on upright, single-component, T/A-pose meshes.\n"
-        "  skin <file> [--algo skintokens|geodesic-voxel|inverse-distance] [--max-influences N] [--falloff F]\n"
+        "  skin <file> [--algo skintokens|geodesic-voxel|inverse-distance] [--max-influences N] [--falloff F] [--rigid]\n"
         "              [--max-distance D] [--voxel-res N] [--smooth-iterations N] [--skip-unweighted] [--merge] -o <out> [--json]\n"
         "                                    Compute skin weights. Default algo: skintokens (ML skinner, #819 —\n"
         "                                    downloads ~2.3 GB models on first use; falls back to geodesic-voxel\n"
@@ -10840,6 +10840,7 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     bool skipUnweighted = false;
     bool replaceExisting = true;
     QString algoName = QStringLiteral("skintokens");
+    bool rigidSkin = false;   // #1013: --rigid → rigidOptions() + inverse-distance
     int voxelRes = 64;
     int smoothIterations = 3;
     bool evaluateMode = false;      // #819 Slice E: metrics, no write
@@ -10849,6 +10850,7 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "skin" || arg == "--cli") continue;
         if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--rigid") { rigidSkin = true; continue; }   // #1013
         if (arg == "--skip-unweighted") { skipUnweighted = true; continue; }
         if (arg == "--merge") { replaceExisting = false; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
@@ -11035,7 +11037,8 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     opts.smoothIterations       = smoothIterations;
 
     const auto report = SkinWeights::computeAndApply(
-        entity, opts, SkinWeights::algorithmFromString(algoName));
+        entity, rigidSkin ? SkinWeights::rigidOptions() : opts,
+        rigidSkin ? SkinWeights::Algorithm::InverseDistance : SkinWeights::algorithmFromString(algoName));
     if (!report.applied) {
         err() << "Error: skin weights failed — " << report.error << Qt::endl;
         return 1;
@@ -11073,6 +11076,7 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     QString algoName = QStringLiteral("pinocchio");
     bool jsonOutput = false;
     bool alsoSkin = false;
+    bool rigid = false;   // #1013: --rigid = skin with SkinWeights::rigidOptions()
     int upAxis = 1;   // +Y default
 
     for (int i = 1; i < argc; ++i) {
@@ -11080,6 +11084,7 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         if (arg == "rig" || arg == "--cli") continue;
         if (arg == "--json") { jsonOutput = true; continue; }
         if (arg == "--skin") { alsoSkin = true; continue; }
+        if (arg == "--rigid") { alsoSkin = true; rigid = true; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
@@ -11121,7 +11126,7 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic] "
+        err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic|vehicle] [--rigid] "
                  "[--algo pinocchio|unirig] [--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
         return 2;
     }
@@ -11179,7 +11184,12 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     // Optionally chain skin weights so the exported asset deforms.
     bool skinned = false;
     if (alsoSkin) {
-        const auto sw = SkinWeights::computeAndApply(entity, {});
+        // #1013: --rigid, or a vehicle template, binds each vertex to ONE bone.
+        const bool useRigid = rigid || AutoRig::templateIsRigid(opts.tmpl);
+        const auto sw = useRigid
+            ? SkinWeights::computeAndApply(entity, SkinWeights::rigidOptions(),
+                                           SkinWeights::Algorithm::InverseDistance)
+            : SkinWeights::computeAndApply(entity, {});
         skinned = sw.applied;
         if (!sw.applied) {
             err() << "Error: rigged, but skinning failed — " << sw.error << Qt::endl;

@@ -774,6 +774,15 @@ QString SkinWeights::algorithmToString(Algorithm algo)
     return QStringLiteral("skintokens");
 }
 
+SkinWeightsOptions SkinWeights::rigidOptions()
+{
+    SkinWeightsOptions o;
+    o.maxInfluencesPerVertex = 1;
+    o.maxInfluenceDistance   = 0.0;   // 0 = no cap: a wheel vertex far from any bone still binds
+    o.smoothIterations       = 0;     // smoothing would soften the hard part boundaries
+    return o;
+}
+
 SkinWeights::Algorithm SkinWeights::algorithmFromString(const QString& s)
 {
     const QString v = s.trimmed().toLower();

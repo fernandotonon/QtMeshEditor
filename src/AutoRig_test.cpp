@@ -4,6 +4,10 @@
 // under Xvfb on CI).
 
 #include <gtest/gtest.h>
+#include "UniRigPredictor.h"
+#include "SkinWeights.h"
+#include <stdexcept>
+#include <random>
 
 #include <cmath>
 #include <vector>
@@ -615,4 +619,106 @@ TEST(AutoRigAlgorithm, ReportJsonCarriesAlgorithm)
     EXPECT_EQ(j.value("algorithm").toString(), QStringLiteral("unirig"));
     EXPECT_EQ(j.value("fallbackReason").toString(),
               QStringLiteral("model offline — used template"));
+}
+
+// ---- #1013 Vehicle template ----
+namespace {
+// A box body with four wheel "cylinders" (point clouds) below it. Length along
+// `lengthAxis` (0=X or 2=Z), width along the other in-plane axis, +Y up.
+std::vector<float> syntheticCar(int lengthAxis, int& n, bool junkBelow = false, bool coincidentPile = false)
+{
+    std::vector<float> c; std::mt19937 rng(3); std::uniform_real_distribution<float> U(-1.f, 1.f);
+    auto put = [&](float len, float up, float wid) {
+        float v[3] = {0, up, 0}; v[lengthAxis] = len; v[lengthAxis == 0 ? 2 : 0] = wid;
+        c.insert(c.end(), v, v + 3);
+    };
+    for (int i = 0; i < 4000; ++i) put(U(rng) * 2.0f, 0.5f + 0.5f * (U(rng) + 1.f) * 0.5f, U(rng) * 0.9f);   // body y∈[0.5,1.0]
+    for (float lz : {-1.4f, 1.4f}) for (float wx : {-1.0f, 1.0f})
+        for (int i = 0; i < 400; ++i) {
+            const float a = U(rng) * 3.14159f, r = 0.3f;                // wheel: circle in the length/up plane
+            put(lz + r * std::cos(a), 0.3f + r * std::sin(a), wx + U(rng) * 0.08f);
+        }
+    // a detached blob far BELOW the car (a shadow plane / dropped interior
+    // part): 1.5% of the points, centred — must not drag the wheels inward
+    if (junkBelow) for (int i = 0; i < 90; ++i) put(U(rng) * 0.3f, -1.5f + U(rng) * 0.05f, U(rng) * 0.3f);
+    // thousands of vertices collapsed onto ONE point at ground level near the
+    // centre (a degenerate primitive — the Buick has ~9,800 of them): they
+    // outnumber a whole wheel, so a vertex-weighted centroid is lost to them
+    if (coincidentPile) for (int i = 0; i < 6000; ++i) put(-0.1f, 0.2f, 0.05f);   // rear-right quadrant, inside the wheel band
+    n = static_cast<int>(c.size() / 3); return c;
+}
+double dist(const AutoRig::Joint& j, double x, double y, double z)
+{ return std::sqrt((j.pos[0]-x)*(j.pos[0]-x) + (j.pos[1]-y)*(j.pos[1]-y) + (j.pos[2]-z)*(j.pos[2]-z)); }
+const AutoRig::Joint& byName(const std::vector<AutoRig::Joint>& js, const char* nm)
+{ for (const auto& j : js) if (j.name == QLatin1String(nm)) return j; throw std::runtime_error(nm); }
+} // namespace
+
+TEST(AutoRigVehicle, WheelsSnapToTheLowGeometryOfEachQuadrant_LengthAlongZ)
+{
+    int n = 0; const auto cloud = syntheticCar(2, n);
+    AutoRig::Options o; o.tmpl = AutoRig::Template::Vehicle;
+    const auto placed = AutoRig::fitVehicle(cloud.data(), n, o);
+    ASSERT_EQ(placed.size(), 7u);
+    // wheel centres are at (x=±1, y≈0.3, z=±1.4); the low-band centroid sits a
+    // little below the hub, so allow 0.25
+    EXPECT_LT(dist(byName(placed, "FrontLeftWheel"),  -1.0, 0.3,  1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "FrontRightWheel"),  1.0, 0.3,  1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "RearLeftWheel"),   -1.0, 0.3, -1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "RearRightWheel"),   1.0, 0.3, -1.4), 0.25);
+    EXPECT_NEAR(byName(placed, "FrontAxle").pos[2],  1.4, 0.25);
+    EXPECT_NEAR(byName(placed, "RearAxle").pos[2],  -1.4, 0.25);
+    EXPECT_NEAR(byName(placed, "Chassis").pos[0], 0.0, 0.05);
+    EXPECT_EQ(byName(placed, "FrontLeftWheel").parent, 1);   // axle
+    EXPECT_EQ(byName(placed, "Chassis").parent, -1);
+}
+
+TEST(AutoRigVehicle, IgnoresSparseGeometryBelowTheBody)
+{
+    // The Buick case: a detached cluster far below the chassis owned the
+    // "lowest 30% of the AABB" band and pulled the rear wheels to the centre.
+    int n = 0; const auto cloud = syntheticCar(2, n, /*junkBelow=*/true);
+    AutoRig::Options o; o.tmpl = AutoRig::Template::Vehicle;
+    const auto placed = AutoRig::fitVehicle(cloud.data(), n, o);
+    EXPECT_LT(dist(byName(placed, "RearLeftWheel"),  -1.0, 0.3, -1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "RearRightWheel"),  1.0, 0.3, -1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "FrontLeftWheel"), -1.0, 0.3,  1.4), 0.25);
+    EXPECT_GT(byName(placed, "Chassis").pos[1], 0.3) << "chassis must sit on the body, not on the junk";
+}
+
+TEST(AutoRigVehicle, IgnoresACoincidentVertexPile)
+{
+    int n = 0; const auto cloud = syntheticCar(2, n, false, /*coincidentPile=*/true);
+    AutoRig::Options o; o.tmpl = AutoRig::Template::Vehicle;
+    const auto placed = AutoRig::fitVehicle(cloud.data(), n, o);
+    // the pile sits in the rear-right quadrant; that wheel must still be a wheel
+    EXPECT_LT(dist(byName(placed, "RearRightWheel"),  1.0, 0.3, -1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "RearLeftWheel"),  -1.0, 0.3, -1.4), 0.25);
+    EXPECT_LT(dist(byName(placed, "FrontRightWheel"), 1.0, 0.3,  1.4), 0.25);
+}
+
+TEST(AutoRigVehicle, OrientsToTheLongerAxis_LengthAlongX)
+{
+    int n = 0; const auto cloud = syntheticCar(0, n);
+    AutoRig::Options o; o.tmpl = AutoRig::Template::Vehicle;
+    const auto placed = AutoRig::fitVehicle(cloud.data(), n, o);
+    // now the wheels are at x=±1.4, z=±1.0 — front is the +X end
+    EXPECT_NEAR(std::abs(byName(placed, "FrontLeftWheel").pos[0]), 1.4, 0.25);
+    EXPECT_NEAR(std::abs(byName(placed, "FrontLeftWheel").pos[2]), 1.0, 0.25);
+    EXPECT_GT(byName(placed, "FrontAxle").pos[0], byName(placed, "RearAxle").pos[0]);
+}
+
+TEST(AutoRigVehicle, StringsHintAndRigidity)
+{
+    EXPECT_EQ(AutoRig::templateFromString("vehicle"), AutoRig::Template::Vehicle);
+    EXPECT_EQ(AutoRig::templateFromString("car"),     AutoRig::Template::Vehicle);
+    EXPECT_EQ(AutoRig::templateToString(AutoRig::Template::Vehicle), "vehicle");
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(AutoRig::Template::Vehicle), UniRigPredictor::Labeling::Generic);
+    EXPECT_TRUE(AutoRig::templateIsRigid(AutoRig::Template::Vehicle));
+    EXPECT_FALSE(AutoRig::templateIsRigid(AutoRig::Template::Humanoid));
+    const auto r = SkinWeights::rigidOptions();
+    EXPECT_EQ(r.maxInfluencesPerVertex, 1); EXPECT_EQ(r.smoothIterations, 0); EXPECT_EQ(r.maxInfluenceDistance, 0.0);
+    // the vehicle template also box-fits inside the AABB like every other template
+    int n = 0; const auto cloud = syntheticCar(2, n); AutoRig::Options o;
+    const auto boxed = AutoRig::fitTemplate(AutoRig::templateJoints(AutoRig::Template::Vehicle), cloud.data(), n, o, nullptr);
+    EXPECT_EQ(boxed.size(), 7u);
 }

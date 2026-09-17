@@ -95,6 +95,21 @@ const TJ kQuadruped[] = {
     {"BackRightFoot",  12, 0.38, 0.04, 0.30, false},
 };
 
+// #1013 Vehicle: chassis root, front/rear axle, four wheels. Template z is the
+// LENGTH (front = high z), x the width, y up; wheels sit low. No slab
+// recentring (it would drag the wheels onto the centre line) — fitVehicle()
+// snaps them to the real lowest OCCUPIED SPACE per quadrant instead (voxel
+// cells, so tessellation density and degenerate vertex piles cannot bias it).
+const TJ kVehicle[] = {
+    {"Chassis",          -1, 0.50, 0.35, 0.50, false},
+    {"FrontAxle",         0, 0.50, 0.15, 0.78, false},
+    {"RearAxle",          0, 0.50, 0.15, 0.22, false},
+    {"FrontLeftWheel",    1, 0.85, 0.12, 0.78, false},
+    {"FrontRightWheel",   1, 0.15, 0.12, 0.78, false},
+    {"RearLeftWheel",     2, 0.85, 0.12, 0.22, false},
+    {"RearRightWheel",    2, 0.15, 0.12, 0.22, false},
+};
+
 // Generic fallback: a 3-joint vertical spine. Always succeeds.
 const TJ kGeneric[] = {
     {"Root",  -1, 0.50, 0.05, 0.50, true},
@@ -131,8 +146,125 @@ std::vector<AutoRig::Joint> AutoRig::templateJoints(Template tmpl)
         case Template::Biped:     return toJoints(kBiped,     std::size(kBiped));
         case Template::Quadruped: return toJoints(kQuadruped, std::size(kQuadruped));
         case Template::Generic:   return toJoints(kGeneric,   std::size(kGeneric));
+        case Template::Vehicle:   return toJoints(kVehicle,   std::size(kVehicle));
     }
     return toJoints(kGeneric, std::size(kGeneric));
+}
+
+std::vector<AutoRig::Joint> AutoRig::fitVehicle(const float* verts, int vertexCount, const Options& opts)
+{
+    // Start from the box-mapped template so every joint has a sane default.
+    std::vector<Joint> placed = fitTemplate(templateJoints(Template::Vehicle), verts, vertexCount, opts, nullptr);
+    if (!verts || vertexCount <= 0) return placed;
+
+    double mn[3] = { 1e300,  1e300,  1e300};
+    double mx[3] = {-1e300, -1e300, -1e300};
+    for (int i = 0; i < vertexCount; ++i)
+        for (int a = 0; a < 3; ++a) {
+            const double v = verts[3*i + a];
+            mn[a] = std::min(mn[a], v); mx[a] = std::max(mx[a], v);
+        }
+    const int up = std::clamp(opts.upAxis, 0, 2);
+    const int a0 = (up == 0) ? 1 : 0;
+    const int a1 = (up == 2) ? 1 : 2;
+    // The car's length is the longer in-plane extent; "front" = its high end.
+    const int L = (mx[a0] - mn[a0] >= mx[a1] - mn[a1]) ? a0 : a1;
+    const int S = (L == a0) ? a1 : a0;
+    const double cL = 0.5 * (mn[L] + mx[L]);
+    const double cS = 0.5 * (mn[S] + mx[S]);
+
+    // Everything below works on OCCUPIED SPACE, not on vertices: the cloud is
+    // deduplicated into voxel cells (96 per axis over the AABB) and each cell
+    // counts once. A vertex-weighted centroid is at the mercy of tessellation
+    // — the Buick carries ~9,800 vertices collapsed onto ONE point at the
+    // origin (a degenerate primitive), which dragged its rear wheel onto the
+    // centre line no matter how the height band was chosen.
+    constexpr int kGrid = 96;
+    std::vector<std::array<double, 3>> cells;
+    {
+        double ext[3];
+        for (int a = 0; a < 3; ++a) ext[a] = std::max(1e-9, mx[a] - mn[a]);
+        std::vector<std::uint32_t> keys; keys.reserve(static_cast<size_t>(vertexCount));
+        for (int i = 0; i < vertexCount; ++i) {
+            std::uint32_t key = 0;
+            for (int a = 0; a < 3; ++a) {
+                const int c = std::clamp(static_cast<int>((verts[3*i + a] - mn[a]) / ext[a] * kGrid), 0, kGrid - 1);
+                key = key * kGrid + static_cast<std::uint32_t>(c);
+            }
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        cells.reserve(keys.size());
+        for (std::uint32_t key : keys) {
+            std::array<double, 3> centre{};
+            for (int a = 2; a >= 0; --a) {
+                centre[a] = mn[a] + (static_cast<double>(key % kGrid) + 0.5) / kGrid * ext[a];
+                key /= kGrid;
+            }
+            cells.push_back(centre);
+        }
+    }
+
+    // Ground = the bottom of the LARGEST height-contiguous mass of occupied
+    // cells, not the AABB bottom: a detached shadow plane / dropped interior
+    // part floating below the body (the Buick has one) is separated from it
+    // by an empty vertical gap, so it forms its own smaller run of height bins
+    // and is treated as junk. Anything touching the body counts as body.
+    const double extUp = std::max(1e-9, mx[up] - mn[up]);
+    double ground = mn[up];
+    {
+        constexpr int kBins = 40;
+        std::array<long long, kBins> hist{};
+        for (const auto& c : cells) {
+            const int bin = static_cast<int>((c[up] - mn[up]) / extUp * kBins);
+            hist[std::clamp(bin, 0, kBins - 1)]++;
+        }
+        long long bestMass = -1;
+        for (int bnum = 0; bnum < kBins; ) {
+            if (hist[bnum] == 0) { ++bnum; continue; }
+            const int runStart = bnum; long long mass = 0;
+            while (bnum < kBins && hist[bnum] > 0) mass += hist[bnum++];
+            if (mass > bestMass) { bestMass = mass; ground = mn[up] + (extUp / kBins) * runStart; }
+        }
+    }
+    const double lowCut   = ground + 0.30 * std::max(1e-9, mx[up] - ground);
+    const double junkCut  = ground - 0.01 * extUp;   // below the body's ground: junk
+
+    // Quadrant centroids of the low band's cells: index = (front?2:0) |
+    // (left?1:0), left = the −S side (the character convention the labeller uses).
+    double sum[4][3] = {{0,0,0},{0,0,0},{0,0,0},{0,0,0}};
+    long long cnt[4] = {0,0,0,0};
+    for (const auto& v : cells) {
+        if (v[up] > lowCut || v[up] < junkCut) continue;
+        const int q = (v[L] > cL ? 2 : 0) | (v[S] < cS ? 1 : 0);
+        for (int a = 0; a < 3; ++a) sum[q][a] += v[a];
+        ++cnt[q];
+    }
+    auto wheelIdx = [&](const char* name) {
+        for (size_t i = 0; i < placed.size(); ++i) if (placed[i].name == QLatin1String(name)) return static_cast<int>(i);
+        return -1;
+    };
+    const struct { const char* name; int q; } wheels[] = {
+        {"FrontLeftWheel", 3}, {"FrontRightWheel", 2}, {"RearLeftWheel", 1}, {"RearRightWheel", 0} };
+    for (const auto& w : wheels) {
+        const int j = wheelIdx(w.name);
+        if (j < 0 || cnt[w.q] == 0) continue;
+        for (int a = 0; a < 3; ++a) placed[j].pos[a] = sum[w.q][a] / static_cast<double>(cnt[w.q]);
+    }
+    auto mid = [&](const char* a, const char* b, const char* axle) {
+        const int i = wheelIdx(a), k = wheelIdx(b), x = wheelIdx(axle);
+        if (i < 0 || k < 0 || x < 0) return;
+        for (int c2 = 0; c2 < 3; ++c2) placed[x].pos[c2] = 0.5 * (placed[i].pos[c2] + placed[k].pos[c2]);
+    };
+    mid("FrontLeftWheel", "FrontRightWheel", "FrontAxle");
+    mid("RearLeftWheel",  "RearRightWheel",  "RearAxle");
+    if (const int ch = wheelIdx("Chassis"); ch >= 0) {
+        placed[ch].pos[S]  = cS;
+        placed[ch].pos[L]  = cL;
+        placed[ch].pos[up] = ground + 0.35 * (mx[up] - ground);
+    }
+    return placed;
 }
 
 std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
@@ -814,6 +946,13 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
             report.algorithmUsed = Algorithm::UniRig;
             report.jointLabeling = opts.prePredictedLabeling;
             mlUsed = true;
+        } else if (opts.tmpl == Template::Vehicle) {
+            // #1013: UniRig returns creature-shaped graphs for vehicles (a
+            // humanoid lying along the body on a fused low-poly car); the
+            // geometric vehicle template is the better answer, so the hint
+            // wins outright and says so.
+            reason = QStringLiteral("vehicle template: UniRig produces creature-shaped skeletons "
+                                    "for vehicles, so the geometric chassis/axle/wheel rig is used");
         } else if (!UniRigPredictor::isAvailable()) {
             reason = QStringLiteral("UniRig needs an ONNX-enabled build");
         } else {
@@ -864,10 +1003,13 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
 
     // --- Pinocchio / template fit (default, and the UniRig fallback) --------
     if (!mlUsed) {
-        placed = markers.empty()
-            ? fitTemplate(tmpl, verts.data(), vcount, opts, &recentered)
-            : fitTemplateWithMarkers(tmpl, verts.data(), vcount, markers, opts,
-                                     &recentered, &markersApplied);
+        if (opts.tmpl == Template::Vehicle)
+            placed = fitVehicle(verts.data(), vcount, opts);   // markers are a humanoid concept
+        else
+            placed = markers.empty()
+                ? fitTemplate(tmpl, verts.data(), vcount, opts, &recentered)
+                : fitTemplateWithMarkers(tmpl, verts.data(), vcount, markers, opts,
+                                         &recentered, &markersApplied);
     }
     report.jointsRecentered = recentered;
     report.markersApplied   = markersApplied;
@@ -1030,6 +1172,7 @@ QString AutoRig::templateToString(Template t)
         case Template::Biped:     return QStringLiteral("biped");
         case Template::Quadruped: return QStringLiteral("quadruped");
         case Template::Generic:   return QStringLiteral("generic");
+        case Template::Vehicle:   return QStringLiteral("vehicle");
     }
     return QStringLiteral("generic");
 }
@@ -1041,6 +1184,7 @@ AutoRig::Template AutoRig::templateFromString(const QString& s)
     if (l == "biped")     return Template::Biped;
     if (l == "quadruped" || l == "quad") return Template::Quadruped;
     if (l == "generic")   return Template::Generic;
+    if (l == "vehicle" || l == "car") return Template::Vehicle;
     return Template::Humanoid;   // default
 }
 
