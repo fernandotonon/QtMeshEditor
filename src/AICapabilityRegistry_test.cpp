@@ -103,6 +103,9 @@ TEST(AICapabilityRegistry, KeywordRoutingPicksRelevantCapabilitiesAndAlwaysKeeps
     EXPECT_FALSE(simple.contains("rigging"));
 
     EXPECT_TRUE(reg.routeByKeywords("hello").contains("scene")) << "never empty";
+    // creating something that is not a primitive routes the (single-tool) generation capability up front
+    EXPECT_TRUE(reg.routeByKeywords("create a f22 raptor scene").contains("generation_3d"));
+    EXPECT_TRUE(reg.routeByKeywords("make me a dragon").contains("generation_3d"));
 }
 
 TEST(AICapabilityRegistry, ValidateArgumentsEnforcesRequiredTypesAndEnums)

@@ -424,6 +424,38 @@ TEST_F(AgentFixture, PlannerCanAskForMoreCapabilitiesBeforePlanning)
     EXPECT_EQ(exec->calls, QStringList({"auto_rig"}));
 }
 
+// The F-22 transcript: the 14B model asked for generation_3d twice although the
+// second prompt already carried its docs. That is a nudge, not a failure.
+TEST_F(AgentFixture, RepeatedRequestForAlreadyProvidedDocsIsNudgedNotFailed)
+{
+    planner->replies << "{\"need_capabilities\": [\"rigging\"]}";
+    planner->replies << "{\"need_capabilities\": [\"rigging\"]}";   // again, although it now has them
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("make it shiny"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
+    ASSERT_EQ(planner->userPrompts.size(), 3);
+    EXPECT_TRUE(planner->userPrompts[2].contains("ALREADY listed")) << planner->userPrompts[2].toStdString();
+    EXPECT_TRUE(planner->systemPrompts[2].contains("- auto_rig:"));
+    EXPECT_EQ(exec->calls, QStringList({"auto_rig"}));
+
+    // a capability this build really lacks is reported as such
+    AIAgentManager::kill(); SetUp();
+    planner->replies << "{\"need_capabilities\": [\"holodeck\"]}";
+    ASSERT_TRUE(m->startTask("beam me up"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(m->lastError().contains("no tools for: holodeck")) << m->lastError().toStdString();
+
+    // and a model that never stops asking is cut off honestly
+    AIAgentManager::kill(); SetUp();
+    for (int i = 0; i < 6; ++i) planner->replies << "{\"need_capabilities\": [\"rigging\"]}";
+    ASSERT_TRUE(m->startTask("rig?"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(m->lastError().contains("kept asking")) << m->lastError().toStdString();
+}
+
 TEST_F(AgentFixture, QuestionIsAnsweredWithoutRunningTools)
 {
     planner->replies << "{\"summary\": \"The scene holds one entity, Floor.\"}";

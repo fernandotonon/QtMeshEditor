@@ -191,7 +191,7 @@ private slots:
 private:
     void handlePlanReply(const QString& text);
     void handleReplanReply(const QString& text);
-    bool expandCapabilities(const QStringList& need);
+    bool expandCapabilities(const QStringList& need, QStringList* alreadyHad = nullptr, QStringList* unknown = nullptr);
     void appendRepairedTail(const QVector<AIAgent::Step>& steps);
 
 private:

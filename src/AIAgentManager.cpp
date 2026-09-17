@@ -588,12 +588,15 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
 }
 
 // Dynamic discovery: the planner asked for docs it did not have. Returns
-// false when nothing new could be added (unknown ids or already provided).
-bool AIAgentManager::expandCapabilities(const QStringList& need)
+// false when nothing new could be added; `alreadyHad` / `unknown` say why
+// (a 14B model asked for generation_3d twice although the second prompt
+// already carried its docs — that must be a nudge, not a failure).
+bool AIAgentManager::expandCapabilities(const QStringList& need, QStringList* alreadyHad, QStringList* unknown)
 {
     QStringList added;
     for (const QString& id : need) {
-        if (!m_registry.capability(id) || m_docCapabilities.contains(id)) continue;
+        if (!m_registry.capability(id)) { if (unknown) *unknown << id; continue; }
+        if (m_docCapabilities.contains(id)) { if (alreadyHad) *alreadyHad << id; continue; }
         m_docCapabilities << id;
         added << id;
     }
@@ -622,14 +625,25 @@ void AIAgentManager::handlePlanReply(const QString& text)
     }
     if (!need.isEmpty()) {
         ++m_plannerRetries;
-        const bool expanded = expandCapabilities(need);
-        if (!expanded || m_plannerRetries > m_limits.maxPlannerRetries + 1) {
-            m_lastError = QStringLiteral("the model asked for unknown capabilities: %1").arg(need.join(", "));
-            say(QStringLiteral("I could not find tools for: %1.").arg(need.join(", ")));
+        QStringList alreadyHad;
+        QStringList unknown;
+        const bool expanded = expandCapabilities(need, &alreadyHad, &unknown);
+        if (m_plannerRetries > m_limits.maxPlannerRetries + 1) {
+            m_lastError = QStringLiteral("the model kept asking for tool docs instead of planning (%1)").arg(need.join(", "));
+            say(QStringLiteral("I could not get a plan out of the model — it kept asking for %1 instead of using it.").arg(need.join(", ")));
             finish(State::Failed);
             return;
         }
-        requestPlan();
+        if (expanded) { requestPlan(); return; }
+        if (!alreadyHad.isEmpty()) {
+            // It already has those docs: nudge it to plan with them.
+            SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("re-asked for provided capabilities: %1").arg(alreadyHad.join(", ")));
+            requestPlan(QStringLiteral("The tools of %1 are ALREADY listed under \"Tools you may use now\" — do not ask for them again. Plan with those tools now (or answer with a summary).").arg(alreadyHad.join(", ")));
+            return;
+        }
+        m_lastError = QStringLiteral("this build has no tools for: %1").arg(unknown.join(", "));
+        say(QStringLiteral("This build has no tools for: %1.").arg(unknown.join(", ")));
+        finish(State::Failed);
         return;
     }
     if (!answer.isEmpty()) {

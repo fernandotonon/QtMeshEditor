@@ -114,6 +114,9 @@ const std::vector<Keyword> kKeywords = {
     {"uv", "uv"}, {"unwrap", "uv"}, {"seam", "uv"},
     {"generate", "generation_3d"}, {"image to 3d", "generation_3d"}, {"from image", "generation_3d"},
     {"from photo", "generation_3d"}, {"prompt", "generation_3d"}, {"create a 3d", "generation_3d"}, {"model of", "generation_3d"},
+    // "create a f22 raptor scene" / "make me a dragon": creating something that is not a primitive
+    {"create", "generation_3d"}, {"make", "generation_3d"}, {"build", "generation_3d"}, {"scene", "generation_3d"},
+    {"a 3d", "generation_3d"}, {"character", "generation_3d"}, {"creature", "generation_3d"}, {"vehicle", "generation_3d"},
     {"load", "scene_io"}, {"import", "scene_io"}, {"open", "scene_io"}, {"export", "scene_io"}, {"save", "scene_io"},
     {"file", "scene_io"}, {".glb", "scene_io"}, {".fbx", "scene_io"}, {".obj", "scene_io"}, {"folder", "scene_io"},
     {"screenshot", "view"}, {"camera", "view"}, {"look at", "view"}, {"render", "view"}, {"show me", "view"},
