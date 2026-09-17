@@ -25,7 +25,7 @@ const std::vector<CapDef> kCapDefs = {
     {"uv",             "UV mapping",            "auto-unwrap, UV info, projections, seams"},
     {"rigging",        "Rigging & skinning",    "auto-rig a static mesh (humanoid/biped/quadruped/generic/vehicle templates or UniRig), compute skin weights, ARKit face blendshapes, remove skeleton"},
     {"segmentation",   "Part segmentation",     "AI part segmentation, split/explode/join mesh parts"},
-    {"generation_3d",  "Image/prompt → 3D",     "generate a 3D mesh from an image or a text prompt (TripoSR/TripoSG/TRELLIS.2)"},
+    {"generation_3d",  "Image/prompt → 3D",     "generate a NEW 3D mesh from a 2D image file (png/jpg) or a text prompt (TripoSR/TripoSG/TRELLIS.2) — not for existing meshes, those are load_mesh"},
     {"animation",      "Skeletal animation",    "list/play/edit animations and keyframes, merge/resample/simplify/trim/bake, isometric sprites, VAT"},
     {"motion_ai",      "AI motion",             "text-to-motion generation, in-betweening, arm-space, foot pinning"},
     {"morph_pose",     "Morph targets & poses", "morph target weights and keyframes, pose library"},
@@ -403,8 +403,22 @@ bool coerceArray(QJsonValue& v, const QString& key, const QJsonObject& def, QStr
     return true;
 }
 
+// An image-typed parameter (image_path, image, photo, texture, …) handed a
+// 3D-mesh path — the agent once fed an .obj to generate_mesh_from_image.
+// Caught here so the tool (and a model download) never runs.
+bool rejectMeshAsImage(const QString& key, const QJsonValue& v, QString* why)
+{
+    static const QRegularExpression imageKey(R"((?i)(^|_)(image|photo|picture|texture|albedo|diffuse_map|src)(_?(path|file))?$)");
+    static const QRegularExpression meshExt(R"((?i)\.(obj|glb|gltf|fbx|dae|stl|ply|mesh|3ds|blend|usdz?)$)");
+    if (!v.isString() || !imageKey.match(key).hasMatch()) return false;
+    if (!meshExt.match(v.toString().trimmed()).hasMatch()) return false;
+    *why = QStringLiteral("'%1' is a 3D mesh, not an image — use load_mesh for an existing mesh").arg(v.toString().trimmed());
+    return true;
+}
+
 bool coerceToType(QJsonValue& v, const QString& key, const QJsonObject& def, QStringList* warnings, QString* why)
 {
+    if (rejectMeshAsImage(key, v, why)) return false;
     const QString type = def["type"].toString();
     if (type == QLatin1String("string"))  return coerceString(v, key, warnings, why);
     if (type == QLatin1String("number"))  return coerceNumber(v, key, false, warnings, why);

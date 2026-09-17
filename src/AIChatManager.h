@@ -37,6 +37,9 @@ public:
     QString currentModelName()  const;
 
     Q_INVOKABLE void sendMessage(const QString& text);
+    /// The header's model name/status is clickable: MainWindow opens the AI
+    /// Model Settings dialog on this signal (the facade knows no widgets).
+    Q_INVOKABLE void openModelSettings() { emit modelSettingsRequested(); }
     bool agentMode() const { return m_agentMode; }
     void setAgentMode(bool on);
     /// Scene summary injected into every planner prompt (#1021c). Public for tests.
@@ -54,6 +57,7 @@ signals:
     void streamingTextChanged();
     void currentModelNameChanged();
     void agentModeChanged();
+    void modelSettingsRequested();
 
 private slots:
     void onGenerationProgress(const QString& partial, float progress);

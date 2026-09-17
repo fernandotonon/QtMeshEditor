@@ -36,6 +36,7 @@ QJsonArray sampleTools()
         tool("create_material", "Create a material.",
              {{"name", prop("string", "Material name")}, {"diffuse", prop("array", "Diffuse color [R, G, B] (0.0-1.0)")}, {"tintish", prop("array", "Overall colour of the glow")}},
              {"name"}),
+        tool("generate_mesh_from_image", "Image → 3D.", {{"image_path", prop("string", "2D image")}, {"output", prop("string", "out")}}),
         tool("uv_unwrap_selection", "Unwrap some triangles.",
              {{"triangles", QJsonObject{{"type", "array"}, {"description", "triangle indices"}, {"items", QJsonObject{{"type", "integer"}}}}}}),
         tool("delete_entity", "Delete an entity.", {{"entity_name", prop("string", "Entity")}}, {"entity_name"}),
@@ -53,7 +54,7 @@ QJsonArray sampleTools()
 TEST(AICapabilityRegistry, GroupsToolsByCapabilityAndParksUnknownOnesInOther)
 {
     AICapabilityRegistry reg(sampleTools());
-    EXPECT_EQ(reg.toolCount(), 12);
+    EXPECT_EQ(reg.toolCount(), 13);
     EXPECT_EQ(reg.capabilityOf("auto_rig"), "rigging");
     EXPECT_EQ(reg.capabilityOf("create_primitive"), "scene");
     EXPECT_EQ(reg.capabilityOf("export_mesh"), "scene_io");
@@ -193,6 +194,23 @@ TEST(AICapabilityRegistry, AliasesAndCamelCaseAreMappedOntoSchemaNamesBeforeReje
     // an alias never overrides an explicitly passed schema key
     ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Real"}, {"entity_name", "Alias"}}, &out, &err, &warn));
     EXPECT_EQ(out["name"].toString(), "Real");
+}
+
+// The agent fed an .obj to generate_mesh_from_image: an image parameter
+// handed a mesh path is rejected before the tool (and a model download) runs.
+TEST(AICapabilityRegistry, MeshPathsAreRejectedForImageParameters)
+{
+    AICapabilityRegistry reg(sampleTools());
+    QJsonObject out; QString err;
+    EXPECT_FALSE(reg.validateArguments("generate_mesh_from_image", {{"image_path", "/models/luigi.obj"}}, &out, &err));
+    EXPECT_TRUE(err.contains("is a 3D mesh, not an image")) << err.toStdString();
+    EXPECT_TRUE(err.contains("load_mesh")) << "the right tool is named";
+    EXPECT_FALSE(reg.validateArguments("generate_mesh_from_image", {{"image_path", "C:/scenes/car.GLB"}}, &out, &err)) << "case-insensitive";
+    ASSERT_TRUE(reg.validateArguments("generate_mesh_from_image", {{"image_path", "/photos/luigi.png"}}, &out, &err)) << err.toStdString();
+    // non-image parameters are untouched
+    ASSERT_TRUE(reg.validateArguments("generate_mesh_from_image", {{"image_path", "/photos/a.jpg"}, {"output", "/tmp/out.glb"}}, &out, &err)) << err.toStdString();
+    ASSERT_TRUE(reg.validateArguments("export_mesh", {{"output_path", "/tmp/x.glb"}}, &out, &err));
+    EXPECT_TRUE(reg.promptIndex().contains("not for existing meshes")) << "the capability index says so too";
 }
 
 TEST(AICapabilityRegistry, ArrayItemsAreCheckedAgainstTheItemsSchema)

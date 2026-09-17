@@ -1379,6 +1379,8 @@ void MainWindow::initToolBar()
         // not follow, so typing went nowhere until a detour via the viewport.
         chatWidget->installEventFilter(new ClickFocusFilter(chatWidget));
         markLazyQml(chatWidget, QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        connect(AIChatManager::instance(), &AIChatManager::modelSettingsRequested,
+                this, &MainWindow::showAIModelSettings, Qt::UniqueConnection);
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);
         m_chatDock->setObjectName("AIChatDock");

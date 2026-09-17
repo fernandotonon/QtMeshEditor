@@ -93,20 +93,43 @@ Rectangle {
                 }
             }
 
-            // Model status dot
+            // Model status dot + name — click to open AI Model Settings and switch models.
             Rectangle {
-                width: 8; height: 8; radius: 4
-                color: AIChatManager.modelAvailable ? "#44dd44" : "#dd4444"
-            }
-
-            Text {
-                text: AIChatManager.modelAvailable
-                      ? AIChatManager.currentModelName
-                      : "No model"
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 10
-                elide: Text.ElideMiddle
-                Layout.maximumWidth: 120
+                id: modelChip
+                Layout.maximumWidth: 150
+                implicitWidth: modelChipRow.implicitWidth + 10
+                height: 20; radius: 3
+                color: modelChipArea.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : "transparent"
+                ToolTip.visible: modelChipArea.containsMouse
+                ToolTip.delay: 500
+                ToolTip.text: (AIChatManager.modelAvailable ? "Model: " + AIChatManager.currentModelName : "No model loaded")
+                              + " — click to open AI Model Settings"
+                Row {
+                    id: modelChipRow
+                    anchors.centerIn: parent
+                    spacing: 5
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: AIChatManager.modelAvailable ? "#44dd44" : "#dd4444"
+                    }
+                    Text {
+                        text: AIChatManager.modelAvailable
+                              ? AIChatManager.currentModelName
+                              : "No model"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        elide: Text.ElideMiddle
+                        width: Math.min(implicitWidth, 120)
+                    }
+                }
+                MouseArea {
+                    id: modelChipArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: AIChatManager.openModelSettings()
+                }
             }
 
             // Clear button

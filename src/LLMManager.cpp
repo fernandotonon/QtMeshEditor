@@ -449,6 +449,40 @@ void LLMManager::browseForModelFile()
         loadModelFromPath(file);
 }
 
+bool LLMManager::deleteModelFile(const QString &fileName)
+{
+    const QString name = QFileInfo(fileName).fileName();   // strip any directory part
+    if (name.isEmpty() || name != fileName.trimmed() || name.contains(QLatin1String(".."))) {
+        qWarning() << "LLMManager: refusing to delete a path outside the models directory:" << fileName;
+        return false;
+    }
+    const QString path = QDir(m_modelsDirectory).filePath(name);
+    const QString base = QFileInfo(name).completeBaseName();
+    if (isModelLoaded() && (m_currentModelName == name || m_currentModelName == base))
+        unloadModel();
+    bool removed = false;
+    if (QFileInfo::exists(path)) removed = QFile::remove(path);
+    if (QFileInfo::exists(path + QLatin1String(".part"))) removed = QFile::remove(path + QLatin1String(".part")) || removed;
+    if (removed) {
+        qDebug() << "LLMManager: deleted model file" << path;
+        scanForModels();
+    }
+    return removed;
+}
+
+int LLMManager::deleteAllModelFiles()
+{
+    int count = 0;
+    QDir dir(m_modelsDirectory);
+    if (!dir.exists()) return 0;
+    if (isModelLoaded()) unloadModel();
+    for (const QFileInfo& fi : dir.entryInfoList({"*.gguf", "*.gguf.part"}, QDir::Files)) {
+        if (QFile::remove(fi.absoluteFilePath())) ++count;
+    }
+    if (count) scanForModels();
+    return count;
+}
+
 void LLMManager::unloadModel()
 {
     if (m_worker) {

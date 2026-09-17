@@ -104,6 +104,12 @@ public slots:
     Q_INVOKABLE void browseForModelsDirectory();
     Q_INVOKABLE void browseForModelFile();
     Q_INVOKABLE void unloadModel();
+    /// Delete one downloaded GGUF (by file name, inside modelsDirectory only —
+    /// paths are refused) plus any `.part`; unloads it first if it is the
+    /// loaded model. Returns false when nothing was removed.
+    Q_INVOKABLE bool deleteModelFile(const QString &fileName);
+    /// Delete every *.gguf (+ .part) in modelsDirectory. Returns the count.
+    Q_INVOKABLE int deleteAllModelFiles();
     Q_INVOKABLE void scanForModels();
     Q_INVOKABLE void tryAutoLoadModel();
 

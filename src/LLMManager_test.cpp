@@ -6,6 +6,8 @@
 #include <QSignalSpy>
 #include <QSettings>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include "LLMManager.h"
 #include "AIAgentManager.h"
@@ -23,6 +25,44 @@ protected:
         ASSERT_NE(manager, nullptr);
     }
 };
+
+// =============================================================================
+// Model file deletion (AI Model Settings → Delete / Remove All, #1052)
+// =============================================================================
+
+TEST_F(LLMManagerTest, DeleteModelFileRemovesOnlyFilesInsideTheModelsDirectory)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString previous = manager->modelsDirectory();
+    manager->setModelsDirectory(dir.path());
+
+    auto touch = [&](const QString& name) {
+        QFile f(dir.filePath(name)); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("GGUF"); f.close();
+    };
+    touch("a.gguf"); touch("b.gguf"); touch("b.gguf.part");
+    QFile outside(dir.path() + "/../llm_delete_outside_probe.gguf");
+    ASSERT_TRUE(outside.open(QIODevice::WriteOnly)); outside.close();
+    manager->scanForModels();
+    ASSERT_EQ(manager->availableModels().size(), 2);
+
+    EXPECT_FALSE(manager->deleteModelFile("../llm_delete_outside_probe.gguf")) << "no path traversal";
+    EXPECT_FALSE(manager->deleteModelFile(dir.path() + "/../llm_delete_outside_probe.gguf"));
+    EXPECT_TRUE(QFileInfo::exists(outside.fileName())) << "the outside file is untouched";
+    EXPECT_FALSE(manager->deleteModelFile("missing.gguf"));
+
+    EXPECT_TRUE(manager->deleteModelFile("b.gguf"));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("b.gguf")));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("b.gguf.part"))) << "the partial download goes too";
+    EXPECT_EQ(manager->availableModels(), QStringList({"a"})) << "the list is rescanned";
+
+    touch("c.gguf");
+    EXPECT_EQ(manager->deleteAllModelFiles(), 2);
+    EXPECT_TRUE(manager->availableModels().isEmpty());
+
+    QFile::remove(outside.fileName());
+    manager->setModelsDirectory(previous);
+}
 
 // =============================================================================
 // Recommended model list (#1021e)

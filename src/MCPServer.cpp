@@ -2827,6 +2827,19 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     }
     if (!QFileInfo::exists(imagePath))
         return makeErrorResult(QStringLiteral("image not found: %1").arg(imagePath));
+    {
+        // A mesh is not an image: the AI agent once fed an .obj here. Fail
+        // fast with the right tool named instead of running the pipeline.
+        static const QStringList imageExts = {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"};
+        static const QStringList meshExts  = {"obj", "glb", "gltf", "fbx", "dae", "stl", "ply", "mesh", "3ds", "blend", "usd", "usdz"};
+        const QString ext = QFileInfo(imagePath).suffix().toLower();
+        if (meshExts.contains(ext))
+            return makeErrorResult(QStringLiteral("'%1' is a 3D mesh, not an image. generate_mesh_from_image needs a 2D image (%2); to work on an existing mesh use load_mesh.")
+                                       .arg(QFileInfo(imagePath).fileName(), imageExts.join("/")));
+        if (!imageExts.contains(ext))
+            return makeErrorResult(QStringLiteral("'%1' is not a supported image (%2).")
+                                       .arg(QFileInfo(imagePath).fileName(), imageExts.join("/")));
+    }
 
     MeshGenPredictor::Options opts;
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
@@ -10889,7 +10902,7 @@ QJsonArray MCPServer::buildToolsList()
     // handler gates the local TripoSR/TripoSG paths on ENABLE_ONNX itself).
     {
         QJsonObject props;
-        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required unless 'prompt' is given."}};
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a 2D IMAGE file (.png, .jpg, .jpeg, .webp, .bmp) — a photo or rendering of a single object, ideally background-removed. NOT a 3D mesh: to work on an existing .obj/.glb/.fbx use load_mesh instead. Required unless 'prompt' is given."}};
         props["prompt"] = QJsonObject{{"type", "string"}, {"description", "Prompt-to-3D: generate the source image from this text (FLUX.2-klein-4B via stable-diffusion.cpp — download it in AI Model Settings; needs a stable-diffusion build). Combined WITH image_path, the prompt EDITS that image (FLUX.2 reference conditioning) and the edit becomes the input."}};
         props["image_model"] = QJsonObject{{"type", "string"}, {"description", "With 'prompt': override the image-generation model (an SD checkpoint name from the sd_models directory; default: FLUX.2-klein-4B when downloaded, else the last-used SD model)."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
