@@ -476,6 +476,23 @@ QJsonObject normaliseAliases(const QJsonObject& props, const QJsonObject& args, 
     return out;
 }
 
+// Every `required` key present and non-null; the error names what WAS
+// passed so the model can rename rather than guess.
+bool checkRequired(const QJsonObject& schema, const QJsonObject& args, QString* error)
+{
+    for (const QJsonValue& r : schema["required"].toArray()) {
+        const QString key = r.toString();
+        if (args.contains(key) && !args[key].isNull()) continue;
+        if (error) {
+            const QStringList passed = args.keys();
+            *error = QStringLiteral("missing required argument '%1' (you passed: %2)")
+                         .arg(key, passed.isEmpty() ? QStringLiteral("nothing") : passed.join(", "));
+        }
+        return false;
+    }
+    return true;
+}
+
 bool matchEnum(QJsonValue& v, const QJsonObject& def, QString* why)
 {
     if (!def.contains("enum")) return true;
@@ -502,17 +519,7 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
     const QJsonObject schema = it->schema;
     const QJsonObject props = schema["properties"].toObject();
     const QJsonObject args = normaliseAliases(props, rawArgs, warnings);
-
-    for (const QJsonValue& r : schema["required"].toArray()) {
-        const QString key = r.toString();
-        if (args.contains(key) && !args[key].isNull()) continue;
-        if (error) {
-            QStringList passed = args.keys();
-            *error = QStringLiteral("missing required argument '%1' (you passed: %2)")
-                         .arg(key, passed.isEmpty() ? QStringLiteral("nothing") : passed.join(", "));
-        }
-        return false;
-    }
+    if (!checkRequired(schema, args, error)) return false;
 
     QJsonObject result;
     for (auto a = args.begin(); a != args.end(); ++a) {
