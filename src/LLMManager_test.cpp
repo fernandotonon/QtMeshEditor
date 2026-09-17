@@ -499,8 +499,10 @@ TEST_F(LLMManagerTest, SetAndGetContextSize)
     int original = manager->contextSize();
     QSignalSpy spy(manager, &LLMManager::settingsChanged);
 
-    manager->setContextSize(8192);
-    EXPECT_EQ(manager->contextSize(), 8192);
+    // pick a value that differs from the default (8192) so the change is observable
+    const int target = (original == 16384) ? 32768 : 16384;
+    manager->setContextSize(target);
+    EXPECT_EQ(manager->contextSize(), target);
     EXPECT_EQ(spy.count(), 1);
 
     // Restore original

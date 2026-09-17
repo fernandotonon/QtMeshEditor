@@ -30,7 +30,7 @@ TEST_F(LLMWorkerTest, DefaultSettings)
 {
     LLMWorker worker;
     LLMSettings settings = worker.getSettings();
-    EXPECT_EQ(settings.contextSize, 4096);
+    EXPECT_EQ(settings.contextSize, 8192);   // raised from 4096 for the AI agent's tool-doc prompts (#1052)
     EXPECT_EQ(settings.maxTokens, 2048);
     EXPECT_FLOAT_EQ(settings.temperature, 0.7f);
     EXPECT_EQ(settings.gpuLayers, 99);
