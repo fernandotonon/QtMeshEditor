@@ -8,6 +8,8 @@
 #include <QDir>
 #include <QTemporaryDir>
 #include "LLMManager.h"
+#include "AIAgentManager.h"
+#include <QSet>
 
 class LLMManagerTest : public ::testing::Test {
 protected:
@@ -21,6 +23,39 @@ protected:
         ASSERT_NE(manager, nullptr);
     }
 };
+
+// =============================================================================
+// Recommended model list (#1021e)
+// =============================================================================
+
+// The download button builds `<modelsDir>/<fileName>` and fetches `url`
+// verbatim, so every entry must be a single-file GGUF over https with a
+// unique name. (The Qwen official repos split their 7B+ quants into
+// -00001-of-00002 parts; a split URL 404s — that was the bug the user hit.)
+TEST_F(LLMManagerTest, RecommendedModelsAreSingleFileHttpsGgufsWithUniqueNames)
+{
+    const QList<ModelInfo> models = manager->getRecommendedModels();
+    ASSERT_GE(models.size(), 6);
+    QSet<QString> names, files;
+    for (const ModelInfo& m : models) {
+        EXPECT_TRUE(m.url.startsWith("https://huggingface.co/")) << m.url.toStdString();
+        EXPECT_TRUE(m.url.endsWith(".gguf")) << m.url.toStdString();
+        EXPECT_FALSE(m.url.contains("-of-0")) << "split quant: " << m.url.toStdString();
+        EXPECT_TRUE(m.fileName.endsWith(".gguf")) << m.fileName.toStdString();
+        EXPECT_FALSE(m.fileName.contains('/'));
+        EXPECT_GT(m.size, 100000000);
+        EXPECT_FALSE(m.description.isEmpty());
+        EXPECT_FALSE(names.contains(m.name)) << "duplicate name " << m.name.toStdString();
+        EXPECT_FALSE(files.contains(m.fileName)) << "duplicate file " << m.fileName.toStdString();
+        names.insert(m.name); files.insert(m.fileName);
+    }
+    // ordered by size, smallest first (the dialog relies on it)
+    for (int i = 1; i < models.size(); ++i) EXPECT_LE(models[i-1].size, models[i].size) << models[i].name.toStdString();
+    // the agent's recommendation must be downloadable from this list
+    bool found = false;
+    for (const ModelInfo& m : models) if (m.name == AIAgentManager::instance()->recommendedModelName()) found = true;
+    EXPECT_TRUE(found) << "AIAgentManager::recommendedModelName must name an entry of the recommended list";
+}
 
 // =============================================================================
 // validateMaterialScript tests

@@ -14,7 +14,7 @@ using namespace AIAgent;
 
 namespace {
 constexpr const char* kTrustedModeKey = "ai/agentTrustedMode";
-constexpr const char* kRecommendedModel = "Qwen 2.5 7B Q4_K_M";
+constexpr const char* kRecommendedModel = "Qwen3 4B Instruct 2507 Q4_K_M";
 
 /// LLMManager-backed planner. Forwards LLMManager's generation signals only
 /// while it has an outstanding request, so a material-generation run by
@@ -136,6 +136,20 @@ void AIAgentManager::setTrustedMode(bool on)
 QString AIAgentManager::recommendedModelName() const
 {
     return QLatin1String(kRecommendedModel);
+}
+
+bool AIAgentManager::modelIsRecommended(const QString& modelName)
+{
+    // Models known to hold a multi-step JSON tool protocol together: the
+    // Qwen Instruct line at 4B+ and anything 7B+/MoE. Substring match on the
+    // file/name the user loaded (case-insensitive).
+    static const QStringList markers = {
+        "qwen3-4b-instruct", "qwen3-30b", "qwen2.5-7b", "qwen 2.5 7b", "qwen3 4b", "qwen3 30b",
+        "7b", "8b", "12b", "14b", "27b", "30b", "32b", "70b",
+    };
+    const QString n = modelName.toLower();
+    for (const QString& m : markers) if (n.contains(m)) return true;
+    return false;
 }
 
 QVariantList AIAgentManager::planModel() const

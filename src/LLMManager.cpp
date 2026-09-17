@@ -96,15 +96,22 @@ void LLMManager::populateRecommendedModels()
 {
     m_recommendedModels.clear();
 
-    // Recommended GGUF models from Hugging Face - ordered by size (smallest first)
-    // Curated to avoid near-duplicates (no Coder variants or older Gemma 2)
+    // Recommended GGUF models from Hugging Face — ordered by size (smallest
+    // first). Every URL is a SINGLE-FILE quant that answered HTTP 200 when this
+    // list was last verified (2026-09-17); the official Qwen repos split their
+    // larger quants into -00001-of-00002 parts, which our downloader cannot
+    // reassemble, so those come from bartowski/unsloth mirrors instead.
+    // Qwen3 entries are the NON-thinking "Instruct-2507" variants: the worker
+    // feeds a generic chat template, which cannot switch thinking off, and
+    // the hybrid Qwen3 models would spend the token budget on <think> blocks
+    // instead of the agent's JSON.
 
     m_recommendedModels.append({
         "Gemma 3 1B Q4_K_M",
         "gemma-3-1b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 1B. Ultra-fast, great for quick tasks.",
-        900000000, // ~0.9GB
+        "Google's Gemma 3 1B. Ultra-fast, great for quick single-step commands.",
+        806000000, // ~0.75GB
         false
     });
 
@@ -113,7 +120,7 @@ void LLMManager::populateRecommendedModels()
         "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         "Meta's Llama 3.2 3B. Well-rounded performance.",
-        2000000000, // ~2.0GB
+        2020000000, // ~1.9GB
         false
     });
 
@@ -122,7 +129,7 @@ void LLMManager::populateRecommendedModels()
         "qwen2.5-3b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
         "Alibaba's Qwen 2.5 3B. Great for structured output.",
-        2100000000, // ~2.1GB
+        2100000000, // ~2.0GB
         false
     });
 
@@ -131,16 +138,26 @@ void LLMManager::populateRecommendedModels()
         "gemma-3-4b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
         "Google's Gemma 3 4B. Excellent balance of speed and quality.",
-        3100000000, // ~3.1GB
+        2490000000, // ~2.3GB
         false
     });
 
     m_recommendedModels.append({
+        "Qwen3 4B Instruct 2507 Q4_K_M",
+        "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "Qwen3 4B, non-thinking Instruct edition. Best small model for the AI agent's multi-step tool calls; fits 8 GB machines. Apache-2.0.",
+        2500000000, // ~2.3GB
+        false
+    });
+
+
+    m_recommendedModels.append({
         "Qwen 2.5 7B Q4_K_M",
-        "qwen2.5-7b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 7B. Strong instruction following and tool use — recommended for the AI agent (multi-step tool calling). Apache-2.0.",
-        4700000000, // ~4.7GB
+        "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 7B. Strong instruction following and tool use — a reliable AI-agent model on 16 GB machines. Apache-2.0.",
+        4680000000, // ~4.4GB
         false
     });
 
@@ -148,17 +165,17 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 12B Q4_K_M",
         "gemma-3-12b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 12B. High quality, needs 8GB+ RAM.",
-        8100000000, // ~8.1GB
+        "Google's Gemma 3 12B. High quality, needs 12GB+ RAM.",
+        7300000000, // ~6.8GB
         false
     });
 
     m_recommendedModels.append({
         "Qwen 2.5 14B Q4_K_M",
-        "qwen2.5-14b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 14B. Very capable, excellent reasoning.",
-        9400000000, // ~9.4GB
+        "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 14B. Very capable, excellent reasoning; needs ~12 GB RAM. Apache-2.0.",
+        8990000000, // ~8.4GB
         false
     });
 
@@ -166,17 +183,26 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 27B Q4_K_M",
         "gemma-3-27b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 27B. Excellent quality, needs 16GB+ RAM.",
-        17000000000, // ~17GB
+        "Google's Gemma 3 27B. Excellent quality, needs 20GB+ RAM.",
+        16546405002, // ~15.4GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen3 30B-A3B Instruct 2507 Q4_K_M",
+        "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        "Qwen3 30B mixture-of-experts (3B active): the strongest local tool caller, fast per token, needs ~20 GB RAM. Apache-2.0.",
+        18550000000, // ~17.3GB
         false
     });
 
     m_recommendedModels.append({
         "Qwen 2.5 32B Q4_K_M",
-        "qwen2.5-32b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-GGUF/resolve/main/qwen2.5-32b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 32B. Near top-tier quality, needs 20GB+ RAM.",
-        20000000000, // ~20GB
+        "Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 32B. Near top-tier quality, needs 24GB+ RAM. Apache-2.0.",
+        19860000000, // ~18.5GB
         false
     });
 }

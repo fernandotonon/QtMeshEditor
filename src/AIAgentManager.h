@@ -123,6 +123,9 @@ public:
     bool trustedMode() const { return m_trustedMode; }
     void setTrustedMode(bool on);
     QString recommendedModelName() const;
+    /// True when the loaded model is one we consider capable of the agent's
+    /// multi-step tool protocol (drives the panel's "tip" banner).
+    Q_INVOKABLE static bool modelIsRecommended(const QString& modelName);
     const AICapabilityRegistry& registry() const { return m_registry; }
 
     // ---- control ----

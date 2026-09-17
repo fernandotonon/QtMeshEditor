@@ -133,10 +133,7 @@ Rectangle {
         id: modelHint
         anchors { top: header.bottom; left: parent.left; right: parent.right }
         visible: AIChatManager.agentMode && AIChatManager.modelAvailable
-                 && AIChatManager.currentModelName.indexOf("7b") < 0
-                 && AIChatManager.currentModelName.indexOf("7B") < 0
-                 && AIChatManager.currentModelName.indexOf("12b") < 0
-                 && AIChatManager.currentModelName.indexOf("12B") < 0
+                 && !AIAgentManager.modelIsRecommended(AIChatManager.currentModelName)
         height: visible ? hintText.implicitHeight + 8 : 0
         color: Qt.rgba(1, 0.8, 0.3, 0.08)
         Text {

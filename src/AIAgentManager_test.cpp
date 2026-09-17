@@ -457,3 +457,14 @@ TEST(AIAgentObservation, ParsesFactsArtifactsAndErrorsFromToolText)
     ASSERT_EQ(ob.warnings.size(), 1);
     EXPECT_TRUE(ob.warnings.first().startsWith("fallback:"));
 }
+
+TEST(AIAgentManagerModels, RecommendedModelCheckIsCaseInsensitiveAndSizeAware)
+{
+    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen3-4B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen2.5-7B-Instruct-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::modelIsRecommended("google_gemma-3-12b-it-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::modelIsRecommended("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::modelIsRecommended("gemma-3-1b-it-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::modelIsRecommended("qwen2.5-3b-instruct-q4_k_m.gguf"));
+    EXPECT_FALSE(AIAgentManager::modelIsRecommended(""));
+}
