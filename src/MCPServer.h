@@ -287,6 +287,7 @@ private:
     QJsonObject toolSetLightProperty(const QJsonObject &args);
     QJsonObject toolApplyLightRig(const QJsonObject &args);
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
+    QJsonObject toolSelectEntity(const QJsonObject &args);   // #1052: agent needs to target selection-based tools
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
     QJsonObject toolExportPose(const QJsonObject &args);

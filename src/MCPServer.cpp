@@ -729,6 +729,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_light_property"), &MCPServer::toolSetLightProperty},
         {QStringLiteral("apply_light_rig"), &MCPServer::toolApplyLightRig},
         {QStringLiteral("duplicate_entity"), &MCPServer::toolDuplicateEntity},
+        {QStringLiteral("select_entity"), &MCPServer::toolSelectEntity},
         {QStringLiteral("camera_control"), &MCPServer::toolCameraControl},
         {QStringLiteral("get_camera_info"), &MCPServer::toolGetCameraInfo},
         {QStringLiteral("set_snap_settings"), &MCPServer::toolSetSnapSettings},
@@ -2381,7 +2382,7 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     // skeleton from a template, binds it, optionally chains skin weights, and
     // optionally re-exports.
     if (!hasSelectedEntities())
-        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+        return makeErrorResult("Error: No mesh selected. Call select_entity with the mesh name first (get_scene_info lists the names), or load one with load_mesh.");
 
     if (args.contains("skin") && !args["skin"].isBool())
         return makeErrorResult("Error: 'skin' must be a boolean.");
@@ -3222,18 +3223,25 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
                 entityInfo << info;
             }
         }
+        QStringList selectedNames;
+        if (SelectionSet* sel = SelectionSet::getSingleton()) {
+            for (Ogre::SceneNode* n : sel->getNodesSelectionList())
+                if (n) selectedNames << QString::fromStdString(n->getName());
+        }
         const QString sceneInfo = QString(
             "Scene Information:\n"
             "- Scene Nodes: %1\n"
             "- Entities: %2\n"
             "- Materials loaded: %3\n\n"
             "Nodes:\n%4\n\n"
-            "Entities:\n%5"
+            "Entities:\n%5\n\n"
+            "Selected: %6"
         ).arg(nodes.size())
          .arg(entityCount)
          .arg(materialCount)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
-         .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
+         .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"))
+         .arg(selectedNames.isEmpty() ? "(nothing — use select_entity)" : selectedNames.join(", "));
         return makeSuccessResult(sceneInfo);
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
@@ -6414,6 +6422,29 @@ QJsonObject MCPServer::toolApplyLightRig(const QJsonObject& args)
     payload.insert(QStringLiteral("rigGroupNodeName"), result.rigGroupNodeName);
     payload.insert(QStringLiteral("addedLightCount"), result.addedLights.size());
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSelectEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+    if (name.isEmpty()) name = args["entity_name"].toString();
+    if (name.isEmpty()) name = args["mesh"].toString();
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel) return makeErrorResult("Error: SelectionSet not available");
+    if (name.isEmpty()) {
+        sel->clear();
+        return makeSuccessResult("Selection cleared");
+    }
+    Ogre::SceneNode* node = findSceneNodeByName(name);
+    if (!node) {
+        // An entity name whose node is named differently.
+        if (Ogre::Entity* entity = findEntityByName(name)) node = entity->getParentSceneNode();
+    }
+    if (!node)
+        return makeErrorResult(QString("Error: No node or entity named '%1' — get_scene_info lists the names").arg(name));
+    sel->selectOne(node);
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("select_entity %1").arg(name));
+    return makeSuccessResult(QString("Selected '%1'").arg(QString::fromStdString(node->getName())));
 }
 
 QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
@@ -11553,6 +11584,20 @@ QJsonArray MCPServer::buildToolsList()
         appendTool(
             "duplicate_entity",
             "Duplicate an entity/node in the scene, creating a clone with the same mesh, materials, and transform. The clone gets a '_copy' name suffix.",
+            props
+        );
+    }
+
+    // select_entity (#1052): ~25 tools act on the CURRENT SELECTION (auto_rig,
+    // compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, ...)
+    // and the AI agent had no way to set it — every rig request failed with
+    // "No mesh selected".
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the scene node or entity to select (get_scene_info lists both). Omit or pass an empty string to clear the selection."}};
+        appendTool(
+            "select_entity",
+            "Select a scene node/entity by name so that tools which act on 'the selected mesh' (auto_rig, compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, retopologize, remove_skeleton, ...) target it. Replaces the current selection.",
             props
         );
     }

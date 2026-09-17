@@ -135,6 +135,15 @@ public:
     Q_INVOKABLE static bool modelIsRecommended(const QString& modelName);
     const AICapabilityRegistry& registry() const { return m_registry; }
 
+    /// Conversation memory across tasks (#1021c): the last few requests and
+    /// what came of them, injected into every planner prompt so "now make it
+    /// red" resolves against the previous task. Cleared with the chat.
+    Q_INVOKABLE void clearHistory();
+    int historySize() const { return m_history.size(); }
+    /// Path of the per-task trace (prompts, replies, tool results) — the
+    /// thing to read when a task went wrong. Overwritten on every task.
+    static QString traceLogPath();
+
     // ---- control ----
     /// Start a task. Returns false (with a chat error) when busy, no executor,
     /// or the planner is unavailable (no model loaded).
@@ -224,6 +233,14 @@ private:
     bool  m_trustedMode = false;
     QString m_lastSummary;
     QString m_lastError;
+
+    struct Turn { QString request; QString outcome; QStringList objects; };
+    QVector<Turn> m_history;
+    QStringList   m_touchedObjects;   // entity/node/material names this task used or created
+    QString conversationContext() const;
+    void noteTouchedObjects(const AIAgent::Step& step, const AIAgent::Observation& ob);
+    void trace(const QString& kind, const QString& text);
+    bool m_traceFresh = false;
 };
 
 #endif // AIAGENTMANAGER_H

@@ -5,8 +5,11 @@
 #include "SentryReporter.h"
 #include "UndoManager.h"
 
+#include <QDir>
+#include <QFile>
 #include <QJsonDocument>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QUndoStack>
 
@@ -140,6 +143,59 @@ void AIAgentManager::setTrustedMode(bool on)
     emit trustedModeChanged();
 }
 
+void AIAgentManager::clearHistory()
+{
+    m_history.clear();
+    m_touchedObjects.clear();
+}
+
+QString AIAgentManager::traceLogPath()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ai_agent");
+    return dir + QStringLiteral("/last_task.log");
+}
+
+void AIAgentManager::trace(const QString& kind, const QString& text)
+{
+    const QString path = traceLogPath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (!f.open(m_traceFresh ? (QIODevice::WriteOnly | QIODevice::Truncate) : (QIODevice::WriteOnly | QIODevice::Append))) return;
+    m_traceFresh = false;
+    f.write(QStringLiteral("==== %1 ====\n%2\n\n").arg(kind, text.left(8000)).toUtf8());
+}
+
+// The last few turns + the objects they touched, compact enough for a small
+// model: one line per turn, most recent last.
+QString AIAgentManager::conversationContext() const
+{
+    if (m_history.isEmpty()) return {};
+    QStringList lines{QStringLiteral("Previous tasks in this conversation (oldest first):")};
+    const int from = qMax(0, m_history.size() - 6);
+    for (int i = from; i < m_history.size(); ++i) {
+        const Turn& t = m_history[i];
+        QString line = QStringLiteral("- user asked: \"%1\" → %2").arg(t.request.left(160), t.outcome.left(200));
+        if (!t.objects.isEmpty()) line += QStringLiteral(" [objects: %1]").arg(t.objects.mid(0, 6).join(", "));
+        lines << line;
+    }
+    QStringList recent;
+    for (int i = m_history.size() - 1; i >= 0 && recent.size() < 8; --i)
+        for (const QString& o : m_history[i].objects) if (!recent.contains(o)) recent << o;
+    if (!recent.isEmpty())
+        lines << QStringLiteral("Objects from earlier turns (\"it\"/\"the model\" usually means the most recent): %1").arg(recent.join(", "));
+    return lines.join('\n');
+}
+
+void AIAgentManager::noteTouchedObjects(const Step& step, const Observation& ob)
+{
+    static const char* const kKeys[] = {"entity_name", "mesh", "name", "node", "material", "output_path", "output", "path"};
+    for (const char* k : kKeys) {
+        const QString v = step.arguments[QLatin1String(k)].toString();
+        if (!v.isEmpty() && !m_touchedObjects.contains(v)) m_touchedObjects << v;
+    }
+    for (const QString& a : ob.artifacts) if (!m_touchedObjects.contains(a)) m_touchedObjects << a;
+}
+
 bool AIAgentManager::plannerPending() const
 {
     return m_planner && m_planner->pending();
@@ -212,7 +268,10 @@ bool AIAgentManager::startTask(const QString& request)
     m_currentStep = -1; m_pendingIndex = -1; m_pendingReason.clear();
     m_replans = 0; m_plannerRetries = 0; m_replanFailedIndex = -1;
     m_cancelRequested = false; m_lastSummary.clear(); m_lastError.clear();
+    m_touchedObjects.clear();
+    m_traceFresh = true;
     emit planChanged(); emit confirmationChanged();
+    trace(QStringLiteral("task"), goal);
 
     SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("task started (%1 routed capabilities)").arg(m_docCapabilities.size()));
     requestPlan();
@@ -287,9 +346,13 @@ QString AIAgentManager::systemPrompt(const QStringList& capabilityIds) const
         "2. 1 to %4 steps, in execution order, minimal — only what the user asked for.\n"
         "3. Up/down is +Y/-Y; forward is -Z; ground is Y=0. 'twice as large' = scale [2,2,2].\n"
         "4. Use exact object/material names from the scene state. Call get_scene_info first only when a needed name is unknown.\n"
-        "5. Never repeat a step.\n")
+        "5. Never repeat a step.\n"
+        "6. Tools described as acting on 'the selected mesh' (auto_rig, compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, retopologize, remove_skeleton, ...) use the CURRENT SELECTION: call select_entity {\"name\": ...} first unless the scene state already shows it selected.\n"
+        "7. Colours are [R,G,B] arrays in 0..1 (red = [1,0,0]). To recolour an object: create_material with a diffuse colour, then apply_material to the object.\n")
         .arg(m_registry.promptIndex(), capabilityIds.join(", "), m_registry.promptToolsFor(capabilityIds))
         .arg(m_limits.maxSteps);
+    const QString history = conversationContext();
+    if (!history.isEmpty()) s += QStringLiteral("\n%1\n").arg(history);
     const QString ctx = sceneContext();
     if (!ctx.isEmpty()) s += QStringLiteral("\nScene state:\n%1\n").arg(ctx);
     return s;
@@ -302,7 +365,10 @@ void AIAgentManager::requestPlan(const QString& extraInstruction)
     QString user = QStringLiteral("Task: %1\n").arg(m_plan.goal);
     if (!extraInstruction.isEmpty()) user += extraInstruction + '\n';
     user += QStringLiteral("JSON:");
-    m_planner->request(systemPrompt(m_docCapabilities), user, 700);
+    const QString sys = systemPrompt(m_docCapabilities);
+    trace(QStringLiteral("plan request (system)"), sys);
+    trace(QStringLiteral("plan request (user)"), user);
+    m_planner->request(sys, user, 700);
 }
 
 void AIAgentManager::requestReplan(int failedIndex)
@@ -330,6 +396,7 @@ void AIAgentManager::requestReplan(int failedIndex)
         .arg(m_plan.goal, QString::fromUtf8(QJsonDocument(planArr).toJson(QJsonDocument::Compact)),
              obsLines.join('\n'))
         .arg(failedIndex + 1).arg(failed.tool, failed.error.left(300));
+    trace(QStringLiteral("replan request (user)"), user);
     m_planner->request(systemPrompt(m_docCapabilities), user, 700);
 }
 
@@ -469,6 +536,7 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
     if (m_awaiting == Awaiting::None) return;
     const Awaiting what = m_awaiting;
     m_awaiting = Awaiting::None;
+    trace(what == Awaiting::Plan ? QStringLiteral("plan reply") : QStringLiteral("replan reply"), text);
     if (m_cancelRequested) return;
     if (what == Awaiting::Plan) handlePlanReply(text);
     else handleReplanReply(text);
@@ -715,6 +783,8 @@ void AIAgentManager::runStep(int idx)
     setState(State::Observing);
     Observation ob = observationFromToolResult(idx, s.tool, result);
     m_observations << ob;
+    trace(QStringLiteral("tool %1 %2").arg(s.tool, ob.status), s.signature() + QStringLiteral("\n--- result ---\n") + ob.raw);
+    noteTouchedObjects(s, ob);
 
     if (ob.status == QLatin1String("success")) {
         s.status = Step::Succeeded;
@@ -788,6 +858,15 @@ void AIAgentManager::finish(State terminal, const QString& plannerSummary)
         summary += '\n' + m_lastError;
     }
     m_lastSummary = summary;
+    if (!m_plan.goal.isEmpty()) {
+        Turn turn;
+        turn.request = m_plan.goal;
+        turn.outcome = summary.section('\n', 0, 0);
+        turn.objects = m_touchedObjects;
+        m_history.push_back(turn);
+        if (m_history.size() > 12) m_history.remove(0, m_history.size() - 12);
+    }
+    trace(QStringLiteral("finished %1").arg(AIAgent::stateName(terminal)), summary);
     setState(terminal);
     const char* crumb = "ai.agent.fail";
     if (terminal == State::Completed) crumb = "ai.agent.done";

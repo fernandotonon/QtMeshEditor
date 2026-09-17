@@ -934,6 +934,31 @@ TEST_F(MCPServerTest, GetSceneInfoMultipleObjects)
     EXPECT_TRUE(text.contains("Scene Information"));
 }
 
+// #1052: the AI agent needs to target the ~25 selection-based tools.
+TEST_F(MCPServerTest, SelectEntityDrivesSelectionBasedToolsAndSceneInfoShowsIt)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    server->callTool("create_primitive", QJsonObject{{"type", "cube"}, {"name", "SelCube"}});
+    server->callTool("create_primitive", QJsonObject{{"type", "sphere"}, {"name", "SelSphere"}});
+
+    QJsonObject r = server->callTool("select_entity", QJsonObject{{"name", "SelSphere"}});
+    EXPECT_FALSE(isError(r)) << getResultText(r).toStdString();
+    EXPECT_TRUE(getResultText(r).contains("Selected 'SelSphere'"));
+    EXPECT_TRUE(getResultText(server->callTool("get_scene_info", QJsonObject())).contains("Selected: SelSphere"));
+
+    // a selection-based tool now resolves the sphere
+    const QJsonObject info = server->callTool("get_lod_info", QJsonObject());
+    EXPECT_FALSE(isError(info)) << getResultText(info).toStdString();
+
+    r = server->callTool("select_entity", QJsonObject{{"name", "Nope"}});
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("get_scene_info lists the names"));
+
+    r = server->callTool("select_entity", QJsonObject{{"name", ""}});
+    EXPECT_FALSE(isError(r));
+    EXPECT_TRUE(getResultText(server->callTool("get_scene_info", QJsonObject())).contains("Selected: (nothing"));
+}
+
 TEST_F(MCPServerTest, GetSceneInfoEmptyScene)
 {
     // No objects created -- scene should still report info

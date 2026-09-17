@@ -8,6 +8,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -505,4 +506,47 @@ TEST(AIAgentManagerModels, RecommendedModelCheckIsCaseInsensitiveAndSizeAware)
     EXPECT_FALSE(AIAgentManager::modelIsRecommended("gemma-3-1b-it-Q4_K_M.gguf"));
     EXPECT_FALSE(AIAgentManager::modelIsRecommended("qwen2.5-3b-instruct-q4_k_m.gguf"));
     EXPECT_FALSE(AIAgentManager::modelIsRecommended(""));
+}
+
+TEST_F(AgentFixture, PreviousTurnsAndTheirObjectsAreInjectedIntoLaterPrompts)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "Crate"}}}}, "make a crate");
+    ASSERT_TRUE(m->startTask("create a crate"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_FALSE(planner->systemPrompts.first().contains("Previous tasks")) << "first task has no history";
+    ASSERT_EQ(m->historySize(), 1);
+
+    planner->replies << planJson({{"transform_mesh", {{"name", "Crate"}, {"scale", QJsonArray{2, 2, 2}}}}});
+    ASSERT_TRUE(m->startTask("now make it twice as large"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString sys = planner->systemPrompts.last();
+    EXPECT_TRUE(sys.contains("Previous tasks in this conversation")) << sys.toStdString();
+    EXPECT_TRUE(sys.contains("user asked: \"create a crate\"")) << "the earlier request is quoted";
+    EXPECT_TRUE(sys.contains("Done — 1 of 1 steps succeeded")) << "and its outcome";
+    EXPECT_TRUE(sys.contains("Crate")) << "objects touched earlier are listed so 'it' can be resolved";
+    EXPECT_TRUE(sys.contains("select_entity")) << "the selection rule is part of every prompt";
+    EXPECT_EQ(m->historySize(), 2);
+
+    m->clearHistory();
+    EXPECT_EQ(m->historySize(), 0);
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("what is here?"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_FALSE(planner->systemPrompts.last().contains("Previous tasks"));
+}
+
+TEST_F(AgentFixture, TraceLogRecordsPromptsRepliesAndToolResults)
+{
+    planner->replies << planJson({{"get_scene_info", {}}});
+    exec->scripted["get_scene_info"] << ok("Scene Information: Entities: 1");
+    ASSERT_TRUE(m->startTask("trace me"));
+    ASSERT_TRUE(pumpToEnd(m));
+    QFile f(AIAgentManager::traceLogPath());
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly)) << AIAgentManager::traceLogPath().toStdString();
+    const QString log = QString::fromUtf8(f.readAll());
+    EXPECT_TRUE(log.contains("==== task ====\ntrace me"));
+    EXPECT_TRUE(log.contains("==== plan reply ===="));
+    EXPECT_TRUE(log.contains("==== tool get_scene_info success ===="));
+    EXPECT_TRUE(log.contains("Scene Information: Entities: 1")) << "raw tool text is in the trace (but never in the prompt)";
+    EXPECT_TRUE(log.contains("==== finished completed ===="));
 }

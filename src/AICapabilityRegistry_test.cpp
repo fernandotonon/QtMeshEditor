@@ -132,6 +132,14 @@ TEST(AICapabilityRegistry, ValidateArgumentsCoercesChattyModelOutput)
     EXPECT_TRUE(err.contains("expected an integer"));
     EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"reduction", "half"}}, &out, &err));
 
+    // a colour NAME where [R,G,B] is expected becomes the array (small models write "diffuse": "red")
+    ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", "red"}}, &out, &err, &warn)) << err.toStdString();
+    EXPECT_EQ(out["scale"].toArray().size(), 3);
+    EXPECT_DOUBLE_EQ(out["scale"].toArray().at(0).toDouble(), 1.0);
+    EXPECT_DOUBLE_EQ(out["scale"].toArray().at(1).toDouble(), 0.0);
+    EXPECT_FALSE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", "chartreuse-ish"}}, &out, &err)) << "unknown words are still rejected";
+    EXPECT_TRUE(AICapabilityRegistry::isReadOnly("select_entity")) << "selecting never opens the undo group";
+
     // integers: finite, integral and inside qint64 — never a UB conversion
     EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"count", 1e100}}, &out, &err));
     EXPECT_TRUE(err.contains("expected an integer")) << err.toStdString();

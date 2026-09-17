@@ -43,7 +43,7 @@ QHash<QString, QString> buildTaxonomy()
     auto add = [&](const char* cap, std::initializer_list<const char*> tools) {
         for (const char* n : tools) t.insert(QLatin1String(n), QLatin1String(cap));
     };
-    add("scene", {"get_scene_info", "get_mesh_info", "create_primitive", "delete_entity", "duplicate_entity",
+    add("scene", {"get_scene_info", "get_mesh_info", "select_entity", "create_primitive", "delete_entity", "duplicate_entity",
                   "transform_mesh", "transform_submesh", "group_nodes", "ungroup_node", "reparent_node",
                   "set_pivot_mode", "get_pivot_mode", "set_snap_settings", "get_snap_settings",
                   "validate_mesh", "get_memory_usage", "analyze_draw_calls"});
@@ -349,10 +349,34 @@ bool coerceBoolean(QJsonValue& v, const QString& key, QStringList* warnings, QSt
     return true;
 }
 
+// A colour NAME where an [R,G,B] array is expected — small models write
+// "diffuse": "red" — becomes the array, with a warning.
+bool colourNameToRgb(const QString& name, QJsonArray* out)
+{
+    static const QHash<QString, QJsonArray> colours = {
+        {"red", {1.0, 0.0, 0.0}}, {"green", {0.0, 1.0, 0.0}}, {"blue", {0.0, 0.0, 1.0}},
+        {"white", {1.0, 1.0, 1.0}}, {"black", {0.0, 0.0, 0.0}}, {"yellow", {1.0, 1.0, 0.0}},
+        {"orange", {1.0, 0.5, 0.0}}, {"purple", {0.5, 0.0, 0.5}}, {"magenta", {1.0, 0.0, 1.0}},
+        {"cyan", {0.0, 1.0, 1.0}}, {"gray", {0.5, 0.5, 0.5}}, {"grey", {0.5, 0.5, 0.5}},
+        {"brown", {0.4, 0.25, 0.1}}, {"pink", {1.0, 0.6, 0.8}}, {"gold", {1.0, 0.84, 0.0}},
+        {"silver", {0.75, 0.75, 0.75}},
+    };
+    const auto it = colours.constFind(name.trimmed().toLower());
+    if (it == colours.constEnd()) return false;
+    *out = it.value();
+    return true;
+}
+
 bool coerceArray(QJsonValue& v, const QString& key, QStringList* warnings, QString* why)
 {
     if (v.isArray()) return true;
     if (!v.isString()) { *why = QStringLiteral("expected an array"); return false; }
+    QJsonArray rgb;
+    if (colourNameToRgb(v.toString(), &rgb)) {
+        v = rgb;
+        if (warnings) *warnings << QStringLiteral("'%1': colour name '%2' → RGB").arg(key, v.toArray().isEmpty() ? QString() : v.toArray().first().toString());
+        return true;
+    }
     // "[1, 2, 3]" or "1,2,3" from a chatty model
     QString s = v.toString().trimmed();
     if (!s.startsWith('[')) s = '[' + s + ']';
@@ -516,7 +540,7 @@ bool AICapabilityRegistry::isReadOnly(const QString& tool)
         "take_screenshot", "validate_mesh", "uv_info", "read_file", "search_files", "list_files",
         "analyze_animation", "analyze_draw_calls", "get_memory_usage", "describe_material",
         "cloud_status", "cloud_limits", "cloud_list_projects", "ps1rip_status", "ps1rip_stats",
-        "list_capture_devices", "camera_control", "get_camera_info",
+        "list_capture_devices", "camera_control", "get_camera_info", "select_entity",
     };
     return tool.startsWith(QLatin1String("get_")) || tool.startsWith(QLatin1String("list_"))
         || tool.startsWith(QLatin1String("toggle_")) || readOnly.contains(tool);

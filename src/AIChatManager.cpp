@@ -167,6 +167,7 @@ void AIChatManager::sendMessage(const QString& text)
 void AIChatManager::clearHistory()
 {
     if (m_agentDriving) AIAgentManager::instance()->cancel();
+    AIAgentManager::instance()->clearHistory();
     if (m_isGenerating)
         LLMManager::instance()->stopGeneration();
     m_messages.clear();
