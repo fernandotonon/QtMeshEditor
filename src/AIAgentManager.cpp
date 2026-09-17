@@ -179,8 +179,12 @@ QString AIAgentManager::conversationContext() const
         lines << line;
     }
     QStringList recent;
-    for (int i = m_history.size() - 1; i >= 0 && recent.size() < 8; --i)
-        for (const QString& o : m_history[i].objects) if (!recent.contains(o)) recent << o;
+    for (int i = m_history.size() - 1; i >= 0 && recent.size() < 8; --i) {
+        for (const QString& o : m_history[i].objects) {
+            if (recent.size() >= 8) break;
+            if (!recent.contains(o)) recent << o;
+        }
+    }
     if (!recent.isEmpty())
         lines << QStringLiteral("Objects from earlier turns (\"it\"/\"the model\" usually means the most recent): %1").arg(recent.join(", "));
     return lines.join('\n');

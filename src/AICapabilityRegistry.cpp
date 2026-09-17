@@ -294,6 +294,14 @@ bool coerceString(QJsonValue& v, const QString& key, QStringList* warnings, QStr
     return true;
 }
 
+// Finite, integral and inside qint64 — the conversion itself is UB otherwise.
+bool isIntegral(double number)
+{
+    constexpr double kMaxExclusive = 9223372036854775808.0;   // 2^63
+    return std::isfinite(number) && std::trunc(number) == number
+        && number >= -kMaxExclusive && number < kMaxExclusive;
+}
+
 bool coerceNumber(QJsonValue& v, const QString& key, bool integer, QStringList* warnings, QString* why)
 {
     if (v.isString()) {
@@ -307,11 +315,7 @@ bool coerceNumber(QJsonValue& v, const QString& key, bool integer, QStringList* 
         return false;
     }
     if (!integer) return true;
-    const double number = v.toDouble();
-    constexpr double kMaxExclusive = 9223372036854775808.0;   // 2^63
-    const bool integral = std::isfinite(number) && std::trunc(number) == number
-                       && number >= -kMaxExclusive && number < kMaxExclusive;
-    if (!integral) { *why = QStringLiteral("expected an integer"); return false; }
+    if (!isIntegral(v.toDouble())) { *why = QStringLiteral("expected an integer"); return false; }
     return true;
 }
 
@@ -326,7 +330,8 @@ bool checkArrayItems(const QJsonValue& v, const QJsonObject& def, QString* why)
         const QJsonValue e = arr.at(i);
         bool ok = true;
         if (itemType == QLatin1String("string")) ok = e.isString();
-        else if (itemType == QLatin1String("number") || itemType == QLatin1String("integer")) ok = e.isDouble();
+        else if (itemType == QLatin1String("number")) ok = e.isDouble();
+        else if (itemType == QLatin1String("integer")) ok = e.isDouble() && isIntegral(e.toDouble());
         else if (itemType == QLatin1String("boolean")) ok = e.isBool();
         else if (itemType == QLatin1String("object")) ok = e.isObject();
         if (!ok) { *why = QStringLiteral("item %1: expected %2").arg(i + 1).arg(itemType); return false; }
@@ -367,12 +372,23 @@ bool colourNameToRgb(const QString& name, QJsonArray* out)
     return true;
 }
 
-bool coerceArray(QJsonValue& v, const QString& key, QStringList* warnings, QString* why)
+// Only properties that ARE colours may take a colour name: by key (diffuse,
+// ambient, specular, emissive, colour/color, tint, rgb) or by a description
+// that says so. "scale": "red" must stay an error, not become [1,0,0]
+// (review finding: that collapsed the node on two axes).
+bool isColourProperty(const QString& key, const QJsonObject& def)
+{
+    static const QRegularExpression colourKey(R"((?i)^(diffuse|ambient|specular|emissive|colou?r|tint|rgb|albedo)(_?colou?r)?$)");
+    if (colourKey.match(key).hasMatch()) return true;
+    return def["description"].toString().contains(QRegularExpression(R"((?i)\bcolou?r\b)"));
+}
+
+bool coerceArray(QJsonValue& v, const QString& key, const QJsonObject& def, QStringList* warnings, QString* why)
 {
     if (v.isArray()) return true;
     if (!v.isString()) { *why = QStringLiteral("expected an array"); return false; }
     QJsonArray rgb;
-    if (colourNameToRgb(v.toString(), &rgb)) {
+    if (isColourProperty(key, def) && colourNameToRgb(v.toString(), &rgb)) {
         v = rgb;
         if (warnings) *warnings << QStringLiteral("'%1': colour name '%2' → RGB").arg(key, v.toArray().isEmpty() ? QString() : v.toArray().first().toString());
         return true;
@@ -387,13 +403,14 @@ bool coerceArray(QJsonValue& v, const QString& key, QStringList* warnings, QStri
     return true;
 }
 
-bool coerceToType(QJsonValue& v, const QString& key, const QString& type, QStringList* warnings, QString* why)
+bool coerceToType(QJsonValue& v, const QString& key, const QJsonObject& def, QStringList* warnings, QString* why)
 {
+    const QString type = def["type"].toString();
     if (type == QLatin1String("string"))  return coerceString(v, key, warnings, why);
     if (type == QLatin1String("number"))  return coerceNumber(v, key, false, warnings, why);
     if (type == QLatin1String("integer")) return coerceNumber(v, key, true, warnings, why);
     if (type == QLatin1String("boolean")) return coerceBoolean(v, key, warnings, why);
-    if (type == QLatin1String("array"))   return coerceArray(v, key, warnings, why);
+    if (type == QLatin1String("array"))   return coerceArray(v, key, def, warnings, why);
     if (type == QLatin1String("object") && !v.isObject()) { *why = QStringLiteral("expected an object"); return false; }
     return true;   // untyped or object
 }
@@ -502,7 +519,7 @@ bool AICapabilityRegistry::validateArguments(const QString& tool, const QJsonObj
         }
         const QJsonObject def = props[key].toObject();
         QString why;
-        const bool valid = coerceToType(v, key, def["type"].toString(), warnings, &why)
+        const bool valid = coerceToType(v, key, def, warnings, &why)
                         && matchEnum(v, def, &why)
                         && (!v.isArray() || checkArrayItems(v, def, &why));
         if (!valid) {

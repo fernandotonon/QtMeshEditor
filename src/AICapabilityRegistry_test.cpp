@@ -33,6 +33,11 @@ QJsonArray sampleTools()
         tool("transform_mesh", "Move/rotate/scale a node.",
              {{"name", prop("string", "Node name")}, {"position", prop("array", "XYZ")}, {"scale", prop("array", "XYZ")}},
              {"name"}),
+        tool("create_material", "Create a material.",
+             {{"name", prop("string", "Material name")}, {"diffuse", prop("array", "Diffuse color [R, G, B] (0.0-1.0)")}, {"tintish", prop("array", "Overall colour of the glow")}},
+             {"name"}),
+        tool("uv_unwrap_selection", "Unwrap some triangles.",
+             {{"triangles", QJsonObject{{"type", "array"}, {"description", "triangle indices"}, {"items", QJsonObject{{"type", "integer"}}}}}}),
         tool("delete_entity", "Delete an entity.", {{"entity_name", prop("string", "Entity")}}, {"entity_name"}),
         tool("export_mesh", "Export.", {{"output_path", prop("string", "Path")}}, {"output_path"}),
         tool("auto_rig", "Auto-rig a static mesh.", {{"template", prop("string", "Template")}, {"skin", prop("boolean", "Also skin")}}),
@@ -48,7 +53,7 @@ QJsonArray sampleTools()
 TEST(AICapabilityRegistry, GroupsToolsByCapabilityAndParksUnknownOnesInOther)
 {
     AICapabilityRegistry reg(sampleTools());
-    EXPECT_EQ(reg.toolCount(), 10);
+    EXPECT_EQ(reg.toolCount(), 12);
     EXPECT_EQ(reg.capabilityOf("auto_rig"), "rigging");
     EXPECT_EQ(reg.capabilityOf("create_primitive"), "scene");
     EXPECT_EQ(reg.capabilityOf("export_mesh"), "scene_io");
@@ -61,6 +66,8 @@ TEST(AICapabilityRegistry, GroupsToolsByCapabilityAndParksUnknownOnesInOther)
     EXPECT_TRUE(ids.contains("rigging"));
     EXPECT_FALSE(ids.contains("paint")) << "no paint tools in the sample";
     EXPECT_EQ(reg.toolsFor({"scene"}).size(), 4);
+    EXPECT_EQ(reg.capabilityOf("create_material"), "materials");
+    EXPECT_EQ(reg.capabilityOf("uv_unwrap_selection"), "uv");
 }
 
 TEST(AICapabilityRegistry, PromptIndexIsCompactAndToolDocsComeFromTheSchema)
@@ -132,12 +139,17 @@ TEST(AICapabilityRegistry, ValidateArgumentsCoercesChattyModelOutput)
     EXPECT_TRUE(err.contains("expected an integer"));
     EXPECT_FALSE(reg.validateArguments("decimate_mesh", {{"reduction", "half"}}, &out, &err));
 
-    // a colour NAME where [R,G,B] is expected becomes the array (small models write "diffuse": "red")
-    ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", "red"}}, &out, &err, &warn)) << err.toStdString();
-    EXPECT_EQ(out["scale"].toArray().size(), 3);
-    EXPECT_DOUBLE_EQ(out["scale"].toArray().at(0).toDouble(), 1.0);
-    EXPECT_DOUBLE_EQ(out["scale"].toArray().at(1).toDouble(), 0.0);
-    EXPECT_FALSE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", "chartreuse-ish"}}, &out, &err)) << "unknown words are still rejected";
+    // a colour NAME where [R,G,B] is expected becomes the array (small models write "diffuse": "red") —
+    // but ONLY on colour properties (by key, or by a description that says colour)
+    ASSERT_TRUE(reg.validateArguments("create_material", {{"name", "M"}, {"diffuse", "red"}}, &out, &err, &warn)) << err.toStdString();
+    EXPECT_EQ(out["diffuse"].toArray().size(), 3);
+    EXPECT_DOUBLE_EQ(out["diffuse"].toArray().at(0).toDouble(), 1.0);
+    EXPECT_DOUBLE_EQ(out["diffuse"].toArray().at(1).toDouble(), 0.0);
+    ASSERT_TRUE(reg.validateArguments("create_material", {{"name", "M"}, {"tintish", "blue"}}, &out, &err, &warn)) << "description says colour";
+    EXPECT_DOUBLE_EQ(out["tintish"].toArray().at(2).toDouble(), 1.0);
+    EXPECT_FALSE(reg.validateArguments("create_material", {{"name", "M"}, {"diffuse", "chartreuse-ish"}}, &out, &err)) << "unknown words are still rejected";
+    EXPECT_FALSE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", "red"}}, &out, &err)) << "a scale is not a colour: 'red' must not become [1,0,0]";
+    EXPECT_TRUE(err.contains("expected an array")) << err.toStdString();
     EXPECT_TRUE(AICapabilityRegistry::isReadOnly("select_entity")) << "selecting never opens the undo group";
 
     // integers: finite, integral and inside qint64 — never a UB conversion
@@ -190,6 +202,11 @@ TEST(AICapabilityRegistry, ArrayItemsAreCheckedAgainstTheItemsSchema)
     ASSERT_TRUE(reg.validateArguments("join_mesh_parts", {{"entity_names", QJsonArray{"A", "B"}}}, &out, &err)) << err.toStdString();
     EXPECT_FALSE(reg.validateArguments("join_mesh_parts", {{"entity_names", QJsonArray{"A", 3}}}, &out, &err));
     EXPECT_TRUE(err.contains("item 2: expected string")) << err.toStdString();
+    // integer items get the same finite/integral/range check as integer scalars
+    ASSERT_TRUE(reg.validateArguments("uv_unwrap_selection", {{"triangles", QJsonArray{0, 4, 7}}}, &out, &err)) << err.toStdString();
+    EXPECT_FALSE(reg.validateArguments("uv_unwrap_selection", {{"triangles", QJsonArray{0, 4.5}}}, &out, &err));
+    EXPECT_TRUE(err.contains("item 2: expected integer")) << err.toStdString();
+    EXPECT_FALSE(reg.validateArguments("uv_unwrap_selection", {{"triangles", QJsonArray{1e100}}}, &out, &err));
     // arrays without an items schema are still accepted as-is
     ASSERT_TRUE(reg.validateArguments("transform_mesh", {{"name", "Cube"}, {"scale", QJsonArray{1, "x"}}}, &out, &err));
 }

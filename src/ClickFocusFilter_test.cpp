@@ -10,11 +10,23 @@
 #include <QMouseEvent>
 #include <QWidget>
 
+namespace {
+// Records whether the press reached the widget — the filter must never consume it.
+class RecordingWidget : public QWidget
+{
+public:
+    using QWidget::QWidget;
+    int presses = 0;
+protected:
+    void mousePressEvent(QMouseEvent* e) override { ++presses; QWidget::mousePressEvent(e); }
+};
+} // namespace
+
 TEST(ClickFocusFilter, MousePressMovesWidgetFocusToTheWatchedWidget)
 {
     QWidget window;
     auto* other  = new QLineEdit(&window);
-    auto* target = new QWidget(&window);
+    auto* target = new RecordingWidget(&window);
     target->setFocusPolicy(Qt::StrongFocus);
     ClickFocusFilter filter;
     target->installEventFilter(&filter);
@@ -28,13 +40,14 @@ TEST(ClickFocusFilter, MousePressMovesWidgetFocusToTheWatchedWidget)
     QCoreApplication::sendEvent(target, &press);
     QCoreApplication::processEvents();
     EXPECT_EQ(window.focusWidget(), target) << "the press must move widget focus to the clicked widget";
-    EXPECT_TRUE(press.isAccepted() || !press.isAccepted()) << "the filter never consumes the event";
+    EXPECT_EQ(target->presses, 1) << "the filter never consumes the event — the widget (and the QML scene behind it) still gets the press";
 
     // a press on an already-focused widget is a no-op (no focus churn)
     QMouseEvent again(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2),
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(target, &again);
     EXPECT_EQ(window.focusWidget(), target);
+    EXPECT_EQ(target->presses, 2);
 
     // other event types are ignored
     other->setFocus(Qt::OtherFocusReason);
