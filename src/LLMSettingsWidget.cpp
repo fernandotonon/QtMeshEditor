@@ -308,9 +308,23 @@ void LLMSettingsWidget::setupDownloadTab(QWidget *parent)
     m_downloadButton = new QPushButton("Download Selected", modelsGroup);
     m_cancelDownloadButton = new QPushButton("Cancel", modelsGroup);
     m_cancelDownloadButton->setEnabled(false);
+    // Same affordances as the QtMeshEditor Models tab (#1052): delete one
+    // downloaded GGUF, remove them all, open the folder.
+    m_deleteModelButton = new QPushButton("Delete Selected", modelsGroup);
+    m_deleteModelButton->setObjectName("llmDeleteModelButton");
+    m_deleteModelButton->setEnabled(false);
+    m_deleteModelButton->setToolTip("Delete the selected model's downloaded file (unloads it first if it is the active model)");
+    m_deleteAllModelsButton = new QPushButton("Remove All", modelsGroup);
+    m_deleteAllModelsButton->setObjectName("llmDeleteAllModelsButton");
+    m_deleteAllModelsButton->setToolTip("Delete every downloaded GGUF in the models folder");
+    m_openLlmFolderButton = new QPushButton("Open Folder", modelsGroup);
+    m_openLlmFolderButton->setObjectName("llmOpenFolderButton");
     downloadButtonLayout->addWidget(m_downloadButton);
     downloadButtonLayout->addWidget(m_cancelDownloadButton);
+    downloadButtonLayout->addWidget(m_deleteModelButton);
+    downloadButtonLayout->addWidget(m_deleteAllModelsButton);
     downloadButtonLayout->addStretch();
+    downloadButtonLayout->addWidget(m_openLlmFolderButton);
     modelsLayout->addLayout(downloadButtonLayout);
 
     layout->addWidget(modelsGroup);
@@ -339,6 +353,78 @@ void LLMSettingsWidget::setupDownloadTab(QWidget *parent)
     // Connections
     connect(m_downloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onDownloadModelClicked);
     connect(m_cancelDownloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onCancelDownloadClicked);
+    connect(m_deleteModelButton, &QPushButton::clicked, this, &LLMSettingsWidget::onDeleteModelClicked);
+    connect(m_deleteAllModelsButton, &QPushButton::clicked, this, &LLMSettingsWidget::onDeleteAllModelsClicked);
+    connect(m_openLlmFolderButton, &QPushButton::clicked, this, &LLMSettingsWidget::onOpenLlmFolderClicked);
+    connect(m_recommendedModelsList, &QListWidget::currentItemChanged, this,
+            [this](QListWidgetItem*, QListWidgetItem*) { updateDownloadButtons(); });
+}
+
+// Delete Selected is only meaningful for a downloaded model; Remove All only
+// when the folder holds something.
+void LLMSettingsWidget::updateDownloadButtons()
+{
+    if (!m_deleteModelButton) return;
+    QListWidgetItem *item = m_recommendedModelsList->currentItem();
+    const bool downloaded = item && item->data(Qt::UserRole + 3).toBool();
+    m_deleteModelButton->setEnabled(downloaded && !ModelDownloader::instance()->isDownloading());
+    m_deleteAllModelsButton->setEnabled(!LLMManager::instance()->availableModels().isEmpty()
+                                        && !ModelDownloader::instance()->isDownloading());
+}
+
+void LLMSettingsWidget::onDeleteModelClicked()
+{
+    QListWidgetItem *item = m_recommendedModelsList->currentItem();
+    if (!item) return;
+    const QString fileName  = item->data(Qt::UserRole + 1).toString();
+    const QString modelName = item->data(Qt::UserRole + 2).toString();
+    const bool active = LLMManager::instance()->isModelLoaded()
+        && (LLMManager::instance()->currentModelName() == modelName
+            || LLMManager::instance()->currentModelName() == QFileInfo(fileName).completeBaseName());
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "Delete Model File",
+        QString("Delete %1 (%2) from the models folder?%3").arg(modelName, fileName,
+            active ? "\n\nIt is the active model and will be unloaded first." : ""),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::No) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Delete LLM model file"));
+    if (!LLMManager::instance()->deleteModelFile(fileName)) {
+        m_downloadStatusLabel->setText(QString("Could not delete %1").arg(fileName));
+    } else {
+        m_downloadStatusLabel->setText(QString("Deleted %1").arg(fileName));
+        m_downloadProgressBar->setValue(0);
+    }
+    updateModelList();
+    updateRecommendedModelsList();
+    updateStatus();
+    updateDownloadButtons();
+}
+
+void LLMSettingsWidget::onDeleteAllModelsClicked()
+{
+    const int count = LLMManager::instance()->availableModels().size();
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "Remove All LLM Files",
+        QString("Remove every downloaded GGUF model (%1 file%2) from the models folder?%3")
+            .arg(count).arg(count == 1 ? "" : "s",
+                 LLMManager::instance()->isModelLoaded() ? "\n\nThe active model will be unloaded first." : ""),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::No) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Delete all LLM model files"));
+    const int removed = LLMManager::instance()->deleteAllModelFiles();
+    m_downloadStatusLabel->setText(QString("Removed %1 model file%2").arg(removed).arg(removed == 1 ? "" : "s"));
+    m_downloadProgressBar->setValue(0);
+    updateModelList();
+    updateRecommendedModelsList();
+    updateStatus();
+    updateDownloadButtons();
+}
+
+void LLMSettingsWidget::onOpenLlmFolderClicked()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Open LLM models folder"));
+    QDir().mkpath(LLMManager::instance()->modelsDirectory());
+    QDesktopServices::openUrl(LLMManager::instance()->modelsDirectoryUrl());
 }
 
 void LLMSettingsWidget::setupAIModelCatalogTab(QWidget *parent)
@@ -423,12 +509,14 @@ void LLMSettingsWidget::updateRecommendedModelsList()
         item->setData(Qt::UserRole, model.url);
         item->setData(Qt::UserRole + 1, model.fileName);
         item->setData(Qt::UserRole + 2, model.name);
+        item->setData(Qt::UserRole + 3, model.isDownloaded);
 
         if (model.isDownloaded) {
             item->setText(text + " [Downloaded]");
             item->setForeground(QColor(0, 128, 0));
         }
     }
+    updateDownloadButtons();
 }
 
 void LLMSettingsWidget::updateStatus()
