@@ -65,6 +65,20 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     // (deleting a model also deletes its .part — the active download's output)
     // and come back on completion, cancel or error alike.
     connect(downloader, &ModelDownloader::isDownloadingChanged, this, &LLMSettingsWidget::updateDownloadButtons);
+    // A deletion of the ACTIVE model only happens once the worker released it:
+    // report THAT outcome, not the optimistic return value (review finding).
+    connect(manager, &LLMManager::deferredDeletionFinished, this,
+            [this](const QStringList& removed, const QStringList& failed) {
+                if (!m_downloadStatusLabel) return;
+                if (failed.isEmpty())
+                    m_downloadStatusLabel->setText(QString("Deleted %1").arg(removed.join(", ")));
+                else
+                    m_downloadStatusLabel->setText(QString("Could not delete %1").arg(failed.join(", ")));
+                updateModelList();
+                updateRecommendedModelsList();
+                updateStatus();
+                updateDownloadButtons();
+            });
     // a deferred deletion (active model unloaded first) rescans later — refresh then too
     connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateRecommendedModelsList);
     connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateDownloadButtons);
@@ -398,7 +412,10 @@ void LLMSettingsWidget::onDeleteModelClicked()
     if (!LLMManager::instance()->deleteModelFile(fileName)) {
         m_downloadStatusLabel->setText(QString("Could not delete %1").arg(fileName));
     } else {
-        m_downloadStatusLabel->setText(QString("Deleted %1").arg(fileName));
+        // Deferred (active model): deferredDeletionFinished reports the result.
+        m_downloadStatusLabel->setText(LLMManager::instance()->hasPendingDeletions()
+            ? QString("Unloading the model, then deleting %1…").arg(fileName)
+            : QString("Deleted %1").arg(fileName));
         m_downloadProgressBar->setValue(0);
     }
     updateModelList();
@@ -419,7 +436,9 @@ void LLMSettingsWidget::onDeleteAllModelsClicked()
     if (reply == QMessageBox::No) return;
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Delete all LLM model files"));
     const int removed = LLMManager::instance()->deleteAllModelFiles();
-    m_downloadStatusLabel->setText(QString("Removed %1 model file%2").arg(removed).arg(removed == 1 ? "" : "s"));
+    m_downloadStatusLabel->setText(LLMManager::instance()->hasPendingDeletions()
+        ? QString("Removing %1 model file%2 (unloading the active model first)…").arg(removed).arg(removed == 1 ? "" : "s")
+        : QString("Removed %1 model file%2").arg(removed).arg(removed == 1 ? "" : "s"));
     m_downloadProgressBar->setValue(0);
     updateModelList();
     updateRecommendedModelsList();

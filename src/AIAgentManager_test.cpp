@@ -76,6 +76,8 @@ public:
     }
     QStringList calls;
     QList<QJsonObject> callArgs;
+    int cancelRequests = 0;
+    void cancelRunningTool() override { ++cancelRequests; }
     QHash<QString, QList<QJsonObject>> scripted;
     QUndoStack* undoStack = nullptr;
     std::function<void(const QString&)> onCall;
@@ -693,4 +695,24 @@ TEST_F(AgentFixture, HeavyToolProgressIsExposedWhileBusyAndClearedBetweenSteps)
     ASSERT_TRUE(pumpToEnd(m));
     EXPECT_EQ(m->state(), State::Completed);
     EXPECT_TRUE(m->stepProgressLabel().isEmpty()) << "cleared once the tool returned";
+}
+
+// A heavy tool runs synchronously and pumps the event loop, so Cancel arrives
+// DURING the call: it must reach the tool, not just set a flag the harness
+// reads minutes later when the tool finally returns.
+TEST_F(AgentFixture, CancelDuringAToolCallAsksTheRunningToolToStop)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
+    exec->onCall = [this](const QString&) {
+        EXPECT_EQ(exec->cancelRequests, 0);
+        m->cancel();                       // as the Stop button does, mid-call
+        EXPECT_EQ(exec->cancelRequests, 1) << "the running tool is told to stop";
+    };
+    ASSERT_TRUE(m->startTask("make a box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Cancelled);
+    // cancelling while idle asks nothing
+    const int before = exec->cancelRequests;
+    m->cancel();
+    EXPECT_EQ(exec->cancelRequests, before);
 }

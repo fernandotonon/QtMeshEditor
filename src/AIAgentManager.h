@@ -44,6 +44,9 @@ public:
     virtual ~AgentToolExecutor() = default;
     virtual QJsonArray  toolList() = 0;
     virtual QJsonObject callTool(const QString& name, const QJsonObject& args) = 0;
+    /// Ask a long-running tool to stop; it returns a "cancelled" error result.
+    /// Default: nothing to cancel (tools that return promptly).
+    virtual void cancelRunningTool() {}
 };
 
 /// Asynchronous planner (LLM) backend. `request` must eventually emit exactly
@@ -77,6 +80,7 @@ public:
     ~McpToolExecutor() override;
     QJsonArray  toolList() override;
     QJsonObject callTool(const QString& name, const QJsonObject& args) override;
+    void cancelRunningTool() override;
 private:
     QPointer<MCPServer> m_server;
 };

@@ -229,8 +229,8 @@ Rectangle {
     Rectangle {
         id: planCard
         anchors { bottom: confirmBar.top; left: parent.left; right: parent.right; margins: visible ? 6 : 0 }
+        // Stays up after the run so the final steps / failure reason can be read.
         visible: AIChatManager.agentMode && AIAgentManager.plan.length > 0
-                 && (root.agentBusy || planCard.planCardPinned)
         height: visible ? planCol.implicitHeight + 12 : 0
         radius: 4
         color: PropertiesPanelController.headerColor
@@ -402,6 +402,27 @@ Rectangle {
             opacity: 0.5
             font.pixelSize: 9
             anchors.verticalCenter: parent.verticalCenter
+        }
+        // The only way out of a multi-minute generation: the heavy tool pumps
+        // the event loop, so this click is delivered mid-run and stops it.
+        Rectangle {
+            visible: AIChatManager.agentMode && root.agentBusy
+            anchors.verticalCenter: parent.verticalCenter
+            width: stopText.implicitWidth + 12; height: 14; radius: 3
+            color: stopArea.containsMouse ? Qt.rgba(0.85, 0.3, 0.3, 0.3) : "transparent"
+            border.color: "#cc5555"
+            Text {
+                id: stopText
+                anchors.centerIn: parent
+                text: "Stop"; color: "#dd7777"; font.pixelSize: 9
+            }
+            MouseArea {
+                id: stopArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: AIAgentManager.cancel()
+            }
         }
     }
 

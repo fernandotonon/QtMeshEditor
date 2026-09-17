@@ -245,6 +245,11 @@ TEST(AICapabilityRegistry, DestructiveReasonNamesDeletesOverwritesAndOutboundAct
     EXPECT_EQ(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/existing.glb"}}, exists), "overwrites existing file /tmp/existing.glb");
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("generate_mesh_from_image", {{"image_path", "/tmp/existing.glb"}, {"output", "/tmp/new.glb"}}, exists).isEmpty()) << "an INPUT path that exists is not an overwrite";
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("read_file", {{"path", "/tmp/existing.glb"}}, exists).isEmpty()) << "read-only tools never overwrite";
+    // take_screenshot is read-only for the SCENE but writes its `path`
+    EXPECT_EQ(AICapabilityRegistry::destructiveReason("take_screenshot", {{"path", "/tmp/existing.glb"}}, exists),
+              "overwrites existing file /tmp/existing.glb");
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("take_screenshot", {{"path", "/tmp/new.png"}}, exists).isEmpty());
+    EXPECT_TRUE(AICapabilityRegistry::destructiveReason("take_screenshot", {}, exists).isEmpty()) << "no path → the temp default";
     EXPECT_TRUE(AICapabilityRegistry::destructiveReason("load_mesh", {{"path", "/tmp/existing.glb"}}, exists).isEmpty()) << "ambiguous key on a non-writer is an input";
     // outbound: the data leaves the machine — always asks, existing file or not
     const QString up = AICapabilityRegistry::destructiveReason("cloud_upload", {{"file", "/tmp/new.glb"}, {"name", "Hero"}}, exists);

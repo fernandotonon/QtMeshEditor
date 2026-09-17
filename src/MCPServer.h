@@ -136,6 +136,9 @@ public:
      */
     void setOgreInitFailed(bool failed) { m_ogreInitFailed = failed; }
 
+    /// Cleared when a heavy tool starts; set by requestToolCancel().
+    bool m_toolCancelRequested = false;
+
 signals:
     void messageReceived(const QJsonObject &message);
     void errorOccurred(const QString &error);
@@ -143,6 +146,13 @@ signals:
     /// tools synchronously — the AI agent shows it in the chat panel. `done`/
     /// `total` are units of the current stage; total <= 0 means "indeterminate".
     void toolProgress(const QString &tool, const QString &stage, int done, int total);
+
+public:
+    /// Ask the running heavy tool to stop at its next progress callback. The
+    /// tool then returns a normal "cancelled" error result. Safe to call when
+    /// nothing is running (the flag is cleared when the next tool starts).
+    void requestToolCancel() { m_toolCancelRequested = true; }
+    bool toolCancelRequested() const { return m_toolCancelRequested; }
 
 private slots:
     void onReadyRead();

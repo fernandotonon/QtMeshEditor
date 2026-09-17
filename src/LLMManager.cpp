@@ -798,9 +798,15 @@ void LLMManager::onWorkerModelUnloaded()
         // the worker released the mapping — now the deferred deletes are safe
         const QStringList pending = m_pendingDeletions;
         m_pendingDeletions.clear();
-        bool any = false;
-        for (const QString& path : pending) any = removeModelFileNow(path) || any;
-        if (any) scanForModels();
+        QStringList removed, failed;
+        for (const QString& path : pending) {
+            if (removeModelFileNow(path)) removed << QFileInfo(path).fileName();
+            else                          failed  << QFileInfo(path).fileName();
+        }
+        if (!removed.isEmpty()) scanForModels();
+        // The callers returned optimistically (the removal had not happened
+        // yet) — this is the only place that knows what actually went.
+        emit deferredDeletionFinished(removed, failed);
     }
     emit modelUnloaded();
     emit modelLoadedChanged();

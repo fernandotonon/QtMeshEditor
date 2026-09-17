@@ -86,6 +86,11 @@ QJsonArray McpToolExecutor::toolList()
     return m_server ? m_server->buildToolsList() : QJsonArray{};
 }
 
+void McpToolExecutor::cancelRunningTool()
+{
+    if (m_server) m_server->requestToolCancel();
+}
+
 QJsonObject McpToolExecutor::callTool(const QString& name, const QJsonObject& args)
 {
     if (!m_server) return QJsonObject{{"isError", true},
@@ -354,6 +359,10 @@ void AIAgentManager::cancel()
     if (!busy()) return;
     m_cancelRequested = true;
     SentryReporter::addBreadcrumb("ai.agent.cancel", QStringLiteral("cancelled in state %1").arg(stateName()));
+    // A heavy tool (image → 3D) runs synchronously and pumps the event loop,
+    // so this arrives DURING the call: tell it to stop at its next progress
+    // callback, otherwise Cancel would only take effect minutes later.
+    if (m_state == State::Executing && m_executor) m_executor->cancelRunningTool();
     if (m_state == State::Planning || m_state == State::Replanning) {
         m_awaiting = Awaiting::None;
         if (m_planner) m_planner->stop();

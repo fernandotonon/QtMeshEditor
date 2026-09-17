@@ -615,7 +615,10 @@ QString overwriteReason(const QString& tool, const QJsonObject& args,
         QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression writerTool(R"(^(?:export_|save_|paint_bake|pack_|generate_|upscale_|inpaint_|photo_depth|bake_))");
     static const QStringList ambiguousKeys = {"path", "file", "file_path"};
-    const bool writer = writerTool.match(tool).hasMatch();
+    // take_screenshot is READ-ONLY for the scene but WRITES its `path` (review
+    // finding): it is the one read-only tool that can clobber a file.
+    const bool writer = writerTool.match(tool).hasMatch()
+                     || tool == QLatin1String("take_screenshot");
     for (auto it = args.begin(); it != args.end(); ++it) {
         const bool byShape = outputKey.match(it.key()).hasMatch();
         const bool ambiguous = writer && ambiguousKeys.contains(it.key());
@@ -654,6 +657,10 @@ QString AICapabilityRegistry::destructiveReason(const QString& tool, const QJson
     if (!del.isEmpty()) return del;
     const QString out = outboundReason(tool, args);
     if (!out.isEmpty()) return out;
+    // Read-only tools cannot damage the scene, but take_screenshot still
+    // writes a file — check the overwrite BEFORE the read-only gate.
+    if (tool == QLatin1String("take_screenshot"))
+        return overwriteReason(tool, args, fileExists);
     if (isReadOnly(tool)) return {};
     return overwriteReason(tool, args, fileExists);
 }

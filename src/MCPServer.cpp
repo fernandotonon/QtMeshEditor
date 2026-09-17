@@ -2830,11 +2830,13 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             });
         }
 #endif
+        m_toolCancelRequested = false;
         const int rc = CLIPipeline::generateSourceImageFromPrompt(
             genPrompt, args.value("image_model").toString(), srcPng, refImage);
 #ifdef ENABLE_STABLE_DIFFUSION
         if (sdConn) disconnect(sdConn);
 #endif
+        if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("cancelled"));
         if (rc != 0)
             return makeErrorResult(
                 "Image generation from prompt failed — download FLUX.2-klein-4B "
@@ -2990,6 +2992,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // — MeshGenBuilder below is Ogre and main-thread-only — and the pump is
     // EXCLUDE_USER_INPUT_EVENTS, so no click can re-enter a tool mid-run.
     QElapsedTimer pumpClock; pumpClock.start();
+    m_toolCancelRequested = false;
     auto reportProgress = [this, &pumpClock](MeshGenPredictor::Stage stage, int done, int total) -> bool {
         if (total > 0) {
             static const QHash<MeshGenPredictor::Stage, QString> names = {
@@ -3004,11 +3007,15 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                               names.value(stage, QStringLiteral("working")), done, total);
         }
         // ~20 Hz is enough to stay responsive without slowing the pipeline.
+        // User input IS delivered: the Stop button is the only way to abort a
+        // multi-minute run, and excluding input made it unclickable. Re-entry
+        // is prevented by the caller (the agent runs one step at a time and
+        // the panel disables sending while busy), not by dropping clicks.
         if (pumpClock.elapsed() >= 50) {
             pumpClock.restart();
-            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         }
-        return true;   // never cancels from here
+        return !m_toolCancelRequested;   // false → predict() returns "cancelled"
     };
 
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
@@ -3016,7 +3023,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         MeshGenPredictor::decoderModelPath(), opts, reportProgress);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
-            ? QStringLiteral("image-to-3D failed") : res.error);
+            ? (m_toolCancelRequested ? QStringLiteral("cancelled")
+                                     : QStringLiteral("image-to-3D failed"))
+            : res.error);
 
     // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
     // un-upscaled texture on any failure — same policy as the CLI).

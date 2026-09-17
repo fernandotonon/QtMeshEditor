@@ -152,6 +152,12 @@ signals:
     void modelLoadCompleted(const QString &modelName);
     void modelLoadError(const QString &error);
     void modelUnloaded();
+    /// A DEFERRED deletion finished (the file belonged to the loaded model, so
+    /// it could only be removed once the worker released it). `removed` names
+    /// the files actually gone, `failed` the ones that could not be removed —
+    /// deleteModelFile/deleteAllModelFiles return before this, so UI that
+    /// reports an outcome must wait for this signal.
+    void deferredDeletionFinished(const QStringList &removed, const QStringList &failed);
 
     void generationStarted();
     void generationProgress(const QString &partialText, float progress);
