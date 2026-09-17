@@ -282,9 +282,12 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
     // size is clamped to the model's training limit in initializeContext —
     // checking against the setting let an oversized prompt through, and
     // llama_decode then failed with an opaque "Failed to decode prompt").
-    // Leave a little headroom so at least some tokens can be generated.
+    // Whatever is left after the prompt is the generation budget: the loop
+    // below is capped to it, so a full context ends generation cleanly
+    // instead of hitting llama_decode's "context full" error one token late.
     const int windowTokens = m_nCtx > 0 ? m_nCtx : m_settings.contextSize;
-    if (static_cast<int>(tokens.size()) + 32 > windowTokens) {
+    const int remainingCapacity = windowTokens - static_cast<int>(tokens.size());
+    if (remainingCapacity <= 0) {
         m_isGenerating.store(false);
         emit generationError(QString("Prompt too long: %1 tokens, but the model's context window is %2. "
                                      "Raise 'Context size' in AI → AI Model Settings (then reload the model) "
@@ -366,7 +369,11 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
         eosToken = llama_vocab_eos(m_vocab);
     }
 
-    const int effectiveMaxTokens = (maxTokensOverride > 0) ? maxTokensOverride : m_settings.maxTokens;
+    const int requestedMaxTokens = (maxTokensOverride > 0) ? maxTokensOverride : m_settings.maxTokens;
+    const int effectiveMaxTokens = std::min(requestedMaxTokens, remainingCapacity);
+    if (effectiveMaxTokens < requestedMaxTokens)
+        qWarning() << "LLMWorker: reply capped to" << effectiveMaxTokens << "tokens — the prompt fills the rest of the"
+                   << windowTokens << "token context";
     for (int i = 0; i < effectiveMaxTokens; ++i) {
         if (m_stopRequested.load()) {
             qDebug() << "LLMWorker: Generation stopped by user";

@@ -457,16 +457,18 @@ bool LLMManager::deleteModelFile(const QString &fileName)
         return false;
     }
     const QString path = QDir(m_modelsDirectory).filePath(name);
-    const QString base = QFileInfo(name).completeBaseName();
-    if (isModelLoaded() && (m_currentModelName == name || m_currentModelName == base))
+    const bool exists = QFileInfo::exists(path) || QFileInfo::exists(path + QLatin1String(".part"));
+    if (!exists) return false;
+    if (isActiveModelFile(name)) {
+        // The worker still maps this file until its queued unloadModel() ran;
+        // delete it from onWorkerModelUnloaded instead of racing the mapping.
+        m_pendingDeletions << path;
         unloadModel();
-    bool removed = false;
-    if (QFileInfo::exists(path)) removed = QFile::remove(path);
-    if (QFileInfo::exists(path + QLatin1String(".part"))) removed = QFile::remove(path + QLatin1String(".part")) || removed;
-    if (removed) {
-        qDebug() << "LLMManager: deleted model file" << path;
-        scanForModels();
+        qDebug() << "LLMManager: model file deletion deferred until the model is unloaded" << path;
+        return true;
     }
+    const bool removed = removeModelFileNow(path);
+    if (removed) scanForModels();
     return removed;
 }
 
@@ -475,12 +477,31 @@ int LLMManager::deleteAllModelFiles()
     int count = 0;
     QDir dir(m_modelsDirectory);
     if (!dir.exists()) return 0;
-    if (isModelLoaded()) unloadModel();
-    for (const QFileInfo& fi : dir.entryInfoList({"*.gguf", "*.gguf.part"}, QDir::Files)) {
+    // the same set scanForModels() lists (.gguf AND .bin), plus their partials
+    for (const QFileInfo& fi : dir.entryInfoList({"*.gguf", "*.gguf.part", "*.bin", "*.bin.part"}, QDir::Files)) {
+        if (isActiveModelFile(fi.fileName())) { m_pendingDeletions << fi.absoluteFilePath(); ++count; continue; }
         if (QFile::remove(fi.absoluteFilePath())) ++count;
     }
+    if (!m_pendingDeletions.isEmpty()) unloadModel();
     if (count) scanForModels();
     return count;
+}
+
+bool LLMManager::isActiveModelFile(const QString& fileName) const
+{
+    if (!isModelLoaded() || m_currentModelName.isEmpty()) return false;
+    QString stem = fileName;
+    if (stem.endsWith(QLatin1String(".part"))) stem.chop(5);
+    return m_currentModelName == stem || m_currentModelName == QFileInfo(stem).completeBaseName();
+}
+
+bool LLMManager::removeModelFileNow(const QString& path)
+{
+    bool removed = false;
+    if (QFileInfo::exists(path)) removed = QFile::remove(path);
+    if (QFileInfo::exists(path + QLatin1String(".part"))) removed = QFile::remove(path + QLatin1String(".part")) || removed;
+    if (removed) qDebug() << "LLMManager: deleted model file" << path;
+    return removed;
 }
 
 void LLMManager::unloadModel()
@@ -772,6 +793,14 @@ void LLMManager::onWorkerModelUnloaded()
     if (!m_isLoading) {
         m_currentModelName.clear();
         emit currentModelNameChanged();
+    }
+    if (!m_pendingDeletions.isEmpty()) {
+        // the worker released the mapping — now the deferred deletes are safe
+        const QStringList pending = m_pendingDeletions;
+        m_pendingDeletions.clear();
+        bool any = false;
+        for (const QString& path : pending) any = removeModelFileNow(path) || any;
+        if (any) scanForModels();
     }
     emit modelUnloaded();
     emit modelLoadedChanged();

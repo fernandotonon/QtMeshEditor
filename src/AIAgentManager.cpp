@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -379,15 +380,19 @@ QString AIAgentManager::systemPromptWithinBudget(const QString& userPrompt, int 
     // 1. history is the least essential context
     QString s = systemPrompt(m_docCapabilities, false);
     QString trimmed = QStringLiteral("dropped history");
-    // 2. capabilities beyond the most relevant (routing order = relevance)
-    for (int keep = qMin(3, static_cast<int>(m_docCapabilities.size())); estimateTokens(s) > budget && keep >= 1; --keep) {
-        m_docCapabilities = m_docCapabilities.mid(0, keep);
-        s = systemPrompt(m_docCapabilities, false);
-        trimmed += QStringLiteral(", capabilities→%1").arg(m_docCapabilities.join('+'));
+    // 2. capabilities beyond the most relevant (routing order = relevance).
+    //    Trim a LOCAL copy: the next round's prompt may fit again (shorter
+    //    scene, no history), and the task's capability set must not shrink
+    //    permanently because one prompt was oversized (review finding).
+    QStringList caps = m_docCapabilities;
+    for (int keep = qMin(3, static_cast<int>(caps.size())); estimateTokens(s) > budget && keep >= 1; --keep) {
+        caps = caps.mid(0, keep);
+        s = systemPrompt(caps, false);
+        trimmed += QStringLiteral(", capabilities→%1").arg(caps.join('+'));
     }
     // 3. a long scene listing
     if (estimateTokens(s) > budget) {
-        s = systemPrompt(m_docCapabilities, false, 1200);
+        s = systemPrompt(caps, false, 1200);
         trimmed += QStringLiteral(", scene→1200 chars");
     }
     // 4. last resort: hard-cut (the model then works with partial docs)

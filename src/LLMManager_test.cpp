@@ -56,9 +56,12 @@ TEST_F(LLMManagerTest, DeleteModelFileRemovesOnlyFilesInsideTheModelsDirectory)
     EXPECT_FALSE(QFileInfo::exists(dir.filePath("b.gguf.part"))) << "the partial download goes too";
     EXPECT_EQ(manager->availableModels(), QStringList({"a"})) << "the list is rescanned";
 
-    touch("c.gguf");
-    EXPECT_EQ(manager->deleteAllModelFiles(), 2);
+    touch("c.gguf"); touch("legacy.bin"); touch("legacy.bin.part");
+    manager->scanForModels();
+    EXPECT_EQ(manager->availableModels().size(), 3) << ".bin models are listed";
+    EXPECT_EQ(manager->deleteAllModelFiles(), 4) << "Remove All removes exactly the listed set (+ partials): a.gguf, c.gguf, legacy.bin, legacy.bin.part";
     EXPECT_TRUE(manager->availableModels().isEmpty());
+    EXPECT_FALSE(manager->hasPendingDeletions()) << "nothing loaded → nothing deferred";
 
     QFile::remove(outside.fileName());
     manager->setModelsDirectory(previous);

@@ -61,6 +61,13 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     connect(downloader, &ModelDownloader::downloadProgressUpdated, this, &LLMSettingsWidget::onDownloadProgress);
     connect(downloader, &ModelDownloader::downloadCompleted, this, &LLMSettingsWidget::onDownloadCompleted);
     connect(downloader, &ModelDownloader::downloadError, this, &LLMSettingsWidget::onDownloadError);
+    // Delete Selected / Remove All must drop out the moment a download starts
+    // (deleting a model also deletes its .part — the active download's output)
+    // and come back on completion, cancel or error alike.
+    connect(downloader, &ModelDownloader::isDownloadingChanged, this, &LLMSettingsWidget::updateDownloadButtons);
+    // a deferred deletion (active model unloaded first) rescans later — refresh then too
+    connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateRecommendedModelsList);
+    connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateDownloadButtons);
 }
 
 void LLMSettingsWidget::setupUI()
@@ -405,7 +412,7 @@ void LLMSettingsWidget::onDeleteAllModelsClicked()
     const int count = LLMManager::instance()->availableModels().size();
     QMessageBox::StandardButton reply = QMessageBox::question(
         this, "Remove All LLM Files",
-        QString("Remove every downloaded GGUF model (%1 file%2) from the models folder?%3")
+        QString("Remove every downloaded model file (%1 file%2) from the models folder?%3")
             .arg(count).arg(count == 1 ? "" : "s",
                  LLMManager::instance()->isModelLoaded() ? "\n\nThe active model will be unloaded first." : ""),
         QMessageBox::Yes | QMessageBox::No);

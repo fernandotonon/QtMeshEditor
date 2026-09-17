@@ -88,7 +88,6 @@ TEST_F(LLMSettingsWidgetTest, HasStatusLabel)
 // Test formatFileSize via indirect observation
 // formatFileSize is private, but we can test behavior through the download tab UI
 
-#endif // ENABLE_LOCAL_LLM
 
 // #1052: the LLM Download tab has the same delete affordances as the
 // QtMeshEditor Models tab; Delete Selected is disabled until a downloaded
@@ -106,3 +105,5 @@ TEST_F(LLMSettingsWidgetTest, DownloadTabHasDeleteRemoveAllAndOpenFolder)
     EXPECT_FALSE(del->isEnabled()) << "nothing selected → nothing to delete";
     EXPECT_TRUE(folder->isEnabled());
 }
+
+#endif // ENABLE_LOCAL_LLM

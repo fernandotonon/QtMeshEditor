@@ -110,6 +110,8 @@ public slots:
     Q_INVOKABLE bool deleteModelFile(const QString &fileName);
     /// Delete every *.gguf (+ .part) in modelsDirectory. Returns the count.
     Q_INVOKABLE int deleteAllModelFiles();
+    /// True while a file deletion waits for the worker to release the model.
+    bool hasPendingDeletions() const { return !m_pendingDeletions.isEmpty(); }
     Q_INVOKABLE void scanForModels();
     Q_INVOKABLE void tryAutoLoadModel();
 
@@ -181,6 +183,8 @@ private slots:
     void onWorkerGenerationStopped();
 
 private:
+    bool isActiveModelFile(const QString& fileName) const;
+    bool removeModelFileNow(const QString& path);
     static LLMManager* s_instance;
 
     QThread *m_workerThread = nullptr;
@@ -193,6 +197,11 @@ private:
     QList<ModelInfo> m_recommendedModels;
     LLMSettings m_settings;
     bool m_isLoading = false;
+    // Files whose deletion waits for the worker to release the loaded model
+    // (unload is queued to the worker thread; the mapping may still hold the
+    // file — QFile::remove fails on Windows while it does). Flushed in
+    // onWorkerModelUnloaded.
+    QStringList m_pendingDeletions;
     int  m_effectiveContextSize = 0;
     bool m_autoLoadModel = false;
     bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active

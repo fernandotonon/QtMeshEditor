@@ -391,9 +391,10 @@ bool coerceArray(QJsonValue& v, const QString& key, const QJsonObject& def, QStr
     if (v.isArray()) return true;
     if (!v.isString()) { *why = QStringLiteral("expected an array"); return false; }
     QJsonArray rgb;
-    if (isColourProperty(key, def) && colourNameToRgb(v.toString(), &rgb)) {
+    const QString colourName = v.toString().trimmed();
+    if (isColourProperty(key, def) && colourNameToRgb(colourName, &rgb)) {
         v = rgb;
-        if (warnings) *warnings << QStringLiteral("'%1': colour name '%2' → RGB").arg(key, v.toArray().isEmpty() ? QString() : v.toArray().first().toString());
+        if (warnings) *warnings << QStringLiteral("'%1': colour name '%2' → RGB").arg(key, colourName);
         return true;
     }
     // "[1, 2, 3]" or "1,2,3" from a chatty model
