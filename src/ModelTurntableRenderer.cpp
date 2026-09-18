@@ -49,6 +49,53 @@ TurntableState &state()
   return s;
 }
 
+/// RAII save/restore for the editor's selection. prepareSceneForCapture clears
+/// it so the capture has no selection highlight, which is fine for the CLI
+/// (the process exits right after) but destructive in-editor: the #521 Pose
+/// Library renders a thumbnail on a LIVE scene, so saving a pose deselected
+/// whatever the author had selected. Same class of bug as RecenterGuard below.
+struct SelectionGuard {
+  QList<Ogre::SceneNode *> nodes;
+  QList<Ogre::Entity *> entities;
+  QList<Ogre::SubEntity *> subEntities;
+  bool active = false;
+
+  SelectionGuard()
+  {
+    auto *sel = SelectionSet::getSingletonPtr();
+    if (!sel)
+      return;
+    nodes = sel->getNodesSelectionList();
+    entities = sel->getEntitiesSelectionList();
+    subEntities = sel->getSubEntitiesSelectionList();
+    active = true;
+  }
+  SelectionGuard(const SelectionGuard &) = delete;
+  SelectionGuard &operator=(const SelectionGuard &) = delete;
+  ~SelectionGuard() noexcept
+  {
+    if (!active)
+      return;
+    try {
+      auto *sel = SelectionSet::getSingletonPtr();
+      if (!sel)
+        return;
+      sel->clear();
+      for (Ogre::SceneNode *n : nodes)
+        if (n)
+          sel->append(n);
+      for (Ogre::Entity *e : entities)
+        if (e)
+          sel->append(e);
+      for (Ogre::SubEntity *se : subEntities)
+        if (se)
+          sel->append(se);
+    } catch (...) {
+      // Best-effort restore; keep the destructor noexcept.
+    }
+  }
+};
+
 void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
 {
   SelectionSet::getSingleton()->clear();
@@ -654,6 +701,8 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   const float elevationRad =
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
 
+  // Restore the author's selection when we're done — see SelectionGuard.
+  SelectionGuard selectionGuard;
   prepareSceneForCapture(entities);
   // Tangents + RTSS normal wiring, then strip any duplicate normal-map TUS that
   // would still modulate in the FFP chain (common on FBX like Jump.fbx).
