@@ -1473,6 +1473,9 @@ TEST_F(PoseLibrarySceneTest, ThumbnailDoesNotDisturbAnUnheldPosedRig) {
 
     // Hand-pose the rig to something else; a thumbnail must not change it.
     skel->getBone("Child")->setPosition(Ogre::Vector3(7, 8, 9));
+    // poseThumbnailForSelection resolves through SelectionSet — without this
+    // it early-returns and the assertions below are vacuous.
+    SelectionSet::getSingleton()->selectOne(entity);
     lib->poseThumbnailForSelection(QStringLiteral("p"));   // no-GL => empty, still restores
 
     const Ogre::Vector3 after = skel->getBone("Child")->getPosition();

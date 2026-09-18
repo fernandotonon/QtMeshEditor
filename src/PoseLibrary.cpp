@@ -778,6 +778,7 @@ void PoseLibrary::clearAll()
     const int n = m_byEntity.size();
     m_byEntity.clear();
     m_blends.clear();
+    m_holds.clear();   // else a stale hold outlives the entity it belonged to
     m_thumbCache.clear();
     if (n > 0) {
         SentryReporter::addBreadcrumb("scene.anim.pose",
