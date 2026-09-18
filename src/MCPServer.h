@@ -469,6 +469,11 @@ private:
     /// Args: `src` (existing pose), `dst` (output pose name).
     QJsonObject toolMirrorPose(const QJsonObject &args);
 
+    /// Pose-lib D2: blend two saved poses into a third.
+    /// Args: `a`, `b` (existing poses), `weight` (0=a … 1=b,
+    /// clamped), `dst` (output pose name).
+    QJsonObject toolBlendPoses(const QJsonObject &args);
+
     /// Pose-lib D-Project: write the first-selected entity's pose
     /// library to a `.poselib` sidecar JSON file. Args: `path`.
     QJsonObject toolSavePoseLibrary(const QJsonObject &args);

@@ -59,6 +59,50 @@ IsometricState &state()
   return s;
 }
 
+/// RAII save/restore for the editor's selection — see the identical guard in
+/// ModelTurntableRenderer.cpp.
+struct SelectionGuard {
+  QList<Ogre::SceneNode *> nodes;
+  QList<Ogre::Entity *> entities;
+  QList<Ogre::SubEntity *> subEntities;
+  bool active = false;
+
+  SelectionGuard()
+  {
+    auto *sel = SelectionSet::getSingletonPtr();
+    if (!sel)
+      return;
+    nodes = sel->getNodesSelectionList();
+    entities = sel->getEntitiesSelectionList();
+    subEntities = sel->getSubEntitiesSelectionList();
+    active = true;
+  }
+  SelectionGuard(const SelectionGuard &) = delete;
+  SelectionGuard &operator=(const SelectionGuard &) = delete;
+  ~SelectionGuard() noexcept
+  {
+    if (!active)
+      return;
+    try {
+      auto *sel = SelectionSet::getSingletonPtr();
+      if (!sel)
+        return;
+      sel->clear();
+      for (Ogre::SceneNode *n : nodes)
+        if (n)
+          sel->append(n);
+      for (Ogre::Entity *e : entities)
+        if (e)
+          sel->append(e);
+      for (Ogre::SubEntity *se : subEntities)
+        if (se)
+          sel->append(se);
+    } catch (...) {
+      // Best-effort restore; keep the destructor noexcept.
+    }
+  }
+};
+
 void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
 {
   SelectionSet::getSingleton()->clear();
@@ -692,6 +736,10 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   const float startAzimuthRad = Ogre::Degree(options.startAzimuthDegrees).valueRadians();
   const float directionStep = directions > 0 ? Ogre::Math::TWO_PI / static_cast<float>(directions) : 0.0f;
 
+  // Restore the author's selection afterwards — prepareSceneForCapture clears
+  // it, which is harmless for the CLI (process exits) but deselects the user's
+  // model when the GUI exports sprites (IsometricSpritesController).
+  SelectionGuard selectionGuard;
   prepareSceneForCapture(entities);
   prepareMaterialsForCapture(entities);
   applyIsometricLighting(sm);

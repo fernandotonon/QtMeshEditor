@@ -659,3 +659,891 @@ TEST_F(PoseLibrarySceneTest, DeletePoseCommandIsNoOpForUnknownName) {
     cmd.undo();
     EXPECT_FALSE(PoseLibrary::instance()->hasPose(entity, QStringLiteral("Missing")));
 }
+
+// =============================================================================
+// D2 — blend two poses (#521)
+// =============================================================================
+
+TEST(PoseLibraryStandalone, BlendRejectsNullAndEmptyNames) {
+    auto* m = PoseLibrary::instance();
+    EXPECT_FALSE(m->blendPoses(nullptr, QStringLiteral("a"),
+                               QStringLiteral("b"), 0.5f, QStringLiteral("c")));
+    EXPECT_FALSE(m->applyPoseBlended(nullptr, QStringLiteral("a"), 1.0f));
+    EXPECT_FALSE(m->isBlending(nullptr));
+    EXPECT_FALSE(m->cancelBlend(nullptr));
+}
+
+TEST_F(PoseLibrarySceneTest, BlendAtEndpointsReproducesSources) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendEnds");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* skel = entity->getSkeleton();
+    ASSERT_GE(skel->getNumBones(), 1);
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    // weight 0 == pure A.
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.0f, QStringLiteral("AtA")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("AtA")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 0.0f, 1e-4f);
+
+    // weight 1 == pure B.
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                1.0f, QStringLiteral("AtB")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("AtB")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 10.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendMidpointInterpolatesTranslation) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendMid");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 4, -6));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("Half")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Half")));
+    const Ogre::Vector3 p = skel->getBone(0)->getPosition();
+    EXPECT_NEAR(p.x, 5.0f, 1e-4f);
+    EXPECT_NEAR(p.y, 2.0f, 1e-4f);
+    EXPECT_NEAR(p.z, -3.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendWeightIsClampedNotExtrapolated) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendClamp");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    // 2.5 clamps to 1.0 → pure B, NOT x=25.
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                2.5f, QStringLiteral("Over")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Over")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 10.0f, 1e-4f);
+
+    // -1 clamps to 0 → pure A.
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                -1.0f, QStringLiteral("Under")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Under")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 0.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendRotationTakesShortestArc) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendArc");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // A = -170°, B = +170° about Y. The SHORT way between them passes
+    // through 180° (a 20° arc); the long way sweeps 340° through 0°.
+    // Slerp with shortestPath must take the former.
+    const Ogre::Quaternion qa(Ogre::Degree(-170), Ogre::Vector3::UNIT_Y);
+    const Ogre::Quaternion qb(Ogre::Degree(170), Ogre::Vector3::UNIT_Y);
+    skel->getBone(0)->setOrientation(qa);
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setOrientation(qb);
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("Mid")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Mid")));
+
+    // Halfway along the short arc is ±180° about Y. Compare on the
+    // quaternion's absolute dot with the expected orientation so the
+    // q / -q double-cover doesn't produce a false failure.
+    const Ogre::Quaternion expected(Ogre::Degree(180), Ogre::Vector3::UNIT_Y);
+    const Ogre::Quaternion got = skel->getBone(0)->getOrientation();
+    EXPECT_NEAR(std::abs(got.Dot(expected)), 1.0f, 1e-3f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendCoversUnionOfBoneSets) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendUnion");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Both poses come from the same skeleton, so the bone sets are
+    // identical — the blend must carry every bone through, not a
+    // subset.
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("U")));
+    // Applying must touch bones (returns true) and the pose exists.
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("U")));
+    EXPECT_TRUE(lib->applyPose(entity, QStringLiteral("U")));
+}
+
+TEST_F(PoseLibrarySceneTest, BlendMissingSourceFails) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendMissing");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+
+    EXPECT_FALSE(lib->blendPoses(entity, QStringLiteral("A"),
+                                 QStringLiteral("NoSuch"), 0.5f,
+                                 QStringLiteral("Out")));
+    EXPECT_FALSE(lib->blendPoses(entity, QStringLiteral("NoSuch"),
+                                 QStringLiteral("A"), 0.5f,
+                                 QStringLiteral("Out")));
+    // Empty destination is rejected too.
+    EXPECT_FALSE(lib->blendPoses(entity, QStringLiteral("A"),
+                                 QStringLiteral("A"), 0.5f, QString()));
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Out")));
+}
+
+TEST_F(PoseLibrarySceneTest, BlendIntoOneOfItsOwnSourcesIsSafe) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendSelf");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    // dst == a: the sources are copied before the store, so this must
+    // not read freed memory or produce garbage.
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("A")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("A")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 5.0f, 1e-4f);
+    // No phantom duplicate in the ordered name list.
+    EXPECT_EQ(lib->listPoses(entity).count(QStringLiteral("A")), 1);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendEmitsPosesChanged) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendSignal");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    QSignalSpy spy(lib, &PoseLibrary::posesChanged);
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("C")));
+    EXPECT_EQ(spy.count(), 1);
+}
+
+// =============================================================================
+// D2 — time-blended apply (#521)
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseBlendedWithZeroDurationSnaps) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendSnap");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Target")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    // duration <= 0 must behave exactly like applyPose and leave no
+    // in-flight transition.
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("Target"), 0.0f));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 7.0f, 1e-4f);
+    EXPECT_FALSE(lib->isBlending(entity));
+    EXPECT_EQ(lib->tickBlend(0.1f), 0);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseBlendedInterpolatesThenLandsExactly) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendTime");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Target")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("Target"), 1.0f));
+    EXPECT_TRUE(lib->isBlending(entity));
+    // Starting the blend must not move anything yet.
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 0.0f, 1e-4f);
+
+    // Half way: strictly between the endpoints. (Smoothstep puts the
+    // midpoint exactly at 0.5, but assert the weaker in-between
+    // property so the easing curve can change without breaking this.)
+    EXPECT_EQ(lib->tickBlend(0.5f), 1);
+    const float mid = skel->getBone(0)->getPosition().x;
+    EXPECT_GT(mid, 0.0f);
+    EXPECT_LT(mid, 10.0f);
+
+    // Past the end: lands exactly on the target and the blend retires.
+    EXPECT_EQ(lib->tickBlend(0.75f), 0);
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 10.0f, 1e-4f);
+    EXPECT_FALSE(lib->isBlending(entity));
+}
+
+TEST_F(PoseLibrarySceneTest, BlendFinishedSignalFiresOnCompletion) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendDone");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+
+    QSignalSpy spy(lib, &PoseLibrary::blendFinished);
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("T"), 0.5f));
+    EXPECT_EQ(spy.count(), 0);
+    lib->tickBlend(0.6f);
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.at(0).at(1).toString(), QStringLiteral("T"));
+}
+
+TEST_F(PoseLibrarySceneTest, CancelBlendLeavesPartialPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendCancel");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("T"), 1.0f));
+    lib->tickBlend(0.5f);
+    const float partial = skel->getBone(0)->getPosition().x;
+
+    EXPECT_TRUE(lib->cancelBlend(entity));
+    EXPECT_FALSE(lib->isBlending(entity));
+    // Cancel does NOT snap to the target — the partial pose stays.
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, partial, 1e-4f);
+    // And further ticks do nothing.
+    EXPECT_EQ(lib->tickBlend(1.0f), 0);
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, partial, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, SnapApplyCancelsInFlightBlend) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendSuperseded");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Far")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Near")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("Far"), 1.0f));
+    ASSERT_TRUE(lib->isBlending(entity));
+    // A snap-apply must win outright — otherwise the next tick drags
+    // the skeleton back toward "Far" and fights the user's action.
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Near")));
+    EXPECT_FALSE(lib->isBlending(entity));
+    lib->tickBlend(0.5f);
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 3.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, DeletingTargetMidBlendDoesNotDangle) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendDelTarget");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("T"), 1.0f));
+    // The blend holds a COPY of the target, so dropping the source
+    // pose must not affect it.
+    ASSERT_TRUE(lib->deletePose(entity, QStringLiteral("T")));
+    lib->tickBlend(2.0f);
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 10.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, ForgetEntityDropsInFlightBlend) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendForget");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("T"), 1.0f));
+
+    EXPECT_TRUE(lib->forgetEntity(entity));
+    EXPECT_FALSE(lib->isBlending(entity));
+    // Nothing left to tick — and no stale Entity* is dereferenced.
+    EXPECT_EQ(lib->tickBlend(0.1f), 0);
+}
+
+// =============================================================================
+// D2 — new undo commands (#521)
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, BlendPosesCommandUndoRemovesCreatedPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdBlendAdd");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+
+    BlendPosesCommand cmd(entity, QStringLiteral("A"), QStringLiteral("B"),
+                          0.5f, QStringLiteral("Mid"));
+    cmd.redo();
+    ASSERT_TRUE(lib->hasPose(entity, QStringLiteral("Mid")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Mid")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 5.0f, 1e-4f);
+
+    cmd.undo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Mid")));
+}
+
+TEST_F(PoseLibrarySceneTest, BlendPosesCommandUndoRestoresOverwrittenPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdBlendOver");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+    // The pose we're about to clobber.
+    skel->getBone(0)->setPosition(Ogre::Vector3(-4, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Victim")));
+
+    BlendPosesCommand cmd(entity, QStringLiteral("A"), QStringLiteral("B"),
+                          0.5f, QStringLiteral("Victim"));
+    cmd.redo();
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Victim")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 5.0f, 1e-4f);
+
+    cmd.undo();
+    ASSERT_TRUE(lib->hasPose(entity, QStringLiteral("Victim")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Victim")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, -4.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendPosesCommandIsNoOpForMissingSource) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdBlendMissing");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+
+    BlendPosesCommand cmd(entity, QStringLiteral("A"), QStringLiteral("NoSuch"),
+                          0.5f, QStringLiteral("Out"));
+    cmd.redo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Out")));
+    // Undo after a failed redo must not invent a deletion.
+    cmd.undo();
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("A")));
+}
+
+TEST_F(PoseLibrarySceneTest, MirrorPoseCommandUndoRemovesCreatedPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdMirrorAdd");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Src")));
+
+    MirrorPoseCommand cmd(entity, QStringLiteral("Src"), QStringLiteral("Dst"));
+    cmd.redo();
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("Dst")));
+    cmd.undo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Dst")));
+    // The source is untouched throughout.
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("Src")));
+}
+
+TEST_F(PoseLibrarySceneTest, MirrorPoseCommandIsNoOpForMissingSource) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdMirrorMissing");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    MirrorPoseCommand cmd(entity, QStringLiteral("NoSuch"), QStringLiteral("Dst"));
+    cmd.redo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Dst")));
+    cmd.undo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Dst")));
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedCommandUndoLeavesUnmaskedBonesAlone) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdMaskUndo");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    ASSERT_GE(skel->getNumBones(), 2);
+    auto* lib = PoseLibrary::instance();
+
+    const QString b0 = QString::fromStdString(skel->getBone(0)->getName());
+
+    // Saved pose puts BOTH bones at 10.
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    skel->getBone(1)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("P")));
+
+    // Live state: both at 1.
+    skel->getBone(0)->setPosition(Ogre::Vector3(1, 0, 0));
+    skel->getBone(1)->setPosition(Ogre::Vector3(1, 0, 0));
+
+    ApplyPoseMaskedCommand cmd(entity, QStringLiteral("P"), QStringList{b0});
+    cmd.redo();
+    // Only bone 0 moved.
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 10.0f, 1e-4f);
+    EXPECT_NEAR(skel->getBone(1)->getPosition().x, 1.0f, 1e-4f);
+
+    // The user edits the UNMASKED bone after the apply. Undo must not
+    // stomp it — the command only ever captured the masked bones.
+    skel->getBone(1)->setPosition(Ogre::Vector3(42, 0, 0));
+    cmd.undo();
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 1.0f, 1e-4f);
+    EXPECT_NEAR(skel->getBone(1)->getPosition().x, 42.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseBlendedCommandUndoCancelsAndRestores) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdBlendApply");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ApplyPoseBlendedCommand cmd(entity, QStringLiteral("T"), 1.0f);
+    cmd.redo();
+    ASSERT_TRUE(lib->isBlending(entity));
+    lib->tickBlend(0.5f);
+
+    // Ctrl+Z mid-transition: the blend is killed AND the pre-blend
+    // state comes back — not some point along the curve.
+    cmd.undo();
+    EXPECT_FALSE(lib->isBlending(entity));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 0.0f, 1e-4f);
+    // No lingering blend to drag it away afterwards.
+    lib->tickBlend(1.0f);
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 0.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, BlendedPoseSurvivesSidecarRoundTrip) {
+    // The "save project, close, reopen — library intact" acceptance
+    // criterion, exercised on a DERIVED pose (blend output) so we know
+    // the round-trip carries computed poses, not just captured ones.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/blend.poselib";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendRoundTrip");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("A")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("B")));
+    ASSERT_TRUE(lib->blendPoses(entity, QStringLiteral("A"), QStringLiteral("B"),
+                                0.5f, QStringLiteral("Mid")));
+    ASSERT_TRUE(lib->savePoseLibrary(entity, path));
+
+    // Simulate a reopen: wipe the in-memory library, then load.
+    lib->clearAll();
+    ASSERT_FALSE(lib->hasPose(entity, QStringLiteral("Mid")));
+    ASSERT_TRUE(lib->loadPoseLibrary(entity, path));
+
+    EXPECT_EQ(lib->listPoses(entity).size(), 3);
+    ASSERT_TRUE(lib->hasPose(entity, QStringLiteral("Mid")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("Mid")));
+    EXPECT_NEAR(skel->getBone(0)->getPosition().x, 5.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, LoadingLibraryDropsInFlightBlend) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/lib.poselib";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_LoadCancelsBlend");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("T")));
+    ASSERT_TRUE(lib->savePoseLibrary(entity, path));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 0));
+
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("T"), 1.0f));
+    ASSERT_TRUE(lib->isBlending(entity));
+    // Replacing the whole library invalidates a blend that targets it.
+    ASSERT_TRUE(lib->loadPoseLibrary(entity, path));
+    EXPECT_FALSE(lib->isBlending(entity));
+    EXPECT_EQ(lib->tickBlend(1.0f), 0);
+}
+
+// =============================================================================
+// Scene-level sidecar — per-entity libraries in ONE file (#521 follow-up)
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, SceneLibrariesRoundTripPerEntity) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/scene.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Distinct libraries on the two entities.
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(1, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(2, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A2")));
+    b->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+    map.insert(QStringLiteral("NodeB"), b);
+    ASSERT_TRUE(lib->saveSceneLibraries(map, path));
+
+    // Simulate reopen.
+    lib->clearAll();
+    ASSERT_TRUE(lib->listPoses(a).isEmpty());
+    ASSERT_TRUE(lib->listPoses(b).isEmpty());
+
+    EXPECT_EQ(lib->loadSceneLibraries(map, path), 2);
+    // Each entity got ITS OWN poses back — not a merged pile.
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"A1", "A2"}));
+    EXPECT_EQ(lib->listPoses(b), (QStringList{"B1"}));
+
+    // And the values are right, not just the names.
+    ASSERT_TRUE(lib->applyPose(b, QStringLiteral("B1")));
+    EXPECT_NEAR(b->getSkeleton()->getBone(0)->getPosition().x, 7.0f, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, SceneSaveRefusesWhenNoEntityHasPoses) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/empty.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneEmpty");
+    ASSERT_NE(a, nullptr);
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+
+    // Nothing saved -> refuse, so the caller can drop a stale sidecar
+    // instead of writing an empty one.
+    EXPECT_FALSE(PoseLibrary::instance()->saveSceneLibraries(map, path));
+    EXPECT_FALSE(QFile::exists(path));
+}
+
+TEST_F(PoseLibrarySceneTest, SceneLoadSkipsNodesMissingFromScene) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/scene.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneKeepA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneDropB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> full;
+    full.insert(QStringLiteral("NodeA"), a);
+    full.insert(QStringLiteral("NodeB"), b);
+    ASSERT_TRUE(lib->saveSceneLibraries(full, path));
+    lib->clearAll();
+
+    // Reopen a scene that no longer has NodeB — the load must restore
+    // what it can rather than failing outright.
+    QHash<QString, Ogre::Entity*> partial;
+    partial.insert(QStringLiteral("NodeA"), a);
+    EXPECT_EQ(lib->loadSceneLibraries(partial, path), 1);
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"A1"}));
+    EXPECT_TRUE(lib->listPoses(b).isEmpty());
+}
+
+TEST_F(PoseLibrarySceneTest, SceneLoadRejectsMalformedAndMissingFiles) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneBad");
+    ASSERT_NE(a, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("Keep")));
+
+    QHash<QString, Ogre::Entity*> map;
+    map.insert(QStringLiteral("NodeA"), a);
+
+    EXPECT_EQ(lib->loadSceneLibraries(map, tmp.path() + "/nope.poselib"), -1);
+    {   // malformed JSON
+        const QString p = tmp.path() + "/bad.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{ not json"); f.close();
+        EXPECT_EQ(lib->loadSceneLibraries(map, p), -1);
+    }
+    {   // right schema, `entities` not an array
+        const QString p = tmp.path() + "/shape.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(R"({"schema":"qtmesheditor.poselib.v1","entities":42})");
+        f.close();
+        EXPECT_EQ(lib->loadSceneLibraries(map, p), -1);
+    }
+    // Every failure left the existing library untouched.
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"Keep"}));
+}
+
+TEST_F(PoseLibrarySceneTest, SceneSidecarIsByteStableAcrossRuns) {
+    // QHash iteration order is randomised per process; an export that
+    // reshuffles its own sidecar every run is hostile to version control.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_SceneStableA");
+    Ogre::Entity* b = createAnimatedTestEntity("PoseLib_SceneStableB");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("A1")));
+    ASSERT_TRUE(lib->savePose(b, QStringLiteral("B1")));
+
+    QHash<QString, Ogre::Entity*> m1;
+    m1.insert(QStringLiteral("Zeta"), a);
+    m1.insert(QStringLiteral("Alpha"), b);
+    const QString p1 = tmp.path() + "/one.poselib";
+    ASSERT_TRUE(lib->saveSceneLibraries(m1, p1));
+
+    // Same content, keys inserted in the opposite order.
+    QHash<QString, Ogre::Entity*> m2;
+    m2.insert(QStringLiteral("Alpha"), b);
+    m2.insert(QStringLiteral("Zeta"), a);
+    const QString p2 = tmp.path() + "/two.poselib";
+    ASSERT_TRUE(lib->saveSceneLibraries(m2, p2));
+
+    QFile f1(p1), f2(p2);
+    ASSERT_TRUE(f1.open(QIODevice::ReadOnly));
+    ASSERT_TRUE(f2.open(QIODevice::ReadOnly));
+    EXPECT_EQ(f1.readAll(), f2.readAll());
+}
+
+TEST_F(PoseLibrarySceneTest, SingleEntitySidecarStillLoadsAfterSchemaShare) {
+    // The scene writer added an `entities` block under the SAME schema
+    // string. An old single-entity file (only `poses`) must still load.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/legacy.poselib";
+
+    Ogre::Entity* a = createAnimatedTestEntity("PoseLib_Legacy");
+    ASSERT_NE(a, nullptr);
+    auto* lib = PoseLibrary::instance();
+    a->getSkeleton()->getBone(0)->setPosition(Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(lib->savePose(a, QStringLiteral("Old")));
+    ASSERT_TRUE(lib->savePoseLibrary(a, path));
+
+    lib->clearAll();
+    ASSERT_TRUE(lib->loadPoseLibrary(a, path));
+    EXPECT_EQ(lib->listPoses(a), (QStringList{"Old"}));
+    ASSERT_TRUE(lib->applyPose(a, QStringLiteral("Old")));
+    EXPECT_NEAR(a->getSkeleton()->getBone(0)->getPosition().x, 3.0f, 1e-4f);
+}
+
+// =============================================================================
+// GUI-workflow regression (#521): the author plays a clip, then saves/applies
+// a pose. An ENABLED AnimationState re-poses the whole skeleton every frame
+// (Skeleton::setAnimationState = reset + re-apply enabled clips), so:
+//   - a pose captured while a clip drives the rig must record the CLIP's pose,
+//     not the bind pose; and
+//   - applying a pose must survive, which means the clips have to stand down.
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, SaveCapturesClipDrivenPoseNotBindPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ClipCapture");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    // Drive the rig with the clip, the way pressing Play does.
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    state->setEnabled(true);
+    state->setTimePosition(0.5f);   // keyframe with a real translate+rotate
+    entity->_updateAnimation();
+
+    auto* skel = entity->getSkeleton();
+    const Ogre::Vector3 posed = skel->getBone("Child")->getPosition();
+    // Sanity: the clip really did move the bone off its bind position.
+    ASSERT_GT((posed - Ogre::Vector3(0, 1, 0)).length(), 1e-4f);
+
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("mid_clip")));
+
+    // Move the bone away, then apply: it must come back to the CLIP pose.
+    skel->getBone("Child")->setPosition(Ogre::Vector3(99, 99, 99));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("mid_clip")));
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, posed.x, 1e-4f);
+    EXPECT_NEAR(after.y, posed.y, 1e-4f);
+    EXPECT_NEAR(after.z, posed.z, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplySurvivesAnUpdateAnimationTick) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ApplySurvives");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+
+    // Author a distinctive pose with no clip running, and save it.
+    state->setEnabled(false);
+    skel->getBone("Child")->setPosition(Ogre::Vector3(3, 4, 5));
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("authored")));
+
+    // Now the author presses Play, then clicks Apply.
+    state->setEnabled(true);
+    state->setTimePosition(0.5f);
+    entity->_updateAnimation();
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("authored")));
+
+    // The frame loop ticks. Without the clip standing down this overwrites
+    // the pose and the model "flashes" back — the reported bug.
+    entity->_updateAnimation();
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 3.0f, 1e-4f);
+    EXPECT_NEAR(after.y, 4.0f, 1e-4f);
+    EXPECT_NEAR(after.z, 5.0f, 1e-4f);
+}
+
+// A time-blended apply writes bones from tickBlend rather than applySnapshot,
+// so it needs the SAME hold contract — otherwise every eased frame is written
+// to the skeleton but never uploaded to the skin (the "applied but invisible"
+// bug, this time spread over the whole transition).
+TEST_F(PoseLibrarySceneTest, BlendedApplyHoldsBonesWhileTransitioning) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendHold");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(2, 3, 4));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("target")));
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(0, 1, 0));
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("target"), 1.0f));
+
+    // Mid-transition the bones must be held, or the mesh renders stale.
+    lib->tickBlend(0.5f);
+    EXPECT_TRUE(lib->hasHeldBones(entity));
+
+    // And the blend still converges on the target.
+    lib->tickBlend(1.0f);
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 2.0f, 1e-3f);
+    EXPECT_NEAR(after.y, 3.0f, 1e-3f);
+    EXPECT_NEAR(after.z, 4.0f, 1e-3f);
+}
+
+// ── Codex review regressions (PR #1055) ──────────────────────────────────────
+
+// A thumbnail render must leave a NON-held rig exactly as it found it. The
+// thumbnail's own applySnapshot takes a hold; releasing it after restoring the
+// pre-render TRS used to hand the skeleton back to the animation system and
+// discard that TRS, snapping a hand-posed, non-animated rig to bind.
+TEST_F(PoseLibrarySceneTest, ThumbnailDoesNotDisturbAnUnheldPosedRig) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ThumbRestore");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    if (auto* st = entity->getAnimationState("TestAnim")) st->setEnabled(false);
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(1, 2, 3));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("p")));
+
+    // Hand-pose the rig to something else; a thumbnail must not change it.
+    skel->getBone("Child")->setPosition(Ogre::Vector3(7, 8, 9));
+    // poseThumbnailForSelection resolves through SelectionSet — without this
+    // it early-returns and the assertions below are vacuous.
+    SelectionSet::getSingleton()->selectOne(entity);
+    lib->poseThumbnailForSelection(QStringLiteral("p"));   // no-GL => empty, still restores
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 7.0f, 1e-3f);
+    EXPECT_NEAR(after.y, 8.0f, 1e-3f);
+    EXPECT_NEAR(after.z, 9.0f, 1e-3f);
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+}
+
+// Saving/overwriting/deleting a pose round-trips through applyPose purely to
+// READ stored content. That must not leave the rig held — otherwise a mere
+// save would freeze it even though no pose was intentionally applied.
+TEST_F(PoseLibrarySceneTest, SavingAPoseLeavesNoHoldBehind) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_NoHoldOnSave");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+
+    // Overwrite path (prior content captured via a transient apply).
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+
+    EXPECT_TRUE(lib->deletePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+}
+
+// Releasing a pose must restore ONLY the mask entries the pose zeroed, and
+// must not resurrect a mask the clip never had. Other systems (bone-drag
+// gizmo, mocap) own masks of their own.
+TEST_F(PoseLibrarySceneTest, ReleasePreservesForeignBlendMaskWeights) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskRestore");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    state->setEnabled(true);
+
+    // A pre-existing mask owned by "another system": Root half-weighted.
+    const unsigned short rootHandle = skel->getBone("Root")->getHandle();
+    state->createBlendMask(skel->getNumBones(), 1.0f);
+    state->setBlendMaskEntry(rootHandle, 0.5f);
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("p")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("p")));
+    ASSERT_TRUE(lib->hasHeldBones(entity));
+
+    lib->releasePosedBones(entity);
+    ASSERT_TRUE(state->hasBlendMask());
+    EXPECT_NEAR(state->getBlendMaskEntry(rootHandle), 0.5f, 1e-4f)
+        << "release clobbered a blend-mask weight the pose did not own";
+}
+
+// An entity destroyed mid-blend must not leave a dangling pointer for the
+// next tickBlend to dereference.
+TEST_F(PoseLibrarySceneTest, ForgetEntityDropsInFlightBlendAndHold) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ForgetBlendHold");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("t")));
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("t"), 1.0f));
+    ASSERT_TRUE(lib->isBlending(entity));
+
+    lib->forgetEntity(entity);
+    EXPECT_FALSE(lib->isBlending(entity));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+    EXPECT_EQ(lib->tickBlend(0.1f), 0);   // must not touch the forgotten entity
+}

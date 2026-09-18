@@ -12,6 +12,9 @@ The MIT License
 #define POSELIBRARY_H
 
 #include <QHash>
+#include <QList>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QQmlEngine>
 #include <QSet>
@@ -22,7 +25,7 @@ The MIT License
 #include <OgreQuaternion.h>
 #include <OgreVector.h>
 
-namespace Ogre { class Entity; class Skeleton; }
+namespace Ogre { class Entity; class Skeleton; class SkeletonInstance; }
 
 /**
  * @brief QML_SINGLETON storing named skeleton-pose snapshots.
@@ -69,6 +72,25 @@ public:
     /// Returns false when entity is null, has no skeleton, or
     /// `name` is empty.
     bool savePose(Ogre::Entity* entity, const QString& name);
+
+    /// Hold `boneHandles` against the animation system so an applied pose
+    /// survives: manual control (excludes them from Skeleton::reset, which
+    /// would snap them to BIND) plus a zeroed per-state blend-mask entry
+    /// (manual control alone does NOT stop tracks applying). Returns the
+    /// number of bones held.
+    int holdPosedBones(Ogre::Entity* entity,
+                       const QList<unsigned short>& boneHandles);
+
+    /// Release every held bone on `entity` — clears manual control, restores
+    /// full blend-mask weight and resets the skeleton, handing the rig back
+    /// to normal clip playback. Returns the number of bones released.
+    int releasePosedBones(Ogre::Entity* entity);
+
+    /// True when any bone on `entity` is currently held by an applied pose
+    /// (see holdPosedBones). Callers that force a full skeleton refresh must
+    /// check this first — a blanket reset(true) wipes a held pose.
+    bool hasHeldBones(Ogre::Entity* entity) const;
+
 
     /// Apply a saved pose to `entity` — sets every captured bone's
     /// TRS back to the snapshotted values. Bones present on the
@@ -119,6 +141,40 @@ public:
     Q_INVOKABLE bool savePoseLibraryForSelection(const QString& filePath) const;
     Q_INVOKABLE bool loadPoseLibraryForSelection(const QString& filePath);
 
+    /// Scene-level persistence (#521 follow-up). A `.poselib` written
+    /// by `savePoseLibrary` holds ONE entity's poses; a scene export
+    /// has many entities, so the scene sidecar nests each entity's
+    /// library under the name of the SCENE NODE it hangs from:
+    ///
+    ///   { "schema": "qtmesheditor.poselib.v1",
+    ///     "entities": [ { "node": "Hero", "poses": [ ... ] },
+    ///                   { "node": "Guard", "poses": [ ... ] } ] }
+    ///
+    /// The node name is the key because that is what `sceneExporter`
+    /// writes into the glTF and what `sceneImporter` recreates — the
+    /// Entity POINTER obviously can't survive a reload, and entity
+    /// names are not guaranteed unique across a scene the way node
+    /// names are.
+    ///
+    /// `entities` and the single-entity `poses` are BOTH optional and
+    /// may coexist, so the two writers share one schema version and an
+    /// old single-entity sidecar still loads (see `loadPoseLibrary`).
+    ///
+    /// `nodesToEntities` maps scene-node name → the entity to read
+    /// from / write to. Returns false on write error or when no
+    /// entity in the map has any poses (nothing to persist).
+    bool saveSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                            const QString& filePath) const;
+
+    /// Read a scene sidecar and restore each named node's library onto
+    /// the matching entity. Nodes present in the file but absent from
+    /// `nodesToEntities` are skipped (the scene changed since export);
+    /// entities present in the map but absent from the file are left
+    /// untouched. Returns the number of entities whose library was
+    /// restored, or -1 on read/parse/schema error.
+    int loadSceneLibraries(const QHash<QString, Ogre::Entity*>& nodesToEntities,
+                           const QString& filePath);
+
     /// Mirror a saved pose across the YZ plane (X = symmetry axis,
     /// the convention every common rig follows). Reads `srcName`
     /// from the library on `entity`, flips each bone's TRS by:
@@ -155,6 +211,70 @@ public:
     /// for tests and so future apply-with-mask code can reuse it.
     static QString flipBoneName(const QString& boneName);
 
+    /// Blend two saved poses and write the result under `dstName`.
+    ///
+    /// `weight` is the position on the A→B axis: 0 = pure `aName`,
+    /// 1 = pure `bName`, 0.5 = the halfway pose. Values outside
+    /// [0,1] are clamped (extrapolation past the endpoints produces
+    /// wild rotations on real rigs, so we refuse rather than
+    /// surprise the author).
+    ///
+    /// Per bone: translation and scale interpolate linearly;
+    /// rotation uses `Quaternion::Slerp` with `shortestPath=true`,
+    /// which is the "dual-quat-correct" behaviour the issue asks for
+    /// — without shortest-path a 350° blend spins the long way round.
+    ///
+    /// Bone-set handling: the result covers the UNION of both poses'
+    /// bones. A bone present in only one pose is taken from that
+    /// pose verbatim (there's nothing to interpolate against, and
+    /// falling back to the live skeleton would make the result
+    /// depend on the current pose — non-deterministic).
+    ///
+    /// Returns false when `entity` is null, either source pose is
+    /// missing, or `dstName` is empty. `dstName` may equal `aName`
+    /// or `bName` (overwrites in place).
+    bool blendPoses(Ogre::Entity* entity,
+                    const QString& aName,
+                    const QString& bName,
+                    float weight,
+                    const QString& dstName);
+
+    /// Start a time-blended apply: over `durationSeconds` the live
+    /// skeleton eases from wherever it is NOW to the saved pose
+    /// `name`. Call `tickBlend(dt)` each frame to advance it (the
+    /// MainWindow render loop does this).
+    ///
+    /// The starting pose is snapshotted at call time from the live
+    /// bones, so the blend is stable even if something else writes
+    /// to the skeleton mid-transition — each tick recomputes from
+    /// (captured start, target, elapsed) rather than accumulating.
+    ///
+    /// `durationSeconds <= 0` applies instantly (equivalent to
+    /// `applyPose`) and leaves no active blend. Starting a new blend
+    /// replaces any in-flight one on the same entity.
+    ///
+    /// Returns false when the pose isn't found / entity has no
+    /// skeleton.
+    bool applyPoseBlended(Ogre::Entity* entity,
+                          const QString& name,
+                          float durationSeconds);
+
+    /// Advance every in-flight `applyPoseBlended` transition by `dt`
+    /// seconds and write the interpolated TRS onto the live bones.
+    /// Completed blends land exactly on the target pose and are
+    /// removed. Returns the number of blends still running after the
+    /// tick (0 = nothing to do, so the render loop can skip cheaply).
+    int tickBlend(float dt);
+
+    /// Is a time-blend currently running on `entity`?
+    bool isBlending(Ogre::Entity* entity) const;
+
+    /// Cancel an in-flight blend WITHOUT snapping to the target —
+    /// the skeleton keeps whatever partial pose it reached. Used by
+    /// the undo path (which restores its own snapshot) and when an
+    /// entity is torn down. Returns true if a blend was cancelled.
+    bool cancelBlend(Ogre::Entity* entity);
+
     /// Drop every entry on `entity` (called when an entity is
     /// destroyed or a scene closes). No-op if `entity` was never
     /// saved. Returns `true` when something was actually erased so
@@ -182,10 +302,78 @@ public:
                                              const QString& dstName);
     Q_INVOKABLE QStringList listPosesForSelection() const;
 
+    /// Selection wrappers for the D2 blend surface. These are the
+    /// entry points the Inspector's Pose Library panel calls; each
+    /// routes through the undo stack (see `PoseLibraryCommands`) so
+    /// the acceptance criterion "all operations are undoable" holds
+    /// for the GUI path.
+    Q_INVOKABLE bool blendPosesForSelection(const QString& aName,
+                                             const QString& bName,
+                                             double weight,
+                                             const QString& dstName);
+    Q_INVOKABLE bool applyPoseBlendedForSelection(const QString& name,
+                                                   double durationSeconds);
+
+    /// Undoable variants used by the GUI. They push the matching
+    /// command onto `UndoManager` and return whether the command was
+    /// accepted (i.e. the operation's preconditions held).
+    Q_INVOKABLE bool savePoseUndoable(const QString& name);
+    Q_INVOKABLE bool applyPoseUndoable(const QString& name);
+    Q_INVOKABLE bool applyPoseBlendedUndoable(const QString& name,
+                                               double durationSeconds);
+    Q_INVOKABLE bool deletePoseUndoable(const QString& name);
+    Q_INVOKABLE bool mirrorPoseUndoable(const QString& srcName,
+                                         const QString& dstName);
+    Q_INVOKABLE bool blendPosesUndoable(const QString& aName,
+                                         const QString& bName,
+                                         double weight,
+                                         const QString& dstName);
+    Q_INVOKABLE bool applyPoseMaskedUndoable(const QString& name,
+                                              const QStringList& boneNames);
+
+    /// Bone names on the current selection's skeleton, in skeleton
+    /// order. Feeds the panel's apply-with-mask bone picker.
+    Q_INVOKABLE QStringList boneNamesForSelection() const;
+
+    /// A `data:image/png;base64,…` thumbnail of `name` as it looks on
+    /// the current selection, or an empty string when unavailable
+    /// (no pose, no entity, headless/no-GL environment).
+    ///
+    /// Rendering strategy: the entity is temporarily posed to the
+    /// snapshot, rendered offscreen via `ModelTurntableRenderer`, and
+    /// the pre-existing live pose is restored — so asking for a
+    /// thumbnail never disturbs what the author is looking at.
+    /// Results are cached per (entity, pose); the cache entry is
+    /// dropped when the pose is re-saved, mirrored over, blended
+    /// over, or deleted.
+    Q_INVOKABLE QString poseThumbnailForSelection(const QString& name);
+
+    /// Edge length of a rendered pose thumbnail, in pixels. Small
+    /// enough that a library of 30 poses stays cheap to hold as
+    /// base64 in the QML list.
+    static constexpr int kThumbnailSize = 96;
+
 signals:
     /// Emitted after savePose / deletePose changes the per-entity
     /// pose list visible to the Inspector / dope-sheet / MCP.
     void posesChanged(Ogre::Entity* entity);
+
+    /// Emitted when a time-blended apply finishes (or is cancelled),
+    /// so the panel can drop its "blending…" affordance.
+    void blendFinished(Ogre::Entity* entity, const QString& name);
+
+    /// Emitted when the panel's Export/Import .poselib buttons are
+    /// pressed. MainWindow opens the native QFileDialog (it owns a
+    /// QWidget parent; QML can't supply one) and calls back into
+    /// `savePoseLibraryForSelection` / `loadPoseLibraryForSelection`.
+    /// Mirrors HdrEnvironmentController::browseRequested.
+    void exportLibraryRequested();
+    void importLibraryRequested();
+
+public slots:
+    /// QML-callable triggers for the two signals above.
+    void requestExportLibrary();
+    void requestImportLibrary();
 
 private:
     explicit PoseLibrary(QObject* parent = nullptr);
@@ -212,6 +400,88 @@ private:
         QStringList order;  // matches savePose() insertion order
     };
     QHash<Ogre::Entity*, EntityPoses> m_byEntity;
+
+    /// One in-flight `applyPoseBlended` transition. `from` is the
+    /// live bone state captured when the blend started; `to` is the
+    /// (copied, not referenced) target snapshot — copying means a
+    /// delete/overwrite of the source pose mid-blend can't dangle.
+    struct ActiveBlend {
+        QString name;
+        PoseSnapshot from;
+        PoseSnapshot to;
+        float elapsed = 0.0f;
+        float duration = 0.0f;
+    };
+    QHash<Ogre::Entity*, ActiveBlend> m_blends;
+
+    /// Bookkeeping for an active pose hold (holdPosedBones). Records what
+    /// the hold overwrote so releasePosedBones can put back EXACTLY that and
+    /// nothing else — other systems (bone-drag gizmo, mocap) install their
+    /// own blend masks, and blanket-restoring every entry to 1.0 would
+    /// destroy their layering.
+    struct PoseHold {
+        QList<unsigned short> handles;          ///< bones the pose owns
+        bool priorSkipAnimStateUpdate = false;  ///< entity flag before hold
+        /// clip name -> (bone handle -> prior mask weight). Empty inner map
+        /// means the state had NO blend mask before the hold, so the whole
+        /// mask must be dropped again on release.
+        QHash<QString, QHash<unsigned short, float>> priorMaskWeights;
+        QSet<QString> maskCreatedByUs;
+    };
+    QHash<Ogre::Entity*, PoseHold> m_holds;
+
+    /// Cached thumbnails, keyed "<entity-ptr>/<pose name>". Values are
+    /// `data:image/png;base64,…` URIs.
+    QHash<QString, QString> m_thumbCache;
+
+    /// Build the cache key and drop any cached thumbnail for a pose
+    /// whose content just changed.
+    static QString thumbKey(Ogre::Entity* entity, const QString& name);
+    void invalidateThumbnail(Ogre::Entity* entity, const QString& name);
+
+    /// Shared implementation behind `savePose` / `mirrorPose` /
+    /// `blendPoses` — inserts `snapshot` under `name`, maintains the
+    /// insertion-ordered `order` list, drops the stale thumbnail and
+    /// emits `posesChanged`. Returns true when it overwrote an
+    /// existing pose (callers use it for the breadcrumb text).
+    bool storePose(Ogre::Entity* entity,
+                   const QString& name,
+                   const PoseSnapshot& snapshot);
+
+    /// Serialise one entity's library to the `poses` JSON array shape
+    /// shared by the single-entity and scene sidecars. Empty array
+    /// when the entity has nothing saved.
+    QJsonArray posesToJson(Ogre::Entity* entity) const;
+
+    /// Inverse of `posesToJson`. Returns the parsed library; the
+    /// caller decides whether to commit it (so a partly-bad file
+    /// can't half-overwrite an existing library).
+    static EntityPoses posesFromJson(const QJsonArray& poses);
+
+    /// Swap `staging` in as `entity`'s library, drop that entity's
+    /// stale thumbnails + any in-flight blend, and emit posesChanged.
+    /// Shared by the single-entity and scene loaders so both get the
+    /// same all-or-nothing replacement semantics.
+    void commitLoadedLibrary(Ogre::Entity* entity, const EntityPoses& staging);
+
+    /// Read + parse a sidecar and verify its schema. Returns false
+    /// (leaving `root` untouched) on any read/parse/schema failure so
+    /// callers can bail before mutating in-memory state.
+    static bool readSidecarRoot(const QString& filePath, QJsonObject& root);
+
+    /// Read the live skeleton into a snapshot. Returns an empty
+    /// snapshot when the entity has no skeleton.
+    static PoseSnapshot captureLive(Ogre::Entity* entity);
+
+    /// Write `snapshot` onto the live skeleton, skipping bones the
+    /// skeleton doesn't have. Returns the number of bones written.
+    int applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapshot);
+
+    /// Push freshly-written bone locals into derived transforms so the
+    /// skin / debug visuals / TagPoints update in the same frame. Bone
+    /// TRS writes alone leave everything downstream on the old pose.
+    static void flushSkeletonPose(Ogre::Entity* entity,
+                                  Ogre::SkeletonInstance* skel);
 
     static PoseLibrary* s_instance;
 };

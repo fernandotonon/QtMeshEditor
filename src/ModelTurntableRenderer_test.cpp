@@ -4,6 +4,7 @@
 #include "ModelTurntableRenderer.h"
 #include "PrimitiveObject.h"
 #include "RTShaderHelper.h"
+#include "SelectionSet.h"
 #include "TestHelpers.h"
 
 #include <QApplication>
@@ -208,4 +209,82 @@ TEST_F(ModelTurntableRendererTest, ExcludeNormalMapFromFfpChainRemovesDuplicateU
     EXPECT_EQ(normalUnits, 1u);
 
     RTShaderHelper::shutdown(sceneMgr);
+}
+
+// Rendering frames a model by shifting its scene node so the bounds centre
+// sits at the world origin. The CLI exits right after, so it never noticed —
+// but in-editor callers (the #521 Pose Library thumbnail) render a LIVE scene
+// entity, and without a restore the model stayed parked at the origin after
+// every thumbnail. The node must come back exactly where it started.
+TEST_F(ModelTurntableRendererTest, RestoresNodePositionAfterRender)
+{
+    PrimitiveObject::createCube(QStringLiteral("TurntableRecenterCube"));
+
+    QList<Ogre::Entity*> entities;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity*>(obj));
+    }
+    ASSERT_FALSE(entities.isEmpty());
+
+    Ogre::SceneNode* node = entities.first()->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    // Park the model well away from the origin, the way an author's scene is.
+    const Ogre::Vector3 original(3.0f, 7.5f, -2.25f);
+    node->setPosition(original);
+
+    TurntableOptions options;
+    options.width = 32;
+    options.height = 32;
+    options.frameCount = 1;
+
+    QList<QImage> frames;
+    QString err;
+    ASSERT_TRUE(ModelTurntableRenderer::renderToImages(entities, options, &frames, &err))
+        << err.toStdString();
+
+    const Ogre::Vector3 after = node->getPosition();
+    EXPECT_NEAR(after.x, original.x, 1e-3f);
+    EXPECT_NEAR(after.y, original.y, 1e-3f);
+    EXPECT_NEAR(after.z, original.z, 1e-3f);
+}
+
+// prepareSceneForCapture clears the editor's selection so the capture has no
+// highlight. The CLI exits right after rendering so it never noticed, but the
+// #521 Pose Library renders thumbnails against the LIVE scene — so saving a
+// pose deselected whatever the author had selected. The selection must come
+// back exactly as it was.
+TEST_F(ModelTurntableRendererTest, RestoresSelectionAfterRender)
+{
+    PrimitiveObject::createCube(QStringLiteral("TurntableSelectionCube"));
+
+    QList<Ogre::Entity*> entities;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity*>(obj));
+    }
+    ASSERT_FALSE(entities.isEmpty());
+
+    auto* sel = SelectionSet::getSingleton();
+    ASSERT_NE(sel, nullptr);
+    sel->clear();
+    sel->selectOne(entities.first());
+    ASSERT_EQ(sel->getEntitiesSelectionList().size(), 1);
+
+    TurntableOptions options;
+    options.width = 32;
+    options.height = 32;
+    options.frameCount = 1;
+
+    QList<QImage> frames;
+    QString err;
+    ASSERT_TRUE(ModelTurntableRenderer::renderToImages(entities, options, &frames, &err))
+        << err.toStdString();
+
+    const auto after = sel->getEntitiesSelectionList();
+    ASSERT_EQ(after.size(), 1) << "render cleared the author's selection";
+    EXPECT_EQ(after.first(), entities.first());
+
+    sel->clear();
 }

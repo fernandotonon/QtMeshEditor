@@ -832,6 +832,20 @@ Rectangle {
                 Component.onCompleted: content = nodeAnimComponent
             }
 
+            // ---- Pose Library (#521 — own group) ----
+            // Named bone-TRS snapshots: save / apply (optionally blended over
+            // time) / blend two / mirror / apply-with-mask. Skinned meshes
+            // only — a pose IS a skeleton state.
+            CollapsibleSection {
+                title: "Pose Library"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    SkinWeightsController.hasSkinnedSelection)
+                expanded: false
+
+                Component.onCompleted: content = poseLibraryComponent
+            }
+
             // ---- Lighting (preset rigs + ambient/background, Slice E #487) ----
             CollapsibleSection {
                 title: "Lighting"
@@ -10885,6 +10899,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/NodeAnimationPanel.qml"
+        }
+    }
+
+    // ---- Pose Library Content (#521, own group) ----
+    Component {
+        id: poseLibraryComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/PoseLibraryPanel.qml"
         }
     }
 
