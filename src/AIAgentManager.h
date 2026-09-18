@@ -116,6 +116,10 @@ public:
     /// Takes ownership (parented). Production creates an LlmPlannerBackend lazily.
     void setPlanner(AgentPlannerBackend* planner);
     void setLimits(const AIAgent::Limits& limits) { m_limits = limits; }
+    /// When the lexical router is not confident, ask the LLM for English
+    /// operation keywords first (any-language requests). Default on; tests
+    /// with scripted planners switch it off unless they exercise it.
+    void setIntentKeywordsEnabled(bool on) { m_intentKeywordsEnabled = on; }
     /// Undo stack the task's mutating steps are grouped on (default: UndoManager's).
     void setUndoStack(QUndoStack* stack) { m_undoStack = stack; }
     /// Extra text appended to every planner prompt (the scene summary). The
@@ -224,13 +228,21 @@ private:
     explicit AIAgentManager(QObject* parent = nullptr);
     ~AIAgentManager() override;
 
-    enum class Awaiting { None, Plan, Replan };
+    enum class Awaiting { None, Intent, Plan, Replan };
 
     void setState(AIAgent::State s);
     void ensurePlanner();
     void requestPlan(const QString& extraInstruction = QString());
     void requestReplan(int failedIndex);
     QString systemPrompt(const QStringList& capabilityIds, bool withHistory = true, int sceneChars = -1) const;
+    /// Route the goal (BM25 + lexicon, plus `extraTerms`) into
+    /// m_docCapabilities / m_route; returns the route's confidence.
+    bool routeGoal(const QStringList& extraTerms = {});
+    /// Ask the LLM for a few English operation keywords (any-language
+    /// requests, odd paraphrases) before routing — only when routing is
+    /// not confident.
+    void requestIntentKeywords();
+    void handleIntentReply(const QString& text);
     /// systemPrompt() shrunk until `system + user + reply` fits the planner's
     /// context window: history dropped first, then capabilities beyond the
     /// most relevant, then the scene state, then the tool docs themselves.
@@ -262,6 +274,8 @@ private:
     AIAgent::Plan   m_plan;
     QVector<AIAgent::Observation> m_observations;
     QStringList     m_docCapabilities;     // capabilities whose docs the planner has seen
+    AIToolRouter::Route m_route;           // per-request tool relevance (prompt pruning)
+    QStringList     m_intentTerms;         // English keywords the LLM added for routing
     QHash<QString, int> m_failureCounts;   // step signature → failures
     int   m_currentStep = -1;
     int   m_pendingIndex = -1;
@@ -272,6 +286,7 @@ private:
     bool  m_macroOpen = false;
     bool  m_cancelRequested = false;
     bool  m_trustedMode = false;
+    bool  m_intentKeywordsEnabled = true;
     QString m_lastSummary;
     QString m_lastError;
 

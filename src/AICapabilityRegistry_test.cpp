@@ -93,19 +93,24 @@ TEST(AICapabilityRegistry, KeywordRoutingPicksRelevantCapabilitiesAndAlwaysKeeps
 {
     AICapabilityRegistry reg(sampleTools());
     const QStringList rig = reg.routeByKeywords("rig and skin the wolf then export it as glb");
-    EXPECT_TRUE(rig.contains("rigging"));
-    EXPECT_TRUE(rig.contains("scene_io"));
+    EXPECT_TRUE(rig.contains("rigging")) << rig.join(",").toStdString();
+    EXPECT_TRUE(rig.contains("scene_io")) << rig.join(",").toStdString();
     EXPECT_TRUE(rig.contains("scene"));
-    EXPECT_LE(rig.size(), 5);
+    EXPECT_LE(rig.size(), 4);
 
     const QStringList simple = reg.routeByKeywords("make the box twice as large");
-    EXPECT_EQ(simple.first(), "scene");
+    EXPECT_TRUE(simple.contains("scene"));
     EXPECT_FALSE(simple.contains("rigging"));
 
     EXPECT_TRUE(reg.routeByKeywords("hello").contains("scene")) << "never empty";
     // creating something that is not a primitive routes the (single-tool) generation capability up front
     EXPECT_TRUE(reg.routeByKeywords("create a f22 raptor scene").contains("generation_3d"));
     EXPECT_TRUE(reg.routeByKeywords("make me a dragon").contains("generation_3d"));
+    // a request in another language has no lexical signal → not confident (the agent asks the LLM for keywords)
+    EXPECT_FALSE(reg.route("cria um dragão vermelho").confident);
+    EXPECT_TRUE(reg.route("rig the wolf").confident);
+    // ...and English keywords supplied for it route it correctly
+    EXPECT_TRUE(reg.route("cria um dragão vermelho", {"generate mesh", "prompt", "material colour"}).capabilities.contains("generation_3d"));
 }
 
 TEST(AICapabilityRegistry, ValidateArgumentsEnforcesRequiredTypesAndEnums)

@@ -28,6 +28,8 @@
 #include <QVector>
 #include <functional>
 
+#include "AIToolRouter.h"
+
 class AICapabilityRegistry
 {
 public:
@@ -58,15 +60,22 @@ public:
     QString promptIndex() const;
     /// Full docs (description + params) for every tool of the given capabilities.
     QString promptToolsFor(const QStringList& capabilityIds) const;
+    /// Same, but a large capability contributes only the tools the router
+    /// found relevant to `route` (small ones and no-signal ones stay whole).
+    QString promptToolsFor(const QStringList& capabilityIds, const AIToolRouter::Route& route) const;
     /// One tool's doc block: "- name: description\n    param: doc (type, required)".
     QString toolDoc(const QString& tool) const;
 
     // ---- routing ----
-    /// Keyword heuristic: which capabilities a request most likely needs.
-    /// Used to pre-narrow the planner's docs and as the fallback when the
-    /// planner's own capability pick is unusable. Always non-empty for a
-    /// non-empty request (falls back to "scene").
-    QStringList routeByKeywords(const QString& request) const;
+    /// BM25 + intent lexicon over the tool docs (AIToolRouter): ranked
+    /// capabilities, per-tool scores and a confidence flag. `extraTerms`
+    /// (e.g. English keywords the LLM produced for a non-English request)
+    /// are appended to the query.
+    AIToolRouter::Route route(const QString& request, const QStringList& extraTerms = {}) const;
+    /// Capabilities only — kept for callers that need just the list. Always
+    /// non-empty for a non-empty request (falls back to "scene").
+    QStringList routeByKeywords(const QString& request) const { return route(request).capabilities; }
+    const AIToolRouter& router() const { return m_router; }
 
     // ---- constrained protocol (#1003) ----
     /// Validate `args` against the tool's input schema. Missing required →
@@ -101,6 +110,7 @@ private:
     QHash<QString, ToolInfo> m_tools;
     QVector<Capability>      m_capabilities;   // stable display order
     QHash<QString, int>      m_capIndex;
+    AIToolRouter             m_router;
 };
 
 #endif // AICAPABILITYREGISTRY_H

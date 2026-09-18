@@ -340,7 +340,8 @@ bool AIAgentManager::startTask(const QString& request)
     m_plan.goal = goal;
     m_observations.clear();
     m_failureCounts.clear();
-    m_docCapabilities = m_registry.routeByKeywords(goal);
+    m_intentTerms.clear();
+    const bool confident = routeGoal();
     m_currentStep = -1; m_pendingIndex = -1; m_pendingReason.clear();
     m_replans = 0; m_plannerRetries = 0; m_replanFailedIndex = -1;
     m_cancelRequested = false; m_lastSummary.clear(); m_lastError.clear();
@@ -349,9 +350,55 @@ bool AIAgentManager::startTask(const QString& request)
     emit planChanged(); emit confirmationChanged();
     trace(QStringLiteral("task"), goal);
 
-    SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("task started (%1 routed capabilities)").arg(m_docCapabilities.size()));
-    requestPlan();
+    SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("task started (%1 routed capabilities, %2)")
+                                      .arg(m_docCapabilities.size()).arg(confident ? "confident" : "asking intent"));
+    if (confident || !m_intentKeywordsEnabled) requestPlan();
+    else requestIntentKeywords();
     return true;
+}
+
+bool AIAgentManager::routeGoal(const QStringList& extraTerms)
+{
+    m_route = m_registry.route(m_plan.goal, extraTerms);
+    m_docCapabilities = m_route.capabilities;
+    QStringList top;
+    for (int i = 0; i < m_route.scores.size() && i < 6; ++i)
+        top << QStringLiteral("%1(%2)").arg(m_route.scores[i].name).arg(m_route.scores[i].score, 0, 'f', 1);
+    trace(QStringLiteral("route"), QStringLiteral("capabilities: %1\nlexicon added: %2\nextra terms: %3\ntop tools: %4\nconfident: %5")
+                                       .arg(m_docCapabilities.join(", "), m_route.expandedTerms.join(' '), extraTerms.join(' '),
+                                            top.join(", "), m_route.confident ? "yes" : "no"));
+    return m_route.confident;
+}
+
+// The tool docs are English; the request may be anything. One short
+// generation turns "cria um dragão vermelho" into "generate mesh, prompt,
+// material colour" and the lexical router does the rest.
+void AIAgentManager::requestIntentKeywords()
+{
+    setState(State::Planning);
+    m_awaiting = Awaiting::Intent;
+    const QString sys = QStringLiteral(
+        "You translate a user's request for a 3D mesh editor into ENGLISH keywords naming the editor operations "
+        "and objects involved. Reply with 3 to 8 comma-separated English keywords and nothing else. "
+        "Examples: 'generate mesh, image prompt, vehicle' / 'material, colour, apply' / 'rig, skeleton, skin weights' / "
+        "'export, glb' / 'load mesh, file' / 'transform, scale' / 'animation, walk, motion' / 'scene info'.");
+    const QString user = QStringLiteral("Request: %1\nKeywords:").arg(m_plan.goal);
+    trace(QStringLiteral("intent request"), user);
+    m_planner->request(sys, user, 40);
+}
+
+void AIAgentManager::handleIntentReply(const QString& text)
+{
+    QStringList terms;
+    static const QRegularExpression sep(R"([,;/\n]+)");
+    for (const QString& t : text.split(sep, Qt::SkipEmptyParts)) {
+        const QString w = t.trimmed().toLower();
+        if (!w.isEmpty() && w.size() < 40 && !terms.contains(w)) terms << w;
+    }
+    m_intentTerms = terms.mid(0, 8);
+    SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("intent keywords: %1").arg(m_intentTerms.join(", ")));
+    routeGoal(m_intentTerms);   // confident or not, we plan now — the planner can still ask for more
+    requestPlan();
 }
 
 void AIAgentManager::cancel()
@@ -430,7 +477,7 @@ QString AIAgentManager::systemPrompt(const QStringList& capabilityIds, bool with
         "6. Tools described as acting on 'the selected mesh' (auto_rig, compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, retopologize, remove_skeleton, ...) use the CURRENT SELECTION: call select_entity {\"name\": ...} first unless the scene state already shows it selected.\n"
         "7. Colours are [R,G,B] arrays in 0..1 (red = [1,0,0]). To recolour an object: create_material with a diffuse colour, then apply_material to the object.\n"
         "8. Never invent file paths. generate_mesh_from_image takes EITHER the user's real image in image_path OR, when the user gave no image, a description of the object in prompt (text → image → 3D). To create something that does not exist yet, use prompt.\n")
-        .arg(m_registry.promptIndex(), capabilityIds.join(", "), m_registry.promptToolsFor(capabilityIds))
+        .arg(m_registry.promptIndex(), capabilityIds.join(", "), m_registry.promptToolsFor(capabilityIds, m_route))
         .arg(m_limits.maxSteps);
     const QString history = withHistory ? conversationContext() : QString();
     if (!history.isEmpty()) s += QStringLiteral("\n%1\n").arg(history);
@@ -666,9 +713,10 @@ void AIAgentManager::onPlannerCompleted(const QString& text)
     if (m_awaiting == Awaiting::None) return;
     const Awaiting what = m_awaiting;
     m_awaiting = Awaiting::None;
-    trace(what == Awaiting::Plan ? QStringLiteral("plan reply") : QStringLiteral("replan reply"), text);
+    trace(what == Awaiting::Plan ? QStringLiteral("plan reply") : (what == Awaiting::Intent ? QStringLiteral("intent reply") : QStringLiteral("replan reply")), text);
     if (m_cancelRequested) return;
-    if (what == Awaiting::Plan) handlePlanReply(text);
+    if (what == Awaiting::Intent) handleIntentReply(text);
+    else if (what == Awaiting::Plan) handlePlanReply(text);
     else handleReplanReply(text);
 }
 
@@ -684,6 +732,10 @@ bool AIAgentManager::expandCapabilities(const QStringList& need, QStringList* al
         if (m_docCapabilities.contains(id)) { if (alreadyHad) *alreadyHad << id; continue; }
         m_docCapabilities << id;
         added << id;
+        // explicitly requested → show it whole (drop any partial scoring so
+        // shortlist() falls back to "all tools")
+        for (int i = m_route.scores.size() - 1; i >= 0; --i)
+            if (m_route.scores[i].capability == id) m_route.scores.removeAt(i);
     }
     if (added.isEmpty()) return false;
     SentryReporter::addBreadcrumb("ai.agent.plan", QStringLiteral("expanded capabilities: %1").arg(added.join(", ")));
@@ -801,6 +853,13 @@ void AIAgentManager::handleReplanReply(const QString& text)
 void AIAgentManager::onPlannerFailed(const QString& error)
 {
     if (m_awaiting == Awaiting::None) return;
+    if (m_awaiting == Awaiting::Intent) {
+        // The keyword step is an optimisation: plan with the lexical route.
+        m_awaiting = Awaiting::None;
+        trace(QStringLiteral("intent failed"), error);
+        requestPlan();
+        return;
+    }
     m_awaiting = Awaiting::None;
     m_lastError = QStringLiteral("planner error: %1").arg(error);
     say(QStringLiteral("The AI model failed: %1").arg(error));

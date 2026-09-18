@@ -241,6 +241,7 @@ AIChatManager.cpp
 AIAgentManager.cpp
 AIAgentTypes.cpp
 AICapabilityRegistry.cpp
+AIToolRouter.cpp
 AIModelCatalog.cpp
 AppStorage.cpp
 WelcomeScreenController.cpp
@@ -438,6 +439,7 @@ ClickFocusFilter.h
 AIAgentManager.h
 AIAgentTypes.h
 AICapabilityRegistry.h
+AIToolRouter.h
 AIModelCatalog.h
 WelcomeScreenController.h
 WelcomeDialog.h
