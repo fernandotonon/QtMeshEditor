@@ -44,6 +44,50 @@ Column {
         }
     }
 
+    // Inspector-themed checkbox (16px box + checkmark). Mirrors
+    // PropertiesPanel's InspectorCheckBox — that one is a component of the
+    // PropertiesPanel root, so it isn't visible from this separate file and
+    // has to be restated here against the AnimationControl palette.
+    component InspectorCheckBox: CheckBox {
+        id: icb
+        spacing: 6
+        property string accessibleLabel: ""
+        Accessible.name: accessibleLabel !== "" ? accessibleLabel : text
+        Accessible.checkable: true
+        Accessible.checked: icb.checkState === Qt.Checked
+        indicator: Rectangle {
+            x: icb.leftPadding
+            y: icb.height / 2 - height / 2
+            implicitWidth: 16
+            implicitHeight: 16
+            radius: 2
+            color: icb.checkState === Qt.Checked
+                ? AnimationControlController.highlightColor
+                : AnimationControlController.inputColor
+            border.color: icb.activeFocus ? AnimationControlController.highlightColor
+                                          : AnimationControlController.borderColor
+            border.width: icb.activeFocus ? 2 : 1
+            opacity: icb.enabled ? 1.0 : 0.45
+            Text {
+                anchors.centerIn: parent
+                visible: icb.checkState !== Qt.Unchecked
+                text: "✓"
+                color: AnimationControlController.textColor
+                font.pixelSize: 12
+                font.bold: true
+            }
+        }
+        contentItem: Text {
+            visible: icb.text !== ""
+            text: icb.text
+            color: AnimationControlController.textColor
+            font.pixelSize: 11
+            leftPadding: icb.indicator.width + icb.spacing
+            verticalAlignment: Text.AlignVCenter
+            opacity: icb.enabled ? 1.0 : 0.45
+        }
+    }
+
     component ThemedInput: Rectangle {
         id: tiRoot
         property alias text: tiIn.text
@@ -132,20 +176,28 @@ Column {
                 anchors.fill: parent; anchors.margins: 2; clip: true
                 model: poseSection.poseNames
                 delegate: Rectangle {
+                    id: pickItem
+                    // `pragma ComponentBehavior: Bound` (top of file) means a
+                    // delegate must DECLARE the model roles it uses — a bare
+                    // `modelData` does not resolve, leaving the row blank and
+                    // the click assigning undefined.
+                    required property string modelData
+                    readonly property string poseName: pickItem.modelData
+
                     width: pickList.width; height: 24
                     color: itemMouse.containsMouse ? AnimationControlController.highlightColor
                                                    : "transparent"
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left; anchors.leftMargin: 8
-                        text: modelData
+                        text: pickItem.poseName
                         color: AnimationControlController.textColor; font.pixelSize: 11
                         elide: Text.ElideRight; width: parent.width - 12
                     }
                     MouseArea {
                         id: itemMouse; anchors.fill: parent; hoverEnabled: true
                         onClicked: {
-                            pickerRoot.selection = modelData
+                            pickerRoot.selection = pickItem.poseName
                             pickerRoot.open = false
                         }
                     }
@@ -500,7 +552,12 @@ Column {
                     readonly property string boneName: boneRow.modelData
                     spacing: 4
                     height: 18
-                    CheckBox {
+                    InspectorCheckBox {
+                        width: 16
+                        height: 18
+                        padding: 0
+                        leftPadding: 0
+                        anchors.verticalCenter: parent.verticalCenter
                         checked: poseSection.maskBones.indexOf(boneRow.boneName) >= 0
                         onToggled: {
                             var list = poseSection.maskBones.slice()

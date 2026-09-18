@@ -1355,3 +1355,101 @@ TEST_F(PoseLibrarySceneTest, SingleEntitySidecarStillLoadsAfterSchemaShare) {
     ASSERT_TRUE(lib->applyPose(a, QStringLiteral("Old")));
     EXPECT_NEAR(a->getSkeleton()->getBone(0)->getPosition().x, 3.0f, 1e-4f);
 }
+
+// =============================================================================
+// GUI-workflow regression (#521): the author plays a clip, then saves/applies
+// a pose. An ENABLED AnimationState re-poses the whole skeleton every frame
+// (Skeleton::setAnimationState = reset + re-apply enabled clips), so:
+//   - a pose captured while a clip drives the rig must record the CLIP's pose,
+//     not the bind pose; and
+//   - applying a pose must survive, which means the clips have to stand down.
+// =============================================================================
+
+TEST_F(PoseLibrarySceneTest, SaveCapturesClipDrivenPoseNotBindPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ClipCapture");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    // Drive the rig with the clip, the way pressing Play does.
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    state->setEnabled(true);
+    state->setTimePosition(0.5f);   // keyframe with a real translate+rotate
+    entity->_updateAnimation();
+
+    auto* skel = entity->getSkeleton();
+    const Ogre::Vector3 posed = skel->getBone("Child")->getPosition();
+    // Sanity: the clip really did move the bone off its bind position.
+    ASSERT_GT((posed - Ogre::Vector3(0, 1, 0)).length(), 1e-4f);
+
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("mid_clip")));
+
+    // Move the bone away, then apply: it must come back to the CLIP pose.
+    skel->getBone("Child")->setPosition(Ogre::Vector3(99, 99, 99));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("mid_clip")));
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, posed.x, 1e-4f);
+    EXPECT_NEAR(after.y, posed.y, 1e-4f);
+    EXPECT_NEAR(after.z, posed.z, 1e-4f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplySurvivesAnUpdateAnimationTick) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ApplySurvives");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+
+    // Author a distinctive pose with no clip running, and save it.
+    state->setEnabled(false);
+    skel->getBone("Child")->setPosition(Ogre::Vector3(3, 4, 5));
+    auto* lib = PoseLibrary::instance();
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("authored")));
+
+    // Now the author presses Play, then clicks Apply.
+    state->setEnabled(true);
+    state->setTimePosition(0.5f);
+    entity->_updateAnimation();
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("authored")));
+
+    // The frame loop ticks. Without the clip standing down this overwrites
+    // the pose and the model "flashes" back — the reported bug.
+    entity->_updateAnimation();
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 3.0f, 1e-4f);
+    EXPECT_NEAR(after.y, 4.0f, 1e-4f);
+    EXPECT_NEAR(after.z, 5.0f, 1e-4f);
+}
+
+// A time-blended apply writes bones from tickBlend rather than applySnapshot,
+// so it needs the SAME hold contract — otherwise every eased frame is written
+// to the skeleton but never uploaded to the skin (the "applied but invisible"
+// bug, this time spread over the whole transition).
+TEST_F(PoseLibrarySceneTest, BlendedApplyHoldsBonesWhileTransitioning) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_BlendHold");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(2, 3, 4));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("target")));
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(0, 1, 0));
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("target"), 1.0f));
+
+    // Mid-transition the bones must be held, or the mesh renders stale.
+    lib->tickBlend(0.5f);
+    EXPECT_TRUE(PoseLibrary::hasHeldBones(entity));
+
+    // And the blend still converges on the target.
+    lib->tickBlend(1.0f);
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 2.0f, 1e-3f);
+    EXPECT_NEAR(after.y, 3.0f, 1e-3f);
+    EXPECT_NEAR(after.z, 4.0f, 1e-3f);
+}

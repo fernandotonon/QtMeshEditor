@@ -979,6 +979,20 @@ void MainWindow::initToolBar()
             // updates the data but the SkeletonDebug overlay stays at
             // its pre-undo pose until the next animation tick.
             auto* animCtrl = AnimationControlController::instance();
+            // #521: the Pose Library poses SelectionSet's entity, which is NOT
+            // necessarily AnimationControlController's (that one stays null
+            // until a clip is picked in the Animation panel). Release-guard
+            // every selected entity that is holding a pose, not just the
+            // animation panel's — otherwise the first Apply after a fresh
+            // selection falls through to reset(true) below and is wiped,
+            // while later clicks (once the panel has synced) survive.
+            for (Ogre::Entity* selEnt : SelectionSet::getSingleton()->getResolvedEntities()) {
+                if (!selEnt || !PoseLibrary::hasHeldBones(selEnt)) continue;
+                if (Ogre::SkeletonInstance* hs = selEnt->getSkeleton()) {
+                    hs->_notifyManualBonesDirty();
+                    hs->_updateTransforms();
+                }
+            }
             // Drop cached track / keyframe pointers BEFORE refreshing
             // anything: AddKeyframeCommand::undo can destroy a track
             // entirely, and a stale m_selectedTrack would crash on the
@@ -998,6 +1012,21 @@ void MainWindow::initToolBar()
                     //      empty-track and missing-mask edge cases.
                     //   3. _updateTransforms — extra push to make
                     //      TagPoint-attached entities catch up.
+                    // #521: an applied Pose-Library pose HOLDS its bones
+                    // (manual control + zeroed blend mask). reset(true)
+                    // resets ALL bones including manual ones, and the
+                    // masked-out clip then contributes nothing — so the
+                    // held pose would snap to BIND (the "pose blinks then
+                    // reverts to T-pose" bug). A held pose is already the
+                    // authoritative skeleton state, so just push derived
+                    // transforms and skip the reset/re-apply.
+                    if (PoseLibrary::hasHeldBones(ent)) {
+                        skel->_notifyManualBonesDirty();
+                        skel->_updateTransforms();
+                        return;
+                    }
+                    // reset(true) discards manual control, so never run it on
+                    // a skeleton some other selected entity is holding.
                     skel->reset(true);
                     skel->_notifyManualBonesDirty();
                     ent->_updateAnimation();
@@ -4516,6 +4545,19 @@ void MainWindow::setPlaying(bool playing)
     // NOT force it here (doing so fought the checkbox: unchecking appeared to
     // do nothing). The frame loop advances enabled node states only while
     // isPlaying; an enabled clip poses its node (locked) — uncheck it to edit.
+    //
+    // #521: an applied Pose-Library pose HOLDS its bones (manual control +
+    // zeroed blend mask) so the pose is not wiped by Skeleton::reset or by a
+    // running track. Pressing Play means the author wants the clip back, so
+    // release the hold here — otherwise playback would visibly skip the
+    // posed bones.
+    if (playing && !isPlaying) {
+        // Release every selected entity, not just the animation panel's — the
+        // Pose Library poses SelectionSet's entity and the two can differ.
+        if (auto* sel = SelectionSet::getSingleton())
+            for (Ogre::Entity* ent : sel->getResolvedEntities())
+                PoseLibrary::releasePosedBones(ent);
+    }
     isPlaying = playing;
 }
 

@@ -12,6 +12,7 @@ The MIT License
 #define POSELIBRARY_H
 
 #include <QHash>
+#include <QList>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
@@ -24,7 +25,7 @@ The MIT License
 #include <OgreQuaternion.h>
 #include <OgreVector.h>
 
-namespace Ogre { class Entity; class Skeleton; }
+namespace Ogre { class Entity; class Skeleton; class SkeletonInstance; }
 
 /**
  * @brief QML_SINGLETON storing named skeleton-pose snapshots.
@@ -71,6 +72,25 @@ public:
     /// Returns false when entity is null, has no skeleton, or
     /// `name` is empty.
     bool savePose(Ogre::Entity* entity, const QString& name);
+
+    /// Hold `boneHandles` against the animation system so an applied pose
+    /// survives: manual control (excludes them from Skeleton::reset, which
+    /// would snap them to BIND) plus a zeroed per-state blend-mask entry
+    /// (manual control alone does NOT stop tracks applying). Returns the
+    /// number of bones held.
+    static int holdPosedBones(Ogre::Entity* entity,
+                              const QList<unsigned short>& boneHandles);
+
+    /// Release every held bone on `entity` — clears manual control, restores
+    /// full blend-mask weight and resets the skeleton, handing the rig back
+    /// to normal clip playback. Returns the number of bones released.
+    static int releasePosedBones(Ogre::Entity* entity);
+
+    /// True when any bone on `entity` is currently held by an applied pose
+    /// (see holdPosedBones). Callers that force a full skeleton refresh must
+    /// check this first — a blanket reset(true) wipes a held pose.
+    static bool hasHeldBones(Ogre::Entity* entity);
+
 
     /// Apply a saved pose to `entity` — sets every captured bone's
     /// TRS back to the snapshotted values. Bones present on the
@@ -440,6 +460,12 @@ private:
     /// Write `snapshot` onto the live skeleton, skipping bones the
     /// skeleton doesn't have. Returns the number of bones written.
     static int applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapshot);
+
+    /// Push freshly-written bone locals into derived transforms so the
+    /// skin / debug visuals / TagPoints update in the same frame. Bone
+    /// TRS writes alone leave everything downstream on the old pose.
+    static void flushSkeletonPose(Ogre::Entity* entity,
+                                  Ogre::SkeletonInstance* skel);
 
     static PoseLibrary* s_instance;
 };

@@ -68,6 +68,9 @@ void applyPose(Ogre::Entity* entity, const PoseLibSnapshot& snap)
         bone->setOrientation(it.value().rotation);
         bone->setScale(it.value().scale);
     }
+    // Push locals into derived transforms so the skin updates now.
+    for (Ogre::Bone* root : skel->getRootBones())
+        if (root) root->_update(true, true);
 }
 
 // Save a precomputed snapshot into the library under `name`. Done

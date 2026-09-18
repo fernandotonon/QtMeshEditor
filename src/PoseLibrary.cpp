@@ -28,6 +28,7 @@ The MIT License
 #include <QSaveFile>
 #include <QThread>
 
+#include <OgreAnimationState.h>
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreSkeleton.h>
@@ -108,6 +109,8 @@ int PoseLibrary::applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapsho
     auto* skel = skeletonOf(entity);
     if (!skel) return 0;
     int written = 0;
+    QList<unsigned short> posedHandles;
+    posedHandles.reserve(snapshot.size());
     for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
         const std::string boneName = it.key().toStdString();
         // Bone present at save time but missing now (e.g. LOD change,
@@ -119,9 +122,129 @@ int PoseLibrary::applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapsho
         bone->setPosition(it.value().translate);
         bone->setOrientation(it.value().rotation);
         bone->setScale(it.value().scale);
+        posedHandles.append(bone->getHandle());
         ++written;
     }
+    if (written > 0) {
+        // Hold the bones against reset() + running tracks, or the pose is
+        // gone before the next frame renders.
+        holdPosedBones(entity, posedHandles);
+        flushSkeletonPose(entity, skel);
+    }
     return written;
+}
+
+int PoseLibrary::holdPosedBones(Ogre::Entity* entity,
+                                const QList<unsigned short>& boneHandles)
+{
+    // Making an applied pose STICK needs both halves of the recipe the
+    // bone-drag gizmo uses (TransformOperator::mousePressEvent):
+    //
+    //   1. setManuallyControlled(true) — excludes the bone from
+    //      Skeleton::reset(), which would otherwise snap it back to the
+    //      BIND pose (that is the "everything goes T-pose" symptom).
+    //   2. a per-state blend mask entry of 0 — manual control alone does
+    //      NOT stop animation TRACKS applying to the bone each frame
+    //      (Ogre's own docs warn about this), which is the "pose flashes
+    //      then reverts" symptom.
+    //
+    // Doing only (1) also breaks reset semantics: reset(false) skips manual
+    // bones, so a re-enabled clip lands on an unreset bone and the error
+    // compounds on every toggle.
+    if (!entity || boneHandles.isEmpty()) return 0;
+    auto* skel = skeletonOf(entity);
+    if (!skel) return 0;
+
+    for (unsigned short handle : boneHandles)
+        if (Ogre::Bone* b = skel->getBone(handle))
+            b->setManuallyControlled(true);
+
+    // THE decisive one. Entity::cacheBoneMatrices runs once per frame number
+    // and, unless this flag is set, calls SkeletonInstance::setAnimationState
+    // — i.e. reset() + re-apply the clips. Whether an applied pose survives
+    // then depends on whether the click landed before or after that call in
+    // the current frame, which is why Apply looked RANDOM (worked on the 3rd
+    // click, or the 5th, or the 20th). Suppressing the per-frame re-apply is
+    // what makes the hold deterministic; releasePosedBones clears it.
+    entity->setSkipAnimationStateUpdate(true);
+
+    if (auto* states = entity->getAllAnimationStates()) {
+        const auto numBones = static_cast<size_t>(skel->getNumBones());
+        for (const auto& [name, st] : states->getAnimationStates()) {
+            if (!st || !st->getEnabled()) continue;
+            if (!st->hasBlendMask()) st->createBlendMask(numBones, 1.0f);
+            for (unsigned short handle : boneHandles)
+                st->setBlendMaskEntry(handle, 0.0f);
+        }
+    }
+    return boneHandles.size();
+}
+
+bool PoseLibrary::hasHeldBones(Ogre::Entity* entity)
+{
+    auto* skel = skeletonOf(entity);
+    if (!skel) return false;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        const Ogre::Bone* b = skel->getBone(i);
+        if (b && b->isManuallyControlled()) return true;
+    }
+    return false;
+}
+
+int PoseLibrary::releasePosedBones(Ogre::Entity* entity)
+{
+    // Hand the skeleton back to the animation system: clear manual control
+    // and restore full blend-mask weight, so a clip drives the rig normally
+    // again. Called before playback resumes / when a pose is dropped.
+    if (!entity) return 0;
+    auto* skel = skeletonOf(entity);
+    if (!skel) return 0;
+
+    entity->setSkipAnimationStateUpdate(false);
+
+    int released = 0;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* b = skel->getBone(i);
+        if (!b || !b->isManuallyControlled()) continue;
+        b->setManuallyControlled(false);
+        ++released;
+    }
+    if (released > 0) {
+        if (auto* states = entity->getAllAnimationStates()) {
+            for (const auto& [name, st] : states->getAnimationStates()) {
+                if (!st || !st->hasBlendMask()) continue;
+                for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+                    st->setBlendMaskEntry(i, 1.0f);
+            }
+        }
+        skel->reset(true);
+    }
+    return released;
+}
+
+void PoseLibrary::flushSkeletonPose(Ogre::Entity* entity,
+                                    Ogre::SkeletonInstance* skel)
+{
+    if (!skel) return;
+    // Push the new locals into derived transforms so the skin, the
+    // SkeletonDebug visuals and any TagPoint-attached entities all see
+    // the pose in the frame it was applied — writing bone TRS alone
+    // leaves everything downstream on the previous pose.
+    for (Ogre::Bone* root : skel->getRootBones())
+        if (root) root->_update(true, true);
+
+    // ...but derived transforms are not what the GPU samples. The skin reads
+    // Entity::mBoneMatrices, refreshed only by cacheBoneMatrices(), which is
+    // gated on "frame number changed OR Skeleton::getManualBonesDirty()".
+    // With setSkipAnimationStateUpdate(true) the per-frame re-apply is off, so
+    // the manual-bones-dirty flag is the ONLY thing that re-uploads the pose.
+    // Order matters: Skeleton::_updateTransforms() CLEARS that flag, so it has
+    // to be set here, AFTER the _update() calls above, and consumed by
+    // _updateAnimation() below. Without this the bones hold the right values
+    // (the debug log proved they do) while the mesh keeps rendering the stale
+    // pose — the "pose applied but nothing visibly happens" bug.
+    skel->_notifyManualBonesDirty();
+    if (entity) entity->_updateAnimation();
 }
 
 QString PoseLibrary::thumbKey(Ogre::Entity* entity, const QString& name)
@@ -210,6 +333,7 @@ bool PoseLibrary::applyPoseMasked(Ogre::Entity* entity,
     int boneCount = 0;
     int filteredOut = 0;
     int missingBones = 0;
+    QList<unsigned short> maskedHandles;
     for (auto it = poseIt->cbegin(); it != poseIt->cend(); ++it) {
         // Filter check first — names not in the mask are skipped
         // without consulting the skeleton, so "applies only to the
@@ -222,7 +346,12 @@ bool PoseLibrary::applyPoseMasked(Ogre::Entity* entity,
         bone->setPosition(it.value().translate);
         bone->setOrientation(it.value().rotation);
         bone->setScale(it.value().scale);
+        maskedHandles.append(bone->getHandle());
         ++boneCount;
+    }
+    if (boneCount > 0) {
+        holdPosedBones(entity, maskedHandles);
+        flushSkeletonPose(entity, skel);
     }
 
     SentryReporter::addBreadcrumb("scene.anim.pose",
@@ -506,11 +635,14 @@ int PoseLibrary::tickBlend(float dt)
             continue;
         }
 
+        QList<unsigned short> blendedHandles;
+        blendedHandles.reserve(blend.to.size());
         for (auto b = blend.to.cbegin(); b != blend.to.cend(); ++b) {
             const std::string boneName = b.key().toStdString();
             if (!skel->hasBone(boneName)) continue;
             Ogre::Bone* bone = skel->getBone(boneName);
             if (!bone) continue;
+            blendedHandles.append(bone->getHandle());
             auto fromIt = blend.from.constFind(b.key());
             // A bone with no captured start (present in the target but
             // not in the live capture) has nothing to ease from — snap
@@ -527,6 +659,14 @@ int PoseLibrary::tickBlend(float dt)
             bone->setScale(f.scale + (to.scale - f.scale) * t);
             bone->setOrientation(
                 Ogre::Quaternion::Slerp(t, f.rotation, to.rotation, true));
+        }
+
+        // Same contract as a snap apply: hold the blended bones against
+        // Skeleton::reset + running tracks, and re-upload the bone matrices,
+        // or each eased frame is written but never rendered.
+        if (!blendedHandles.isEmpty()) {
+            holdPosedBones(entity, blendedHandles);
+            flushSkeletonPose(entity, skel);
         }
 
         if (done) {
@@ -1094,6 +1234,20 @@ QString PoseLibrary::poseThumbnailForSelection(const QString& name)
     // not want an iterator into m_byEntity live across that.
     const PoseSnapshot target = *poseIt;
     const PoseSnapshot before = captureLive(entity);
+    // A thumbnail must leave the skeleton EXACTLY as it found it — including
+    // whether an applied pose was being held. Rendering one is triggered by
+    // QML (row creation / thumbGeneration bump / cache miss), so it lands at
+    // an unpredictable moment relative to the user's click: blanket-releasing
+    // here is what made Apply work only after a random number of clicks.
+    const bool wasHeld = hasHeldBones(entity);
+    // applySnapshot disables enabled clips (they would overwrite the pose).
+    // For a THUMBNAIL that must not stick: remember what was enabled and put
+    // it back below, alongside the bone restore.
+    QStringList reEnable;
+    if (auto* states = entity->getAllAnimationStates())
+        for (const auto& [nm, st] : states->getAnimationStates())
+            if (st && st->getEnabled())
+                reEnable << QString::fromStdString(nm);
     applySnapshot(entity, target);
 
     TurntableOptions opts;
@@ -1112,6 +1266,18 @@ QString PoseLibrary::poseThumbnailForSelection(const QString& name)
     // Restore BEFORE inspecting the result so an early return can't
     // leave the character stuck in the thumbnail pose.
     applySnapshot(entity, before);
+    // applySnapshot HOLDS the bones it wrote. Only hand the rig back to the
+    // animation system if it was NOT already held before we started —
+    // otherwise a thumbnail render silently cancels the user's applied pose.
+    if (!wasHeld)
+        releasePosedBones(entity);
+    if (auto* states = entity->getAllAnimationStates()) {
+        for (const QString& nm : reEnable) {
+            const std::string key = nm.toStdString();
+            if (states->hasAnimationState(key))
+                states->getAnimationState(key)->setEnabled(true);
+        }
+    }
 
     if (!ok || frames.isEmpty() || frames.first().isNull()) {
         // Headless / no-GL environments land here. Returning empty is
