@@ -1444,7 +1444,7 @@ TEST_F(PoseLibrarySceneTest, BlendedApplyHoldsBonesWhileTransitioning) {
 
     // Mid-transition the bones must be held, or the mesh renders stale.
     lib->tickBlend(0.5f);
-    EXPECT_TRUE(PoseLibrary::hasHeldBones(entity));
+    EXPECT_TRUE(lib->hasHeldBones(entity));
 
     // And the blend still converges on the target.
     lib->tickBlend(1.0f);
@@ -1452,4 +1452,95 @@ TEST_F(PoseLibrarySceneTest, BlendedApplyHoldsBonesWhileTransitioning) {
     EXPECT_NEAR(after.x, 2.0f, 1e-3f);
     EXPECT_NEAR(after.y, 3.0f, 1e-3f);
     EXPECT_NEAR(after.z, 4.0f, 1e-3f);
+}
+
+// ── Codex review regressions (PR #1055) ──────────────────────────────────────
+
+// A thumbnail render must leave a NON-held rig exactly as it found it. The
+// thumbnail's own applySnapshot takes a hold; releasing it after restoring the
+// pre-render TRS used to hand the skeleton back to the animation system and
+// discard that TRS, snapping a hand-posed, non-animated rig to bind.
+TEST_F(PoseLibrarySceneTest, ThumbnailDoesNotDisturbAnUnheldPosedRig) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ThumbRestore");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    if (auto* st = entity->getAnimationState("TestAnim")) st->setEnabled(false);
+
+    skel->getBone("Child")->setPosition(Ogre::Vector3(1, 2, 3));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("p")));
+
+    // Hand-pose the rig to something else; a thumbnail must not change it.
+    skel->getBone("Child")->setPosition(Ogre::Vector3(7, 8, 9));
+    lib->poseThumbnailForSelection(QStringLiteral("p"));   // no-GL => empty, still restores
+
+    const Ogre::Vector3 after = skel->getBone("Child")->getPosition();
+    EXPECT_NEAR(after.x, 7.0f, 1e-3f);
+    EXPECT_NEAR(after.y, 8.0f, 1e-3f);
+    EXPECT_NEAR(after.z, 9.0f, 1e-3f);
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+}
+
+// Saving/overwriting/deleting a pose round-trips through applyPose purely to
+// READ stored content. That must not leave the rig held — otherwise a mere
+// save would freeze it even though no pose was intentionally applied.
+TEST_F(PoseLibrarySceneTest, SavingAPoseLeavesNoHoldBehind) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_NoHoldOnSave");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+
+    // Overwrite path (prior content captured via a transient apply).
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+
+    EXPECT_TRUE(lib->deletePose(entity, QStringLiteral("a")));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+}
+
+// Releasing a pose must restore ONLY the mask entries the pose zeroed, and
+// must not resurrect a mask the clip never had. Other systems (bone-drag
+// gizmo, mocap) own masks of their own.
+TEST_F(PoseLibrarySceneTest, ReleasePreservesForeignBlendMaskWeights) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskRestore");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+    auto* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    state->setEnabled(true);
+
+    // A pre-existing mask owned by "another system": Root half-weighted.
+    const unsigned short rootHandle = skel->getBone("Root")->getHandle();
+    state->createBlendMask(skel->getNumBones(), 1.0f);
+    state->setBlendMaskEntry(rootHandle, 0.5f);
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("p")));
+    ASSERT_TRUE(lib->applyPose(entity, QStringLiteral("p")));
+    ASSERT_TRUE(lib->hasHeldBones(entity));
+
+    lib->releasePosedBones(entity);
+    ASSERT_TRUE(state->hasBlendMask());
+    EXPECT_NEAR(state->getBlendMaskEntry(rootHandle), 0.5f, 1e-4f)
+        << "release clobbered a blend-mask weight the pose did not own";
+}
+
+// An entity destroyed mid-blend must not leave a dangling pointer for the
+// next tickBlend to dereference.
+TEST_F(PoseLibrarySceneTest, ForgetEntityDropsInFlightBlendAndHold) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Forget");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("t")));
+    ASSERT_TRUE(lib->applyPoseBlended(entity, QStringLiteral("t"), 1.0f));
+    ASSERT_TRUE(lib->isBlending(entity));
+
+    lib->forgetEntity(entity);
+    EXPECT_FALSE(lib->isBlending(entity));
+    EXPECT_FALSE(lib->hasHeldBones(entity));
+    EXPECT_EQ(lib->tickBlend(0.1f), 0);   // must not touch the forgotten entity
 }

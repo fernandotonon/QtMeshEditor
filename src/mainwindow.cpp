@@ -986,8 +986,9 @@ void MainWindow::initToolBar()
             // animation panel's — otherwise the first Apply after a fresh
             // selection falls through to reset(true) below and is wiped,
             // while later clicks (once the panel has synced) survive.
+            auto* poseLib = PoseLibrary::instance();
             for (Ogre::Entity* selEnt : SelectionSet::getSingleton()->getResolvedEntities()) {
-                if (!selEnt || !PoseLibrary::hasHeldBones(selEnt)) continue;
+                if (!selEnt || !poseLib || !poseLib->hasHeldBones(selEnt)) continue;
                 if (Ogre::SkeletonInstance* hs = selEnt->getSkeleton()) {
                     hs->_notifyManualBonesDirty();
                     hs->_updateTransforms();
@@ -1020,7 +1021,7 @@ void MainWindow::initToolBar()
                     // reverts to T-pose" bug). A held pose is already the
                     // authoritative skeleton state, so just push derived
                     // transforms and skip the reset/re-apply.
-                    if (PoseLibrary::hasHeldBones(ent)) {
+                    if (poseLib && poseLib->hasHeldBones(ent)) {
                         skel->_notifyManualBonesDirty();
                         skel->_updateTransforms();
                         return;
@@ -4552,11 +4553,22 @@ void MainWindow::setPlaying(bool playing)
     // release the hold here — otherwise playback would visibly skip the
     // posed bones.
     if (playing && !isPlaying) {
-        // Release every selected entity, not just the animation panel's — the
-        // Pose Library poses SelectionSet's entity and the two can differ.
-        if (auto* sel = SelectionSet::getSingleton())
-            for (Ogre::Entity* ent : sel->getResolvedEntities())
-                PoseLibrary::releasePosedBones(ent);
+        // Release EVERY pose-held entity in the scene, not just the current
+        // selection: pose character A, select character B, press Play, and A
+        // would otherwise keep skipAnimationStateUpdate + zeroed masks — its
+        // timeline advancing while its skeleton stayed frozen.
+        if (auto* poseLib = PoseLibrary::instance()) {
+            if (auto* mgr = Manager::getSingletonPtr()) {
+                for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+                    if (!node) continue;
+                    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = node->getAttachedObject(i);
+                        if (!obj || obj->getMovableType() != "Entity") continue;
+                        poseLib->releasePosedBones(static_cast<Ogre::Entity*>(obj));
+                    }
+                }
+            }
+        }
     }
     isPlaying = playing;
 }

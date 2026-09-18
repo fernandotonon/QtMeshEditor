@@ -78,18 +78,18 @@ public:
     /// would snap them to BIND) plus a zeroed per-state blend-mask entry
     /// (manual control alone does NOT stop tracks applying). Returns the
     /// number of bones held.
-    static int holdPosedBones(Ogre::Entity* entity,
-                              const QList<unsigned short>& boneHandles);
+    int holdPosedBones(Ogre::Entity* entity,
+                       const QList<unsigned short>& boneHandles);
 
     /// Release every held bone on `entity` — clears manual control, restores
     /// full blend-mask weight and resets the skeleton, handing the rig back
     /// to normal clip playback. Returns the number of bones released.
-    static int releasePosedBones(Ogre::Entity* entity);
+    int releasePosedBones(Ogre::Entity* entity);
 
     /// True when any bone on `entity` is currently held by an applied pose
     /// (see holdPosedBones). Callers that force a full skeleton refresh must
     /// check this first — a blanket reset(true) wipes a held pose.
-    static bool hasHeldBones(Ogre::Entity* entity);
+    bool hasHeldBones(Ogre::Entity* entity) const;
 
 
     /// Apply a saved pose to `entity` — sets every captured bone's
@@ -414,6 +414,22 @@ private:
     };
     QHash<Ogre::Entity*, ActiveBlend> m_blends;
 
+    /// Bookkeeping for an active pose hold (holdPosedBones). Records what
+    /// the hold overwrote so releasePosedBones can put back EXACTLY that and
+    /// nothing else — other systems (bone-drag gizmo, mocap) install their
+    /// own blend masks, and blanket-restoring every entry to 1.0 would
+    /// destroy their layering.
+    struct PoseHold {
+        QList<unsigned short> handles;          ///< bones the pose owns
+        bool priorSkipAnimStateUpdate = false;  ///< entity flag before hold
+        /// clip name -> (bone handle -> prior mask weight). Empty inner map
+        /// means the state had NO blend mask before the hold, so the whole
+        /// mask must be dropped again on release.
+        QHash<QString, QHash<unsigned short, float>> priorMaskWeights;
+        QSet<QString> maskCreatedByUs;
+    };
+    QHash<Ogre::Entity*, PoseHold> m_holds;
+
     /// Cached thumbnails, keyed "<entity-ptr>/<pose name>". Values are
     /// `data:image/png;base64,…` URIs.
     QHash<QString, QString> m_thumbCache;
@@ -459,7 +475,7 @@ private:
 
     /// Write `snapshot` onto the live skeleton, skipping bones the
     /// skeleton doesn't have. Returns the number of bones written.
-    static int applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapshot);
+    int applySnapshot(Ogre::Entity* entity, const PoseSnapshot& snapshot);
 
     /// Push freshly-written bone locals into derived transforms so the
     /// skin / debug visuals / TagPoints update in the same frame. Bone

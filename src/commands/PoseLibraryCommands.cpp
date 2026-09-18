@@ -79,6 +79,22 @@ void applyPose(Ogre::Entity* entity, const PoseLibSnapshot& snap)
 // transiently, hit PoseLibrary::savePose, then restore the bones
 // to whatever they were before. Caller is responsible for the
 // "restore" via captureBeforeAndAfter.
+// Restore `snap` onto the bones AND drop any pose hold. The commands use
+// PoseLibrary::applyPose purely to READ stored pose content (apply, capture,
+// put the bones back) — but that call now takes a hold (manual control +
+// zeroed masks + skipAnimationStateUpdate). Left behind, a mere
+// save/delete/overwrite would freeze the rig even though the user never
+// intentionally applied a pose. Release first, then write the TRS: releasing
+// afterwards would hand the skeleton to the animation system and discard it.
+void restoreAndUnhold(Ogre::Entity* entity, const PoseLibSnapshot& snap)
+{
+    if (auto* lib = PoseLibrary::instance())
+        lib->releasePosedBones(entity);
+    applyPose(entity, snap);
+    if (auto* lib = PoseLibrary::instance())
+        lib->releasePosedBones(entity);
+}
+
 void writeSnapshotToLibrary(Ogre::Entity* entity,
                             const QString& name,
                             const PoseLibSnapshot& snap)
@@ -89,7 +105,7 @@ void writeSnapshotToLibrary(Ogre::Entity* entity,
     const PoseLibSnapshot live = capturePose(entity);
     applyPose(entity, snap);
     lib->savePose(entity, name);
-    applyPose(entity, live);
+    restoreAndUnhold(entity, live);
 }
 
 } // namespace
@@ -120,7 +136,7 @@ SavePoseCommand::SavePoseCommand(Ogre::Entity* entity,
         const PoseLibSnapshot live = capturePose(entity);
         lib->applyPose(entity, name);
         mPriorSnapshot = capturePose(entity);
-        applyPose(entity, live);
+        restoreAndUnhold(entity, live);
     }
 }
 
@@ -167,7 +183,7 @@ DeletePoseCommand::DeletePoseCommand(Ogre::Entity* entity,
         const PoseLibSnapshot live = capturePose(entity);
         lib->applyPose(entity, name);
         mSnapshot = capturePose(entity);
-        applyPose(entity, live);
+        restoreAndUnhold(entity, live);
     }
 }
 
@@ -222,7 +238,7 @@ void ApplyPoseCommand::undo()
     // bone edits the user made after the failed apply (Codex P1
     // on PR #595).
     if (!mRedoApplied) return;
-    applyPose(mEntity, mPreApply);
+    restoreAndUnhold(mEntity, mPreApply);
     SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
         QStringLiteral("undo: apply '%1'").arg(mName));
 }
@@ -264,7 +280,7 @@ void ApplyPoseMaskedCommand::redo()
 void ApplyPoseMaskedCommand::undo()
 {
     if (!mEntity || !mRedoApplied) return;
-    applyPose(mEntity, mPreApply);
+    restoreAndUnhold(mEntity, mPreApply);
     SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
         QStringLiteral("undo: apply '%1' masked").arg(mName));
 }
@@ -305,7 +321,7 @@ void ApplyPoseBlendedCommand::undo()
     // tickBlend would immediately drag the skeleton back off the
     // snapshot we're about to restore.
     if (lib) lib->cancelBlend(mEntity);
-    applyPose(mEntity, mPreApply);
+    restoreAndUnhold(mEntity, mPreApply);
     SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
         QStringLiteral("undo: apply '%1' blended").arg(mName));
 }
@@ -338,7 +354,7 @@ std::optional<PoseLibSnapshot> capturePriorPose(Ogre::Entity* entity,
     const PoseLibSnapshot live = capturePose(entity);
     lib->applyPose(entity, name);
     PoseLibSnapshot prior = capturePose(entity);
-    applyPose(entity, live);
+    restoreAndUnhold(entity, live);
     return prior;
 }
 
