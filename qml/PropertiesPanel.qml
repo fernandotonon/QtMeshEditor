@@ -2132,10 +2132,18 @@ Rectangle {
                     smooth: true
                     cache: false
                 }
+                // Declared before the controls so they are on top of it, and
+                // bounded above the button row so it cannot cover them.
+                MouseArea {
+                    anchors { left: parent.left; right: parent.right; top: parent.top
+                              bottom: saveRow.top }
+                    onDoubleClicked: imageViewerWindow.close()
+                }
                 // A generated image otherwise lives only in AppData under a
                 // timestamped name, so it is effectively thrown away after the
                 // mesh is built. Saving makes prompt-to-image useful on its own.
                 Row {
+                    id: saveRow
                     anchors.bottom: sourcePathLabel.top
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.margins: 6
@@ -2157,13 +2165,13 @@ Rectangle {
                     width: parent.width - 16
                     horizontalAlignment: Text.AlignHCenter
                 }
-                // Esc closes. NB the close-on-click MouseArea must NOT cover
-                // the button row, or the dialog would shut on the way to Save.
+                // Esc closes. The close-on-double-click MouseArea must not
+                // eat the button's clicks: `fullImage` fills the WHOLE window
+                // (anchors.fill: parent), so anchoring to it still covered the
+                // button row — and being declared last it sat on top, so Save
+                // never received a press. Stop it above the controls, and
+                // declare it BEFORE them so they win the overlap regardless.
                 Shortcut { sequence: "Esc"; onActivated: imageViewerWindow.close() }
-                MouseArea {
-                    anchors.fill: fullImage
-                    onDoubleClicked: imageViewerWindow.close()
-                }
             }
 
             // Auto-generated caption of the selected image (SmolVLM), computed
