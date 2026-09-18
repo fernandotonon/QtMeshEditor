@@ -1293,17 +1293,32 @@ jobs:
       # slowest step in this job, dominated by ~500 .cpp compiles)
       # gets near-instant replays for files that haven't changed.
       #
-      # The key MUST be unique per run (github.run_id) so the action
-      # uploads a FRESH cache after every build. GitHub cache entries are
-      # immutable — with a static key the cache is written once and then
-      # never updated, so its hit rate decays to ~0 as the code drifts.
-      # `restore-keys` then pulls the most recent prior cache as the base,
-      # so each run starts warm and saves back the updated cache.
+      # MEASURED 2026-09-18: hit rate was 0/1442 on every run, i.e. the
+      # cache never worked, because of two compounding problems:
+      #
+      # 1. SCOPING. GitHub Actions caches are BRANCH-SCOPED: a run can read
+      #    caches written by its own ref or by the DEFAULT branch, never by
+      #    another PR's ref. A per-run key saved from a PR lands under
+      #    `refs/pull/N/merge`, so PR #1054 could never read PR #1052's
+      #    entry — every PR build started cold and then wrote a ~840 MB
+      #    entry only it could ever read.
+      # 2. QUOTA. Those write-only entries (12 x ~840 MB) filled the repo's
+      #    10 GB cache allowance, so GitHub evicted by age — including the
+      #    single master-ref entry that every PR needs as its base.
+      #
+      # Fix: only the DEFAULT BRANCH writes a cache (`save` is true just on
+      # master), and every run restores from the master lineage. PR builds
+      # become read-only consumers of a warm master cache: they get the
+      # hits without competing for the quota, and one shared entry replaces
+      # a dozen private ones. `key` still carries run_id so master's own
+      # save is a fresh immutable entry rather than a no-op write.
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         key: sonar-tests-${{ runner.os }}-${{ github.run_id }}
         restore-keys: |
           sonar-tests-${{ runner.os }}-
+        # Only master writes; PRs read master's entry (see above).
+        save: ${{ github.ref == 'refs/heads/master' }}
         max-size: 2G
         # ccache wraps gcc/g++ so build-wrapper still sees every
         # invocation it needs to record for SonarCloud.
