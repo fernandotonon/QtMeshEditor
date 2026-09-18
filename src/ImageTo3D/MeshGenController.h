@@ -121,6 +121,22 @@ public:
     Q_INVOKABLE void generateSourceImage(const QString& prompt);
     Q_INVOKABLE void clearSelectedImage();
 
+    /// Copy the selected/generated source image to `destPath` (a plain path
+    /// or a file:// URL, as QML's FileDialog hands back). The generated
+    /// image otherwise lives only in AppData under a timestamped name and is
+    /// effectively disposable — saving it makes prompt-to-image useful on
+    /// its own, not just as a step of image-to-3D. Returns false and emits
+    /// `error` when there is nothing selected or the copy fails.
+    Q_INVOKABLE bool saveSelectedImageAs(const QString& destPath);
+    /// Ask for a destination with a native Save dialog and copy the image
+    /// there. Returns the saved path, or empty when cancelled/failed. The
+    /// panel calls this — the file dialog lives here rather than in QML to
+    /// match the project's existing openFileDialog convention.
+    Q_INVOKABLE QString saveSelectedImageInteractive();
+    /// A sensible default filename for the save dialog, derived from the
+    /// caption/prompt when there is one so saved images are identifiable.
+    Q_INVOKABLE QString suggestedImageFileName() const;
+
     Q_INVOKABLE bool modelsPresent(int quality = 0) const;
     // Download the decoder + the given tier's encoder (blocks on the caller's
     // event loop, driven by ModelDownloader → its progress bar updates in the

@@ -2112,7 +2112,21 @@ Rectangle {
                     smooth: true
                     cache: false
                 }
+                // A generated image otherwise lives only in AppData under a
+                // timestamped name, so it is effectively thrown away after the
+                // mesh is built. Saving makes prompt-to-image useful on its own.
+                Row {
+                    anchors.bottom: sourcePathLabel.top
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.margins: 6
+                    spacing: 8
+                    Button {
+                        text: "Save Image As…"
+                        onClicked: MeshGenController.saveSelectedImageInteractive()
+                    }
+                }
                 Text {
+                    id: sourcePathLabel
                     anchors.bottom: parent.bottom
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.margins: 4
@@ -2123,9 +2137,13 @@ Rectangle {
                     width: parent.width - 16
                     horizontalAlignment: Text.AlignHCenter
                 }
-                // Esc / click closes
+                // Esc closes. NB the close-on-click MouseArea must NOT cover
+                // the button row, or the dialog would shut on the way to Save.
                 Shortcut { sequence: "Esc"; onActivated: imageViewerWindow.close() }
-                MouseArea { anchors.fill: parent; onDoubleClicked: imageViewerWindow.close() }
+                MouseArea {
+                    anchors.fill: fullImage
+                    onDoubleClicked: imageViewerWindow.close()
+                }
             }
 
             // Auto-generated caption of the selected image (SmolVLM), computed

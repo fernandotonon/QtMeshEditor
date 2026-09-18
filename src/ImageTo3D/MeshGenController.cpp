@@ -28,6 +28,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
+#include <QRegularExpression>
 #include <QUrl>
 
 #include <thread>
@@ -211,6 +212,78 @@ void MeshGenController::clearSelectedImage()
     emit selectedImageChanged();
     emit captionChanged();
     emit statusMessage(tr("Image cleared."));
+}
+
+QString MeshGenController::suggestedImageFileName() const
+{
+    // Prefer the caption/prompt so a folder of saved images is readable;
+    // fall back to the source file's own name.
+    QString stem = m_caption.trimmed();
+    if (stem.isEmpty()) stem = QFileInfo(m_selectedImage).completeBaseName();
+    if (stem.isEmpty()) return QStringLiteral("generated_image.png");
+    // Keep it filesystem-safe and short: captions are sentences, not names.
+    stem.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9 _-]")), QString());
+    stem = stem.simplified();
+    stem.replace(' ', '_');
+    if (stem.size() > 60) stem = stem.left(60);
+    if (stem.isEmpty()) return QStringLiteral("generated_image.png");
+    return stem + QStringLiteral(".png");
+}
+
+bool MeshGenController::saveSelectedImageAs(const QString& destPath)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Save source image"));
+    if (m_selectedImage.isEmpty() || !QFileInfo::exists(m_selectedImage)) {
+        emit error(tr("There is no source image to save."));
+        return false;
+    }
+    // QML's FileDialog hands back a file:// URL; a caller may pass a plain
+    // path. Accept both rather than making the QML side normalise it.
+    QString dest = destPath.trimmed();
+    if (dest.startsWith(QLatin1String("file://"))) dest = QUrl(dest).toLocalFile();
+    if (dest.isEmpty()) {
+        emit error(tr("No save location chosen."));
+        return false;
+    }
+    if (QFileInfo(dest).suffix().isEmpty()) dest += QStringLiteral(".png");
+    // Saving onto the source would delete it via the overwrite below.
+    if (QFileInfo(dest).absoluteFilePath()
+        == QFileInfo(m_selectedImage).absoluteFilePath()) {
+        emit statusMessage(tr("Image is already saved there."));
+        return true;
+    }
+    QDir().mkpath(QFileInfo(dest).absolutePath());
+    // QFile::copy refuses to overwrite, so clear an existing target first —
+    // the file dialog already asked the user to confirm the replacement.
+    if (QFileInfo::exists(dest) && !QFile::remove(dest)) {
+        emit error(tr("Could not replace %1.").arg(QFileInfo(dest).fileName()));
+        return false;
+    }
+    if (!QFile::copy(m_selectedImage, dest)) {
+        emit error(tr("Could not save the image to %1.").arg(dest));
+        return false;
+    }
+    emit statusMessage(tr("Saved %1").arg(QFileInfo(dest).fileName()));
+    return true;
+}
+
+QString MeshGenController::saveSelectedImageInteractive()
+{
+    if (m_selectedImage.isEmpty() || !QFileInfo::exists(m_selectedImage)) {
+        emit error(tr("There is no source image to save."));
+        return {};
+    }
+    const QString startDir =
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString suggested =
+        QDir(startDir.isEmpty() ? QDir::homePath() : startDir)
+            .filePath(suggestedImageFileName());
+    const QString dest = QFileDialog::getSaveFileName(
+        nullptr, tr("Save Source Image"), suggested,
+        tr("PNG image (*.png);;All files (*)"));
+    if (dest.isEmpty()) return {};          // cancelled — not an error
+    return saveSelectedImageAs(dest) ? dest : QString();
 }
 
 // ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
