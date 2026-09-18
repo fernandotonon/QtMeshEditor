@@ -136,9 +136,23 @@ public:
      */
     void setOgreInitFailed(bool failed) { m_ogreInitFailed = failed; }
 
+    /// Cleared when a heavy tool starts; set by requestToolCancel().
+    bool m_toolCancelRequested = false;
+
 signals:
     void messageReceived(const QJsonObject &message);
     void errorOccurred(const QString &error);
+    /// Progress of a long-running (heavy) tool, for in-app callers that drive
+    /// tools synchronously — the AI agent shows it in the chat panel. `done`/
+    /// `total` are units of the current stage; total <= 0 means "indeterminate".
+    void toolProgress(const QString &tool, const QString &stage, int done, int total);
+
+public:
+    /// Ask the running heavy tool to stop at its next progress callback. The
+    /// tool then returns a normal "cancelled" error result. Safe to call when
+    /// nothing is running (the flag is cleared when the next tool starts).
+    void requestToolCancel() { m_toolCancelRequested = true; }
+    bool toolCancelRequested() const { return m_toolCancelRequested; }
 
 private slots:
     void onReadyRead();
@@ -287,6 +301,7 @@ private:
     QJsonObject toolSetLightProperty(const QJsonObject &args);
     QJsonObject toolApplyLightRig(const QJsonObject &args);
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
+    QJsonObject toolSelectEntity(const QJsonObject &args);   // #1052: agent needs to target selection-based tools
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
     QJsonObject toolExportPose(const QJsonObject &args);

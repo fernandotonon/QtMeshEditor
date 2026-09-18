@@ -1,0 +1,718 @@
+// Headless tests for the AI agent state machine (#1001). A scripted planner
+// stands in for the LLM and a scripted executor for the MCP server, so the
+// whole plan → execute → observe → replan → finish loop runs without a
+// model, Ogre, or a GUI. The custom test main owns the QApplication.
+#include <gtest/gtest.h>
+
+#include "AIAgentManager.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMetaMethod>
+#include <QRegularExpression>
+#include <QSignalSpy>
+#include <QTimer>
+#include <QUndoCommand>
+#include <QUndoStack>
+
+using namespace AIAgent;
+
+namespace {
+
+QJsonObject prop(const char* type, const char* desc, QJsonArray enumVals = {})
+{
+    QJsonObject p{{"type", type}, {"description", desc}};
+    if (!enumVals.isEmpty()) p["enum"] = enumVals;
+    return p;
+}
+QJsonObject tool(const char* name, const char* desc, QJsonObject props, QJsonArray required = {})
+{
+    QJsonObject schema{{"type", "object"}, {"properties", props}};
+    if (!required.isEmpty()) schema["required"] = required;
+    return {{"name", name}, {"description", desc}, {"inputSchema", schema}};
+}
+QJsonObject ok(const QString& text)
+{
+    return {{"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}}}};
+}
+QJsonObject err(const QString& text)
+{
+    return {{"isError", true}, {"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}}}};
+}
+
+/// Scripted MCP stand-in: per-tool queues of results (default: success),
+/// a call log, and an optional undo stack it pushes a command onto for
+/// every mutating call (so undo grouping is observable).
+class FakeExecutor : public AgentToolExecutor
+{
+public:
+    QJsonArray toolList() override
+    {
+        return {
+            tool("get_scene_info", "Scene info.", {}),
+            tool("create_primitive", "Create a primitive.", {{"type", prop("string", "kind", {"box", "sphere"})}, {"name", prop("string", "name")}}, {"type"}),
+            tool("transform_mesh", "Transform.", {{"name", prop("string", "node")}, {"scale", prop("array", "xyz")}}, {"name"}),
+            tool("apply_material", "Apply.", {{"mesh", prop("string", "m")}, {"material", prop("string", "mat")}}, {"mesh", "material"}),
+            tool("auto_rig", "Rig.", {{"template", prop("string", "t")}}),
+            tool("delete_entity", "Delete.", {{"entity_name", prop("string", "e")}}, {"entity_name"}),
+            tool("export_mesh", "Export.", {{"output_path", prop("string", "p")}}, {"output_path"}),
+            tool("generate_mesh_from_image", "Image or prompt to 3D.", {{"image_path", prop("string", "img")}, {"prompt", prop("string", "text")}}),
+        };
+    }
+    QJsonObject callTool(const QString& name, const QJsonObject& args) override
+    {
+        calls << name;
+        callArgs << args;
+        if (onCall) onCall(name);
+        if (undoStack && !AICapabilityRegistry::isReadOnly(name))
+            undoStack->push(new QUndoCommand(name));
+        auto& q = scripted[name];
+        if (!q.isEmpty()) return q.takeFirst();
+        return ok(QStringLiteral("Created %1").arg(args.value("name").toString("thing")));
+    }
+    QStringList calls;
+    QList<QJsonObject> callArgs;
+    int cancelRequests = 0;
+    void cancelRunningTool() override { ++cancelRequests; }
+    QHash<QString, QList<QJsonObject>> scripted;
+    QUndoStack* undoStack = nullptr;
+    std::function<void(const QString&)> onCall;
+};
+
+/// Scripted LLM: replies are dequeued in order and delivered asynchronously
+/// (a queued call, like the real worker thread). Records every prompt.
+class FakePlanner : public AgentPlannerBackend
+{
+public:
+    using AgentPlannerBackend::AgentPlannerBackend;
+    bool available() const override { return isAvailable; }
+    void request(const QString& sys, const QString& user, int) override
+    {
+        systemPrompts << sys; userPrompts << user; pendingFlag = true;
+        if (replies.isEmpty()) { QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit failed("no scripted reply"); }); return; }
+        const QString r = replies.takeFirst();
+        QTimer::singleShot(0, this, [this, r]() { if (!stoppedFlag) { pendingFlag = false; emit completed(r); } });
+    }
+    void stop() override { stoppedFlag = true; QTimer::singleShot(0, this, [this]() { pendingFlag = false; emit stopped(); }); }
+    bool pending() const override { return pendingFlag; }
+    int contextTokens() const override { return ctxTokens; }
+    int ctxTokens = 0;
+    bool isAvailable = true;
+    bool stoppedFlag = false;
+    bool pendingFlag = false;
+    QStringList replies, systemPrompts, userPrompts;
+};
+
+QString planJson(const QList<QPair<QString, QJsonObject>>& steps, const QString& title = "test plan")
+{
+    QJsonArray arr;
+    for (const auto& s : steps) arr.append(QJsonObject{{"tool", s.first}, {"arguments", s.second}, {"why", "because"}});
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{"title", title}, {"steps", arr}}).toJson(QJsonDocument::Compact));
+}
+QString replanJson(const QList<QPair<QString, QJsonObject>>& steps, bool done = false, const QString& summary = {})
+{
+    QJsonArray arr;
+    for (const auto& s : steps) arr.append(QJsonObject{{"tool", s.first}, {"arguments", s.second}});
+    QJsonObject o{{"steps", arr}, {"done", done}};
+    if (!summary.isEmpty()) o["summary"] = summary;
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+/// Pump the event loop until the manager reaches a terminal state or the
+/// given one (confirmation waits), with a hard timeout.
+bool pumpUntil(AIAgentManager* m, std::function<bool()> pred, int ms = 3000)
+{
+    QElapsedTimer t; t.start();
+    while (t.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        if (pred()) return true;
+    }
+    return pred();
+}
+bool pumpToEnd(AIAgentManager* m) { return pumpUntil(m, [m]() { return isTerminal(m->state()); }); }
+
+struct AgentFixture : public ::testing::Test {
+    AIAgentManager* m = nullptr;
+    std::shared_ptr<FakeExecutor> exec;
+    FakePlanner* planner = nullptr;   // owned by the manager
+    QUndoStack undo;
+    QStringList transcript;
+
+    void SetUp() override
+    {
+        AIAgentManager::kill();
+        m = AIAgentManager::instance();
+        exec = std::make_shared<FakeExecutor>();
+        exec->undoStack = &undo;
+        m->setExecutor(exec);
+        planner = new FakePlanner();
+        m->setPlanner(planner);
+        m->setUndoStack(&undo);
+        m->setTrustedMode(false);
+        QObject::connect(m, &AIAgentManager::chatMessage, [this](const QString& role, const QString& text, bool) {
+            transcript << role + ": " + text;
+        });
+    }
+    void TearDown() override { AIAgentManager::kill(); }
+};
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+
+TEST(AIAgentManagerParse, ExtractsTheFirstBalancedObjectEvenWithoutTheOpeningBrace)
+{
+    EXPECT_EQ(AIAgentManager::extractJsonObject("Sure! {\"a\": {\"b\": 1}} trailing"), "{\"a\": {\"b\": 1}}");
+    EXPECT_EQ(AIAgentManager::extractJsonObject("\"title\": \"x\", \"steps\": []}"), "{\"title\": \"x\", \"steps\": []}");
+    EXPECT_EQ(AIAgentManager::extractJsonObject("{\"s\": \"a } inside a string\"}"), "{\"s\": \"a } inside a string\"}");
+    EXPECT_TRUE(AIAgentManager::extractJsonObject("no json here").isEmpty());
+}
+
+TEST(AIAgentManagerParse, PlanReplyVariants)
+{
+    Plan p; QStringList need; QString answer, err;
+    ASSERT_TRUE(AIAgentManager::parsePlanReply(planJson({{"get_scene_info", {}}, {"create_primitive", {{"type", "box"}}}}), &p, &need, &answer, &err));
+    EXPECT_EQ(p.steps.size(), 2);
+    EXPECT_EQ(p.steps[1].arguments["type"].toString(), "box");
+
+    ASSERT_TRUE(AIAgentManager::parsePlanReply("{\"need_capabilities\": [\"rigging\", \"uv\"]}", &p, &need, &answer, &err));
+    EXPECT_EQ(need, QStringList({"rigging", "uv"}));
+
+    ASSERT_TRUE(AIAgentManager::parsePlanReply("{\"summary\": \"There are 2 entities.\"}", &p, &need, &answer, &err));
+    EXPECT_EQ(answer, "There are 2 entities.");
+
+    EXPECT_FALSE(AIAgentManager::parsePlanReply("I think we should...", &p, &need, &answer, &err));
+    EXPECT_FALSE(AIAgentManager::parsePlanReply("{\"title\": \"t\", \"steps\": [{\"arguments\": {}}]}", &p, &need, &answer, &err)) << "a step without a tool";
+    // legacy v1 field names are accepted
+    ASSERT_TRUE(AIAgentManager::parsePlanReply("{\"steps\": [{\"command\": \"get_scene_info\", \"args\": {}}]}", &p, &need, &answer, &err));
+    EXPECT_EQ(p.steps[0].tool, "get_scene_info");
+}
+
+TEST_F(AgentFixture, FiveDependentStepsRunInOrderWithObservableStateAndOneUndoGroup)
+{
+    planner->replies << planJson({
+        {"get_scene_info", {}},
+        {"create_primitive", {{"type", "box"}, {"name", "Crate"}}},
+        {"transform_mesh", {{"name", "Crate"}, {"scale", QJsonArray{2, 2, 2}}}},
+        {"apply_material", {{"mesh", "Crate"}, {"material", "Wood"}}},
+        {"auto_rig", {{"template", "generic"}}},
+    }, "build a crate");
+    exec->scripted["get_scene_info"] << ok("Scene Information:\n- Scene Nodes: 1\n- Entities: 1\n  - Floor (material: BaseWhite)");
+    exec->scripted["auto_rig"] << ok("{\"applied\":true,\"boneCount\":7,\"template\":\"generic\",\"skinned\":false}");
+
+    QSignalSpy stateSpy(m, &AIAgentManager::stateChanged);
+    ASSERT_TRUE(m->startTask("build a crate and rig it"));
+    EXPECT_EQ(m->state(), State::Planning);
+    ASSERT_TRUE(pumpToEnd(m));
+
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_EQ(exec->calls, QStringList({"get_scene_info", "create_primitive", "transform_mesh", "apply_material", "auto_rig"}));
+    ASSERT_EQ(m->plan().steps.size(), 5);
+    for (const Step& s : m->plan().steps) EXPECT_EQ(s.status, Step::Succeeded);
+    EXPECT_EQ(m->observations().size(), 5);
+    EXPECT_DOUBLE_EQ(m->observations()[0].facts["entities"].toDouble(), 1.0) << "facts parsed from the tool text";
+    EXPECT_EQ(m->observations()[4].facts["boneCount"].toInt(), 7) << "facts lifted from JSON results";
+    EXPECT_EQ(m->plan().title, "AI: build a crate");
+    // ONE undo group named after the task, covering the 4 mutating steps.
+    EXPECT_EQ(undo.count(), 1);
+    EXPECT_EQ(undo.text(0), "AI: build a crate");
+    EXPECT_TRUE(m->lastSummary().startsWith("Done — 5 of 5 steps succeeded.")) << m->lastSummary().toStdString();
+    EXPECT_GT(stateSpy.count(), 4) << "state transitions are observable";
+    // transcript: the plan card, one line per tool, the summary
+    EXPECT_TRUE(transcript.first().startsWith("plan: Plan — build a crate"));
+    EXPECT_EQ(transcript.filter(QRegularExpression("^tool: ")).size(), 5);
+    // the planner saw the compact capability index, not 170 tool docs
+    EXPECT_TRUE(planner->systemPrompts.first().contains("Capabilities (groups of tools):"));
+    EXPECT_TRUE(planner->systemPrompts.first().contains("- auto_rig:")) << "keyword routing exposed rigging docs";
+}
+
+TEST_F(AgentFixture, RecoverableErrorIsRetriedOnceThenSucceeds)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"transform_mesh", {{"name", "A"}}}});
+    exec->scripted["transform_mesh"] << err("Error: node 'A' busy") << ok("Transformed A");
+    ASSERT_TRUE(m->startTask("make a box and move it"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_EQ(exec->calls, QStringList({"create_primitive", "transform_mesh", "transform_mesh"}));
+    EXPECT_EQ(m->plan().steps[1].attempts, 2);
+    EXPECT_EQ(m->replanCount(), 0) << "a retry is not a replan";
+}
+
+TEST_F(AgentFixture, PersistentFailureTriggersOneReplanAndTheRepairedTailSucceeds)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    // Replan: the model realises Gold does not exist and applies Wood instead.
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Wood"}}}});
+    exec->scripted["apply_material"] << err("Error: material 'Gold' not found") << err("Error: material 'Gold' not found") << ok("Applied Wood to A");
+    ASSERT_TRUE(m->startTask("golden box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
+    EXPECT_EQ(m->replanCount(), 1);
+    EXPECT_EQ(exec->calls.size(), 4);
+    EXPECT_EQ(exec->callArgs.last()["material"].toString(), "Wood");
+    // the replan prompt carried the structured observations, not raw dumps
+    ASSERT_EQ(planner->userPrompts.size(), 2);
+    EXPECT_TRUE(planner->userPrompts[1].contains("\"status\":\"error\""));
+    EXPECT_TRUE(planner->userPrompts[1].contains("Step 2 (apply_material) failed"));
+    // old pending step marked skipped, repaired step appended
+    ASSERT_EQ(m->plan().steps.size(), 3);
+    EXPECT_EQ(m->plan().steps[1].status, Step::Repaired) << "a failed step with an appended replacement is not an unrepaired failure";
+    EXPECT_EQ(m->plan().steps[2].status, Step::Succeeded);
+}
+
+TEST_F(AgentFixture, RepeatedIdenticalFailingActionIsDetectedAndStopsTheTask)
+{
+    Limits lim; lim.maxAttemptsPerStep = 1; lim.maxReplans = 5; lim.maxRepeatedFailures = 2;
+    m->setLimits(lim);
+    planner->replies << planJson({{"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    // The model stubbornly re-issues the exact same call.
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    exec->scripted["apply_material"] << err("Error: no") << err("Error: no") << err("Error: no") << err("Error: no");
+    ASSERT_TRUE(m->startTask("gold"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_EQ(exec->calls.size(), 2) << "stopped after the second identical failure, not after 5 replans";
+    EXPECT_TRUE(m->lastError().contains("same action failed 2 times")) << m->lastError().toStdString();
+}
+
+TEST_F(AgentFixture, ReplanBudgetExhaustedFailsCleanly)
+{
+    Limits lim; lim.maxAttemptsPerStep = 1; lim.maxReplans = 1; lim.maxRepeatedFailures = 10;
+    m->setLimits(lim);
+    planner->replies << planJson({{"apply_material", {{"mesh", "A"}, {"material", "X"}}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Y"}}}});
+    exec->scripted["apply_material"] << err("Error: no X") << err("Error: no Y");
+    ASSERT_TRUE(m->startTask("paint"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(m->lastError().contains("replan budget")) << m->lastError().toStdString();
+    // The failing calls still pushed commands (the fake mimics tools that
+    // partially mutate before erroring), so ONE group exists — and it must be
+    // CLOSED: a command pushed after the task lands as a new entry, not
+    // inside a dangling macro.
+    EXPECT_EQ(undo.count(), 1);
+    undo.push(new QUndoCommand("later"));
+    EXPECT_EQ(undo.count(), 2) << "the undo group was left open";
+    EXPECT_EQ(undo.text(1), "later");
+}
+
+TEST_F(AgentFixture, RepairThatDoesNotFitTheStepCapFailsInsteadOfCompleting)
+{
+    // Plan already AT the cap; the last step fails; the repair needs one more
+    // step. Skipped entries do not count, but this repair still does not fit.
+    Limits lim; lim.maxSteps = 2; lim.maxAttemptsPerStep = 1; m->setLimits(lim);
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Wood"}}}});
+    exec->scripted["apply_material"] << err("Error: no Gold");
+    ASSERT_TRUE(m->startTask("gold box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed) << "a discarded repair must not read as success";
+    EXPECT_TRUE(m->lastError().contains("step limit")) << m->lastError().toStdString();
+    EXPECT_EQ(exec->calls, QStringList({"create_primitive", "apply_material"}));
+
+    // With room (a skipped pending step frees its slot) the repair runs.
+    AIAgentManager::kill(); SetUp();
+    lim.maxSteps = 3; m->setLimits(lim);
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"apply_material", {{"mesh", "A"}, {"material", "Gold"}}}, {"get_scene_info", {}}});
+    planner->replies << replanJson({{"apply_material", {{"mesh", "A"}, {"material", "Wood"}}}});
+    exec->scripted["apply_material"] << err("Error: no Gold") << ok("Applied Wood");
+    ASSERT_TRUE(m->startTask("gold box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
+    EXPECT_EQ(exec->callArgs.last()["material"].toString(), "Wood");
+}
+
+TEST_F(AgentFixture, CancellationStopsBetweenStepsAndDuringPlanning)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "A"}}}, {"create_primitive", {{"type", "box"}, {"name", "B"}}}, {"create_primitive", {{"type", "box"}, {"name", "C"}}}});
+    // cancel() fires INSIDE the synchronous tool call (a long tool pumps GUI events)
+    exec->onCall = [this](const QString&) { if (exec->calls.size() == 1) m->cancel(); };
+    QSignalSpy finished(m, &AIAgentManager::taskFinished);
+    ASSERT_TRUE(m->startTask("three boxes"));
+    ASSERT_TRUE(pumpToEnd(m));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_EQ(m->state(), State::Cancelled) << "the late tool result must not resurrect the task";
+    EXPECT_EQ(exec->calls.size(), 1) << "no further tool calls after cancel";
+    EXPECT_EQ(finished.count(), 1) << "finish() is idempotent — one taskFinished, one summary";
+    EXPECT_EQ(transcript.filter(QRegularExpression("^assistant: Cancelled")).size(), 1);
+    EXPECT_TRUE(m->lastSummary().startsWith("Cancelled after")) << m->lastSummary().toStdString();
+    EXPECT_FALSE(m->busy());
+
+    // cancel while the planner is thinking: the reply that arrives later is ignored
+    AIAgentManager::kill(); SetUp();
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
+    ASSERT_TRUE(m->startTask("a box"));
+    m->cancel();
+    EXPECT_EQ(m->state(), State::Cancelled) << "the UI learns immediately";
+    EXPECT_TRUE(m->plannerPending()) << "but the LLM request is still draining — the facade must keep ignoring v1 callbacks";
+    ASSERT_TRUE(pumpUntil(m, [this]() { return !m->plannerPending(); }));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_TRUE(exec->calls.isEmpty());
+}
+
+TEST_F(AgentFixture, InvalidArgumentsNeverReachTheToolAndTriggerAReplan)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "pyramid"}}}});   // not in the enum
+    planner->replies << replanJson({{"create_primitive", {{"type", "box"}}}});
+    ASSERT_TRUE(m->startTask("a pyramid"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_EQ(exec->calls, QStringList({"create_primitive"})) << "the invalid call was never executed";
+    EXPECT_EQ(m->observations().first().status, "invalid_arguments");
+    EXPECT_TRUE(planner->userPrompts[1].contains("not one of box|sphere"));
+}
+
+TEST_F(AgentFixture, UnknownToolFromThePlannerIsRejectedWithoutExecution)
+{
+    Limits lim; lim.maxReplans = 0; m->setLimits(lim);
+    planner->replies << planJson({{"make_it_pretty", {}}});
+    ASSERT_TRUE(m->startTask("pretty"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(exec->calls.isEmpty());
+}
+
+TEST_F(AgentFixture, DestructiveStepWaitsForConfirmationUnlessTrusted)
+{
+    planner->replies << planJson({{"delete_entity", {{"entity_name", "Cube"}}}, {"create_primitive", {{"type", "box"}}}});
+    ASSERT_TRUE(m->startTask("replace the cube"));
+    ASSERT_TRUE(pumpUntil(m, [this]() { return m->state() == State::AwaitingConfirmation; }));
+    EXPECT_TRUE(exec->calls.isEmpty()) << "nothing runs before the answer";
+    EXPECT_TRUE(m->pendingConfirmation().contains("deletes 'Cube'")) << m->pendingConfirmation().toStdString();
+
+    m->confirmPendingStep(false);   // deny → skipped, the rest continues
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(exec->calls, QStringList({"create_primitive"}));
+    EXPECT_EQ(m->plan().steps[0].status, Step::Skipped);
+    EXPECT_EQ(m->observations().first().status, "denied");
+    EXPECT_EQ(m->state(), State::Completed);
+
+    // approve path
+    AIAgentManager::kill(); SetUp();
+    planner->replies << planJson({{"delete_entity", {{"entity_name", "Cube"}}}});
+    ASSERT_TRUE(m->startTask("delete the cube"));
+    ASSERT_TRUE(pumpUntil(m, [this]() { return m->state() == State::AwaitingConfirmation; }));
+    m->confirmPendingStep(true);
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(exec->calls, QStringList({"delete_entity"}));
+    EXPECT_EQ(m->state(), State::Completed);
+
+    // trusted mode: no pause at all
+    AIAgentManager::kill(); SetUp();
+    m->setTrustedMode(true);
+    planner->replies << planJson({{"delete_entity", {{"entity_name", "Cube"}}}});
+    ASSERT_TRUE(m->startTask("delete the cube"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_EQ(exec->calls, QStringList({"delete_entity"}));
+    m->setTrustedMode(false);
+}
+
+TEST_F(AgentFixture, PlannerCanAskForMoreCapabilitiesBeforePlanning)
+{
+    // "make it shiny" routes to materials/scene; the model asks for rigging docs first.
+    planner->replies << "{\"need_capabilities\": [\"rigging\"]}";
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("make it shiny"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    ASSERT_EQ(planner->systemPrompts.size(), 2);
+    EXPECT_FALSE(planner->systemPrompts[0].contains("- auto_rig:")) << "first prompt: only routed capabilities";
+    EXPECT_TRUE(planner->systemPrompts[1].contains("- auto_rig:")) << "second prompt: expanded on request";
+    EXPECT_EQ(exec->calls, QStringList({"auto_rig"}));
+}
+
+// The F-22 transcript: the 14B model asked for generation_3d twice although the
+// second prompt already carried its docs. That is a nudge, not a failure.
+TEST_F(AgentFixture, RepeatedRequestForAlreadyProvidedDocsIsNudgedNotFailed)
+{
+    planner->replies << "{\"need_capabilities\": [\"rigging\"]}";
+    planner->replies << "{\"need_capabilities\": [\"rigging\"]}";   // again, although it now has them
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("make it shiny"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastSummary().toStdString();
+    ASSERT_EQ(planner->userPrompts.size(), 3);
+    EXPECT_TRUE(planner->userPrompts[2].contains("ALREADY listed")) << planner->userPrompts[2].toStdString();
+    EXPECT_TRUE(planner->systemPrompts[2].contains("- auto_rig:"));
+    EXPECT_EQ(exec->calls, QStringList({"auto_rig"}));
+
+    // a capability this build really lacks is reported as such
+    AIAgentManager::kill(); SetUp();
+    planner->replies << "{\"need_capabilities\": [\"holodeck\"]}";
+    ASSERT_TRUE(m->startTask("beam me up"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(m->lastError().contains("no tools for: holodeck")) << m->lastError().toStdString();
+
+    // and a model that never stops asking is cut off honestly
+    AIAgentManager::kill(); SetUp();
+    for (int i = 0; i < 6; ++i) planner->replies << "{\"need_capabilities\": [\"rigging\"]}";
+    ASSERT_TRUE(m->startTask("rig?"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_TRUE(m->lastError().contains("kept asking")) << m->lastError().toStdString();
+}
+
+TEST_F(AgentFixture, QuestionIsAnsweredWithoutRunningTools)
+{
+    planner->replies << "{\"summary\": \"The scene holds one entity, Floor.\"}";
+    ASSERT_TRUE(m->startTask("what is in the scene?"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_TRUE(exec->calls.isEmpty());
+    EXPECT_EQ(m->lastSummary(), "The scene holds one entity, Floor.");
+    EXPECT_EQ(undo.count(), 0);
+}
+
+TEST_F(AgentFixture, MalformedPlannerOutputIsRetriedThenFails)
+{
+    planner->replies << "I would love to help!" << "still no json" << "nope";
+    ASSERT_TRUE(m->startTask("do things"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Failed);
+    EXPECT_EQ(planner->userPrompts.size(), 3) << "1 attempt + maxPlannerRetries";
+    EXPECT_TRUE(planner->userPrompts[1].contains("previous reply was not valid"));
+    EXPECT_TRUE(exec->calls.isEmpty());
+}
+
+TEST_F(AgentFixture, RefusesToStartWithoutAModelOrWhileBusy)
+{
+    planner->isAvailable = false;
+    EXPECT_FALSE(m->startTask("anything"));
+    EXPECT_EQ(m->state(), State::Idle);
+    EXPECT_TRUE(transcript.last().contains("No AI model is loaded"));
+
+    planner->isAvailable = true;
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("scene?"));
+    EXPECT_FALSE(m->startTask("another")) << "busy";
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_EQ(undo.count(), 0) << "read-only steps never open an undo group";
+}
+
+TEST_F(AgentFixture, SceneContextIsInjectedIntoEveryPlannerPrompt)
+{
+    m->setContextProvider([]() { return QStringLiteral("Entities: Floor, Crate"); });
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("x"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_TRUE(planner->systemPrompts.first().contains("Scene state:\nEntities: Floor, Crate"));
+}
+
+TEST(AIAgentObservation, ParsesFactsArtifactsAndErrorsFromToolText)
+{
+    Observation ob = observationFromToolResult(0, "get_mesh_info",
+        ok("Mesh Information for Wolf:\n- Vertices: 12,345\n- Triangles: 20000\n- Bones: 24\nHas skeleton: yes"));
+    EXPECT_EQ(ob.status, "success");
+    EXPECT_DOUBLE_EQ(ob.facts["vertices"].toDouble(), 12345.0);
+    EXPECT_DOUBLE_EQ(ob.facts["triangles"].toDouble(), 20000.0);
+    EXPECT_DOUBLE_EQ(ob.facts["bones"].toDouble(), 24.0);
+    EXPECT_TRUE(ob.facts["hasSkeleton"].toBool());
+
+    ob = observationFromToolResult(1, "export_mesh", ok("Exported mesh to /tmp/out/wolf.glb (1 skin)"));
+    EXPECT_EQ(ob.artifacts, QStringList({"/tmp/out/wolf.glb"}));
+
+    ob = observationFromToolResult(2, "apply_material", err("Error: material 'Gold' not found\nAvailable: Wood"));
+    EXPECT_EQ(ob.status, "error");
+    EXPECT_EQ(ob.error, "Error: material 'Gold' not found");
+    EXPECT_TRUE(ob.raw.contains("Available: Wood")) << "raw is kept for the transcript";
+    EXPECT_FALSE(ob.toPromptLine().contains("Available: Wood")) << "but never copied into the prompt";
+
+    ob = observationFromToolResult(4, "segment_mesh", ok("{\"isError\":true,\"error\":\"no mesh selected\"}"));
+    EXPECT_EQ(ob.status, "error");
+    EXPECT_EQ(ob.error, "no mesh selected") << "a JSON isError payload carries its reason into the replan prompt";
+
+    ob = observationFromToolResult(3, "auto_rig", ok("{\"applied\":true,\"boneCount\":19,\"fallbackReason\":\"UniRig unavailable\"}"));
+    EXPECT_EQ(ob.facts["boneCount"].toInt(), 19);
+    ASSERT_EQ(ob.warnings.size(), 1);
+    EXPECT_TRUE(ob.warnings.first().startsWith("fallback:"));
+}
+
+TEST(AIAgentManagerModels, RecommendedModelCheckIsCaseInsensitiveAndSizeAware)
+{
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3-4B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen2.5-7B-Instruct-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("google_gemma-3-12b-it-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("gemma-3-1b-it-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("qwen2.5-3b-instruct-q4_k_m.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName(""));
+    // the QML-facing wrapper must be an INSTANCE invokable (a static one is not callable from QML)
+    AIAgentManager::kill();
+    EXPECT_TRUE(AIAgentManager::instance()->modelIsRecommended("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    const QMetaObject* mo = &AIAgentManager::staticMetaObject;
+    const int idx = mo->indexOfMethod("modelIsRecommended(QString)");
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(mo->method(idx).methodType(), QMetaMethod::Method);
+    AIAgentManager::kill();
+}
+
+TEST_F(AgentFixture, PreviousTurnsAndTheirObjectsAreInjectedIntoLaterPrompts)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}, {"name", "Crate"}}}}, "make a crate");
+    ASSERT_TRUE(m->startTask("create a crate"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_FALSE(planner->systemPrompts.first().contains("Previous tasks")) << "first task has no history";
+    ASSERT_EQ(m->historySize(), 1);
+
+    planner->replies << planJson({{"transform_mesh", {{"name", "Crate"}, {"scale", QJsonArray{2, 2, 2}}}}});
+    ASSERT_TRUE(m->startTask("now make it twice as large"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString sys = planner->systemPrompts.last();
+    EXPECT_TRUE(sys.contains("Previous tasks in this conversation")) << sys.toStdString();
+    EXPECT_TRUE(sys.contains("user asked: \"create a crate\"")) << "the earlier request is quoted";
+    EXPECT_TRUE(sys.contains("Done — 1 of 1 steps succeeded")) << "and its outcome";
+    EXPECT_TRUE(sys.contains("Crate")) << "objects touched earlier are listed so 'it' can be resolved";
+    EXPECT_TRUE(sys.contains("select_entity")) << "the selection rule is part of every prompt";
+    EXPECT_EQ(m->historySize(), 2);
+
+    m->clearHistory();
+    EXPECT_EQ(m->historySize(), 0);
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("what is here?"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_FALSE(planner->systemPrompts.last().contains("Previous tasks"));
+}
+
+TEST_F(AgentFixture, TraceLogRecordsPromptsRepliesAndToolResults)
+{
+    planner->replies << planJson({{"get_scene_info", {}}});
+    exec->scripted["get_scene_info"] << ok("Scene Information: Entities: 1");
+    ASSERT_TRUE(m->startTask("trace me"));
+    ASSERT_TRUE(pumpToEnd(m));
+    QFile f(AIAgentManager::traceLogPath());
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly)) << AIAgentManager::traceLogPath().toStdString();
+    const QString log = QString::fromUtf8(f.readAll());
+    EXPECT_TRUE(log.contains("==== task ====\ntrace me"));
+    EXPECT_TRUE(log.contains("==== plan reply ===="));
+    EXPECT_TRUE(log.contains("==== tool get_scene_info success ===="));
+    EXPECT_TRUE(log.contains("Scene Information: Entities: 1")) << "raw tool text is in the trace (but never in the prompt)";
+    EXPECT_TRUE(log.contains("==== finished completed ===="));
+}
+
+TEST_F(AgentFixture, PromptIsTrimmedToTheModelsContextWindow)
+{
+    // A big scene listing + history, with a small window: the prompt must
+    // shrink (history first, then extra capabilities, then the scene) and
+    // still carry the tool docs the request needs.
+    QString bigScene;
+    for (int i = 0; i < 200; ++i) bigScene += QStringLiteral("  - Prop_%1 (material: Wood)\n").arg(i);
+    m->setContextProvider([bigScene]() { return bigScene; });
+
+    planner->replies << planJson({{"get_scene_info", {}}});
+    ASSERT_TRUE(m->startTask("look around"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString unbounded = planner->systemPrompts.last();
+    EXPECT_TRUE(unbounded.contains("Prop_199")) << "no window → nothing trimmed";
+
+    planner->ctxTokens = 2500;
+    planner->replies << planJson({{"auto_rig", {{"template", "humanoid"}}}});
+    ASSERT_TRUE(m->startTask("rig it as a humanoid"));
+    ASSERT_TRUE(pumpToEnd(m));
+    const QString bounded = planner->systemPrompts.last();
+    EXPECT_LT(AIAgentManager::estimateTokens(bounded), 2500 - 700) << "fits window minus reply";
+    EXPECT_FALSE(bounded.contains("Previous tasks")) << "history is the first thing to go";
+    EXPECT_TRUE(bounded.contains("- auto_rig:")) << "the routed capability's docs survive";
+    EXPECT_TRUE(bounded.contains("...(truncated)")) << "the long scene listing was cut";
+    EXPECT_EQ(m->state(), State::Completed);
+}
+
+// Field finding (F-22 session): the planner INVENTED
+// ~/Downloads/f22_raptor.png, the tool said "image not found", and the
+// repair rounds guessed .jpg, then .png again — six failures, nothing made.
+// The harness now drops a non-existent image and turns the request into the
+// tool's text prompt before the call runs.
+TEST(AIAgentSubject, SubjectFromGoalStripsCreationVerbsAndTrailingScene)
+{
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("create a f22 raptor scene"), "f22 raptor");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("Make me a red dragon, please."), "red dragon");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("generate a 3d model of a goblin warrior"), "goblin warrior");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("wolf"), "wolf");
+    EXPECT_EQ(AIAgentManager::subjectFromGoal("create a scene"), "create a scene") << "nothing left → the goal itself";
+}
+
+TEST(AIAgentSubject, RepairMissingImageInputTurnsAnInventedPathIntoAPrompt)
+{
+    auto missing = [](const QString&) { return false; };
+    auto present = [](const QString&) { return true; };
+    AIAgent::Step s; s.tool = "generate_mesh_from_image"; s.arguments = {{"image_path", "/Users/x/Downloads/f22_raptor.png"}};
+    const QString note = AIAgentManager::repairMissingImageInput(s, "create a f22 raptor scene", missing);
+    EXPECT_FALSE(note.isEmpty());
+    EXPECT_FALSE(s.arguments.contains("image_path"));
+    EXPECT_EQ(s.arguments.value("prompt").toString(), "f22 raptor");
+    // an image that exists is the user's — untouched
+    AIAgent::Step real; real.tool = "generate_mesh_from_image"; real.arguments = {{"image_path", "/photos/car.png"}};
+    EXPECT_TRUE(AIAgentManager::repairMissingImageInput(real, "make a car", present).isEmpty());
+    EXPECT_EQ(real.arguments.value("image_path").toString(), "/photos/car.png");
+    // a missing image WITH a prompt: keep the prompt, drop the path
+    AIAgent::Step both; both.tool = "generate_mesh_from_image"; both.arguments = {{"image_path", "/nope.png"}, {"prompt", "a jet"}};
+    EXPECT_FALSE(AIAgentManager::repairMissingImageInput(both, "create a jet", missing).isEmpty());
+    EXPECT_FALSE(both.arguments.contains("image_path"));
+    EXPECT_EQ(both.arguments.value("prompt").toString(), "a jet");
+    // other tools are never touched
+    AIAgent::Step other; other.tool = "load_mesh"; other.arguments = {{"image_path", "/nope.png"}};
+    EXPECT_TRUE(AIAgentManager::repairMissingImageInput(other, "x", missing).isEmpty());
+}
+
+TEST_F(AgentFixture, InventedImagePathIsRepairedBeforeTheToolRunsAndTheTaskSucceeds)
+{
+    planner->replies << planJson({{"generate_mesh_from_image", {{"image_path", "/nonexistent_qtmesh_dir/f22_raptor.png"}}}});
+    ASSERT_TRUE(m->startTask("create a f22 raptor scene"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed) << m->lastError().toStdString();
+    ASSERT_EQ(exec->calls, QStringList({"generate_mesh_from_image"}));
+    EXPECT_FALSE(exec->callArgs.first().contains("image_path")) << "the invented path never reaches the tool";
+    EXPECT_EQ(exec->callArgs.first().value("prompt").toString(), "f22 raptor");
+}
+
+// A heavy tool (image → 3D) runs for minutes on the main thread; without a
+// progress relay the whole window looked frozen. The manager exposes the
+// running tool's stage so the chat panel can draw a bar.
+TEST_F(AgentFixture, HeavyToolProgressIsExposedWhileBusyAndClearedBetweenSteps)
+{
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty());
+    // a report while idle is ignored (a non-agent tool run reports too)
+    m->reportToolProgress("baking the texture", 1, 4);
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty()) << "not busy → no bar";
+
+    // during a step the fraction is exposed; the executor reports mid-call
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
+    exec->onCall = [this](const QString&) {
+        m->reportToolProgress("building the surface", 1, 4);
+        EXPECT_EQ(m->stepProgressLabel(), "building the surface");
+        EXPECT_DOUBLE_EQ(m->stepProgress(), 0.25);
+        m->reportToolProgress("indeterminate stage", 0, 0);
+        EXPECT_LT(m->stepProgress(), 0.0) << "total <= 0 → indeterminate";
+    };
+    ASSERT_TRUE(m->startTask("make a box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Completed);
+    EXPECT_TRUE(m->stepProgressLabel().isEmpty()) << "cleared once the tool returned";
+}
+
+// A heavy tool runs synchronously and pumps the event loop, so Cancel arrives
+// DURING the call: it must reach the tool, not just set a flag the harness
+// reads minutes later when the tool finally returns.
+TEST_F(AgentFixture, CancelDuringAToolCallAsksTheRunningToolToStop)
+{
+    planner->replies << planJson({{"create_primitive", {{"type", "box"}}}});
+    exec->onCall = [this](const QString&) {
+        EXPECT_EQ(exec->cancelRequests, 0);
+        m->cancel();                       // as the Stop button does, mid-call
+        EXPECT_EQ(exec->cancelRequests, 1) << "the running tool is told to stop";
+    };
+    ASSERT_TRUE(m->startTask("make a box"));
+    ASSERT_TRUE(pumpToEnd(m));
+    EXPECT_EQ(m->state(), State::Cancelled);
+    // cancelling while idle asks nothing
+    const int before = exec->cancelRequests;
+    m->cancel();
+    EXPECT_EQ(exec->cancelRequests, before);
+}

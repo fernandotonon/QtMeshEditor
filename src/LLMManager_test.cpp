@@ -6,8 +6,12 @@
 #include <QSignalSpy>
 #include <QSettings>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include "LLMManager.h"
+#include "AIAgentManager.h"
+#include <QSet>
 
 class LLMManagerTest : public ::testing::Test {
 protected:
@@ -21,6 +25,80 @@ protected:
         ASSERT_NE(manager, nullptr);
     }
 };
+
+// =============================================================================
+// Model file deletion (AI Model Settings → Delete / Remove All, #1052)
+// =============================================================================
+
+TEST_F(LLMManagerTest, DeleteModelFileRemovesOnlyFilesInsideTheModelsDirectory)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString previous = manager->modelsDirectory();
+    manager->setModelsDirectory(dir.path());
+
+    auto touch = [&](const QString& name) {
+        QFile f(dir.filePath(name)); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("GGUF"); f.close();
+    };
+    touch("a.gguf"); touch("b.gguf"); touch("b.gguf.part");
+    QFile outside(dir.path() + "/../llm_delete_outside_probe.gguf");
+    ASSERT_TRUE(outside.open(QIODevice::WriteOnly)); outside.close();
+    manager->scanForModels();
+    ASSERT_EQ(manager->availableModels().size(), 2);
+
+    EXPECT_FALSE(manager->deleteModelFile("../llm_delete_outside_probe.gguf")) << "no path traversal";
+    EXPECT_FALSE(manager->deleteModelFile(dir.path() + "/../llm_delete_outside_probe.gguf"));
+    EXPECT_TRUE(QFileInfo::exists(outside.fileName())) << "the outside file is untouched";
+    EXPECT_FALSE(manager->deleteModelFile("missing.gguf"));
+
+    EXPECT_TRUE(manager->deleteModelFile("b.gguf"));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("b.gguf")));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("b.gguf.part"))) << "the partial download goes too";
+    EXPECT_EQ(manager->availableModels(), QStringList({"a"})) << "the list is rescanned";
+
+    touch("c.gguf"); touch("legacy.bin"); touch("legacy.bin.part");
+    manager->scanForModels();
+    EXPECT_EQ(manager->availableModels().size(), 3) << ".bin models are listed";
+    EXPECT_EQ(manager->deleteAllModelFiles(), 4) << "Remove All removes exactly the listed set (+ partials): a.gguf, c.gguf, legacy.bin, legacy.bin.part";
+    EXPECT_TRUE(manager->availableModels().isEmpty());
+    EXPECT_FALSE(manager->hasPendingDeletions()) << "nothing loaded → nothing deferred";
+
+    QFile::remove(outside.fileName());
+    manager->setModelsDirectory(previous);
+}
+
+// =============================================================================
+// Recommended model list (#1021e)
+// =============================================================================
+
+// The download button builds `<modelsDir>/<fileName>` and fetches `url`
+// verbatim, so every entry must be a single-file GGUF over https with a
+// unique name. (The Qwen official repos split their 7B+ quants into
+// -00001-of-00002 parts; a split URL 404s — that was the bug the user hit.)
+TEST_F(LLMManagerTest, RecommendedModelsAreSingleFileHttpsGgufsWithUniqueNames)
+{
+    const QList<ModelInfo> models = manager->getRecommendedModels();
+    ASSERT_GE(models.size(), 6);
+    QSet<QString> names, files;
+    for (const ModelInfo& m : models) {
+        EXPECT_TRUE(m.url.startsWith("https://huggingface.co/")) << m.url.toStdString();
+        EXPECT_TRUE(m.url.endsWith(".gguf")) << m.url.toStdString();
+        EXPECT_FALSE(m.url.contains("-of-0")) << "split quant: " << m.url.toStdString();
+        EXPECT_TRUE(m.fileName.endsWith(".gguf")) << m.fileName.toStdString();
+        EXPECT_FALSE(m.fileName.contains('/'));
+        EXPECT_GT(m.size, 100000000);
+        EXPECT_FALSE(m.description.isEmpty());
+        EXPECT_FALSE(names.contains(m.name)) << "duplicate name " << m.name.toStdString();
+        EXPECT_FALSE(files.contains(m.fileName)) << "duplicate file " << m.fileName.toStdString();
+        names.insert(m.name); files.insert(m.fileName);
+    }
+    // ordered by size, smallest first (the dialog relies on it)
+    for (int i = 1; i < models.size(); ++i) EXPECT_LE(models[i-1].size, models[i].size) << models[i].name.toStdString();
+    // the agent's recommendation must be downloadable from this list
+    bool found = false;
+    for (const ModelInfo& m : models) if (m.name == AIAgentManager::instance()->recommendedModelName()) found = true;
+    EXPECT_TRUE(found) << "AIAgentManager::recommendedModelName must name an entry of the recommended list";
+}
 
 // =============================================================================
 // validateMaterialScript tests
@@ -409,7 +487,7 @@ TEST_F(LLMManagerTest, DefaultSettingsValues)
 {
     // Create fresh settings to check defaults - LLMSettings struct has hardcoded defaults
     LLMSettings defaults;
-    EXPECT_EQ(defaults.contextSize, 4096);
+    EXPECT_EQ(defaults.contextSize, 8192);   // raised from 4096 for the AI agent's tool-doc prompts (#1052)
     EXPECT_EQ(defaults.maxTokens, 2048);
     EXPECT_FLOAT_EQ(defaults.temperature, 0.7f);
     EXPECT_EQ(defaults.gpuLayers, 99);
@@ -424,8 +502,10 @@ TEST_F(LLMManagerTest, SetAndGetContextSize)
     int original = manager->contextSize();
     QSignalSpy spy(manager, &LLMManager::settingsChanged);
 
-    manager->setContextSize(8192);
-    EXPECT_EQ(manager->contextSize(), 8192);
+    // pick a value that differs from the default (8192) so the change is observable
+    const int target = (original == 16384) ? 32768 : 16384;
+    manager->setContextSize(target);
+    EXPECT_EQ(manager->contextSize(), target);
     EXPECT_EQ(spy.count(), 1);
 
     // Restore original

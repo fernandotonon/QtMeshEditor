@@ -49,6 +49,9 @@ class LLMManager : public QObject
 
     // Settings properties for QML binding
     Q_PROPERTY(int contextSize READ contextSize WRITE setContextSize NOTIFY settingsChanged)
+    // The window the loaded model actually got (setting clamped to the model's
+    // training limit); 0 while no model is loaded.
+    Q_PROPERTY(int effectiveContextSize READ effectiveContextSize NOTIFY effectiveContextSizeChanged)
     Q_PROPERTY(int maxTokens READ maxTokens WRITE setMaxTokens NOTIFY settingsChanged)
     Q_PROPERTY(float temperature READ temperature WRITE setTemperature NOTIFY settingsChanged)
     Q_PROPERTY(int gpuLayers READ gpuLayers WRITE setGpuLayers NOTIFY settingsChanged)
@@ -75,6 +78,7 @@ public:
 
     // Settings accessors for QML
     int contextSize() const { return m_settings.contextSize; }
+    int effectiveContextSize() const { return m_effectiveContextSize; }
     void setContextSize(int value);
     int maxTokens() const { return m_settings.maxTokens; }
     void setMaxTokens(int value);
@@ -100,6 +104,14 @@ public slots:
     Q_INVOKABLE void browseForModelsDirectory();
     Q_INVOKABLE void browseForModelFile();
     Q_INVOKABLE void unloadModel();
+    /// Delete one downloaded GGUF (by file name, inside modelsDirectory only —
+    /// paths are refused) plus any `.part`; unloads it first if it is the
+    /// loaded model. Returns false when nothing was removed.
+    Q_INVOKABLE bool deleteModelFile(const QString &fileName);
+    /// Delete every *.gguf (+ .part) in modelsDirectory. Returns the count.
+    Q_INVOKABLE int deleteAllModelFiles();
+    /// True while a file deletion waits for the worker to release the model.
+    bool hasPendingDeletions() const { return !m_pendingDeletions.isEmpty(); }
     Q_INVOKABLE void scanForModels();
     Q_INVOKABLE void tryAutoLoadModel();
 
@@ -131,6 +143,7 @@ signals:
     void availableModelsChanged();
     void modelsDirectoryChanged();
     void settingsChanged();
+    void effectiveContextSizeChanged();
     void autoLoadModelChanged();
     void lastModelNameChanged();
 
@@ -139,6 +152,12 @@ signals:
     void modelLoadCompleted(const QString &modelName);
     void modelLoadError(const QString &error);
     void modelUnloaded();
+    /// A DEFERRED deletion finished (the file belonged to the loaded model, so
+    /// it could only be removed once the worker released it). `removed` names
+    /// the files actually gone, `failed` the ones that could not be removed —
+    /// deleteModelFile/deleteAllModelFiles return before this, so UI that
+    /// reports an outcome must wait for this signal.
+    void deferredDeletionFinished(const QStringList &removed, const QStringList &failed);
 
     void generationStarted();
     void generationProgress(const QString &partialText, float progress);
@@ -162,6 +181,7 @@ private slots:
     void onWorkerModelLoaded(const QString &modelPath);
     void onWorkerModelLoadError(const QString &error);
     void onWorkerModelUnloaded();
+    void onWorkerContextReady(int nCtx);
     void onWorkerGenerationStarted();
     void onWorkerGenerationProgress(const QString &partialText, float progress);
     void onWorkerGenerationCompleted(const QString &fullText);
@@ -169,6 +189,8 @@ private slots:
     void onWorkerGenerationStopped();
 
 private:
+    bool isActiveModelFile(const QString& fileName) const;
+    bool removeModelFileNow(const QString& path);
     static LLMManager* s_instance;
 
     QThread *m_workerThread = nullptr;
@@ -181,6 +203,12 @@ private:
     QList<ModelInfo> m_recommendedModels;
     LLMSettings m_settings;
     bool m_isLoading = false;
+    // Files whose deletion waits for the worker to release the loaded model
+    // (unload is queued to the worker thread; the mapping may still hold the
+    // file — QFile::remove fails on Windows while it does). Flushed in
+    // onWorkerModelUnloaded.
+    QStringList m_pendingDeletions;
+    int  m_effectiveContextSize = 0;
     bool m_autoLoadModel = false;
     bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active
 

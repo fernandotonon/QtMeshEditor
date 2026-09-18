@@ -137,6 +137,8 @@
 #include "SkinWeightController.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
+#include "AIAgentManager.h"
+#include "ClickFocusFilter.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
@@ -758,11 +760,21 @@ MainWindow::MainWindow(QWidget *parent) :
                     [this]() { m_editHintLabel->setVisible(false); });
             });
 
+    // The MCP server object doubles as the in-process TOOL DISPATCHER for
+    // the AI chat/agent (callTool needs no transport). Create it always so
+    // the agent has an executor on a fresh install (review finding on
+    // #1052: with MCP/enabled=false every agent message failed with "tool
+    // server not available"); the HTTP transport stays opt-in below.
+    if (!m_mcpServer) {
+        m_mcpServer = new MCPServer(this);
+        m_mcpServer->setMainWindow(this);
+        AIChatManager::instance()->setMcpServer(m_mcpServer);
+    }
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
     int mcpPort = mcpSettings.value("MCP/port", 8080).toInt();
-    if (mcpEnabled && !m_mcpServer) {
+    if (mcpEnabled && !m_mcpServer->isHttpRunning()) {
         startMCPServer(mcpPort);
     }
 
@@ -880,6 +892,7 @@ MainWindow::~MainWindow()
         PaintChannelPresets::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        AIAgentManager::kill();
         ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
@@ -1167,6 +1180,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<AIAgentManager>("AIChatPanel", 1, 0, "AIAgentManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIAgentManager::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return WelcomeScreenController::qmlInstance(engine, nullptr);
@@ -1357,7 +1374,13 @@ void MainWindow::initToolBar()
         // StrongFocus: a single click inside the dock routes keyboard events into QML
         // without requiring a prior click in the viewport.
         chatWidget->setFocusPolicy(Qt::StrongFocus);
+        // ...and make that true after focus has moved to ANOTHER QQuickWidget
+        // (the Inspector): the QML field took the click but widget focus did
+        // not follow, so typing went nowhere until a detour via the viewport.
+        chatWidget->installEventFilter(new ClickFocusFilter(chatWidget));
         markLazyQml(chatWidget, QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        connect(AIChatManager::instance(), &AIChatManager::modelSettingsRequested,
+                this, &MainWindow::showAIModelSettings, Qt::UniqueConnection);
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);
         m_chatDock->setObjectName("AIChatDock");

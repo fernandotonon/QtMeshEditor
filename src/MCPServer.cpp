@@ -90,6 +90,7 @@
 #include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
 #ifdef ENABLE_PS1_RIP
@@ -180,11 +181,11 @@ static QString captureLodControllerError(const std::function<void()> &operation)
 MCPServer::MCPServer(QObject *parent)
     : QObject(parent)
 {
-#ifdef Q_OS_WIN
-    // Set stdin/stdout to binary mode on Windows
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-#endif
+    // NB: no stdio side effects here — the object is now constructed on every
+    // GUI launch as the in-process tool dispatcher (#1052), and a Windows GUI
+    // process has no console: `_setmode(_fileno(stdout))` on an invalid fd
+    // trips the CRT invalid-parameter handler. The binary-mode switch lives
+    // in start(), the stdio transport.
 }
 
 MCPServer::~MCPServer()
@@ -204,6 +205,11 @@ void MCPServer::setOutputFd(int fd)
 
 void MCPServer::start()
 {
+#ifdef Q_OS_WIN
+    // Set stdin/stdout to binary mode on Windows (stdio JSON-RPC transport only)
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (m_running) return;
 
     m_stdinFd = fileno(stdin);
@@ -724,6 +730,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_light_property"), &MCPServer::toolSetLightProperty},
         {QStringLiteral("apply_light_rig"), &MCPServer::toolApplyLightRig},
         {QStringLiteral("duplicate_entity"), &MCPServer::toolDuplicateEntity},
+        {QStringLiteral("select_entity"), &MCPServer::toolSelectEntity},
         {QStringLiteral("camera_control"), &MCPServer::toolCameraControl},
         {QStringLiteral("get_camera_info"), &MCPServer::toolGetCameraInfo},
         {QStringLiteral("set_snap_settings"), &MCPServer::toolSetSnapSettings},
@@ -2376,7 +2383,7 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     // skeleton from a template, binds it, optionally chains skin weights, and
     // optionally re-exports.
     if (!hasSelectedEntities())
-        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+        return makeErrorResult("Error: No mesh selected. Call select_entity with the mesh name first (get_scene_info lists the names), or load one with load_mesh.");
 
     if (args.contains("skin") && !args["skin"].isBool())
         return makeErrorResult("Error: 'skin' must be a boolean.");
@@ -2811,8 +2818,25 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             .filePath(QStringLiteral("mcp_prompt_%1.png")
                           .arg(QDateTime::currentMSecsSinceEpoch()));
         QDir().mkpath(QFileInfo(srcPng).absolutePath());
+        // The image phase already spins nested event loops (so the window
+        // keeps painting); relay SD's sampling ticks so the bar moves here too.
+#ifdef ENABLE_STABLE_DIFFUSION
+        QMetaObject::Connection sdConn;
+        if (SDManager* sd = SDManager::instance()) {
+            sdConn = connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+                emit toolProgress(QStringLiteral("generate_mesh_from_image"),
+                                  QStringLiteral("generating the image"),
+                                  sd->generationStep(), sd->generationTotalSteps());
+            });
+        }
+#endif
+        m_toolCancelRequested = false;
         const int rc = CLIPipeline::generateSourceImageFromPrompt(
             genPrompt, args.value("image_model").toString(), srcPng, refImage);
+#ifdef ENABLE_STABLE_DIFFUSION
+        if (sdConn) disconnect(sdConn);
+#endif
+        if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("cancelled"));
         if (rc != 0)
             return makeErrorResult(
                 "Image generation from prompt failed — download FLUX.2-klein-4B "
@@ -2821,6 +2845,19 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     }
     if (!QFileInfo::exists(imagePath))
         return makeErrorResult(QStringLiteral("image not found: %1").arg(imagePath));
+    {
+        // A mesh is not an image: the AI agent once fed an .obj here. Fail
+        // fast with the right tool named instead of running the pipeline.
+        static const QStringList imageExts = {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"};
+        static const QStringList meshExts  = {"obj", "glb", "gltf", "fbx", "dae", "stl", "ply", "mesh", "3ds", "blend", "usd", "usdz"};
+        const QString ext = QFileInfo(imagePath).suffix().toLower();
+        if (meshExts.contains(ext))
+            return makeErrorResult(QStringLiteral("'%1' is a 3D mesh, not an image. generate_mesh_from_image needs a 2D image (%2); to work on an existing mesh use load_mesh.")
+                                       .arg(QFileInfo(imagePath).fileName(), imageExts.join("/")));
+        if (!imageExts.contains(ext))
+            return makeErrorResult(QStringLiteral("'%1' is not a supported image (%2).")
+                                       .arg(QFileInfo(imagePath).fileName(), imageExts.join("/")));
+    }
 
     MeshGenPredictor::Options opts;
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
@@ -2947,12 +2984,48 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (image.isNull())
         return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
 
+    // In-app callers (the AI agent) drive tools synchronously on the MAIN
+    // thread, so a multi-minute generation used to freeze the whole UI. The
+    // predictor calls this back many times per stage: report it (the chat
+    // panel draws a bar) and pump the GUI so the window keeps painting and
+    // Cancel/Stop stays clickable. The heavy work itself stays on this thread
+    // — MeshGenBuilder below is Ogre and main-thread-only — and the pump is
+    // EXCLUDE_USER_INPUT_EVENTS, so no click can re-enter a tool mid-run.
+    QElapsedTimer pumpClock; pumpClock.start();
+    m_toolCancelRequested = false;
+    auto reportProgress = [this, &pumpClock](MeshGenPredictor::Stage stage, int done, int total) -> bool {
+        if (total > 0) {
+            static const QHash<MeshGenPredictor::Stage, QString> names = {
+                {MeshGenPredictor::Stage::Encode,  QStringLiteral("encoding the image")},
+                {MeshGenPredictor::Stage::Denoise, QStringLiteral("denoising")},
+                {MeshGenPredictor::Stage::Decode,  QStringLiteral("building the surface")},
+                {MeshGenPredictor::Stage::Refine,  QStringLiteral("refining the surface")},
+                {MeshGenPredictor::Stage::Bake,    QStringLiteral("baking the texture")},
+                {MeshGenPredictor::Stage::Color,   QStringLiteral("colouring")},
+            };
+            emit toolProgress(QStringLiteral("generate_mesh_from_image"),
+                              names.value(stage, QStringLiteral("working")), done, total);
+        }
+        // ~20 Hz is enough to stay responsive without slowing the pipeline.
+        // User input IS delivered: the Stop button is the only way to abort a
+        // multi-minute run, and excluding input made it unclickable. Re-entry
+        // is prevented by the caller (the agent runs one step at a time and
+        // the panel disables sending while busy), not by dropping clicks.
+        if (pumpClock.elapsed() >= 50) {
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;   // false → predict() returns "cancelled"
+    };
+
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(opts.quality),
-        MeshGenPredictor::decoderModelPath(), opts);
+        MeshGenPredictor::decoderModelPath(), opts, reportProgress);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
-            ? QStringLiteral("image-to-3D failed") : res.error);
+            ? (m_toolCancelRequested ? QStringLiteral("cancelled")
+                                     : QStringLiteral("image-to-3D failed"))
+            : res.error);
 
     // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
     // un-upscaled texture on any failure — same policy as the CLI).
@@ -3175,6 +3248,42 @@ QJsonObject MCPServer::toolInpaintTexture(const QJsonObject &args)
 #endif
 }
 
+namespace {
+// "  - <entity> (material: <name>)" for the scene summary.
+QString sceneEntityLine(const Ogre::Entity* entity)
+{
+    QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
+    if (entity->getNumSubEntities() == 0) return info;
+    const Ogre::SubEntity* subEnt = entity->getSubEntity(0);
+    if (subEnt && subEnt->getMaterial())
+        info += QString(" (material: %1)").arg(QString::fromStdString(subEnt->getMaterial()->getName()));
+    return info;
+}
+
+// Entities attached to a node. Manager::getEntities() static_casts every
+// attached movable (crashes on ManualObjects) — check the type explicitly.
+QStringList sceneEntityLines(const Ogre::SceneNode* node)
+{
+    QStringList lines;
+    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+        const Ogre::MovableObject* obj = node->getAttachedObject(i);
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        lines << sceneEntityLine(static_cast<const Ogre::Entity*>(obj));
+    }
+    return lines;
+}
+
+QStringList selectedSceneNodeNames()
+{
+    QStringList names;
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel) return names;
+    for (Ogre::SceneNode* n : sel->getNodesSelectionList())
+        if (n) names << QString::fromStdString(n->getName());
+    return names;
+}
+} // namespace
+
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
@@ -3192,43 +3301,29 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             it.getNext();
             materialCount++;
         }
-        // Build scene node list and entity list by iterating nodes directly.
-        // Manager::getEntities() uses static_cast<Entity*> on all attached objects,
-        // which crashes on ManualObjects. Check movable type explicitly.
         QStringList nodeNames;
         QStringList entityInfo;
-        int entityCount = 0;
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             nodeNames << QString::fromStdString(node->getName());
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
-                entityCount++;
-                QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
-                if (entity->getNumSubEntities() > 0) {
-                    Ogre::SubEntity* subEnt = entity->getSubEntity(0);
-                    if (subEnt && subEnt->getMaterial()) {
-                        info += QString(" (material: %1)").arg(
-                            QString::fromStdString(subEnt->getMaterial()->getName()));
-                    }
-                }
-                entityInfo << info;
-            }
+            entityInfo << sceneEntityLines(node);
         }
+        const int entityCount = static_cast<int>(entityInfo.size());
+        const QStringList selectedNames = selectedSceneNodeNames();
         const QString sceneInfo = QString(
             "Scene Information:\n"
             "- Scene Nodes: %1\n"
             "- Entities: %2\n"
             "- Materials loaded: %3\n\n"
             "Nodes:\n%4\n\n"
-            "Entities:\n%5"
+            "Entities:\n%5\n\n"
+            "Selected: %6"
         ).arg(nodes.size())
          .arg(entityCount)
          .arg(materialCount)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
-         .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
+         .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"))
+         .arg(selectedNames.isEmpty() ? "(nothing — use select_entity)" : selectedNames.join(", "));
         return makeSuccessResult(sceneInfo);
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
@@ -6409,6 +6504,29 @@ QJsonObject MCPServer::toolApplyLightRig(const QJsonObject& args)
     payload.insert(QStringLiteral("rigGroupNodeName"), result.rigGroupNodeName);
     payload.insert(QStringLiteral("addedLightCount"), result.addedLights.size());
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSelectEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+    if (name.isEmpty()) name = args["entity_name"].toString();
+    if (name.isEmpty()) name = args["mesh"].toString();
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel) return makeErrorResult("Error: SelectionSet not available");
+    if (name.isEmpty()) {
+        sel->clear();
+        return makeSuccessResult("Selection cleared");
+    }
+    Ogre::SceneNode* node = findSceneNodeByName(name);
+    if (!node) {
+        // An entity name whose node is named differently.
+        if (Ogre::Entity* entity = findEntityByName(name)) node = entity->getParentSceneNode();
+    }
+    if (!node)
+        return makeErrorResult(QString("Error: No node or entity named '%1' — get_scene_info lists the names").arg(name));
+    sel->selectOne(node);
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("select_entity %1").arg(name));
+    return makeSuccessResult(QString("Selected '%1'").arg(QString::fromStdString(node->getName())));
 }
 
 QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
@@ -10838,7 +10956,7 @@ QJsonArray MCPServer::buildToolsList()
     // handler gates the local TripoSR/TripoSG paths on ENABLE_ONNX itself).
     {
         QJsonObject props;
-        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required unless 'prompt' is given."}};
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a 2D IMAGE file (.png, .jpg, .jpeg, .webp, .bmp) — a photo or rendering of a single object, ideally background-removed. NOT a 3D mesh: to work on an existing .obj/.glb/.fbx use load_mesh instead. Only a file that really exists — never guess a path; without an image, use 'prompt'. Required unless 'prompt' is given."}};
         props["prompt"] = QJsonObject{{"type", "string"}, {"description", "Prompt-to-3D: generate the source image from this text (FLUX.2-klein-4B via stable-diffusion.cpp — download it in AI Model Settings; needs a stable-diffusion build). Combined WITH image_path, the prompt EDITS that image (FLUX.2 reference conditioning) and the edit becomes the input."}};
         props["image_model"] = QJsonObject{{"type", "string"}, {"description", "With 'prompt': override the image-generation model (an SD checkpoint name from the sd_models directory; default: FLUX.2-klein-4B when downloaded, else the last-used SD model)."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
@@ -11548,6 +11666,20 @@ QJsonArray MCPServer::buildToolsList()
         appendTool(
             "duplicate_entity",
             "Duplicate an entity/node in the scene, creating a clone with the same mesh, materials, and transform. The clone gets a '_copy' name suffix.",
+            props
+        );
+    }
+
+    // select_entity (#1052): ~25 tools act on the CURRENT SELECTION (auto_rig,
+    // compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, ...)
+    // and the AI agent had no way to set it — every rig request failed with
+    // "No mesh selected".
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the scene node or entity to select (get_scene_info lists both). Omit or pass an empty string to clear the selection."}};
+        appendTool(
+            "select_entity",
+            "Select a scene node/entity by name so that tools which act on 'the selected mesh' (auto_rig, compute_skin_weights, validate_mesh, generate_lods, auto_uv_unwrap, retopologize, remove_skeleton, ...) target it. Replaces the current selection.",
             props
         );
     }
