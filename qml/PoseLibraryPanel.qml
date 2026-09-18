@@ -125,6 +125,11 @@ Column {
         id: pickerRoot
         property string selection: ""
         property string emptyLabel: "— pick a pose —"
+        // Inline components do NOT share the enclosing component's scope, so
+        // `poseSection` is not reachable here (Qt docs: "Inline components
+        // don't share their scope with the component they are declared in").
+        // The pose list has to come in through an explicit property.
+        property var names: []
         height: 22
         property bool open: false
 
@@ -153,7 +158,7 @@ Column {
             }
             MouseArea {
                 id: pickMouse; anchors.fill: parent; hoverEnabled: true
-                enabled: poseSection.poseNames.length > 0
+                enabled: pickerRoot.names.length > 0
                 onClicked: pickerRoot.open = !pickerRoot.open
             }
         }
@@ -174,7 +179,7 @@ Column {
             ListView {
                 id: pickList
                 anchors.fill: parent; anchors.margins: 2; clip: true
-                model: poseSection.poseNames
+                model: pickerRoot.names
                 delegate: Rectangle {
                     id: pickItem
                     // `pragma ComponentBehavior: Bound` (top of file) means a
@@ -462,11 +467,13 @@ Column {
             PosePicker {
                 id: blendA
                 width: (parent.width - 8) / 2
+                names: poseSection.poseNames
                 emptyLabel: "— pose A —"
             }
             PosePicker {
                 id: blendB
                 width: (parent.width - 8) / 2
+                names: poseSection.poseNames
                 emptyLabel: "— pose B —"
             }
         }
@@ -582,6 +589,7 @@ Column {
             PosePicker {
                 id: maskPose
                 width: parent.width - 150
+                names: poseSection.poseNames
                 emptyLabel: "— pose to apply —"
             }
             ToolBtn {

@@ -9439,7 +9439,20 @@ QJsonObject MCPServer::toolApplyPose(const QJsonObject &args)
     // D2: an optional positive `duration` turns the snap into a time
     // blend that the render loop advances. Absent / <= 0 keeps the
     // original snap behaviour, so existing callers are unaffected.
+    if (args.contains("duration") && !args.value("duration").isDouble())
+        return makeErrorResult("Error: 'duration' must be a number");
     const double duration = args.value("duration").toDouble(0.0);
+
+    // A timed blend is advanced by MainWindow::frameRenderingQueued — the only
+    // non-test caller of PoseLibrary::tickBlend. Headless `--mcp` has no
+    // MainWindow and therefore no render loop, so the blend would be created,
+    // reported successful, and then never advance to the target pose. Fail
+    // loudly instead of silently leaving the rig mid-transition.
+    if (duration > 0.0 && !m_mainWindow)
+        return makeErrorResult(
+            "Error: a timed pose apply ('duration' > 0) needs the GUI render "
+            "loop to advance the blend; it is unavailable in headless --mcp "
+            "mode. Omit 'duration' for an immediate snap apply.");
 
     auto* lib = PoseLibrary::instance();
     const bool ok = duration > 0.0
@@ -9474,6 +9487,8 @@ QJsonObject MCPServer::toolBlendPoses(const QJsonObject &args)
         return makeErrorResult("Error: missing required 'dst' argument");
     // Default 0.5 = the halfway pose, the useful thing to get when the
     // caller doesn't say.
+    if (args.contains("weight") && !args.value("weight").isDouble())
+        return makeErrorResult("Error: 'weight' must be a number");
     const double weight = args.value("weight").toDouble(0.5);
 
     auto* lib = PoseLibrary::instance();

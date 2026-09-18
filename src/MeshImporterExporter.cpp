@@ -2699,14 +2699,13 @@ static void reconstructNodeClipsFromSidecar(const QString& meshPath,
 // to export it. The explicit Export/Import .poselib buttons remain for
 // sharing a library between assets.
 //
-// Scope: single-entity export/import only. A pose library is keyed PER
-// ENTITY while the sidecar path is derived from the FILE, so a
-// multi-entity scene export has no unambiguous mapping (whose library
-// owns `scene.poselib`?). Scene-level persistence would need the
-// per-entity libraries nested under entity names inside the scene
-// metadata — a schema change, tracked separately. Until then, poses on
-// a scene-exported entity round-trip via the explicit Export/Import
-// buttons.
+// Scope: this helper derives the SINGLE-entity sidecar path. A pose
+// library is keyed per entity while the path comes from the FILE, so a
+// multi-entity scene needs the libraries nested under the owning SCENE
+// NODE name — that is what writeScenePoseLibrarySidecar /
+// loadScenePoseLibrarySidecar below do (same `.poselib` path, same
+// schema string, `entities[]` instead of a bare `poses[]`), wired into
+// sceneExporter / sceneImporter.
 static QString poseLibrarySidecarPath(const QString& meshPath)
 {
     const QFileInfo fi(meshPath);

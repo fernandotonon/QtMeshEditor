@@ -387,6 +387,10 @@ bool PoseLibrary::applyPoseMasked(Ogre::Entity* entity,
     if (boneCount > 0) {
         holdPosedBones(entity, maskedHandles);
         flushSkeletonPose(entity, skel);
+        // A masked snap supersedes any in-flight time blend, exactly like
+        // applyPose: tickBlend walks EVERY bone in blend.to and would drag
+        // the masked bones back toward the old target on the next frame.
+        cancelBlend(entity);
     }
 
     SentryReporter::addBreadcrumb("scene.anim.pose",

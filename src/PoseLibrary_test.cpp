@@ -1531,7 +1531,7 @@ TEST_F(PoseLibrarySceneTest, ReleasePreservesForeignBlendMaskWeights) {
 // An entity destroyed mid-blend must not leave a dangling pointer for the
 // next tickBlend to dereference.
 TEST_F(PoseLibrarySceneTest, ForgetEntityDropsInFlightBlendAndHold) {
-    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Forget");
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_ForgetBlendHold");
     ASSERT_NE(entity, nullptr);
     auto* lib = PoseLibrary::instance();
 
