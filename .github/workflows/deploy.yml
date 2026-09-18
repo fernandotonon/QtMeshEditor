@@ -1315,15 +1315,21 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         key: sonar-tests-${{ runner.os }}-${{ github.run_id }}
-        # NB the action SAVES under "ccache-<key>-<timestamp>", so a
-        # restore-key must carry the `ccache-` prefix the action adds —
-        # `sonar-tests-Linux-` matched nothing (restore keys are literal
-        # prefix matches) and every run logged "No cache found." while the
-        # saved entries were all named `ccache-sonar-tests-Linux-…`.
-        # Verified against the live cache list: 3 entries start with
-        # `ccache-sonar-tests-`, 0 with `sonar-tests-`.
+        # NB NO TRAILING DASH, and do NOT add the `ccache-` prefix here.
+        # From the action's own source (dist/restore/index.js):
+        #     const keyPrefix  = ccacheVariant + "-";            // "ccache-"
+        #     const restoreKeys = inputs.restoreKeys
+        #                           .map(k => keyPrefix + k + "-");
+        # It prepends "ccache-" AND appends "-" to whatever we pass, so what
+        # is actually looked up is `ccache-<ours>-`. Entries are saved as
+        # `ccache-sonar-tests-Linux-<run_id>-<timestamp>`, therefore:
+        #   "sonar-tests-Linux-"        → "ccache-sonar-tests-Linux--"  ✗ (double dash)
+        #   "ccache-sonar-tests-Linux-" → "ccache-ccache-sonar-tests-…" ✗ (doubled prefix)
+        #   "sonar-tests-Linux"         → "ccache-sonar-tests-Linux-"   ✓
+        # Both earlier values matched nothing, which is why every run logged
+        # "No cache found." and build-wrapper stayed ~27 min cold.
         restore-keys: |
-          ccache-sonar-tests-${{ runner.os }}-
+          sonar-tests-${{ runner.os }}
         # Only master writes; PRs read master's entry (see above).
         save: ${{ github.ref == 'refs/heads/master' }}
         max-size: 2G
