@@ -1,4 +1,6 @@
 #include "SDManager.h"
+
+#include <algorithm>
 #include "GamificationManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
@@ -103,6 +105,26 @@ void SDManager::populateRecommendedModels()
         false
     });
 
+    // The anatomy option. Every other entry here is DISTILLED (klein: 4-step
+    // guidance-distilled; SDXL Turbo: 4-12 step adversarial-distilled), and
+    // distillation is exactly what costs limb/finger coherence — the "extra
+    // arms, weird fingers" class of artifact. SDXL base is NOT distilled: it
+    // runs the full 30-step schedule with real classifier-free guidance and
+    // a negative prompt, which is what resolves anatomy. Slower per image
+    // and a bigger download, so it is offered ALONGSIDE klein rather than
+    // replacing it. CreativeML OpenRAIL++-M, like the SDXL Turbo entry above
+    // — permissive enough for the project's redistribution bar (FLUX.2-dev,
+    // the obvious quality jump, is NON-COMMERCIAL and deliberately absent).
+    m_recommendedModels.append({
+        "SDXL Base 1.0 (FP16) — best anatomy",
+        "sd_xl_base_1.0.safetensors",
+        "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+        "SDXL Base - full 30-step sampling with real guidance; best limb/hand "
+        "coherence, slower than the distilled models. ~6.9GB",
+        6938078334,
+        false
+    });
+
     m_recommendedModels.append({
         "SDXL Turbo (FP16)",
         "sd_xl_turbo_1.0_fp16.safetensors",
@@ -199,6 +221,18 @@ void SDManager::setSteps(int value)
         saveSettings();
         emit settingsChanged();
     }
+}
+
+void SDManager::setFlux2Steps(int steps)
+{
+    // Clamp here as well as in the worker so the persisted/QML-visible value
+    // is the one that will actually be used (a silently-corrected setting
+    // reads as "the knob did nothing").
+    const int clamped = std::clamp(steps, 4, 20);
+    if (m_settings.flux2Steps == clamped) return;
+    m_settings.flux2Steps = clamped;
+    saveSettings();
+    emit settingsChanged();
 }
 
 void SDManager::setCfgScale(float value)
@@ -590,6 +624,7 @@ void SDManager::saveSettings()
     settings.setValue("width", m_settings.width);
     settings.setValue("height", m_settings.height);
     settings.setValue("steps", m_settings.steps);
+    settings.setValue("flux2Steps", m_settings.flux2Steps);
     settings.setValue("cfgScale", static_cast<double>(m_settings.cfgScale));
     settings.setValue("seed", QVariant::fromValue(m_settings.seed));
     settings.setValue("negativePrompt", m_settings.negativePrompt);
@@ -611,6 +646,9 @@ void SDManager::loadSettings()
     m_settings.width = settings.value("width", 512).toInt();
     m_settings.height = settings.value("height", 512).toInt();
     m_settings.steps = settings.value("steps", 20).toInt();
+    // clamp on read too: an out-of-range value from an older build or a
+    // hand-edited config must not reach the sampler
+    m_settings.flux2Steps = std::clamp(settings.value("flux2Steps", 8).toInt(), 4, 20);
     m_settings.cfgScale = settings.value("cfgScale", 7.0).toFloat();
     m_settings.seed = settings.value("seed", -1).toLongLong();
     m_settings.negativePrompt = settings.value("negativePrompt", "").toString();

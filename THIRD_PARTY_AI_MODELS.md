@@ -541,4 +541,18 @@ for #410 — non-commercial — in favour of synthetic bone-weight-derived label
   VAE (Comfy-Org flux2-klein split files), text encoder **Qwen3-4B**
   (Apache-2.0, unsloth GGUF Q4_K_M). ~5.2 GB total, installed under
   `ai_models/flux2_klein/`; runs on the same stable-diffusion.cpp backend as
-  texture generation (4-step distilled flow: cfg 1.0, euler).
+  texture generation (distilled flow: cfg 1.0, euler, `flux2Steps` steps —
+  default 8, clamped [4,20]; 4 is the distillation's MINIMUM, and the extra
+  steps are what resolve anatomy, i.e. the extra-limb / malformed-hand
+  artifacts users hit on character prompts).
+- **SDXL Base 1.0** (Stability AI) — offered ALONGSIDE klein as the
+  non-distilled option. Every other image model here is distilled (klein:
+  guidance-distilled; SDXL Turbo: adversarial-distilled), and distillation is
+  what costs limb/finger coherence; SDXL base runs the full 30-step schedule
+  with real classifier-free guidance and a negative prompt. **CreativeML
+  OpenRAIL++-M** (verified 2026-09-18: HF `license: openrail++`, ungated),
+  the same licence as the existing SDXL Turbo entry. Slower per image and
+  ~6.9 GB, so it is a user choice rather than the default.
+  **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
+  is non-commercial, which fails the redistribution bar (Homebrew / Snap /
+  WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.

@@ -74,6 +74,34 @@ TEST_F(SDManagerTest, DefaultSettings)
     EXPECT_TRUE(manager->negativePrompt().isEmpty());
 }
 
+// FLUX.2-klein is guidance-distilled: it ignores cfg and takes far fewer
+// steps than an SD checkpoint, so it has its own knob. 4 is the
+// distillation's MINIMUM (it was hardcoded there, which is what left
+// character prompts with extra limbs/malformed hands); extra steps are what
+// resolve anatomy, so the default is 8. Clamped on BOTH sides: a value that
+// silently differs from what the sampler uses reads as "the knob did
+// nothing", and a hand-edited config must not reach the sampler unchecked.
+TEST_F(SDManagerTest, Flux2StepsDefaultsToEightAndClampsToTheUsefulRange)
+{
+    const int restore = manager->flux2Steps();
+    EXPECT_EQ(restore, 8) << "default: above the 4-step minimum";
+
+    manager->setFlux2Steps(12);
+    EXPECT_EQ(manager->flux2Steps(), 12);
+
+    manager->setFlux2Steps(1);
+    EXPECT_EQ(manager->flux2Steps(), 4) << "below the distillation minimum → 4";
+
+    manager->setFlux2Steps(999);
+    EXPECT_EQ(manager->flux2Steps(), 20) << "a distilled model stops improving → 20";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setFlux2Steps(manager->flux2Steps());
+    EXPECT_EQ(spy.count(), 0) << "setting the same value must not churn settings";
+
+    manager->setFlux2Steps(restore);
+}
+
 TEST_F(SDManagerTest, SetImageWidth)
 {
     QSignalSpy spy(manager, &SDManager::settingsChanged);

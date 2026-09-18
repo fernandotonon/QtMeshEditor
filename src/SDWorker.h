@@ -16,6 +16,14 @@ struct SDSettings {
     int width = 512;
     int height = 512;
     int steps = 30;
+    // FLUX.2-klein is guidance-distilled: it IGNORES cfg (pinned to 1.0) and
+    // needs far fewer steps than an SD checkpoint, so `steps` above (an
+    // SD-oriented knob that auto-detect writes 12/30 into) must not reach it.
+    // 4 is the distillation's documented MINIMUM, not a ceiling — anatomy
+    // (limb/finger counts) is what resolves with the extra steps, so the
+    // default is 8. Clamped to [4,20] in SDWorker: below 4 the model has not
+    // converged, and beyond ~20 a distilled model stops improving.
+    int flux2Steps = 8;
     float cfgScale = 7.0f;
     int64_t seed = -1; // -1 = random
     QString negativePrompt = "blurry, low quality, distorted, simple, cartoon";

@@ -1,5 +1,8 @@
 // LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDWorker.h"
+
+#include <algorithm>
+
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -361,11 +364,14 @@ void SDWorker::generateTextureControlled(const QString &prompt,
             // produce garbage on it, so klein pins its own sampling.
             img_params.negative_prompt = "";
             img_params.sample_params.guidance.txt_cfg = 1.0f;
-            // Unconditionally 4: the settings dialog's step count is an
-            // SD-model knob (turbo/SDXL auto-detect writes 12/30 into it),
-            // and klein is a 4-step distilled model — passing SD-oriented
-            // values through just degrades it.
-            img_params.sample_params.sample_steps = 4;
+            // NOT the dialog's `steps` (an SD-model knob that auto-detect
+            // writes 12/30 into) — klein takes its own `flux2Steps`. 4 is the
+            // distillation's MINIMUM, not a ceiling: extra steps are what
+            // resolve anatomy (extra arms/legs, malformed hands), which is
+            // the artifact class users hit on character prompts. Clamped:
+            // < 4 has not converged, > 20 stops paying for itself.
+            img_params.sample_params.sample_steps =
+                std::clamp(m_settings.flux2Steps, 4, 20);
             img_params.sample_params.sample_method = EULER_SAMPLE_METHOD;
         }
 
