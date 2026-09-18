@@ -52,27 +52,32 @@ TEST(ClickFocusFilter, MousePressMovesWidgetFocusToTheWatchedWidget)
     // the "clicked outside the app, came back, caret dead" case — the widget
     // kept its focus flag but the QML scene never saw a fresh FocusIn.
     //
-    // NB assert the clearFocus()+setFocus() PAIR, not a FocusIn count: Qt
-    // delivers QFocusEvent only inside an ACTIVE window, and a headless CI
-    // display (Xvfb, no window manager) never activates one — the focus widget
-    // still changes, but no focus event is dispatched, so a FocusIn assertion
-    // passes on a developer desktop and fails on CI. Counting the focus-OUT
-    // that only clearFocus() can produce proves the re-assert happened on every
-    // platform; that pair is what makes QQuickWidget forward FocusIn to its
-    // scene when the window IS active.
-    ASSERT_TRUE(target->hasFocus()) << "precondition: already focused";
-    const int focusOutsBefore = target->focusOuts;
+    // NB everything asserted here must be WINDOW-ACTIVATION INDEPENDENT.
+    // A headless CI display (Xvfb, no window manager) never activates the
+    // window, and Qt gates BOTH of these on activation:
+    //   * QFocusEvent delivery — so focusIn/focusOut counts stay 0;
+    //   * QWidget::hasFocus() — it is `window()->focusWidget() == this &&
+    //     window()->isActiveWindow()`, so it is false even when this widget
+    //     IS the focus widget.
+    // `window.focusWidget()` is the one that tracks focus regardless, which is
+    // why the assertion above it passes on CI. Two earlier attempts at this
+    // test asserted a FocusIn count and then hasFocus(), and each passed on a
+    // developer desktop and failed the Linux lane. Assert focusWidget() only,
+    // and gate anything activation-dependent behind isActiveWindow().
     const bool windowActive = window.isActiveWindow();
+    ASSERT_EQ(window.focusWidget(), target) << "precondition: already the focus widget";
+    const int focusOutsBefore = target->focusOuts;
     QMouseEvent again(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2),
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(target, &again);
     QCoreApplication::processEvents();
     EXPECT_EQ(window.focusWidget(), target) << "still the focus widget afterwards";
     EXPECT_EQ(target->presses, 2);
-    EXPECT_TRUE(target->hasFocus());
-    if (windowActive)
+    if (windowActive) {
+        EXPECT_TRUE(target->hasFocus());
         EXPECT_GT(target->focusOuts, focusOutsBefore)
             << "an active window must see the FocusOut/FocusIn pair the QML scene needs";
+    }
 
     // other event types are ignored
     other->setFocus(Qt::OtherFocusReason);
@@ -80,4 +85,36 @@ TEST(ClickFocusFilter, MousePressMovesWidgetFocusToTheWatchedWidget)
                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(target, &move);
     EXPECT_EQ(window.focusWidget(), other);
+}
+
+// Regression guard for the two CI-only failures this test already caused.
+// The window is deliberately NEVER shown, which reproduces what a headless CI
+// display (Xvfb, no window manager) does: the window is not ACTIVE. Qt gates
+// QWidget::hasFocus() and QFocusEvent delivery on activation, so a test that
+// asserts either passes on a developer desktop and fails the Linux lane. The
+// filter's real contract — the clicked widget becomes the window's focus
+// widget — holds either way, and that is what this pins.
+TEST(ClickFocusFilter, FocusWidgetIsSetEvenWhenTheWindowIsNotActive)
+{
+    QWidget window;                       // NOT shown → never active
+    auto* other  = new QLineEdit(&window);
+    auto* target = new RecordingWidget(&window);
+    target->setFocusPolicy(Qt::StrongFocus);
+    ClickFocusFilter filter;
+    target->installEventFilter(&filter);
+    other->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(window.isActiveWindow()) << "precondition: this is the CI case";
+
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &press);
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(window.focusWidget(), target) << "the filter's contract does not depend on activation";
+    EXPECT_EQ(target->presses, 1) << "and the press is never consumed";
+    // hasFocus() is deliberately NOT asserted here: it is
+    // `focusWidget() == this && isActiveWindow()`, so it is false by
+    // construction in this case. Asserting it is the bug this test guards.
+    EXPECT_FALSE(target->hasFocus()) << "documents WHY hasFocus must not be asserted unconditionally";
 }
