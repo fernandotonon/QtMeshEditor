@@ -1938,12 +1938,24 @@ Rectangle {
                             visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
                             text: MeshGenController.selectedImagePath.length > 0
                                 ? "e.g. give him golden armor"
-                                : "e.g. a goblin warrior in bronze armor"
+                                : "describe it — \"a capybara standing on grass\", not \"capybara\""
                             color: PropertiesPanelController.textColor
                             opacity: 0.4; font.pixelSize: 11
                         }
                         onAccepted: imgGenBtn.run()
                     }
+                }
+                // Edit mode is easy to miss (the placeholder only shows on an
+                // EMPTY field), and its failure is confusing rather than
+                // obvious: typing a new subject nudges the old image instead
+                // of generating that subject. Say so, with the way out.
+                Text {
+                    visible: MeshGenController.selectedImagePath.length > 0
+                    text: "✎ Editing the loaded image — 🗑 it to create a new one"
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.65; font.pixelSize: 10
+                    wrapMode: Text.Wrap
+                    width: parent.width      // plain Column: Layout.* is inert here
                 }
                 Rectangle {
                     id: imgGenBtn
@@ -1966,8 +1978,16 @@ Rectangle {
                         genBusy = true
                         MeshGenController.generateSourceImage(imgGenPromptIn.text)
                     }
+                    // With an image already selected the prompt EDITS it
+                    // (FLUX.2 kontext-style) instead of generating from
+                    // scratch — a user who typed "capybara" after a previous
+                    // run got their old subject nudged, not a capybara. Say
+                    // which one the click will do.
                     Text { anchors.centerIn: parent
-                           text: imgGenBtn.genBusy ? "…" : "Create Image"
+                           text: imgGenBtn.genBusy
+                                 ? "…"
+                                 : (MeshGenController.selectedImagePath.length > 0
+                                    ? "Edit Image" : "Create Image")
                            color: "white"; font.pixelSize: 10 }
                     MouseArea { id: imgGenMa; anchors.fill: parent; hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor

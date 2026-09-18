@@ -11551,10 +11551,13 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
     }
     // Fresh generation gets the subject steering the reconstruction wants;
     // an EDIT keeps the reference image's composition, so no suffix there.
+    // Same wording as the GUI path (MeshGenController::generateSourceImage):
+    // "full body"/"single subject" caption HUMAN figure photography, and on a
+    // short prompt that beat the subject — "capybara" produced a person.
     const QString fullPrompt = refImagePath.isEmpty()
         ? prompt.trimmed()
-              + QStringLiteral(", single subject, full body, centered, "
-                               "plain light gray background")
+              + QStringLiteral(", the entire subject fully visible, centered, "
+                               "isolated on a plain light gray background")
         : prompt.trimmed();
     // FLUX.2-klein trains at 1024²; SD-class checkpoints at 512² (bigger
     // makes SD 1.5 duplicate the subject).

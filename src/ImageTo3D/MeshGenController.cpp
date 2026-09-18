@@ -19,6 +19,7 @@
 
 #include <QBuffer>
 #include <QByteArray>
+#include <QApplication>
 #include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
@@ -279,9 +280,22 @@ QString MeshGenController::saveSelectedImageInteractive()
     const QString suggested =
         QDir(startDir.isEmpty() ? QDir::homePath() : startDir)
             .filePath(suggestedImageFileName());
+    // Same recipe as MaterialEditorQML::openFileDialog — a dialog opened
+    // from a QQuickWidget context with a null parent and the NATIVE backend
+    // silently fails to appear on macOS (the button looks dead). Pump the
+    // queue, raise/activate the real window, parent to it, and use Qt's own
+    // dialog.
+    QApplication::processEvents();
+    if (QWidget* activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
     const QString dest = QFileDialog::getSaveFileName(
-        nullptr, tr("Save Source Image"), suggested,
-        tr("PNG image (*.png);;All files (*)"));
+        QApplication::activeWindow(), tr("Save Source Image"), suggested,
+        tr("PNG image (*.png);;All files (*)"), nullptr,
+        QFileDialog::DontUseNativeDialog
+            | QFileDialog::DontUseCustomDirectoryIcons);
     if (dest.isEmpty()) return {};          // cancelled — not an error
     return saveSelectedImageAs(dest) ? dest : QString();
 }
@@ -359,9 +373,15 @@ void MeshGenController::generateSourceImage(const QString& prompt)
     // Fresh generation: steer toward what the 3D reconstruction wants — one
     // isolated subject on a plain backdrop. Edits keep the reference image's
     // composition, so no suffix there.
+    // NB "full body" and "single subject" caption HUMAN figure photography
+    // in the training data, and on a short prompt that association can beat
+    // the subject itself: "capybara" reproducibly generated a person in
+    // plain clothes on a grey backdrop — the suffix, rendered literally,
+    // with the animal absent. Steering must describe the FRAMING without
+    // implying a person.
     m_imageGenPrompt = m_imageGenRef.isEmpty()
-        ? trimmed + QStringLiteral(", single subject, full body, centered, "
-                                   "plain light gray background")
+        ? trimmed + QStringLiteral(", the entire subject fully visible, centered, "
+                                   "isolated on a plain light gray background")
         : trimmed;
     // Explicit output name: SDManager's generationCompleted is GLOBAL, so a
     // texture generation finishing while we wait must not be mistaken for our
