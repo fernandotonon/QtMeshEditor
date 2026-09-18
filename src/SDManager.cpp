@@ -235,6 +235,15 @@ void SDManager::setFlux2Steps(int steps)
     emit settingsChanged();
 }
 
+void SDManager::setSeed(qint64 seed)
+{
+    const qint64 v = seed < 0 ? -1 : seed;   // any negative means "random"
+    if (m_settings.seed == v) return;
+    m_settings.seed = v;
+    saveSettings();
+    emit settingsChanged();
+}
+
 void SDManager::setCfgScale(float value)
 {
     if (m_settings.cfgScale != value) {

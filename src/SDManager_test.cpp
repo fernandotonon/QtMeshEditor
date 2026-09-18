@@ -102,6 +102,27 @@ TEST_F(SDManagerTest, Flux2StepsDefaultsToEightAndClampsToTheUsefulRange)
     manager->setFlux2Steps(restore);
 }
 
+// Added for the step-count A/B: without a fixed seed two runs differ by
+// noise, so "did more steps help?" is unanswerable. -1 (and any negative)
+// means "random per generation", which is the default.
+TEST_F(SDManagerTest, SeedCanBeFixedForReproducibleGenerationsAndNegativeMeansRandom)
+{
+    const qint64 restore = manager->seed();
+    EXPECT_EQ(restore, -1) << "default: random per generation";
+
+    manager->setSeed(12345);
+    EXPECT_EQ(manager->seed(), 12345);
+
+    manager->setSeed(-7);
+    EXPECT_EQ(manager->seed(), -1) << "any negative normalises to the random sentinel";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setSeed(manager->seed());
+    EXPECT_EQ(spy.count(), 0) << "no churn when the value is unchanged";
+
+    manager->setSeed(restore);
+}
+
 TEST_F(SDManagerTest, SetImageWidth)
 {
     QSignalSpy spy(manager, &SDManager::settingsChanged);

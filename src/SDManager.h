@@ -90,6 +90,11 @@ public:
     int steps() const { return m_settings.steps; }
     int flux2Steps() const { return m_settings.flux2Steps; }
     void setFlux2Steps(int steps);
+    /// Stored RNG seed; -1 (the default) means "random per generation".
+    /// Fixing it makes a run reproducible, which is what makes an A/B of
+    /// sampling settings meaningful — otherwise two runs differ by noise.
+    qint64 seed() const { return m_settings.seed; }
+    Q_INVOKABLE void setSeed(qint64 seed);
     void setSteps(int value);
     float cfgScale() const { return m_settings.cfgScale; }
     void setCfgScale(float value);
