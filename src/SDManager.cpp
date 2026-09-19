@@ -118,8 +118,9 @@ void SDManager::populateRecommendedModels()
         "SDXL Base 1.0 (FP16) — best anatomy",
         "sd_xl_base_1.0.safetensors",
         "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
-        "SDXL Base - full 30-step sampling with real guidance; best limb/hand "
-        "coherence, slower than the distilled models. ~6.9GB",
+        "SDXL Base - full 30-step sampling with real guidance; finest surface "
+        "detail, but it tends to CROP to a bust and ignore full-body framing, "
+        "which image-to-3D needs. Slower than the distilled models. ~6.9GB",
         6938078334,
         false
     });
