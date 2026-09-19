@@ -408,3 +408,96 @@ TEST(FaceRigger, SatelliteIslandFollowsAGlobalScale)
     }
     EXPECT_EQ(checked, 4);
 }
+
+// #1061 — a vertex must not match a triangle on the WRONG surface where two
+// surfaces nearly touch.
+//
+// This is env-gated on the REAL ICT template rather than synthetic, because
+// synthetic geometry did not reproduce the bug. A flat plane with a parallel
+// floating patch was tried at four separation heights and a proximity-only
+// build produced IDENTICAL output to the fixed one every time — the test
+// would have pinned nothing. The real template has whatever the synthetic
+// case lacks (curvature, a genuinely interleaved seam), and the failure is
+// sharp and reproducible there.
+//
+// What the fix does: the resample seeds its triangle search from the nearest
+// correspondence VERTEX and considers only triangles incident to it, so the
+// seed decides which SURFACE is searched. On the real template the
+// mouth-interior island passes ~0.14 from the outer lip, and every triangle
+// incident to an island vertex is an island triangle (measured 7 of 7, 5 of
+// 5, 7 of 7) — so three lip vertices seeded on the island, the correct lip
+// triangle was never a candidate, and they inherited its ZERO motion while
+// every neighbour moved ~4.0. Choosing the seed by NORMAL AGREEMENT fixes it:
+// the island scores -0.974 against the query normal, the correct
+// main-surface vertex +0.993, and the latter is also nearer (0.118 v 0.144).
+//
+// Measured on the control mesh (template rigged against itself), jawOpen:
+//
+//                        tears>1.0   worst tear   frozen lip verts
+//   before (master)        1182        4.018            -
+//   satellite fix (#1060)   372        4.076            3
+//   + this seeding fix       60        1.885            0
+//
+// Set QTMESH_FACERIG_TEMPLATE to the packed arkit_template.bin to run it.
+TEST(FaceRigger, RealTemplateHasNoFrozenLipVertices)
+{
+    const QByteArray tp = qgetenv("QTMESH_FACERIG_TEMPLATE");
+    if (tp.isEmpty()) {
+        // A skipped test counts as a suite failure in this CI harness.
+        SUCCEED() << "QTMESH_FACERIG_TEMPLATE not set — real template not exercised";
+        return;
+    }
+    FaceRig::ArkitTemplate at;
+    QString err;
+    ASSERT_TRUE(at.load(QString::fromUtf8(tp), &err)) << err.toStdString();
+    ASSERT_GT(at.vertexCount(), 10000);
+
+    // The template rigged against ITSELF: every shape should reproduce
+    // exactly, so any vertex that fails to move is unambiguously a defect
+    // rather than fit error.
+    const std::vector<float>& V = at.neutral();
+    const std::vector<int>&   F = at.faces();
+    const auto r = FaceRig::buildFaceRig(V, F, at);
+    ASSERT_TRUE(r.ok) << r.error;
+    ASSERT_FALSE(r.shapes.empty());
+
+    const FaceRig::FaceRigShape* jaw = nullptr;
+    for (const auto& sh : r.shapes)
+        if (sh.name == QStringLiteral("jawOpen")) { jaw = &sh; break; }
+    ASSERT_NE(jaw, nullptr) << "the template must carry jawOpen";
+
+    // Per-vertex 1-ring from the template topology.
+    const int nv = int(V.size() / 3);
+    // NB braces + resize, not parens: `vector<vector<int>> ring(size_t(nv))`
+    // is the most vexing parse — the compiler reads it as a declaration of a
+    // FUNCTION taking size_t. This bites repeatedly in this file.
+    std::vector<std::vector<int>> ring{};
+    ring.resize(size_t(nv));
+    for (size_t f = 0; f + 2 < F.size(); f += 3) {
+        const int a = F[f], b = F[f+1], c = F[f+2];
+        if (a < 0 || b < 0 || c < 0 || a >= nv || b >= nv || c >= nv) continue;
+        ring[size_t(a)].push_back(b); ring[size_t(b)].push_back(a);
+        ring[size_t(b)].push_back(c); ring[size_t(c)].push_back(b);
+        ring[size_t(c)].push_back(a); ring[size_t(a)].push_back(c);
+    }
+    auto mag = [&](int i) {
+        if (size_t(i)*3+2 >= jaw->userDeltas.size()) return 0.0;
+        const float* d = &jaw->userDeltas[size_t(i)*3];
+        return std::sqrt(double(d[0])*d[0] + double(d[1])*d[1] + double(d[2])*d[2]);
+    };
+
+    // A FROZEN vertex: still, while at least 5 of its neighbours move a lot.
+    // That is the exact signature of matching a wrong-surface triangle, and
+    // it is what produces the visible spike.
+    int frozen = 0;
+    for (int i = 0; i < nv; ++i) {
+        if (ring[size_t(i)].size() < 5) continue;
+        if (mag(i) > 0.05) continue;
+        int movingNb = 0;
+        for (const int n : ring[size_t(i)]) if (mag(n) > 2.0) ++movingNb;
+        if (movingNb >= 5) ++frozen;
+    }
+    EXPECT_EQ(frozen, 0)
+        << frozen << " vertices are frozen while 5+ of their neighbours move "
+           ">2.0 — they matched a triangle on the wrong surface (#1061)";
+}

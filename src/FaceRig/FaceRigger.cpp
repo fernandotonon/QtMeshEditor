@@ -97,6 +97,55 @@ public:
         return best;
     }
 
+    /// The k nearest point indices to q, nearest first. The sampler needs
+    /// several candidates because the SINGLE nearest vertex can sit on the
+    /// wrong surface where two surfaces nearly touch — see
+    /// SurfaceSampler::sample.
+    void nearestK(const float* q, int k, std::vector<int>& out) const
+    {
+        out.clear();
+        if (!m_pts || m_cells.empty() || k <= 0) return;
+        float qc[3];
+        for (int a = 0; a < 3; ++a)
+            qc[a] = std::min(std::max(q[a], m_lo[a]), m_hi[a]);
+        const std::array<int,3> c = cellOf(qc);
+        int spanCells = 1;
+        for (int a = 0; a < 3; ++a)
+            spanCells = std::max(spanCells,
+                                 int(std::ceil((m_hi[a]-m_lo[a]) / m_cell)) + 1);
+        const int rMax = spanCells + 1;
+
+        std::vector<std::pair<double,int>> best;   // (dist², idx), worst last
+        best.reserve(size_t(k) + 1);
+        for (int r = 0; r <= rMax; ++r) {
+            for (int dx = -r; dx <= r; ++dx)
+              for (int dy = -r; dy <= r; ++dy)
+                for (int dz = -r; dz <= r; ++dz) {
+                    if (std::max({std::abs(dx),std::abs(dy),std::abs(dz)}) != r) continue;
+                    auto it = m_cells.find(key({c[0]+dx, c[1]+dy, c[2]+dz}));
+                    if (it == m_cells.end()) continue;
+                    for (int idx : it->second) {
+                        const float* p = &(*m_pts)[size_t(idx)*3];
+                        const double d = (double(p[0]-q[0])*(p[0]-q[0]) +
+                                          double(p[1]-q[1])*(p[1]-q[1]) +
+                                          double(p[2]-q[2])*(p[2]-q[2]));
+                        if (int(best.size()) == k && d >= best.back().first) continue;
+                        auto pos = std::lower_bound(
+                            best.begin(), best.end(), d,
+                            [](const std::pair<double,int>& e, double v){ return e.first < v; });
+                        best.insert(pos, {d, idx});
+                        if (int(best.size()) > k) best.pop_back();
+                    }
+                }
+            if (int(best.size()) == k) {
+                const double guaranteed = double(r) * m_cell;
+                if (guaranteed * guaranteed >= best.back().first) break;
+            }
+        }
+        out.reserve(best.size());
+        for (const auto& e : best) out.push_back(e.second);
+    }
+
 private:
     std::array<int,3> cellOf(const float* p) const
     {
@@ -144,6 +193,7 @@ public:
         m_pts = &pts;
         m_faces = &faces;
         m_grid.build(pts);
+        m_vertN = vertexNormals(pts, faces);
         // vertex → incident triangles: a nearest-vertex hit yields the few
         // triangles worth testing (testing the whole surface is hopeless).
         const int nv = int(pts.size() / 3);
@@ -157,13 +207,90 @@ public:
 
     struct Hit { float w[3] = {0, 0, 0}; int vi[3] = {-1, -1, -1}; };
 
+    /// Area-weighted per-vertex normals. Public so the caller can compute the
+    /// QUERY mesh's normals with the identical convention.
+    static std::vector<float> vertexNormals(const std::vector<float>& pts,
+                                            const std::vector<int>& faces)
+    {
+        std::vector<float> n(pts.size(), 0.0f);
+        const int nv = int(pts.size() / 3);
+        for (size_t f = 0; f + 2 < faces.size(); f += 3) {
+            const int a = faces[f], b = faces[f+1], c = faces[f+2];
+            if (a < 0 || b < 0 || c < 0 || a >= nv || b >= nv || c >= nv) continue;
+            float e1[3], e2[3], cr[3];
+            for (int d = 0; d < 3; ++d) {
+                e1[d] = pts[size_t(b)*3+size_t(d)] - pts[size_t(a)*3+size_t(d)];
+                e2[d] = pts[size_t(c)*3+size_t(d)] - pts[size_t(a)*3+size_t(d)];
+            }
+            cr[0] = e1[1]*e2[2] - e1[2]*e2[1];
+            cr[1] = e1[2]*e2[0] - e1[0]*e2[2];
+            cr[2] = e1[0]*e2[1] - e1[1]*e2[0];
+            for (const int v : {a, b, c})
+                for (int d = 0; d < 3; ++d) n[size_t(v)*3+size_t(d)] += cr[d];
+        }
+        for (int v = 0; v < nv; ++v) {
+            float L = 0;
+            for (int d = 0; d < 3; ++d)
+                L += n[size_t(v)*3+size_t(d)] * n[size_t(v)*3+size_t(d)];
+            L = std::sqrt(L);
+            if (L > 1e-20f)
+                for (int d = 0; d < 3; ++d) n[size_t(v)*3+size_t(d)] /= L;
+        }
+        return n;
+    }
+
     // Closest point on the surface to q. Falls back to the nearest VERTEX
     // (weight 1) when it has no incident triangles, so an isolated
     // correspondence point still contributes instead of dropping out.
-    Hit sample(const float* q) const
+    /// `qn` (optional, 3 floats) is the query's own surface normal. When
+    /// supplied, the SEED vertex is the nearest one whose normal agrees with
+    /// it, instead of the nearest one outright.
+    ///
+    /// The seed decides which surface is searched: only triangles incident to
+    /// it are ever considered. Where two surfaces nearly touch that makes the
+    /// nearest-vertex pick load-bearing, and at the lip centre it is wrong —
+    /// the mouth-interior island passes ~0.14 from the outer lip, so three lip
+    /// vertices seeded on the island, and EVERY triangle incident to an island
+    /// vertex is an island triangle (measured: 7, 5 and 7 of 7, 5 and 7). The
+    /// correct lip triangle was never a candidate, so those vertices inherited
+    /// the island's zero motion and froze while every neighbour moved ~4.0 —
+    /// the spiky lip line (#1061).
+    ///
+    /// That is also why filtering the candidates cannot help, and three
+    /// attempts confirmed it: widening the seed set to the 8 nearest vertices
+    /// made it WORSE (8 frozen became 19) because it added more island
+    /// triangles; restricting to the seed's connected component did nothing
+    /// because the seed is itself on the island; and rejecting opposed
+    /// triangles did nothing because it rejected them ALL and the fallback
+    /// restored the island match. The answer was never in the set — so fix
+    /// the SEED, not the filter.
+    ///
+    /// Orientation separates the surfaces decisively. Measured at the three
+    /// failing vertices, over the 8 nearest correspondence vertices:
+    ///
+    ///     nearest overall      v18154  d=0.144  island  dot = -0.974
+    ///     nearest AGREEING     v5941   d=0.118  main    dot = +0.993
+    ///
+    /// The agreeing vertex is both closer AND on the right surface; the
+    /// island scores about -0.9 because the two surfaces face opposite ways,
+    /// which is exactly what makes them distinct surfaces. If no candidate
+    /// agrees, the nearest is used unchanged, so this can never lose a
+    /// correspondence.
+    Hit sample(const float* q, const float* qn = nullptr) const
     {
         Hit h;
-        const int nv = m_grid.nearest(q);
+        int nv = -1;
+        if (qn) {
+            m_grid.nearestK(q, kSeedCandidates, m_seeds);
+            for (const int cand : m_seeds) {
+                if (cand < 0 || size_t(cand)*3+2 >= m_vertN.size()) continue;
+                const float d = qn[0]*m_vertN[size_t(cand)*3]
+                              + qn[1]*m_vertN[size_t(cand)*3+1]
+                              + qn[2]*m_vertN[size_t(cand)*3+2];
+                if (d > 0.0f) { nv = cand; break; }   // nearest that agrees
+            }
+        }
+        if (nv < 0) nv = m_grid.nearest(q);
         if (nv < 0) return h;
         h.vi[0] = nv; h.w[0] = 1.0f;
         if (size_t(nv) >= m_vertFaces.size()) return h;
@@ -238,6 +365,13 @@ private:
     const std::vector<int>* m_faces = nullptr;
     PointGrid m_grid;
     std::vector<std::vector<int>> m_vertFaces;
+    std::vector<float> m_vertN;          // unit normal per correspondence vertex
+    mutable std::vector<int> m_seeds;    // scratch, reused across calls
+
+    // How many nearby vertices to consider before giving up on finding one
+    // whose normal agrees. The correct seed was the 1st or 2nd candidate in
+    // every measured case; 8 is slack for a denser seam.
+    static constexpr int kSeedCandidates = 8;
 };
 
 
@@ -844,8 +978,13 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     // NB braces, not parens: `vector<Hit> userHit(size_t(nu))` is the most
     // vexing parse — the compiler reads it as a function declaration.
     std::vector<SurfaceSampler::Hit> userHit{size_t(nu)};
-    for (int i = 0; i < nu; ++i)
-        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3]);
+    // The query's own normal lets the sampler seed on the RIGHT surface where
+    // two surfaces nearly touch — see SurfaceSampler::sample.
+    const std::vector<float> userN = SurfaceSampler::vertexNormals(fitV, fitF);
+    for (int i = 0; i < nu; ++i) {
+        const float* qn = (size_t(i)*3+2 < userN.size()) ? &userN[size_t(i)*3] : nullptr;
+        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3], qn);
+    }
 
     // noise floor scaled by the FIT region diagonal (a head is smaller than a
     // whole body, so scaling on the full-body diag would swallow real motion).
