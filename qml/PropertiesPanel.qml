@@ -2145,9 +2145,13 @@ Rectangle {
                 // mesh is built. Saving makes prompt-to-image useful on its own.
                 Row {
                     id: saveRow
+                    // Bottom-RIGHT: the path label below is centred and full
+                    // width, so a centred button sat directly above it and
+                    // read as part of that label.
                     anchors.bottom: sourcePathLabel.top
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.margins: 6
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.bottomMargin: 6
                     spacing: 8
                     Button {
                         text: "Save Image As…"
