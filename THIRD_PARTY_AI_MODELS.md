@@ -554,13 +554,15 @@ for #410 — non-commercial — in favour of synthetic bone-weight-derived label
   — verified 2026-09-18 against the HF API: `license: openrail++`, ungated,
   `content-length` 6938078334 matching the catalog entry. Slower per image
   and ~6.9 GB, so it is a user choice rather than the default.
-- ⚠️ **SDXL Turbo, already in the catalog, is NOT permissively licensed.**
-  Verified 2026-09-18: `license: other`, `license_name: sai-nc-community` —
-  the Stability AI **Non-Commercial** Community License. It therefore does
-  NOT clear the redistribution bar the other entries are held to, and it
-  predates this note rather than being added by it. It is a user-initiated
-  download (nothing is bundled), but it should be reviewed on its own terms:
-  either drop it or label it non-commercial at the point of download.
+- **SDXL Turbo — REMOVED from the catalog (2026-09-18).** Verified against
+  the HF API: `license: other`, `license_name: sai-nc-community` — the
+  Stability AI **Non-Commercial** Community License. QtMeshEditor is **MIT**,
+  so users reasonably assume anything the app offers them is safe for
+  commercial work; shipping a non-commercial model in the download list is a
+  trap they have no reason to check for. It also failed the exact bar that
+  rejected SF3D, FLUX.2-dev and LAFAN1, so keeping it was inconsistent.
+  SDXL Base 1.0 (openrail++) is the permissive replacement, and is the
+  better anatomy model anyway since Turbo is adversarial-distilled.
   **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
   is non-commercial, which fails the redistribution bar (Homebrew / Snap /
   WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.

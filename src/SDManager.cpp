@@ -105,16 +105,15 @@ void SDManager::populateRecommendedModels()
         false
     });
 
-    // The anatomy option. Every other entry here is DISTILLED (klein: 4-step
-    // guidance-distilled; SDXL Turbo: 4-12 step adversarial-distilled), and
-    // distillation is exactly what costs limb/finger coherence — the "extra
-    // arms, weird fingers" class of artifact. SDXL base is NOT distilled: it
-    // runs the full 30-step schedule with real classifier-free guidance and
-    // a negative prompt, which is what resolves anatomy. Slower per image
-    // and a bigger download, so it is offered ALONGSIDE klein rather than
-    // replacing it. CreativeML OpenRAIL++-M, like the SDXL Turbo entry above
-    // — permissive enough for the project's redistribution bar (FLUX.2-dev,
-    // the obvious quality jump, is NON-COMMERCIAL and deliberately absent).
+    // The anatomy option. The DEFAULT model (FLUX.2-klein) is 4-step
+    // guidance-distilled, and distillation is what costs limb/finger
+    // coherence — the "extra arms, weird fingers" artifacts. SDXL Base is
+    // NOT distilled: the full 30-step schedule with real classifier-free
+    // guidance and a negative prompt, which is what resolves anatomy.
+    // Slower and a bigger download, so it is offered ALONGSIDE klein rather
+    // than replacing it. CreativeML OpenRAIL++-M — permissive, unlike
+    // FLUX.2-dev (the obvious quality jump) and the removed SDXL Turbo,
+    // both non-commercial and therefore out of scope for an MIT app.
     m_recommendedModels.append({
         "SDXL Base 1.0 (FP16) — best anatomy",
         "sd_xl_base_1.0.safetensors",
@@ -125,14 +124,13 @@ void SDManager::populateRecommendedModels()
         false
     });
 
-    m_recommendedModels.append({
-        "SDXL Turbo (FP16)",
-        "sd_xl_turbo_1.0_fp16.safetensors",
-        "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
-        "SDXL Turbo - fast generation, 4-12 steps. ~6.5GB",
-        6938081905,
-        false
-    });
+    // SDXL Turbo was REMOVED (2026-09-18): its licence is
+    // `sai-nc-community` — the Stability AI NON-COMMERCIAL licence — which
+    // fails the permissive-redistribution bar every other entry is held to
+    // (SF3D, FLUX.2-dev and LAFAN1 were all rejected on exactly this
+    // ground). QtMeshEditor is MIT, so users reasonably assume what the app
+    // offers is safe for commercial work; a non-commercial model in this
+    // list is a trap. SDXL Base 1.0 above is the openrail++ replacement.
 
     // Issue #403: ControlNet depth model for mesh-aware texture
     // generation. NOT a base model — it pairs WITH SD 1.5 as the

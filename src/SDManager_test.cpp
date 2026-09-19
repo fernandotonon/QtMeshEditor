@@ -304,11 +304,13 @@ TEST_F(SDManagerTest, GetModelFilePathResolvesRecommendedModelFilename)
     QString originalDir = manager->modelsDirectory();
     QString tempDir = QDir::temp().filePath("qtmesh_sd_recommended_models");
 
-    const QString recommendedPath = createModelFile(tempDir, "sd_xl_turbo_1.0_fp16.safetensors");
+    // SDXL Turbo was removed from the catalog (non-commercial licence), so
+    // this resolves against a recommended entry that still exists.
+    const QString recommendedPath = createModelFile(tempDir, "sd_xl_base_1.0.safetensors");
     manager->setModelsDirectory(tempDir);
 
-    EXPECT_EQ(manager->getModelFilePath("SDXL Turbo (FP16)"), recommendedPath);
-    EXPECT_TRUE(manager->modelFileExists("SDXL Turbo (FP16)"));
+    EXPECT_EQ(manager->getModelFilePath("SDXL Base 1.0 (FP16) — best anatomy"), recommendedPath);
+    EXPECT_TRUE(manager->modelFileExists("SDXL Base 1.0 (FP16) — best anatomy"));
 
     manager->setModelsDirectory(originalDir);
     QDir(tempDir).removeRecursively();
@@ -372,10 +374,21 @@ TEST_F(SDManagerTest, GetAvailableModelsInfoIncludesFileMetadata)
     manager->setModelsDirectory(tempDir);
     manager->scanForModels();
 
+    // NB not an exact count: the FLUX.2-klein SET is discovered from its own
+    // ai_models/flux2_klein/ directory, not from modelsDirectory, so a
+    // machine with klein installed legitimately lists it here too. Find the
+    // entry under test instead of assuming it is the only one.
     const QVariantList models = manager->getAvailableModelsInfo();
-    ASSERT_EQ(models.size(), 1);
-
-    const QVariantMap info = models.first().toMap();
+    QVariantMap info;
+    for (const QVariant& m : models) {
+        const QVariantMap candidate = m.toMap();
+        if (candidate.value("name").toString() == QLatin1String("metadata-model")) {
+            info = candidate;
+            break;
+        }
+    }
+    ASSERT_FALSE(info.isEmpty())
+        << "the scanned model is missing from getAvailableModelsInfo()";
     EXPECT_EQ(info.value("name").toString(), QString("metadata-model"));
     EXPECT_EQ(info.value("fileName").toString(), QString("metadata-model.ckpt"));
     EXPECT_GT(info.value("size").toLongLong(), 0);

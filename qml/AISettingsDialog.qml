@@ -83,7 +83,7 @@ Dialog {
                 width: implicitWidth
             }
             TabButton {
-                text: "SD Models"
+                text: "Image Models"
                 visible: MaterialEditorQML.stableDiffusionEnabled
                 width: visible ? implicitWidth : 0
             }
@@ -752,7 +752,7 @@ Dialog {
                 }
             }
 
-            // ============ SD Models Tab ============
+            // ============ Image Models Tab ============
             ScrollView {
                 visible: MaterialEditorQML.stableDiffusionEnabled
                 Layout.fillWidth: true
@@ -818,7 +818,7 @@ Dialog {
                         // SD Model Selection
                         GroupBox {
                             Layout.fillWidth: true
-                            title: "Available SD Models"
+                            title: "Available Image Models"
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -857,9 +857,9 @@ Dialog {
                             }
                         }
 
-                        // Recommended SD Models
+                        // Recommended image models
                         Text {
-                            text: "Recommended SD Models"
+                            text: "Recommended Image Models"
                             font.pointSize: 12
                             font.bold: true
                             color: textColor
