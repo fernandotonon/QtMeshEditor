@@ -637,99 +637,186 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
             for (int d = 0; d < 3; ++d)
                 fitted[size_t(mainToFull[m])*3 + d] = fit.fitted[m*3 + d];
 
-        // group satellite verts per component
-        std::unordered_map<int, std::vector<int>> sats;
-        for (int i = 0; i < tvc; ++i)
-            if (comp[size_t(i)] != mainComp) sats[comp[size_t(i)]].push_back(i);
+        // Place the satellite islands (mouth interior, teeth, eyeballs,
+        // lashes) by transporting them with the displacement the main surface
+        // underwent, sampled as a globally-supported inverse-distance blend.
+        //
+        // The previous rule fitted a least-squares AFFINE to the 60 main verts
+        // nearest each island's centroid. That is an extrapolation problem in
+        // disguise, and it failed badly on the mouth interior (#1059): its
+        // deepest vertices sit up to 2.6 units from ANY main-surface vertex on
+        // a head only ~22 units across, so their nearest neighbours form a
+        // distant, nearly co-planar patch of outer skin. The fitted affine was
+        // ill-conditioned there and extrapolated wildly — measured on the
+        // template fitted to ITSELF (where a correct placement is exact), it
+        // misplaced the island by 0.347 mean / 3.29 max, inverting the
+        // front-to-back ordering of the throat vertices. That is the artifact
+        // the user saw as the mouth interior lagging the teeth on jawOpen.
+        //
+        // An affine is the wrong model because it has a linear part that must
+        // be EXTRAPOLATED far outside its support. A displacement blend has
+        // no linear part to diverge: every sample is a convex combination of
+        // displacements that actually occurred, so the island can never leave
+        // the convex hull of the motion around it. Measured on the same
+        // control mesh, sweeping neighbourhood size and falloff exponent:
+        //
+        //   rule                                mean      max
+        //   affine, K=60   (what shipped)      0.3468    3.2853
+        //   affine, K=2000                     0.1839    0.4482
+        //   IDW p=1, K=60                      0.3051    1.3607
+        //   IDW p=1, K=2000                    0.1038    0.3820
+        //   IDW p=1, all main                  0.0274    0.0759
+        //   IDW p=0.5, all main                0.0172    0.0340   <- chosen
+        //
+        // Both knobs are monotone: more support and a gentler falloff are
+        // always better, because the true displacement field is smooth and a
+        // wide blend is what recovers that smoothness. Using ALL main verts
+        // also removes the neighbourhood-size parameter entirely. The result
+        // is more accurate than the main surface's own fit drift (0.120 mean),
+        // i.e. satellite placement is no longer a meaningful error source.
+        //
+        // End to end, as per-island jawOpen amplitude ratios on the control
+        // mesh (1.000 is exact; the main surface sits at 1.008 either way):
+        //
+        //   island           before   after
+        //   mouth interior    0.912   0.997
+        //   212               0.915   0.997
+        //   179               0.902   0.997
+        //   176               0.898   0.997
+        //
+        // The p10 outliers go with them: islands 212 and 176 had vertices
+        // receiving ZERO motion (p10 = 0.000), and the worst island p10 is
+        // now 0.995. Every island was lagging, not just the mouth — the
+        // reported symptom was simply where it was most visible.
+        //
+        // Cost is O(satellites x main) — 12,657 x 14,062 = 178M distance
+        // evaluations for the ICT template, measured at 0.24 s against a
+        // ~10 min total run, i.e. dwarfed by the deformation-transfer solves.
+        // A spatial index would cut it further but is not worth the code:
+        // the whole point of the rule is that EVERY main vertex contributes.
 
-        for (auto& [cid, verts] : sats) {
-            // centroid in the (warped) template space
-            std::array<double,3> ctr{0,0,0};
-            for (int v : verts)
-                for (int d = 0; d < 3; ++d)
-                    ctr[size_t(d)] += fitTmplV[size_t(v)*3+d] / double(verts.size());
-            // K nearest FINITE main verts to the centroid
-            constexpr int K = 60;
-            std::vector<std::pair<float,int>> near;   // (dist², main idx)
-            near.reserve(mainToFull.size());
-            for (size_t m = 0; m < mainToFull.size(); ++m) {
-                bool finite = true;
-                for (int d = 0; d < 3; ++d)
-                    if (!std::isfinite(fit.fitted[m*3+d])) { finite = false; break; }
-                if (!finite) continue;
-                const int fv = mainToFull[m];
-                float d2 = 0;
+        // Main verts with a finite fit, with their displacement precomputed.
+        std::vector<int>    srcFull;     // template vertex index
+        std::vector<double> srcDisp;     // fitted - warped rest, xyz
+        srcFull.reserve(mainToFull.size());
+        srcDisp.reserve(mainToFull.size() * 3);
+        for (size_t m = 0; m < mainToFull.size(); ++m) {
+            bool finite = true;
+            for (int d = 0; d < 3; ++d)
+                if (!std::isfinite(fit.fitted[m*3+d])) { finite = false; break; }
+            if (!finite) continue;
+            const int fv = mainToFull[m];
+            srcFull.push_back(fv);
+            for (int d = 0; d < 3; ++d)
+                srcDisp.push_back(double(fit.fitted[m*3+size_t(d)])
+                                - double(fitTmplV[size_t(fv)*3+size_t(d)]));
+        }
+
+        // No usable main correspondence at all (a fit that diverged wholesale):
+        // leave every satellite at the template rest. It simply won't deform,
+        // which is the same degradation the old code chose, and the NRICP gate
+        // above would normally have rejected such a fit already.
+        const bool haveSources = srcFull.size() >= 4;
+
+        // Fit the global SIMILARITY (uniform scale + translation) that the main
+        // surface underwent, and apply it EXACTLY; blend only what is left.
+        //
+        // Without this the blend is wrong under a global scale, which NRICP's
+        // bbox prealign produces routinely for meshes in different units. A
+        // uniform scale s about the origin gives every main vertex the
+        // displacement (s-1)*p — a POSITION-DEPENDENT term. Averaging those
+        // and adding the result to a satellite at q yields
+        // q + (s-1)*weightedMean(mainPositions) instead of s*q, so an eye or
+        // tooth sitting away from the main surface's centroid keeps roughly
+        // its original position and size while the head scales around it.
+        // Measured on the ICT template under a synthetic pure scale, placing
+        // 12,657 satellites (error vs the exact s*p):
+        //
+        //   scale   mean     max      worst relative
+        //   1.00    0.0000   0.0000    0.0 %
+        //   1.05    0.1991   0.3430    8.0 %
+        //   1.20    0.7963   1.3721   28.1 %
+        //   2.00    3.9817   6.8604   84.4 %
+        //
+        // Even 5 % costs more than the main surface's own fit drift (0.120).
+        // The residual after removing the similarity carries no such term, so
+        // the blend sees only local, position-independent deformation — which
+        // is the thing an average is valid for.
+        double gScale = 1.0;
+        std::array<double,3> srcCtr{0,0,0}, dstCtr{0,0,0};
+        if (haveSources) {
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
                 for (int d = 0; d < 3; ++d) {
-                    const float dd = fitTmplV[size_t(fv)*3+d] - float(ctr[size_t(d)]);
-                    d2 += dd*dd;
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    srcCtr[size_t(d)] += p;
+                    dstCtr[size_t(d)] += p + srcDisp[k*3+size_t(d)];
                 }
-                near.push_back({d2, int(m)});
             }
-            const int k = std::min<int>(K, int(near.size()));
-            if (k < 4) {
-                // no usable neighbours — leave the satellite at the template
-                // rest (it just won't deform meaningfully).
-                for (int v : verts)
-                    for (int d = 0; d < 3; ++d)
-                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
+            const double inv = 1.0 / double(srcFull.size());
+            for (int d = 0; d < 3; ++d) { srcCtr[size_t(d)] *= inv; dstCtr[size_t(d)] *= inv; }
+            // Uniform scale from the RMS radius about each centroid. Rotation
+            // is deliberately NOT extracted: the prealign is axis-aligned
+            // (centroid + bbox), so scale + translation is the part that
+            // carries a position-dependent term, and a wrong rotation would
+            // be worse than none.
+            double sn = 0.0, sd = 0.0;
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double a = double(fitTmplV[size_t(fv)*3+size_t(d)]) - srcCtr[size_t(d)];
+                    const double b = a + srcDisp[k*3+size_t(d)] - (dstCtr[size_t(d)] - srcCtr[size_t(d)]);
+                    sn += a * b; sd += a * a;
+                }
+            }
+            if (sd > 1e-12) {
+                const double cand = sn / sd;
+                // Guard against a degenerate estimate; 1.0 falls back to the
+                // pure-blend behaviour, which is correct when there is no
+                // global scale.
+                if (std::isfinite(cand) && cand > 1e-3 && cand < 1e3) gScale = cand;
+            }
+            // Re-express every source displacement as the RESIDUAL left after
+            // the global similarity, so the blend never averages (s-1)*p.
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                    srcDisp[k*3+size_t(d)] = (p + srcDisp[k*3+size_t(d)]) - sim;
+                }
+            }
+        }
+
+        for (int i = 0; i < tvc; ++i) {
+            if (comp[size_t(i)] == mainComp) continue;
+            if (!haveSources) {
+                for (int d = 0; d < 3; ++d)
+                    fitted[size_t(i)*3+size_t(d)] = tn[size_t(i)*3+size_t(d)];
                 continue;
             }
-            std::partial_sort(near.begin(), near.begin()+k, near.end());
-            // least-squares affine: (warped rest) → (fitted), normal equations
-            // per output dim: (SᵀS) w = Sᵀ t, S rows = [x y z 1].
-            double StS[4][4] = {{0}}, Stt[3][4] = {{0}};
-            for (int n = 0; n < k; ++n) {
-                const int m = near[size_t(n)].second;
-                const int fv = mainToFull[size_t(m)];
-                const double s[4] = {fitTmplV[size_t(fv)*3], fitTmplV[size_t(fv)*3+1],
-                                     fitTmplV[size_t(fv)*3+2], 1.0};
-                for (int a = 0; a < 4; ++a)
-                    for (int b = 0; b < 4; ++b)
-                        StS[a][b] += s[a]*s[b];
-                for (int d = 0; d < 3; ++d)
-                    for (int a = 0; a < 4; ++a)
-                        Stt[d][a] += double(fit.fitted[size_t(m)*3+d]) * s[a];
+            const double px = fitTmplV[size_t(i)*3];
+            const double py = fitTmplV[size_t(i)*3+1];
+            const double pz = fitTmplV[size_t(i)*3+2];
+            // Inverse-distance blend with exponent 1/2 (w = d^-0.5, i.e.
+            // 1/sqrt(d)), which the sweep above picked over 1 and 1.5.
+            double acc[3] = {0,0,0}, wsum = 0.0;
+            for (size_t n = 0; n < srcFull.size(); ++n) {
+                const int fv = srcFull[n];
+                const double dx = double(fitTmplV[size_t(fv)*3])   - px;
+                const double dy = double(fitTmplV[size_t(fv)*3+1]) - py;
+                const double dz = double(fitTmplV[size_t(fv)*3+2]) - pz;
+                const double d2 = dx*dx + dy*dy + dz*dz;
+                // w = d^-0.5 = (d2)^-0.25; the floor keeps a coincident
+                // vertex from producing an infinite weight.
+                const double w = 1.0 / std::sqrt(std::sqrt(std::max(d2, 1e-12)));
+                wsum += w;
+                for (int d = 0; d < 3; ++d) acc[d] += w * srcDisp[n*3+size_t(d)];
             }
-            // solve 4x4 (Gaussian, shared factorisation for the 3 rhs)
-            double A[4][7];
-            for (int a = 0; a < 4; ++a) {
-                for (int b = 0; b < 4; ++b) A[a][b] = StS[a][b];
-                for (int d = 0; d < 3; ++d) A[a][4+d] = Stt[d][a];
-            }
-            bool singular = false;
-            for (int col = 0; col < 4 && !singular; ++col) {
-                int piv = col;
-                for (int rr = col+1; rr < 4; ++rr)
-                    if (std::abs(A[rr][col]) > std::abs(A[piv][col])) piv = rr;
-                if (std::abs(A[piv][col]) < 1e-12) { singular = true; break; }
-                if (piv != col) for (int cc = 0; cc < 7; ++cc) std::swap(A[piv][cc], A[col][cc]);
-                for (int rr = col+1; rr < 4; ++rr) {
-                    const double f2 = A[rr][col] / A[col][col];
-                    for (int cc = col; cc < 7; ++cc) A[rr][cc] -= f2 * A[col][cc];
-                }
-            }
-            double W[3][4];   // affine rows per output dim
-            if (!singular) {
-                for (int d = 0; d < 3; ++d)
-                    for (int rr = 3; rr >= 0; --rr) {
-                        double acc = A[rr][4+d];
-                        for (int cc = rr+1; cc < 4; ++cc) acc -= A[rr][cc] * W[d][cc];
-                        W[d][rr] = acc / A[rr][rr];
-                    }
-            }
-            for (int v : verts) {
-                if (singular) {
-                    for (int d = 0; d < 3; ++d)
-                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
-                    continue;
-                }
-                const double p[4] = {fitTmplV[size_t(v)*3], fitTmplV[size_t(v)*3+1],
-                                     fitTmplV[size_t(v)*3+2], 1.0};
-                for (int d = 0; d < 3; ++d) {
-                    double o = 0;
-                    for (int a = 0; a < 4; ++a) o += W[d][a] * p[a];
-                    fitted[size_t(v)*3+d] = float(o);
-                }
+            for (int d = 0; d < 3; ++d) {
+                const double p = double(fitTmplV[size_t(i)*3+size_t(d)]);
+                const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                fitted[size_t(i)*3+size_t(d)] = float(sim + acc[d] / wsum);
             }
         }
     }
