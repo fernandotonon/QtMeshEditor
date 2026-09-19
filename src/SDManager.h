@@ -56,6 +56,9 @@ class SDManager : public QObject
     Q_PROPERTY(int imageWidth READ imageWidth WRITE setImageWidth NOTIFY settingsChanged)
     Q_PROPERTY(int imageHeight READ imageHeight WRITE setImageHeight NOTIFY settingsChanged)
     Q_PROPERTY(int steps READ steps WRITE setSteps NOTIFY settingsChanged)
+    /// Sampling steps for a guidance-distilled FLUX.2 model, which ignores
+    /// `steps` and `cfgScale`. More steps resolve anatomy; clamped to [4,20].
+    Q_PROPERTY(int flux2Steps READ flux2Steps WRITE setFlux2Steps NOTIFY settingsChanged)
     Q_PROPERTY(float cfgScale READ cfgScale WRITE setCfgScale NOTIFY settingsChanged)
     Q_PROPERTY(QString negativePrompt READ negativePrompt WRITE setNegativePrompt NOTIFY settingsChanged)
     Q_PROPERTY(int generationStep READ generationStep NOTIFY generationProgressChanged)
@@ -85,6 +88,13 @@ public:
     int imageHeight() const { return m_settings.height; }
     void setImageHeight(int value);
     int steps() const { return m_settings.steps; }
+    int flux2Steps() const { return m_settings.flux2Steps; }
+    void setFlux2Steps(int steps);
+    /// Stored RNG seed; -1 (the default) means "random per generation".
+    /// Fixing it makes a run reproducible, which is what makes an A/B of
+    /// sampling settings meaningful — otherwise two runs differ by noise.
+    qint64 seed() const { return m_settings.seed; }
+    Q_INVOKABLE void setSeed(qint64 seed);
     void setSteps(int value);
     float cfgScale() const { return m_settings.cfgScale; }
     void setCfgScale(float value);

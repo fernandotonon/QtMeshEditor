@@ -1,4 +1,6 @@
 #include "SDManager.h"
+
+#include <algorithm>
 #include "GamificationManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
@@ -103,14 +105,33 @@ void SDManager::populateRecommendedModels()
         false
     });
 
+    // The anatomy option. The DEFAULT model (FLUX.2-klein) is 4-step
+    // guidance-distilled, and distillation is what costs limb/finger
+    // coherence — the "extra arms, weird fingers" artifacts. SDXL Base is
+    // NOT distilled: the full 30-step schedule with real classifier-free
+    // guidance and a negative prompt, which is what resolves anatomy.
+    // Slower and a bigger download, so it is offered ALONGSIDE klein rather
+    // than replacing it. CreativeML OpenRAIL++-M — permissive, unlike
+    // FLUX.2-dev (the obvious quality jump) and the removed SDXL Turbo,
+    // both non-commercial and therefore out of scope for an MIT app.
     m_recommendedModels.append({
-        "SDXL Turbo (FP16)",
-        "sd_xl_turbo_1.0_fp16.safetensors",
-        "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
-        "SDXL Turbo - fast generation, 4-12 steps. ~6.5GB",
-        6938081905,
+        "SDXL Base 1.0 (FP16) — best anatomy",
+        "sd_xl_base_1.0.safetensors",
+        "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+        "SDXL Base - full 30-step sampling with real guidance; finest surface "
+        "detail, but it tends to CROP to a bust and ignore full-body framing, "
+        "which image-to-3D needs. Slower than the distilled models. ~6.9GB",
+        6938078334,
         false
     });
+
+    // SDXL Turbo was REMOVED (2026-09-18): its licence is
+    // `sai-nc-community` — the Stability AI NON-COMMERCIAL licence — which
+    // fails the permissive-redistribution bar every other entry is held to
+    // (SF3D, FLUX.2-dev and LAFAN1 were all rejected on exactly this
+    // ground). QtMeshEditor is MIT, so users reasonably assume what the app
+    // offers is safe for commercial work; a non-commercial model in this
+    // list is a trap. SDXL Base 1.0 above is the openrail++ replacement.
 
     // Issue #403: ControlNet depth model for mesh-aware texture
     // generation. NOT a base model — it pairs WITH SD 1.5 as the
@@ -199,6 +220,27 @@ void SDManager::setSteps(int value)
         saveSettings();
         emit settingsChanged();
     }
+}
+
+void SDManager::setFlux2Steps(int steps)
+{
+    // Clamp here as well as in the worker so the persisted/QML-visible value
+    // is the one that will actually be used (a silently-corrected setting
+    // reads as "the knob did nothing").
+    const int clamped = std::clamp(steps, 4, 20);
+    if (m_settings.flux2Steps == clamped) return;
+    m_settings.flux2Steps = clamped;
+    saveSettings();
+    emit settingsChanged();
+}
+
+void SDManager::setSeed(qint64 seed)
+{
+    const qint64 v = seed < 0 ? -1 : seed;   // any negative means "random"
+    if (m_settings.seed == v) return;
+    m_settings.seed = v;
+    saveSettings();
+    emit settingsChanged();
 }
 
 void SDManager::setCfgScale(float value)
@@ -590,6 +632,7 @@ void SDManager::saveSettings()
     settings.setValue("width", m_settings.width);
     settings.setValue("height", m_settings.height);
     settings.setValue("steps", m_settings.steps);
+    settings.setValue("flux2Steps", m_settings.flux2Steps);
     settings.setValue("cfgScale", static_cast<double>(m_settings.cfgScale));
     settings.setValue("seed", QVariant::fromValue(m_settings.seed));
     settings.setValue("negativePrompt", m_settings.negativePrompt);
@@ -611,6 +654,9 @@ void SDManager::loadSettings()
     m_settings.width = settings.value("width", 512).toInt();
     m_settings.height = settings.value("height", 512).toInt();
     m_settings.steps = settings.value("steps", 20).toInt();
+    // clamp on read too: an out-of-range value from an older build or a
+    // hand-edited config must not reach the sampler
+    m_settings.flux2Steps = std::clamp(settings.value("flux2Steps", 8).toInt(), 4, 20);
     m_settings.cfgScale = settings.value("cfgScale", 7.0).toFloat();
     m_settings.seed = settings.value("seed", -1).toLongLong();
     m_settings.negativePrompt = settings.value("negativePrompt", "").toString();

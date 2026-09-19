@@ -112,8 +112,9 @@ void LLMSettingsWidget::setupUI()
     setupSDModelsTab(sdModelsTab);
     setupSDSettingsTab(sdSettingsTab);
 
-    m_tabWidget->addTab(sdModelsTab, "SD Models");
-    m_tabWidget->addTab(sdSettingsTab, "SD Settings");
+    // "Image" not "SD": the FLUX.2-klein set is listed here too.
+    m_tabWidget->addTab(sdModelsTab, "Image Models");
+    m_tabWidget->addTab(sdSettingsTab, "Image Settings");
 #endif
 
     mainLayout->addWidget(m_tabWidget);
@@ -993,7 +994,7 @@ void LLMSettingsWidget::setupSDModelsTab(QWidget *parent)
     QVBoxLayout *layout = new QVBoxLayout(parent);
 
     // Status
-    QGroupBox *statusGroup = new QGroupBox("SD Model Status", parent);
+    QGroupBox *statusGroup = new QGroupBox("Image Model Status", parent);
     QVBoxLayout *statusLayout = new QVBoxLayout(statusGroup);
     m_sdStatusLabel = new QLabel("No SD model loaded", statusGroup);
     m_sdStatusLabel->setWordWrap(true);
@@ -1169,7 +1170,7 @@ void LLMSettingsWidget::updateSDStatus()
     SDManager *manager = SDManager::instance();
 
     if (manager->isModelLoaded()) {
-        m_sdStatusLabel->setText(QString("SD Model loaded: %1").arg(manager->currentModelName()));
+        m_sdStatusLabel->setText(QString("Image model loaded: %1").arg(manager->currentModelName()));
         m_sdStatusLabel->setStyleSheet("color: green;");
         m_sdUnloadButton->setEnabled(true);
         m_sdLoadButton->setEnabled(true);
@@ -1234,7 +1235,7 @@ void LLMSettingsWidget::onSDDownloadModelClicked()
 
 void LLMSettingsWidget::onSDModelLoadCompleted(const QString &modelName)
 {
-    m_sdStatusLabel->setText(QString("SD Model loaded: %1").arg(modelName));
+    m_sdStatusLabel->setText(QString("Image model loaded: %1").arg(modelName));
     m_sdStatusLabel->setStyleSheet("color: green;");
     m_sdLoadButton->setEnabled(true);
     m_sdUnloadButton->setEnabled(true);
@@ -1245,7 +1246,7 @@ void LLMSettingsWidget::onSDModelLoadError(const QString &error)
     m_sdStatusLabel->setText(QString("Error: %1").arg(error));
     m_sdStatusLabel->setStyleSheet("color: red;");
     m_sdLoadButton->setEnabled(true);
-    QMessageBox::warning(this, "SD Model Load Error", error);
+    QMessageBox::warning(this, "Image Model Load Error", error);
 }
 
 void LLMSettingsWidget::onSDModelUnloaded()

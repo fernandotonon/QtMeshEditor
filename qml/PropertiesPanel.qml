@@ -1938,7 +1938,7 @@ Rectangle {
                             visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
                             text: MeshGenController.selectedImagePath.length > 0
                                 ? "e.g. give him golden armor"
-                                : "e.g. a goblin warrior in bronze armor"
+                                : "describe it — \"a capybara standing on grass\", not \"capybara\""
                             color: PropertiesPanelController.textColor
                             opacity: 0.4; font.pixelSize: 11
                         }
@@ -1966,13 +1966,34 @@ Rectangle {
                         genBusy = true
                         MeshGenController.generateSourceImage(imgGenPromptIn.text)
                     }
+                    // With an image already selected the prompt EDITS it
+                    // (FLUX.2 kontext-style) instead of generating from
+                    // scratch — a user who typed "capybara" after a previous
+                    // run got their old subject nudged, not a capybara. Say
+                    // which one the click will do.
                     Text { anchors.centerIn: parent
-                           text: imgGenBtn.genBusy ? "…" : "Create Image"
+                           text: imgGenBtn.genBusy
+                                 ? "…"
+                                 : (MeshGenController.selectedImagePath.length > 0
+                                    ? "Edit Image" : "Create Image")
                            color: "white"; font.pixelSize: 10 }
                     MouseArea { id: imgGenMa; anchors.fill: parent; hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: imgGenBtn.run() }
                 }
+            }
+            // Edit mode is easy to miss (the placeholder only shows on an EMPTY
+            // field) and its failure is confusing: typing a new subject nudges
+            // the old image instead of generating that subject. Sibling of the
+            // Row, not a child — a Row lays out horizontally, so a full-width
+            // Text inside it would overflow and displace the input and button.
+            Text {
+                visible: MeshGenController.selectedImagePath.length > 0
+                text: "✎ Editing the loaded image — 🗑 it to create a new one"
+                color: PropertiesPanelController.textColor
+                opacity: 0.65; font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
             }
             Text {
                 id: imgGenStatusTxt
@@ -2112,7 +2133,33 @@ Rectangle {
                     smooth: true
                     cache: false
                 }
+                // Declared before the controls so they are on top of it, and
+                // bounded above the button row so it cannot cover them.
+                MouseArea {
+                    anchors { left: parent.left; right: parent.right; top: parent.top
+                              bottom: saveRow.top }
+                    onDoubleClicked: imageViewerWindow.close()
+                }
+                // A generated image otherwise lives only in AppData under a
+                // timestamped name, so it is effectively thrown away after the
+                // mesh is built. Saving makes prompt-to-image useful on its own.
+                Row {
+                    id: saveRow
+                    // Bottom-RIGHT: the path label below is centred and full
+                    // width, so a centred button sat directly above it and
+                    // read as part of that label.
+                    anchors.bottom: sourcePathLabel.top
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.bottomMargin: 6
+                    spacing: 8
+                    Button {
+                        text: "Save Image As…"
+                        onClicked: MeshGenController.saveSelectedImageInteractive()
+                    }
+                }
                 Text {
+                    id: sourcePathLabel
                     anchors.bottom: parent.bottom
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.margins: 4
@@ -2123,9 +2170,13 @@ Rectangle {
                     width: parent.width - 16
                     horizontalAlignment: Text.AlignHCenter
                 }
-                // Esc / click closes
+                // Esc closes. The close-on-double-click MouseArea must not
+                // eat the button's clicks: `fullImage` fills the WHOLE window
+                // (anchors.fill: parent), so anchoring to it still covered the
+                // button row — and being declared last it sat on top, so Save
+                // never received a press. Stop it above the controls, and
+                // declare it BEFORE them so they win the overlap regardless.
                 Shortcut { sequence: "Esc"; onActivated: imageViewerWindow.close() }
-                MouseArea { anchors.fill: parent; onDoubleClicked: imageViewerWindow.close() }
             }
 
             // Auto-generated caption of the selected image (SmolVLM), computed

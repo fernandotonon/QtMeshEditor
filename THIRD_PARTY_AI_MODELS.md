@@ -541,4 +541,28 @@ for #410 — non-commercial — in favour of synthetic bone-weight-derived label
   VAE (Comfy-Org flux2-klein split files), text encoder **Qwen3-4B**
   (Apache-2.0, unsloth GGUF Q4_K_M). ~5.2 GB total, installed under
   `ai_models/flux2_klein/`; runs on the same stable-diffusion.cpp backend as
-  texture generation (4-step distilled flow: cfg 1.0, euler).
+  texture generation (distilled flow: cfg 1.0, euler, `flux2Steps` steps —
+  default 8, clamped [4,20]; 4 is the distillation's MINIMUM, and the extra
+  steps are what resolve anatomy, i.e. the extra-limb / malformed-hand
+  artifacts users hit on character prompts).
+- **SDXL Base 1.0** (Stability AI) — offered ALONGSIDE klein as a modern
+  non-distilled option. The two DISTILLED entries (klein: guidance-distilled;
+  SDXL Turbo: adversarial-distilled) are the ones whose few-step schedules
+  cost limb/finger coherence; SDXL Base runs the full 30-step schedule with
+  real classifier-free guidance and a negative prompt. (SD 1.5 is also
+  non-distilled, just an older and weaker model.) **CreativeML OpenRAIL++-M**
+  — verified 2026-09-18 against the HF API: `license: openrail++`, ungated,
+  `content-length` 6938078334 matching the catalog entry. Slower per image
+  and ~6.9 GB, so it is a user choice rather than the default.
+- **SDXL Turbo — REMOVED from the catalog (2026-09-18).** Verified against
+  the HF API: `license: other`, `license_name: sai-nc-community` — the
+  Stability AI **Non-Commercial** Community License. QtMeshEditor is **MIT**,
+  so users reasonably assume anything the app offers them is safe for
+  commercial work; shipping a non-commercial model in the download list is a
+  trap they have no reason to check for. It also failed the exact bar that
+  rejected SF3D, FLUX.2-dev and LAFAN1, so keeping it was inconsistent.
+  SDXL Base 1.0 (openrail++) is the permissive replacement, and is the
+  better anatomy model anyway since Turbo is adversarial-distilled.
+  **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
+  is non-commercial, which fails the redistribution bar (Homebrew / Snap /
+  WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.
