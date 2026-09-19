@@ -1,5 +1,8 @@
 #include "FaceRigger.h"
 
+#include <QtGlobal>
+#include <cstdio>
+
 #include "ArkitTemplate.h"
 #include "DeformationTransfer.h"
 #include "NonRigidICP.h"
@@ -115,6 +118,128 @@ private:
     float m_cell = 1.0f;
     std::unordered_map<long long, std::vector<int>> m_cells;
 };
+
+// Barycentric resample over the correspondence SURFACE (fitted verts +
+// template topology), replacing a nearest-VERTEX pick.
+//
+// Why (measured 2026-09-18 on the ICT template): a facial mesh has creases
+// where spatially ADJACENT vertices carry completely different motion — at
+// the lip seam upper and lower lip touch in the neutral pose, but under
+// jawOpen one moves ~1.6 units and the other EXACTLY 0. A single
+// nearest-vertex lookup there is a coin flip: offsetting the query by half
+// a median edge (what a different mesh's vertex placement does) changed the
+// sampled motion drastically for 3.2% of vertices near a seam, so a slice
+// of lips and eyelids inherited the opposite side's motion or none at all.
+// Scattered enough to read as "mushy expressions" rather than a bug, and
+// invisible to the fit-residual gate (which measures the NEUTRAL match).
+//
+// Projecting onto the nearest TRIANGLE and blending its three corner deltas
+// by barycentric weight keeps the interpolation ON the surface: a query on
+// the upper lip lands on an upper-lip triangle and can only mix upper-lip
+// corners — it cannot jump the crease, because no triangle joins the lips.
+class SurfaceSampler {
+public:
+    void build(const std::vector<float>& pts, const std::vector<int>& faces)
+    {
+        m_pts = &pts;
+        m_faces = &faces;
+        m_grid.build(pts);
+        // vertex → incident triangles: a nearest-vertex hit yields the few
+        // triangles worth testing (testing the whole surface is hopeless).
+        const int nv = int(pts.size() / 3);
+        m_vertFaces.assign(size_t(std::max(0, nv)), {});
+        for (size_t f = 0; f + 2 < faces.size(); f += 3)
+            for (int k = 0; k < 3; ++k) {
+                const int v = faces[f + size_t(k)];
+                if (v >= 0 && v < nv) m_vertFaces[size_t(v)].push_back(int(f / 3));
+            }
+    }
+
+    struct Hit { float w[3] = {0, 0, 0}; int vi[3] = {-1, -1, -1}; };
+
+    // Closest point on the surface to q. Falls back to the nearest VERTEX
+    // (weight 1) when it has no incident triangles, so an isolated
+    // correspondence point still contributes instead of dropping out.
+    Hit sample(const float* q) const
+    {
+        Hit h;
+        const int nv = m_grid.nearest(q);
+        if (nv < 0) return h;
+        h.vi[0] = nv; h.w[0] = 1.0f;
+        if (size_t(nv) >= m_vertFaces.size()) return h;
+
+        float best = std::numeric_limits<float>::max();
+        for (const int t : m_vertFaces[size_t(nv)]) {
+            const int a = (*m_faces)[size_t(t)*3];
+            const int b = (*m_faces)[size_t(t)*3+1];
+            const int c = (*m_faces)[size_t(t)*3+2];
+            float w[3];
+            const float d2 = closestOnTri(q, a, b, c, w);
+            if (d2 < best) {
+                best = d2;
+                h.vi[0] = a; h.vi[1] = b; h.vi[2] = c;
+                h.w[0] = w[0]; h.w[1] = w[1]; h.w[2] = w[2];
+            }
+        }
+        return h;
+    }
+
+private:
+    // Squared distance q→triangle, writing the closest point's barycentric
+    // weights. Ericson, Real-Time Collision Detection: the standard region
+    // test, clamped so an off-triangle query lands on the nearest edge or
+    // corner rather than extrapolating past it.
+    float closestOnTri(const float* q, int a, int b, int c, float* w) const
+    {
+        const float* A = &(*m_pts)[size_t(a)*3];
+        const float* B = &(*m_pts)[size_t(b)*3];
+        const float* C = &(*m_pts)[size_t(c)*3];
+        float ab[3], ac[3], ap[3];
+        for (int i = 0; i < 3; ++i) { ab[i]=B[i]-A[i]; ac[i]=C[i]-A[i]; ap[i]=q[i]-A[i]; }
+        const float d1 = ab[0]*ap[0]+ab[1]*ap[1]+ab[2]*ap[2];
+        const float d2 = ac[0]*ap[0]+ac[1]*ap[1]+ac[2]*ap[2];
+        if (d1 <= 0 && d2 <= 0) { w[0]=1; w[1]=0; w[2]=0; return dist2(q, A); }
+        float bp[3]; for (int i=0;i<3;++i) bp[i]=q[i]-B[i];
+        const float d3 = ab[0]*bp[0]+ab[1]*bp[1]+ab[2]*bp[2];
+        const float d4 = ac[0]*bp[0]+ac[1]*bp[1]+ac[2]*bp[2];
+        if (d3 >= 0 && d4 <= d3) { w[0]=0; w[1]=1; w[2]=0; return dist2(q, B); }
+        float cp[3]; for (int i=0;i<3;++i) cp[i]=q[i]-C[i];
+        const float d5 = ab[0]*cp[0]+ab[1]*cp[1]+ab[2]*cp[2];
+        const float d6 = ac[0]*cp[0]+ac[1]*cp[1]+ac[2]*cp[2];
+        if (d6 >= 0 && d5 <= d6) { w[0]=0; w[1]=0; w[2]=1; return dist2(q, C); }
+        const float vc = d1*d4 - d3*d2;
+        if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+            const float v = d1 / std::max(1e-20f, d1 - d3);
+            w[0]=1-v; w[1]=v; w[2]=0; return distToSeg(q, A, B, v);
+        }
+        const float vb = d5*d2 - d1*d6;
+        if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+            const float v = d2 / std::max(1e-20f, d2 - d6);
+            w[0]=1-v; w[1]=0; w[2]=v; return distToSeg(q, A, C, v);
+        }
+        const float va = d3*d6 - d5*d4;
+        if (va <= 0 && (d4-d3) >= 0 && (d5-d6) >= 0) {
+            const float v = (d4-d3) / std::max(1e-20f, (d4-d3) + (d5-d6));
+            w[0]=0; w[1]=1-v; w[2]=v; return distToSeg(q, B, C, v);
+        }
+        const float denom = 1.0f / std::max(1e-20f, va + vb + vc);
+        const float v = vb * denom, ww = vc * denom;
+        w[0] = 1.0f - v - ww; w[1] = v; w[2] = ww;
+        float pt[3];
+        for (int i = 0; i < 3; ++i) pt[i] = A[i] + ab[i]*v + ac[i]*ww;
+        return dist2(q, pt);
+    }
+    static float dist2(const float* p, const float* q)
+    { float s=0; for (int i=0;i<3;++i) { const float d=p[i]-q[i]; s+=d*d; } return s; }
+    static float distToSeg(const float* q, const float* A, const float* B, float t)
+    { float pt[3]; for (int i=0;i<3;++i) pt[i]=A[i]+(B[i]-A[i])*t; return dist2(q, pt); }
+
+    const std::vector<float>* m_pts = nullptr;
+    const std::vector<int>* m_faces = nullptr;
+    PointGrid m_grid;
+    std::vector<std::vector<int>> m_vertFaces;
+};
+
 
 double bboxDiag(const std::vector<float>& v)
 {
@@ -451,6 +576,18 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     const std::vector<float>& fitTV = splitTmpl ? mainV : fitTmplV;
     const std::vector<int>&   fitTF = splitTmpl ? mainF : tmpl.faces();
 
+    // Pre-align on the WHOLE template vs the WHOLE fit-user mesh, even though
+    // only the main surface is FITTED. The component split removes the
+    // template's eyeballs/teeth/lashes while the user mesh still has its own,
+    // so aligning those two directly compares different subsets of a head:
+    // measured on the template fitted to ITSELF the centroids differed by
+    // 0.875 in Z, and the anneal warped the surface by ~0.55 mean to close a
+    // gap that should not exist — detuning the transfer's rest frames and
+    // leaving every blendshape 4-9x too weak.
+    if (splitTmpl) {
+        fitOpts.prealignTmplV = fitTmplV;   // whole template (pre-warped)
+        fitOpts.prealignUserV = fitV;       // whole fit-side user mesh
+    }
     // 1) NRICP: (pre-warped) template MAIN SURFACE → user neutral.
     // Report each annealing level so the (long) fit phase visibly advances.
     const NricpResult fit = FaceRig::fit(
@@ -612,12 +749,16 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         return r;
     }
 
-    // 3) resample map: fit vertex → nearest correspondence vertex (built once).
-    PointGrid grid;
-    grid.build(fitted);
-    std::vector<int> userToTmpl(size_t(nu), -1);
+    // 3) resample map: fit vertex → closest point ON the correspondence
+    //    SURFACE (barycentric, template topology), built once for all shapes.
+    //    Deliberately not a nearest-VERTEX pick — see SurfaceSampler.
+    SurfaceSampler sampler;
+    sampler.build(fitted, tmpl.faces());
+    // NB braces, not parens: `vector<Hit> userHit(size_t(nu))` is the most
+    // vexing parse — the compiler reads it as a function declaration.
+    std::vector<SurfaceSampler::Hit> userHit{size_t(nu)};
     for (int i = 0; i < nu; ++i)
-        userToTmpl[size_t(i)] = grid.nearest(&fitV[size_t(i)*3]);
+        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3]);
 
     // noise floor scaled by the FIT region diagonal (a head is smaller than a
     // whole body, so scaling on the full-body diag would swallow real motion).
@@ -645,11 +786,19 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         out.userDeltas.assign(size_t(nuFull) * 3, 0.0f);
         const float amp = float(std::clamp(opts.amplitude, 0.1, 5.0));
         for (int i = 0; i < nu; ++i) {
-            const int t = userToTmpl[size_t(i)];
-            if (t < 0) continue;
-            float dvec[3] = {amp * tmplDelta[size_t(t)*3],
-                             amp * tmplDelta[size_t(t)*3+1],
-                             amp * tmplDelta[size_t(t)*3+2]};
+            const SurfaceSampler::Hit& h = userHit[size_t(i)];
+            if (h.vi[0] < 0) continue;
+            // Blend the hit triangle's corner deltas by barycentric weight.
+            // The corners belong to ONE triangle, so a query on the upper
+            // lip mixes only upper-lip motion; it cannot reach across the
+            // seam the way a nearest-vertex pick could.
+            float dvec[3] = {0.0f, 0.0f, 0.0f};
+            for (int k = 0; k < 3; ++k) {
+                if (h.vi[k] < 0 || h.w[k] == 0.0f) continue;
+                for (int a = 0; a < 3; ++a)
+                    dvec[a] += h.w[k] * tmplDelta[size_t(h.vi[k])*3 + size_t(a)];
+            }
+            for (int a = 0; a < 3; ++a) dvec[a] *= amp;
             const double mag = std::sqrt(double(dvec[0])*dvec[0] +
                                          double(dvec[1])*dvec[1] +
                                          double(dvec[2])*dvec[2]);

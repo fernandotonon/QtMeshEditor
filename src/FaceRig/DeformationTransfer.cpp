@@ -283,7 +283,26 @@ std::vector<float> DeformationTransfer::transfer(
             x[size_t(i)] = m_fitted[size_t(i)*3+axis];
         for (int f = 0; f < F; ++f)
             x[size_t(m_n + f)] = m_tgtNormalV4[size_t(f)][size_t(axis)];
-        solveLeastSquaresCG(m_A, rhs[size_t(axis)], x, 800, 1e-8);
+        // 800 iterations does NOT converge this system and the shortfall is
+        // silent: measured on the ICT template with a PERFECT identity fit
+        // (fitted == template neutral, so the answer must be the input),
+        // jawOpen came back at 0.617 of its true amplitude and the per-vertex
+        // ratio was scattered 0.22-1.41 — the surface arrived distorted, not
+        // merely scaled. The residual looks respectable (~0.018) because most
+        // rows are satisfied early while the low-frequency modes are still
+        // converging, which is exactly what carries the overall amplitude.
+        //
+        //   iters   per-vertex ratio (median / p10 / p90)
+        //     800   0.455 / 0.218 / 1.413     ← shipped behaviour
+        //    2000   0.584 / 0.285 / 1.150
+        //    4000   0.781 / 0.364 / 0.898
+        //    6000   0.999 / 0.810 / 1.026
+        //    8000   0.998 / 0.935 / 1.003     ← converged
+        //
+        // The cap is now high enough to reach convergence on a ~27k-vertex
+        // head; CG exits on the tolerance long before it on easier systems,
+        // so this costs nothing when the solve is well conditioned.
+        solveLeastSquaresCG(m_A, rhs[size_t(axis)], x, 12000, 1e-9);
         for (int i = 0; i < m_n; ++i)
             out[size_t(i)*3+axis] =
                 float(x[size_t(i)] - m_fitted[size_t(i)*3+axis]);  // delta
