@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include <QtEndian>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -479,6 +480,13 @@ TEST(FaceRigger, RealTemplateHasNoFrozenLipVertices)
         ring[size_t(a)].push_back(b); ring[size_t(b)].push_back(a);
         ring[size_t(b)].push_back(c); ring[size_t(c)].push_back(b);
         ring[size_t(c)].push_back(a); ring[size_t(a)].push_back(c);
+    }
+    // Each interior edge is visited from BOTH its triangles, so the lists hold
+    // duplicates; the neighbour COUNT below must be over distinct vertices or
+    // the threshold silently means something weaker (CodeRabbit finding).
+    for (auto& nb : ring) {
+        std::sort(nb.begin(), nb.end());
+        nb.erase(std::unique(nb.begin(), nb.end()), nb.end());
     }
     auto mag = [&](int i) {
         if (size_t(i)*3+2 >= jaw->userDeltas.size()) return 0.0;

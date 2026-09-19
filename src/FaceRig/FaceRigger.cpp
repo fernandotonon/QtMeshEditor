@@ -207,6 +207,38 @@ public:
 
     struct Hit { float w[3] = {0, 0, 0}; int vi[3] = {-1, -1, -1}; };
 
+    /// +1 when the two meshes' normals broadly agree, -1 when the query mesh
+    /// is wound the OPPOSITE way and its normals are therefore globally
+    /// negated. Review finding (Codex P2): `buildFaceRig`'s contract does not
+    /// require template-matching winding, and with a reversed user mesh the
+    /// raw sign test picks the surface facing the other way — measured on the
+    /// real template, seeding flips from the correct main vertex 5941 to the
+    /// mouth-interior island vertex 18154, silently recreating the exact
+    /// frozen-vertex bug this seeding is meant to prevent.
+    ///
+    /// Decided by VOTE over a sample of query vertices rather than by any one
+    /// pair, so local disagreement at a seam cannot flip the global answer.
+    static float orientationSign(const std::vector<float>& queryPts,
+                                 const std::vector<float>& queryN,
+                                 const SurfaceSampler& corr)
+    {
+        const int nq = int(queryN.size() / 3);
+        if (nq <= 0 || corr.m_vertN.empty()) return 1.0f;
+        const int step = std::max(1, nq / 512);      // ~512 samples, cheap
+        double agree = 0.0, disagree = 0.0;
+        for (int i = 0; i < nq; i += step) {
+            if (size_t(i)*3+2 >= queryPts.size()) break;
+            const int nv = corr.m_grid.nearest(&queryPts[size_t(i)*3]);
+            if (nv < 0 || size_t(nv)*3+2 >= corr.m_vertN.size()) continue;
+            const double d = double(queryN[size_t(i)*3])   * corr.m_vertN[size_t(nv)*3]
+                           + double(queryN[size_t(i)*3+1]) * corr.m_vertN[size_t(nv)*3+1]
+                           + double(queryN[size_t(i)*3+2]) * corr.m_vertN[size_t(nv)*3+2];
+            if (d > 0.1) agree += d;
+            else if (d < -0.1) disagree += -d;
+        }
+        return (disagree > agree) ? -1.0f : 1.0f;
+    }
+
     /// Area-weighted per-vertex normals. Public so the caller can compute the
     /// QUERY mesh's normals with the identical convention.
     static std::vector<float> vertexNormals(const std::vector<float>& pts,
@@ -276,18 +308,31 @@ public:
     /// which is exactly what makes them distinct surfaces. If no candidate
     /// agrees, the nearest is used unchanged, so this can never lose a
     /// correspondence.
-    Hit sample(const float* q, const float* qn = nullptr) const
+    Hit sample(const float* q, const float* qn = nullptr, float nsign = 1.0f) const
     {
         Hit h;
         int nv = -1;
         if (qn) {
-            m_grid.nearestK(q, kSeedCandidates, m_seeds);
-            for (const int cand : m_seeds) {
-                if (cand < 0 || size_t(cand)*3+2 >= m_vertN.size()) continue;
-                const float d = qn[0]*m_vertN[size_t(cand)*3]
-                              + qn[1]*m_vertN[size_t(cand)*3+1]
-                              + qn[2]*m_vertN[size_t(cand)*3+2];
-                if (d > 0.0f) { nv = cand; break; }   // nearest that agrees
+            // Widening the candidate list is safe here (unlike widening the
+            // TRIANGLE set, which made things worse): the first AGREEING
+            // vertex still wins, so extra candidates only matter when the
+            // near ones all disagree. Exhaust the surface rather than give up
+            // at a fixed count — falling back to the unfiltered nearest is
+            // what reintroduces the wrong-surface match this exists to stop.
+            const int total = int(m_vertN.size() / 3);
+            int want = kSeedCandidates;
+            while (nv < 0 && want <= total) {
+                m_grid.nearestK(q, want, m_seeds);
+                if (m_seeds.empty()) break;
+                for (const int cand : m_seeds) {
+                    if (cand < 0 || size_t(cand)*3+2 >= m_vertN.size()) continue;
+                    const float d = nsign * (qn[0]*m_vertN[size_t(cand)*3]
+                                           + qn[1]*m_vertN[size_t(cand)*3+1]
+                                           + qn[2]*m_vertN[size_t(cand)*3+2]);
+                    if (d > 0.0f) { nv = cand; break; }   // nearest that agrees
+                }
+                if (int(m_seeds.size()) < want) break;    // surface exhausted
+                want *= 4;
             }
         }
         if (nv < 0) nv = m_grid.nearest(q);
@@ -981,9 +1026,12 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     // The query's own normal lets the sampler seed on the RIGHT surface where
     // two surfaces nearly touch — see SurfaceSampler::sample.
     const std::vector<float> userN = SurfaceSampler::vertexNormals(fitV, fitF);
+    // A user mesh wound opposite to the template has globally negated normals;
+    // without this the sign test would pick the WRONG surface every time.
+    const float nsign = SurfaceSampler::orientationSign(fitV, userN, sampler);
     for (int i = 0; i < nu; ++i) {
         const float* qn = (size_t(i)*3+2 < userN.size()) ? &userN[size_t(i)*3] : nullptr;
-        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3], qn);
+        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3], qn, nsign);
     }
 
     // noise floor scaled by the FIT region diagonal (a head is smaller than a
