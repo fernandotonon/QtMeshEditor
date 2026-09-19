@@ -235,3 +235,103 @@ TEST(FaceRigger, RejectsNonFaceMesh)
     EXPECT_FALSE(r.ok);
     EXPECT_NE(r.error.find("face"), std::string::npos);
 }
+
+// #1059 — a DISCONNECTED satellite island must move with the main surface.
+//
+// The template is split into a fitted main component plus satellites (mouth
+// interior, teeth, eyeballs, lashes), which have no correspondence of their
+// own and are placed by transporting the main surface's displacement. The
+// original rule fitted an affine to the 60 main verts nearest the island
+// CENTROID, which extrapolated badly for an island sitting off the surface:
+// on the real ICT template every satellite lagged the main surface on
+// jawOpen (0.898-0.915 vs 1.008) and some verts received NO motion at all.
+//
+// Here a small island floats well OFF the plane (so its nearest main verts are
+// a distant, nearly co-planar patch — the ill-conditioned case) directly above
+// a region the shape translates uniformly. Any correct placement rule carries
+// the island by that same translation.
+//
+// The offset is load-bearing and was chosen by measurement, not taste. Both
+// rules were built into a harness and swept, reading the island's ratio to the
+// target translation:
+//
+//   island offset   affine (old)   blend (new)
+//        0.5            0.967         0.985
+//        0.9            0.930         0.981
+//        1.5            0.858         0.979
+//        2.5            0.726         0.980
+//        6.0            0.412         0.986
+//
+// The blend is flat; the affine decays with distance (non-monotonically —
+// that wobble IS the ill-conditioning). An earlier draft of this test used
+// 0.9 and PASSED against the old broken code, pinning nothing. At 2.5 the old
+// rule misses the band on every vertex and the new one clears it on every
+// vertex, so this test actually fails if the affine is restored.
+TEST(FaceRigger, DisconnectedSatelliteIslandTracksTheMainSurface)
+{
+    Grid tmpl = makeGrid(12, 2.0f, 0.12f);
+    const int mainVerts = int(tmpl.V.size()/3);
+
+    // A satellite: a small quad floating above the +y half of the plane,
+    // sharing NO vertex or edge with it.
+    const int islandBase = mainVerts;
+    const float zOff = 2.5f;   // see the sweep above — separates the two rules
+    for (float dy : {0.30f, 0.55f})
+        for (float dx : {-0.12f, 0.12f})
+            tmpl.V.insert(tmpl.V.end(), {dx, dy, zOff});
+    tmpl.F.insert(tmpl.F.end(), {islandBase, islandBase+1, islandBase+2});
+    tmpl.F.insert(tmpl.F.end(), {islandBase+1, islandBase+3, islandBase+2});
+    const int totalVerts = int(tmpl.V.size()/3);
+
+    // Shape: translate the whole +y half (island included) by a constant.
+    // A uniform translation is the cleanest possible target — every correct
+    // rule must reproduce it exactly, so a shortfall is unambiguous.
+    const float kShift = 0.20f;
+    std::vector<float> shape(tmpl.V.size(), 0.0f);
+    for (int i = 0; i < totalVerts; ++i)
+        if (tmpl.V[size_t(i)*3+1] > 0.0f) shape[size_t(i)*3+2] = kShift;
+
+    const QString path = tempTemplatePath();
+    ASSERT_TRUE(writeSyntheticTemplate(path, tmpl, {{"jawOpen", shape}}));
+
+    FaceRig::ArkitTemplate at;
+    QString err;
+    ASSERT_TRUE(at.load(path, &err)) << err.toStdString();
+
+    // The user mesh is the same surface PLUS the same island, retessellated
+    // on the main surface only (so the fit is tight and the island is again a
+    // separate component).
+    Grid user = makeGrid(16, 2.0f, 0.12f);
+    const int userMain = int(user.V.size()/3);
+    for (float dy : {0.30f, 0.55f})
+        for (float dx : {-0.12f, 0.12f})
+            user.V.insert(user.V.end(), {dx, dy, zOff});
+    user.F.insert(user.F.end(), {userMain, userMain+1, userMain+2});
+    user.F.insert(user.F.end(), {userMain+1, userMain+3, userMain+2});
+
+    const auto r = FaceRig::buildFaceRig(user.V, user.F, at);
+    ASSERT_TRUE(r.ok) << r.error;
+    ASSERT_EQ(int(r.shapes.size()), 1);
+    const auto& sh = r.shapes[0];
+
+    // Every island vertex must pick up essentially the full translation.
+    // Measured: the blend gives 0.980 of it, the old affine 0.726. A
+    // displacement blend cannot fall short by much, because it can only ever
+    // return a convex combination of displacements that actually occurred
+    // (all of which are exactly +kShift here).
+    int checked = 0;
+    for (int i = userMain; i < int(user.V.size()/3); ++i) {
+        ASSERT_LT(size_t(i)*3+2, sh.userDeltas.size());
+        const float dz = sh.userDeltas[size_t(i)*3+2];
+        EXPECT_TRUE(std::isfinite(dz));
+        // Band 0.90..1.10. Measured 0.980 here, so there is ~8% of headroom
+        // for solver noise, while the old affine's 0.726 misses by a wide
+        // margin — the gap is big enough that the bound need not be loose.
+        EXPECT_GT(dz, 0.90f * kShift)
+            << "island vertex " << i << " lags the surface it sits on (dz=" << dz << ")";
+        EXPECT_LT(dz, 1.10f * kShift)
+            << "island vertex " << i << " overshoots (dz=" << dz << ")";
+        ++checked;
+    }
+    EXPECT_EQ(checked, 4) << "the island must survive into the user shape";
+}
