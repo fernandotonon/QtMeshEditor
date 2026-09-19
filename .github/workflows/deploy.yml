@@ -3003,6 +3003,7 @@ jobs:
             $cmpUri = "https://api.github.com/repos/microsoft/winget-pkgs/compare/microsoft:master...${forkOwner}:master"
             $cmp = (Invoke-WebRequest -Uri $cmpUri -Headers $headers -UseBasicParsing).Content | ConvertFrom-Json
             Write-Host "Fork is $($cmp.ahead_by) ahead / $($cmp.behind_by) behind upstream."
+            $syncFailed = $false
 
             if ($cmp.behind_by -gt 0) {
               $syncUri  = "https://api.github.com/repos/${forkOwner}/winget-pkgs/merge-upstream"
@@ -3020,12 +3021,19 @@ jobs:
                   try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = 0 }
                 }
                 $isScopeError = ($status -eq 422) -or ($_.ErrorDetails.Message -match 'workflow')
+                $syncFailed = $true
                 if ($isScopeError) {
-                  Write-Host "::warning::Fork sync refused — upstream changed files this token may not write (usually .github/workflows/**, which needs 'workflow' scope)."
-                  Write-Host "::warning::Continuing anyway: wingetcreate can branch from a fork that is behind, as long as it is not ahead."
-                  Write-Host "::warning::If submit fails below, sync the fork once by hand at https://github.com/${forkOwner}/winget-pkgs (the 'Sync fork' button)."
+                  # Upstream regularly edits .github/workflows/**, and a
+                  # classic PAT with only `public_repo` may not write those,
+                  # so merge-upstream 422s until the fork is synced by a
+                  # token that has `workflow` scope (or via the web UI).
+                  # This is not recoverable from inside the job.
+                  Write-Host "::error::Fork sync refused: upstream changed files this token may not write (.github/workflows/**, which needs 'workflow' scope)."
+                  Write-Host "::error::Fix once, then releases keep working:"
+                  Write-Host "::error::  a) open https://github.com/${forkOwner}/winget-pkgs and press 'Sync fork', or"
+                  Write-Host "::error::  b) give WINGET_TOKEN the 'workflow' scope in addition to 'public_repo'."
                 } else {
-                  Write-Host "::warning::Fork sync failed with HTTP ${status}: $($_.Exception.Message). Continuing to submit."
+                  Write-Host "::warning::Fork sync failed with HTTP ${status}: $($_.Exception.Message)."
                 }
               }
             }
@@ -3033,6 +3041,21 @@ jobs:
             if ($cmp.ahead_by -gt 0) {
               Write-Host "::warning::Fork is $($cmp.ahead_by) commit(s) AHEAD of upstream. wingetcreate may refuse to sync it."
               Write-Host "::warning::If submit fails, reset the fork's master to upstream — those commits are not needed for manifest submission."
+            }
+
+            # Re-read the state. wingetcreate refuses outright when the fork
+            # is behind ("The forked repository could not be synced with the
+            # upstream commits"), which is how 3.40.1 failed, so a fork that
+            # is still behind here means the submit below cannot succeed.
+            # Fail now with the remediation rather than after three retries.
+            if ($syncFailed) {
+              $after = (Invoke-WebRequest -Uri $cmpUri -Headers $headers -UseBasicParsing).Content | ConvertFrom-Json
+              if ($after.behind_by -gt 0) {
+                Write-Host "::error::Fork is still $($after.behind_by) commit(s) behind upstream and could not be synced automatically."
+                Write-Host "::error::wingetcreate cannot branch from a stale fork — this is what failed the 3.40.1 release."
+                Write-Host "::error::Sync the fork using one of the options above, then re-run this job."
+                exit 1
+              }
             }
           } catch {
             Write-Host "::warning::Could not determine fork sync state: $($_.Exception.Message). Continuing to submit."
