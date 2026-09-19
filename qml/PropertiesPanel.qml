@@ -1945,18 +1945,6 @@ Rectangle {
                         onAccepted: imgGenBtn.run()
                     }
                 }
-                // Edit mode is easy to miss (the placeholder only shows on an
-                // EMPTY field), and its failure is confusing rather than
-                // obvious: typing a new subject nudges the old image instead
-                // of generating that subject. Say so, with the way out.
-                Text {
-                    visible: MeshGenController.selectedImagePath.length > 0
-                    text: "✎ Editing the loaded image — 🗑 it to create a new one"
-                    color: PropertiesPanelController.textColor
-                    opacity: 0.65; font.pixelSize: 10
-                    wrapMode: Text.Wrap
-                    width: parent.width      // plain Column: Layout.* is inert here
-                }
                 Rectangle {
                     id: imgGenBtn
                     width: 88; height: 24; radius: 3
@@ -1993,6 +1981,19 @@ Rectangle {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: imgGenBtn.run() }
                 }
+            }
+            // Edit mode is easy to miss (the placeholder only shows on an EMPTY
+            // field) and its failure is confusing: typing a new subject nudges
+            // the old image instead of generating that subject. Sibling of the
+            // Row, not a child — a Row lays out horizontally, so a full-width
+            // Text inside it would overflow and displace the input and button.
+            Text {
+                visible: MeshGenController.selectedImagePath.length > 0
+                text: "✎ Editing the loaded image — 🗑 it to create a new one"
+                color: PropertiesPanelController.textColor
+                opacity: 0.65; font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
             }
             Text {
                 id: imgGenStatusTxt
