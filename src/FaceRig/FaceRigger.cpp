@@ -1,5 +1,8 @@
 #include "FaceRigger.h"
 
+#include <QtGlobal>
+#include <cstdio>
+
 #include "ArkitTemplate.h"
 #include "DeformationTransfer.h"
 #include "NonRigidICP.h"
@@ -573,6 +576,18 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     const std::vector<float>& fitTV = splitTmpl ? mainV : fitTmplV;
     const std::vector<int>&   fitTF = splitTmpl ? mainF : tmpl.faces();
 
+    // Pre-align on the WHOLE template vs the WHOLE fit-user mesh, even though
+    // only the main surface is FITTED. The component split removes the
+    // template's eyeballs/teeth/lashes while the user mesh still has its own,
+    // so aligning those two directly compares different subsets of a head:
+    // measured on the template fitted to ITSELF the centroids differed by
+    // 0.875 in Z, and the anneal warped the surface by ~0.55 mean to close a
+    // gap that should not exist — detuning the transfer's rest frames and
+    // leaving every blendshape 4-9x too weak.
+    if (splitTmpl) {
+        fitOpts.prealignTmplV = fitTmplV;   // whole template (pre-warped)
+        fitOpts.prealignUserV = fitV;       // whole fit-side user mesh
+    }
     // 1) NRICP: (pre-warped) template MAIN SURFACE → user neutral.
     // Report each annealing level so the (long) fit phase visibly advances.
     const NricpResult fit = FaceRig::fit(

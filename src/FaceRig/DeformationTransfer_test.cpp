@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "FaceRig/DeformationTransfer.h"
 
 #include <cmath>
@@ -146,4 +148,74 @@ TEST(DeformationTransfer, ZeroDeltaProducesZero)
     const auto out = dt.transfer(zero);
     ASSERT_EQ(out.size(), zero.size());
     EXPECT_LT(maxAbs(out) / diag(g.V), 1e-3);
+}
+
+// The shipped IdentityFitReproducesShapeDelta above uses a FLAT 10x10 grid,
+// which converges in a few hundred CG iterations and therefore could not
+// catch this: on a real head (curved, ~27k verts, many islands) the same
+// solve was iteration-starved at the old 800 cap and returned an answer that
+// was not merely small but DISTORTED — measured per-vertex amplitude
+// scattered 0.22-1.41 of target, and jawOpen at 0.617 overall, on a PERFECT
+// identity fit where the answer must be the input.
+//
+// A curved, denser patch reproduces the conditioning that exposed it.
+TEST(DeformationTransfer, CurvedIdentityFitPreservesAmplitude)
+{
+    // hemisphere-ish patch: curvature makes the per-triangle frames vary,
+    // which is what ill-conditions the normal equations.
+    // R=100 (~10.2k verts) is the smallest size that reproduces this:
+    // measured with the fix reverted, ratio was 1.000 at 441/1681/3721/6561
+    // verts and only fell to 0.871 at 10201. A smaller patch converges
+    // inside the old 800-iteration cap and cannot catch the regression.
+    const int R = 100;
+    std::vector<float> V;
+    std::vector<int> F;
+    for (int j = 0; j <= R; ++j)
+        for (int i = 0; i <= R; ++i) {
+            const float u = float(i)/R*2-1, v = float(j)/R*2-1;
+            const float z = 0.6f*std::sqrt(std::max(0.0f, 1.0f - u*u*0.8f - v*v*0.8f));
+            V.insert(V.end(), {u, v, z});
+        }
+    auto id = [&](int i, int j) { return j*(R+1)+i; };
+    for (int j = 0; j < R; ++j)
+        for (int i = 0; i < R; ++i) {
+            F.insert(F.end(), {id(i,j), id(i+1,j), id(i+1,j+1)});
+            F.insert(F.end(), {id(i,j), id(i+1,j+1), id(i,j+1)});
+        }
+
+    FaceRig::DeformationTransfer dt;
+    ASSERT_TRUE(dt.init(V, F, V));        // identity fit
+
+    std::vector<float> delta(V.size(), 0.0f);
+    for (size_t i = 0; i < V.size()/3; ++i) {
+        const float x = V[i*3], y = V[i*3+1];
+        delta[i*3+2] = 0.25f*std::exp(-(x*x + y*y)*6.0f);
+    }
+    const auto out = dt.transfer(delta);
+    ASSERT_EQ(out.size(), delta.size());
+
+    auto maxMag = [](const std::vector<float>& v) {
+        double m = 0;
+        for (size_t i = 0; i + 2 < v.size(); i += 3)
+            m = std::max(m, std::sqrt(double(v[i]*v[i] + v[i+1]*v[i+1] + v[i+2]*v[i+2])));
+        return m;
+    };
+    const double ratio = maxMag(out) / std::max(1e-9, maxMag(delta));
+    EXPECT_GT(ratio, 0.9) << "identity transfer lost amplitude (unconverged solve?)";
+    EXPECT_LT(ratio, 1.1) << "identity transfer overshot";
+
+    // Per-vertex, not just the peak: an unconverged solve distorts the
+    // surface (some verts overshoot while others undershoot) even when the
+    // peak happens to look reasonable.
+    std::vector<double> ratios;
+    for (size_t i = 0; i < V.size()/3; ++i) {
+        const double a = std::sqrt(double(delta[i*3]*delta[i*3] + delta[i*3+1]*delta[i*3+1] + delta[i*3+2]*delta[i*3+2]));
+        if (a < 0.05) continue;           // only verts with real motion
+        const double o = std::sqrt(double(out[i*3]*out[i*3] + out[i*3+1]*out[i*3+1] + out[i*3+2]*out[i*3+2]));
+        ratios.push_back(o / a);
+    }
+    ASSERT_FALSE(ratios.empty());
+    std::sort(ratios.begin(), ratios.end());
+    EXPECT_GT(ratios[ratios.size()/10], 0.8) << "p10 per-vertex amplitude too low — distorted, not just scaled";
+    EXPECT_LT(ratios[ratios.size()*9/10], 1.25) << "p90 per-vertex amplitude too high";
 }

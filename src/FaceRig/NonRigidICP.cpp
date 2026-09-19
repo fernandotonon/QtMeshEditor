@@ -248,17 +248,37 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     }
     res.diag = std::sqrt(vdot(vsub(mx,mn), vsub(mx,mn)));
 
-    // rigid pre-align: centroid + bbox-scale (correspondence-free)
-    Vec3 tmn = at(tmplV,0), tmx = tmn, tc{0,0,0}, uc{0,0,0};
-    for (int i = 0; i < Nt; ++i) {
-        const Vec3 p = at(tmplV,i); tc = vadd(tc,p);
+    // Rigid pre-align: centroid + bbox-scale (correspondence-free).
+    // Computed over the PREALIGN REFERENCE sets when the caller supplied
+    // them — see NricpOptions::prealignTmplV. Fitting a template SUBSET
+    // against a whole user head otherwise misaligns the start by
+    // construction, and the anneal warps real geometry to compensate.
+    const std::vector<float>& paT =
+        opts.prealignTmplV.size() >= 3 ? opts.prealignTmplV : tmplV;
+    const std::vector<float>& paU =
+        opts.prealignUserV.size() >= 3 ? opts.prealignUserV : userV;
+    const int paNt = int(paT.size() / 3), paNu = int(paU.size() / 3);
+    auto atv = [](const std::vector<float>& v, int i) {
+        return Vec3{v[size_t(i)*3], v[size_t(i)*3+1], v[size_t(i)*3+2]};
+    };
+    Vec3 tmn = atv(paT,0), tmx = tmn, tc{0,0,0}, uc{0,0,0};
+    for (int i = 0; i < paNt; ++i) {
+        const Vec3 p = atv(paT,i); tc = vadd(tc,p);
         for (int a=0;a<3;++a){ tmn[a]=std::min(tmn[a],p[a]); tmx[a]=std::max(tmx[a],p[a]); }
     }
-    tc = vscale(tc, 1.0/Nt);
-    for (int i = 0; i < Nu; ++i) uc = vadd(uc, at(userV,i));
-    uc = vscale(uc, 1.0/Nu);
+    tc = vscale(tc, 1.0/std::max(1, paNt));
+    Vec3 umn = atv(paU,0), umx = umn;
+    for (int i = 0; i < paNu; ++i) {
+        const Vec3 p = atv(paU,i); uc = vadd(uc, p);
+        for (int a=0;a<3;++a){ umn[a]=std::min(umn[a],p[a]); umx[a]=std::max(umx[a],p[a]); }
+    }
+    uc = vscale(uc, 1.0/std::max(1, paNu));
     const double tdiag = std::sqrt(vdot(vsub(tmx,tmn), vsub(tmx,tmn)));
-    const double s = tdiag > 1e-9 ? res.diag/tdiag : 1.0;
+    const double udiag = std::sqrt(vdot(vsub(umx,umn), vsub(umx,umn)));
+    // Scale from the REFERENCE diagonals (res.diag is the full fit-user
+    // diagonal, which is the wrong measure when a reference set was given).
+    const double s = tdiag > 1e-9
+        ? (opts.prealignTmplV.size() >= 3 ? udiag : res.diag) / tdiag : 1.0;
 
     // template homogeneous verts and current fitted positions X
     std::vector<Vec3> vhat(Nt), X(Nt);
