@@ -2980,6 +2980,64 @@ jobs:
             exit 1
           }
 
+          # Sync the fork of microsoft/winget-pkgs with upstream before
+          # submitting.
+          #
+          # wingetcreate branches the new manifest off the fork's default
+          # branch. When that branch has fallen behind upstream, the tool
+          # refuses with "The forked repository could not be synced with the
+          # upstream commits" and no amount of retrying helps — the 3.40.1
+          # release failed exactly this way with the fork 1627 commits
+          # behind. Syncing here makes the job self-healing.
+          #
+          # The REST merge-upstream endpoint is used rather than a git push:
+          # it is a fast-forward that cannot discard fork-local commits.
+          # It does fail with 422 when upstream has touched
+          # .github/workflows/** and the token lacks `workflow` scope, which
+          # is expected for a `public_repo` PAT — that case is reported
+          # clearly rather than treated as fatal, because wingetcreate can
+          # still fork-and-branch from a fork that is merely behind.
+          Write-Host "Syncing fork of microsoft/winget-pkgs with upstream..."
+          $forkOwner = $login
+          try {
+            $cmpUri = "https://api.github.com/repos/microsoft/winget-pkgs/compare/microsoft:master...${forkOwner}:master"
+            $cmp = (Invoke-WebRequest -Uri $cmpUri -Headers $headers -UseBasicParsing).Content | ConvertFrom-Json
+            Write-Host "Fork is $($cmp.ahead_by) ahead / $($cmp.behind_by) behind upstream."
+
+            if ($cmp.behind_by -gt 0) {
+              $syncUri  = "https://api.github.com/repos/${forkOwner}/winget-pkgs/merge-upstream"
+              $syncBody = @{ branch = "master" } | ConvertTo-Json
+              try {
+                Invoke-WebRequest -Uri $syncUri -Method Post -Headers $headers `
+                  -Body $syncBody -ContentType "application/json" -UseBasicParsing | Out-Null
+                Write-Host "Fork synced to upstream master."
+              } catch {
+                # PowerShell Core throws HttpResponseException here, whose
+                # .Response can be null; read the status defensively so a
+                # failure inside the catch cannot mask the real error.
+                $status = 0
+                if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
+                  try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = 0 }
+                }
+                $isScopeError = ($status -eq 422) -or ($_.ErrorDetails.Message -match 'workflow')
+                if ($isScopeError) {
+                  Write-Host "::warning::Fork sync refused — upstream changed files this token may not write (usually .github/workflows/**, which needs 'workflow' scope)."
+                  Write-Host "::warning::Continuing anyway: wingetcreate can branch from a fork that is behind, as long as it is not ahead."
+                  Write-Host "::warning::If submit fails below, sync the fork once by hand at https://github.com/${forkOwner}/winget-pkgs (the 'Sync fork' button)."
+                } else {
+                  Write-Host "::warning::Fork sync failed with HTTP ${status}: $($_.Exception.Message). Continuing to submit."
+                }
+              }
+            }
+
+            if ($cmp.ahead_by -gt 0) {
+              Write-Host "::warning::Fork is $($cmp.ahead_by) commit(s) AHEAD of upstream. wingetcreate may refuse to sync it."
+              Write-Host "::warning::If submit fails, reset the fork's master to upstream — those commits are not needed for manifest submission."
+            }
+          } catch {
+            Write-Host "::warning::Could not determine fork sync state: $($_.Exception.Message). Continuing to submit."
+          }
+
           # wingetcreate --submit goes through the GitHub Contents API (PUT
           # /contents/:path), which works with a classic PAT that only has
           # `public_repo` scope. The previous approach (manual `git clone` +
@@ -3026,8 +3084,12 @@ jobs:
             } else {
               Write-Host "::error::wingetcreate submit failed after 3 attempts. Check:"
               Write-Host "::error:: 1. WINGET_TOKEN is still valid and has 'public_repo' scope."
-              Write-Host "::error:: 2. The user's fork of microsoft/winget-pkgs hasn't diverged."
-              Write-Host "::error:: 3. https://www.githubstatus.com for GitHub API availability."
+              Write-Host "::error:: 2. The fork's master is not AHEAD of upstream. This job syncs a fork that is"
+              Write-Host "::error::    behind, but cannot rebase one that has its own commits. Fix at"
+              Write-Host "::error::    https://github.com/${forkOwner}/winget-pkgs — reset master to upstream."
+              Write-Host "::error:: 3. If the log shows 'could not be synced with the upstream commits', press"
+              Write-Host "::error::    'Sync fork' on that page once, then re-run this job."
+              Write-Host "::error:: 4. https://www.githubstatus.com for GitHub API availability."
             }
             exit 1
           }
