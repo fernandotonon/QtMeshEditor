@@ -320,8 +320,15 @@ public:
             // at a fixed count — falling back to the unfiltered nearest is
             // what reintroduces the wrong-surface match this exists to stop.
             const int total = int(m_vertN.size() / 3);
-            int want = kSeedCandidates;
-            while (nv < 0 && want <= total) {
+            // Grow geometrically, but CLAMP the last request to `total` so the
+            // whole surface really is covered. Letting `want` quadruple past
+            // the end and exiting on `want <= total` silently stops early:
+            // with 26,719 vertices the requests are 8, 32, … 8192 and the next
+            // is 32768, so 18,527 vertices are never inspected and the
+            // unfiltered fallback can still pick the wrong surface (CodeRabbit
+            // finding — my previous claim that this was exhaustive was wrong).
+            int want = std::min(kSeedCandidates, total);
+            while (nv < 0 && want > 0) {
                 m_grid.nearestK(q, want, m_seeds);
                 if (m_seeds.empty()) break;
                 for (const int cand : m_seeds) {
@@ -332,7 +339,8 @@ public:
                     if (d > 0.0f) { nv = cand; break; }   // nearest that agrees
                 }
                 if (int(m_seeds.size()) < want) break;    // surface exhausted
-                want *= 4;
+                if (want >= total) break;                 // everything searched
+                want = std::min(want * 4, total);
             }
         }
         if (nv < 0) nv = m_grid.nearest(q);
