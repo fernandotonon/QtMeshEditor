@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QSignalSpy>
 #include <QDir>
+#include <QSettings>
 #include <QStandardPaths>
 #include "SDManager.h"
 
@@ -84,7 +85,18 @@ TEST_F(SDManagerTest, DefaultSettings)
 TEST_F(SDManagerTest, Flux2StepsDefaultsToEightAndClampsToTheUsefulRange)
 {
     const int restore = manager->flux2Steps();
-    EXPECT_EQ(restore, 8) << "default: above the 4-step minimum";
+    // The singleton loads QSettings at construction and this fixture uses the
+    // REAL app settings, so a persisted value legitimately differs from the
+    // compiled default — assert the default only when the key is absent, and
+    // the clamping behaviour (below) unconditionally. (A developer machine
+    // that has run the app has this key set; CI runners do not.)
+    {
+        QSettings probe;
+        if (!probe.contains(QStringLiteral("StableDiffusion/flux2Steps")))
+            EXPECT_EQ(restore, 8) << "compiled default: above the 4-step minimum";
+        EXPECT_GE(restore, 4);
+        EXPECT_LE(restore, 20) << "whatever was loaded must already be in range";
+    }
 
     manager->setFlux2Steps(12);
     EXPECT_EQ(manager->flux2Steps(), 12);
@@ -108,7 +120,11 @@ TEST_F(SDManagerTest, Flux2StepsDefaultsToEightAndClampsToTheUsefulRange)
 TEST_F(SDManagerTest, SeedCanBeFixedForReproducibleGenerationsAndNegativeMeansRandom)
 {
     const qint64 restore = manager->seed();
-    EXPECT_EQ(restore, -1) << "default: random per generation";
+    {
+        QSettings probe;   // same rationale as the flux2Steps test above
+        if (!probe.contains(QStringLiteral("StableDiffusion/seed")))
+            EXPECT_EQ(restore, -1) << "compiled default: random per generation";
+    }
 
     manager->setSeed(12345);
     EXPECT_EQ(manager->seed(), 12345);

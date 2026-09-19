@@ -989,6 +989,30 @@ Dialog {
                                     editable: true
                                 }
 
+                                // A guidance-distilled FLUX.2 model IGNORES
+                                // the Steps and CFG Scale controls above (it
+                                // pins cfg 1.0 and takes its own step count),
+                                // so without this row the visible Steps box
+                                // looks editable but does nothing for klein.
+                                Text {
+                                    text: "FLUX.2 Steps:"; color: textColor
+                                }
+                                RowLayout {
+                                    SpinBox {
+                                        from: 4; to: 20
+                                        value: SDManager.flux2Steps
+                                        onValueModified: SDManager.flux2Steps = value
+                                        editable: true
+                                    }
+                                    Text {
+                                        text: "distilled model; 8 resolves hands, 12+ invents extra objects"
+                                        color: textColor; opacity: 0.6
+                                        font.pixelSize: 10
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
                                 Text { text: "CFG Scale:"; color: textColor }
                                 RowLayout {
                                     Slider {

@@ -30,6 +30,7 @@
 #include <QPointer>
 #include <QThread>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QUrl>
 
 #include <thread>
@@ -215,6 +216,26 @@ void MeshGenController::clearSelectedImage()
     emit statusMessage(tr("Image cleared."));
 }
 
+int MeshGenController::imageGenSizeForModel(const QString& model)
+{
+    if (model == SDManager::flux2KleinModelName()) return 1024;
+    // SDXL checkpoints train at 1024²; SD 1.x at 512² (bigger makes SD 1.5
+    // duplicate the subject). Matches SDManager's own auto-detect naming.
+    const QString lower = model.toLower();
+    if (lower.contains(QLatin1String("sdxl")) || lower.contains(QLatin1String("sd_xl")))
+        return 1024;
+    return 512;
+}
+
+QString MeshGenController::normalisedSavePath(const QString& destPath)
+{
+    QString dest = destPath.trimmed();
+    if (dest.startsWith(QLatin1String("file://"))) dest = QUrl(dest).toLocalFile();
+    if (!dest.isEmpty() && QFileInfo(dest).suffix().isEmpty())
+        dest += QStringLiteral(".png");
+    return dest;
+}
+
 QString MeshGenController::suggestedImageFileName() const
 {
     // Prefer the caption/prompt so a folder of saved images is readable;
@@ -240,14 +261,13 @@ bool MeshGenController::saveSelectedImageAs(const QString& destPath)
         return false;
     }
     // QML's FileDialog hands back a file:// URL; a caller may pass a plain
-    // path. Accept both rather than making the QML side normalise it.
-    QString dest = destPath.trimmed();
-    if (dest.startsWith(QLatin1String("file://"))) dest = QUrl(dest).toLocalFile();
+    // path. One normaliser, shared with the interactive variant so the path
+    // it RETURNS is the path this writes.
+    const QString dest = normalisedSavePath(destPath);
     if (dest.isEmpty()) {
         emit error(tr("No save location chosen."));
         return false;
     }
-    if (QFileInfo(dest).suffix().isEmpty()) dest += QStringLiteral(".png");
     // Saving onto the source would delete it via the overwrite below.
     if (QFileInfo(dest).absoluteFilePath()
         == QFileInfo(m_selectedImage).absoluteFilePath()) {
@@ -255,13 +275,30 @@ bool MeshGenController::saveSelectedImageAs(const QString& destPath)
         return true;
     }
     QDir().mkpath(QFileInfo(dest).absolutePath());
-    // QFile::copy refuses to overwrite, so clear an existing target first —
-    // the file dialog already asked the user to confirm the replacement.
-    if (QFileInfo::exists(dest) && !QFile::remove(dest)) {
-        emit error(tr("Could not replace %1.").arg(QFileInfo(dest).fileName()));
+    // Write through QSaveFile: it stages into a temporary and commits on
+    // commit(), so a failure part-way leaves an EXISTING destination intact.
+    // Removing the target first (QFile::copy refuses to overwrite) would
+    // destroy the user's previous file if the copy then failed.
+    QFile src(m_selectedImage);
+    if (!src.open(QIODevice::ReadOnly)) {
+        emit error(tr("Could not read the source image."));
         return false;
     }
-    if (!QFile::copy(m_selectedImage, dest)) {
+    QSaveFile out(dest);
+    if (!out.open(QIODevice::WriteOnly)) {
+        emit error(tr("Could not save the image to %1.").arg(dest));
+        return false;
+    }
+    char buf[64 * 1024];
+    while (!src.atEnd()) {
+        const qint64 n = src.read(buf, sizeof(buf));
+        if (n < 0 || out.write(buf, n) != n) {
+            out.cancelWriting();     // existing destination untouched
+            emit error(tr("Could not save the image to %1.").arg(dest));
+            return false;
+        }
+    }
+    if (!out.commit()) {
         emit error(tr("Could not save the image to %1.").arg(dest));
         return false;
     }
@@ -297,7 +334,11 @@ QString MeshGenController::saveSelectedImageInteractive()
         QFileDialog::DontUseNativeDialog
             | QFileDialog::DontUseCustomDirectoryIcons);
     if (dest.isEmpty()) return {};          // cancelled — not an error
-    return saveSelectedImageAs(dest) ? dest : QString();
+    // Return the path actually WRITTEN: saveSelectedImageAs appends .png to a
+    // suffix-less name, so returning the raw dialog result would hand callers
+    // a path that does not exist.
+    const QString written = normalisedSavePath(dest);
+    return saveSelectedImageAs(written) ? written : QString();
 }
 
 // ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
@@ -319,11 +360,15 @@ bool MeshGenController::imageGenAvailable() const
 QString MeshGenController::imageGenModelName() const
 {
 #ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sd = SDManager::instance();
+    // An EXPLICITLY LOADED model wins. Klein used to short-circuit here, so
+    // downloading and loading another checkpoint (e.g. SDXL Base, the whole
+    // point of offering a non-distilled option) silently still generated
+    // with klein — the alternative was unusable unless klein was deleted.
+    if (sd && sd->isModelLoaded() && !sd->currentModelName().isEmpty())
+        return sd->currentModelName();
     if (SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
         return SDManager::flux2KleinModelName();
-    SDManager* sd = SDManager::instance();
-    if (sd && sd->isModelLoaded())
-        return sd->currentModelName();
     if (sd && !sd->availableModels().isEmpty())
         return sd->availableModels().first();
 #endif
@@ -416,8 +461,10 @@ void MeshGenController::generateSourceImage(const QString& prompt)
 
     const bool loadedIsTarget =
         sd->isModelLoaded() && sd->currentModelName() == model;
-    m_imageGenSize =
-        (model == SDManager::flux2KleinModelName()) ? 1024 : 512;
+    // Native training resolution: klein and SDXL are 1024 models; SD 1.x is
+    // 512 (and duplicates the subject when pushed higher). Running SDXL at
+    // 512 would quarter the pixel count of the very option added for quality.
+    m_imageGenSize = imageGenSizeForModel(model);
     if (loadedIsTarget) {
         emit imageGenStatus(m_imageGenRef.isEmpty()
                                 ? tr("Generating image…")

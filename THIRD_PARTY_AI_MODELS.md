@@ -545,14 +545,22 @@ for #410 — non-commercial — in favour of synthetic bone-weight-derived label
   default 8, clamped [4,20]; 4 is the distillation's MINIMUM, and the extra
   steps are what resolve anatomy, i.e. the extra-limb / malformed-hand
   artifacts users hit on character prompts).
-- **SDXL Base 1.0** (Stability AI) — offered ALONGSIDE klein as the
-  non-distilled option. Every other image model here is distilled (klein:
-  guidance-distilled; SDXL Turbo: adversarial-distilled), and distillation is
-  what costs limb/finger coherence; SDXL base runs the full 30-step schedule
-  with real classifier-free guidance and a negative prompt. **CreativeML
-  OpenRAIL++-M** (verified 2026-09-18: HF `license: openrail++`, ungated),
-  the same licence as the existing SDXL Turbo entry. Slower per image and
-  ~6.9 GB, so it is a user choice rather than the default.
+- **SDXL Base 1.0** (Stability AI) — offered ALONGSIDE klein as a modern
+  non-distilled option. The two DISTILLED entries (klein: guidance-distilled;
+  SDXL Turbo: adversarial-distilled) are the ones whose few-step schedules
+  cost limb/finger coherence; SDXL Base runs the full 30-step schedule with
+  real classifier-free guidance and a negative prompt. (SD 1.5 is also
+  non-distilled, just an older and weaker model.) **CreativeML OpenRAIL++-M**
+  — verified 2026-09-18 against the HF API: `license: openrail++`, ungated,
+  `content-length` 6938078334 matching the catalog entry. Slower per image
+  and ~6.9 GB, so it is a user choice rather than the default.
+- ⚠️ **SDXL Turbo, already in the catalog, is NOT permissively licensed.**
+  Verified 2026-09-18: `license: other`, `license_name: sai-nc-community` —
+  the Stability AI **Non-Commercial** Community License. It therefore does
+  NOT clear the redistribution bar the other entries are held to, and it
+  predates this note rather than being added by it. It is a user-initiated
+  download (nothing is bundled), but it should be reviewed on its own terms:
+  either drop it or label it non-commercial at the point of download.
   **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
   is non-commercial, which fails the redistribution bar (Homebrew / Snap /
   WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.

@@ -133,6 +133,15 @@ public:
     /// panel calls this — the file dialog lives here rather than in QML to
     /// match the project's existing openFileDialog convention.
     Q_INVOKABLE QString saveSelectedImageInteractive();
+
+private:
+    /// Native generation resolution for a checkpoint: klein and SDXL train
+    /// at 1024², SD 1.x at 512².
+    static int imageGenSizeForModel(const QString& model);
+    /// file:// → path, and default a missing suffix to .png. Shared so the
+    /// path returned by the interactive save is the one actually written.
+    static QString normalisedSavePath(const QString& destPath);
+public:
     /// A sensible default filename for the save dialog, derived from the
     /// caption/prompt when there is one so saved images are identifiable.
     Q_INVOKABLE QString suggestedImageFileName() const;

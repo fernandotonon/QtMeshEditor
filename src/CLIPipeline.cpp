@@ -11559,10 +11559,15 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
               + QStringLiteral(", the entire subject fully visible, centered, "
                                "isolated on a plain light gray background")
         : prompt.trimmed();
-    // FLUX.2-klein trains at 1024²; SD-class checkpoints at 512² (bigger
-    // makes SD 1.5 duplicate the subject).
-    const int genSize =
-        (chosenModel == SDManager::flux2KleinModelName()) ? 1024 : 512;
+    // Native training resolution: klein AND SDXL are 1024² models; SD 1.x is
+    // 512² (bigger makes SD 1.5 duplicate the subject). Treating every
+    // non-klein checkpoint as 512 ran SDXL at a quarter of its pixel count.
+    const QString lowerModel = chosenModel.toLower();
+    const bool is1024Model =
+        chosenModel == SDManager::flux2KleinModelName()
+        || lowerModel.contains(QLatin1String("sdxl"))
+        || lowerModel.contains(QLatin1String("sd_xl"));
+    const int genSize = is1024Model ? 1024 : 512;
     QEventLoop genLoop;
     QString genPath, genErr;
     QObject::connect(sd, &SDManager::generationCompleted, &genLoop,
