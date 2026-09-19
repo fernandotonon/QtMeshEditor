@@ -335,3 +335,76 @@ TEST(FaceRigger, DisconnectedSatelliteIslandTracksTheMainSurface)
     }
     EXPECT_EQ(checked, 4) << "the island must survive into the user shape";
 }
+
+// A satellite island must scale WITH the head, not stay behind it.
+//
+// Found in review of #1060. The satellite placement blends the displacements
+// the main surface underwent. Under a global SCALE that displacement is
+// (s-1)*p — POSITION-DEPENDENT — so averaging it and adding the result to a
+// satellite at q gives q + (s-1)*mean(mainPositions) instead of s*q: an eye
+// or tooth sitting away from the main surface's centroid keeps roughly its
+// original place and size while the head grows around it. NRICP's bbox
+// prealign produces exactly this whenever the user mesh is in different units.
+//
+// Measured on the real template before the fix, placing 12,657 satellites
+// under a pure scale (error against the exact s*p): 0.199 mean at s=1.05,
+// 3.98 mean / 84% relative at s=2.0. The fix extracts the global similarity,
+// applies it exactly, and blends only the residual.
+//
+// Here the user mesh is the template scaled up, so the whole rig — island
+// included — should simply scale. The island is placed by the blend, so if
+// the similarity is not preserved it lands short.
+TEST(FaceRigger, SatelliteIslandFollowsAGlobalScale)
+{
+    Grid tmpl = makeGrid(12, 2.0f, 0.12f);
+    const int islandBase = int(tmpl.V.size()/3);
+    // The island must sit FAR from the main surface's centroid. The dropped
+    // term is (s-1)*(mean(mainPositions) - q), so an island near the centroid
+    // shows no error at all — an earlier draft put it at z=1.6, close to the
+    // plane's centre, and PASSED against a build with the similarity disabled.
+    for (float dy : {0.30f, 0.55f})
+        for (float dx : {-0.12f, 0.12f})
+            tmpl.V.insert(tmpl.V.end(), {dx + 6.0f, dy + 6.0f, 6.0f});
+    tmpl.F.insert(tmpl.F.end(), {islandBase, islandBase+1, islandBase+2});
+    tmpl.F.insert(tmpl.F.end(), {islandBase+1, islandBase+3, islandBase+2});
+
+    // A shape that moves the island along with the +y half.
+    const float kShift = 0.20f;
+    std::vector<float> shape(tmpl.V.size(), 0.0f);
+    for (int i = 0; i < int(tmpl.V.size()/3); ++i)
+        if (tmpl.V[size_t(i)*3+1] > 0.0f) shape[size_t(i)*3+2] = kShift;
+
+    const QString path = tempTemplatePath();
+    ASSERT_TRUE(writeSyntheticTemplate(path, tmpl, {{"jawOpen", shape}}));
+    FaceRig::ArkitTemplate at;
+    QString err;
+    ASSERT_TRUE(at.load(path, &err)) << err.toStdString();
+
+    // The user mesh is the SAME geometry scaled about the origin — the case
+    // that produces a pure global scale in the fit.
+    const float kScale = 2.0f;
+    Grid user = tmpl;
+    for (float& v : user.V) v *= kScale;
+
+    const auto r = FaceRig::buildFaceRig(user.V, user.F, at);
+    ASSERT_TRUE(r.ok) << r.error;
+    ASSERT_EQ(int(r.shapes.size()), 1);
+    const auto& sh = r.shapes[0];
+
+    // The island's motion must scale with the mesh: kShift * kScale. Getting
+    // the UNSCALED kShift back is the symptom of a dropped similarity.
+    const float want = kShift * kScale;
+    int checked = 0;
+    for (int i = islandBase; i < int(user.V.size()/3); ++i) {
+        ASSERT_LT(size_t(i)*3+2, sh.userDeltas.size());
+        const float dz = sh.userDeltas[size_t(i)*3+2];
+        EXPECT_TRUE(std::isfinite(dz));
+        EXPECT_GT(dz, 0.80f * want)
+            << "island vertex " << i << " did not scale with the head (dz="
+            << dz << ", want ~" << want << ")";
+        EXPECT_LT(dz, 1.20f * want)
+            << "island vertex " << i << " overshot (dz=" << dz << ")";
+        ++checked;
+    }
+    EXPECT_EQ(checked, 4);
+}

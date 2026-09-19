@@ -718,6 +718,76 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         // above would normally have rejected such a fit already.
         const bool haveSources = srcFull.size() >= 4;
 
+        // Fit the global SIMILARITY (uniform scale + translation) that the main
+        // surface underwent, and apply it EXACTLY; blend only what is left.
+        //
+        // Without this the blend is wrong under a global scale, which NRICP's
+        // bbox prealign produces routinely for meshes in different units. A
+        // uniform scale s about the origin gives every main vertex the
+        // displacement (s-1)*p — a POSITION-DEPENDENT term. Averaging those
+        // and adding the result to a satellite at q yields
+        // q + (s-1)*weightedMean(mainPositions) instead of s*q, so an eye or
+        // tooth sitting away from the main surface's centroid keeps roughly
+        // its original position and size while the head scales around it.
+        // Measured on the ICT template under a synthetic pure scale, placing
+        // 12,657 satellites (error vs the exact s*p):
+        //
+        //   scale   mean     max      worst relative
+        //   1.00    0.0000   0.0000    0.0 %
+        //   1.05    0.1991   0.3430    8.0 %
+        //   1.20    0.7963   1.3721   28.1 %
+        //   2.00    3.9817   6.8604   84.4 %
+        //
+        // Even 5 % costs more than the main surface's own fit drift (0.120).
+        // The residual after removing the similarity carries no such term, so
+        // the blend sees only local, position-independent deformation — which
+        // is the thing an average is valid for.
+        double gScale = 1.0;
+        std::array<double,3> srcCtr{0,0,0}, dstCtr{0,0,0};
+        if (haveSources) {
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    srcCtr[size_t(d)] += p;
+                    dstCtr[size_t(d)] += p + srcDisp[k*3+size_t(d)];
+                }
+            }
+            const double inv = 1.0 / double(srcFull.size());
+            for (int d = 0; d < 3; ++d) { srcCtr[size_t(d)] *= inv; dstCtr[size_t(d)] *= inv; }
+            // Uniform scale from the RMS radius about each centroid. Rotation
+            // is deliberately NOT extracted: the prealign is axis-aligned
+            // (centroid + bbox), so scale + translation is the part that
+            // carries a position-dependent term, and a wrong rotation would
+            // be worse than none.
+            double sn = 0.0, sd = 0.0;
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double a = double(fitTmplV[size_t(fv)*3+size_t(d)]) - srcCtr[size_t(d)];
+                    const double b = a + srcDisp[k*3+size_t(d)] - (dstCtr[size_t(d)] - srcCtr[size_t(d)]);
+                    sn += a * b; sd += a * a;
+                }
+            }
+            if (sd > 1e-12) {
+                const double cand = sn / sd;
+                // Guard against a degenerate estimate; 1.0 falls back to the
+                // pure-blend behaviour, which is correct when there is no
+                // global scale.
+                if (std::isfinite(cand) && cand > 1e-3 && cand < 1e3) gScale = cand;
+            }
+            // Re-express every source displacement as the RESIDUAL left after
+            // the global similarity, so the blend never averages (s-1)*p.
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                    srcDisp[k*3+size_t(d)] = (p + srcDisp[k*3+size_t(d)]) - sim;
+                }
+            }
+        }
+
         for (int i = 0; i < tvc; ++i) {
             if (comp[size_t(i)] == mainComp) continue;
             if (!haveSources) {
@@ -743,9 +813,11 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                 wsum += w;
                 for (int d = 0; d < 3; ++d) acc[d] += w * srcDisp[n*3+size_t(d)];
             }
-            for (int d = 0; d < 3; ++d)
-                fitted[size_t(i)*3+size_t(d)] =
-                    float(double(fitTmplV[size_t(i)*3+size_t(d)]) + acc[d] / wsum);
+            for (int d = 0; d < 3; ++d) {
+                const double p = double(fitTmplV[size_t(i)*3+size_t(d)]);
+                const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                fitted[size_t(i)*3+size_t(d)] = float(sim + acc[d] / wsum);
+            }
         }
     }
 
