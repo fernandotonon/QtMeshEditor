@@ -124,7 +124,24 @@ SolveResult PoseBasis::solve(const std::vector<float>& deltaVertices,
         for (size_t j = 0; j < n; ++j) rowSum += std::abs(m_gram[i * n + j]);
         lmax = std::max(lmax, rowSum);
     }
-    const double L = 2.0 * (lmax + options.l2 + options.temporal + options.symmetry);
+    // The symmetry term is `symmetry*(w[a]-w[b])^2`, whose Hessian on the
+    // (a,b) block is 2*symmetry*[[1,-1],[-1,1]] -- max eigenvalue 4*symmetry,
+    // which is 2.0*symmetry INSIDE this parenthesis. Counting it once left L
+    // below the true curvature, so the step was not guaranteed stable.
+    //
+    // Worth recording what this does and does not buy, because it is easy to
+    // misread: with symmetry=100 the solver was never diverging -- it
+    // converges monotonically, just slowly, because a large symmetry weight
+    // dominates L and shrinks the step for every coordinate. Correcting the
+    // bound makes a weak-basis case ~73% slower to converge (47k -> 81k
+    // iterations in a synthetic worst case) and changes the answer by <1e-3.
+    // Capping the contribution to claw that back was tried and is WRONG: it
+    // lets the mirrored pair oscillate apart to [0, 1], which is precisely
+    // what the bound prevents. Correctness first; the real pipeline
+    // warm-starts each frame from the previous one and never sits near this
+    // worst case.
+    const double L =
+        2.0 * (lmax + options.l2 + options.temporal + 2.0 * options.symmetry);
     const double step = (L > 0.0) ? 1.0 / L : 0.0;
     if (step <= 0.0) {
         r.weights.assign(n, 0.0f);
@@ -143,14 +160,20 @@ SolveResult PoseBasis::solve(const std::vector<float>& deltaVertices,
 
     std::vector<double> grad(n, 0.0);
     for (int it = 0; it < options.maxIterations; ++it) {
-        // grad = 2 (Gram w - Dᵀdv) + 2 l2 w + l1 sign(w)
-        //        + 2 temporal (w - wPrev) + 2 symmetry (w - wPartner)
+        // SMOOTH part only: grad = 2 (Gram w - Dᵀdv) + 2 l2 w
+        //                          + 2 temporal (w - wPrev)
+        //                          + 2 symmetry (w - wPartner)
+        // L1 is handled by a proximal (soft-threshold) step below, NOT here as
+        // a subgradient. Adding `l1` only when w > 0 made the update alternate:
+        // at w == 0 the penalty vanished, the data term pushed w positive, the
+        // penalty reappeared and drove it back to 0, forever. Reproduced as an
+        // exact two-cycle whose reported weight depends on whether
+        // maxIterations is odd or even (0.0 at 200, the target value at 201),
+        // with converged never becoming true.
         for (size_t i = 0; i < n; ++i) {
             if (!isActive(i)) { grad[i] = 0.0; continue; }
             double g = 2.0 * (dot(&m_gram[i * n], w.data(), n) - dtv[i]);
             g += 2.0 * options.l2 * w[i];
-            if (w[i] > 0.0) g += options.l1;           // subgradient; at w=0 the
-                                                       // projection pins it anyway
             if (hasPrev) g += 2.0 * options.temporal * (w[i] - double(previous[i]));
             const int p = partner(i);
             if (p >= 0 && isActive(size_t(p)))
@@ -161,7 +184,12 @@ SolveResult PoseBasis::solve(const std::vector<float>& deltaVertices,
         double maxMove = 0.0;
         for (size_t i = 0; i < n; ++i) {
             if (!isActive(i)) continue;
-            const double next = std::min(1.0, std::max(0.0, w[i] - step * grad[i]));
+            // Proximal gradient: smooth step, then soft-threshold for L1,
+            // then project onto [0, 1]. Weights are non-negative here, so the
+            // soft-threshold reduces to subtracting step*l1 and clamping at 0.
+            double next = w[i] - step * grad[i];
+            next = std::max(0.0, next - step * options.l1);
+            next = std::min(1.0, next);
             maxMove = std::max(maxMove, std::abs(next - w[i]));
             w[i] = next;
         }

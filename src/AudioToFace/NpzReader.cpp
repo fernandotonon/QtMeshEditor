@@ -3,6 +3,7 @@
 #include <QFile>
 
 #include <cstring>
+#include <limits>
 
 namespace AudioToFace {
 
@@ -49,9 +50,18 @@ QString headerField(const QString& header, const QString& key)
 
 int64_t NpyArray::elementCount() const
 {
+    // The shape comes from the file, so the product is untrusted. A negative
+    // dimension or an overflowing multiply would make a bounds check pass on
+    // a nonsense value; report 0 instead, which every caller treats as
+    // "unusable" and refuses.
+    if (shape.empty()) return 0;
     int64_t n = 1;
-    for (int64_t d : shape) n *= d;
-    return shape.empty() ? 0 : n;
+    for (int64_t d : shape) {
+        if (d < 0) return 0;
+        if (d != 0 && n > std::numeric_limits<int64_t>::max() / d) return 0;
+        n *= d;
+    }
+    return n;
 }
 
 bool NpzReader::open(const QString& path, QString* error)
@@ -99,9 +109,20 @@ bool NpzReader::open(const QString& path, QString* error)
         return false;
     }
 
+    // All-or-nothing, as open()'s contract says: a malformed entry used to
+    // `break`, which left every entry parsed so far in m_entries and returned
+    // true -- a partially-read archive presented as a good one.
+    auto malformed = [&](const char* why) {
+        if (error) *error = QStringLiteral("central directory: %1").arg(
+            QString::fromLatin1(why));
+        m_entries.clear();
+        return false;
+    };
+
     int p = 0;
     for (int i = 0; i < int(count); ++i) {
-        if (p + 46 > cd.size() || rd32(cd.constData() + p) != kCentralSig) break;
+        if (p + 46 > cd.size() || rd32(cd.constData() + p) != kCentralSig)
+            return malformed("truncated or bad entry signature");
         const char* h = cd.constData() + p;
         const quint16 method   = rd16(h + 10);
         const quint32 compSize = rd32(h + 20);
@@ -110,7 +131,8 @@ bool NpzReader::open(const QString& path, QString* error)
         const quint16 extraLen = rd16(h + 30);
         const quint16 cmtLen   = rd16(h + 32);
         const quint32 localOfs = rd32(h + 42);
-        if (p + 46 + nameLen > cd.size()) break;
+        if (p + 46 + nameLen > cd.size())
+            return malformed("entry name overruns the directory");
 
         Entry en;
         en.name = QString::fromUtf8(h + 46, nameLen);
@@ -206,12 +228,17 @@ NpyArray NpzReader::read(const QString& name, QString* error) const
     }
     const quint32 hlen = (major == 1) ? rd16(raw.constData() + 8)
                                       : rd32(raw.constData() + 8);
-    const int dataStart = 8 + hlenBytes + int(hlen);
-    if (raw.size() < dataStart) {
+    // 64-bit throughout: `hlen` is an untrusted quint32 and narrowing it to
+    // int made `dataStart` overflow. At hlen 0x7FFFFFFF that handed
+    // fromLatin1 a huge positive length -- an ASan BUS crash, reproduced from
+    // a crafted 100-byte .npz. Same bug class as the WAV chunk walk.
+    const qint64 dataStart = qint64(8) + hlenBytes + qint64(hlen);
+    if (dataStart < 0 || raw.size() < dataStart) {
         if (error) *error = QStringLiteral("member '%1' header overruns the payload").arg(name);
         return out;
     }
-    const QString header = QString::fromLatin1(raw.constData() + 8 + hlenBytes, int(hlen));
+    const QString header =
+        QString::fromLatin1(raw.constData() + 8 + hlenBytes, qsizetype(hlen));
 
     // dtype: only little-endian float32. Anything else is refused BY NAME
     // rather than reinterpreted — reading float64 as float32 produces
@@ -271,9 +298,14 @@ QStringList NpzReader::readStrings(const QString& name, QString* error) const
     const int hlenBytes = (major == 1) ? 2 : 4;
     const quint32 hlen = (major == 1) ? rd16(raw.constData() + 8)
                                       : rd32(raw.constData() + 8);
-    const int dataStart = 8 + hlenBytes + int(hlen);
-    if (raw.size() < dataStart) return out;
-    const QString header = QString::fromLatin1(raw.constData() + 8 + hlenBytes, int(hlen));
+    // 64-bit throughout: `hlen` is an untrusted quint32 and narrowing it to
+    // int made `dataStart` overflow. At hlen 0x7FFFFFFF that handed
+    // fromLatin1 a huge positive length -- an ASan BUS crash, reproduced from
+    // a crafted 100-byte .npz. Same bug class as the WAV chunk walk.
+    const qint64 dataStart = qint64(8) + hlenBytes + qint64(hlen);
+    if (dataStart < 0 || raw.size() < dataStart) return out;
+    const QString header =
+        QString::fromLatin1(raw.constData() + 8 + hlenBytes, qsizetype(hlen));
 
     // Fixed-width byte strings: '|S19' means 19 bytes per entry, NUL-padded.
     const QString descr = headerField(header, QStringLiteral("descr"))
@@ -288,16 +320,23 @@ QStringList NpzReader::readStrings(const QString& name, QString* error) const
     const int width = descr.mid(2).toInt(&ok);
     if (!ok || width <= 0) return out;
 
+    // The declared shape is untrusted: multiply in 64-bit, reject negatives,
+    // and cap against what the payload can actually hold. The per-iteration
+    // bounds check below already prevents an overrun, but an absurd product
+    // would otherwise spin for a long time before hitting it.
     const QString shapeStr = headerField(header, QStringLiteral("shape"));
-    int count = 0;
+    qint64 count = 0;
     for (const QString& part : shapeStr.mid(1, shapeStr.size() - 2)
                                    .split(QLatin1Char(','), Qt::SkipEmptyParts)) {
         bool k = false;
-        const int v = part.trimmed().toInt(&k);
-        if (k) count = (count == 0) ? v : count * v;
+        const qint64 v = part.trimmed().toLongLong(&k);
+        if (!k || v < 0) return out;
+        count = (count == 0) ? v : count * v;
+        if (count > raw.size()) return out;      // cannot fit, even at 1 byte each
     }
-    for (int i = 0; i < count; ++i) {
-        const int off = dataStart + i * width;
+    if (count > (raw.size() - dataStart) / width) return out;
+    for (qint64 i = 0; i < count; ++i) {
+        const qint64 off = dataStart + qint64(i) * width;
         if (off + width > raw.size()) break;
         QByteArray s(raw.constData() + off, width);
         const int nul = s.indexOf('\0');

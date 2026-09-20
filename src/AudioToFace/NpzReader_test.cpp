@@ -194,6 +194,68 @@ TEST(NpzReader, ReadsFixedWidthStringArrays)
     EXPECT_EQ(names[1], QStringLiteral("neutral"));
 }
 
+// The .npy header length is an untrusted quint32. Narrowing it to int made
+// the data offset overflow, and at 0x7FFFFFFF the reader handed
+// QString::fromLatin1 a huge positive length — an ASan BUS crash, reproduced
+// from a crafted ~100-byte archive. A model file is downloaded, so a corrupt
+// or hostile one must be refused, not trusted.
+TEST(NpzReader, AbsurdHeaderLengthIsRefusedNotOverflowed)
+{
+    // A version-2 npy (4-byte header length) with a hostile length field.
+    auto hostile = [](quint32 hlen) {
+        QByteArray out("\x93NUMPY", 6);
+        out.append(char(2)); out.append(char(0));     // version 2 -> 4-byte hlen
+        put32(out, hlen);
+        out.append(QByteArray(16, 'x'));
+        return out;
+    };
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    for (quint32 hlen : {0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu, 100000u}) {
+        const QString path = dir.filePath(QStringLiteral("bad%1.npz").arg(hlen));
+        ASSERT_TRUE(writeNpz(path, {{"poseNames", hostile(hlen)}}));
+
+        NpzReader r;
+        QString err;
+        if (!r.open(path, &err)) continue;      // refusing at open is fine too
+        EXPECT_TRUE(r.readStrings(QStringLiteral("poseNames"), &err).isEmpty())
+            << "hlen " << hlen;                 // must not crash
+        EXPECT_FALSE(r.read(QStringLiteral("poseNames"), &err).valid())
+            << "hlen " << hlen;
+    }
+}
+
+// open() is documented all-or-nothing. A malformed entry used to `break` out
+// of the central-directory walk, leaving the entries parsed so far in place
+// and returning true — a partially-read archive presented as a good one.
+TEST(NpzReader, AMalformedCentralDirectoryFailsTheWholeOpen)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("trunc.npz"));
+    ASSERT_TRUE(writeNpz(path, {{"a", npy("<f4", "(2,)", floats({1.0f, 2.0f}))},
+                                {"b", npy("<f4", "(2,)", floats({3.0f, 4.0f}))}}));
+
+    // Corrupt the SECOND central-directory record's signature. The first
+    // entry stays valid, which is exactly the case that used to half-open.
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadWrite));
+    QByteArray all = f.readAll();
+    const int first = all.indexOf(QByteArray("PK\x01\x02", 4));
+    ASSERT_GE(first, 0);
+    const int second = all.indexOf(QByteArray("PK\x01\x02", 4), first + 4);
+    ASSERT_GE(second, 0) << "the fixture needs two central-directory records";
+    all[second + 3] = char(0xFF);
+    f.seek(0); f.write(all); f.close();
+
+    NpzReader r;
+    QString err;
+    EXPECT_FALSE(r.open(path, &err))
+        << "a malformed entry must fail the whole open, not half of it";
+    EXPECT_FALSE(err.isEmpty());
+}
+
 TEST(NpzReader, MissingMemberAndBadFileAreReportedNotCrashed)
 {
     QTemporaryDir dir;

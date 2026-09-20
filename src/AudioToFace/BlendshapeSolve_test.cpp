@@ -226,6 +226,34 @@ TEST(BlendshapeSolve, MultipliersAndOffsetsAreAppliedAndStillClamped)
     EXPECT_FLOAT_EQ(r.weights[1], 0.0f);
 }
 
+// L1 must be applied as a PROXIMAL (soft-threshold) step, not as a
+// subgradient that vanishes at w == 0. As a subgradient the update alternated
+// forever — at 0 the penalty disappeared, the data term pushed w positive, the
+// penalty reappeared and pushed it back — so the answer depended on whether
+// maxIterations happened to be odd or even, and `converged` never became true.
+TEST(BlendshapeSolve, L1DoesNotOscillateAcrossZero)
+{
+    std::vector<PoseDelta> poses(1, PoseDelta(6, 0.0f));
+    poses[0][0] = 1.0f;
+    std::vector<float> target(6, 0.0f);
+    target[0] = 0.01f;            // small enough that L1 should pin w to 0
+
+    float first = -1.0f;
+    for (int iterations : {199, 200, 201}) {
+        auto o = bare(1);
+        o.l1 = 0.5;
+        o.maxIterations = iterations;
+        const auto r = solveBlendshapeWeights(poses, target, {}, o);
+        EXPECT_TRUE(r.converged)
+            << "a two-cycle never settles, so it never reports converged "
+            << "(maxIterations " << iterations << ")";
+        if (first < 0.0f) first = r.weights[0];
+        EXPECT_FLOAT_EQ(r.weights[0], first)
+            << "the result must not depend on the parity of maxIterations";
+    }
+    EXPECT_FLOAT_EQ(first, 0.0f) << "L1 should pin a sub-threshold weight to 0";
+}
+
 // A built basis owns its poses, so a COPY (or move) must keep working after
 // the original is gone. This used to hold a pointer at its own member vector,
 // which a copy left aimed into the source object — fine until the source died.
