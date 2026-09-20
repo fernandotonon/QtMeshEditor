@@ -16,6 +16,7 @@
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
 #include "Mocap/MocapCLI.h"
+#include "AudioToFace/LipsyncCLI.h"
 #ifdef ENABLE_MOCAP
 #include "Mocap/MocapCameraHints.h"
 #endif
@@ -1683,6 +1684,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "hdri") rc = cmdHdri(argc, argv);
     else if (cmd == "light") rc = SceneLightsCLI::run(argc, argv);
     else if (cmd == "mocap") rc = MocapCLI::run(argc, argv);
+    else if (cmd == "lipsync") rc = AudioToFace::LipsyncCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
