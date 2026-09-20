@@ -74,8 +74,22 @@ int run(int argc, char* argv[])
 
     for (int i = 2; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
+        // A flag's operand must exist and must not itself be a flag.
+        // Without the second check, `--mesh --json` silently consumed the
+        // `--json` and then reported "mesh not found: --json", which sends
+        // the user looking for a missing file instead of a typo. `-` alone
+        // and negative numbers stay valid operands.
+        bool badOperand = false;
         auto next = [&]() -> QString {
-            return (i + 1 < argc) ? QString::fromLocal8Bit(argv[++i]) : QString();
+            if (i + 1 >= argc) { badOperand = true; return {}; }
+            const QString v = QString::fromLocal8Bit(argv[i + 1]);
+            if (v.size() > 1 && v.startsWith(QLatin1Char('-'))
+                && !v.at(1).isDigit() && v.at(1) != QLatin1Char('.')) {
+                badOperand = true;
+                return {};
+            }
+            ++i;
+            return v;
         };
         if (a == QStringLiteral("--mesh")) meshPath = next();
         else if (a == QStringLiteral("-o") || a == QStringLiteral("--output")) outPath = next();
@@ -113,6 +127,11 @@ int run(int argc, char* argv[])
         else if (!a.startsWith(QLatin1Char('-')) && audioPath.isEmpty()) audioPath = a;
         else {
             CLIPipeline::writeCliError(QStringLiteral("Error: unknown option %1\n").arg(a));
+            return 2;
+        }
+        if (badOperand) {
+            CLIPipeline::writeCliError(
+                QStringLiteral("Error: %1 needs a value.\n").arg(a));
             return 2;
         }
     }
