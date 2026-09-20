@@ -121,6 +121,15 @@ QString A2FPredictor::modelDirectory()
     return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("a2f"));
 }
 
+bool A2FPredictor::present()
+{
+    const QDir dir(modelDirectory());
+    for (const auto& f : kFiles)
+        if (!QFileInfo::exists(dir.filePath(QString::fromLatin1(f.name))))
+            return false;
+    return true;
+}
+
 QString A2FPredictor::ensureModelBlocking(QString* error)
 {
     const QString dir = modelDirectory();
@@ -372,8 +381,17 @@ bool A2FPredictor::load(QString* error)
         Ort::SessionOptions so;
         so.SetIntraOpNumThreads(std::max(1u, std::thread::hardware_concurrency() / 2));
         so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // ORT takes ORTCHAR_T, which is wchar_t on Windows -- a narrow path
+        // does not even compile there, and a UTF-8 one would mangle a
+        // non-ASCII profile directory. Same split as FaceLandmarkDetector.
+        const QString modelPath = path("network.onnx");
+#ifdef _WIN32
+        const std::wstring mp = modelPath.toStdWString();
+#else
+        const std::string mp = modelPath.toStdString();
+#endif
         m_impl->session = std::make_unique<Ort::Session>(
-            *m_impl->env, path("network.onnx").toUtf8().constData(), so);
+            *m_impl->env, mp.c_str(), so);
 
         Ort::AllocatorWithDefaultOptions al;
         for (size_t i = 0; i < m_impl->session->GetInputCount(); ++i) {
@@ -446,17 +464,30 @@ PredictResult A2FPredictor::predict(const std::vector<float>& samples,
     r.frames.reserve(centres.size());
 
     for (size_t fi = 0; fi < centres.size(); ++fi) {
-        if (options.progress && !options.progress(int(fi), int(centres.size()))) break;
+        if (options.progress && !options.progress(int(fi), int(centres.size()))) {
+            r.cancelled = true;
+            break;
+        }
 
         std::vector<float> window = windowAt(audio, centres[fi]);
         std::vector<int64_t> aShape{1, 1, int64_t(kWindowSamples)};
         std::vector<int64_t> eShape{1, 1, int64_t(emotion.size())};
 
+        // Bind BY NAME, not by push order. This model happens to declare
+        // `input` then `emotion` (verified against the shipped graph), so a
+        // positional bind works today -- but if a future revision swaps them,
+        // audio would be fed into the emotion slot and the only symptom is a
+        // face that moves wrongly. Order the tensors to match inNames.
         std::vector<Ort::Value> ins;
-        ins.push_back(Ort::Value::CreateTensor<float>(mem, window.data(), window.size(),
-                                                      aShape.data(), aShape.size()));
-        ins.push_back(Ort::Value::CreateTensor<float>(mem, emotion.data(), emotion.size(),
-                                                      eShape.data(), eShape.size()));
+        ins.reserve(inNames.size());
+        for (const char* n : inNames) {
+            if (std::string(n) == "emotion")
+                ins.push_back(Ort::Value::CreateTensor<float>(
+                    mem, emotion.data(), emotion.size(), eShape.data(), eShape.size()));
+            else
+                ins.push_back(Ort::Value::CreateTensor<float>(
+                    mem, window.data(), window.size(), aShape.data(), aShape.size()));
+        }
         std::vector<float> coeffs;
         try {
             auto out = m_impl->session->Run(Ort::RunOptions{nullptr}, inNames.data(),

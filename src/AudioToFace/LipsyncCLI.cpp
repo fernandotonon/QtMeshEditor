@@ -11,15 +11,18 @@
 
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QHash>
 #include <QString>
 #include <QStringList>
 
 #include <OgreEntity.h>
+#include <OgreMesh.h>
 #include <OgreSceneNode.h>
 
 namespace AudioToFace {
@@ -190,6 +193,49 @@ int run(int argc, char* argv[])
             return true;
         };
     }
+    // `--map` overrides, in the same JSON shape the mocap CLI accepts:
+    //   { "map": { "jawOpen": "JawDrop" }, "ignore": [ "tongueOut" ] }
+    // A bad path or an override naming a target the mesh does not have is a
+    // hard error: the user asked for a specific binding, and quietly falling
+    // back to name matching would look like the file was honoured.
+    QHash<QString, QString> overrideMap;
+    QSet<QString> ignoreSet;
+    if (!mapPath.isEmpty()) {
+        QFile mf(mapPath);
+        if (!mf.open(QIODevice::ReadOnly)) {
+            CLIPipeline::writeCliError(
+                QStringLiteral("Error: cannot open --map file: %1\n").arg(mapPath));
+            return 1;
+        }
+        QJsonParseError perr{};
+        const QJsonDocument doc = QJsonDocument::fromJson(mf.readAll(), &perr);
+        if (doc.isNull() || !doc.isObject()) {
+            CLIPipeline::writeCliError(
+                QStringLiteral("Error: --map parse error in %1: %2\n")
+                    .arg(mapPath, perr.errorString()));
+            return 1;
+        }
+        const QJsonObject root = doc.object();
+        const QJsonObject m = root.value(QLatin1String("map")).toObject();
+        for (auto it = m.begin(); it != m.end(); ++it)
+            overrideMap.insert(it.key(), it.value().toString());
+        for (const auto& v : root.value(QLatin1String("ignore")).toArray())
+            ignoreSet.insert(v.toString());
+
+        // Validate the bindings NOW, before a minute of inference: an
+        // override naming a target the mesh lacks is the likely mistake, and
+        // reporting it after the solve wastes the user's time.
+        for (auto it = overrideMap.constBegin(); it != overrideMap.constEnd(); ++it) {
+            if (!targets.contains(it.value())) {
+                CLIPipeline::writeCliError(
+                    QStringLiteral("Error: --map binds %1 to '%2', which is not a "
+                                   "morph target on this mesh.\n")
+                        .arg(it.key(), it.value()));
+                return 1;
+            }
+        }
+    }
+
     const PredictResult pred =
         predictor.predict(wavData.samples, wavData.sampleRate, wavData.channels, popts);
     if (!json) CLIPipeline::writeCliError(QStringLiteral("\r                         \r"));
@@ -216,11 +262,24 @@ int run(int argc, char* argv[])
     };
     for (const QString& t : targets) byNormalised.insert(canonical(t), t);
 
+
     const QStringList poses = predictor.poseNames();
-    QStringList matched, unmatched;
+    QStringList matched, unmatched, ignored;
     std::vector<QString> poseTarget(size_t(poses.size()));
     for (int i = 0; i < poses.size(); ++i) {
-        const QString hit = byNormalised.value(canonical(poses[i]));
+        if (ignoreSet.contains(poses[i])) { ignored << poses[i]; continue; }
+        QString hit;
+        if (overrideMap.contains(poses[i])) {
+            hit = overrideMap.value(poses[i]);
+            if (!targets.contains(hit)) {
+                CLIPipeline::writeCliError(
+                    QStringLiteral("Error: --map binds %1 to '%2', which is not a "
+                                   "morph target on this mesh.\n").arg(poses[i], hit));
+                return 1;
+            }
+        } else {
+            hit = byNormalised.value(canonical(poses[i]));
+        }
         poseTarget[size_t(i)] = hit;
         if (hit.isEmpty()) unmatched << poses[i]; else matched << poses[i];
     }
@@ -233,29 +292,61 @@ int run(int argc, char* argv[])
         return 1;
     }
 
-    // Suppress keys that do not change: a 2-second take at 30 fps across 52
-    // poses is 3120 potential keys, most of them identical to the last.
+    // Choose key TIMES first, then write every matched pose at each one.
+    //
+    // Doing this per channel -- skipping a pose at frames where it did not
+    // change -- looks like a harmless saving and is not. ARKit targets on one
+    // submesh share a single VAT_POSE track, so a keyframe created for one
+    // channel is a keyframe for ALL of them, and Ogre interpolates a pose that
+    // is missing from the next keyframe TOWARD ZERO
+    // (`VertexAnimationTrack::applyToVertexData`: "Search for entry in
+    // keyframe 2 list (if not there, will be 0)"). A steady channel therefore
+    // dips to 0 and back every time a sibling keys. Measured on a real
+    // 59-frame take before this change: 39 such dips across 14 channels, e.g.
+    // jawOpen 0.056 -> 0.000 -> 0.080 between adjacent frames.
+    //
+    // So the epsilon still decides WHEN to key -- that saving is real, and a
+    // quiet take still collapses to a handful of times -- but never WHICH
+    // poses a key carries.
     constexpr float kEpsilon = 0.01f;
     std::vector<float> lastWritten(size_t(poses.size()), -1.0f);
-    int keyframes = 0;
-    const std::string clip = clipName.toStdString();
+    std::vector<size_t> keyFrameIndices;
     for (size_t fi = 0; fi < pred.frames.size(); ++fi) {
         const auto& f = pred.frames[fi];
-        const bool isLast = (fi + 1 == pred.frames.size());
+        // First and last frame are always keyed, so the clip starts and ends
+        // at a defined pose instead of holding whatever preceded it.
+        bool key = (fi == 0) || (fi + 1 == pred.frames.size());
+        for (int i = 0; !key && i < poses.size() && i < int(f.weights.size()); ++i) {
+            if (poseTarget[size_t(i)].isEmpty()) continue;
+            if (std::abs(f.weights[size_t(i)] - lastWritten[size_t(i)]) >= kEpsilon)
+                key = true;
+        }
+        if (!key) continue;
+        keyFrameIndices.push_back(fi);
+        for (int i = 0; i < poses.size() && i < int(f.weights.size()); ++i)
+            if (!poseTarget[size_t(i)].isEmpty())
+                lastWritten[size_t(i)] = f.weights[size_t(i)];
+    }
+
+    int keyframes = 0;
+    const std::string clip = clipName.toStdString();
+
+    // Replace, don't merge. `writeWeightKeyOn` reuses an existing animation
+    // and only updates keys that land on the same time, and the clip length
+    // only ever grows -- so re-running into a name that already exists leaves
+    // stale keys from the previous take and can play motion past the end of
+    // the new one. Same rule as MocapRecorder's replaceExisting.
+    if (Ogre::MeshPtr mesh = entity->getMesh(); mesh && mesh->hasAnimation(clip))
+        mesh->removeAnimation(clip);
+
+    for (size_t fi : keyFrameIndices) {
+        const auto& f = pred.frames[fi];
         for (int i = 0; i < poses.size() && i < int(f.weights.size()); ++i) {
             if (poseTarget[size_t(i)].isEmpty()) continue;
-            const float w = f.weights[size_t(i)];
-            // Always key the first and last frame of a channel that ever
-            // moves, so the clip starts and ends at a defined pose instead of
-            // holding whatever the previous clip left behind.
-            const bool changed = std::abs(w - lastWritten[size_t(i)]) >= kEpsilon;
-            if (!changed && !isLast && lastWritten[size_t(i)] >= 0.0f) continue;
             if (MorphAnimationManager::writeWeightKeyOn(
                     entity, clip, poseTarget[size_t(i)].toStdString(),
-                    float(f.timeSec), w)) {
-                lastWritten[size_t(i)] = w;
+                    float(f.timeSec), f.weights[size_t(i)]))
                 ++keyframes;
-            }
         }
     }
     entity->refreshAvailableAnimationState();
@@ -299,6 +390,11 @@ int run(int argc, char* argv[])
         QJsonArray unmatchedArr;
         for (const QString& m : unmatched) unmatchedArr.append(m);
         o["unmatched_canonical"] = unmatchedArr;
+        if (!ignored.isEmpty()) {
+            QJsonArray ignoredArr;
+            for (const QString& m : ignored) ignoredArr.append(m);
+            o["ignored_channels"] = ignoredArr;
+        }
         if (!outPath.isEmpty()) o["output"] = QFileInfo(outPath).fileName();
         CLIPipeline::writeOutput(
             QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));

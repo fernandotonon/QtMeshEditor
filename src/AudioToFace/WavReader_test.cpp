@@ -164,6 +164,46 @@ TEST(WavReader, UnsupportedEncodingIsRefusedByName)
     EXPECT_TRUE(err.contains(QStringLiteral("mu-law"))) << err.toStdString();
 }
 
+// A chunk header may declare ANY quint32 length. A length above INT_MAX used
+// to be narrowed to a negative int, walking the cursor BACKWARDS and reading
+// before the buffer — ASan reported an out-of-bounds read (a hard BUS crash)
+// on a 60-byte file like this one. Audio paths come from the user, so a
+// malformed header must be rejected rather than trusted.
+TEST(WavReader, AbsurdChunkLengthIsRejectedNotOverflowed)
+{
+    QByteArray body("WAVE");
+    QByteArray fmt;
+    put16(fmt, 1); put16(fmt, 1); put32(fmt, 16000);
+    put32(fmt, 32000); put16(fmt, 2); put16(fmt, 16);
+    body.append("fmt "); put32(body, quint32(fmt.size())); body.append(fmt);
+
+    // The hostile chunk: a declared length past INT_MAX with 8 real bytes.
+    body.append("JUNK"); put32(body, 0x80000000u); body.append(QByteArray(8, 'x'));
+    body.append("data"); put32(body, 4); body.append(QByteArray(4, '\0'));
+
+    QByteArray out("RIFF");
+    put32(out, quint32(body.size()));
+    out.append(body);
+
+    QString err;
+    const auto w = parseWav(out, &err);   // must not crash
+    EXPECT_FALSE(w.valid());
+    EXPECT_FALSE(err.isEmpty());
+}
+
+// A zero-length chunk is legal and must not truncate the walk: the data
+// chunk after it still has to be found.
+TEST(WavReader, EmptyChunkDoesNotStopTheWalk)
+{
+    QByteArray empty("LIST");
+    put32(empty, 0);
+    QString err;
+    const auto w = parseWav(wav(1, 1, 16000, 16, pcm16({0, 32767}), empty), &err);
+    ASSERT_TRUE(w.valid()) << err.toStdString();
+    ASSERT_EQ(w.samples.size(), 2u);
+    EXPECT_NEAR(w.samples[1], 1.0f, 1e-3);
+}
+
 TEST(WavReader, MalformedInputIsReportedNotCrashed)
 {
     QString err;

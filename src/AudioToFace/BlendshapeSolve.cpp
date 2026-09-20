@@ -40,7 +40,6 @@ void PoseBasis::build(const std::vector<PoseDelta>& poses)
     m_valueCount = 0;
     m_gram.clear();
     m_owned.clear();
-    m_poses = nullptr;
     if (poses.empty()) return;
 
     // Every pose must describe the same mesh; a ragged basis means the caller
@@ -52,7 +51,6 @@ void PoseBasis::build(const std::vector<PoseDelta>& poses)
         if (p.size() != vc) return;
 
     m_owned = poses;
-    m_poses = &m_owned;
     m_poseCount = poses.size();
     m_valueCount = vc;
 
@@ -83,7 +81,7 @@ SolveResult PoseBasis::solve(const std::vector<float>& deltaVertices,
     }
 
     const size_t n = m_poseCount;
-    const auto& poses = *m_poses;
+    const auto& poses = m_owned;
 
     // Dᵀ dv — the only per-frame pass over the full vertex count.
     std::vector<double> dtv(n, 0.0);

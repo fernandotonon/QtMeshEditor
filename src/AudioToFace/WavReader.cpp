@@ -55,17 +55,23 @@ WavData parseWav(const QByteArray& bytes, QString* error)
 
     quint16 format = 0, channels = 0, bits = 0;
     quint32 rate = 0;
-    int dataOfs = -1;
+    qint64 dataOfs = -1;
     qint64 dataLen = 0;
 
     // Walk the chunk list rather than assuming fmt-then-data: real files carry
     // LIST/INFO and fact chunks between them, and a fixed 44-byte offset reads
     // metadata as audio (which is audible as a burst of noise at the start).
-    int p = 12;
+    // Offsets are computed in 64-bit and bounds-checked every step. A chunk
+    // header may declare any quint32 length, and a length above INT_MAX made
+    // `int(len)` negative, walked `p` BACKWARDS and read before the buffer --
+    // reproduced as an ASan out-of-bounds read (a hard BUS crash) from a
+    // 60-byte crafted file. Audio comes from wherever the user points us, so
+    // a malformed header has to be rejected, not trusted.
+    qint64 p = 12;
     while (p + 8 <= bytes.size()) {
         const char* id = d + p;
         const quint32 len = rd32(d + p + 4);
-        const int body = p + 8;
+        const qint64 body = p + 8;
         if (std::memcmp(id, "fmt ", 4) == 0 && body + 16 <= bytes.size()) {
             format   = rd16(d + body);
             channels = rd16(d + body + 2);
@@ -80,8 +86,9 @@ WavData parseWav(const QByteArray& bytes, QString* error)
             dataLen = qMin<qint64>(len, bytes.size() - body);
         }
         // Chunks are word-aligned: an odd length is followed by a pad byte.
-        p = body + int(len) + (len & 1);
-        if (len == 0) break;   // malformed; avoid spinning
+        const qint64 next = body + qint64(len) + qint64(len & 1);
+        if (next <= p || next > bytes.size()) break;  // malformed or truncated
+        p = next;
     }
 
     if (channels == 0 || rate == 0)

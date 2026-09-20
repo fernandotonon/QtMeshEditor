@@ -60,7 +60,12 @@ struct PredictResult {
     std::vector<FaceFrame> frames;
     QString error;                ///< non-empty = nothing usable produced
     QString modelVersion;
-    bool ok() const { return error.isEmpty() && !frames.empty(); }
+    /// The progress callback asked to stop. `frames` then holds whatever was
+    /// solved before that, which is a TRUNCATED take -- callers must not
+    /// commit it as if the run had finished. Reported separately from `error`
+    /// because a cancellation is a user decision, not a failure.
+    bool cancelled = false;
+    bool ok() const { return error.isEmpty() && !frames.empty() && !cancelled; }
 };
 
 class A2FPredictor {
@@ -78,6 +83,9 @@ public:
 
     /// Fetch the model set if absent. Blocking; returns the directory, or an
     /// empty string with `error` set. Honours `QTMESH_A2F_NO_DOWNLOAD`.
+    /// True when every model file is already on disk, so a caller can say
+    /// "Downloading…" only when it is actually about to download ~320 MB.
+    static bool present();
     static QString ensureModelBlocking(QString* error = nullptr);
 
     /// Load the session and the pose basis. Idempotent.

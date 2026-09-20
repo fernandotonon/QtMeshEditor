@@ -104,8 +104,12 @@ private:
     size_t m_poseCount = 0;
     size_t m_valueCount = 0;
     std::vector<double> m_gram;          ///< poseCount², row-major: Dᵀ D
-    const std::vector<PoseDelta>* m_poses = nullptr;
-    std::vector<PoseDelta> m_owned;      ///< copy, so callers need not outlive us
+    /// Copy, so callers need not outlive us. Held BY VALUE and used directly:
+    /// an earlier version also kept a `m_poses` pointer aimed at this vector,
+    /// which a copy or move of the basis would leave pointing into the source
+    /// object -- a dangling read once the source died. There is no second
+    /// storage mode, so the pointer bought nothing.
+    std::vector<PoseDelta> m_owned;
 };
 
 }  // namespace AudioToFace

@@ -220,6 +220,7 @@ Mocap/MocapPoseDebugOverlay.cpp
 Mocap/MocapBodyDriveDebug.cpp
 Mocap/HandCapPredictor.cpp
 commands/RecordMocapClipCommand.cpp
+commands/LipsyncClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp

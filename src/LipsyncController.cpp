@@ -8,6 +8,7 @@
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
+#include "commands/LipsyncClipCommand.h"
 
 #include <QCoreApplication>
 #include <QHash>
@@ -15,6 +16,8 @@
 #include <QUndoStack>
 
 #include <OgreEntity.h>
+#include <OgrePose.h>
+#include <OgreMesh.h>
 
 #include <atomic>
 #include <cmath>
@@ -171,8 +174,29 @@ bool LipsyncController::generateAsync(const QString& audioPath,
 
     m_impl->cancel->store(false);
     setBusy(true);
-    setStatus(QStringLiteral("Preparing…"));
     setProgress(0, 0);
+
+    // MAIN thread: make sure the models are on disk BEFORE the worker starts.
+    // ModelFetch drives the singleton ModelDownloader, its QNetworkAccessManager
+    // and its timers, all of which live on this thread — reaching them from a
+    // detached std::thread is a Qt thread-affinity violation, and on a first
+    // run it would also give the singleton worker affinity for every later
+    // GUI use. Same order FaceRigController uses, and it lets the status line
+    // say "Downloading…" only when something really is being fetched.
+    const bool needsDownload = !AudioToFace::A2FPredictor::present();
+    setStatus(needsDownload ? QStringLiteral("Downloading model (~320 MB)…")
+                            : QStringLiteral("Preparing…"));
+    if (needsDownload) QCoreApplication::processEvents();
+    QString fetchErr;
+    if (AudioToFace::A2FPredictor::ensureModelBlocking(&fetchErr).isEmpty()) {
+        setBusy(false);
+        setStatus(QString());
+        emit finished(false, fetchErr.isEmpty()
+            ? QStringLiteral("Audio2Face models are unavailable.")
+            : fetchErr);
+        return false;
+    }
+    setStatus(QStringLiteral("Preparing…"));
 
     auto emo = std::make_shared<std::vector<float>>();
     for (double v : emotion) emo->push_back(float(qBound(0.0, v, 1.0)));
@@ -186,6 +210,8 @@ bool LipsyncController::generateAsync(const QString& audioPath,
     // WORKER: model load (possibly a ~320 MB first-use download) plus one
     // inference and solve per frame. Ogre is never touched here.
     std::thread([self, wav, emo, fps, clip, entName, cancelFlag, targetsCopy]() {
+        // The files are already on disk (fetched on the main thread above),
+        // so this only parses them — no network, no Qt singletons.
         auto predictor = std::make_shared<AudioToFace::A2FPredictor>();
         QString loadErr;
         QMetaObject::invokeMethod(qApp, [self]() {
@@ -227,10 +253,14 @@ bool LipsyncController::generateAsync(const QString& audioPath,
             self->setProgress(0, 0);
             self->setStatus(QString());
 
+            // A cancelled run reports !ok() even though it may hold frames:
+            // those are a truncated take and must never be committed as if
+            // the run had finished.
             if (!result->ok()) {
-                emit self->finished(false, cancelFlag->load()
-                    ? QStringLiteral("Lipsync cancelled.")
-                    : result->error);
+                emit self->finished(false,
+                    (result->cancelled || cancelFlag->load())
+                        ? QStringLiteral("Lipsync cancelled.")
+                        : result->error);
                 return;
             }
             // Re-resolve by NAME: the selection may have changed while the
@@ -253,33 +283,81 @@ bool LipsyncController::generateAsync(const QString& audioPath,
             QHash<QString, QString> byName;
             for (const QString& t : *targetsCopy) byName.insert(canonical(t), t);
 
-            auto* undo = UndoManager::getSingleton();
-            auto* stack = undo ? undo->stack() : nullptr;
-            if (stack) stack->beginMacro(QStringLiteral("Lipsync"));
+            // Resolve each pose to the mesh's own target name once.
+            std::vector<QString> poseTarget(size_t(poses->size()));
+            int matched = 0;
+            for (int i = 0; i < poses->size(); ++i) {
+                poseTarget[size_t(i)] = byName.value(canonical(poses->at(i)));
+                if (!poseTarget[size_t(i)].isEmpty()) ++matched;
+            }
 
+            // Key TIMES are chosen first; every matched pose is then written
+            // at each one. Skipping unchanged channels per key would make a
+            // steady channel dip to zero whenever a sibling keys, because
+            // ARKit targets share one VAT_POSE track and Ogre interpolates a
+            // pose missing from the next keyframe toward 0. See the longer
+            // note in LipsyncCLI.cpp -- the two loops must stay in step.
             constexpr float kEps = 0.01f;
             std::vector<float> last(size_t(poses->size()), -1.0f);
-            int keys = 0, matched = 0;
-            const std::string clipStd = clip.toStdString();
+            std::vector<size_t> keyTimes;
             for (size_t fi = 0; fi < result->frames.size(); ++fi) {
                 const auto& f = result->frames[fi];
-                const bool isLast = (fi + 1 == result->frames.size());
-                for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i) {
-                    const QString target = byName.value(canonical(poses->at(i)));
-                    if (target.isEmpty()) continue;
-                    if (fi == 0) ++matched;
-                    const float w = f.weights[size_t(i)];
-                    const bool changed = std::abs(w - last[size_t(i)]) >= kEps;
-                    if (!changed && !isLast && last[size_t(i)] >= 0.0f) continue;
-                    if (MorphAnimationManager::writeWeightKeyOn(
-                            e, clipStd, target.toStdString(), float(f.timeSec), w)) {
-                        last[size_t(i)] = w;
-                        ++keys;
-                    }
+                bool key = (fi == 0) || (fi + 1 == result->frames.size());
+                for (int i = 0; !key && i < poses->size()
+                                && i < int(f.weights.size()); ++i) {
+                    if (poseTarget[size_t(i)].isEmpty()) continue;
+                    if (std::abs(f.weights[size_t(i)] - last[size_t(i)]) >= kEps)
+                        key = true;
                 }
+                if (!key) continue;
+                keyTimes.push_back(fi);
+                for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i)
+                    if (!poseTarget[size_t(i)].isEmpty())
+                        last[size_t(i)] = f.weights[size_t(i)];
             }
-            if (stack) stack->endMacro();
-            e->refreshAvailableAnimationState();
+
+            // Build the take as pose-index keys and commit it through ONE
+            // undoable command. A `beginMacro` around direct writeWeightKeyOn
+            // calls would NOT be undoable at all: a macro groups commands
+            // pushed while it is open, and nothing was ever pushed.
+            Ogre::MeshPtr mesh = e->getMesh();
+            if (!mesh) {
+                emit self->finished(false,
+                    QStringLiteral("The mesh is no longer in the scene."));
+                return;
+            }
+            QHash<QString, unsigned short> poseIndexByName;
+            const auto& poseList = mesh->getPoseList();
+            for (unsigned short pi = 0; pi < poseList.size(); ++pi)
+                poseIndexByName.insert(
+                    QString::fromStdString(poseList[pi]->getName()), pi);
+
+            std::vector<LipsyncClipCommand::Key> cmdKeys;
+            cmdKeys.reserve(keyTimes.size());
+            int keys = 0;
+            for (size_t fi : keyTimes) {
+                const auto& f = result->frames[fi];
+                LipsyncClipCommand::Key k;
+                k.time = float(f.timeSec);
+                for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i) {
+                    if (poseTarget[size_t(i)].isEmpty()) continue;
+                    const auto it = poseIndexByName.constFind(poseTarget[size_t(i)]);
+                    if (it == poseIndexByName.constEnd()) continue;
+                    k.poseRefs.emplace_back(
+                        *it, std::clamp(f.weights[size_t(i)], 0.0f, 1.0f));
+                }
+                if (k.poseRefs.empty()) continue;
+                keys += int(k.poseRefs.size());
+                cmdKeys.push_back(std::move(k));
+            }
+
+            if (!cmdKeys.empty()) {
+                auto* cmd = new LipsyncClipCommand(entName, clip,
+                                                   std::move(cmdKeys));
+                if (auto* undo = UndoManager::getSingleton(); undo && undo->stack())
+                    undo->stack()->push(cmd);   // push() runs redo()
+                else { cmd->redo(); delete cmd; }
+            }
 
             if (keys == 0) {
                 emit self->finished(false, QStringLiteral(

@@ -226,6 +226,31 @@ TEST(BlendshapeSolve, MultipliersAndOffsetsAreAppliedAndStillClamped)
     EXPECT_FLOAT_EQ(r.weights[1], 0.0f);
 }
 
+// A built basis owns its poses, so a COPY (or move) must keep working after
+// the original is gone. This used to hold a pointer at its own member vector,
+// which a copy left aimed into the source object — fine until the source died.
+TEST(BlendshapeSolve, ACopiedBasisOutlivesTheOriginal)
+{
+    const auto p = orthoBasis();
+    const std::vector<float> truth{0.5f, 0.0f, 0.0f};
+    const auto target = combine(p, truth);
+
+    std::vector<float> expected;
+    PoseBasis copy;
+    {
+        PoseBasis original;
+        original.build(p);
+        ASSERT_TRUE(original.valid());
+        expected = original.solve(target, {}, bare(3)).weights;
+        copy = original;                       // copy, then let `original` die
+    }
+    ASSERT_TRUE(copy.valid());
+    const auto got = copy.solve(target, {}, bare(3)).weights;
+    ASSERT_EQ(got.size(), expected.size());
+    for (size_t i = 0; i < got.size(); ++i)
+        EXPECT_FLOAT_EQ(got[i], expected[i]) << "weight " << i;
+}
+
 // A FRACTIONAL multiplier is how the pipeline corrects a counter-shape whose
 // convention differs between the solving basis and the rig being driven --
 // `mouthClose` is the real case (#1019). Two properties matter and neither is
