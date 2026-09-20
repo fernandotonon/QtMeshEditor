@@ -151,6 +151,7 @@ FaceRig/FaceRigLandmarks.cpp
 # data and always compiles; the ONNX predictor above it is guarded.
 AudioToFace/BlendshapeSolve.cpp
 AudioToFace/A2FCoefficients.cpp
+AudioToFace/AudioPreprocess.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionComposer.cpp
