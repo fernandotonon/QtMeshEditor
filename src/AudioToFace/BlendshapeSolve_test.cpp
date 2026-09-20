@@ -225,3 +225,28 @@ TEST(BlendshapeSolve, MultipliersAndOffsetsAreAppliedAndStillClamped)
     EXPECT_FLOAT_EQ(r.weights[0], 1.0f);
     EXPECT_FLOAT_EQ(r.weights[1], 0.0f);
 }
+
+// A FRACTIONAL multiplier is how the pipeline corrects a counter-shape whose
+// convention differs between the solving basis and the rig being driven --
+// `mouthClose` is the real case (#1019). Two properties matter and neither is
+// covered by the clamping test above: the weight must scale PROPORTIONALLY
+// (not merely change), and the residual must be untouched, because the trim is
+// applied after the fit and must not be mistaken for a better or worse solve.
+TEST(BlendshapeSolve, FractionalMultiplierScalesWeightWithoutChangingTheFit)
+{
+    const auto p = orthoBasis();
+    const std::vector<float> truth{0.6f, 0.0f, 0.0f};
+    const auto target = combine(p, truth);
+
+    const auto plain = solveBlendshapeWeights(p, target, {}, bare(3));
+    ASSERT_GT(plain.weights[0], 0.2f) << "the un-trimmed solve must find a real weight";
+
+    auto o = bare(3);
+    o.multipliers = {0.5f, 1.0f, 1.0f};
+    const auto trimmed = solveBlendshapeWeights(p, target, {}, o);
+
+    EXPECT_NEAR(trimmed.weights[0], plain.weights[0] * 0.5f, 1e-6)
+        << "a 0.5 multiplier must halve the emitted weight";
+    EXPECT_NEAR(trimmed.residual, plain.residual, 1e-9)
+        << "the trim is applied after the fit, so it must not move the residual";
+}

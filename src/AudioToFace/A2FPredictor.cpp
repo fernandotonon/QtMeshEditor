@@ -38,6 +38,15 @@ constexpr const char* kEnvBaseUrl = "QTMESH_A2F_MODEL_BASE_URL";
 constexpr const char* kEnvNoDownload = "QTMESH_A2F_NO_DOWNLOAD";
 constexpr const char* kBreadcrumb = "ai.assist.audio2face";
 
+/// Scales the solved `mouthClose` weight before it is emitted. NVIDIA's basis
+/// and a real ARKit rig author this shape with OPPOSITE conventions (see the
+/// long note in `load`), so the raw weight over-drives the lower lip. 0.5 was
+/// chosen by measurement, not taste: over a 58-frame take, 9 frames had
+/// `mouthClose` running at more than twice `jawOpen` -- the frames that read as
+/// unnatural -- and halving the weight is what brings the pair back into the
+/// jaw-dominant balance the shape is meant to be a correction to.
+constexpr float kMouthCloseScale = 0.5f;
+
 // The four files the pipeline needs, with their sizes for the timeout budget.
 struct ModelFile { const char* name; int timeoutMs; };
 constexpr ModelFile kFiles[] = {
@@ -326,6 +335,34 @@ bool A2FPredictor::load(QString* error)
                 for (int& s : m_impl->solve.symmetryPartner)
                     if (s > 0) --s; else if (s == 0) s = -1;
             }
+        }
+    }
+
+    // --- counter-shape correction: `mouthClose`
+    //
+    // ARKit defines `mouthClose` as a COUNTER-shape: it is only meaningful as
+    // a partial cancellation of `jawOpen`, so on a correctly authored rig it
+    // lifts the lower lip hard. NVIDIA's character does NOT follow that
+    // convention -- measured on the shipped basis, its `mouthClose` moves
+    // 16364 verts DOWN and only 97 up (cosine with `jawOpen` +0.41), whereas a
+    // real ARKit rig (the ICT template `qtmesh facerig` generates) moves 12903
+    // verts UP by as much as 3.81 (cosine -0.46).
+    //
+    // So a weight the solver picks to mean "tuck the lips a little" against
+    // NVIDIA's basis costs almost no upward motion there, but drives the lower
+    // lip to the nose on the rig it is replayed on. Scaling the weight down is
+    // the honest correction: the ICT shape follows the ARKit convention and is
+    // shared with hand-authored animation, so it must not be altered, and the
+    // solver's own fit is measured against NVIDIA's mesh where the weight is
+    // right. The multiplier table is exactly the hook for this, and NVIDIA
+    // ships a flat 1.0 for every pose (`bsSolveCancelPoses` is all -1 for this
+    // character), so nothing tuned is being overwritten.
+    {
+        const int idx = m_impl->poseNames.indexOf(QStringLiteral("mouthClose"));
+        if (idx >= 0) {
+            if (int(m_impl->solve.multipliers.size()) <= idx)
+                m_impl->solve.multipliers.resize(size_t(idx) + 1, 1.0f);
+            m_impl->solve.multipliers[size_t(idx)] *= kMouthCloseScale;
         }
     }
 
