@@ -124,6 +124,7 @@
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
 #include "FaceRigController.h"
+#include "LipsyncController.h"
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
@@ -879,6 +880,7 @@ MainWindow::~MainWindow()
         QuadRetopoController::kill();
         SkinWeightsController::kill();
         FaceRigController::kill();
+        LipsyncController::kill();
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
@@ -1120,6 +1122,11 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return FaceRigController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<LipsyncController>(
+            "PropertiesPanel", 1, 0, "LipsyncController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LipsyncController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<LightsController>(
             "PropertiesPanel", 1, 0, "LightsController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -1300,6 +1307,25 @@ void MainWindow::initToolBar()
                     });
             }
         }
+        // Lipsync (#1019): QML cannot parent a file dialog, so the controller
+        // asks and MainWindow raises it — the same split HDR uses. The
+        // non-native flag matters on macOS, where a native dialog opened from
+        // a QQuickWidget context can fail to appear at all.
+        connect(LipsyncController::instance(), &LipsyncController::browseRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this, tr("Select Speech Audio"), QString(),
+                    tr("Audio (*.wav);;All Files (*)"), nullptr,
+                    QFileDialog::DontUseNativeDialog
+                        | QFileDialog::DontUseCustomDirectoryIcons);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    path.isEmpty() ? QStringLiteral("lipsync.browseCancelled")
+                                   : QStringLiteral("lipsync.browse"));
+                if (!path.isEmpty())
+                    LipsyncController::instance()->generateAsync(path);
+            });
+        });
         connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
                 this, [this]() {
             QTimer::singleShot(0, this, [this]() {

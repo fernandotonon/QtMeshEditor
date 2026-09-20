@@ -108,6 +108,22 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseCapPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/PoseIKSolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCLI.cpp
+        # Audio2Face lipsync (#1019): same reason as the two blocks above —
+        # mainwindow references LipsyncController and CLIPipeline references
+        # LipsyncCLI, so the per-suite executables need the implementations.
+        # Safe to list unconditionally: the pure-data half (solve, PCA,
+        # npz, wav, preprocess) has no ONNX dependency at all, and the two
+        # that do -- A2FPredictor and LipsyncCLI -- self-guard on
+        # ENABLE_ONNX, so an ONNX-less lane still links.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LipsyncController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LipsyncClipCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/LipsyncCLI.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/A2FPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/A2FCoefficients.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/AudioPreprocess.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/BlendshapeSolve.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/NpzReader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/WavReader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapPoseDebugOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapBodyDriveDebug.cpp
