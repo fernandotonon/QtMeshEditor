@@ -48,13 +48,22 @@ constexpr const char* kBreadcrumb = "ai.assist.audio2face";
 constexpr float kMouthCloseScale = 0.5f;
 
 // The four files the pipeline needs, with their sizes for the timeout budget.
-struct ModelFile { const char* name; int timeoutMs; };
+// `sha256` is NVIDIA's published Git-LFS oid, verified against a real
+// download. Pinning matters here for the reason #1025 documented: a model
+// that arrives corrupted is byte-identical in SIZE and loads without
+// complaint, then produces garbage nobody traces back to the file. The two
+// JSON files are small and not LFS-tracked, so they carry no published oid
+// and stay unpinned rather than pinned to a value we made up ourselves.
+struct ModelFile { const char* name; int timeoutMs; const char* sha256; };
 constexpr ModelFile kFiles[] = {
-    {"network.onnx",         600000},   // ~76 MB
-    {"model_data.npz",      1800000},   // ~204 MB — the PCA basis
-    {"bs_skin.npz",          900000},   // ~39 MB  — the ARKit deltas
-    {"network_info.json",     60000},
-    {"bs_skin_config.json",   60000},
+    {"network.onnx",         600000,
+     "dcd16d3b1affb090d4da1ba88791faa6bcd755f97c853b3b667abad9be15cb4b"},   // ~76 MB
+    {"model_data.npz",      1800000,
+     "03790f24942ec26796ce101c2e238eb7ff5c1bb94a6c14a840ffcd530d3a301e"},   // ~204 MB — the PCA basis
+    {"bs_skin.npz",          900000,
+     "95fbe12499271a9c1ca0d718262fad76d6218f026a450d07006c6b70bc001cc5"},   // ~39 MB  — the ARKit deltas
+    {"network_info.json",     60000, nullptr},
+    {"bs_skin_config.json",   60000, nullptr},
 };
 
 // Required by the NVIDIA Open Model License when the weights are
@@ -136,12 +145,27 @@ QString A2FPredictor::ensureModelBlocking(QString* error)
     QDir().mkpath(dir);
 
     QStringList missing;
-    for (const auto& f : kFiles)
+    bool anyPinned = false;
+    for (const auto& f : kFiles) {
         if (!QFileInfo::exists(QDir(dir).filePath(QString::fromLatin1(f.name))))
             missing << QString::fromLatin1(f.name);
-    if (missing.isEmpty()) return dir;
+        else if (f.sha256)
+            anyPinned = true;
+    }
+    // Returning early on mere EXISTENCE would skip ModelFetch entirely, and
+    // with it the digest check on files already on disk -- which is the case
+    // #1025 was actually about: a corrupted model is byte-identical in size,
+    // loads without complaint, and produces garbage. So when anything is
+    // pinned we still go through ModelFetch, which hashes an existing file
+    // (cached per path+size+mtime, so the 204 MB basis is hashed once, not
+    // once per run) and re-fetches only on a mismatch.
+    if (missing.isEmpty() && !anyPinned) return dir;
 
-    if (!qEnvironmentVariableIsEmpty(kEnvNoDownload)) {
+    // The offline guard only bites when something is genuinely MISSING. With
+    // every file present it must stay out of the way -- we are here only to
+    // re-verify digests, and ModelFetch short-circuits a file that matches
+    // without touching the network.
+    if (!missing.isEmpty() && !qEnvironmentVariableIsEmpty(kEnvNoDownload)) {
         if (error)
             *error = QStringLiteral("Audio2Face models are missing and %1 is set")
                          .arg(QString::fromLatin1(kEnvNoDownload));
@@ -159,13 +183,23 @@ QString A2FPredictor::ensureModelBlocking(QString* error)
     for (const auto& f : kFiles) {
         const QString name = QString::fromLatin1(f.name);
         const QString dest = QDir(dir).filePath(name);
-        if (QFileInfo::exists(dest)) continue;
+        // Skip an existing file ONLY when there is no digest to check it
+        // against. With a pin, ModelFetch must see it: that is what detects a
+        // file that downloaded corrupt (identical size, loads fine, produces
+        // garbage) and re-fetches it. A matching file costs one cached hash.
+        if (QFileInfo::exists(dest) && !f.sha256) continue;
 
         ModelFetch::Request req;
         req.url = base + name;
         req.destination = dest;
         req.label = QStringLiteral("Audio2Face %1").arg(name);
         req.timeoutMs = f.timeoutMs;
+        // Only when fetching from NVIDIA's own repo: a mirror override may
+        // legitimately serve a different export, and pinning the stock digest
+        // against it would refuse a file the user deliberately pointed us at.
+        // Same rule UniRig follows.
+        if (f.sha256 && base == QString::fromLatin1(kDefaultBaseUrl))
+            req.expectedSha256 = QString::fromLatin1(f.sha256);
         const ModelFetch::Outcome out = ModelFetch::ensureBlocking(req);
         if (!out.ok) {
             // Carry the downloader's own words: "refusing http://" and
