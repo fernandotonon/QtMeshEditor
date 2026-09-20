@@ -154,6 +154,7 @@ AudioToFace/A2FCoefficients.cpp
 AudioToFace/AudioPreprocess.cpp
 AudioToFace/NpzReader.cpp
 AudioToFace/A2FPredictor.cpp
+AudioToFace/WavReader.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionComposer.cpp
