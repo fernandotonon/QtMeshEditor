@@ -147,6 +147,9 @@ FaceRig/FaceRigger.cpp
 FaceRig/FaceRigAttach.cpp
 FaceRig/FaceLandmarkDetector.cpp
 FaceRig/FaceRigLandmarks.cpp
+# Audio2Face (#1019): audio -> ARKit blendshape weights. The solve is pure
+# data and always compiles; the ONNX predictor above it is guarded.
+AudioToFace/BlendshapeSolve.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionComposer.cpp
