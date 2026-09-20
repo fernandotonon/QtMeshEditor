@@ -152,6 +152,7 @@ FaceRig/FaceRigLandmarks.cpp
 AudioToFace/BlendshapeSolve.cpp
 AudioToFace/A2FCoefficients.cpp
 AudioToFace/AudioPreprocess.cpp
+AudioToFace/NpzReader.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 MotionComposer.cpp
