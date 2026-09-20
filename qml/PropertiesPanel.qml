@@ -12166,6 +12166,121 @@ Rectangle {
                     }
                 }
 
+                // ── Lipsync from audio (Audio2Face, #1019) ──────────────────
+                // Speech in, ARKit blendshape animation out. Needs the ARKit
+                // targets above, so it sits directly beneath them: rig the
+                // face, then drive it. Heavy — worker thread via
+                // LipsyncController, with progress and cancel.
+                Rectangle {
+                    id: lipsyncBtn
+                    width: parent.width
+                    height: 24
+                    radius: 3
+                    visible: LipsyncController.available
+                    property bool canRun: LipsyncController.hasRiggableSelection
+                                          && !LipsyncController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    color: lipsyncMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                           : PropertiesPanelController.highlightColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: LipsyncController.busy
+                              ? (LipsyncController.status !== ""
+                                 ? LipsyncController.status : "Working…")
+                              : "🎙 Lipsync from Audio (AI)…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: lipsyncMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: lipsyncBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: LipsyncController.browseForAudio()
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: LipsyncController.hasRiggableSelection
+                            ? "Pick a WAV and generate ARKit blendshape animation "
+                              + "from the speech in it. Writes a morph-weight clip "
+                              + "you can play on the timeline."
+                            : "Select a mesh that has ARKit morph targets first "
+                              + "(use Add ARKit Blendshapes above)."
+                    }
+                }
+
+                // Progress + cancel while a take is solving. The first run also
+                // downloads ~320 MB of model data, which is why the status line
+                // distinguishes loading from solving.
+                RowLayout {
+                    width: parent.width
+                    visible: LipsyncController.busy
+                    spacing: 4
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 4
+                        radius: 2
+                        color: PropertiesPanelController.controlBgColor
+                        Rectangle {
+                            height: parent.height
+                            radius: 2
+                            color: PropertiesPanelController.highlightColor
+                            width: LipsyncController.progressTotal > 0
+                                   ? parent.width * (LipsyncController.progress
+                                                     / LipsyncController.progressTotal)
+                                   : 0
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 46
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: lipsyncCancelMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Cancel"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: lipsyncCancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LipsyncController.cancel()
+                        }
+                    }
+                }
+
+                // Result of the last take. Kept in the panel rather than a
+                // dialog so it does not interrupt, and so the channel count is
+                // still readable while checking the animation.
+                Text {
+                    id: lipsyncResult
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    visible: text !== "" && !LipsyncController.busy
+                    font.pixelSize: 9
+                    property bool wasOk: true
+                    color: wasOk
+                           ? Qt.rgba(PropertiesPanelController.textColor.r,
+                                     PropertiesPanelController.textColor.g,
+                                     PropertiesPanelController.textColor.b, 0.75)
+                           : "#e06c6c"
+                    Connections {
+                        target: LipsyncController
+                        function onFinished(ok, message) {
+                            lipsyncResult.wasOk = ok;
+                            lipsyncResult.text = message;
+                        }
+                    }
+                }
+
                 // Experimental-feature disclaimer for ARKit blendshape generation.
                 Text {
                     width: parent.width
