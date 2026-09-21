@@ -31,7 +31,7 @@ const std::vector<CapDef> kCapDefs = {
     {"morph_pose",     "Morph targets & poses", "morph target weights and keyframes, pose library"},
     {"node_animation", "Node animation",        "transform (TRS) animation clips on scene nodes"},
     {"paint",          "Texture painting",      "paint layers/channels/brushes, stencil projection, bake painted PBR sets"},
-    {"mocap",          "Performance capture",   "face/body capture from video or webcam"},
+    {"mocap",          "Performance capture",   "face/body capture from video or webcam, lipsync from speech audio"},
     {"cloud",          "QtMesh Cloud",          "cloud login/status/limits, project list/upload/delete"},
     {"ps1",            "PS1 ripper",            "PlayStation runtime model extraction"},
     {"other",          "Other tools",           "tools without a category"},
@@ -82,7 +82,8 @@ QHash<QString, QString> buildTaxonomy()
                            "set_node_animation_playing", "delete_node_animation_clip", "move_node_keyframe",
                            "delete_node_keyframe", "get_node_animation"});
     add("mocap", {"capture_face_from_video", "capture_body_from_video", "list_capture_devices",
-                  "start_live_capture", "set_capture_channels", "stop_live_capture"});
+                  "start_live_capture", "set_capture_channels", "stop_live_capture",
+                  "generate_lipsync"});
     return t;
 }
 

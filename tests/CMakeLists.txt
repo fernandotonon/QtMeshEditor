@@ -117,6 +117,7 @@ if(BUILD_TESTS)
         # ENABLE_ONNX, so an ONNX-less lane still links.
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LipsyncController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LipsyncClipCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/LipsyncApply.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/LipsyncCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/A2FPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AudioToFace/A2FCoefficients.cpp

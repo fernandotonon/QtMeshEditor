@@ -28,6 +28,57 @@ namespace {
 // at import time. Same shape the manager is contracted against, so
 // the test exercises the public API end-to-end without dragging in
 // Assimp.
+/// A mesh with TWO submeshes, each carrying a pose called "JawOpen" — the
+/// shape a real character has when its face is split into skin / teeth /
+/// eyelashes, since AddMorphTargetCommand creates one pose per slice with the
+/// same name.
+Ogre::MeshPtr createTwoSubmeshMorphMesh(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    for (int s = 0; s < 2; ++s) {
+        auto* sub = mesh->createSubMesh();
+        sub->useSharedVertices = false;
+        sub->vertexData = new Ogre::VertexData();
+        auto* decl = sub->vertexData->vertexDeclaration;
+        size_t off = 0;
+        decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+        off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+        decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+
+        auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        float verts[] = {
+            0,0,0,  0,0,1,
+            1,0,0,  0,0,1,
+            0,1,0,  0,0,1,
+        };
+        vbuf->writeData(0, sizeof(verts), verts);
+        sub->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+        sub->vertexData->vertexCount = 3;
+
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+            Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        uint16_t idx[] = {0, 1, 2};
+        ibuf->writeData(0, sizeof(idx), idx);
+        sub->indexData->indexBuffer = ibuf;
+        sub->indexData->indexCount = 3;
+    }
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,2,2,2));
+    mesh->_setBoundingSphereRadius(2.0f);
+    mesh->load();
+
+    // The same NAME on both submesh handles (1 and 2).
+    for (unsigned short handle : {1, 2}) {
+        Ogre::Pose* p = mesh->createPose(handle, "JawOpen");
+        p->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    }
+    return mesh;
+}
+
 Ogre::MeshPtr createMorphTestMesh(const std::string& name)
 {
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
@@ -137,6 +188,37 @@ protected:
         }
     }
 };
+
+// A morph target on a MULTI-SUBMESH character exists once per submesh, each
+// on its own VAT_POSE track. writeWeightKeyOn used to resolve only the FIRST
+// same-named pose, so a face split into skin/teeth/eyelashes animated one part
+// and left the rest frozen — the jaw opens, the teeth stay put. Invisible on a
+// single-submesh mesh, which is why it shipped (review finding on #1068).
+TEST_F(MorphAnimationManagerSceneTest, WritesKeysForEverySameNamedSubmeshPose) {
+    auto mesh = createTwoSubmeshMorphMesh("Morph_TwoSub");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_TwoSubEnt", mesh->getName());
+    scene->getRootSceneNode()->createChildSceneNode()->attachObject(entity);
+
+    ASSERT_TRUE(MorphAnimationManager::writeWeightKeyOn(
+        entity, "TwoSubClip", "JawOpen", 0.5f, 0.75f));
+
+    ASSERT_TRUE(mesh->hasAnimation("TwoSubClip"));
+    Ogre::Animation* anim = mesh->getAnimation("TwoSubClip");
+
+    // One track per submesh handle, each holding the weight.
+    int tracksWithTheWeight = 0;
+    for (const auto& [handle, track] : anim->_getVertexTrackList()) {
+        (void)handle;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            auto* kf = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+            for (const auto& ref : kf->getPoseReferences())
+                if (std::abs(ref.influence - 0.75f) < 1e-4f) ++tracksWithTheWeight;
+        }
+    }
+    EXPECT_EQ(tracksWithTheWeight, 2)
+        << "both submeshes' same-named poses must be keyed, not just the first";
+}
 
 TEST_F(MorphAnimationManagerSceneTest, ListsMorphTargetsInPoseOrder) {
     auto mesh = createMorphTestMesh("Morph_ListOrder");
