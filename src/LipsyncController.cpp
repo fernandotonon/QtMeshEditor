@@ -1,6 +1,7 @@
 #include "LipsyncController.h"
 
 #include "AudioToFace/A2FPredictor.h"
+#include "AudioToFace/LipsyncApply.h"
 #include "AudioToFace/WavReader.h"
 
 #include "Manager.h"
@@ -26,11 +27,6 @@
 
 namespace {
 LipsyncController* g_instance = nullptr;
-
-const char* const kEmotionNames[] = {
-    "amazement", "anger", "cheekiness", "disgust", "fear",
-    "grief", "joy", "outofbreath", "pain", "sadness",
-};
 
 /// Selected entity, or null. Mirrors how the other controllers resolve it.
 Ogre::Entity* selectedEntity()
@@ -91,7 +87,7 @@ bool LipsyncController::available() const
 QStringList LipsyncController::emotionNames() const
 {
     QStringList out;
-    for (const char* n : kEmotionNames) out << QString::fromLatin1(n);
+    for (const char* n : AudioToFace::kEmotionNames) out << QString::fromLatin1(n);
     return out;
 }
 
@@ -274,47 +270,21 @@ bool LipsyncController::generateAsync(const QString& audioPath,
                 return;
             }
 
-            // Match pose names to the mesh's own spelling, case-insensitively
-            // and ignoring a leading underscore.
-            auto canonical = [](QString n) {
-                while (n.startsWith(QLatin1Char('_'))) n.remove(0, 1);
-                return n.toLower();
-            };
-            QHash<QString, QString> byName;
-            for (const QString& t : *targetsCopy) byName.insert(canonical(t), t);
-
-            // Resolve each pose to the mesh's own target name once.
-            std::vector<QString> poseTarget(size_t(poses->size()));
-            int matched = 0;
-            for (int i = 0; i < poses->size(); ++i) {
-                poseTarget[size_t(i)] = byName.value(canonical(poses->at(i)));
-                if (!poseTarget[size_t(i)].isEmpty()) ++matched;
+            // Name binding and key-time selection come from LipsyncApply,
+            // shared with the CLI and the MCP tool. Only the WRITE differs
+            // here: the GUI turns the take into pose-index keys for one
+            // undoable command instead of calling writeWeightKeyOn directly.
+            const AudioToFace::NameBinding binding =
+                AudioToFace::bindPoseNames(*poses, *targetsCopy);
+            if (!binding.ok()) {
+                emit self->finished(false, binding.error.isEmpty()
+                    ? QStringLiteral("No ARKit channels matched this mesh.")
+                    : binding.error);
+                return;
             }
-
-            // Key TIMES are chosen first; every matched pose is then written
-            // at each one. Skipping unchanged channels per key would make a
-            // steady channel dip to zero whenever a sibling keys, because
-            // ARKit targets share one VAT_POSE track and Ogre interpolates a
-            // pose missing from the next keyframe toward 0. See the longer
-            // note in LipsyncCLI.cpp -- the two loops must stay in step.
-            constexpr float kEps = 0.01f;
-            std::vector<float> last(size_t(poses->size()), -1.0f);
-            std::vector<size_t> keyTimes;
-            for (size_t fi = 0; fi < result->frames.size(); ++fi) {
-                const auto& f = result->frames[fi];
-                bool key = (fi == 0) || (fi + 1 == result->frames.size());
-                for (int i = 0; !key && i < poses->size()
-                                && i < int(f.weights.size()); ++i) {
-                    if (poseTarget[size_t(i)].isEmpty()) continue;
-                    if (std::abs(f.weights[size_t(i)] - last[size_t(i)]) >= kEps)
-                        key = true;
-                }
-                if (!key) continue;
-                keyTimes.push_back(fi);
-                for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i)
-                    if (!poseTarget[size_t(i)].isEmpty())
-                        last[size_t(i)] = f.weights[size_t(i)];
-            }
+            const int matched = int(binding.matched.size());
+            const std::vector<size_t> keyTimes =
+                AudioToFace::selectKeyFrames(*result, binding);
 
             // Build the take as pose-index keys and commit it through ONE
             // undoable command. A `beginMacro` around direct writeWeightKeyOn
@@ -340,8 +310,9 @@ bool LipsyncController::generateAsync(const QString& audioPath,
                 LipsyncClipCommand::Key k;
                 k.time = float(f.timeSec);
                 for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i) {
-                    if (poseTarget[size_t(i)].isEmpty()) continue;
-                    const auto it = poseIndexByName.constFind(poseTarget[size_t(i)]);
+                    if (binding.poseTarget[size_t(i)].isEmpty()) continue;
+                    const auto it =
+                        poseIndexByName.constFind(binding.poseTarget[size_t(i)]);
                     if (it == poseIndexByName.constEnd()) continue;
                     k.poseRefs.emplace_back(
                         *it, std::clamp(f.weights[size_t(i)], 0.0f, 1.0f));

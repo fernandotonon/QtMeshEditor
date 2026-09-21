@@ -1,5 +1,7 @@
 #include "LipsyncCLI.h"
 
+#include "LipsyncApply.h"
+
 #include "A2FPredictor.h"
 #include "WavReader.h"
 
@@ -34,12 +36,6 @@ namespace {
 // the Audio2Emotion model that would predict these is licensed "use allowed
 // with Audio2Face only", which fails this project's redistribution bar, so it
 // is never downloaded and never inferred.
-const char* const kEmotionNames[] = {
-    "amazement", "anger", "cheekiness", "disgust", "fear",
-    "grief", "joy", "outofbreath", "pain", "sadness",
-};
-constexpr int kEmotionCount = 10;
-
 void usage()
 {
     CLIPipeline::writeOutput(QStringLiteral(
@@ -263,119 +259,28 @@ int run(int argc, char* argv[])
         return 1;
     }
 
-    // Write the weight keys directly through MorphAnimationManager rather
-    // than via the mocap recorder. The recorder does the same thing, but it
-    // lives behind ENABLE_MOCAP, which pulls in Qt Multimedia for a webcam
-    // this feature never touches — lipsync should not require a camera stack
-    // to animate from a file.
-    //
-    // Matching is by NAME against the mesh's own targets, case-insensitively
-    // and ignoring a leading underscore, so a rig that spells it `JawOpen` or
-    // `_jawOpen` still drives. Anything unmatched is reported rather than
-    // silently dropped: a mesh missing half the ARKit set produces a
-    // half-moving face, and the user needs to know which half.
-    QHash<QString, QString> byNormalised;   // normalised -> the mesh's spelling
-    auto canonical = [](QString n) {
-        while (n.startsWith(QLatin1Char('_'))) n.remove(0, 1);
-        return n.toLower();
-    };
-    for (const QString& t : targets) byNormalised.insert(canonical(t), t);
-
-
+    // Name matching, key-time selection and the keyframe write all live in
+    // LipsyncApply, shared with the Inspector controller and the MCP tool —
+    // the "a key carries every matched pose" and "replace, don't merge" rules
+    // are subtle enough that three copies would drift.
     const QStringList poses = predictor.poseNames();
-    QStringList matched, unmatched, ignored;
-    std::vector<QString> poseTarget(size_t(poses.size()));
-    for (int i = 0; i < poses.size(); ++i) {
-        if (ignoreSet.contains(poses[i])) { ignored << poses[i]; continue; }
-        QString hit;
-        if (overrideMap.contains(poses[i])) {
-            hit = overrideMap.value(poses[i]);
-            if (!targets.contains(hit)) {
-                CLIPipeline::writeCliError(
-                    QStringLiteral("Error: --map binds %1 to '%2', which is not a "
-                                   "morph target on this mesh.\n").arg(poses[i], hit));
-                return 1;
-            }
-        } else {
-            hit = byNormalised.value(canonical(poses[i]));
-        }
-        poseTarget[size_t(i)] = hit;
-        if (hit.isEmpty()) unmatched << poses[i]; else matched << poses[i];
-    }
-    if (matched.isEmpty()) {
-        CLIPipeline::writeCliError(QStringLiteral(
-            "Error: none of the mesh's %1 morph targets match an ARKit pose name.\n"
-            "Expected names like jawOpen, mouthPucker, mouthSmileLeft.\n"
-            "`qtmesh facerig` produces targets with the right names.\n")
-            .arg(targets.size()));
+    const NameBinding binding =
+        bindPoseNames(poses, targets, overrideMap, ignoreSet);
+    if (!binding.error.isEmpty()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: %1.\n").arg(binding.error));
         return 1;
     }
+    const QStringList matched = binding.matched;
+    const QStringList unmatched = binding.unmatched;
+    const QStringList ignored = binding.ignored;
 
-    // Choose key TIMES first, then write every matched pose at each one.
-    //
-    // Doing this per channel -- skipping a pose at frames where it did not
-    // change -- looks like a harmless saving and is not. ARKit targets on one
-    // submesh share a single VAT_POSE track, so a keyframe created for one
-    // channel is a keyframe for ALL of them, and Ogre interpolates a pose that
-    // is missing from the next keyframe TOWARD ZERO
-    // (`VertexAnimationTrack::applyToVertexData`: "Search for entry in
-    // keyframe 2 list (if not there, will be 0)"). A steady channel therefore
-    // dips to 0 and back every time a sibling keys. Measured on a real
-    // 59-frame take before this change: 39 such dips across 14 channels, e.g.
-    // jawOpen 0.056 -> 0.000 -> 0.080 between adjacent frames.
-    //
-    // So the epsilon still decides WHEN to key -- that saving is real, and a
-    // quiet take still collapses to a handful of times -- but never WHICH
-    // poses a key carries.
-    constexpr float kEpsilon = 0.01f;
-    std::vector<float> lastWritten(size_t(poses.size()), -1.0f);
-    std::vector<size_t> keyFrameIndices;
-    for (size_t fi = 0; fi < pred.frames.size(); ++fi) {
-        const auto& f = pred.frames[fi];
-        // First and last frame are always keyed, so the clip starts and ends
-        // at a defined pose instead of holding whatever preceded it.
-        bool key = (fi == 0) || (fi + 1 == pred.frames.size());
-        for (int i = 0; !key && i < poses.size() && i < int(f.weights.size()); ++i) {
-            if (poseTarget[size_t(i)].isEmpty()) continue;
-            if (std::abs(f.weights[size_t(i)] - lastWritten[size_t(i)]) >= kEpsilon)
-                key = true;
-        }
-        if (!key) continue;
-        keyFrameIndices.push_back(fi);
-        for (int i = 0; i < poses.size() && i < int(f.weights.size()); ++i)
-            if (!poseTarget[size_t(i)].isEmpty())
-                lastWritten[size_t(i)] = f.weights[size_t(i)];
-    }
-
-    int keyframes = 0;
-    const std::string clip = clipName.toStdString();
-
-    // Replace, don't merge. `writeWeightKeyOn` reuses an existing animation
-    // and only updates keys that land on the same time, and the clip length
-    // only ever grows -- so re-running into a name that already exists leaves
-    // stale keys from the previous take and can play motion past the end of
-    // the new one. Same rule as MocapRecorder's replaceExisting.
-    if (Ogre::MeshPtr mesh = entity->getMesh(); mesh && mesh->hasAnimation(clip))
-        mesh->removeAnimation(clip);
-
-    for (size_t fi : keyFrameIndices) {
-        const auto& f = pred.frames[fi];
-        for (int i = 0; i < poses.size() && i < int(f.weights.size()); ++i) {
-            if (poseTarget[size_t(i)].isEmpty()) continue;
-            if (MorphAnimationManager::writeWeightKeyOn(
-                    entity, clip, poseTarget[size_t(i)].toStdString(),
-                    float(f.timeSec), f.weights[size_t(i)]))
-                ++keyframes;
-        }
-    }
-    entity->refreshAvailableAnimationState();
-
-    if (keyframes == 0) {
-        CLIPipeline::writeCliError(QStringLiteral(
-            "Error: the solve produced no motion above the %1 threshold — the "
-            "audio may be silent.\n").arg(double(kEpsilon)));
+    const ApplyResult applied =
+        applyToEntity(entity, clipName, pred, binding);
+    if (!applied.ok()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: %1.\n").arg(applied.error));
         return 1;
     }
+    const int keyframes = applied.keyframesWritten;
 
     if (!outPath.isEmpty()) {
         QDir().mkpath(QFileInfo(outPath).absolutePath());

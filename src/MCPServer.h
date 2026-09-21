@@ -237,6 +237,7 @@ private:
     /// (NRICP + deformation transfer), attach the 52 ARKit morph targets, and
     /// optionally re-export.
     QJsonObject toolAddArkitBlendshapes(const QJsonObject &args);
+    QJsonObject toolGenerateLipsync(const QJsonObject &args);
     /// Issue #403: mesh-aware (depth-conditioned) texture
     /// generation. Renders the selected entity's depth map and
     /// conditions sd.cpp on it via a ControlNet depth model, then

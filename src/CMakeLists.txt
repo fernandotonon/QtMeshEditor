@@ -155,6 +155,7 @@ AudioToFace/AudioPreprocess.cpp
 AudioToFace/NpzReader.cpp
 AudioToFace/A2FPredictor.cpp
 AudioToFace/WavReader.cpp
+AudioToFace/LipsyncApply.cpp
 AudioToFace/LipsyncCLI.cpp
 LipsyncController.cpp
 MotionInbetween.cpp

@@ -72,6 +72,9 @@
 #include "SkinningDisplay.h"
 #include "AutoRig.h"
 #include "FaceRig/FaceRigAttach.h"
+#include "AudioToFace/A2FPredictor.h"
+#include "AudioToFace/LipsyncApply.h"
+#include "AudioToFace/WavReader.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -675,6 +678,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("remove_skeleton"), &MCPServer::toolRemoveSkeleton},
         {QStringLiteral("trim_animation"), &MCPServer::toolTrimAnimation},
         {QStringLiteral("add_arkit_blendshapes"), &MCPServer::toolAddArkitBlendshapes},
+        {QStringLiteral("generate_lipsync"), &MCPServer::toolGenerateLipsync},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
@@ -839,6 +843,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("explode_mesh_parts"),
         QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
+        QStringLiteral("generate_lipsync"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
@@ -912,6 +917,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
             {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
             {QStringLiteral("add_arkit_blendshapes"), QStringLiteral("auto_rig")},
+            {QStringLiteral("generate_lipsync"), QStringLiteral("mocap")},
             {QStringLiteral("motion_in_between"), QStringLiteral("motion_inbetween")},
             {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
             {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
@@ -2521,6 +2527,178 @@ QJsonObject MCPServer::toolRemoveSkeleton(const QJsonObject &args)
         QStringLiteral("Skeleton removed from '%1' — the mesh is static again "
                        "(auto_rig can regenerate a rig).")
             .arg(QString::fromStdString(entity->getName())));
+}
+
+QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
+{
+    // #1019: speech -> ARKit blendshape weight keyframes on the selected mesh.
+    // Shares LipsyncApply with the CLI and the Inspector, so the keyframe
+    // rules (a key carries every matched pose; an existing clip is replaced,
+    // not merged) cannot drift between surfaces.
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "Lipsync needs ONNX Runtime; this build was made without it "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    if (!args.contains("audio_path") || !args["audio_path"].isString())
+        return makeErrorResult("Error: 'audio_path' (a WAV file) is required.");
+    const QString audioPath = args["audio_path"].toString();
+
+    if (args.contains("clip") && !args["clip"].isString())
+        return makeErrorResult("Error: 'clip' must be a string.");
+    const QString clipName = args.contains("clip")
+        ? args["clip"].toString() : QStringLiteral("Lipsync");
+    if (clipName.isEmpty())
+        return makeErrorResult("Error: 'clip' must not be empty.");
+
+    double fps = 30.0;
+    if (args.contains("fps")) {
+        if (!args["fps"].isDouble())
+            return makeErrorResult("Error: 'fps' must be a number.");
+        fps = args["fps"].toDouble();
+        if (!(fps > 0.0) || fps > 240.0)
+            return makeErrorResult("Error: 'fps' must be in (0, 240].");
+    }
+    if (args.contains("output_path") && !args["output_path"].isString())
+        return makeErrorResult("Error: 'output_path' must be a string.");
+    const QString outputPath = args.value("output_path").toString();
+
+    // Emotion is a USER-SUPPLIED vector by design: NVIDIA's Audio2Emotion
+    // model, which would predict it, is licensed for use only with
+    // Audio2Face and is deliberately not shipped (THIRD_PARTY_AI_MODELS.md).
+    std::vector<float> emotion(size_t(AudioToFace::kEmotionCount), 0.0f);
+    if (args.contains("emotion")) {
+        if (!args["emotion"].isObject())
+            return makeErrorResult(
+                "Error: 'emotion' must be an object like {\"joy\": 0.6}.");
+        const QJsonObject eo = args["emotion"].toObject();
+        for (auto it = eo.begin(); it != eo.end(); ++it) {
+            if (!it.value().isDouble())
+                return makeErrorResult(QStringLiteral(
+                    "Error: emotion '%1' must be a number.").arg(it.key()));
+            int idx = -1;
+            const QString want = it.key().trimmed().toLower();
+            for (int e = 0; e < AudioToFace::kEmotionCount; ++e)
+                if (want == QString::fromLatin1(AudioToFace::kEmotionNames[e])) {
+                    idx = e; break;
+                }
+            if (idx < 0) {
+                QStringList valid;
+                for (const char* n : AudioToFace::kEmotionNames)
+                    valid << QString::fromLatin1(n);
+                return makeErrorResult(
+                    QStringLiteral("Error: unknown emotion '%1'. Valid: %2")
+                        .arg(it.key(), valid.join(QStringLiteral(", "))));
+            }
+            emotion[size_t(idx)] = float(qBound(0.0, it.value().toDouble(), 1.0));
+        }
+    }
+
+    Ogre::Entity* entity = nullptr;
+    if (args.contains("mesh") && args["mesh"].isString()) {
+        const std::string want = args["mesh"].toString().toStdString();
+        for (Ogre::Entity* e : Manager::getSingleton()->getEntities())
+            if (e && e->getName() == want) { entity = e; break; }
+        if (!entity)
+            return makeErrorResult(QStringLiteral(
+                "Error: no entity named '%1' in the scene.")
+                .arg(args["mesh"].toString()));
+    } else {
+        SelectionSet* sel = SelectionSet::getSingleton();
+        const QList<Ogre::Entity*> resolved =
+            sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+        if (resolved.isEmpty() || !resolved.first())
+            return makeErrorResult(
+                "No mesh selected. Select one with select_entity, or pass 'mesh'.");
+        entity = resolved.first();
+    }
+
+    auto* mm = MorphAnimationManager::instance();
+    const QStringList targets = mm ? mm->morphTargetsFor(entity) : QStringList{};
+    if (targets.isEmpty())
+        return makeErrorResult(
+            "This mesh has no morph targets. Add ARKit blendshapes first with "
+            "add_arkit_blendshapes.");
+
+    QString err;
+    const AudioToFace::WavData wav = AudioToFace::readWav(audioPath, &err);
+    if (!wav.valid())
+        return makeErrorResult(err.isEmpty()
+            ? QStringLiteral("Error: could not read '%1'.").arg(audioPath) : err);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("generate_lipsync %1s @%2fps")
+            .arg(wav.durationSec(), 0, 'f', 1).arg(fps));
+
+    AudioToFace::A2FPredictor predictor;
+    if (!predictor.load(&err))
+        return makeErrorResult(err);
+
+    AudioToFace::PredictOptions popts;
+    popts.fps = fps;
+    popts.emotion = emotion;
+    // Report progress so a long take does not look hung; the MCP tool runs on
+    // the main thread, and toolProgress also pumps the event loop.
+    popts.progress = [this](int done, int total) {
+        emit toolProgress(QStringLiteral("generate_lipsync"),
+                          QStringLiteral("solving"), done, total);
+        return true;
+    };
+
+    const AudioToFace::PredictResult pred = predictor.predict(
+        wav.samples, wav.sampleRate, wav.channels, popts);
+    if (!pred.ok())
+        return makeErrorResult(pred.error.isEmpty()
+            ? QStringLiteral("Lipsync failed.") : pred.error);
+
+    const AudioToFace::NameBinding binding =
+        AudioToFace::bindPoseNames(predictor.poseNames(), targets);
+    if (!binding.error.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: %1.").arg(binding.error));
+
+    const AudioToFace::ApplyResult applied =
+        AudioToFace::applyToEntity(entity, clipName, pred, binding);
+    if (!applied.ok())
+        return makeErrorResult(QStringLiteral("Error: %1.").arg(applied.error));
+
+    if (!outputPath.isEmpty()) {
+        Ogre::SceneNode* node = entity->getParentSceneNode();
+        if (!node)
+            return makeErrorResult(
+                "Error: keyframes written, but the entity has no scene node "
+                "to export from.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("generate_lipsync export requested"));
+        const int rc = MeshImporterExporter::exporter(
+            node, outputPath, CLIPipeline::formatForExtension(outputPath));
+        if (rc != 0)
+            return makeErrorResult(QStringLiteral(
+                "Error: keyframes written but export to '%1' failed (code %2).")
+                .arg(outputPath).arg(rc));
+    }
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Lipsync '%1': %2 frames, %3 keyframes on %4 channels.")
+        .arg(clipName).arg(pred.frames.size())
+        .arg(applied.keyframesWritten).arg(binding.matched.size()));
+    QJsonObject j;
+    j["clip"] = clipName;
+    j["frames"] = int(pred.frames.size());
+    j["keyframes"] = applied.keyframesWritten;
+    j["fps"] = fps;
+    j["duration_sec"] = wav.durationSec();
+    j["model"] = pred.modelVersion;
+    QJsonArray matchedArr;
+    for (const QString& m : binding.matched) matchedArr.append(m);
+    j["matched_channels"] = matchedArr;
+    QJsonArray unmatchedArr;
+    for (const QString& m : binding.unmatched) unmatchedArr.append(m);
+    j["unmatched_canonical"] = unmatchedArr;
+    if (!outputPath.isEmpty()) j["output"] = outputPath;
+    result["data"] = j;
+    return result;
+#endif
 }
 
 QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
@@ -11464,6 +11642,54 @@ QJsonArray MCPServer::buildToolsList()
             props
         );
     }
+
+    // generate_lipsync (#1019) — only advertised on an ONNX build, matching
+    // generate_mesh_texture below: the handler hard-fails without ONNX, so
+    // publishing it anyway would advertise a capability the server cannot
+    // satisfy.
+#ifdef ENABLE_ONNX
+    {
+        QJsonObject props;
+        props["audio_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "REQUIRED. Path to a WAV file of speech. PCM or float; any sample "
+             "rate and channel count (resampled to 16 kHz mono internally). "
+             "A-law/mu-law are refused by name."}};
+        props["mesh"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Entity name to drive. Omit to use the current selection. The mesh "
+             "must already carry ARKit-named morph targets — use "
+             "add_arkit_blendshapes first if it does not."}};
+        props["clip"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Name of the morph-weight animation to write (default 'Lipsync'). "
+             "An existing clip of this name is REPLACED, not merged into."}};
+        props["fps"] = QJsonObject{{"type", "number"},
+            {"description", "Keyframe rate, in (0, 240]. Default 30."}};
+        props["emotion"] = QJsonObject{{"type", "object"},
+            {"description",
+             "Optional emotion weights 0..1, e.g. {\"joy\": 0.6}. Valid names: "
+             "amazement, anger, cheekiness, disgust, fear, grief, joy, "
+             "outofbreath, pain, sadness. This is user-supplied on purpose: the "
+             "model that would PREDICT emotion is separately licensed and is "
+             "not shipped."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Optional path to re-export the mesh with the animation. When "
+             "omitted, the clip is added to the in-session scene only."}};
+        appendTool(
+            "generate_lipsync",
+            "Generate ARKit blendshape animation from SPEECH audio (#1019): "
+            "NVIDIA Audio2Face-3D runs locally via ONNX, and the predicted "
+            "motion is solved onto the ARKit-52 basis, so the result is weights "
+            "— which carry no topology and drive any mesh with ARKit morph "
+            "targets, including the ones add_arkit_blendshapes generates. "
+            "Writes a morph-weight clip playable on the timeline. Models "
+            "(~320 MB) download from NVIDIA on first use.",
+            props
+        );
+    }
+#endif
 
     // generate_mesh_texture — only advertised when Stable Diffusion is
     // compiled in; the handler hard-fails otherwise, so publishing it on
