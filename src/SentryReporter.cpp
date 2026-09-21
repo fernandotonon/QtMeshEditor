@@ -383,8 +383,12 @@ void SentryReporter::captureFileWorkflowEvent(const FileWorkflowTelemetry &telem
         props["animation_count"] = telemetry.animationCount;
     if (telemetry.approximateBytes >= 0)
         props["size_bucket"] = sizeBucket(telemetry.approximateBytes);
+    // `cancelled` carries success=false so the funnel does not count it as a
+    // completion, but it is a normal user action, not an error-level event.
+    const bool isError = !telemetry.success
+        && telemetry.phase != QStringLiteral("cancelled");
     captureTelemetryEvent(QStringLiteral("file.%1.%2").arg(telemetry.operation, telemetry.phase), props,
-                          telemetry.success ? QStringLiteral("info") : QStringLiteral("error"));
+                          isError ? QStringLiteral("error") : QStringLiteral("info"));
 }
 
 QString SentryReporter::sanitizedValue(const QString &value)
@@ -438,6 +442,10 @@ bool SentryReporter::isKnownTelemetryEvent(const QString &eventName)
         QStringLiteral("file.import.started"), QStringLiteral("file.import.completed"),
         QStringLiteral("file.import.failed"), QStringLiteral("file.export.started"),
         QStringLiteral("file.export.completed"), QStringLiteral("file.export.failed"),
+        // A user cancelling the save dialog is a real outcome, distinct from
+        // both success and failure — without it the export funnel counts
+        // cancellations as completions (#1058).
+        QStringLiteral("file.export.cancelled"),
         QStringLiteral("cli.command.started"), QStringLiteral("cli.command.completed"),
         QStringLiteral("cli.command.failed"), QStringLiteral("mcp.tool.started"),
         QStringLiteral("mcp.tool.completed"), QStringLiteral("mcp.tool.failed"),

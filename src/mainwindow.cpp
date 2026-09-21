@@ -5958,10 +5958,20 @@ void MainWindow::on_actionExport_Selected_triggered()
     }
     AnimationControlController::instance()->resumePollTimer();
     if (wasRendering) m_pTimer->start();
-    SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
-        QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), true, QString(),
-        static_cast<int>(Manager::getSingleton()->getEntities().size())});
-    if (!lastExportedPath.isEmpty()) {
+    // A cancelled save dialog / declined flatten / empty selection leaves
+    // lastExportedPath empty — nothing was written, so this is not a
+    // completed export. Reporting success=true here would inflate the export
+    // funnel with sessions that produced no file, which is precisely the
+    // signal #1058 is trying to measure.
+    if (lastExportedPath.isEmpty()) {
+        SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+            QStringLiteral("cancelled"), QStringLiteral("gui"), QString(), QString(),
+            exportTimer.elapsed(), false, QStringLiteral("no_output")});
+    } else {
+        SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+            QStringLiteral("completed"), QStringLiteral("gui"), QString(), lastExportedPath,
+            exportTimer.elapsed(), true, QString(),
+            static_cast<int>(Manager::getSingleton()->getEntities().size())});
         FeedbackPromptController::instance()->noteExport(
             true, QFileInfo(lastExportedPath).suffix().toLower());
     }
