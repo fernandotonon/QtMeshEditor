@@ -75,6 +75,7 @@
 #include "AudioToFace/A2FPredictor.h"
 #include "AudioToFace/LipsyncApply.h"
 #include "AudioToFace/WavReader.h"
+#include "commands/LipsyncClipCommand.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -2638,29 +2639,81 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
     AudioToFace::PredictOptions popts;
     popts.fps = fps;
     popts.emotion = emotion;
-    // Report progress so a long take does not look hung; the MCP tool runs on
-    // the main thread, and toolProgress also pumps the event loop.
-    popts.progress = [this](int done, int total) {
+    // Progress + cancellation, the generate_mesh_from_image pattern: this tool
+    // runs on the MAIN thread, so without pumping, a long take freezes the
+    // window and the agent's Stop button is unclickable — which also makes
+    // `m_toolCancelRequested` unreachable. User input IS delivered on purpose;
+    // re-entry is prevented by the agent running one step at a time.
+    m_toolCancelRequested = false;
+    QElapsedTimer pumpClock;
+    pumpClock.start();
+    popts.progress = [this, &pumpClock](int done, int total) {
         emit toolProgress(QStringLiteral("generate_lipsync"),
                           QStringLiteral("solving"), done, total);
-        return true;
+        if (pumpClock.elapsed() >= 50) {   // ~20 Hz
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;
     };
 
     const AudioToFace::PredictResult pred = predictor.predict(
         wav.samples, wav.sampleRate, wav.channels, popts);
-    if (!pred.ok())
+    if (!pred.ok()) {
+        // A cancelled run may hold frames; those are a TRUNCATED take and must
+        // never be committed as if the run had finished.
+        if (pred.cancelled || m_toolCancelRequested)
+            return makeErrorResult(QStringLiteral("cancelled"));
         return makeErrorResult(pred.error.isEmpty()
             ? QStringLiteral("Lipsync failed.") : pred.error);
+    }
 
     const AudioToFace::NameBinding binding =
         AudioToFace::bindPoseNames(predictor.poseNames(), targets);
     if (!binding.error.isEmpty())
         return makeErrorResult(QStringLiteral("Error: %1.").arg(binding.error));
 
-    const AudioToFace::ApplyResult applied =
-        AudioToFace::applyToEntity(entity, clipName, pred, binding);
-    if (!applied.ok())
-        return makeErrorResult(QStringLiteral("Error: %1.").arg(applied.error));
+    // Commit through the SAME undoable command the Inspector uses. Writing
+    // straight to the mesh would leave the agent's undo macro empty — a macro
+    // groups commands PUSHED while it is open — so Ctrl+Z could neither remove
+    // the generated clip nor restore the one it replaced.
+    std::vector<LipsyncClipCommand::Key> cmdKeys;
+    int keysWritten = 0;
+    {
+        Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh)
+            return makeErrorResult("Error: the entity has no mesh.");
+        QHash<QString, unsigned short> poseIndexByName;
+        const auto& poseList = mesh->getPoseList();
+        for (unsigned short pi = 0; pi < poseList.size(); ++pi)
+            poseIndexByName.insert(
+                QString::fromStdString(poseList[pi]->getName()), pi);
+
+        for (size_t fi : AudioToFace::selectKeyFrames(pred, binding)) {
+            const auto& f = pred.frames[fi];
+            LipsyncClipCommand::Key k;
+            k.time = float(f.timeSec);
+            for (size_t i = 0; i < binding.poseTarget.size()
+                               && i < f.weights.size(); ++i) {
+                if (binding.poseTarget[i].isEmpty()) continue;
+                const auto it = poseIndexByName.constFind(binding.poseTarget[i]);
+                if (it == poseIndexByName.constEnd()) continue;
+                k.poseRefs.emplace_back(*it, std::clamp(f.weights[i], 0.0f, 1.0f));
+            }
+            if (k.poseRefs.empty()) continue;
+            keysWritten += int(k.poseRefs.size());
+            cmdKeys.push_back(std::move(k));
+        }
+    }
+    if (cmdKeys.empty())
+        return makeErrorResult(
+            "Error: the solve produced no motion — the audio may be silent.");
+
+    auto* cmd = new LipsyncClipCommand(entity->getName(), clipName,
+                                       std::move(cmdKeys));
+    if (auto* undo = UndoManager::getSingleton(); undo && undo->stack())
+        undo->stack()->push(cmd);      // push() runs redo()
+    else { cmd->redo(); delete cmd; }
 
     if (!outputPath.isEmpty()) {
         Ogre::SceneNode* node = entity->getParentSceneNode();
@@ -2681,11 +2734,11 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
     QJsonObject result = makeSuccessResult(QStringLiteral(
         "Lipsync '%1': %2 frames, %3 keyframes on %4 channels.")
         .arg(clipName).arg(pred.frames.size())
-        .arg(applied.keyframesWritten).arg(binding.matched.size()));
+        .arg(keysWritten).arg(binding.matched.size()));
     QJsonObject j;
     j["clip"] = clipName;
     j["frames"] = int(pred.frames.size());
-    j["keyframes"] = applied.keyframesWritten;
+    j["keyframes"] = keysWritten;
     j["fps"] = fps;
     j["duration_sec"] = wav.durationSec();
     j["model"] = pred.modelVersion;
@@ -11686,7 +11739,8 @@ QJsonArray MCPServer::buildToolsList()
             "targets, including the ones add_arkit_blendshapes generates. "
             "Writes a morph-weight clip playable on the timeline. Models "
             "(~320 MB) download from NVIDIA on first use.",
-            props
+            props,
+            QJsonArray{"audio_path"}
         );
     }
 #endif

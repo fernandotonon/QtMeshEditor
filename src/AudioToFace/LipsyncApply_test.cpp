@@ -9,6 +9,8 @@
 #include "AudioToFace/A2FPredictor.h"
 #include "AudioToFace/LipsyncApply.h"
 
+#include <algorithm>
+
 using AudioToFace::bindPoseNames;
 using AudioToFace::selectKeyFrames;
 using AudioToFace::PredictResult;
