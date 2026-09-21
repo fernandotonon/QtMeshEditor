@@ -223,6 +223,53 @@ the binary). Attribution + licenses for the models and their training data:
   output. This exists because the UniRig export (#1025) shipped a graph
   emitting 100% NaN latents that went unnoticed for months.
 
+## Audio2Face-3D — audio-driven ARKit lipsync (issue #1019, epic #818 C1)
+
+- **Model:** NVIDIA **Audio2Face-3D v2.3 "Mark"** — `network.onnx` (~76 MB),
+  `model_data.npz` (~204 MB, the PCA basis), `bs_skin.npz` (~39 MB, the
+  character's ARKit-52 blendshape deltas), plus two small JSON configs. Audio
+  in, 301 coefficients out, reconstructed to a mesh deformation and solved
+  into ARKit blendshape weights.
+- **Licence: NVIDIA Open Model License — commercial use and redistribution
+  explicitly permitted, NOTICE file REQUIRED.** `A2FPredictor::load` writes
+  that NOTICE beside the weights on first fetch so the attribution travels
+  with any copy of the directory.
+  <https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/>
+- **Audio2Emotion is DELIBERATELY NOT SHIPPED.** NVIDIA licenses those weights
+  separately, permitting use only together with Audio2Face — a use-restriction
+  that fails this project's bar. Emotion is therefore a **user-supplied
+  26-dimensional vector** (`--emotion joy=0.6`), never a predicted one. Do not
+  add the A2E model to the fetch list to "complete" the feature.
+- **Hosting — the one model we do NOT mirror.** Every other entry here is
+  re-hosted on `fernandotonon/QtMeshEditor-models`; this one is fetched
+  directly from NVIDIA's own repo
+  [`nvidia/Audio2Face-3D-v2.3-Mark`](https://huggingface.co/nvidia/Audio2Face-3D-v2.3-Mark),
+  because re-hosting would take on a redistribution obligation for no benefit.
+  Overridable via `QTMESH_A2F_MODEL_BASE_URL` / `ai/a2fModelBaseUrl`; offline
+  guard `QTMESH_A2F_NO_DOWNLOAD`.
+- **Integrity:** the three large files carry NVIDIA's published Git-LFS oids,
+  pinned in `kFiles` and verified by `ModelFetch` on download AND on files
+  already on disk (the #1025 lesson: a corrupted model is byte-identical in
+  size, loads without complaint, and produces garbage). Pinning is applied
+  only for the default base URL, since a mirror override may legitimately
+  serve a different export. The two JSON files are not LFS-tracked and carry
+  no published oid, so they stay unpinned rather than pinned to a value we
+  invented.
+- **Why no mesh correspondence is needed:** the network emits a deformation of
+  NVIDIA's own character, but NVIDIA also ships that character's ARKit-52
+  deltas — so the weights are recovered by projecting the predicted motion
+  onto those 52 shapes. Weights carry no topology, so they drive any mesh with
+  ARKit targets, including the ones `qtmesh facerig` generates. 51 of our 52
+  names match NVIDIA's verbatim (they spell `_neutral` as `neutral` and add a
+  bonus `tongueOut`).
+- **Convention trap — `mouthClose`.** ARKit defines it as a counter-shape to
+  `jawOpen`; NVIDIA's character authors it with the OPPOSITE sign (cosine with
+  `jawOpen` +0.41 on their basis vs −0.46 on a true ARKit rig), so the solved
+  weight over-drives the lower lip on replay. Corrected by a 0.5 multiplier
+  through NVIDIA's own `bsWeightMultipliers` table, keyed by pose NAME — the
+  npz is a zip, so its entry order is arbitrary and the `poseNames` array
+  inside it is authoritative.
+
 ## LaMa — texture inpainting (issue #1017, epic #818 C3)
 
 - **Model:** LaMa (large-mask inpainting) exported to ONNX, hosted as
