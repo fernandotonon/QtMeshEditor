@@ -135,6 +135,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDiagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackPromptController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackReportHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
