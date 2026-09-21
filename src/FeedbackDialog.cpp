@@ -205,8 +205,16 @@ void FeedbackDialog::setSignedInAccountLabel(const QString& accountLabel, bool s
         m_accountLabel->setText(label);
         m_signInButton->hide();
     } else {
-        m_accountLabel->setText(
-            tr("Sign in to QtMesh Cloud to send feedback. Anonymous submissions are not available yet."));
+        // #1058: anonymous submission is available whenever telemetry is on,
+        // since that is what mints the installation id we identify it by.
+        if (SentryReporter::anonymousInstallationId().isEmpty()) {
+            m_accountLabel->setText(
+                tr("Sign in to QtMesh Cloud, or enable anonymous usage data in "
+                   "Preferences, to send feedback."));
+        } else {
+            m_accountLabel->setText(
+                tr("Sending anonymously. Sign in if you'd like us to be able to reply."));
+        }
         m_signInButton->show();
     }
     updateSubmitEnabled();
@@ -276,11 +284,17 @@ void FeedbackDialog::onSendClicked()
         return;
     }
 
+    // #1058: feedback may be sent signed in OR anonymously, identified by the
+    // anonymous installation id the telemetry pipeline already tags. Only
+    // refuse when we have neither identity — which means telemetry is off, so
+    // there is no id and a response could not be joined to anything.
     const CloudSession session = CloudCredentialStore::loadSession();
-    if (!session.hasToken()) {
+    const QString installId = SentryReporter::anonymousInstallationId();
+    if (!session.hasToken() && installId.isEmpty()) {
         setSignedInAccountLabel({}, false);
         QMessageBox::information(this, tr("Sign in required"),
-                                 tr("Your QtMesh Cloud session is missing. Sign in and try again."));
+                                 tr("Sign in to QtMesh Cloud, or enable anonymous usage data "
+                                    "in Preferences, to send feedback."));
         return;
     }
 
@@ -294,6 +308,10 @@ void FeedbackDialog::onSendClicked()
     submission.contactAllowed = contactAllowedChecked();
     if (submission.includeDiagnostics)
         submission.diagnosticsJson = FeedbackDiagnostics::collectDiagnostics(true);
+    // Ignored by the server when a bearer token is present.
+    if (!session.hasToken())
+        submission.anonymousInstallationId = installId;
+    submission.category = m_category;
 
     m_sendButton->setEnabled(false);
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),

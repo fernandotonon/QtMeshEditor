@@ -16,6 +16,9 @@ class FeedbackDialog : public QDialog {
     Q_OBJECT
 
 public:
+    /// Preselect the problem area reported by the contextual prompt (#1058).
+    void setCategory(const QString& category) { m_category = category; }
+
     static constexpr int kMaxMessageLength = 4000;
 
     explicit FeedbackDialog(QWidget* parent = nullptr);
@@ -57,6 +60,9 @@ private:
     QPushButton* m_signInButton = nullptr;
     QString m_relatedOperation;
     QString m_relatedFormat;
+    /// Optional self-reported problem area (#1058), set by the contextual
+    /// prompt before the dialog is shown.
+    QString m_category;
     bool m_signedIn = false;
 };
 

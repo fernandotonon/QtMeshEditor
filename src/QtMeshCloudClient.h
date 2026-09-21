@@ -320,6 +320,15 @@ public:
         bool includeDiagnostics = false;
         QJsonObject diagnosticsJson;
         bool contactAllowed = false;
+        /// Self-reported problem area on negative feedback (#1058):
+        /// materials | textures | animation | skeleton | geometry |
+        /// scale_orientation | performance | other. Optional.
+        QString category;
+        /// Anonymous installation id, used when there is no signed-in
+        /// session. Same id the telemetry pipeline tags, so feedback joins
+        /// against that install's activation/retention data. Ignored by the
+        /// server when a bearer token is supplied.
+        QString anonymousInstallationId;
     };
 
     struct FeedbackResult {

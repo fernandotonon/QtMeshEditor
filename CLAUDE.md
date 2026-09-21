@@ -365,6 +365,18 @@ The animation pipeline started skeleton-only; the #517 epic broadens it. Slices 
 - **Discovery nudges (E-P5 #801)**: the welcome screen shows at most one dismissible "try this next" card from `GamificationManager.suggestion` — personalized to unused clusters when stats exist, generic rotation when logged out; rotation cursor + dismissals persist in QSettings (`Gamification/*` keys, see `AppSettingsKeys.h`).
 - **Ops with metrics instrumented**: retopo (GUI+CLI), decimate/LOD (GUI+CLI), optimize (CLI), uv_unwrap (GUI), auto_rig (GUI sync/async/marker + CLI), skin_weights (GUI+CLI), fix (CLI), texture_atlas pack (GUI), isometric_sprites (GUI), vat_bake (GUI), vertex_color_bake (GUI), morph (GUI), motion_inbetween (GUI), pbr_synth (AIAssistManager). MCP tools map to clusters in `MCPServer::callTool`; CLI subcommands map in `CLIPipeline::run`.
 
+### Contextual feedback (#1058)
+
+Lightweight in-app feedback to explain churn: users who open the editor once and never return. Retention data cannot separate "they got what they came for" from "something didn't work" — those look identical but call for opposite responses — so the prompt is built to distinguish them.
+
+- **FeedbackPromptController** (`src/FeedbackPromptController.{h,cpp}`): decides *when* to ask. Triggers are `FirstExport`, `ImportFailure`, `ExportFailure`, and `SessionNoExport` (imported, worked ≥ `kSessionNoExportMinutes`, never exported — the churn-shaped case). **A successful first import deliberately does NOT prompt**: that is the start of the workflow, and asking there interrupts someone who has not yet had a chance to succeed or fail. At most one prompt per session; `kCooldownDays` (14) between prompts; stops entirely after `kMaxDismissals` (3) consecutive dismissals. Answering resets the dismissal budget.
+- **Gated on telemetry consent.** The prompt is identified by `SentryReporter::anonymousInstallationId()`, which only exists when telemetry is on. Without it a response cannot be joined to that install's activation/retention data — which is the only reason to ask. `Feedback/promptEnabled` (default ON) is a separate opt-out in Preferences.
+- **Headless-safe**: `maybePrompt` checks `isSignalConnected(promptRequested)` before consuming the one-per-session budget, so a CLI/MCP run never burns it (the `GamificationManager::maybeRequestConsent` pattern).
+- **UI**: non-modal `QMessageBox` in `MainWindow` (the consent-prompt pattern), offering **"Got what I needed" / "Something didn't work" / "Not now"** — two affirmative answers rather than a thumbs up/down, so a satisfied one-time user is distinguishable from a blocked one. Negative hands off to the existing `FeedbackDialog`, prefilled from the trigger.
+- **Transport**: `QtMeshCloudClient::submitFeedback` now accepts either a bearer token **or** `anonymousInstallationId` (qtmesh-cloud#107 added `POST /v1/feedback` anonymous support, migration 0028, rate-limited per install). `authorizedJsonRequest` omits the `Authorization` header entirely when there is no token — a bare `Bearer ` reads as a malformed credential.
+- **Telemetry**: `feedback.prompt_shown|dismissed|positive|negative|submitted` via `SentryReporter::captureTelemetryEvent`, carrying only non-sensitive context (workflow stage, session duration, file format, error category, feedback category). Never a filename, path, or model content.
+- Settings keys live under `Feedback/` in `AppSettingsKeys.h`.
+
 ### MCP Server
 
 - **MCPServer** (`src/MCPServer.h/cpp`): JSON-RPC 2.0 over stdio + HTTP REST API on configurable port.

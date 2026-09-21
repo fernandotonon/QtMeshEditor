@@ -451,7 +451,14 @@ bool SentryReporter::isKnownTelemetryEvent(const QString &eventName)
         QStringLiteral("selection.bone"), QStringLiteral("transform.completed"),
         QStringLiteral("segmentation.started"), QStringLiteral("segmentation.completed"),
         QStringLiteral("segmentation.failed"), QStringLiteral("animation.played"),
-        QStringLiteral("animation.exported")
+        QStringLiteral("animation.exported"),
+        // Contextual feedback lifecycle (#1058). Carries only non-sensitive
+        // context (workflow stage, session duration, format, error category,
+        // feedback category) so responses can be correlated with activation
+        // and retention for the same anonymous install.
+        QStringLiteral("feedback.prompt_shown"), QStringLiteral("feedback.dismissed"),
+        QStringLiteral("feedback.positive"), QStringLiteral("feedback.negative"),
+        QStringLiteral("feedback.submitted")
     };
     return events.contains(eventName);
 }

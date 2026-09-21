@@ -60,6 +60,7 @@
 #include "CloudUploadPlanner.h"
 #include "CloudUploadProgress.h"
 #include "FeedbackDialog.h"
+#include "FeedbackPromptController.h"
 #include "FeedbackReportHelper.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
@@ -4011,6 +4012,75 @@ void MainWindow::setupCloudAccountStatusControl()
         });
         prompt->show();
     });
+
+    // Contextual feedback prompt (#1058). The churn question is whether a
+    // one-time user left because they FINISHED or because they got STUCK —
+    // those look identical in retention data, so the wording has to separate
+    // them rather than ask a generic "how's it going".
+    connect(FeedbackPromptController::instance(),
+            &FeedbackPromptController::promptRequested, this,
+            [this](FeedbackPromptController::Trigger trigger) {
+        auto* ctrl = FeedbackPromptController::instance();
+
+        auto* prompt = new QMessageBox(this);
+        prompt->setAttribute(Qt::WA_DeleteOnClose);
+        prompt->setWindowModality(Qt::NonModal);
+        prompt->setIcon(QMessageBox::Question);
+        prompt->setWindowTitle(tr("How did that go?"));
+
+        switch (trigger) {
+        case FeedbackPromptController::Trigger::ImportFailure:
+            prompt->setText(tr("That import didn't work. Want to tell us what happened?"));
+            break;
+        case FeedbackPromptController::Trigger::ExportFailure:
+            prompt->setText(tr("That export didn't work. Want to tell us what happened?"));
+            break;
+        case FeedbackPromptController::Trigger::FirstExport:
+            prompt->setText(tr("You just exported your first model — did it come out the way "
+                               "you wanted?"));
+            break;
+        case FeedbackPromptController::Trigger::SessionNoExport:
+            prompt->setText(tr("Did you get what you came for today?"));
+            break;
+        case FeedbackPromptController::Trigger::FirstImport:
+            prompt->setText(tr("How is QtMeshEditor working out so far?"));
+            break;
+        }
+        prompt->setInformativeText(tr(
+            "One question, and it genuinely shapes what gets built next. "
+            "Nothing about your model — no file names, paths or content — is ever sent."));
+
+        // Two affirmative answers rather than a thumbs up/down: a satisfied
+        // one-time user and a blocked one must be distinguishable.
+        QPushButton* good = prompt->addButton(tr("Got what I needed"), QMessageBox::AcceptRole);
+        QPushButton* bad  = prompt->addButton(tr("Something didn't work"), QMessageBox::DestructiveRole);
+        prompt->addButton(tr("Not now"), QMessageBox::RejectRole);
+
+        connect(prompt, &QMessageBox::finished, this, [this, prompt, good, bad, ctrl]() {
+            if (prompt->clickedButton() == good) {
+                ctrl->reportPositive();
+            } else if (prompt->clickedButton() == bad) {
+                ctrl->reportNegative();
+                // Hand off to the existing detailed dialog, prefilled from
+                // whichever moment triggered the prompt.
+                showSendFeedbackDialog(ctrl->prefillForLastTrigger());
+            } else {
+                ctrl->reportDismissed();
+            }
+        });
+        prompt->show();
+    });
+
+    // The session trigger has to fire while the window is still up: closeEvent
+    // calls QApplication::quit() (and _exit() on macOS), so a prompt raised
+    // there would never be seen. Poll instead — the controller itself decides
+    // whether anything is warranted, and stops after one prompt per session.
+    auto* feedbackSessionTimer = new QTimer(this);
+    feedbackSessionTimer->setInterval(60 * 1000);
+    connect(feedbackSessionTimer, &QTimer::timeout, this, []() {
+        FeedbackPromptController::instance()->evaluateSession();
+    });
+    feedbackSessionTimer->start();
 }
 
 void MainWindow::updateCloudAuthActions()
@@ -5616,6 +5686,7 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
             QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteImport(false, QFileInfo(firstImportPath).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
@@ -5623,6 +5694,9 @@ void MainWindow::importMeshs(const QStringList &_uriList)
         QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()),
         static_cast<int>(animOnlySkeletons.size()), QFileInfo(firstImportPath).size()});
+    // #1058: only the extension, never the path.
+    FeedbackPromptController::instance()->noteImport(
+        true, QFileInfo(firstImportPath).suffix().toLower());
     SentryReporter::finishTransaction(txn);
 
     // Material rebinding (texture hydration + per-material RTSS sync + a
@@ -5726,18 +5800,22 @@ void MainWindow::on_actionOpen_Scene_triggered()
                     QFileInfo(fileName).suffix(), tr("Could not import scene file.")));
             SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
                 QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("import_failed")});
+            FeedbackPromptController::instance()->noteImport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("import_failed"));
             SentryReporter::finishTransaction(txn);
             return;
         }
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
             QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteImport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("completed"),
         QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()), -1, QFileInfo(fileName).size()});
+    FeedbackPromptController::instance()->noteImport(
+        true, QFileInfo(fileName).suffix().toLower());
     SentryReporter::finishTransaction(txn);
     addToRecentFiles(fileName);
 }
@@ -5775,6 +5853,7 @@ void MainWindow::on_actionSave_Scene_triggered()
         if (result != 0) {
             SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
                 QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("export_failed")});
+            FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("export_failed"));
             FeedbackReportHelper::showFailureWithReportOption(
                 this, tr("Save Scene"), tr("Failed to save scene."),
                 FeedbackReportHelper::exportFailurePrefill(
@@ -5786,12 +5865,15 @@ void MainWindow::on_actionSave_Scene_triggered()
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
             QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
         QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()), -1, QFileInfo(fileName).size()});
+    FeedbackPromptController::instance()->noteExport(
+        true, QFileInfo(fileName).suffix().toLower());
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
@@ -5854,6 +5936,7 @@ void MainWindow::on_actionExport_Selected_triggered()
         if (wasRendering) m_pTimer->start();
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
             QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
@@ -5862,6 +5945,7 @@ void MainWindow::on_actionExport_Selected_triggered()
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
         QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size())});
+    FeedbackPromptController::instance()->noteExport(true, QString());
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
