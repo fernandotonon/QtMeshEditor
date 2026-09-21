@@ -164,3 +164,28 @@ TEST_F(FeedbackPromptControllerTest, TriggerTagsAreStable)
     EXPECT_EQ(FeedbackPromptController::triggerTag(T::ExportFailure), QStringLiteral("export_failure"));
     EXPECT_EQ(FeedbackPromptController::triggerTag(T::SessionNoExport), QStringLiteral("session_no_export"));
 }
+
+// Positive answers must reach the DURABLE store too, not only Sentry —
+// otherwise the feedback table collects complaints exclusively and cannot
+// answer "did they finish?", which is half the churn question.
+TEST_F(FeedbackPromptControllerTest, PositiveCarriesTheTriggerContext)
+{
+    auto* ctrl = FeedbackPromptController::instance();
+    QSignalSpy spy(ctrl, &FeedbackPromptController::promptRequested);
+
+    ctrl->noteExport(true, QStringLiteral("glb"));
+    ASSERT_EQ(spy.count(), 1);
+
+    // The silent positive post is built from this prefill, so the row carries
+    // the moment that produced it rather than being context-free.
+    const FeedbackPrefill prefill = ctrl->prefillForLastTrigger();
+    EXPECT_EQ(prefill.relatedOperation, QStringLiteral("export"));
+    EXPECT_EQ(prefill.relatedFormat, QStringLiteral("glb"));
+    EXPECT_EQ(FeedbackPromptController::triggerTag(
+                  FeedbackPromptController::Trigger::FirstExport),
+              QStringLiteral("first_export"));
+
+    // Answering positively still clears the dismissal budget.
+    ctrl->reportPositive();
+    EXPECT_EQ(QSettings().value(AppSettingsKeys::feedbackDismissCount(), -1).toInt(), 0);
+}

@@ -11,12 +11,15 @@ The MIT License
 #include "FeedbackPromptController.h"
 
 #include "AppSettingsKeys.h"
+#include "CloudCredentialStore.h"
+#include "QtMeshCloudClient.h"
 #include "SentryReporter.h"
 
 #include <QDateTime>
 #include <QJsonObject>
 #include <QMetaMethod>
 #include <QSettings>
+#include <QThread>
 
 namespace {
 
@@ -170,12 +173,55 @@ void FeedbackPromptController::evaluateSession()
     maybePrompt(Trigger::SessionNoExport);
 }
 
+void FeedbackPromptController::postSilentRating(const QString& rating,
+                                                const QString& workflowStage,
+                                                const QString& relatedOperation,
+                                                const QString& relatedFormat)
+{
+    const CloudSession session = CloudCredentialStore::loadSession();
+    const QString installId = SentryReporter::anonymousInstallationId();
+    // No identity means no joinable row; the server would 401 anyway.
+    if (!session.hasToken() && installId.isEmpty()) return;
+
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("general");
+    submission.rating = rating;
+    // The server requires a non-empty message. There is no user text on this
+    // path by design, so record the moment instead — that is the datum: which
+    // workflow stage produced this outcome.
+    submission.message = QStringLiteral("[prompt] %1 at %2")
+                             .arg(rating, workflowStage);
+    submission.relatedOperation = relatedOperation;
+    submission.relatedFormat = relatedFormat;
+    submission.includeDiagnostics = false;
+    submission.contactAllowed = false;
+    if (!session.hasToken())
+        submission.anonymousInstallationId = installId;
+
+    const QString token = session.token;
+    // submitFeedback blocks on a QEventLoop, so it must not run on the UI
+    // thread. Detached worker, result deliberately ignored — a failed POST is
+    // invisible to the user and must never interrupt editing (#1058).
+    QThread* worker = QThread::create([token, submission]() {
+        QtMeshCloudClient::submitFeedback(token, submission);
+    });
+    QObject::connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
 void FeedbackPromptController::reportPositive()
 {
     QSettings settings;
     settings.setValue(AppSettingsKeys::feedbackDismissCount(), 0);
     recordLifecycleEvent(QStringLiteral("feedback.positive"));
     SentryReporter::addBreadcrumb(QStringLiteral("ui.feedback"), QStringLiteral("positive"));
+
+    // "Got what I needed" never opens the detailed dialog, so without this it
+    // would exist only as a Sentry event. Persist it too, or the durable store
+    // collects complaints exclusively and cannot answer "did they finish?".
+    const FeedbackPrefill prefill = prefillForLastTrigger();
+    postSilentRating(QStringLiteral("great"), triggerTag(m_lastTrigger),
+                     prefill.relatedOperation, prefill.relatedFormat);
 }
 
 void FeedbackPromptController::reportNegative()

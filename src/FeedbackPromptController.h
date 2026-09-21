@@ -118,6 +118,20 @@ private:
 
     /// Emit the prompt if allowed, marking the session + persisting the time.
     void maybePrompt(Trigger trigger);
+
+    /// Fire-and-forget POST of a short, message-less submission so EVERY
+    /// outcome lands in the durable store — not just the negative ones that
+    /// go through the detailed dialog. Without this the feedback table would
+    /// hold only complaints, and "they finished happily" would live solely in
+    /// Sentry on shorter retention — exactly the half of the churn question
+    /// we most need to keep.
+    ///
+    /// Runs on a detached worker (submitFeedback blocks) and ignores the
+    /// result: feedback must never interrupt editing or surface an error.
+    static void postSilentRating(const QString& rating,
+                                 const QString& workflowStage,
+                                 const QString& relatedOperation,
+                                 const QString& relatedFormat);
     void recordLifecycleEvent(const QString& event, const QString& category = {}) const;
     qint64 sessionSeconds() const;
 

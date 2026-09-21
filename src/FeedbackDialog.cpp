@@ -5,6 +5,8 @@
 #include "QtMeshCloudClient.h"
 #include "SentryReporter.h"
 
+#include <QJsonObject>
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -324,6 +326,30 @@ void FeedbackDialog::onSendClicked()
     if (result.ok) {
         SentryReporter::addBreadcrumb(QStringLiteral("cloud.feedback"),
                                       QStringLiteral("Feedback sent id=%1").arg(result.id));
+        // Mirror the submission into Sentry as a structured event. The durable
+        // copy lives in the cloud table; this one exists so day-to-day
+        // observability (what broke this week, for whom) is answerable in the
+        // same place as the crash and workflow telemetry. The message text is
+        // the USER'S OWN words about the editor — never model content, file
+        // names or paths, which are the things #1058 forbids uploading.
+        QJsonObject props;
+        props.insert(QStringLiteral("feedback_id"), result.id);
+        props.insert(QStringLiteral("feedback_type"), submission.type);
+        if (!submission.rating.isEmpty())
+            props.insert(QStringLiteral("rating"), submission.rating);
+        if (!submission.category.isEmpty())
+            props.insert(QStringLiteral("feedback_category"), submission.category);
+        if (!submission.relatedOperation.isEmpty())
+            props.insert(QStringLiteral("related_operation"), submission.relatedOperation);
+        if (!submission.relatedFormat.isEmpty())
+            props.insert(QStringLiteral("file_format"), submission.relatedFormat);
+        props.insert(QStringLiteral("anonymous"), !session.hasToken());
+        // NB SentryReporter::sanitizedValue redacts anything path- or
+        // filename-shaped and truncates at 160 chars, so the Sentry copy is a
+        // safe excerpt for triage, not the record of truth. The full text
+        // lives in the cloud feedback table.
+        props.insert(QStringLiteral("message"), submission.message);
+        SentryReporter::captureTelemetryEvent(QStringLiteral("feedback.submitted"), props);
         QMessageBox::information(
             this, tr("Thank you"),
             tr("Thanks — your feedback was sent to the QtMesh team."));
