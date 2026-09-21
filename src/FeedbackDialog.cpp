@@ -244,7 +244,13 @@ bool FeedbackDialog::contactAllowedChecked() const
 
 bool FeedbackDialog::canSubmit() const
 {
-    return m_signedIn && !selectedType().isEmpty() && !messageText().trimmed().isEmpty()
+    // #1058: a signed-out user with telemetry on has an anonymous
+    // installation id, which the server accepts as an identity. Requiring
+    // m_signedIn here left Send disabled for exactly the signed-out users the
+    // contextual prompt targets, making the whole anonymous path unreachable.
+    const bool haveIdentity =
+        m_signedIn || !SentryReporter::anonymousInstallationId().isEmpty();
+    return haveIdentity && !selectedType().isEmpty() && !messageText().trimmed().isEmpty()
         && messageText().size() <= kMaxMessageLength;
 }
 
@@ -279,9 +285,10 @@ QString FeedbackDialog::copyableFeedbackText() const
 void FeedbackDialog::onSendClicked()
 {
     if (!canSubmit()) {
-        if (!m_signedIn) {
+        if (!m_signedIn && SentryReporter::anonymousInstallationId().isEmpty()) {
             QMessageBox::information(this, tr("Sign in required"),
-                                     tr("Sign in to QtMesh Cloud before sending feedback."));
+                                     tr("Sign in to QtMesh Cloud, or enable anonymous usage "
+                                        "data in Preferences, before sending feedback."));
         }
         return;
     }
@@ -344,11 +351,14 @@ void FeedbackDialog::onSendClicked()
         if (!submission.relatedFormat.isEmpty())
             props.insert(QStringLiteral("file_format"), submission.relatedFormat);
         props.insert(QStringLiteral("anonymous"), !session.hasToken());
-        // NB SentryReporter::sanitizedValue redacts anything path- or
-        // filename-shaped and truncates at 160 chars, so the Sentry copy is a
-        // safe excerpt for triage, not the record of truth. The full text
-        // lives in the cloud feedback table.
-        props.insert(QStringLiteral("message"), submission.message);
+        // Deliberately NOT the message text. sanitizedValue strips paths and
+        // filenames but not prose PII — a user writing "email me at
+        // someone@example.com" would leak it into Sentry, which is a
+        // different retention and access regime from the feedback service.
+        // The length still tells us whether people write anything
+        // substantive, and the cloud row (linked by feedback_id) holds the
+        // actual words for anyone who needs them.
+        props.insert(QStringLiteral("message_length"), submission.message.size());
         SentryReporter::captureTelemetryEvent(QStringLiteral("feedback.submitted"), props);
         QMessageBox::information(
             this, tr("Thank you"),

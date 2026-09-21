@@ -18,6 +18,8 @@ class FeedbackDialog : public QDialog {
 public:
     /// Preselect the problem area reported by the contextual prompt (#1058).
     void setCategory(const QString& category) { m_category = category; }
+    /// Category actually sent (empty when none was collected).
+    QString submittedCategory() const { return m_category; }
 
     static constexpr int kMaxMessageLength = 4000;
 

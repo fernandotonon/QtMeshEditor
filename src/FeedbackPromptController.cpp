@@ -104,6 +104,12 @@ void FeedbackPromptController::maybePrompt(Trigger trigger)
 
     m_promptedThisSession = true;
     m_lastTrigger = trigger;
+    // Freeze the context now: the prompt is non-modal, so an import or export
+    // completing while it is open would otherwise rewrite the format/error
+    // that the eventual answer gets attributed to.
+    m_promptTrigger = trigger;
+    m_promptFormat = m_lastFormat;
+    m_promptErrorCode = m_lastErrorCode;
 
     QSettings settings;
     settings.setValue(AppSettingsKeys::feedbackLastPromptedAt(),
@@ -178,6 +184,12 @@ void FeedbackPromptController::postSilentRating(const QString& rating,
                                                 const QString& relatedOperation,
                                                 const QString& relatedFormat)
 {
+    // Only ever post in response to a prompt we actually showed. Besides
+    // being correct, this keeps stray reportPositive()/reportNegative() calls
+    // — unit tests especially — from POSTing to the live API and creating
+    // synthetic rows in production.
+    if (!s_instance || !s_instance->m_promptedThisSession) return;
+
     const CloudSession session = CloudCredentialStore::loadSession();
     const QString installId = SentryReporter::anonymousInstallationId();
     // No identity means no joinable row; the server would 401 anyway.
@@ -220,7 +232,7 @@ void FeedbackPromptController::reportPositive()
     // would exist only as a Sentry event. Persist it too, or the durable store
     // collects complaints exclusively and cannot answer "did they finish?".
     const FeedbackPrefill prefill = prefillForLastTrigger();
-    postSilentRating(QStringLiteral("great"), triggerTag(m_lastTrigger),
+    postSilentRating(QStringLiteral("great"), triggerTag(m_promptTrigger),
                      prefill.relatedOperation, prefill.relatedFormat);
 }
 
@@ -252,10 +264,10 @@ void FeedbackPromptController::reportSubmitted(const QString& category)
 FeedbackPrefill FeedbackPromptController::prefillForLastTrigger() const
 {
     FeedbackPrefill prefill;
-    prefill.relatedFormat = m_lastFormat;
-    prefill.errorCode = m_lastErrorCode;
+    prefill.relatedFormat = m_promptFormat;
+    prefill.errorCode = m_promptErrorCode;
 
-    switch (m_lastTrigger) {
+    switch (m_promptTrigger) {
     case Trigger::ImportFailure:
         prefill.type = QStringLiteral("import_problem");
         prefill.relatedOperation = QStringLiteral("import");
@@ -287,15 +299,15 @@ void FeedbackPromptController::recordLifecycleEvent(const QString& event,
     // Non-sensitive context only. Never a filename, path, or anything read
     // out of the user's model — see the privacy section of #1058.
     QJsonObject props;
-    props.insert(QStringLiteral("workflow_stage"), triggerTag(m_lastTrigger));
+    props.insert(QStringLiteral("workflow_stage"), triggerTag(m_promptTrigger));
     props.insert(QStringLiteral("session_seconds"), static_cast<double>(sessionSeconds()));
     props.insert(QStringLiteral("imported_this_session"), m_importedThisSession);
     props.insert(QStringLiteral("exported_this_session"), m_exportedThisSession);
-    if (!m_lastFormat.isEmpty())
-        props.insert(QStringLiteral("file_format"), m_lastFormat);
-    if (!m_lastErrorCode.isEmpty())
+    if (!m_promptFormat.isEmpty())
+        props.insert(QStringLiteral("file_format"), m_promptFormat);
+    if (!m_promptErrorCode.isEmpty())
         props.insert(QStringLiteral("error_category"),
-                     SentryReporter::sanitizedErrorCategory(m_lastErrorCode));
+                     SentryReporter::sanitizedErrorCategory(m_promptErrorCode));
     if (!category.isEmpty())
         props.insert(QStringLiteral("feedback_category"), category);
 

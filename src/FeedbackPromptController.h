@@ -143,6 +143,13 @@ private:
     Trigger       m_lastTrigger = Trigger::SessionNoExport;
     QString       m_lastFormat;
     QString       m_lastErrorCode;
+    /// Context FROZEN when the prompt was emitted. The prompt is non-modal,
+    /// so a later import/export would otherwise overwrite m_lastFormat /
+    /// m_lastErrorCode while m_lastTrigger still named the original moment —
+    /// producing a prefill that mixes the two.
+    Trigger       m_promptTrigger = Trigger::SessionNoExport;
+    QString       m_promptFormat;
+    QString       m_promptErrorCode;
     QElapsedTimer m_sessionTimer;
 };
 

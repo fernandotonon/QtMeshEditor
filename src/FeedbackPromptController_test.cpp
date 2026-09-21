@@ -185,7 +185,10 @@ TEST_F(FeedbackPromptControllerTest, PositiveCarriesTheTriggerContext)
                   FeedbackPromptController::Trigger::FirstExport),
               QStringLiteral("first_export"));
 
-    // Answering positively still clears the dismissal budget.
-    ctrl->reportPositive();
-    EXPECT_EQ(QSettings().value(AppSettingsKeys::feedbackDismissCount(), -1).toInt(), 0);
+    // NB deliberately NOT calling reportPositive() here: it starts a detached
+    // worker that POSTs to QTMESH_API_BASE, which defaults to the LIVE
+    // https://api.qtmesh.dev — a unit test must never create real feedback
+    // rows in production. The dismissal-budget reset is covered by
+    // AnsweringResetsTheDismissalBudget, which does not reach the prompt (so
+    // there is no frozen context and postSilentRating returns early).
 }

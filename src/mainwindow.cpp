@@ -4123,7 +4123,13 @@ void MainWindow::showSendFeedbackDialog(const FeedbackPrefill& prefill)
         refreshAccount();
     };
 
-    dialog.exec();
+    // FeedbackDialog accepts ONLY after a successful POST, so this is the
+    // signal that a submission actually happened — without it
+    // feedback.submitted was never emitted and we could not distinguish
+    // "opened the form" from "sent something".
+    if (dialog.exec() == QDialog::Accepted) {
+        FeedbackPromptController::instance()->reportSubmitted(dialog.submittedCategory());
+    }
 }
 
 void MainWindow::signInToQtMeshCloud()
@@ -5853,7 +5859,7 @@ void MainWindow::on_actionSave_Scene_triggered()
         if (result != 0) {
             SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
                 QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("export_failed")});
-            FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("export_failed"));
+            FeedbackPromptController::instance()->noteExport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("export_failed"));
             FeedbackReportHelper::showFailureWithReportOption(
                 this, tr("Save Scene"), tr("Failed to save scene."),
                 FeedbackReportHelper::exportFailurePrefill(
@@ -5865,7 +5871,7 @@ void MainWindow::on_actionSave_Scene_triggered()
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
             QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("exception")});
-        FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("exception"));
+        FeedbackPromptController::instance()->noteExport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
@@ -5908,6 +5914,12 @@ void MainWindow::on_actionExport_Selected_triggered()
     if (wasRendering) m_pTimer->stop();
     AnimationControlController::instance()->suspendPollTimer();
 
+    // #1058: exporter() returns an empty path when the user cancels the save
+    // dialog, declines texture flattening, or there is nothing exportable.
+    // Recording success then would mark firstExportDone, claim "you just
+    // exported your first model", and suppress the session-no-export trigger
+    // — for a session in which nothing was written.
+    QString lastExportedPath;
     try {
         const auto* sel = SelectionSet::getSingleton();
 
@@ -5916,8 +5928,10 @@ void MainWindow::on_actionExport_Selected_triggered()
             foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
             {
                 QString exportedPath = MeshImporterExporter::exporter(node, this);
-                if (!exportedPath.isEmpty())
+                if (!exportedPath.isEmpty()) {
+                    lastExportedPath = exportedPath;
                     addToRecentFiles(exportedPath);
+                }
             }
         }
         else if(sel->hasEntities())
@@ -5927,8 +5941,10 @@ void MainWindow::on_actionExport_Selected_triggered()
                 auto* node = entity->getParentSceneNode();
                 if (!node) continue;
                 QString exportedPath = MeshImporterExporter::exporter(node, this);
-                if (!exportedPath.isEmpty())
+                if (!exportedPath.isEmpty()) {
+                    lastExportedPath = exportedPath;
                     addToRecentFiles(exportedPath);
+                }
             }
         }
     } catch (...) {
@@ -5945,7 +5961,10 @@ void MainWindow::on_actionExport_Selected_triggered()
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
         QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size())});
-    FeedbackPromptController::instance()->noteExport(true, QString());
+    if (!lastExportedPath.isEmpty()) {
+        FeedbackPromptController::instance()->noteExport(
+            true, QFileInfo(lastExportedPath).suffix().toLower());
+    }
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
