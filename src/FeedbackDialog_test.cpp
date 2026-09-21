@@ -1,4 +1,6 @@
 #include "FeedbackDialog.h"
+#include "SentryReporter.h"
+#include "AppSettingsKeys.h"
 
 #include "CloudCredentialStore.h"
 
@@ -57,8 +59,17 @@ TEST_F(FeedbackDialogTest, RejectsOverlongMessage)
     EXPECT_FALSE(dialog.canSubmit());
 }
 
-TEST_F(FeedbackDialogTest, LoggedOutCannotSubmitEvenWithMessage)
+// #1058 changed this contract: a signed-out user with telemetry enabled has
+// an anonymous installation id, which the server accepts as an identity, so
+// they CAN submit. Only a user with neither identity is blocked.
+TEST_F(FeedbackDialogTest, LoggedOutWithoutInstallIdCannotSubmit)
 {
+    QSettings settings;
+    const bool had = settings.contains(AppSettingsKeys::sentryEnabled());
+    const bool prev = settings.value(AppSettingsKeys::sentryEnabled(), true).toBool();
+    // Telemetry off => anonymousInstallationId() is empty => no identity.
+    settings.setValue(AppSettingsKeys::sentryEnabled(), false);
+
     FeedbackDialog dialog;
     dialog.setSignedInAccountLabel({}, false);
     auto* edit = messageEdit(dialog);
@@ -66,6 +77,33 @@ TEST_F(FeedbackDialogTest, LoggedOutCannotSubmitEvenWithMessage)
     edit->setPlainText(QStringLiteral("Something broke"));
     QApplication::processEvents();
     EXPECT_FALSE(dialog.canSubmit());
+
+    if (had) settings.setValue(AppSettingsKeys::sentryEnabled(), prev);
+    else settings.remove(AppSettingsKeys::sentryEnabled());
+}
+
+TEST_F(FeedbackDialogTest, LoggedOutWithInstallIdCanSubmitAnonymously)
+{
+    QSettings settings;
+    const bool had = settings.contains(AppSettingsKeys::sentryEnabled());
+    const bool prev = settings.value(AppSettingsKeys::sentryEnabled(), true).toBool();
+    settings.setValue(AppSettingsKeys::sentryEnabled(), true);
+    // Mint the id (lazily created on first read) so the dialog sees one.
+    const QString installId = SentryReporter::anonymousInstallationId();
+
+    FeedbackDialog dialog;
+    dialog.setSignedInAccountLabel({}, false);
+    auto* edit = messageEdit(dialog);
+    ASSERT_NE(edit, nullptr);
+    edit->setPlainText(QStringLiteral("Something broke"));
+    QApplication::processEvents();
+    // Guard: in a build without telemetry support there is no id, and the
+    // signed-out user genuinely cannot submit.
+    if (!installId.isEmpty())
+        EXPECT_TRUE(dialog.canSubmit());
+
+    if (had) settings.setValue(AppSettingsKeys::sentryEnabled(), prev);
+    else settings.remove(AppSettingsKeys::sentryEnabled());
 }
 
 TEST_F(FeedbackDialogTest, PrefillSetsImportProblemType)

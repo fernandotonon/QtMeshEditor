@@ -186,7 +186,9 @@ TEST(QtMeshCloudClientPureCoverageTest, SubmitFeedbackOversizedMessage)
     EXPECT_TRUE(res.userMessage.contains(QStringLiteral("too large"), Qt::CaseInsensitive));
 }
 
-TEST(QtMeshCloudClientPureCoverageTest, SubmitFeedbackMissingTokenUnauthorized)
+// #1058: submitFeedback accepts a bearer token OR an anonymous installation
+// id, so "no token" alone is no longer unauthorized — only having NEITHER is.
+TEST(QtMeshCloudClientPureCoverageTest, SubmitFeedbackNoIdentityUnauthorized)
 {
     Client::FeedbackSubmission sub;
     sub.type = QStringLiteral("bug");
@@ -195,7 +197,8 @@ TEST(QtMeshCloudClientPureCoverageTest, SubmitFeedbackMissingTokenUnauthorized)
     const Client::FeedbackResult res = Client::submitFeedback(QString(), sub);
 
     EXPECT_FALSE(res.ok);
-    EXPECT_TRUE(res.errorString.contains(QStringLiteral("missing bearer token"), Qt::CaseInsensitive));
+    EXPECT_TRUE(res.errorString.contains(QStringLiteral("anonymous installation id"),
+                                         Qt::CaseInsensitive));
     EXPECT_TRUE(res.userMessage.contains(QStringLiteral("session expired"), Qt::CaseInsensitive));
 }
 

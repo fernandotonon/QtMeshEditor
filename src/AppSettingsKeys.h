@@ -210,6 +210,44 @@ inline const QString& gamificationNudgesEnabled()
     return k;
 }
 
+/** @brief Show occasional in-app feedback prompts (#1058). Default ON —
+ *  the prompt is visible and dismissible, unlike silent telemetry. Prompts
+ *  additionally require telemetry consent, since they are identified by the
+ *  anonymous installation id. */
+inline const QString& feedbackPromptEnabled()
+{
+    static const QString k(QStringLiteral("Feedback/promptEnabled"));
+    return k;
+}
+
+/** @brief Epoch ms of the last contextual feedback prompt (cooldown). */
+inline const QString& feedbackLastPromptedAt()
+{
+    static const QString k(QStringLiteral("Feedback/lastPromptedAt"));
+    return k;
+}
+
+/** @brief Consecutive dismissals; prompts back off and then stop. */
+inline const QString& feedbackDismissCount()
+{
+    static const QString k(QStringLiteral("Feedback/dismissCount"));
+    return k;
+}
+
+/** @brief Whether this install has ever completed an import. */
+inline const QString& feedbackFirstImportDone()
+{
+    static const QString k(QStringLiteral("Feedback/firstImportDone"));
+    return k;
+}
+
+/** @brief Whether this install has ever completed an export. */
+inline const QString& feedbackFirstExportDone()
+{
+    static const QString k(QStringLiteral("Feedback/firstExportDone"));
+    return k;
+}
+
 /** @brief Feature keys the user dismissed from the nudge card. */
 inline const QString& gamificationDismissedSuggestions()
 {

@@ -5,6 +5,8 @@
 #include "QtMeshCloudClient.h"
 #include "SentryReporter.h"
 
+#include <QJsonObject>
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -205,8 +207,16 @@ void FeedbackDialog::setSignedInAccountLabel(const QString& accountLabel, bool s
         m_accountLabel->setText(label);
         m_signInButton->hide();
     } else {
-        m_accountLabel->setText(
-            tr("Sign in to QtMesh Cloud to send feedback. Anonymous submissions are not available yet."));
+        // #1058: anonymous submission is available whenever telemetry is on,
+        // since that is what mints the installation id we identify it by.
+        if (SentryReporter::anonymousInstallationId().isEmpty()) {
+            m_accountLabel->setText(
+                tr("Sign in to QtMesh Cloud, or enable anonymous usage data in "
+                   "Preferences, to send feedback."));
+        } else {
+            m_accountLabel->setText(
+                tr("Sending anonymously. Sign in if you'd like us to be able to reply."));
+        }
         m_signInButton->show();
     }
     updateSubmitEnabled();
@@ -234,7 +244,13 @@ bool FeedbackDialog::contactAllowedChecked() const
 
 bool FeedbackDialog::canSubmit() const
 {
-    return m_signedIn && !selectedType().isEmpty() && !messageText().trimmed().isEmpty()
+    // #1058: a signed-out user with telemetry on has an anonymous
+    // installation id, which the server accepts as an identity. Requiring
+    // m_signedIn here left Send disabled for exactly the signed-out users the
+    // contextual prompt targets, making the whole anonymous path unreachable.
+    const bool haveIdentity =
+        m_signedIn || !SentryReporter::anonymousInstallationId().isEmpty();
+    return haveIdentity && !selectedType().isEmpty() && !messageText().trimmed().isEmpty()
         && messageText().size() <= kMaxMessageLength;
 }
 
@@ -269,18 +285,25 @@ QString FeedbackDialog::copyableFeedbackText() const
 void FeedbackDialog::onSendClicked()
 {
     if (!canSubmit()) {
-        if (!m_signedIn) {
+        if (!m_signedIn && SentryReporter::anonymousInstallationId().isEmpty()) {
             QMessageBox::information(this, tr("Sign in required"),
-                                     tr("Sign in to QtMesh Cloud before sending feedback."));
+                                     tr("Sign in to QtMesh Cloud, or enable anonymous usage "
+                                        "data in Preferences, before sending feedback."));
         }
         return;
     }
 
+    // #1058: feedback may be sent signed in OR anonymously, identified by the
+    // anonymous installation id the telemetry pipeline already tags. Only
+    // refuse when we have neither identity — which means telemetry is off, so
+    // there is no id and a response could not be joined to anything.
     const CloudSession session = CloudCredentialStore::loadSession();
-    if (!session.hasToken()) {
+    const QString installId = SentryReporter::anonymousInstallationId();
+    if (!session.hasToken() && installId.isEmpty()) {
         setSignedInAccountLabel({}, false);
         QMessageBox::information(this, tr("Sign in required"),
-                                 tr("Your QtMesh Cloud session is missing. Sign in and try again."));
+                                 tr("Sign in to QtMesh Cloud, or enable anonymous usage data "
+                                    "in Preferences, to send feedback."));
         return;
     }
 
@@ -294,6 +317,10 @@ void FeedbackDialog::onSendClicked()
     submission.contactAllowed = contactAllowedChecked();
     if (submission.includeDiagnostics)
         submission.diagnosticsJson = FeedbackDiagnostics::collectDiagnostics(true);
+    // Ignored by the server when a bearer token is present.
+    if (!session.hasToken())
+        submission.anonymousInstallationId = installId;
+    submission.category = m_category;
 
     m_sendButton->setEnabled(false);
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
@@ -306,6 +333,33 @@ void FeedbackDialog::onSendClicked()
     if (result.ok) {
         SentryReporter::addBreadcrumb(QStringLiteral("cloud.feedback"),
                                       QStringLiteral("Feedback sent id=%1").arg(result.id));
+        // Mirror the submission into Sentry as a structured event. The durable
+        // copy lives in the cloud table; this one exists so day-to-day
+        // observability (what broke this week, for whom) is answerable in the
+        // same place as the crash and workflow telemetry. The message text is
+        // the USER'S OWN words about the editor — never model content, file
+        // names or paths, which are the things #1058 forbids uploading.
+        QJsonObject props;
+        props.insert(QStringLiteral("feedback_id"), result.id);
+        props.insert(QStringLiteral("feedback_type"), submission.type);
+        if (!submission.rating.isEmpty())
+            props.insert(QStringLiteral("rating"), submission.rating);
+        if (!submission.category.isEmpty())
+            props.insert(QStringLiteral("feedback_category"), submission.category);
+        if (!submission.relatedOperation.isEmpty())
+            props.insert(QStringLiteral("related_operation"), submission.relatedOperation);
+        if (!submission.relatedFormat.isEmpty())
+            props.insert(QStringLiteral("file_format"), submission.relatedFormat);
+        props.insert(QStringLiteral("anonymous"), !session.hasToken());
+        // Deliberately NOT the message text. sanitizedValue strips paths and
+        // filenames but not prose PII — a user writing "email me at
+        // someone@example.com" would leak it into Sentry, which is a
+        // different retention and access regime from the feedback service.
+        // The length still tells us whether people write anything
+        // substantive, and the cloud row (linked by feedback_id) holds the
+        // actual words for anyone who needs them.
+        props.insert(QStringLiteral("message_length"), submission.message.size());
+        SentryReporter::captureTelemetryEvent(QStringLiteral("feedback.submitted"), props);
         QMessageBox::information(
             this, tr("Thank you"),
             tr("Thanks — your feedback was sent to the QtMesh team."));

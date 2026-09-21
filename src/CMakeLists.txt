@@ -279,6 +279,7 @@ CloudUploadProgress.cpp
 CloudCLIPipeline.cpp
 FeedbackDiagnostics.cpp
 FeedbackDialog.cpp
+FeedbackPromptController.cpp
 FeedbackReportHelper.cpp
 AssetBrowserController.cpp
 AssetScanController.cpp
@@ -476,6 +477,7 @@ CloudCLIPipeline.h
 FeedbackPrefill.h
 FeedbackDiagnostics.h
 FeedbackDialog.h
+FeedbackPromptController.h
 FeedbackReportHelper.h
 AssetBrowserController.h
 AssetScanController.h
