@@ -281,6 +281,8 @@ public:
     /// [--no-model] [--up-axis x|y|z]`. Text lists per-part vertex/face counts;
     /// --json emits the full vertex/face → label arrays.
     static int cmdSegment(int argc, char* argv[]);
+    /// `qtmesh lattice <file> --apply <lattice.json> -o <out>` / `--info` (LatticeDeformer).
+    static int cmdLattice(int argc, char* argv[]);
 
     /// AI image-to-3D (epic #764, TripoSR via ONNX): generate a mesh from a
     /// single image. `generate3d <image> [-o out.glb] [--resolution 16..1024]

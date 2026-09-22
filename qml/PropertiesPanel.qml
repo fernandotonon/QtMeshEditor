@@ -901,6 +901,19 @@ Rectangle {
                 Component.onCompleted: content = partOpsSplitComponent
             }
 
+            // ---- Lattice Deform (free-form deformation, Object mode) ----
+            // Stays visible while a session is open even if the selection
+            // changes, so Apply/Cancel are always reachable.
+            CollapsibleSection {
+                title: "Lattice Deform"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    LatticeController.hasSelection || LatticeController.sessionActive)
+                expanded: false
+
+                Component.onCompleted: content = latticeDeformComponent
+            }
+
             // ---- Explode / Join Parts (#859/#862, Object mode) ----
             CollapsibleSection {
                 title: "Explode / Join Parts"
@@ -8043,6 +8056,253 @@ Rectangle {
     // Parts") into independent scene nodes for inspection/editing, and join a
     // multi-selection of part nodes back into one fused mesh (baking their
     // world transforms into vertices). Both undoable (#859/#862, Object mode).
+    // ---- Lattice Deform section body ----
+    // Blender-style lattice modifier: a grid of control points boxes the mesh;
+    // dragging points in the viewport bends the enclosed vertices live. Apply
+    // bakes as one undo step; Cancel restores the mesh.
+    Component {
+        id: latticeDeformComponent
+
+        Column {
+            id: latticeContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            readonly property bool active: LatticeController.sessionActive
+
+            // Same look as the Inspector's InspectorButton (26 px, palette
+            // colours, focus ring) — copied because that factory is scoped to
+            // the Image→3D section.
+            component LatticeButton: Rectangle {
+                id: lbRoot
+                property alias text: lbLabel.text
+                property bool clickEnabled: true
+                signal clicked()
+                width: lbLabel.implicitWidth + 20
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: (lbMa.containsMouse || lbRoot.activeFocus) && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: lbRoot.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: lbRoot.activeFocus ? 2 : 1
+                activeFocusOnTab: clickEnabled
+                Accessible.role: Accessible.Button
+                Accessible.name: lbLabel.text
+                Keys.onSpacePressed: if (clickEnabled) clicked()
+                Keys.onReturnPressed: if (clickEnabled) clicked()
+                Keys.onEnterPressed: if (clickEnabled) clicked()
+                Text {
+                    id: lbLabel
+                    anchors.centerIn: parent
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: lbMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: lbRoot.clickEnabled
+                    cursorShape: lbRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: lbRoot.clicked()
+                }
+            }
+
+            // Inspector-styled integer stepper (the stock SpinBox renders in
+            // the default Qt Quick style and clashes with the palette).
+            component LatticeStepper: Row {
+                id: lsRoot
+                property string label: ""
+                property int value: 2
+                property int from: 2
+                property int to: 16
+                signal modified(int v)
+                spacing: 0
+                Text {
+                    text: lsRoot.label
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    width: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Rectangle {
+                    width: 18; height: 22; radius: 3
+                    color: lsDownMa.containsMouse && lsRoot.value > lsRoot.from
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: lsRoot.value > lsRoot.from ? 1.0 : 0.45
+                    Text { anchors.centerIn: parent; text: "−"; color: PropertiesPanelController.textColor; font.pixelSize: 12 }
+                    MouseArea {
+                        id: lsDownMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: if (lsRoot.value > lsRoot.from) lsRoot.modified(lsRoot.value - 1)
+                    }
+                }
+                Rectangle {
+                    width: 26; height: 22
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: lsRoot.value
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                }
+                Rectangle {
+                    width: 18; height: 22; radius: 3
+                    color: lsUpMa.containsMouse && lsRoot.value < lsRoot.to
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: lsRoot.value < lsRoot.to ? 1.0 : 0.45
+                    Text { anchors.centerIn: parent; text: "+"; color: PropertiesPanelController.textColor; font.pixelSize: 12 }
+                    MouseArea {
+                        id: lsUpMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: if (lsRoot.value < lsRoot.to) lsRoot.modified(lsRoot.value + 1)
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: latticeContent.active
+                    ? "Deforming: " + LatticeController.entityName
+                    : "Box the selected mesh with a grid of control points and drag them to bend it."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                opacity: 0.85
+            }
+
+            // --- Resolution X / Y / Z ---
+            Text {
+                text: "Resolution"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Flow {
+                width: parent.width - 16
+                spacing: 10
+                LatticeStepper {
+                    label: "X"
+                    value: LatticeController.resolutionX
+                    onModified: function(v) { LatticeController.resolutionX = v }
+                }
+                LatticeStepper {
+                    label: "Y"
+                    value: LatticeController.resolutionY
+                    onModified: function(v) { LatticeController.resolutionY = v }
+                }
+                LatticeStepper {
+                    label: "Z"
+                    value: LatticeController.resolutionZ
+                    onModified: function(v) { LatticeController.resolutionZ = v }
+                }
+            }
+            Text {
+                visible: latticeContent.active
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: "Changing the resolution rebuilds the cage at rest (the current bend is dropped)."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.6
+            }
+
+            // --- Interpolation ---
+            Text {
+                text: "Interpolation"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            RigSegments {
+                width: parent.width - 16
+                options: ["Linear", "Smooth", "Bézier"]
+                index: LatticeController.interpolation
+                onPicked: function(i) { LatticeController.interpolation = i }
+            }
+
+            // --- Add lattice (idle) ---
+            LatticeButton {
+                visible: !latticeContent.active
+                text: "Add Lattice"
+                clickEnabled: LatticeController.hasSelection
+                onClicked: LatticeController.beginSession()
+            }
+
+            // --- Session controls ---
+            Column {
+                visible: latticeContent.active
+                width: parent.width - 16
+                spacing: 6
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: LatticeController.selectedPointCount + " / " + LatticeController.pointCount
+                          + " control points selected · drag on empty space to box-select · Shift adds · Ctrl+A all"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.7
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    LatticeButton { text: "Select All"; onClicked: LatticeController.selectAllPoints() }
+                    LatticeButton {
+                        text: "Deselect"
+                        clickEnabled: LatticeController.selectedPointCount > 0
+                        onClicked: LatticeController.clearPointSelection()
+                    }
+                    LatticeButton {
+                        text: "Reset Points"
+                        clickEnabled: LatticeController.isDeformed
+                        onClicked: LatticeController.resetPoints()
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    LatticeButton { text: "Save Lattice…"; onClicked: LatticeController.requestSaveDialog() }
+                    LatticeButton { text: "Load Lattice…"; onClicked: LatticeController.requestLoadDialog() }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    LatticeButton { text: "Apply  (Enter)"; onClicked: LatticeController.applySession() }
+                    LatticeButton { text: "Cancel  (Esc)"; onClicked: LatticeController.cancelSession() }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                visible: LatticeController.statusText.length > 0
+                text: LatticeController.statusText
+                color: LatticeController.statusIsError ? "#e06060" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: LatticeController.statusIsError ? 1.0 : 0.7
+            }
+        }
+    }
+
     Component {
         id: partOpsExplodeJoinComponent
 

@@ -29,7 +29,7 @@ bool isCliSubcommand(const QString& arg)
         QStringLiteral("vat"), QStringLiteral("uv"), QStringLiteral("hdri"), QStringLiteral("light"),
         QStringLiteral("retopo"),
         QStringLiteral("skin"), QStringLiteral("rig"), QStringLiteral("facerig"),
-        QStringLiteral("segment"),
+        QStringLiteral("segment"), QStringLiteral("lattice"),
         QStringLiteral("generate3d"),
         QStringLiteral("morph"),
         QStringLiteral("nodeanim"), QStringLiteral("ps1"), QStringLiteral("cloud"),

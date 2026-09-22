@@ -236,6 +236,10 @@ private:
     /// Skel Slice D (#558): a weight-paint stroke owns the drag. Separate
     /// from the vertex-paint flag so the two brushes cannot both claim it.
     bool                                    mWeightPaintDragActive = false;
+    /// Lattice deformer: a control-point drag owns the mouse (LatticeController).
+    bool                                    mLatticeDragActive = false;
+    /// Lattice deformer: a press that missed every point is a rubber-band box select.
+    bool                                    mLatticeBoxActive = false;
     bool                                    mTexturePaintDragActive = false;
     // Paint v2 Slice F (#549): decal-handle drag state.
     bool                                    mDecalDragActive = false;

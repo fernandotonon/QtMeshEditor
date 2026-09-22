@@ -25,6 +25,7 @@ const std::vector<CapDef> kCapDefs = {
     {"uv",             "UV mapping",            "auto-unwrap, UV info, projections, seams"},
     {"rigging",        "Rigging & skinning",    "auto-rig a static mesh (humanoid/biped/quadruped/generic/vehicle templates or UniRig), compute skin weights, ARKit face blendshapes, remove skeleton"},
     {"segmentation",   "Part segmentation",     "AI part segmentation, split/explode/join mesh parts"},
+    {"mesh_deform",    "Mesh deformation",      "lattice (free-form) deformer: box a mesh with control points and bend/squash/stretch it, apply a saved lattice"},
     {"generation_3d",  "Image/prompt → 3D",     "generate a NEW 3D mesh from a 2D image file (png/jpg) or a text prompt (TripoSR/TripoSG/TRELLIS.2) — not for existing meshes, those are load_mesh"},
     {"animation",      "Skeletal animation",    "list/play/edit animations and keyframes, merge/resample/simplify/trim/bake, isometric sprites, VAT"},
     {"motion_ai",      "AI motion",             "text-to-motion generation, in-betweening, arm-space, foot pinning"},
@@ -66,6 +67,7 @@ QHash<QString, QString> buildTaxonomy()
     add("rigging", {"auto_rig", "compute_skin_weights", "set_skinning_display", "remove_skeleton",
                     "add_arkit_blendshapes"});
     add("segmentation", {"segment_mesh", "split_mesh_by_segments", "explode_mesh_parts", "join_mesh_parts"});
+    add("mesh_deform", {"lattice_begin", "lattice_get", "lattice_set_points", "lattice_apply", "lattice_cancel", "lattice_deform"});
     add("generation_3d", {"generate_mesh_from_image"});
     add("animation", {"animate", "list_skeletal_animations", "get_animation_info", "set_animation_length",
                       "set_animation_time", "add_keyframe", "remove_keyframe", "play_animation",
@@ -537,7 +539,8 @@ QString deleteReason(const QString& tool, const QJsonObject& args)
         {"cloud_delete_project", "project_id"}, {"ps1rip_clear", ""}, {"paint_delete_layer", "index"},
         {"paint_flatten", ""}, {"ungroup_node", "name"}, {"split_mesh_by_segments", "entity_name"},
         {"explode_mesh_parts", "entity_name"}, {"join_mesh_parts", ""}, {"decimate_mesh", "entity_name"},
-        {"retopologize", "entity_name"}, {"weld_vertices", "entity_name"},
+        {"retopologize", "entity_name"}, {"weld_vertices", "entity_name"}, {"lattice_deform", "entity_name"},
+        {"lattice_apply", ""},
     };
     const auto it = deletes.constFind(tool);
     if (it == deletes.constEnd()) return {};

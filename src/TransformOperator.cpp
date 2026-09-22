@@ -32,6 +32,7 @@
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
 #include "SkinWeightController.h"
+#include "LatticeController.h"
 #include "AutoRigController.h"
 #include "FaceRigController.h"
 #include "TexturePaintController.h"
@@ -134,6 +135,9 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     // Texture paint toggle also affects mouse-tracking (we need
     // hover events without a button press) and gizmo visibility.
     connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
+            this, &TransformOperator::onSelectionChanged);
+    // Lattice session toggles hover tracking + cursor like the paint modes.
+    connect(LatticeController::instance(), &LatticeController::sessionChanged,
             this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
@@ -643,7 +647,8 @@ void TransformOperator::updateGizmo()
                 mTrackingEnable =
                     (EditModeController::instance()->isEditModeActive()
                      && EditModeController::instance()->vertexPaintEnabled())
-                    || TexturePaintController::instance()->texturePaintEnabled();
+                    || TexturePaintController::instance()->texturePaintEnabled()
+                    || LatticeController::instance()->sessionActive();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -690,7 +695,8 @@ void TransformOperator::updateGizmo()
             const bool paintOn =
                 (EditModeController::instance()->isEditModeActive()
                  && EditModeController::instance()->vertexPaintEnabled())
-                || TexturePaintController::instance()->texturePaintEnabled();
+                || TexturePaintController::instance()->texturePaintEnabled()
+                || LatticeController::instance()->sessionActive();
             m_pActiveWidget->setCursor(paintOn ? Qt::CrossCursor : Qt::ArrowCursor);
         } else {
             m_pActiveWidget->setCursor(Qt::ArrowCursor);
@@ -1254,6 +1260,27 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         // edit mode is off in Animation mode — the brush appeared completely
         // dead. Only the SELECT tool is hijacked, so the transform gizmos keep
         // working while the brush is armed.
+        // Lattice deformer: while a session is open the SELECT tool grabs
+        // control points. A click that misses every point clears the point
+        // selection and is swallowed — falling through to scene selection
+        // would deselect the entity under the cage mid-edit.
+        if (mTransformState == TS_SELECT) {
+            if (auto* lat = LatticeController::instance(); lat && lat->sessionActive()) {
+                const bool additive = e->modifiers() & Qt::ShiftModifier;
+                if (lat->beginDrag(m_pActiveWidget, e->pos(), additive)) {
+                    mLatticeDragActive = true;
+                    SentryReporter::addBreadcrumb("mesh.lattice.drag", "begin");
+                    return;
+                }
+                // Missed every point: start a rubber band. Release decides
+                // whether it was a click (deselect) or a box (select inside).
+                mLatticeBoxActive = true;
+                mScreenStart = e->pos();
+                if (m_pSelectionBox) m_pSelectionBox->setVisible(true);
+                return;
+            }
+        }
+
         if (mTransformState == TS_SELECT) {
             if (auto* swc = SkinWeightController::instance();
                 swc && swc->weightPaintEnabled()) {
@@ -1508,6 +1535,27 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Lattice deformer: a control-point drag owns the mouse; otherwise keep
+    // the hover highlight live without consuming (camera hover still works).
+    if (auto* lat = LatticeController::instance(); lat && m_pActiveWidget && lat->sessionActive()) {
+        if (mLatticeDragActive && (e->buttons() & Qt::LeftButton)) {
+            lat->updateDrag(m_pActiveWidget, e->pos());
+            return;
+        }
+        if (mLatticeBoxActive && (e->buttons() & Qt::LeftButton) && m_pSelectionBox
+            && m_pActiveWidget->getViewport()) {
+            const int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
+            const int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
+            const float xStart = (float)mScreenStart.x() / (float)width * 2.0f - 1.0f;
+            const float xStop  = (float)e->pos().x() / (float)width * 2.0f - 1.0f;
+            const float yStart = 1.0f - (float)mScreenStart.y() / (float)height * 2.0f;
+            const float yStop  = 1.0f - (float)e->pos().y() / (float)height * 2.0f;
+            m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
+            return;
+        }
+        lat->updateHover(m_pActiveWidget, e->pos());
+    }
+
     // Skel Slice D (#558): weight-paint drag / hover readout. Deliberately NOT
     // gated on edit mode — this is an Animation-mode feature.
     if (auto* swc = SkinWeightController::instance(); swc && m_pActiveWidget) {
@@ -2087,6 +2135,27 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (mLatticeDragActive && e->button() == Qt::LeftButton) {
+        if (auto* lat = LatticeController::instance()) lat->endDrag();
+        mLatticeDragActive = false;
+        return;
+    }
+    if (mLatticeBoxActive && e->button() == Qt::LeftButton) {
+        mLatticeBoxActive = false;
+        if (m_pSelectionBox) { m_pSelectionBox->clear(); m_pSelectionBox->setVisible(false); }
+        auto* lat = LatticeController::instance();
+        const bool additive = e->modifiers() & Qt::ShiftModifier;
+        const QRect box(mScreenStart, e->pos());
+        mScreenStart = QPoint(invalidPosition);
+        if (lat && lat->sessionActive()) {
+            if (box.normalized().width() < 3 && box.normalized().height() < 3) {
+                if (!additive) lat->clearPointSelection(); // a plain click on empty space
+            } else {
+                lat->selectPointsInRect(m_pActiveWidget, box, additive);
+            }
+        }
+        return;
+    }
     if (mWeightPaintDragActive && e->button() == Qt::LeftButton) {
         if (auto* swc = SkinWeightController::instance()) swc->endStroke();
         mWeightPaintDragActive = false;

@@ -50,6 +50,7 @@
 #include "RTShaderHelper.h"
 #include <QColor>
 #include <QJsonDocument>
+#include <QFile>
 #include <QJsonObject>
 #include <QSet>
 #include "UvPipeline.h"
@@ -66,6 +67,8 @@
 #include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
+#include "LatticeDeformer.h"
+#include "LatticeController.h"
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
 #include "PartOpsScene.h"
@@ -880,6 +883,12 @@ void CLIPipeline::printUsage()
         "                  [--pos x,y,z] [--dir x,y,z] [--range N] [--enabled 0|1] -o <out>\n"
         "  light <file> --apply-rig <rig_id> [--replace] -o <out>\n"
         "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
+        "  lattice <file> --apply <lattice.json> -o <out> [--json]\n"
+        "                                    Lattice (free-form) deform: bend a mesh with a lattice saved from the\n"
+        "                                    GUI's Lattice Deform section (Save Lattice…) or MCP lattice_get\n"
+        "  lattice <file> --info [--resolution nx,ny,nz] [--json]\n"
+        "                                    Print the REST lattice boxing the mesh (a starting point to edit)\n"
+        "  lattice --info <lattice.json> [--json]  Describe a saved lattice file\n"
         "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
         "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
@@ -1690,6 +1699,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "rig") rc = cmdRig(argc, argv);
     else if (cmd == "facerig") rc = cmdFaceRig(argc, argv);
     else if (cmd == "segment") rc = cmdSegment(argc, argv);
+    else if (cmd == "lattice") rc = cmdLattice(argc, argv);
     else if (cmd == "generate3d") rc = cmdGenerate3d(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
@@ -13406,4 +13416,160 @@ int CLIPipeline::cmdPs1(int argc, char* argv[])
     }
     return exportRc;
 #endif // ENABLE_PS1_RIP
+}
+
+// ---------------------------------------------------------------------------
+// qtmesh lattice — lattice (free-form) deformation
+// ---------------------------------------------------------------------------
+
+int CLIPipeline::cmdLattice(int argc, char* argv[])
+{
+    // Parse: lattice <mesh> --apply <lattice.json> -o <out> [--json]
+    //        lattice <mesh> --info [--resolution nx,ny,nz] [--interpolation m] [--json]
+    //        lattice --info <lattice.json> [--json]
+    QString inputPath, latticePath, outputPath;
+    bool info = false, jsonOutput = false;
+    int res[3] = {3, 3, 3};
+    Lattice::Interpolation interp = Lattice::Interpolation::Smooth;
+
+    auto usage = [&]() {
+        err() << "Usage: qtmesh lattice <mesh> --apply <lattice.json> -o <out> [--json]" << Qt::endl;
+        err() << "       qtmesh lattice <mesh> --info [--resolution nx,ny,nz] [--interpolation linear|smooth|bezier] [--json]" << Qt::endl;
+        err() << "       qtmesh lattice --info <lattice.json> [--json]" << Qt::endl;
+        err() << "The lattice JSON (qtmesh-lattice-v1) is what the GUI's Lattice Deform section saves with" << Qt::endl;
+        err() << "'Save Lattice…' and what MCP lattice_get returns; its box is in MESH-LOCAL space." << Qt::endl;
+        return 2;
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "lattice" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--info") { info = true; continue; }
+        if (arg == "--apply") {
+            if (i + 1 >= argc) { err() << "Error: --apply requires a lattice JSON path." << Qt::endl; return 2; }
+            latticePath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) { err() << "Error: -o requires an output path." << Qt::endl; return 2; }
+            outputPath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--resolution") {
+            if (i + 1 >= argc) { err() << "Error: --resolution requires nx,ny,nz." << Qt::endl; return 2; }
+            const QStringList parts = QString::fromLocal8Bit(argv[++i]).split(',');
+            bool ok = parts.size() == 3;
+            for (int a = 0; ok && a < 3; ++a) { res[a] = parts[a].trimmed().toInt(&ok); }
+            if (!ok || res[0] < 2 || res[1] < 2 || res[2] < 2 || res[0] > 16 || res[1] > 16 || res[2] > 16) {
+                err() << "Error: --resolution must be nx,ny,nz with each in 2..16." << Qt::endl; return 2;
+            }
+            continue;
+        }
+        if (arg == "--interpolation") {
+            if (i + 1 >= argc || !Lattice::interpolationFromId(QString::fromLocal8Bit(argv[i + 1]), interp)) {
+                err() << "Error: --interpolation must be linear, smooth or bezier." << Qt::endl; return 2;
+            }
+            ++i;
+            continue;
+        }
+        if (arg.startsWith('-')) { err() << "Error: unknown option " << arg << Qt::endl; return usage(); }
+        if (inputPath.isEmpty()) inputPath = arg;
+        else if (info && latticePath.isEmpty()) latticePath = arg; // "--info <mesh> <lattice>" tolerated
+        else { err() << "Error: unexpected argument " << arg << Qt::endl; return usage(); }
+    }
+    if (inputPath.isEmpty()) return usage();
+
+    auto readLattice = [&](const QString& path, Lattice::Grid& grid) -> bool {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) { err() << "Error: cannot read " << path << Qt::endl; return false; }
+        QJsonParseError perr{};
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+            err() << "Error: " << path << " is not a lattice JSON document (" << perr.errorString() << ")" << Qt::endl;
+            return false;
+        }
+        QString e;
+        if (!Lattice::Grid::fromJson(doc.object(), grid, &e)) { err() << "Error: " << e << Qt::endl; return false; }
+        return true;
+    };
+    auto describe = [&](const Lattice::Grid& g, const QString& source) {
+        if (jsonOutput) {
+            QJsonObject root = g.toJson();
+            root["source"] = source;
+            root["atRest"] = g.isAtRest();
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+            return;
+        }
+        int moved = 0;
+        for (int k = 0; k < g.nz; ++k) for (int j = 0; j < g.ny; ++j) for (int i = 0; i < g.nx; ++i)
+            if (g.points[static_cast<size_t>(g.index(i, j, k))].squaredDistance(g.restPoint(i, j, k)) > 1e-12f) ++moved;
+        cliWrite(QString("Lattice: %1\n  resolution:    %2 x %3 x %4 (%5 control points, %6 displaced)\n"
+                         "  interpolation: %7\n  box origin:    %8 %9 %10\n  box size:      %11 %12 %13\n")
+                     .arg(source).arg(g.nx).arg(g.ny).arg(g.nz).arg(g.pointCount()).arg(moved)
+                     .arg(Lattice::interpolationId(g.interpolation))
+                     .arg(g.origin.x).arg(g.origin.y).arg(g.origin.z).arg(g.size.x).arg(g.size.y).arg(g.size.z));
+    };
+
+    // `lattice --info <lattice.json>`: describe a saved lattice, no mesh needed.
+    if (info && latticePath.isEmpty() && inputPath.endsWith(".json", Qt::CaseInsensitive)) {
+        Lattice::Grid g;
+        if (!readLattice(inputPath, g)) return 1;
+        describe(g, QFileInfo(inputPath).fileName());
+        return 0;
+    }
+    if (!info && latticePath.isEmpty()) { err() << "Error: --apply <lattice.json> or --info is required." << Qt::endl; return usage(); }
+    if (!info && outputPath.isEmpty()) { err() << "Error: --apply requires -o <output mesh>." << Qt::endl; return 2; }
+
+    const QFileInfo fi(inputPath);
+    if (!fi.exists()) { err() << "Error: file not found: " << inputPath << Qt::endl; return 1; }
+    if (!initOgreHeadless()) return 1;
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities())
+        if (e && e->getMovableType() == "Entity" && e->getMesh()) { entity = e; break; }
+    if (!entity) { err() << "Error: failed to load " << inputPath << Qt::endl; return 1; }
+
+    if (info) {
+        // The REST lattice boxing the mesh — the same grid the GUI's Add Lattice
+        // builds — as a starting point for scripted edits.
+        EditableMesh mesh;
+        if (!mesh.loadFromEntity(entity)) { err() << "Error: could not read vertex data." << Qt::endl; return 1; }
+        Lattice::Grid g = Lattice::Grid::fromBounds(mesh.calculateBounds(), res[0], res[1], res[2]);
+        g.interpolation = interp;
+        describe(g, fi.fileName());
+        return 0;
+    }
+
+    Lattice::Grid grid;
+    if (!readLattice(latticePath, grid)) return 1;
+    if (grid.isAtRest()) err() << "Warning: the lattice is at rest — the mesh is written unchanged." << Qt::endl;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"),
+                                  QStringLiteral("CLI %1x%2x%3 %4").arg(grid.nx).arg(grid.ny).arg(grid.nz)
+                                      .arg(Lattice::interpolationId(grid.interpolation)));
+    QString e;
+    if (!LatticeController::deformEntityWithGrid(entity, grid, &e)) { err() << "Error: " << e << Qt::endl; return 1; }
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    if (!node || MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed for " << outputPath << Qt::endl;
+        return 1;
+    }
+    if (jsonOutput) {
+        QJsonObject root;
+        root["input"] = fi.fileName();
+        root["output"] = QFileInfo(outputPath).absoluteFilePath();
+        root["lattice"] = QFileInfo(latticePath).fileName();
+        root["resolution"] = QJsonArray{grid.nx, grid.ny, grid.nz};
+        root["interpolation"] = Lattice::interpolationId(grid.interpolation);
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QString("Applied lattice %1 (%2x%3x%4, %5) to %6 → %7\n")
+                     .arg(QFileInfo(latticePath).fileName()).arg(grid.nx).arg(grid.ny).arg(grid.nz)
+                     .arg(Lattice::interpolationId(grid.interpolation)).arg(fi.fileName()).arg(outputPath));
+    }
+    return 0;
 }

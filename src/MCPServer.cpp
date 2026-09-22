@@ -162,6 +162,10 @@
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
 #include "commands/SplitMeshCommand.h"
+#include "LatticeController.h"
+#include "LatticeDeformer.h"
+#include "EditableMesh.h"
+#include "commands/LatticeCommands.h"
 #include "commands/ExplodePartsCommand.h"
 #include "commands/SkeletonBoneCommands.h"
 #include "commands/JoinPartsCommand.h"
@@ -711,6 +715,12 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pin_feet"), &MCPServer::toolPinFeet},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("split_mesh_by_segments"), &MCPServer::toolSplitMeshBySegments},
+        {QStringLiteral("lattice_begin"), &MCPServer::toolLatticeBegin},
+        {QStringLiteral("lattice_get"), &MCPServer::toolLatticeGet},
+        {QStringLiteral("lattice_set_points"), &MCPServer::toolLatticeSetPoints},
+        {QStringLiteral("lattice_apply"), &MCPServer::toolLatticeApply},
+        {QStringLiteral("lattice_cancel"), &MCPServer::toolLatticeCancel},
+        {QStringLiteral("lattice_deform"), &MCPServer::toolLatticeDeform},
         {QStringLiteral("explode_mesh_parts"), &MCPServer::toolExplodeMeshParts},
         {QStringLiteral("join_mesh_parts"), &MCPServer::toolJoinMeshParts},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
@@ -841,6 +851,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
         QStringLiteral("split_mesh_by_segments"),
+        QStringLiteral("lattice_deform"),
         QStringLiteral("explode_mesh_parts"),
         QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
@@ -5722,6 +5733,199 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
     } catch (std::exception& e) {
         return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lattice deformer
+// ---------------------------------------------------------------------------
+
+namespace {
+Ogre::Entity* latticeTargetEntity(const QString& entityName)
+{
+    if (!entityName.isEmpty()) return findEntityByName(entityName);
+    if (auto* sel = SelectionSet::getSingleton()) {
+        const QList<Ogre::Entity*> ents = sel->getResolvedEntities();
+        if (ents.size() == 1 && ents.first()) return ents.first();
+    }
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    for (Ogre::Entity* e : mgr->getEntities())
+        if (e && e->getMovableType() == "Entity" && e->getMesh()) return e;
+    return nullptr;
+}
+
+QJsonObject latticeSessionJson(LatticeController* lat)
+{
+    QJsonObject o;
+    o["entity"] = lat->entityName();
+    o["lattice"] = lat->latticeJson();
+    o["isDeformed"] = lat->isDeformed();
+    return o;
+}
+} // namespace
+
+QJsonObject MCPServer::toolLatticeBegin(const QJsonObject &args)
+{
+    try {
+        auto* lat = LatticeController::instance();
+        Ogre::Entity* entity = latticeTargetEntity(args.value("entity_name").toString());
+        if (!entity) return makeErrorResult("Error: no mesh entity found (load or name one)");
+
+        const QJsonArray res = args.value("resolution").toArray();
+        if (!res.isEmpty()) {
+            if (res.size() != 3) return makeErrorResult("Error: resolution must be [nx, ny, nz]");
+            lat->setResolution(res[0].toInt(3), res[1].toInt(3), res[2].toInt(3));
+        }
+        const QString interp = args.value("interpolation").toString();
+        if (!interp.isEmpty()) {
+            Lattice::Interpolation mode;
+            if (!Lattice::interpolationFromId(interp, mode))
+                return makeErrorResult("Error: interpolation must be linear, smooth or bezier");
+            lat->setInterpolation(static_cast<int>(mode));
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("lattice_begin"));
+        if (!lat->beginSessionOn(entity))
+            return makeErrorResult("Error: " + (lat->statusText().isEmpty() ? QStringLiteral("could not start a lattice session") : lat->statusText()));
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(latticeSessionJson(lat)).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    }
+}
+
+QJsonObject MCPServer::toolLatticeGet(const QJsonObject &)
+{
+    auto* lat = LatticeController::instance();
+    if (!lat->sessionActive()) return makeErrorResult("Error: no lattice session is open (call lattice_begin)");
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(latticeSessionJson(lat)).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolLatticeSetPoints(const QJsonObject &args)
+{
+    try {
+        auto* lat = LatticeController::instance();
+        if (!lat->sessionActive()) return makeErrorResult("Error: no lattice session is open (call lattice_begin)");
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("lattice_set_points"));
+        if (args.value("reset").toBool(false)) lat->resetPoints();
+
+        const QJsonArray pts = args.value("points").toArray();
+        if (!pts.isEmpty()) {
+            const int n = lat->pointCount();
+            if (pts.size() != n * 3)
+                return makeErrorResult(QString("Error: points must hold %1 numbers (3 × %2 control points), got %3")
+                                           .arg(n * 3).arg(n).arg(pts.size()));
+            QJsonObject doc = lat->latticeJson();
+            doc["points"] = pts;
+            QString err;
+            if (!lat->setLatticeJson(doc, &err)) return makeErrorResult("Error: " + err);
+        }
+        const QJsonArray moves = args.value("moves").toArray();
+        for (const QJsonValue& mv : moves) {
+            const QJsonObject m = mv.toObject();
+            const int idx = m.value("index").toInt(-1);
+            if (idx < 0 || idx >= lat->pointCount())
+                return makeErrorResult(QString("Error: move index %1 out of range [0, %2)").arg(idx).arg(lat->pointCount()));
+            const QJsonArray pos = m.value("position").toArray();
+            const QJsonArray delta = m.value("delta").toArray();
+            if (pos.size() == 3) {
+                lat->setPoint(idx, pos[0].toDouble(), pos[1].toDouble(), pos[2].toDouble());
+            } else if (delta.size() == 3) {
+                const QVariantList cur = lat->pointPosition(idx);
+                lat->setPoint(idx, cur[0].toDouble() + delta[0].toDouble(), cur[1].toDouble() + delta[1].toDouble(),
+                              cur[2].toDouble() + delta[2].toDouble());
+            } else {
+                return makeErrorResult(QString("Error: move %1 needs position:[x,y,z] or delta:[dx,dy,dz]").arg(idx));
+            }
+        }
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(latticeSessionJson(lat)).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    }
+}
+
+QJsonObject MCPServer::toolLatticeApply(const QJsonObject &)
+{
+    auto* lat = LatticeController::instance();
+    if (!lat->sessionActive()) return makeErrorResult("Error: no lattice session is open (call lattice_begin)");
+    const QString entity = lat->entityName();
+    const bool deformed = lat->isDeformed();
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("lattice_apply"));
+    if (!lat->applySession()) return makeErrorResult("Error: " + lat->statusText());
+    QJsonObject o;
+    o["entity"] = entity;
+    o["applied"] = deformed;
+    o["message"] = deformed ? QStringLiteral("Lattice deformation baked into the mesh (undoable).")
+                            : QStringLiteral("Lattice was at rest — session closed, mesh unchanged.");
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolLatticeCancel(const QJsonObject &)
+{
+    auto* lat = LatticeController::instance();
+    if (!lat->sessionActive()) return makeErrorResult("Error: no lattice session is open");
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("lattice_cancel"));
+    lat->cancelSession();
+    return makeSuccessResult("Lattice cancelled — mesh restored to its rest shape.");
+}
+
+QJsonObject MCPServer::toolLatticeDeform(const QJsonObject &args)
+{
+    try {
+        Ogre::Entity* entity = latticeTargetEntity(args.value("entity_name").toString());
+        if (!entity) return makeErrorResult("Error: no mesh entity found (load or name one)");
+
+        QJsonObject latticeObj = args.value("lattice").toObject();
+        const QString latticePath = args.value("lattice_path").toString();
+        if (latticeObj.isEmpty() && !latticePath.isEmpty()) {
+            QFile f(latticePath);
+            if (!f.open(QIODevice::ReadOnly)) return makeErrorResult("Error: cannot read " + latticePath);
+            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+            if (!doc.isObject()) return makeErrorResult("Error: " + latticePath + " is not a lattice JSON document");
+            latticeObj = doc.object();
+        }
+        if (latticeObj.isEmpty()) return makeErrorResult("Error: provide `lattice` (object) or `lattice_path`");
+
+        Lattice::Grid grid;
+        QString err;
+        if (!Lattice::Grid::fromJson(latticeObj, grid, &err)) return makeErrorResult("Error: " + err);
+        if (grid.isAtRest()) return makeErrorResult("Error: the lattice is at rest — nothing to apply");
+
+        auto* lat = LatticeController::instance();
+        if (lat->sessionActive() && lat->entityName() == QString::fromStdString(entity->getName()))
+            lat->cancelSession(); // never bake under an open interactive session on the same mesh
+
+        // Rest + deformed snapshots make it one undo step (LatticeApplyCommand).
+        EditableMesh mesh;
+        if (!mesh.loadFromEntity(entity)) return makeErrorResult("Error: could not read the mesh's vertex data");
+        LatticeCmd::Positions rest, deformed;
+        for (const auto& sm : mesh.subMeshes()) {
+            std::vector<Ogre::Vector3> r, d;
+            r.reserve(sm.vertices.size()); d.reserve(sm.vertices.size());
+            for (const auto& v : sm.vertices) { r.push_back(v.position); d.push_back(grid.deform(v.position)); }
+            rest.push_back(std::move(r)); deformed.push_back(std::move(d));
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"), QStringLiteral("MCP lattice_deform"));
+        const QString entityName = QString::fromStdString(entity->getName());
+        auto* cmd = new LatticeApplyCommand(entity->getName(), std::move(rest), std::move(deformed), latticeObj,
+                                            /*alreadyApplied=*/false);
+        UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
+        if (!cmd->ok()) return makeErrorResult("Error: " + cmd->error());
+
+        QJsonObject o;
+        o["entity"] = entityName;
+        o["resolution"] = QJsonArray{grid.nx, grid.ny, grid.nz};
+        o["interpolation"] = Lattice::interpolationId(grid.interpolation);
+        const QString outputPath = args.value("output_path").toString();
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            const QString fmt = CLIPipeline::formatForExtension(outputPath);
+            if (!node || MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
+                return makeErrorResult("Error: deformed, but export to " + outputPath + " failed");
+            o["output"] = QFileInfo(outputPath).absoluteFilePath();
+        }
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
     }
 }
 
@@ -11208,6 +11412,70 @@ QJsonArray MCPServer::buildToolsList()
             "Undoable (same command as the GUI 'Split into Parts' button). Returns "
             "the created submesh count + part names. FBX export keeps the submesh "
             "boundaries; glTF coalesces same-material parts.",
+            props
+        );
+    }
+
+    // ---- Lattice deformer (free-form deformation, Blender "Lattice modifier") ----
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Mesh entity to box with a lattice. Empty → the selected entity, else the first mesh in the scene."}};
+        props["resolution"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "integer"}}}, {"description", "[nx, ny, nz] control points per axis, each 2..16 (default [3,3,3])."}};
+        props["interpolation"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"linear", "smooth", "bezier"}}, {"description", "Basis across the grid: linear (trilinear, creases), smooth (Catmull-Rom, default), bezier (Bernstein FFD, global)."}};
+        appendTool(
+            "lattice_begin",
+            "Lattice deformer: open an interactive lattice session on a mesh — a rest "
+            "grid of control points boxing its bounds. Returns the lattice JSON "
+            "(qtmesh-lattice-v1: resolution, origin, size, interpolation, points as "
+            "a flat xyz array in MESH-LOCAL space) so a caller can compute point "
+            "moves. Follow with lattice_set_points to bend the mesh live, then "
+            "lattice_apply (bake, one undo step) or lattice_cancel (restore). The "
+            "GUI shows the same cage.",
+            props
+        );
+    }
+    {
+        QJsonObject props;
+        appendTool("lattice_get",
+                   "Lattice deformer: return the live session's lattice JSON (or an error when no session is open).",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["points"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}}, {"description", "Full control-point array as flat [x0,y0,z0, x1,y1,z1, …] (mesh-local), length 3·nx·ny·nz — replaces every point."}};
+        props["moves"] = QJsonObject{{"type", "array"}, {"description", "Alternative to `points`: a list of {index, position:[x,y,z]} or {index, delta:[dx,dy,dz]} edits applied to individual control points (flat index = (k·ny + j)·nx + i)."}};
+        props["reset"] = QJsonObject{{"type", "boolean"}, {"description", "Snap every point back to rest first (default false)."}};
+        appendTool(
+            "lattice_set_points",
+            "Lattice deformer: move control points in the open session; the mesh is "
+            "re-deformed from its rest positions immediately (nothing accumulates). "
+            "Undoable inside the session. Returns the resulting lattice JSON.",
+            props
+        );
+    }
+    {
+        QJsonObject props;
+        appendTool("lattice_apply",
+                   "Lattice deformer: BAKE the current deformation into the mesh vertices as one undo step and close the session. A rest lattice just closes.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        appendTool("lattice_cancel",
+                   "Lattice deformer: restore the mesh to its rest shape and close the session.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Mesh entity to deform. Empty → the selected entity, else the first mesh in the scene."}};
+        props["lattice"] = QJsonObject{{"type", "object"}, {"description", "A qtmesh-lattice-v1 document (as returned by lattice_get or saved from the GUI's 'Save Lattice…'). Its box is in mesh-local space."}};
+        props["lattice_path"] = QJsonObject{{"type", "string"}, {"description", "Alternative to `lattice`: path to a saved .lattice.json file."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional: re-export the deformed mesh to this file."}};
+        appendTool(
+            "lattice_deform",
+            "Lattice deformer, ONE-SHOT: apply a saved lattice to a mesh without an "
+            "interactive session (the `qtmesh lattice <mesh> --apply <lattice.json>` "
+            "CLI). Undoable. Use this to replay the same bend on several assets.",
             props
         );
     }
