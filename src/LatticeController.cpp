@@ -371,8 +371,14 @@ void LatticeController::flushToEntity()
 
 bool LatticeController::deformEntityWithGrid(Ogre::Entity* entity, const Lattice::Grid& grid, QString* error)
 {
-    if (!entity) { if (error) *error = QStringLiteral("no entity"); return false; }
-    if (!grid.isValid()) { if (error) *error = QStringLiteral("invalid lattice"); return false; }
+    if (!entity) {
+        if (error) *error = QStringLiteral("no entity");
+        return false;
+    }
+    if (!grid.isValid()) {
+        if (error) *error = QStringLiteral("invalid lattice");
+        return false;
+    }
     EditableMesh mesh;
     if (!mesh.loadFromEntity(entity)) {
         if (error) *error = QStringLiteral("could not read the mesh's vertex data");
@@ -563,7 +569,10 @@ QJsonObject LatticeController::latticeJson() const
 
 bool LatticeController::setLatticeJson(const QJsonObject& obj, QString* error)
 {
-    if (!sessionActive()) { if (error) *error = QStringLiteral("no lattice session"); return false; }
+    if (!sessionActive()) {
+        if (error) *error = QStringLiteral("no lattice session");
+        return false;
+    }
     Lattice::Grid g;
     if (!Lattice::Grid::fromJson(obj, g, error)) return false;
     const QJsonObject before = m_grid.toJson();
@@ -855,20 +864,21 @@ void LatticeController::destroyOverlay()
     if (scene) {
         // The overlay lives under the entity's node; if something destroyed
         // that subtree already, our pointers are stale — check by NAME first.
-        const bool nodeAlive = m_overlayNode && scene->hasSceneNode(m_overlayNodeName);
+        Ogre::SceneNode* liveNode =
+            (m_overlayNode && scene->hasSceneNode(m_overlayNodeName)) ? m_overlayNode : nullptr;
         auto destroyObj = [&](Ogre::ManualObject*& obj, const std::string& name) {
             if (!obj) return;
             if (scene->hasManualObject(name)) {
-                if (nodeAlive) m_overlayNode->detachObject(obj);
+                if (liveNode) liveNode->detachObject(obj);
                 scene->destroyManualObject(obj);
             }
             obj = nullptr;
         };
         destroyObj(m_wireObj, m_wireObjName);
         destroyObj(m_pointObj, m_pointObjName);
-        if (nodeAlive) {
-            if (auto* parent = m_overlayNode->getParentSceneNode()) parent->removeChild(m_overlayNode);
-            scene->destroySceneNode(m_overlayNode);
+        if (liveNode) {
+            if (auto* parent = liveNode->getParentSceneNode()) parent->removeChild(liveNode);
+            scene->destroySceneNode(liveNode);
         }
     }
     m_wireObj = nullptr;

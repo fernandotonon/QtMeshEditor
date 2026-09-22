@@ -232,7 +232,10 @@ QJsonObject Grid::toJson() const
 
 bool Grid::fromJson(const QJsonObject& obj, Grid& out, QString* error)
 {
-    auto fail = [&](const QString& why) { if (error) *error = why; return false; };
+    auto fail = [&](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
     // A coordinate must be a JSON NUMBER that survives the float cast finite —
     // QJsonValue::toDouble() would turn a string/bool/null into 0 and a huge
     // value into inf, silently collapsing control points.
