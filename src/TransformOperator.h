@@ -100,6 +100,8 @@ public:
     // Made public for testing
     static void swap(int& x, int& y);
     Ogre::Ray   rayFromScreenPoint(const QPoint& pos);
+    /// Stretch the rubber-band selection box from mScreenStart to `pos` (viewport pixels → NDC).
+    void        drawSelectionBoxTo(const QPoint& pos);
 
     /// Decides whether a left-click during translate/rotate/scale should
     /// route to the bone-gizmo branch. Rotate and scale always go through
@@ -236,6 +238,10 @@ private:
     /// Skel Slice D (#558): a weight-paint stroke owns the drag. Separate
     /// from the vertex-paint flag so the two brushes cannot both claim it.
     bool                                    mWeightPaintDragActive = false;
+    /// Lattice deformer: a control-point drag owns the mouse (LatticeController).
+    bool                                    mLatticeDragActive = false;
+    /// Lattice deformer: a press that missed every point is a rubber-band box select.
+    bool                                    mLatticeBoxActive = false;
     bool                                    mTexturePaintDragActive = false;
     // Paint v2 Slice F (#549): decal-handle drag state.
     bool                                    mDecalDragActive = false;

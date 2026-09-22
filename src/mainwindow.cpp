@@ -118,6 +118,7 @@
 #include "MeshLodController.h"
 #include "MeshDecimatorController.h"
 #include "PartOpsController.h"
+#include "LatticeController.h"
 #include "MeshValidator.h"
 #include "AssetScanController.h"
 #include "UvUnwrapController.h"
@@ -1098,6 +1099,11 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return PartOpsController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<LatticeController>(
+            "PropertiesPanel", 1, 0, "LatticeController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LatticeController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<UVEditorController>(
             "PropertiesPanel", 1, 0, "UVEditorController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -1368,6 +1374,32 @@ void MainWindow::initToolBar()
         // the same split HdrEnvironmentController::browseRequested uses. The
         // singleShot defers out of the QML signal handler so the dialog's
         // nested event loop doesn't re-enter QQuickWidget's own.
+        // Lattice deformer: QML can't parent a QFileDialog, so the controller
+        // raises a request and the window runs the dialog (the PoseLibrary split).
+        connect(LatticeController::instance(), &LatticeController::saveLatticeRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getSaveFileName(
+                    this, tr("Save Lattice"), QString(),
+                    tr("Lattice (*.lattice.json);;JSON (*.json);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) return;
+                LatticeController::instance()->saveLatticeToFile(path);
+            });
+        });
+        connect(LatticeController::instance(), &LatticeController::loadLatticeRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this, tr("Load Lattice"), QString(),
+                    tr("Lattice (*.lattice.json *.json);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) return;
+                LatticeController::instance()->loadLatticeFromFile(path);
+            });
+        });
         connect(PoseLibrary::instance(), &PoseLibrary::exportLibraryRequested,
                 this, [this]() {
             QTimer::singleShot(0, this, [this]() {
@@ -5232,6 +5264,29 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         event->accept();
         return;
+    }
+
+    // Lattice deformer: Enter applies, Esc cancels, Ctrl+A selects every
+    // control point. Other keys pass through (the cage is not modal — camera
+    // and tool shortcuts keep working while it is open).
+    if (auto* lat = LatticeController::instance(); lat->sessionActive()) {
+        if (event->key() == Qt::Key_Escape) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel lattice");
+            lat->cancelSession();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Enter — apply lattice");
+            lat->applySession();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_A && (event->modifiers() & Qt::ControlModifier)) {
+            lat->selectAllPoints();
+            event->accept();
+            return;
+        }
     }
 
     if (editCtrl->isEditModeActive()) {

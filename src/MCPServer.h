@@ -276,6 +276,13 @@ private:
     QJsonObject toolPinFeet(const QJsonObject &args);           // #856 foot-contact pin
     QJsonObject toolSegmentMesh(const QJsonObject &args);
     QJsonObject toolSplitMeshBySegments(const QJsonObject &args);
+    // Lattice deformer (free-form deformation)
+    QJsonObject toolLatticeBegin(const QJsonObject &args);
+    QJsonObject toolLatticeGet(const QJsonObject &args);
+    QJsonObject toolLatticeSetPoints(const QJsonObject &args);
+    QJsonObject toolLatticeApply(const QJsonObject &args);
+    QJsonObject toolLatticeCancel(const QJsonObject &args);
+    QJsonObject toolLatticeDeform(const QJsonObject &args);
     QJsonObject toolExplodeMeshParts(const QJsonObject &args);   // #862/#864
     QJsonObject toolJoinMeshParts(const QJsonObject &args);      // #862/#864
     QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D

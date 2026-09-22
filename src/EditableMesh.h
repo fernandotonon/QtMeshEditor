@@ -462,7 +462,11 @@ public:
      * @param entity The target entity (should be the same entity used in loadFromEntity).
      * @return true on success, false on failure.
      */
-    bool commitToEntity(Ogre::Entity* entity);
+    /** @param recomputeNormals  true (default) derives normals from the current
+     *  positions (respecting the flat/smooth mode); false writes the normals
+     *  stored in the editable vertices verbatim — for restoring an authored
+     *  normal set after a positions-only round trip (lattice cancel/undo). */
+    bool commitToEntity(Ogre::Entity* entity, bool recomputeNormals = true);
 
     /**
      * @brief Write only vertex colors back to the Ogre::Entity's buffers.

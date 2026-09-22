@@ -286,7 +286,7 @@ TEST(AICapabilityRegistry, TaxonomyOnlyNamesRealCapabilities)
     AICapabilityRegistry reg(sampleTools());
     const auto& tax = AICapabilityRegistry::taxonomy();
     static const QStringList known = {"scene", "scene_io", "view", "materials", "lighting", "textures_ai",
-                                      "mesh_optimize", "uv", "rigging", "segmentation", "generation_3d",
+                                      "mesh_optimize", "uv", "rigging", "segmentation", "mesh_deform", "generation_3d",
                                       "animation", "motion_ai", "morph_pose", "node_animation", "paint",
                                       "mocap", "cloud", "ps1", "other"};
     for (auto it = tax.begin(); it != tax.end(); ++it)

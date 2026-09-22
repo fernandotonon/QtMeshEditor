@@ -98,6 +98,7 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/SplitMeshCommand.cpp
+commands/LatticeCommands.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp
@@ -294,6 +295,8 @@ SubMeshOps.cpp
 PartOpsMesh.cpp
 PartOpsScene.cpp
 PartOpsController.cpp
+LatticeDeformer.cpp
+LatticeController.cpp
 )
 
 set(HEADER_FILES
@@ -445,6 +448,9 @@ VertexCacheOptimizer.h
 MeshDecimator.h
 MeshDecimatorController.h
 PartOpsController.h
+LatticeDeformer.h
+LatticeController.h
+commands/LatticeCommands.h
 MeshValidator.h
 MeshWeldOps.h
 AIChatManager.h
