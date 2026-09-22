@@ -107,6 +107,7 @@ LatticeController::LatticeController() : QObject(nullptr)
     }
     if (auto* mgr = Manager::getSingletonPtr()) {
         connect(mgr, &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
+            // Emitted BEFORE the node (and our overlay child) is destroyed.
             if (sessionActive() && node && node == entityNode()) endSession();
         });
     }
@@ -131,19 +132,32 @@ bool LatticeController::hasSelection() const
     return ents.size() == 1 && ents.first() && ents.first()->getMesh();
 }
 
-Ogre::Entity* LatticeController::resolveEntity() const
+Ogre::Entity* LatticeController::resolveEntity()
 {
     if (!m_entity) return nullptr;
     Manager* mgr = Manager::getSingletonPtr();
-    if (!mgr) return nullptr;
-    for (Ogre::Entity* e : mgr->getEntities())
-        if (e == m_entity && e->getMovableType() == "Entity" && e->getName() == m_entityName) return e;
+    Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    // Never dereference m_entity before the SceneManager has vouched for it:
+    // look the NAME up, then require the same object and the same mesh. A
+    // command that replaced the entity under its node (SplitMeshCommand,
+    // Explode/Join) leaves the name but not the pointer/mesh, and a new
+    // allocation landing at the old address still fails the mesh check.
+    Ogre::Entity* live = nullptr;
+    if (scene && scene->hasEntity(m_entityName)) live = scene->getEntity(m_entityName);
+    if (live && live == m_entity && live->getMesh().get() == m_meshIdentity) return live;
+
+    // Gone or replaced: the rest snapshot no longer describes this mesh, so
+    // there is nothing safe to restore — just drop the session.
+    m_entity = nullptr; // endSession's overlay teardown must not touch it
+    endSession();
+    setStatus(tr("Lattice closed: the mesh was replaced or removed."), true);
     return nullptr;
 }
 
-Ogre::SceneNode* LatticeController::entityNode() const
+Ogre::SceneNode* LatticeController::entityNode()
 {
-    return m_entity ? m_entity->getParentSceneNode() : nullptr;
+    Ogre::Entity* e = resolveEntity();
+    return e ? e->getParentSceneNode() : nullptr;
 }
 
 void LatticeController::setStatus(const QString& text, bool isError)
@@ -186,7 +200,10 @@ bool LatticeController::beginSessionOn(Ogre::Entity* entity)
     }
     m_entity = entity;
     m_entityName = entity->getName();
+    m_meshIdentity = entity->getMesh().get();
     m_mesh = std::move(mesh);
+    ++m_sessionId;
+    m_meshDirty = false;
     captureRest();
     m_selected.clear();
     m_hover = -1;
@@ -204,11 +221,14 @@ void LatticeController::captureRest()
 {
     m_rest.clear();
     if (!m_mesh) return;
+    m_restNormals.clear();
     for (const auto& sm : m_mesh->subMeshes()) {
-        std::vector<Ogre::Vector3> pos;
+        std::vector<Ogre::Vector3> pos, nrm;
         pos.reserve(sm.vertices.size());
-        for (const auto& v : sm.vertices) pos.push_back(v.position);
+        nrm.reserve(sm.vertices.size());
+        for (const auto& v : sm.vertices) { pos.push_back(v.position); nrm.push_back(v.normal); }
         m_rest.push_back(std::move(pos));
+        m_restNormals.push_back(std::move(nrm));
     }
 }
 
@@ -252,7 +272,8 @@ bool LatticeController::applySession()
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"),
                                   QStringLiteral("%1x%2x%3 %4").arg(m_grid.nx).arg(m_grid.ny).arg(m_grid.nz)
                                       .arg(Lattice::interpolationId(m_grid.interpolation)));
-    auto* cmd = new LatticeApplyCommand(name, m_rest, std::move(deformed), json, /*alreadyApplied=*/true);
+    auto* cmd = new LatticeApplyCommand(name, m_rest, m_restNormals, std::move(deformed), json,
+                                        /*alreadyApplied=*/true);
     endSession();
     UndoManager::getSingleton()->push(cmd);
     setStatus(tr("Lattice deformation applied."));
@@ -272,23 +293,29 @@ bool LatticeController::restoreRestToEntity()
 {
     Ogre::Entity* entity = resolveEntity();
     if (!entity || !m_mesh) return false;
-    if (m_grid.isAtRest() && !m_flushPending) return true;
+    m_flushPending = false;
+    if (!m_meshDirty) return true; // the GPU mesh never left its rest shape
     auto& subs = m_mesh->subMeshes();
     for (size_t s = 0; s < subs.size() && s < m_rest.size(); ++s)
-        for (size_t v = 0; v < subs[s].vertices.size() && v < m_rest[s].size(); ++v)
+        for (size_t v = 0; v < subs[s].vertices.size() && v < m_rest[s].size(); ++v) {
             subs[s].vertices[v].position = m_rest[s][v];
-    m_mesh->recalculateNormals();
-    m_flushPending = false;
-    return m_mesh->commitToEntity(entity);
+            if (s < m_restNormals.size() && v < m_restNormals[s].size()) subs[s].vertices[v].normal = m_restNormals[s][v];
+        }
+    m_meshDirty = false;
+    // Authored normals go back verbatim — recomputing would smooth hard edges.
+    return m_mesh->commitToEntity(entity, /*recomputeNormals=*/false);
 }
 
 void LatticeController::endSession()
 {
     destroyOverlay();
     m_entity = nullptr;
+    m_meshIdentity = nullptr;
     m_entityName.clear();
     m_mesh.reset();
     m_rest.clear();
+    m_restNormals.clear();
+    m_meshDirty = false;
     m_selected.clear();
     m_hover = -1;
     m_dragActive = false;
@@ -314,6 +341,10 @@ void LatticeController::applyDeform()
     }
     refreshOverlay();
     emit latticeChanged();
+    if (!sessionActive()) return; // refreshOverlay may have dropped a stale session
+    // A rest lattice over a mesh that never left rest has nothing to upload
+    // (and a commit would recompute the authored normals for no reason).
+    if (m_grid.isAtRest() && !m_meshDirty) { m_flushPending = false; return; }
     // Coalesce GPU flushes: a drag delivers moves faster than a 90k-vertex
     // commit (normals + buffer upload) can run, so flush once per event-loop
     // turn (the vertex-paint stroke idiom).
@@ -323,13 +354,19 @@ void LatticeController::applyDeform()
     }
 }
 
+void LatticeController::flushPendingDeform()
+{
+    if (m_flushPending) flushToEntity();
+}
+
 void LatticeController::flushToEntity()
 {
     m_flushPending = false;
+    if (m_grid.isAtRest()) { restoreRestToEntity(); return; } // back to the authored mesh, normals verbatim
     Ogre::Entity* entity = resolveEntity();
     if (!entity || !m_mesh) return;
-    m_mesh->recalculateNormals();
-    m_mesh->commitToEntity(entity);
+    m_meshDirty = true;
+    m_mesh->commitToEntity(entity, /*recomputeNormals=*/true); // normals follow the bend
 }
 
 bool LatticeController::deformEntityWithGrid(Ogre::Entity* entity, const Lattice::Grid& grid, QString* error)
@@ -343,8 +380,7 @@ bool LatticeController::deformEntityWithGrid(Ogre::Entity* entity, const Lattice
     }
     for (auto& sm : mesh.subMeshes())
         for (auto& v : sm.vertices) v.position = grid.deform(v.position);
-    mesh.recalculateNormals();
-    if (!mesh.commitToEntity(entity)) {
+    if (!mesh.commitToEntity(entity, /*recomputeNormals=*/true)) {
         if (error) *error = QStringLiteral("failed to write the deformed vertices");
         return false;
     }
@@ -366,10 +402,11 @@ void LatticeController::setResolution(int nx, int ny, int nz)
     m_resX = nx; m_resY = ny; m_resZ = nz;
     if (sessionActive()) {
         // A resolution change rebuilds a REST lattice: the old control points
-        // have no meaning on the new grid, so the deformation is dropped (as
-        // in Blender). Deliberately not an undo step — the previous shape can
-        // be recovered with Ctrl+Z on the point moves themselves.
+        // have no meaning on the new grid, so the bend is dropped (as in
+        // Blender) — but the whole previous lattice is one Ctrl+Z away.
+        const QJsonObject before = m_grid.toJson();
         rebuildRestLattice();
+        pushGridUndo(before, QStringLiteral("Lattice Resolution"));
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.resolution"),
                                       QStringLiteral("%1x%2x%3").arg(nx).arg(ny).arg(nz));
     }
@@ -381,29 +418,38 @@ void LatticeController::setInterpolation(int mode)
     mode = std::clamp(mode, 0, 2);
     const auto interp = static_cast<Lattice::Interpolation>(mode);
     if (interp == m_grid.interpolation) return;
+    const QJsonObject before = m_grid.toJson();
     m_grid.interpolation = interp;
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.interpolation"), Lattice::interpolationId(interp));
-    if (sessionActive()) applyDeform();
+    if (sessionActive()) { applyDeform(); pushGridUndo(before, QStringLiteral("Lattice Interpolation")); }
     else emit latticeChanged();
 }
 
-void LatticeController::pushPointsUndo(const std::vector<Ogre::Vector3>& before, const QString& description)
+void LatticeController::pushGridUndo(const QJsonObject& before, const QString& description)
 {
-    if (before.size() != m_grid.points.size()) return;
-    bool changed = false;
-    for (size_t i = 0; i < before.size() && !changed; ++i)
-        changed = before[i].squaredDistance(m_grid.points[i]) > 1e-12f;
-    if (!changed) return;
-    UndoManager::getSingleton()->push(new LatticePointsCommand(m_entityName, before, m_grid.points, description));
+    if (!sessionActive()) return; // applyDeform may have just dropped a stale session
+    const QJsonObject after = m_grid.toJson();
+    if (before == after) return;
+    UndoManager::getSingleton()->push(new LatticeGridCommand(m_entityName, m_sessionId, before, after, description));
+}
+
+void LatticeController::adoptGrid(const Lattice::Grid& g)
+{
+    const bool reshaped = g.nx != m_grid.nx || g.ny != m_grid.ny || g.nz != m_grid.nz;
+    m_grid = g;
+    m_resX = g.nx; m_resY = g.ny; m_resZ = g.nz;
+    if (reshaped) { m_selected.clear(); m_hover = -1; }
+    applyDeform();
+    emit pointSelectionChanged();
 }
 
 void LatticeController::resetPoints()
 {
     if (!sessionActive()) return;
-    const std::vector<Ogre::Vector3> before = m_grid.points;
+    const QJsonObject before = m_grid.toJson();
     m_grid.reset();
     applyDeform();
-    pushPointsUndo(before, QStringLiteral("Reset Lattice"));
+    pushGridUndo(before, QStringLiteral("Reset Lattice"));
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.reset"), QString());
 }
 
@@ -461,30 +507,49 @@ QVariantList LatticeController::pointRestPosition(int index) const
 void LatticeController::moveSelectedPoints(double dx, double dy, double dz)
 {
     if (!sessionActive() || m_selected.empty()) return;
-    const std::vector<Ogre::Vector3> before = m_grid.points;
+    const QJsonObject before = m_grid.toJson();
     const Ogre::Vector3 d(static_cast<float>(dx), static_cast<float>(dy), static_cast<float>(dz));
     for (int i : m_selected) m_grid.points[static_cast<size_t>(i)] += d;
     applyDeform();
-    pushPointsUndo(before, QStringLiteral("Move Lattice Points"));
+    pushGridUndo(before, QStringLiteral("Move Lattice Points"));
 }
 
 bool LatticeController::setPoint(int index, double x, double y, double z)
 {
     if (!sessionActive() || index < 0 || index >= m_grid.pointCount()) return false;
-    const std::vector<Ogre::Vector3> before = m_grid.points;
+    const QJsonObject before = m_grid.toJson();
     m_grid.points[static_cast<size_t>(index)] =
         Ogre::Vector3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
     applyDeform();
-    pushPointsUndo(before, QStringLiteral("Move Lattice Point"));
+    pushGridUndo(before, QStringLiteral("Move Lattice Point"));
     return true;
 }
 
-void LatticeController::restorePointsFromUndo(const std::string& entityName, const std::vector<Ogre::Vector3>& points)
+bool LatticeController::setPoints(const std::vector<Ogre::Vector3>& points)
 {
-    if (!sessionActive() || entityName != m_entityName) return;
-    if (points.size() != m_grid.points.size()) return;
+    if (!sessionActive() || static_cast<int>(points.size()) != m_grid.pointCount()) return false;
+    const QJsonObject before = m_grid.toJson();
     m_grid.points = points;
     applyDeform();
+    pushGridUndo(before, QStringLiteral("Move Lattice Points"));
+    return true;
+}
+
+void LatticeController::restoreGridFromUndo(const std::string& entityName, uint64_t sessionId,
+                                            const QJsonObject& grid)
+{
+    if (!sessionActive() || entityName != m_entityName || sessionId != m_sessionId) return;
+    Lattice::Grid g;
+    if (!Lattice::Grid::fromJson(grid, g)) return;
+    adoptGrid(g);
+}
+
+void LatticeController::abandonSessionFor(const std::string& entityName)
+{
+    if (!sessionActive() || entityName != m_entityName) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.cancel"), QStringLiteral("abandoned (mesh rewritten)"));
+    endSession();
+    setStatus(tr("Lattice closed: the mesh was rewritten by another operation."), true);
 }
 
 // ---------------------------------------------------------------------------
@@ -501,15 +566,9 @@ bool LatticeController::setLatticeJson(const QJsonObject& obj, QString* error)
     if (!sessionActive()) { if (error) *error = QStringLiteral("no lattice session"); return false; }
     Lattice::Grid g;
     if (!Lattice::Grid::fromJson(obj, g, error)) return false;
-    const std::vector<Ogre::Vector3> before = m_grid.points;
-    const bool sameShape = g.nx == m_grid.nx && g.ny == m_grid.ny && g.nz == m_grid.nz;
-    m_grid = g;
-    m_resX = g.nx; m_resY = g.ny; m_resZ = g.nz;
-    m_selected.clear();
-    m_hover = -1;
-    applyDeform();
-    if (sameShape) pushPointsUndo(before, QStringLiteral("Load Lattice"));
-    emit pointSelectionChanged();
+    const QJsonObject before = m_grid.toJson();
+    adoptGrid(g);
+    pushGridUndo(before, QStringLiteral("Load Lattice"));
     return true;
 }
 
@@ -582,7 +641,7 @@ bool LatticeController::worldToScreen(const Ogre::Camera* cam, OgreWidget* widge
     return true;
 }
 
-int LatticeController::hitTestPoint(OgreWidget* widget, const QPoint& screenPos) const
+int LatticeController::hitTestPoint(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!sessionActive() || !widget) return -1;
     auto* spaceCam = widget->getSpaceCamera();
@@ -692,7 +751,9 @@ void LatticeController::endDrag()
     if (!m_dragActive) return;
     m_dragActive = false;
     if (m_dragMoved && sessionActive()) {
-        pushPointsUndo(m_dragStartPoints, QStringLiteral("Move Lattice Points"));
+        Lattice::Grid startGrid = m_grid;
+        startGrid.points = m_dragStartPoints;
+        pushGridUndo(startGrid.toJson(), QStringLiteral("Move Lattice Points"));
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.drag"),
                                       QStringLiteral("%1 points").arg(m_selected.size()));
     }
@@ -728,16 +789,26 @@ void LatticeController::refreshOverlay()
 
     // Dedicated child node: mesh-local geometry follows the entity transform,
     // and nothing walks the entity node's attachments expecting Entities.
-    if (!m_overlayNode) m_overlayNode = node->createChildSceneNode();
+    // Explicit names: Ogre registers only NAMED nodes in its lookup table, so
+    // destroyOverlay's liveness checks need them.
+    if (!m_overlayNode) {
+        // "Unnamed_" is Manager's forbidden-name prefix: keeps the cage out of
+        // the Scene tree / entity walks while still being a registered name.
+        m_overlayNodeName = "Unnamed_LatticeOverlay_" + std::to_string(m_sessionId);
+        m_overlayNode = scene->createSceneNode(m_overlayNodeName);
+        node->addChild(m_overlayNode);
+    }
     if (!m_wireObj) {
-        m_wireObj = scene->createManualObject();
+        m_wireObjName = "LatticeWire_" + std::to_string(m_sessionId);
+        m_wireObj = scene->createManualObject(m_wireObjName);
         m_wireObj->setDynamic(true);
         m_wireObj->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
         m_wireObj->setQueryFlags(0);
         m_overlayNode->attachObject(m_wireObj);
     }
     if (!m_pointObj) {
-        m_pointObj = scene->createManualObject();
+        m_pointObjName = "LatticePoints_" + std::to_string(m_sessionId);
+        m_pointObj = scene->createManualObject(m_pointObjName);
         m_pointObj->setDynamic(true);
         m_pointObj->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
         m_pointObj->setQueryFlags(0);
@@ -782,9 +853,20 @@ void LatticeController::destroyOverlay()
     Manager* mgr = Manager::getSingletonPtr();
     Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
     if (scene) {
-        if (m_wireObj) { if (m_overlayNode) m_overlayNode->detachObject(m_wireObj); scene->destroyManualObject(m_wireObj); }
-        if (m_pointObj) { if (m_overlayNode) m_overlayNode->detachObject(m_pointObj); scene->destroyManualObject(m_pointObj); }
-        if (m_overlayNode) {
+        // The overlay lives under the entity's node; if something destroyed
+        // that subtree already, our pointers are stale — check by NAME first.
+        const bool nodeAlive = m_overlayNode && scene->hasSceneNode(m_overlayNodeName);
+        auto destroyObj = [&](Ogre::ManualObject*& obj, const std::string& name) {
+            if (!obj) return;
+            if (scene->hasManualObject(name)) {
+                if (nodeAlive) m_overlayNode->detachObject(obj);
+                scene->destroyManualObject(obj);
+            }
+            obj = nullptr;
+        };
+        destroyObj(m_wireObj, m_wireObjName);
+        destroyObj(m_pointObj, m_pointObjName);
+        if (nodeAlive) {
             if (auto* parent = m_overlayNode->getParentSceneNode()) parent->removeChild(m_overlayNode);
             scene->destroySceneNode(m_overlayNode);
         }

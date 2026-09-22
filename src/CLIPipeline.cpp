@@ -13475,7 +13475,6 @@ int CLIPipeline::cmdLattice(int argc, char* argv[])
         }
         if (arg.startsWith('-')) { err() << "Error: unknown option " << arg << Qt::endl; return usage(); }
         if (inputPath.isEmpty()) inputPath = arg;
-        else if (info && latticePath.isEmpty()) latticePath = arg; // "--info <mesh> <lattice>" tolerated
         else { err() << "Error: unexpected argument " << arg << Qt::endl; return usage(); }
     }
     if (inputPath.isEmpty()) return usage();
@@ -13512,7 +13511,7 @@ int CLIPipeline::cmdLattice(int argc, char* argv[])
     };
 
     // `lattice --info <lattice.json>`: describe a saved lattice, no mesh needed.
-    if (info && latticePath.isEmpty() && inputPath.endsWith(".json", Qt::CaseInsensitive)) {
+    if (info && inputPath.endsWith(".json", Qt::CaseInsensitive)) {
         Lattice::Grid g;
         if (!readLattice(inputPath, g)) return 1;
         describe(g, QFileInfo(inputPath).fileName());

@@ -21,7 +21,6 @@
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 
-#include <QCoreApplication>
 
 namespace {
 
@@ -57,7 +56,9 @@ struct LatticeSceneFixture {
         if (!scene) return false;
         mesh = createInMemoryTriangleMesh(("Lattice_Mesh_" + tag).toStdString());
         entity = scene->createEntity(("Lattice_Entity_" + tag).toStdString(), mesh->getName());
-        node = scene->getRootSceneNode()->createChildSceneNode();
+        // NAMED node: Manager::getEntities() skips unnamed ("forbidden") nodes,
+        // so an unnamed fixture node would hide the entity from MCP-style lookups.
+        node = scene->getRootSceneNode()->createChildSceneNode(("Lattice_Node_" + tag).toStdString());
         node->attachObject(entity);
         SelectionSet::getSingleton()->clear();
         SelectionSet::getSingleton()->append(entity);
@@ -94,13 +95,13 @@ protected:
 TEST(LatticeCommands, WritePositionsToMissingEntityFailsWithReason)
 {
     QString err;
-    EXPECT_FALSE(LatticeCmd::writePositionsToEntity("__no_such_lattice_entity__", {}, &err));
+    EXPECT_FALSE(LatticeCmd::writePositionsToEntity("__no_such_lattice_entity__", {}, nullptr, true, &err));
     EXPECT_FALSE(err.isEmpty());
 }
 
 TEST(LatticeCommands, ApplyCommandSkipsFirstRedoWhenAlreadyApplied)
 {
-    LatticeApplyCommand cmd("__no_such_lattice_entity__", {}, {}, QJsonObject{}, /*alreadyApplied=*/true);
+    LatticeApplyCommand cmd("__no_such_lattice_entity__", {}, {}, {}, QJsonObject{}, /*alreadyApplied=*/true);
     cmd.redo(); // skipped — must NOT try to resolve the bogus entity
     EXPECT_TRUE(cmd.ok());
     cmd.undo(); // now it does, and the entity is missing
@@ -109,14 +110,15 @@ TEST(LatticeCommands, ApplyCommandSkipsFirstRedoWhenAlreadyApplied)
     EXPECT_EQ(cmd.text(), QStringLiteral("Apply Lattice Deform"));
 }
 
-TEST(LatticeCommands, PointsCommandIsANoOpWithoutASession)
+TEST(LatticeCommands, GridCommandIsANoOpWithoutASession)
 {
     auto* lat = LatticeController::instance();
     ASSERT_FALSE(lat->sessionActive());
-    LatticePointsCommand cmd("ghost", {Ogre::Vector3::ZERO}, {Ogre::Vector3::UNIT_X}, "Move");
+    LatticeGridCommand cmd("ghost", 1, QJsonObject{}, QJsonObject{}, "Move");
     cmd.redo();
     cmd.undo(); // nothing to restore into; must not crash
     EXPECT_FALSE(lat->sessionActive());
+    lat->abandonSessionFor("ghost"); // also a no-op
 }
 
 TEST(LatticeControllerHeadless, SafeDegradationWithoutASession)
@@ -194,7 +196,7 @@ TEST_F(LatticeControllerFixture, MovingAPointDeformsTheGpuMeshAndCancelRestoresI
     EXPECT_EQ(lat->selectedPointCount(), 8);
     lat->moveSelectedPoints(0.0, 2.0, 0.0);
     EXPECT_TRUE(lat->isDeformed());
-    QCoreApplication::processEvents(); // the coalesced GPU flush runs on the next loop turn
+    lat->flushPendingDeform(); // the coalesced GPU write-back, run now
 
     const std::vector<Ogre::Vector3> moved = readPositions(m_fix.entity);
     ASSERT_EQ(moved.size(), 3u);
@@ -202,17 +204,110 @@ TEST_F(LatticeControllerFixture, MovingAPointDeformsTheGpuMeshAndCancelRestoresI
 
     // Undo inside the session restores the control points AND the mesh.
     UndoManager::getSingleton()->undo();
-    QCoreApplication::processEvents();
+    lat->flushPendingDeform();
     EXPECT_FALSE(lat->isDeformed());
     const std::vector<Ogre::Vector3> undone = readPositions(m_fix.entity);
     for (size_t i = 0; i < 3; ++i) expectNear(undone[i], rest[i]);
     UndoManager::getSingleton()->redo();
-    QCoreApplication::processEvents();
+    lat->flushPendingDeform();
     EXPECT_TRUE(lat->isDeformed());
 
     lat->cancelSession();
     const std::vector<Ogre::Vector3> restored = readPositions(m_fix.entity);
     for (size_t i = 0; i < 3; ++i) expectNear(restored[i], rest[i]);
+
+    // A command recorded in THAT session must not replay into a new one on
+    // the same mesh (its rest shape is different; the old points would bend it).
+    ASSERT_TRUE(lat->beginSession());
+    UndoManager::getSingleton()->undo(); // the old drag's "before" (rest) — harmless either way
+    UndoManager::getSingleton()->redo(); // the old drag's "after": must be ignored
+    lat->flushPendingDeform();
+    EXPECT_FALSE(lat->isDeformed());
+    lat->cancelSession();
+}
+
+TEST_F(LatticeControllerFixture, CancelRestoresAuthoredNormalsVerbatim)
+{
+    ASSERT_TRUE(m_fix.setup("normals"));
+    // Author a deliberately "wrong" normal set — a recompute would replace it
+    // with the flat triangle normal (0,0,1), so survival proves no recompute.
+    {
+        EditableMesh mesh;
+        ASSERT_TRUE(mesh.loadFromEntity(m_fix.entity));
+        for (auto& sm : mesh.subMeshes())
+            for (auto& v : sm.vertices) v.normal = Ogre::Vector3(1, 0, 0);
+        ASSERT_TRUE(mesh.commitToEntity(m_fix.entity, /*recomputeNormals=*/false));
+    }
+    auto readNormals = [&]() {
+        EditableMesh mesh;
+        std::vector<Ogre::Vector3> out;
+        if (mesh.loadFromEntity(m_fix.entity))
+            for (const auto& sm : mesh.subMeshes()) for (const auto& v : sm.vertices) out.push_back(v.normal);
+        return out;
+    };
+    for (const auto& n : readNormals()) expectNear(n, Ogre::Vector3(1, 0, 0));
+
+    auto* lat = LatticeController::instance();
+    lat->setResolution(2, 2, 2);
+    ASSERT_TRUE(lat->beginSession());
+    lat->flushPendingDeform();                               // adding a lattice alone must not touch normals
+    for (const auto& n : readNormals()) expectNear(n, Ogre::Vector3(1, 0, 0));
+
+    lat->selectAllPoints();
+    lat->moveSelectedPoints(0, 0, 1);
+    lat->flushPendingDeform();                               // a bend recomputes (normals follow the surface)
+    lat->cancelSession();
+    for (const auto& n : readNormals()) expectNear(n, Ogre::Vector3(1, 0, 0));
+
+    // Same contract through the bake command's undo.
+    ASSERT_TRUE(lat->beginSession());
+    lat->selectAllPoints();
+    lat->moveSelectedPoints(0, 0, 1);
+    lat->flushPendingDeform();
+    ASSERT_TRUE(lat->applySession());
+    UndoManager::getSingleton()->undo();
+    for (const auto& n : readNormals()) expectNear(n, Ogre::Vector3(1, 0, 0));
+}
+
+TEST_F(LatticeControllerFixture, ResolutionChangeIsUndoableAsAWholeLattice)
+{
+    ASSERT_TRUE(m_fix.setup("resundo"));
+    auto* lat = LatticeController::instance();
+    lat->setResolution(2, 2, 2);
+    ASSERT_TRUE(lat->beginSession());
+    lat->selectAllPoints();
+    lat->moveSelectedPoints(0, 0, 3);
+    lat->flushPendingDeform();
+    EXPECT_TRUE(lat->isDeformed());
+
+    lat->setResolutionX(4);              // drops the bend…
+    EXPECT_EQ(lat->pointCount(), 16);
+    EXPECT_FALSE(lat->isDeformed());
+    UndoManager::getSingleton()->undo(); // …and Ctrl+Z brings the whole 2×2×2 bend back
+    lat->flushPendingDeform();
+    EXPECT_EQ(lat->pointCount(), 8);
+    EXPECT_EQ(lat->resolutionX(), 2);
+    EXPECT_TRUE(lat->isDeformed());
+    const auto pos = readPositions(m_fix.entity);
+    for (const auto& p : pos) EXPECT_NEAR(p.z, 3.0f, 1e-4f);
+    lat->cancelSession();
+}
+
+TEST_F(LatticeControllerFixture, SetPointsIsOneUndoStep)
+{
+    ASSERT_TRUE(m_fix.setup("setpoints"));
+    auto* lat = LatticeController::instance();
+    lat->setResolution(2, 2, 2);
+    ASSERT_TRUE(lat->beginSession());
+    auto* undo = UndoManager::getSingleton();
+    const int before = undo->stack()->index();
+    std::vector<Ogre::Vector3> pts = lat->grid().points;
+    for (auto& p : pts) p += Ogre::Vector3(0, 0, 2);
+    EXPECT_FALSE(lat->setPoints({}));   // wrong size rejected
+    EXPECT_TRUE(lat->setPoints(pts));
+    EXPECT_EQ(undo->stack()->index(), before + 1);
+    EXPECT_TRUE(lat->isDeformed());
+    lat->cancelSession();
 }
 
 TEST_F(LatticeControllerFixture, ApplyBakesAsOneUndoStep)
@@ -224,7 +319,7 @@ TEST_F(LatticeControllerFixture, ApplyBakesAsOneUndoStep)
     ASSERT_TRUE(lat->beginSession());
     lat->selectAllPoints();
     lat->moveSelectedPoints(1.0, 0.0, 0.0);
-    QCoreApplication::processEvents();
+    lat->flushPendingDeform();
 
     auto* undo = UndoManager::getSingleton();
     const int before = undo->stack()->index();
@@ -277,6 +372,26 @@ TEST_F(LatticeControllerFixture, LatticeJsonRoundTripsThroughTheSession)
     lat->cancelSession();
 }
 
+TEST_F(LatticeControllerFixture, ApplyCommandUndoAbandonsALiveSessionOnTheSameMesh)
+{
+    // Drag → Apply → Add Lattice again → Ctrl+Z (undo the bake): the second
+    // session's rest snapshot no longer describes the mesh, so it must close.
+    ASSERT_TRUE(m_fix.setup("abandon"));
+    auto* lat = LatticeController::instance();
+    lat->setResolution(2, 2, 2);
+    ASSERT_TRUE(lat->beginSession());
+    lat->selectAllPoints();
+    lat->moveSelectedPoints(1, 0, 0);
+    lat->flushPendingDeform();
+    ASSERT_TRUE(lat->applySession());
+
+    ASSERT_TRUE(lat->beginSession());
+    UndoManager::getSingleton()->undo(); // LatticeApplyCommand::undo
+    EXPECT_FALSE(lat->sessionActive());
+    const auto pos = readPositions(m_fix.entity);
+    expectNear(pos[1], Ogre::Vector3(1, 0, 0)); // rest restored, not the session's stale shape
+}
+
 TEST_F(LatticeControllerFixture, ResolutionChangeRebuildsARestLattice)
 {
     ASSERT_TRUE(m_fix.setup("res"));
@@ -291,6 +406,39 @@ TEST_F(LatticeControllerFixture, ResolutionChangeRebuildsARestLattice)
     EXPECT_FALSE(lat->isDeformed());
     EXPECT_EQ(lat->selectedPointCount(), 0);
     lat->cancelSession();
+}
+
+TEST_F(LatticeControllerFixture, ReplacingTheEntityUnderItsNodeEndsTheSessionSafely)
+{
+    // SplitMeshCommand-style swap: the entity is destroyed and a NEW one with
+    // the same name is attached to the same node. The session must notice
+    // (pointer/mesh identity) and close instead of touching freed memory.
+    ASSERT_TRUE(m_fix.setup("swap"));
+    auto* lat = LatticeController::instance();
+    ASSERT_TRUE(lat->beginSession());
+    lat->selectAllPoints();
+    lat->moveSelectedPoints(0, 1, 0);
+    lat->flushPendingDeform();
+
+    const std::string name = m_fix.entity->getName();
+    m_fix.node->detachObject(m_fix.entity);
+    m_fix.scene->destroyEntity(m_fix.entity);
+    Ogre::MeshPtr other = createInMemoryTriangleMesh("Lattice_Mesh_swap_other");
+    m_fix.entity = m_fix.scene->createEntity(name, other->getName());
+    m_fix.node->attachObject(m_fix.entity);
+
+    // Any entry point resolves the entity first and drops the stale session.
+    EXPECT_EQ(lat->hitTestPoint(nullptr, QPoint(0, 0)), -1);
+    lat->moveSelectedPoints(0, 1, 0);
+    EXPECT_FALSE(lat->sessionActive());
+    EXPECT_TRUE(lat->statusIsError());
+    EXPECT_FALSE(lat->applySession());
+
+    // The replacement mesh was never written to.
+    const auto pos = readPositions(m_fix.entity);
+    ASSERT_EQ(pos.size(), 3u);
+    expectNear(pos[1], Ogre::Vector3(1, 0, 0));
+    Ogre::MeshManager::getSingleton().remove(other->getHandle());
 }
 
 TEST_F(LatticeControllerFixture, OneShotDeformWithGridWritesThroughWithoutASession)

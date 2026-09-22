@@ -945,6 +945,19 @@ void TransformOperator::setActiveWidget(OgreWidget* ogreWidget)
 }
 
 // LCOV_EXCL_START — mouse/ray/viewport interaction requires active render window + camera
+void TransformOperator::drawSelectionBoxTo(const QPoint& pos)
+{
+    if (!m_pSelectionBox || !m_pActiveWidget || !m_pActiveWidget->getViewport()) return;
+    const int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
+    const int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
+    if (width <= 0 || height <= 0) return;
+    const float xStart = (float)mScreenStart.x() / (float)width * 2.0f - 1.0f;
+    const float xStop  = (float)pos.x() / (float)width * 2.0f - 1.0f;
+    const float yStart = 1.0f - (float)mScreenStart.y() / (float)height * 2.0f;
+    const float yStop  = 1.0f - (float)pos.y() / (float)height * 2.0f;
+    m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
+}
+
 Ogre::Ray TransformOperator::rayFromScreenPoint(const QPoint& pos)
 {
     if(m_pActiveWidget && m_pActiveWidget->getViewport()
@@ -1542,15 +1555,8 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
             lat->updateDrag(m_pActiveWidget, e->pos());
             return;
         }
-        if (mLatticeBoxActive && (e->buttons() & Qt::LeftButton) && m_pSelectionBox
-            && m_pActiveWidget->getViewport()) {
-            const int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
-            const int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
-            const float xStart = (float)mScreenStart.x() / (float)width * 2.0f - 1.0f;
-            const float xStop  = (float)e->pos().x() / (float)width * 2.0f - 1.0f;
-            const float yStart = 1.0f - (float)mScreenStart.y() / (float)height * 2.0f;
-            const float yStop  = 1.0f - (float)e->pos().y() / (float)height * 2.0f;
-            m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
+        if (mLatticeBoxActive && (e->buttons() & Qt::LeftButton)) {
+            drawSelectionBoxTo(e->pos());
             return;
         }
         lat->updateHover(m_pActiveWidget, e->pos());
@@ -1745,17 +1751,7 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
             && EditModeController::instance()->vertexPaintEnabled()))
     {
         if(m_pSelectionBox->isVisible() && m_pActiveWidget)
-        {
-            int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
-            int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
-
-            float xStart  = (float)(mScreenStart.x())/(float)width*2.0f-1.0f;
-            float xStop   = (float)(e->pos().x())/(float)width*2.0f-1.0f;
-            float yStart  = 1.0f-(float)(mScreenStart.y())/(float)height*2.0f;
-            float yStop   = 1.0f-(float)(e->pos().y())/(float)height*2.0f;
-
-            m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
-        }
+            drawSelectionBoxTo(e->pos());
     }
     else if (mTransformState == TS_TRANSLATE && mBoneDragActive
              && AnimationControlController::instance()->selectedBonePtr())

@@ -5,46 +5,52 @@
 #include "Manager.h"
 
 #include <OgreEntity.h>
+#include <OgreSceneManager.h>
 
 namespace LatticeCmd {
 
 static Ogre::Entity* resolveEntity(const std::string& name)
 {
     Manager* mgr = Manager::getSingletonPtr();
-    if (!mgr) return nullptr;
-    for (Ogre::Entity* obj : mgr->getEntities()) {
-        if (obj && obj->getMovableType() == "Entity" && obj->getName() == name)
-            return obj;
-    }
-    return nullptr;
+    Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!scene || !scene->hasEntity(name)) return nullptr;
+    return scene->getEntity(name);
 }
 
-bool writePositionsToEntity(const std::string& entityName, const Positions& positions, QString* error)
+bool writePositionsToEntity(const std::string& entityName, const Positions& positions, const Positions* normals,
+                            bool recomputeNormals, QString* error)
 {
     Ogre::Entity* entity = resolveEntity(entityName);
     if (!entity) {
         if (error) *error = QStringLiteral("entity '%1' not found").arg(QString::fromStdString(entityName));
         return false;
     }
+    // A live interactive session on this mesh holds a rest snapshot that is
+    // about to stop describing the mesh — drop it (no write) before ours.
+    if (auto* ctl = LatticeController::instance()) ctl->abandonSessionFor(entityName);
+
     EditableMesh mesh;
     if (!mesh.loadFromEntity(entity)) {
         if (error) *error = QStringLiteral("could not read '%1'").arg(QString::fromStdString(entityName));
         return false;
     }
     auto& subs = mesh.subMeshes();
-    if (subs.size() != positions.size()) {
+    if (subs.size() != positions.size() || (normals && normals->size() != positions.size())) {
         if (error) *error = QStringLiteral("submesh count changed since the lattice was applied");
         return false;
     }
     for (size_t s = 0; s < subs.size(); ++s) {
-        if (subs[s].vertices.size() != positions[s].size()) {
+        if (subs[s].vertices.size() != positions[s].size()
+            || (normals && (*normals)[s].size() != positions[s].size())) {
             if (error) *error = QStringLiteral("vertex count changed since the lattice was applied");
             return false;
         }
-        for (size_t v = 0; v < positions[s].size(); ++v) subs[s].vertices[v].position = positions[s][v];
+        for (size_t v = 0; v < positions[s].size(); ++v) {
+            subs[s].vertices[v].position = positions[s][v];
+            if (normals) subs[s].vertices[v].normal = (*normals)[s][v];
+        }
     }
-    mesh.recalculateNormals();
-    if (!mesh.commitToEntity(entity)) {
+    if (!mesh.commitToEntity(entity, recomputeNormals)) {
         if (error) *error = QStringLiteral("failed to write vertex data");
         return false;
     }
@@ -55,43 +61,45 @@ bool writePositionsToEntity(const std::string& entityName, const Positions& posi
 
 // ---------------------------------------------------------------------------
 
-LatticePointsCommand::LatticePointsCommand(std::string entityName, std::vector<Ogre::Vector3> before,
-                                           std::vector<Ogre::Vector3> after, const QString& description,
-                                           QUndoCommand* parent)
-    : QUndoCommand(description, parent), mEntityName(std::move(entityName)), mBefore(std::move(before)),
-      mAfter(std::move(after))
+LatticeGridCommand::LatticeGridCommand(std::string entityName, uint64_t sessionId, QJsonObject before,
+                                       QJsonObject after, const QString& description, QUndoCommand* parent)
+    : QUndoCommand(description, parent), mEntityName(std::move(entityName)), mSessionId(sessionId),
+      mBefore(std::move(before)), mAfter(std::move(after))
 {
 }
 
-void LatticePointsCommand::undo()
+void LatticeGridCommand::undo()
 {
-    if (auto* ctl = LatticeController::instance()) ctl->restorePointsFromUndo(mEntityName, mBefore);
+    if (auto* ctl = LatticeController::instance()) ctl->restoreGridFromUndo(mEntityName, mSessionId, mBefore);
 }
 
-void LatticePointsCommand::redo()
+void LatticeGridCommand::redo()
 {
     if (mFirstRedo) { mFirstRedo = false; return; } // the live edit already happened
-    if (auto* ctl = LatticeController::instance()) ctl->restorePointsFromUndo(mEntityName, mAfter);
+    if (auto* ctl = LatticeController::instance()) ctl->restoreGridFromUndo(mEntityName, mSessionId, mAfter);
 }
 
 // ---------------------------------------------------------------------------
 
 LatticeApplyCommand::LatticeApplyCommand(std::string entityName, LatticeCmd::Positions rest,
-                                         LatticeCmd::Positions deformed, QJsonObject lattice,
-                                         bool alreadyApplied, QUndoCommand* parent)
+                                         LatticeCmd::Positions restNormals, LatticeCmd::Positions deformed,
+                                         QJsonObject lattice, bool alreadyApplied, QUndoCommand* parent)
     : QUndoCommand(QStringLiteral("Apply Lattice Deform"), parent), mEntityName(std::move(entityName)),
-      mRest(std::move(rest)), mDeformed(std::move(deformed)), mLattice(std::move(lattice)),
-      mSkipFirstRedo(alreadyApplied)
+      mRest(std::move(rest)), mRestNormals(std::move(restNormals)), mDeformed(std::move(deformed)),
+      mLattice(std::move(lattice)), mSkipFirstRedo(alreadyApplied)
 {
 }
 
 void LatticeApplyCommand::undo()
 {
-    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mRest, &mError);
+    // Restore the authored normals verbatim — recomputing would smooth hard edges.
+    const bool haveNormals = mRestNormals.size() == mRest.size();
+    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mRest, haveNormals ? &mRestNormals : nullptr,
+                                             /*recomputeNormals=*/!haveNormals, &mError);
 }
 
 void LatticeApplyCommand::redo()
 {
     if (mSkipFirstRedo) { mSkipFirstRedo = false; return; }
-    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mDeformed, &mError);
+    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mDeformed, nullptr, /*recomputeNormals=*/true, &mError);
 }

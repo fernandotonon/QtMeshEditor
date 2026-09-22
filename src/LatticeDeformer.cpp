@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Lattice {
 
@@ -232,12 +233,20 @@ QJsonObject Grid::toJson() const
 bool Grid::fromJson(const QJsonObject& obj, Grid& out, QString* error)
 {
     auto fail = [&](const QString& why) { if (error) *error = why; return false; };
+    // A coordinate must be a JSON NUMBER that survives the float cast finite —
+    // QJsonValue::toDouble() would turn a string/bool/null into 0 and a huge
+    // value into inf, silently collapsing control points.
+    auto readFloat = [](const QJsonValue& v, float& out) {
+        if (!v.isDouble()) return false;
+        const double d = v.toDouble();
+        if (!std::isfinite(d) || std::fabs(d) > static_cast<double>(std::numeric_limits<float>::max())) return false;
+        out = static_cast<float>(d);
+        return true;
+    };
     auto readVec3 = [&](const QString& key, Ogre::Vector3& v) {
         const QJsonArray a = obj.value(key).toArray();
         if (a.size() != 3) return false;
-        v = Ogre::Vector3(static_cast<float>(a[0].toDouble()), static_cast<float>(a[1].toDouble()),
-                          static_cast<float>(a[2].toDouble()));
-        return true;
+        return readFloat(a[0], v.x) && readFloat(a[1], v.y) && readFloat(a[2], v.z);
     };
 
     Grid g;
@@ -259,9 +268,9 @@ bool Grid::fromJson(const QJsonObject& obj, Grid& out, QString* error)
                         .arg(g.pointCount() * 3).arg(pts.size()));
     g.points.resize(static_cast<size_t>(g.pointCount()));
     for (int p = 0; p < g.pointCount(); ++p) {
-        g.points[static_cast<size_t>(p)] = Ogre::Vector3(static_cast<float>(pts[p * 3].toDouble()),
-                                                         static_cast<float>(pts[p * 3 + 1].toDouble()),
-                                                         static_cast<float>(pts[p * 3 + 2].toDouble()));
+        Ogre::Vector3& v = g.points[static_cast<size_t>(p)];
+        if (!readFloat(pts[p * 3], v.x) || !readFloat(pts[p * 3 + 1], v.y) || !readFloat(pts[p * 3 + 2], v.z))
+            return fail(QStringLiteral("lattice: 'points'[%1] is not a finite number").arg(p * 3));
     }
     out = g;
     return true;

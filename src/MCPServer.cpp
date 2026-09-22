@@ -5771,6 +5771,9 @@ QJsonObject MCPServer::toolLatticeBegin(const QJsonObject &args)
         auto* lat = LatticeController::instance();
         Ogre::Entity* entity = latticeTargetEntity(args.value("entity_name").toString());
         if (!entity) return makeErrorResult("Error: no mesh entity found (load or name one)");
+        // Settings below act on the LIVE session; close any existing one first
+        // (restoring its mesh) so a session on another entity is not reshaped.
+        if (lat->sessionActive()) lat->cancelSession();
 
         const QJsonArray res = args.value("resolution").toArray();
         if (!res.isEmpty()) {
@@ -5806,37 +5809,54 @@ QJsonObject MCPServer::toolLatticeSetPoints(const QJsonObject &args)
         auto* lat = LatticeController::instance();
         if (!lat->sessionActive()) return makeErrorResult("Error: no lattice session is open (call lattice_begin)");
         SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("lattice_set_points"));
-        if (args.value("reset").toBool(false)) lat->resetPoints();
 
+        // Build the FULL target point array first and validate every edit, so a
+        // bad entry rejects the whole call with nothing applied, and the
+        // accepted call lands as ONE undo step.
+        Lattice::Grid work = lat->grid();
+        if (args.value("reset").toBool(false)) work.reset();
+
+        auto finiteNumber = [](const QJsonValue& v, double& out) {
+            if (!v.isDouble()) return false;
+            out = v.toDouble();
+            return std::isfinite(out);
+        };
         const QJsonArray pts = args.value("points").toArray();
         if (!pts.isEmpty()) {
-            const int n = lat->pointCount();
+            const int n = work.pointCount();
             if (pts.size() != n * 3)
                 return makeErrorResult(QString("Error: points must hold %1 numbers (3 × %2 control points), got %3")
                                            .arg(n * 3).arg(n).arg(pts.size()));
-            QJsonObject doc = lat->latticeJson();
-            doc["points"] = pts;
-            QString err;
-            if (!lat->setLatticeJson(doc, &err)) return makeErrorResult("Error: " + err);
+            for (int p = 0; p < n; ++p) {
+                double x, y, z;
+                if (!finiteNumber(pts[p * 3], x) || !finiteNumber(pts[p * 3 + 1], y) || !finiteNumber(pts[p * 3 + 2], z))
+                    return makeErrorResult(QString("Error: points[%1..%2] must be finite numbers").arg(p * 3).arg(p * 3 + 2));
+                work.points[static_cast<size_t>(p)] = Ogre::Vector3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            }
         }
         const QJsonArray moves = args.value("moves").toArray();
         for (const QJsonValue& mv : moves) {
             const QJsonObject m = mv.toObject();
             const int idx = m.value("index").toInt(-1);
-            if (idx < 0 || idx >= lat->pointCount())
-                return makeErrorResult(QString("Error: move index %1 out of range [0, %2)").arg(idx).arg(lat->pointCount()));
+            if (idx < 0 || idx >= work.pointCount())
+                return makeErrorResult(QString("Error: move index %1 out of range [0, %2)").arg(idx).arg(work.pointCount()));
             const QJsonArray pos = m.value("position").toArray();
             const QJsonArray delta = m.value("delta").toArray();
+            double a, b, c;
+            Ogre::Vector3& target = work.points[static_cast<size_t>(idx)];
             if (pos.size() == 3) {
-                lat->setPoint(idx, pos[0].toDouble(), pos[1].toDouble(), pos[2].toDouble());
+                if (!finiteNumber(pos[0], a) || !finiteNumber(pos[1], b) || !finiteNumber(pos[2], c))
+                    return makeErrorResult(QString("Error: move %1 position must be finite numbers").arg(idx));
+                target = Ogre::Vector3(static_cast<float>(a), static_cast<float>(b), static_cast<float>(c));
             } else if (delta.size() == 3) {
-                const QVariantList cur = lat->pointPosition(idx);
-                lat->setPoint(idx, cur[0].toDouble() + delta[0].toDouble(), cur[1].toDouble() + delta[1].toDouble(),
-                              cur[2].toDouble() + delta[2].toDouble());
+                if (!finiteNumber(delta[0], a) || !finiteNumber(delta[1], b) || !finiteNumber(delta[2], c))
+                    return makeErrorResult(QString("Error: move %1 delta must be finite numbers").arg(idx));
+                target += Ogre::Vector3(static_cast<float>(a), static_cast<float>(b), static_cast<float>(c));
             } else {
                 return makeErrorResult(QString("Error: move %1 needs position:[x,y,z] or delta:[dx,dy,dz]").arg(idx));
             }
         }
+        if (!lat->setPoints(work.points)) return makeErrorResult("Error: the lattice session closed while editing");
         return makeSuccessResult(QString::fromUtf8(QJsonDocument(latticeSessionJson(lat)).toJson(QJsonDocument::Indented)));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
@@ -5897,17 +5917,19 @@ QJsonObject MCPServer::toolLatticeDeform(const QJsonObject &args)
         // Rest + deformed snapshots make it one undo step (LatticeApplyCommand).
         EditableMesh mesh;
         if (!mesh.loadFromEntity(entity)) return makeErrorResult("Error: could not read the mesh's vertex data");
-        LatticeCmd::Positions rest, deformed;
+        LatticeCmd::Positions rest, restNormals, deformed;
         for (const auto& sm : mesh.subMeshes()) {
-            std::vector<Ogre::Vector3> r, d;
-            r.reserve(sm.vertices.size()); d.reserve(sm.vertices.size());
-            for (const auto& v : sm.vertices) { r.push_back(v.position); d.push_back(grid.deform(v.position)); }
-            rest.push_back(std::move(r)); deformed.push_back(std::move(d));
+            std::vector<Ogre::Vector3> r, n, d;
+            r.reserve(sm.vertices.size()); n.reserve(sm.vertices.size()); d.reserve(sm.vertices.size());
+            for (const auto& v : sm.vertices) {
+                r.push_back(v.position); n.push_back(v.normal); d.push_back(grid.deform(v.position));
+            }
+            rest.push_back(std::move(r)); restNormals.push_back(std::move(n)); deformed.push_back(std::move(d));
         }
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"), QStringLiteral("MCP lattice_deform"));
         const QString entityName = QString::fromStdString(entity->getName());
-        auto* cmd = new LatticeApplyCommand(entity->getName(), std::move(rest), std::move(deformed), latticeObj,
-                                            /*alreadyApplied=*/false);
+        auto* cmd = new LatticeApplyCommand(entity->getName(), std::move(rest), std::move(restNormals),
+                                            std::move(deformed), latticeObj, /*alreadyApplied=*/false);
         UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
         if (!cmd->ok()) return makeErrorResult("Error: " + cmd->error());
 

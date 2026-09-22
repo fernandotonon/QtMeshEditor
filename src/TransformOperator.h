@@ -100,6 +100,8 @@ public:
     // Made public for testing
     static void swap(int& x, int& y);
     Ogre::Ray   rayFromScreenPoint(const QPoint& pos);
+    /// Stretch the rubber-band selection box from mScreenStart to `pos` (viewport pixels → NDC).
+    void        drawSelectionBoxTo(const QPoint& pos);
 
     /// Decides whether a left-click during translate/rotate/scale should
     /// route to the bone-gizmo branch. Rotate and scale always go through

@@ -213,6 +213,49 @@ Rectangle {
         }
     }
 
+    // Inspector button factory, FILE scope so every section shares one look
+    // (raw QML — the Themed* wrappers blank this dynamically-loaded panel, so
+    // raw controls are styled with the PropertiesPanelController palette).
+    component InspectorButton: Rectangle {
+        id: ibRoot
+        property alias text: ibLabel.text
+        property bool clickEnabled: true
+        signal clicked()
+        width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
+        height: 26
+        radius: 3
+        opacity: clickEnabled ? 1.0 : 0.45
+        color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.headerColor
+        border.color: ibRoot.activeFocus
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.borderColor
+        border.width: ibRoot.activeFocus ? 2 : 1
+        // Keyboard accessibility: focusable via Tab, activatable via
+        // Space/Enter, and exposed to assistive tech.
+        activeFocusOnTab: clickEnabled
+        Accessible.role: Accessible.Button
+        Accessible.name: ibLabel.text
+        Keys.onSpacePressed: if (clickEnabled) clicked()
+        Keys.onReturnPressed: if (clickEnabled) clicked()
+        Keys.onEnterPressed: if (clickEnabled) clicked()
+        Text {
+            id: ibLabel
+            anchors.centerIn: parent
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            id: ibMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: ibRoot.clickEnabled
+            cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: ibRoot.clicked()
+        }
+    }
+
     // A wrapping segmented picker: options flow onto new lines when the panel
     // is narrower than the row (5 skeleton types no longer clip at the edge).
     component RigSegments: Flow {
@@ -1727,49 +1770,6 @@ Rectangle {
             property int mgActiveIdx: -1
             property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
             property bool mgAiPending: false     // AI texture queued for onCompleted
-
-            // A small local button factory (raw QML — the Themed* wrappers blank
-            // this dynamically-loaded panel, so we style raw controls with the
-            // PropertiesPanelController palette to match the Inspector).
-            component InspectorButton: Rectangle {
-                id: ibRoot
-                property alias text: ibLabel.text
-                property bool clickEnabled: true
-                signal clicked()
-                width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
-                height: 26
-                radius: 3
-                opacity: clickEnabled ? 1.0 : 0.45
-                color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: ibRoot.activeFocus
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.borderColor
-                border.width: ibRoot.activeFocus ? 2 : 1
-                // Keyboard accessibility: focusable via Tab, activatable via
-                // Space/Enter, and exposed to assistive tech.
-                activeFocusOnTab: clickEnabled
-                Accessible.role: Accessible.Button
-                Accessible.name: ibLabel.text
-                Keys.onSpacePressed: if (clickEnabled) clicked()
-                Keys.onReturnPressed: if (clickEnabled) clicked()
-                Keys.onEnterPressed: if (clickEnabled) clicked()
-                Text {
-                    id: ibLabel
-                    anchors.centerIn: parent
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: ibMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: ibRoot.clickEnabled
-                    cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: ibRoot.clicked()
-                }
-            }
 
             // Inspector-styled CheckBox (flat 16px box + checkmark, palette
             // colors) — one factory for the pipeline-stage toggles below,
@@ -8071,47 +8071,6 @@ Rectangle {
 
             readonly property bool active: LatticeController.sessionActive
 
-            // Same look as the Inspector's InspectorButton (26 px, palette
-            // colours, focus ring) — copied because that factory is scoped to
-            // the Image→3D section.
-            component LatticeButton: Rectangle {
-                id: lbRoot
-                property alias text: lbLabel.text
-                property bool clickEnabled: true
-                signal clicked()
-                width: lbLabel.implicitWidth + 20
-                height: 26
-                radius: 3
-                opacity: clickEnabled ? 1.0 : 0.45
-                color: (lbMa.containsMouse || lbRoot.activeFocus) && clickEnabled
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: lbRoot.activeFocus
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.borderColor
-                border.width: lbRoot.activeFocus ? 2 : 1
-                activeFocusOnTab: clickEnabled
-                Accessible.role: Accessible.Button
-                Accessible.name: lbLabel.text
-                Keys.onSpacePressed: if (clickEnabled) clicked()
-                Keys.onReturnPressed: if (clickEnabled) clicked()
-                Keys.onEnterPressed: if (clickEnabled) clicked()
-                Text {
-                    id: lbLabel
-                    anchors.centerIn: parent
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: lbMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: lbRoot.clickEnabled
-                    cursorShape: lbRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: lbRoot.clicked()
-                }
-            }
-
             // Inspector-styled integer stepper (the stock SpinBox renders in
             // the default Qt Quick style and clashes with the palette).
             component LatticeStepper: Row {
@@ -8237,7 +8196,7 @@ Rectangle {
             }
 
             // --- Add lattice (idle) ---
-            LatticeButton {
+            InspectorButton {
                 visible: !latticeContent.active
                 text: "Add Lattice"
                 clickEnabled: LatticeController.hasSelection
@@ -8263,13 +8222,13 @@ Rectangle {
                 Flow {
                     width: parent.width
                     spacing: 4
-                    LatticeButton { text: "Select All"; onClicked: LatticeController.selectAllPoints() }
-                    LatticeButton {
+                    InspectorButton { text: "Select All"; onClicked: LatticeController.selectAllPoints() }
+                    InspectorButton {
                         text: "Deselect"
                         clickEnabled: LatticeController.selectedPointCount > 0
                         onClicked: LatticeController.clearPointSelection()
                     }
-                    LatticeButton {
+                    InspectorButton {
                         text: "Reset Points"
                         clickEnabled: LatticeController.isDeformed
                         onClicked: LatticeController.resetPoints()
@@ -8279,15 +8238,15 @@ Rectangle {
                 Flow {
                     width: parent.width
                     spacing: 4
-                    LatticeButton { text: "Save Lattice…"; onClicked: LatticeController.requestSaveDialog() }
-                    LatticeButton { text: "Load Lattice…"; onClicked: LatticeController.requestLoadDialog() }
+                    InspectorButton { text: "Save Lattice…"; onClicked: LatticeController.requestSaveDialog() }
+                    InspectorButton { text: "Load Lattice…"; onClicked: LatticeController.requestLoadDialog() }
                 }
 
                 Flow {
                     width: parent.width
                     spacing: 6
-                    LatticeButton { text: "Apply  (Enter)"; onClicked: LatticeController.applySession() }
-                    LatticeButton { text: "Cancel  (Esc)"; onClicked: LatticeController.cancelSession() }
+                    InspectorButton { text: "Apply  (Enter)"; onClicked: LatticeController.applySession() }
+                    InspectorButton { text: "Cancel  (Esc)"; onClicked: LatticeController.cancelSession() }
                 }
             }
 

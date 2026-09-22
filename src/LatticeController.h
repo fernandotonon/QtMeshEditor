@@ -13,6 +13,7 @@
 
 #include <OgreVector.h>
 
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <string>
@@ -20,7 +21,7 @@
 
 class EditableMesh;
 class OgreWidget;
-namespace Ogre { class Entity; class SceneNode; class ManualObject; class Camera; }
+namespace Ogre { class Entity; class SceneNode; class ManualObject; class Camera; class Mesh; }
 
 /**
  * Lattice (free-form) deformer — the Blender "Lattice modifier" for
@@ -36,7 +37,7 @@ namespace Ogre { class Entity; class SceneNode; class ManualObject; class Camera
  * the session began (`Lattice::Grid::deformAll(rest)`), so it never
  * accumulates and resetting the points restores the mesh bit-exactly.
  * Interactive edits are also undoable inside the session
- * (`LatticePointsCommand`); the bake is `LatticeApplyCommand`.
+ * (`LatticeGridCommand`, stamped with a session id); the bake is `LatticeApplyCommand`.
  *
  * Viewport hooks (`sessionActive`/`beginDrag`/`updateDrag`/`endDrag`/
  * `updateHover`) are called by `TransformOperator` — the SkinWeightController
@@ -119,6 +120,9 @@ public:
     Q_INVOKABLE void moveSelectedPoints(double dx, double dy, double dz);
     /** Set one control point (flat index) to a mesh-local position. */
     Q_INVOKABLE bool setPoint(int index, double x, double y, double z);
+    /** Replace EVERY control point (mesh-local) as ONE undo step; the array
+     *  must hold exactly pointCount() entries. */
+    bool setPoints(const std::vector<Ogre::Vector3>& points);
     /** Set the point selection to the given flat indices. */
     Q_INVOKABLE void selectPoints(const QVariantList& indices);
     Q_INVOKABLE QVariantList selectedPoints() const;
@@ -138,6 +142,9 @@ public:
     Q_INVOKABLE void requestLoadDialog() { emit loadLatticeRequested(); }
 
     const Lattice::Grid& grid() const { return m_grid; }
+    /** Run the coalesced GPU write-back now instead of on the next event-loop
+     *  turn (tests / headless callers that read the mesh back immediately). */
+    void flushPendingDeform();
 
     /** One-shot headless bake: deform `entity`'s vertices with `grid` from
      *  their CURRENT positions and write them back (no session, no undo).
@@ -146,7 +153,7 @@ public:
 
     // --- viewport hooks (TransformOperator) --------------------------------
     /** Flat index of the control point under the cursor, or -1. */
-    int hitTestPoint(OgreWidget* widget, const QPoint& screenPos) const;
+    int hitTestPoint(OgreWidget* widget, const QPoint& screenPos);
     /** Press: hit-test, update the point selection (`additive` = Shift) and
      *  arm a camera-plane drag. Returns true when a point was grabbed; a miss
      *  has no side effect (the caller decides between a click-to-deselect and
@@ -161,9 +168,14 @@ public:
     bool dragActive() const { return m_dragActive; }
     void updateHover(OgreWidget* widget, const QPoint& screenPos);
 
-    /** Undo plumbing (LatticePointsCommand). No-op unless the session is on
-     *  `entityName`. */
-    void restorePointsFromUndo(const std::string& entityName, const std::vector<Ogre::Vector3>& points);
+    /** Undo plumbing (LatticeGridCommand): swap in a whole lattice document.
+     *  No-op unless the live session is on `entityName` AND is the very
+     *  session (`sessionId`) the command was recorded in. */
+    void restoreGridFromUndo(const std::string& entityName, uint64_t sessionId, const QJsonObject& grid);
+    /** Close a live session on `entityName` WITHOUT writing anything — for
+     *  a command about to rewrite that mesh's vertices itself. */
+    void abandonSessionFor(const std::string& entityName);
+    uint64_t sessionId() const { return m_sessionId; }
 
 signals:
     void selectionChanged();
@@ -178,8 +190,13 @@ private:
     LatticeController();
     static LatticeController* m_pSingleton;
 
-    Ogre::Entity* resolveEntity() const;
-    Ogre::SceneNode* entityNode() const;
+    /** The session entity if it is still alive AND unchanged — same name,
+     *  same pointer, same Ogre::Mesh. Anything else (destroyed, or replaced
+     *  under its scene node the way SplitMeshCommand swaps meshes) ENDS the
+     *  session and returns null, so no caller ever touches a dangling
+     *  `m_entity`. Every public entry point resolves through this. */
+    Ogre::Entity* resolveEntity();
+    Ogre::SceneNode* entityNode();
     void endSession();
     void setStatus(const QString& text, bool isError = false);
 
@@ -190,7 +207,10 @@ private:
     void flushToEntity();
     void refreshOverlay();
     void destroyOverlay();
-    void pushPointsUndo(const std::vector<Ogre::Vector3>& before, const QString& description);
+    /** Push a LatticeGridCommand if `before` differs from the live lattice. */
+    void pushGridUndo(const QJsonObject& before, const QString& description);
+    /** Swap the live lattice for `g` (resolution + points + interpolation) and re-deform. */
+    void adoptGrid(const Lattice::Grid& g);
     bool restoreRestToEntity();
 
     bool screenToRay(OgreWidget* widget, const QPoint& p, Ogre::Vector3& origin, Ogre::Vector3& dir,
@@ -201,8 +221,12 @@ private:
     // session
     Ogre::Entity* m_entity = nullptr;
     std::string m_entityName;
+    const Ogre::Mesh* m_meshIdentity = nullptr; ///< the entity's mesh at session start (replacement detector)
     std::unique_ptr<EditableMesh> m_mesh;
-    std::vector<std::vector<Ogre::Vector3>> m_rest; ///< [submesh][vertex] rest positions
+    std::vector<std::vector<Ogre::Vector3>> m_rest;        ///< [submesh][vertex] rest positions
+    std::vector<std::vector<Ogre::Vector3>> m_restNormals; ///< authored normals, restored verbatim on cancel
+    uint64_t m_sessionId = 0;      ///< bumps per beginSession; stamps LatticeGridCommands
+    bool m_meshDirty = false;      ///< GPU mesh currently holds a non-rest deform
     Lattice::Grid m_grid;
     int m_resX = 3, m_resY = 3, m_resZ = 3;
     std::set<int> m_selected;
@@ -220,6 +244,7 @@ private:
     Ogre::SceneNode* m_overlayNode = nullptr;
     Ogre::ManualObject* m_wireObj = nullptr;
     Ogre::ManualObject* m_pointObj = nullptr;
+    std::string m_overlayNodeName, m_wireObjName, m_pointObjName; ///< liveness lookups (see destroyOverlay)
 
     QString m_status;
     bool m_statusIsError = false;

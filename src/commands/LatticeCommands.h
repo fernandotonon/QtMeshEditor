@@ -7,6 +7,7 @@
 
 #include <OgreVector.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,44 +16,53 @@
  *
  * Two levels, mirroring Blender's lattice workflow:
  *
- *  - **LatticePointsCommand** — one control-point drag / reset / load INSIDE a
- *    live session. Snapshots the control-point array before and after; undo
- *    re-applies the earlier array through the controller (which re-deforms
- *    the mesh from its frozen rest positions). A no-op when the session has
- *    since closed or moved to another entity — the bake command below owns
- *    the mesh state at that point.
+ *  - **LatticeGridCommand** — one edit INSIDE a live session: a control-point
+ *    drag, reset, load, resolution or interpolation change. Snapshots the whole
+ *    `qtmesh-lattice-v1` document before and after, so a resolution change
+ *    (which reshapes the point array) is as undoable as a drag. Stamped with
+ *    the controller's SESSION ID: a command from an earlier, cancelled session
+ *    on the same mesh is a no-op in a later one (a later session's rest shape
+ *    is different, so replaying old points into it would bend the mesh
+ *    unasked). Also a no-op once the session has closed — the bake command
+ *    owns the mesh state then.
  *
- *  - **LatticeApplyCommand** — the BAKE. Captures dense per-submesh rest and
- *    deformed positions (the whole mesh, not a sparse map — a lattice touches
- *    most vertices) and writes one or the other back through EditableMesh's
- *    in-place commit. Resolves its entity by NAME on every undo/redo, never a
- *    cached pointer.
+ *  - **LatticeApplyCommand** — the BAKE. Captures dense per-submesh rest
+ *    positions AND rest normals plus the deformed positions (the whole mesh,
+ *    not a sparse map — a lattice touches most vertices). Undo writes the rest
+ *    positions/normals back WITHOUT recomputing normals, so authored (hard /
+ *    custom) normals survive a bake→undo; redo re-deforms and recomputes.
+ *    Resolves its entity by NAME on every undo/redo, never a cached pointer,
+ *    and abandons any live lattice session on that entity first (its frozen
+ *    rest snapshot would no longer describe the mesh).
  */
 namespace LatticeCmd {
 using Positions = std::vector<std::vector<Ogre::Vector3>>; ///< [submesh][vertex], mesh-local.
 
-/// Write `positions` into the named entity's vertex buffers (positions +
-/// recomputed normals + bounds) via EditableMesh. Returns false when the
-/// entity is gone or the layout no longer matches.
+/// Write `positions` (and, when non-null, `normals`) into the named entity's
+/// vertex buffers via EditableMesh. `recomputeNormals` = derive normals from
+/// the new positions (a deform); false = keep/restore the given normals.
+/// Returns false when the entity is gone or the layout no longer matches.
 bool writePositionsToEntity(const std::string& entityName, const Positions& positions,
-                            QString* error = nullptr);
+                            const Positions* normals, bool recomputeNormals, QString* error = nullptr);
 }
 
-class LatticePointsCommand : public QUndoCommand
+class LatticeGridCommand : public QUndoCommand
 {
 public:
-    LatticePointsCommand(std::string entityName,
-                         std::vector<Ogre::Vector3> before,
-                         std::vector<Ogre::Vector3> after,
-                         const QString& description,
-                         QUndoCommand* parent = nullptr);
+    LatticeGridCommand(std::string entityName,
+                       uint64_t sessionId,
+                       QJsonObject before,
+                       QJsonObject after,
+                       const QString& description,
+                       QUndoCommand* parent = nullptr);
     void undo() override;
     void redo() override;
 
 private:
     std::string mEntityName;
-    std::vector<Ogre::Vector3> mBefore;
-    std::vector<Ogre::Vector3> mAfter;
+    uint64_t mSessionId = 0;
+    QJsonObject mBefore;
+    QJsonObject mAfter;
     bool mFirstRedo = true;
 };
 
@@ -63,6 +73,7 @@ public:
      *  the GPU (the interactive session) — the first redo() is then skipped. */
     LatticeApplyCommand(std::string entityName,
                         LatticeCmd::Positions rest,
+                        LatticeCmd::Positions restNormals,
                         LatticeCmd::Positions deformed,
                         QJsonObject lattice,
                         bool alreadyApplied,
@@ -77,6 +88,7 @@ public:
 private:
     std::string mEntityName;
     LatticeCmd::Positions mRest;
+    LatticeCmd::Positions mRestNormals;
     LatticeCmd::Positions mDeformed;
     QJsonObject mLattice;
     bool mSkipFirstRedo = false;

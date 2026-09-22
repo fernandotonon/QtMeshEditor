@@ -275,6 +275,39 @@ TEST(LatticeJson, RejectsMalformedInput)
     EXPECT_FALSE(Grid::fromJson(o, g, &err));
 }
 
+TEST(LatticeJson, RejectsNonNumericAndNonFiniteCoordinates)
+{
+    // QJsonValue::toDouble() would silently read these as 0 / inf and collapse
+    // the control points; the parser must refuse them instead.
+    Grid g;
+    QString err;
+    QJsonObject o = unitGrid(2, Interpolation::Linear).toJson();
+    QJsonArray pts = o["points"].toArray();
+    pts[4] = QStringLiteral("0.5");
+    o["points"] = pts;
+    EXPECT_FALSE(Grid::fromJson(o, g, &err));
+    EXPECT_TRUE(err.contains("points")) << err.toStdString();
+
+    o = unitGrid(2, Interpolation::Linear).toJson();
+    pts = o["points"].toArray();
+    pts[7] = QJsonValue::Null;
+    o["points"] = pts;
+    EXPECT_FALSE(Grid::fromJson(o, g, &err));
+
+    o = unitGrid(2, Interpolation::Linear).toJson();
+    pts = o["points"].toArray();
+    pts[0] = 1e300; // overflows float → inf
+    o["points"] = pts;
+    EXPECT_FALSE(Grid::fromJson(o, g, &err));
+
+    o = unitGrid(2, Interpolation::Linear).toJson();
+    o["origin"] = QJsonArray{true, 0.0, 0.0};
+    EXPECT_FALSE(Grid::fromJson(o, g, &err));
+
+    // Sanity: the untouched document still parses.
+    EXPECT_TRUE(Grid::fromJson(unitGrid(2, Interpolation::Linear).toJson(), g, &err)) << err.toStdString();
+}
+
 TEST(LatticeJson, InterpolationIdsRoundTripAndAcceptAliases)
 {
     for (auto mode : kModes) {
