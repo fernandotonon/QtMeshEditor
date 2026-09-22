@@ -62,6 +62,10 @@ struct LatticeSceneFixture {
         node->attachObject(entity);
         SelectionSet::getSingleton()->clear();
         SelectionSet::getSingleton()->append(entity);
+        // Undo routing falls through to the GLOBAL stack when the session stack is
+        // empty — start each test from a clean history so earlier tests' bakes
+        // (on entities long destroyed) are never what Ctrl+Z reaches.
+        UndoManager::getSingleton()->clear();
         return true;
     }
 
@@ -95,13 +99,13 @@ protected:
 TEST(LatticeCommands, WritePositionsToMissingEntityFailsWithReason)
 {
     QString err;
-    EXPECT_FALSE(LatticeCmd::writePositionsToEntity("__no_such_lattice_entity__", {}, nullptr, true, &err));
+    EXPECT_FALSE(LatticeCmd::writePositionsToEntity("__no_such_lattice_entity__", {}, nullptr, true, nullptr, &err));
     EXPECT_FALSE(err.isEmpty());
 }
 
 TEST(LatticeCommands, ApplyCommandSkipsFirstRedoWhenAlreadyApplied)
 {
-    LatticeApplyCommand cmd("__no_such_lattice_entity__", {}, {}, {}, QJsonObject{}, /*alreadyApplied=*/true);
+    LatticeApplyCommand cmd("__no_such_lattice_entity__", nullptr, {}, {}, {}, QJsonObject{}, /*alreadyApplied=*/true);
     cmd.redo(); // skipped — must NOT try to resolve the bogus entity
     EXPECT_TRUE(cmd.ok());
     cmd.undo(); // now it does, and the entity is missing
@@ -300,14 +304,18 @@ TEST_F(LatticeControllerFixture, SetPointsIsOneUndoStep)
     lat->setResolution(2, 2, 2);
     ASSERT_TRUE(lat->beginSession());
     auto* undo = UndoManager::getSingleton();
-    const int before = undo->stack()->index();
+    const int globalBefore = undo->stack()->index();
+    const int sessionBefore = lat->sessionUndoStack()->index();
     std::vector<Ogre::Vector3> pts = lat->grid().points;
     for (auto& p : pts) p += Ogre::Vector3(0, 0, 2);
     EXPECT_FALSE(lat->setPoints({}));   // wrong size rejected
     EXPECT_TRUE(lat->setPoints(pts));
-    EXPECT_EQ(undo->stack()->index(), before + 1);
+    EXPECT_EQ(lat->sessionUndoStack()->index(), sessionBefore + 1); // one step, on the SESSION stack
+    EXPECT_EQ(undo->stack()->index(), globalBefore);                // global history untouched
     EXPECT_TRUE(lat->isDeformed());
     lat->cancelSession();
+    EXPECT_EQ(lat->sessionUndoStack()->count(), 0); // transient edits die with the session
+    EXPECT_EQ(undo->sessionStack(), nullptr);
 }
 
 TEST_F(LatticeControllerFixture, ApplyBakesAsOneUndoStep)
@@ -323,9 +331,11 @@ TEST_F(LatticeControllerFixture, ApplyBakesAsOneUndoStep)
 
     auto* undo = UndoManager::getSingleton();
     const int before = undo->stack()->index();
+    EXPECT_EQ(lat->sessionUndoStack()->count(), 1); // the drag lives on the session stack…
     ASSERT_TRUE(lat->applySession());
     EXPECT_FALSE(lat->sessionActive());
-    EXPECT_EQ(undo->stack()->index(), before + 1); // exactly one bake step
+    EXPECT_EQ(undo->stack()->index(), before + 1); // …and exactly one bake step reaches the global history
+    EXPECT_EQ(lat->sessionUndoStack()->count(), 0);
     EXPECT_EQ(undo->stack()->text(before), QStringLiteral("Apply Lattice Deform"));
 
     std::vector<Ogre::Vector3> baked = readPositions(m_fix.entity);
@@ -438,6 +448,17 @@ TEST_F(LatticeControllerFixture, ReplacingTheEntityUnderItsNodeEndsTheSessionSaf
     const auto pos = readPositions(m_fix.entity);
     ASSERT_EQ(pos.size(), 3u);
     expectNear(pos[1], Ogre::Vector3(1, 0, 0));
+
+    // A bake recorded on the ORIGINAL mesh refuses to write into the
+    // same-name replacement (same layout, different Ogre::Mesh).
+    LatticeCmd::Positions rest{{Ogre::Vector3(0, 0, 0), Ogre::Vector3(1, 0, 0), Ogre::Vector3(0, 1, 0)}};
+    LatticeCmd::Positions deformed{{Ogre::Vector3(0, 0, 9), Ogre::Vector3(1, 0, 9), Ogre::Vector3(0, 1, 9)}};
+    LatticeApplyCommand stale(name, /*meshIdentity=*/m_fix.mesh.get(), rest, {}, deformed, QJsonObject{},
+                              /*alreadyApplied=*/false); // recorded on the ORIGINAL mesh, still alive via m_fix.mesh
+    stale.redo();
+    EXPECT_FALSE(stale.ok());
+    EXPECT_TRUE(stale.error().contains("different mesh")) << stale.error().toStdString();
+    expectNear(readPositions(m_fix.entity)[1], Ogre::Vector3(1, 0, 0));
     Ogre::MeshManager::getSingleton().remove(other->getHandle());
 }
 

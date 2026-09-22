@@ -18,11 +18,16 @@ static Ogre::Entity* resolveEntity(const std::string& name)
 }
 
 bool writePositionsToEntity(const std::string& entityName, const Positions& positions, const Positions* normals,
-                            bool recomputeNormals, QString* error)
+                            bool recomputeNormals, const Ogre::Mesh* expectedMesh, QString* error)
 {
     Ogre::Entity* entity = resolveEntity(entityName);
     if (!entity) {
         if (error) *error = QStringLiteral("entity '%1' not found").arg(QString::fromStdString(entityName));
+        return false;
+    }
+    if (expectedMesh && entity->getMesh().get() != expectedMesh) {
+        if (error) *error = QStringLiteral("'%1' now carries a different mesh than the lattice was applied to")
+                                .arg(QString::fromStdString(entityName));
         return false;
     }
     // A live interactive session on this mesh holds a rest snapshot that is
@@ -81,11 +86,12 @@ void LatticeGridCommand::redo()
 
 // ---------------------------------------------------------------------------
 
-LatticeApplyCommand::LatticeApplyCommand(std::string entityName, LatticeCmd::Positions rest,
-                                         LatticeCmd::Positions restNormals, LatticeCmd::Positions deformed,
-                                         QJsonObject lattice, bool alreadyApplied, QUndoCommand* parent)
+LatticeApplyCommand::LatticeApplyCommand(std::string entityName, const Ogre::Mesh* meshIdentity,
+                                         LatticeCmd::Positions rest, LatticeCmd::Positions restNormals,
+                                         LatticeCmd::Positions deformed, QJsonObject lattice, bool alreadyApplied,
+                                         QUndoCommand* parent)
     : QUndoCommand(QStringLiteral("Apply Lattice Deform"), parent), mEntityName(std::move(entityName)),
-      mRest(std::move(rest)), mRestNormals(std::move(restNormals)), mDeformed(std::move(deformed)),
+      mMeshIdentity(meshIdentity), mRest(std::move(rest)), mRestNormals(std::move(restNormals)), mDeformed(std::move(deformed)),
       mLattice(std::move(lattice)), mSkipFirstRedo(alreadyApplied)
 {
 }
@@ -95,11 +101,12 @@ void LatticeApplyCommand::undo()
     // Restore the authored normals verbatim — recomputing would smooth hard edges.
     const bool haveNormals = mRestNormals.size() == mRest.size();
     mOk = LatticeCmd::writePositionsToEntity(mEntityName, mRest, haveNormals ? &mRestNormals : nullptr,
-                                             /*recomputeNormals=*/!haveNormals, &mError);
+                                             /*recomputeNormals=*/!haveNormals, mMeshIdentity, &mError);
 }
 
 void LatticeApplyCommand::redo()
 {
     if (mSkipFirstRedo) { mSkipFirstRedo = false; return; }
-    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mDeformed, nullptr, /*recomputeNormals=*/true, &mError);
+    mOk = LatticeCmd::writePositionsToEntity(mEntityName, mDeformed, nullptr, /*recomputeNormals=*/true,
+                                             mMeshIdentity, &mError);
 }

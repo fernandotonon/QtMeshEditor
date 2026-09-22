@@ -115,6 +115,7 @@ LatticeController::LatticeController() : QObject(nullptr)
 
 LatticeController::~LatticeController()
 {
+    if (auto* um = UndoManager::getSingleton(); um && um->sessionStack() == &m_sessionUndo) um->setSessionStack(nullptr);
     destroyOverlay();
 }
 
@@ -204,6 +205,11 @@ bool LatticeController::beginSessionOn(Ogre::Entity* entity)
     m_mesh = std::move(mesh);
     ++m_sessionId;
     m_meshDirty = false;
+    // Transient edits go on the session-local stack; UndoManager routes
+    // Ctrl+Z there first while the session is open.
+    m_sessionUndo.clear();
+    m_sessionUndoStale = false;
+    UndoManager::getSingleton()->setSessionStack(&m_sessionUndo);
     captureRest();
     m_selected.clear();
     m_hover = -1;
@@ -269,12 +275,13 @@ bool LatticeController::applySession()
     }
     const QJsonObject json = latticeJson();
     const std::string name = m_entityName;
+    const Ogre::Mesh* meshIdentity = m_meshIdentity;
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"),
                                   QStringLiteral("%1x%2x%3 %4").arg(m_grid.nx).arg(m_grid.ny).arg(m_grid.nz)
                                       .arg(Lattice::interpolationId(m_grid.interpolation)));
-    auto* cmd = new LatticeApplyCommand(name, m_rest, m_restNormals, std::move(deformed), json,
+    auto* cmd = new LatticeApplyCommand(name, meshIdentity, m_rest, m_restNormals, std::move(deformed), json,
                                         /*alreadyApplied=*/true);
-    endSession();
+    endSession(); // detaches + clears the session stack; only the bake reaches the global history
     UndoManager::getSingleton()->push(cmd);
     setStatus(tr("Lattice deformation applied."));
     return true;
@@ -308,6 +315,11 @@ bool LatticeController::restoreRestToEntity()
 
 void LatticeController::endSession()
 {
+    if (auto* um = UndoManager::getSingleton(); um->sessionStack() == &m_sessionUndo) um->setSessionStack(nullptr);
+    // QUndoStack::clear() deletes the commands — never under a command that
+    // is currently executing (a replay that ended the session).
+    if (m_inUndoReplay) m_sessionUndoStale = true;
+    else m_sessionUndo.clear();
     destroyOverlay();
     m_entity = nullptr;
     m_meshIdentity = nullptr;
@@ -436,7 +448,7 @@ void LatticeController::pushGridUndo(const QJsonObject& before, const QString& d
     if (!sessionActive()) return; // applyDeform may have just dropped a stale session
     const QJsonObject after = m_grid.toJson();
     if (before == after) return;
-    UndoManager::getSingleton()->push(new LatticeGridCommand(m_entityName, m_sessionId, before, after, description));
+    m_sessionUndo.push(new LatticeGridCommand(m_entityName, m_sessionId, before, after, description));
 }
 
 void LatticeController::adoptGrid(const Lattice::Grid& g)
@@ -547,7 +559,9 @@ void LatticeController::restoreGridFromUndo(const std::string& entityName, uint6
     if (!sessionActive() || entityName != m_entityName || sessionId != m_sessionId) return;
     Lattice::Grid g;
     if (!Lattice::Grid::fromJson(grid, g)) return;
+    m_inUndoReplay = true;
     adoptGrid(g);
+    m_inUndoReplay = false;
 }
 
 void LatticeController::abandonSessionFor(const std::string& entityName)

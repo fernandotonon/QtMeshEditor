@@ -5928,8 +5928,9 @@ QJsonObject MCPServer::toolLatticeDeform(const QJsonObject &args)
         }
         SentryReporter::addBreadcrumb(QStringLiteral("mesh.lattice.apply"), QStringLiteral("MCP lattice_deform"));
         const QString entityName = QString::fromStdString(entity->getName());
-        auto* cmd = new LatticeApplyCommand(entity->getName(), std::move(rest), std::move(restNormals),
-                                            std::move(deformed), latticeObj, /*alreadyApplied=*/false);
+        auto* cmd = new LatticeApplyCommand(entity->getName(), entity->getMesh().get(), std::move(rest),
+                                            std::move(restNormals), std::move(deformed), latticeObj,
+                                            /*alreadyApplied=*/false);
         UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
         if (!cmd->ok()) return makeErrorResult("Error: " + cmd->error());
 

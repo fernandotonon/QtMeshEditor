@@ -35,15 +35,21 @@
  *    and abandons any live lattice session on that entity first (its frozen
  *    rest snapshot would no longer describe the mesh).
  */
+namespace Ogre { class Mesh; }
+
 namespace LatticeCmd {
 using Positions = std::vector<std::vector<Ogre::Vector3>>; ///< [submesh][vertex], mesh-local.
 
 /// Write `positions` (and, when non-null, `normals`) into the named entity's
 /// vertex buffers via EditableMesh. `recomputeNormals` = derive normals from
 /// the new positions (a deform); false = keep/restore the given normals.
-/// Returns false when the entity is gone or the layout no longer matches.
+/// `expectedMesh` (when non-null) must be the entity's CURRENT Ogre::Mesh —
+/// a same-name replacement with a compatible layout is refused rather than
+/// overwritten. Returns false when the entity is gone, replaced, or the
+/// layout no longer matches.
 bool writePositionsToEntity(const std::string& entityName, const Positions& positions,
-                            const Positions* normals, bool recomputeNormals, QString* error = nullptr);
+                            const Positions* normals, bool recomputeNormals,
+                            const Ogre::Mesh* expectedMesh, QString* error = nullptr);
 }
 
 class LatticeGridCommand : public QUndoCommand
@@ -71,7 +77,10 @@ class LatticeApplyCommand : public QUndoCommand
 public:
     /** @param alreadyApplied  true when the deformed positions are already on
      *  the GPU (the interactive session) — the first redo() is then skipped. */
+    /** @param meshIdentity  the entity's Ogre::Mesh at record time; undo/redo
+     *  refuse to write when the entity now carries a different mesh. */
     LatticeApplyCommand(std::string entityName,
+                        const Ogre::Mesh* meshIdentity,
                         LatticeCmd::Positions rest,
                         LatticeCmd::Positions restNormals,
                         LatticeCmd::Positions deformed,
@@ -87,6 +96,7 @@ public:
 
 private:
     std::string mEntityName;
+    const Ogre::Mesh* mMeshIdentity = nullptr;
     LatticeCmd::Positions mRest;
     LatticeCmd::Positions mRestNormals;
     LatticeCmd::Positions mDeformed;

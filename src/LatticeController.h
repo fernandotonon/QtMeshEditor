@@ -10,6 +10,7 @@
 #include <QRect>
 #include <QString>
 #include <QVariantList>
+#include <QUndoStack>
 
 #include <OgreVector.h>
 
@@ -176,6 +177,10 @@ public:
      *  a command about to rewrite that mesh's vertices itself. */
     void abandonSessionFor(const std::string& entityName);
     uint64_t sessionId() const { return m_sessionId; }
+    /** In-session edits live on this SESSION-LOCAL stack (routed through
+     *  UndoManager::setSessionStack while the session is open, cleared when
+     *  it ends) — only the bake reaches the global history. */
+    QUndoStack* sessionUndoStack() { return &m_sessionUndo; }
 
 signals:
     void selectionChanged();
@@ -226,6 +231,9 @@ private:
     std::vector<std::vector<Ogre::Vector3>> m_rest;        ///< [submesh][vertex] rest positions
     std::vector<std::vector<Ogre::Vector3>> m_restNormals; ///< authored normals, restored verbatim on cancel
     uint64_t m_sessionId = 0;      ///< bumps per beginSession; stamps LatticeGridCommands
+    QUndoStack m_sessionUndo;      ///< transient in-session edits (see sessionUndoStack)
+    bool m_inUndoReplay = false;   ///< a LatticeGridCommand is executing — never clear the stack under it
+    bool m_sessionUndoStale = false; ///< endSession ran mid-replay; clear on the next begin
     bool m_meshDirty = false;      ///< GPU mesh currently holds a non-rest deform
     Lattice::Grid m_grid;
     int m_resX = 3, m_resY = 3, m_resZ = 3;
