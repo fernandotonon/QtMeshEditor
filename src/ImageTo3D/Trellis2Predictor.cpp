@@ -527,6 +527,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                      QStringLiteral("--models"),    models2,
                      QStringLiteral("--res"),       QString::number(res),
                      QStringLiteral("--seed"),      QString::number(opts.seed)};
+    // Texture-volume resolution. 0 leaves trellis-cli on its own default; a
+    // simple prop (a box, a mat) does not need the larger volume, and the
+    // smaller one is markedly faster.
+    if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
+        args << QStringLiteral("--tex-res")
+             << QString::number(opts.texVolumeRes);
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);

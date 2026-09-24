@@ -132,6 +132,14 @@ public:
         // Bake a tangent-space normal map carrying the full-res source detail
         // (only meaningful when the target was simplified; needs bakeTexture).
         bool bakeNormalMap = true;
+        // TRELLIS.2 only. 2 = 2x2 subsamples per baked texel; the extra
+        // samples average out the single-point sampling speckle that shows up
+        // on small atlases, at ~4x the bake cost.
+        int  textureSupersample = 1;
+        // TRELLIS.2 only. Texture-volume resolution passed to trellis-cli
+        // (--tex-res): 0 keeps the sidecar's own default, 512 or 1024 pick it
+        // explicitly. A simple prop does not need the larger volume.
+        int  texVolumeRes = 0;
         // Test hook: drive the sidecar's --mock synthetic generation (no GPU,
         // no TRELLIS.2 models) — used by the plumbing e2e tests.
         bool trellis2Mock = false;
