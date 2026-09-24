@@ -2365,15 +2365,42 @@ Rectangle {
                     // 64..512 for simple props whose texture is a few flat
                     // faces (a mat, a pizza box); 4096 for hero assets.
                     // Backend range is 64..8192, so every entry here is valid.
-                    // The bake rounds the packed atlas up to a power of two,
-                    // so these sizes are what actually lands on disk — before
-                    // that, xatlas treated the request as a hint and a 2048
-                    // ask produced a 2963x2959 (unmippable) texture.
+                    // NB xatlas treats this as a HINT, not a size: it only
+                    // seeds an estimated texelsPerUnit, so the atlas that
+                    // lands can differ (a 64 request measured 140x143).
+                    // Treat these as a budget, not a guarantee.
                     model: ["64 px", "128 px", "256 px", "512 px", "1024 px",
                             "2048 px (default)", "4096 px"]
                     currentIndex: 5
                     readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
                     property int sizeValue: sizeValues[currentIndex]
+                }
+            }
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Sampling"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Super
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    // Subsamples per baked texel. The bake normally takes ONE
+                    // sample at each texel centre, so where a texel straddles
+                    // a colour boundary the result is whichever side the
+                    // centre happened to land on. 2x2 averages four positions
+                    // instead, which softens that speckle — at roughly 4x the
+                    // bake cost, so it is off by default and worth enabling
+                    // mainly on small textures, where each texel covers more
+                    // of the surface.
+                    model: ["1x (fast, default)", "2x2 (smoother, ~4x slower)"]
+                    currentIndex: 0
+                    readonly property var superValues: [1, 2]
+                    property int superValue: superValues[currentIndex]
                 }
             }
 
@@ -2588,6 +2615,7 @@ Rectangle {
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
+                        genOptions["texture_supersample"] = mgT2Super.superValue
                     }
                     genOptions["matting"] = mgBestMatte.checked ? "best" : "fast"
                     MeshGenController.generateSelected(
