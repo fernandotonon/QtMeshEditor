@@ -325,25 +325,30 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "refusing to run a real trellis.cpp generation for a mock "
                 "request."));
     }
+    // The QTMESH_TRELLIS2_IMPORT re-bake seam (Phase 9) skips inference
+    // entirely — it must work with NO runtime installed.
+    const QString importPath = qEnvironmentVariable("QTMESH_TRELLIS2_IMPORT");
+    if (kind == RuntimeKind::None && importPath.isEmpty())
+        return failResult(runtimeDescription());
+
     // --tex-res is a trellis-cli option; the Python sidecar
     // (ai/trellis2/generate.py) has no equivalent argument, so on that runtime
     // the request could only be silently dropped and the caller would get the
     // sidecar's default volume with no indication why. Refuse instead, in the
     // same spirit as the mock check above: a clear error beats a run that
     // quietly ignored what was asked for.
+    //
+    // Scoped to a REAL generation: the import seam above re-bakes a saved
+    // .qtm3d and never reaches either runtime, so it never reads
+    // texVolumeRes — rejecting there would fail a call the flag cannot
+    // affect, and would contradict "must work with NO runtime installed".
     if ((opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
-        && kind == RuntimeKind::PythonSidecar) {
+        && kind == RuntimeKind::PythonSidecar && importPath.isEmpty()) {
         return failResult(QStringLiteral(
             "trellis2: --tex-res is only supported by the trellis.cpp runtime; "
             "the Python sidecar has no texture-volume-resolution option. "
             "Drop --tex-res (or install trellis-cli) and re-run."));
     }
-
-    // The QTMESH_TRELLIS2_IMPORT re-bake seam (Phase 9) skips inference
-    // entirely — it must work with NO runtime installed.
-    const QString importPath = qEnvironmentVariable("QTMESH_TRELLIS2_IMPORT");
-    if (kind == RuntimeKind::None && importPath.isEmpty())
-        return failResult(runtimeDescription());
 
     auto report = [&progress](Stage s, int done, int total) -> bool {
         return !progress || progress(s, done, total);
