@@ -109,8 +109,13 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 ExternalProject_Add(qtmesh_trelliscpp
-    GIT_REPOSITORY https://github.com/pwilkin/trellis.cpp.git
-    GIT_TAG        2516c48b677050c570f47eba2e68dc8a5bc918b0
+    # fernandotonon/trellis.cpp @ qtmesh-pixal3d = upstream pwilkin/main plus the
+    # three macOS commits QtMeshEditor depends on (Metal backend, direct CONV_3D
+    # in the SS decoder, and --dump-post, which is how we take over the asset
+    # pipeline after inference). Upstream shipped Pixal3D support in v0.8.0, so
+    # the fork carries no generation logic of its own — only the platform work.
+    GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
+    GIT_TAG        f46ea9a8c5cb6b7cf0d58ea6594db7d918d4e384
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"

@@ -11638,6 +11638,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
     int texVolumeRes = 0;       // 0 = sidecar auto | 512 | 1024
     bool keepSource = true;     // write the .qtm3d full-res source sidecar
+    // Pixal3D camera knobs. 0 leaves trellis-cli on its own default (49.13,
+    // the value Pixal3D was trained with) — guessing a FOV would silently
+    // mis-place the projection camera that the whole backend depends on.
+    float pixalFovDeg = 0.0f;
+    bool  pixalNoNaf  = false;
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
     MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
     bool backendSet = false;    // explicit --backend beats the auto default
@@ -11671,7 +11676,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-pbr") { generatePbr = false; continue; }
         if (arg == "--backend") {
             if (i + 1 >= argc) {
-                err() << "Error: --backend requires trellis2, triposr or triposg." << Qt::endl;
+                err() << "Error: --backend requires trellis2, pixal3d, triposr or triposg." << Qt::endl;
                 return 2;
             }
             const QString b = QString::fromLocal8Bit(argv[++i]).toLower();
@@ -11679,7 +11684,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             else if (b == "triposg") backend = MeshGenPredictor::Backend::TripoSG;
             else if (b == "trellis2" || b == "trellis.2" || b == "trellis")
                 backend = MeshGenPredictor::Backend::Trellis2;
-            else { err() << "Error: --backend must be trellis2, triposr or triposg." << Qt::endl; return 2; }
+            else if (b == "pixal3d" || b == "pixal")
+                backend = MeshGenPredictor::Backend::Pixal3D;
+            else { err() << "Error: --backend must be trellis2, pixal3d, triposr or triposg." << Qt::endl; return 2; }
             backendSet = true;
             continue;
         }
@@ -11722,6 +11729,18 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-source") { keepSource = false; continue; }
+        if (arg == "--pixal-fov") {
+            if (i + 1 >= argc) {
+                err() << "Error: --pixal-fov requires degrees." << Qt::endl; return 2; }
+            bool ok = false;
+            pixalFovDeg = QString::fromLocal8Bit(argv[++i]).toFloat(&ok);
+            if (!ok || pixalFovDeg <= 0.0f || pixalFovDeg >= 180.0f) {
+                err() << "Error: --pixal-fov must be in (0, 180) degrees." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--no-naf") { pixalNoNaf = true; continue; }
         if (arg == "--target-tris") {
             if (i + 1 >= argc) { err() << "Error: --target-tris requires a number." << Qt::endl; return 2; }
             bool ok = false;
@@ -11834,9 +11853,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
-                 "[--backend trellis2|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
+                 "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
                  "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
+                 " [--pixal-fov DEG] [--no-naf]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
@@ -11901,7 +11921,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             err() << "Using backend: trellis2 (runtime detected; pass "
                      "--backend triposr|triposg to override)." << Qt::endl;
     }
-    const bool useTrellis2 = (backend == MeshGenPredictor::Backend::Trellis2);
+    // Pixal3D rides the SAME trellis-cli runtime as TRELLIS.2 — same sidecar,
+    // same game-ready pass, same native PBR bake; only the flow weights differ.
+    // Everything gated on this flag applies to both.
+    const bool useTrellis2 =
+        MeshGenPredictor::isTrellisRuntime(backend);
 
 #ifndef ENABLE_ONNX
     // The TRELLIS.2 sidecar backend has no ONNX dependency; only the local
@@ -11925,7 +11949,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
 
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
-    const QString backendName = useTrellis2 ? QStringLiteral("trellis2")
+    const QString backendName =
+        backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")
+        : useTrellis2 ? QStringLiteral("trellis2")
         : (useSG ? QStringLiteral("triposg") : QStringLiteral("triposr"));
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
         QString("generate3d .%1 res=%2 color=%3 backend=%4")
@@ -12001,6 +12027,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.bakeNormalMap   = generatePbr && bake;
     opts.textureSupersample = textureSupersample;
     opts.texVolumeRes       = texVolumeRes;
+    opts.pixal3dFovDeg      = pixalFovDeg;
+    opts.pixal3dNoNaf       = pixalNoNaf;
     if (useTrellis2) {
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the
                                         // predictor skips it when the input

@@ -110,6 +110,9 @@ MeshGenPredictor::Backend MeshGenPredictor::defaultBackend()
 {
     // TRELLIS.2 becomes the default the moment its runtime is installed on
     // this machine; otherwise the local ONNX TripoSR path stays the default.
+    // Trellis2 stays the default even though Pixal3D is better on humanoids:
+    // Pixal3D needs its own ~11 GB of flow weights, so preselecting it would
+    // point most users at models they have not downloaded.
     return Trellis2Predictor::runtimeAvailable() ? Backend::Trellis2
                                                  : Backend::TripoSR;
 }
@@ -132,6 +135,9 @@ MeshGenPredictor::Result predictTrellis2(
     t2.bakeNormalMap    = opts.bakeNormalMap;
     t2.supersample      = opts.textureSupersample;
     t2.texVolumeRes     = opts.texVolumeRes;
+    t2.pixal3d          = (opts.backend == MeshGenPredictor::Backend::Pixal3D);
+    t2.fovDeg           = opts.pixal3dFovDeg;
+    t2.noNaf            = opts.pixal3dNoNaf;
     t2.removeBackground = opts.removeBackground;
     t2.mattingQuality   = opts.mattingQuality;   // #1016
     t2.mock             = opts.trellis2Mock;
@@ -210,7 +216,9 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                                                    const Options& opts,
                                                    const ProgressFn& progress)
 {
-    if (opts.backend == Backend::Trellis2)
+    // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
+    // `--model pixal3d` for the latter and everything downstream is shared.
+    if (isTrellisRuntime(opts.backend))
         return predictTrellis2(image, opts, progress);
     Result r;
     r.error = QStringLiteral(
@@ -307,7 +315,9 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         return fail(QStringLiteral("MeshGen: input image is empty."));
 
     // ---- Backend dispatch: TRELLIS.2 (out-of-process sidecar) ----------------
-    if (opts.backend == Backend::Trellis2)
+    // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
+    // `--model pixal3d` for the latter and everything downstream is shared.
+    if (isTrellisRuntime(opts.backend))
         return predictTrellis2(image, opts, progress);
 
     // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------

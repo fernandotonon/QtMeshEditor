@@ -552,6 +552,18 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
         args << QStringLiteral("--tex-res")
              << QString::number(opts.texVolumeRes);
+    if (opts.pixal3d) {
+        // Same runtime, same model directory — only the flow weights differ
+        // (trellis-cli prefixes them with `pixal3d_`; the decoders are shared).
+        args << QStringLiteral("--model") << QStringLiteral("pixal3d");
+        // Only pass a FOV when the caller set one: trellis-cli's default is
+        // 49.13, the value Pixal3D was trained with, and guessing here would
+        // silently mis-place the projection camera.
+        if (opts.fovDeg > 0.0f)
+            args << QStringLiteral("--fov") << QString::number(opts.fovDeg);
+        if (opts.noNaf)
+            args << QStringLiteral("--no-naf");
+    }
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);
