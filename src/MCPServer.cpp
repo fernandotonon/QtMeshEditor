@@ -3171,6 +3171,24 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.targetTriangles < 0 || opts.targetTriangles > 10000000)
             return makeErrorResult("'target_tris' must be in [0, 10000000] (0 = original).");
     }
+    // Baking a texture on a FULL-DENSITY generation produces an unusable
+    // atlas. xatlas cuts a chart wherever it cannot flatten the surface, so an
+    // organic mesh at native density fragments into thousands of tiny islands
+    // (measured: a 299,988-tri goblin -> 16,043 islands, ~19 tris each) and at
+    // any sane texture size each chart gets too few texels for the dilation
+    // gutter to cover its border — every seam reads as a black line across the
+    // model. The same generation at target_tris 25000 gave 1,195 islands and a
+    // clean bake. The GUI never hits this because its mesh picker defaults to
+    // Game Medium (25k); target_tris defaults to 0 here, so a caller who omits
+    // it gets the broken result with no clue why. Warn rather than silently
+    // change the default, which would alter output for existing callers.
+    QString densityWarning;
+    if (opts.bakeTexture && opts.targetTriangles == 0)
+        densityWarning = QStringLiteral(
+            "note: 'target_tris' was not set, so the mesh keeps its native "
+            "density; a texture bake on a dense organic mesh fragments the UV "
+            "atlas into thousands of charts and shows black seam lines. Pass "
+            "target_tris (25000 is the GUI default) for a clean bake.");
     opts.bakeNormalMap = generatePbr && opts.bakeTexture;
     if (args.contains("flow_steps")) {
         opts.flowSteps = args["flow_steps"].toInt(25);
@@ -3337,7 +3355,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         result["sourcePath"] = res.sourceInterchangePath;
     // Surface non-fatal degradations (bake fell back to vertex colours, …) so
     // the MCP caller can tell a textured result from a fallback one.
-    if (!res.warning.isEmpty()) result["warning"] = res.warning;
+    // Join the predictor's own warning with the atlas-density note so a
+    // caller never loses either one.
+    QString warn = res.warning;
+    if (!densityWarning.isEmpty()) {
+        if (!warn.isEmpty()) warn += QStringLiteral(" ");
+        warn += densityWarning;
+    }
+    if (!warn.isEmpty()) result["warning"] = warn;
     return result;
 }
 
@@ -11575,7 +11600,7 @@ QJsonArray MCPServer::buildToolsList()
         props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
         props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
         props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
-        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
+        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). STRONGLY recommended whenever a texture is baked: at native density xatlas fragments the atlas into thousands of charts and the bake shows black seam lines (a 300k-tri mesh gave 16,043 UV islands vs 1,195 at 25000). The GUI defaults to 25000. For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764 + TRELLIS.2): reconstruct a "
