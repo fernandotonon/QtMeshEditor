@@ -331,6 +331,25 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (kind == RuntimeKind::None && importPath.isEmpty())
         return failResult(runtimeDescription());
 
+    // --tex-res is a trellis-cli option; the Python sidecar
+    // (ai/trellis2/generate.py) has no equivalent argument, so on that runtime
+    // the request could only be silently dropped and the caller would get the
+    // sidecar's default volume with no indication why. Refuse instead, in the
+    // same spirit as the mock check above: a clear error beats a run that
+    // quietly ignored what was asked for.
+    //
+    // Scoped to a REAL generation: the import seam above re-bakes a saved
+    // .qtm3d and never reaches either runtime, so it never reads
+    // texVolumeRes — rejecting there would fail a call the flag cannot
+    // affect, and would contradict "must work with NO runtime installed".
+    if ((opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
+        && kind == RuntimeKind::PythonSidecar && importPath.isEmpty()) {
+        return failResult(QStringLiteral(
+            "trellis2: --tex-res is only supported by the trellis.cpp runtime; "
+            "the Python sidecar has no texture-volume-resolution option. "
+            "Drop --tex-res (or install trellis-cli) and re-run."));
+    }
+
     auto report = [&progress](Stage s, int done, int total) -> bool {
         return !progress || progress(s, done, total);
     };
@@ -527,6 +546,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                      QStringLiteral("--models"),    models2,
                      QStringLiteral("--res"),       QString::number(res),
                      QStringLiteral("--seed"),      QString::number(opts.seed)};
+    // Texture-volume resolution. 0 leaves trellis-cli on its own default; a
+    // simple prop (a box, a mat) does not need the larger volume, and the
+    // smaller one is markedly faster.
+    if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
+        args << QStringLiteral("--tex-res")
+             << QString::number(opts.texVolumeRes);
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);

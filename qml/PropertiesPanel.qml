@@ -2327,10 +2327,25 @@ Rectangle {
                     // "Maximum" still caps dense TRELLIS sources at ~150–300k
                     // for the bake (an uncapped raw dual-grid mesh is
                     // un-unwrappable); the raw source is preserved either way.
-                    model: ["Maximum detail (auto cap)", "Game Low (~10k tris)",
-                            "Game Medium (~25k tris)", "Game High (~50k tris)"]
-                    currentIndex: 2
-                    readonly property var triValues: [0, 10000, 25000, 50000]
+                    // Simple props (a pizza box, a mat, a crate) are wasteful
+                    // at 10k — the low tiers exist for them. The backend has
+                    // always accepted these (--target-tris takes 0..10M); only
+                    // this picker was capped. Verified on a 16k-tri source:
+                    // 1000 -> 1030 tris, 5000 -> 5034, 500 -> 824.
+                    //
+                    // 500 is the lowest HONEST tier: meshoptimizer locks UV and
+                    // material border edges, so asking for 100 and asking for
+                    // 500 both bottom out at the same ~824 tris (~460 on a
+                    // simple bench). A "100 tris" entry would promise a number
+                    // the simplifier cannot deliver, so it is deliberately
+                    // absent — the floor depends on the asset's seams, not on
+                    // the request.
+                    model: ["Maximum detail (auto cap)", "Prop Minimal (~500 tris)",
+                            "Prop Tiny (~1k tris)", "Prop Low (~5k tris)",
+                            "Game Low (~10k tris)", "Game Medium (~25k tris)",
+                            "Game High (~50k tris)"]
+                    currentIndex: 5
+                    readonly property var triValues: [0, 500, 1000, 5000, 10000, 25000, 50000]
                     property int triValue: triValues[currentIndex]
                 }
             }
@@ -2347,10 +2362,45 @@ Rectangle {
                     id: mgT2Tex
                     width: 190
                     enabled: !MeshGenController.busy
-                    model: ["1024 px", "2048 px (default)", "4096 px"]
-                    currentIndex: 1
-                    readonly property var sizeValues: [1024, 2048, 4096]
+                    // 64..512 for simple props whose texture is a few flat
+                    // faces (a mat, a pizza box); 4096 for hero assets.
+                    // Backend range is 64..8192, so every entry here is valid.
+                    // NB xatlas treats this as a HINT, not a size: it only
+                    // seeds an estimated texelsPerUnit, so the atlas that
+                    // lands can differ (a 64 request measured 140x143).
+                    // Treat these as a budget, not a guarantee.
+                    model: ["64 px", "128 px", "256 px", "512 px", "1024 px",
+                            "2048 px (default)", "4096 px"]
+                    currentIndex: 5
+                    readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
                     property int sizeValue: sizeValues[currentIndex]
+                }
+            }
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Sampling"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Super
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    // Subsamples per baked texel. The bake normally takes ONE
+                    // sample at each texel centre, so where a texel straddles
+                    // a colour boundary the result is whichever side the
+                    // centre happened to land on. 2x2 averages four positions
+                    // instead, which softens that speckle — at roughly 4x the
+                    // bake cost, so it is off by default and worth enabling
+                    // mainly on small textures, where each texel covers more
+                    // of the surface.
+                    model: ["1x (fast, default)", "2x2 (smoother, ~4x slower)"]
+                    currentIndex: 0
+                    readonly property var superValues: [1, 2]
+                    property int superValue: superValues[currentIndex]
                 }
             }
 
@@ -2565,6 +2615,7 @@ Rectangle {
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
+                        genOptions["texture_supersample"] = mgT2Super.superValue
                     }
                     genOptions["matting"] = mgBestMatte.checked ? "best" : "fast"
                     MeshGenController.generateSelected(

@@ -642,6 +642,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         : QStringLiteral("balanced");
     const int t2TargetTris = options.contains(QLatin1String("target_tris"))
         ? options.value(QLatin1String("target_tris")).toInt() : 0;
+    // Subsamples per baked texel (TRELLIS.2). 1 = one sample at the texel
+    // centre (default); 2 = 2x2, which averages four positions and softens
+    // the speckle a single centre sample leaves where a texel straddles a
+    // colour boundary — at roughly 4x the bake cost. Anything else is
+    // ignored rather than trusted, since it comes in as a loose QVariant.
+    const int t2Supersample =
+        options.value(QLatin1String("texture_supersample")).toInt() == 2 ? 2 : 1;
 
     GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
@@ -752,6 +759,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
+                                     t2Supersample,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -814,6 +822,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         if (useT2) {
             opts.seed            = t2Seed;
             opts.trellis2Preset  = t2Preset;
+            opts.textureSupersample = t2Supersample;
             // Phase 9: keep the raw full-res generation in AppData so
             // textures/LODs can be re-baked without re-running inference.
             opts.trellis2SourceKeepDir =

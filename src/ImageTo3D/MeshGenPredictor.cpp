@@ -130,6 +130,8 @@ MeshGenPredictor::Result predictTrellis2(
     t2.bakeTexture      = opts.bakeTexture;
     t2.textureSize      = opts.textureSize;
     t2.bakeNormalMap    = opts.bakeNormalMap;
+    t2.supersample      = opts.textureSupersample;
+    t2.texVolumeRes     = opts.texVolumeRes;
     t2.removeBackground = opts.removeBackground;
     t2.mattingQuality   = opts.mattingQuality;   // #1016
     t2.mock             = opts.trellis2Mock;

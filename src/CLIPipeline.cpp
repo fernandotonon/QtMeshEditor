@@ -11635,6 +11635,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     unsigned seed = 42;         // TRELLIS.2 generation seed
     QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
     int targetTris = 0;         // TRELLIS.2 game-ready simplification target
+    int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
+    int texVolumeRes = 0;       // 0 = sidecar auto | 512 | 1024
+    bool keepSource = true;     // write the .qtm3d full-res source sidecar
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
     MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
     bool backendSet = false;    // explicit --backend beats the auto default
@@ -11696,6 +11699,29 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             }
             continue;
         }
+        if (arg == "--texture-supersample" || arg == "--supersample") {
+            if (i + 1 >= argc) {
+                err() << "Error: --texture-supersample requires 1 or 2." << Qt::endl; return 2; }
+            bool ok = false;
+            textureSupersample = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || (textureSupersample != 1 && textureSupersample != 2)) {
+                err() << "Error: --texture-supersample must be 1 or 2." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--tex-res") {
+            if (i + 1 >= argc) {
+                err() << "Error: --tex-res requires 512 or 1024." << Qt::endl; return 2; }
+            bool ok = false;
+            texVolumeRes = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || (texVolumeRes != 512 && texVolumeRes != 1024)) {
+                err() << "Error: --tex-res must be 512 or 1024." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--no-source") { keepSource = false; continue; }
         if (arg == "--target-tris") {
             if (i + 1 >= argc) { err() << "Error: --target-tris requires a number." << Qt::endl; return 2; }
             bool ok = false;
@@ -11810,6 +11836,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--upscale-texture] [--no-pbr] "
                  "[--backend trellis2|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
                  "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
+                 " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
@@ -11972,13 +11999,22 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.trellis2Preset  = preset;
     opts.targetTriangles = targetTris;
     opts.bakeNormalMap   = generatePbr && bake;
+    opts.textureSupersample = textureSupersample;
+    opts.texVolumeRes       = texVolumeRes;
     if (useTrellis2) {
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the
                                         // predictor skips it when the input
                                         // already carries one
-        // Phase 9: keep the raw full-res generation next to the export.
-        opts.trellis2SourceKeepDir = QFileInfo(outputPath).absolutePath();
-        opts.trellis2SourceKeepBaseName = QFileInfo(outputPath).completeBaseName();
+        // Phase 9: keep the raw full-res generation next to the export so
+        // textures/LODs can be re-baked without re-running inference. It is
+        // the WHOLE generation (verts + faces + sparse PBR volume) and can
+        // dwarf the .glb, so a bulk run that never re-bakes should pass
+        // --no-source rather than filling the disk. Nothing reads it
+        // automatically — only an explicit QTMESH_TRELLIS2_IMPORT=<file>.
+        if (keepSource) {
+            opts.trellis2SourceKeepDir = QFileInfo(outputPath).absolutePath();
+            opts.trellis2SourceKeepBaseName = QFileInfo(outputPath).completeBaseName();
+        }
     }
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),

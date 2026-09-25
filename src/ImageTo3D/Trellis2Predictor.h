@@ -55,6 +55,7 @@ public:
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
+        int  texVolumeRes  = 0;     // 0 = sidecar default | 512 | 1024
         bool removeBackground = true;   // alpha matte (skipped if the input
                                         // already carries real alpha)
         // #1016: which matting model. Fast = U²-Net 320² (default); Best =
