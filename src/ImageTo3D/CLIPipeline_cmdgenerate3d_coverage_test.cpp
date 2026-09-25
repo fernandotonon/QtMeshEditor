@@ -228,3 +228,50 @@ TEST(CLIPipelineCmdGenerate3dCoverage, NoSourceTakesNoValue)
     Gen3dArgv args({"generate3d", kMissingImage, "--no-source"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
 }
+
+// ---- Pixal3D backend --------------------------------------------------------
+//
+// Pixal3D is a TRELLIS.2 fork with view-aligned projection conditioning,
+// markedly better on humanoids. It rides the SAME trellis-cli runtime, so the
+// CLI only has to name it and carry its two camera knobs.
+
+TEST(CLIPipelineCmdGenerate3dCoverage, Pixal3DBackendIsAccepted)
+{
+    // exit 1 (not 2) = the argument parsed and the run failed later on the
+    // missing image, which is how this file distinguishes accept from reject.
+    for (const char* name : {"pixal3d", "pixal", "PIXAL3D"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--backend", name});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1)
+            << "should accept --backend " << name;
+    }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, UnknownBackendStillRejected)
+{
+    // Adding a backend must not turn the enum into a catch-all.
+    Gen3dArgv args({"generate3d", kMissingImage, "--backend", "pixal4d"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, PixalFovRejectsOutOfRangeAngles)
+{
+    // 0 is reserved for "leave trellis-cli on its own 49.13 default", so an
+    // explicit 0 is a caller error rather than a silent no-op — otherwise
+    // `--pixal-fov 0` would look like it set something and do nothing.
+    for (const char* bad : {"0", "-10", "180", "999", "abc"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--pixal-fov", bad});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2)
+            << "should reject --pixal-fov " << bad;
+    }
+    Gen3dArgv missing({"generate3d", kMissingImage, "--pixal-fov"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv ok({"generate3d", kMissingImage, "--pixal-fov", "49.13"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(ok.argc(), ok.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, NoNafTakesNoValue)
+{
+    // Bare switch: must not swallow the next argument.
+    Gen3dArgv args({"generate3d", kMissingImage, "--no-naf"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
+}
