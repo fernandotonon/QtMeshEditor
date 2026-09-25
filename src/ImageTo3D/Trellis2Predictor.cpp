@@ -325,6 +325,20 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "refusing to run a real trellis.cpp generation for a mock "
                 "request."));
     }
+    // --tex-res is a trellis-cli option; the Python sidecar
+    // (ai/trellis2/generate.py) has no equivalent argument, so on that runtime
+    // the request could only be silently dropped and the caller would get the
+    // sidecar's default volume with no indication why. Refuse instead, in the
+    // same spirit as the mock check above: a clear error beats a run that
+    // quietly ignored what was asked for.
+    if ((opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
+        && kind == RuntimeKind::PythonSidecar) {
+        return failResult(QStringLiteral(
+            "trellis2: --tex-res is only supported by the trellis.cpp runtime; "
+            "the Python sidecar has no texture-volume-resolution option. "
+            "Drop --tex-res (or install trellis-cli) and re-run."));
+    }
+
     // The QTMESH_TRELLIS2_IMPORT re-bake seam (Phase 9) skips inference
     // entirely — it must work with NO runtime installed.
     const QString importPath = qEnvironmentVariable("QTMESH_TRELLIS2_IMPORT");
