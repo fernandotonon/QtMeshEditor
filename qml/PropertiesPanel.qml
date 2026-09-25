@@ -2260,16 +2260,27 @@ Rectangle {
                     // while the app runs is picked up on the next session /
                     // section reopen).
                     readonly property bool t2Ready: MeshGenController.trellis2Available()
-                    readonly property bool t2Selected: currentIndex === 0
-                    readonly property bool sgSelected: currentIndex === 2
+                    // Backend IDs, parallel to `model`. Everything keys off
+                    // these rather than a positional currentIndex — the list
+                    // previously hardcoded `currentIndex === 0/2` in 14 places,
+                    // so inserting an entry silently rewired all of them.
+                    readonly property var backendIds: ["trellis2", "pixal3d", "triposr", "triposg"]
+                    readonly property string backendId: backendIds[currentIndex]
+                    // Pixal3D rides the SAME trellis-cli runtime as TRELLIS.2,
+                    // so every trellis-only control applies to both.
+                    readonly property bool t2Selected: backendId === "trellis2"
+                                                    || backendId === "pixal3d"
+                    readonly property bool pxSelected: backendId === "pixal3d"
+                    readonly property bool sgSelected: backendId === "triposg"
                     model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
+                            "Pixal3D (best humanoids" + (t2Ready ? ")" : ", needs runtime)"),
                             "TripoSR (fast, textured)",
                             "TripoSG (best geometry)"]
-                    currentIndex: t2Ready ? 0 : 1
+                    currentIndex: t2Ready ? 0 : 2
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
                     onCurrentIndexChanged: {
-                        if (currentIndex === 2)
+                        if (sgSelected)
                             mgQualityCombo.currentIndex = 0
                     }
                 }
@@ -2539,8 +2550,11 @@ Rectangle {
                     && MeshGenController.selectedImagePath.length > 0
                     && (!mgBackendCombo.t2Selected || mgBackendCombo.t2Ready)
                 onClicked: {
-                    var t2 = mgBackendCombo.currentIndex === 0   // TRELLIS.2
-                    var sg = mgBackendCombo.currentIndex === 2   // TripoSG
+                    // Value-based, not positional: t2 covers BOTH trellis-cli
+                    // families (TRELLIS.2 and Pixal3D), which share the sidecar
+                    // path and so emit the same progress stages.
+                    var t2 = mgBackendCombo.t2Selected
+                    var sg = mgBackendCombo.sgSelected
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     // The worker only posts a "background" stage on the TripoSR
                     // path; TripoSG/TRELLIS.2 remove the bg inside their
@@ -2608,7 +2622,7 @@ Rectangle {
                         "bake_texture": buildBake,
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
-                        "backend": t2 ? "trellis2" : (sg ? "triposg" : "triposr"),
+                        "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
                         "target_tris": mgT2Mesh.triValue
                     }
