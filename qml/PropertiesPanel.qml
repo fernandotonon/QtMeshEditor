@@ -2008,15 +2008,21 @@ Rectangle {
                 wrapMode: Text.Wrap
                 width: parent.width - 16
             }
-            Text {
+            TextEdit {
                 id: imgGenStatusTxt
                 width: parent.width - 16
                 visible: text.length > 0
                 property bool isError: false
                 color: isError ? "#e08080" : PropertiesPanelController.textColor
                 font.pixelSize: 10
-                wrapMode: Text.WordWrap
+                wrapMode: TextEdit.WordWrap
                 text: ""
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
             // Progress while the image generates: determinate once sampling
             // ticks arrive, indeterminate sweep during the (long) model load.
@@ -2705,14 +2711,29 @@ Rectangle {
                 }
             }
 
-            Text {
+            // A read-only TextEdit rather than a Text, so the message can be
+            // SELECTED and COPIED. Generation errors are often the backend's
+            // own multi-line output (a rejected argument makes trellis-cli
+            // print its whole usage), and a user reporting one had no way to
+            // get the text out of the panel except by retyping it from a
+            // screenshot. Read-only + no cursor keeps it looking like a label.
+            TextEdit {
                 id: mgStatus
                 width: parent.width - 16
-                wrapMode: Text.Wrap
+                wrapMode: TextEdit.Wrap
                 visible: text.length > 0
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: ""
+                readOnly: true
+                selectByMouse: true
+                // Selection needs focus, but taking it on load would steal it
+                // from the panel's inputs, so only a click focuses this.
+                activeFocusOnPress: true
+                cursorVisible: false
+                // Ctrl/Cmd+C works via the built-in TextEdit shortcut once
+                // there is a selection; Cmd+A selects the whole message.
+                persistentSelection: true
             }
 
             // Cancel (only while busy)
@@ -8315,14 +8336,20 @@ Rectangle {
                 }
             }
 
-            Text {
+            TextEdit {
                 width: parent.width - 16
-                wrapMode: Text.WordWrap
+                wrapMode: TextEdit.WordWrap
                 visible: LatticeController.statusText.length > 0
                 text: LatticeController.statusText
                 color: LatticeController.statusIsError ? "#e06060" : PropertiesPanelController.textColor
                 font.pixelSize: 10
                 opacity: LatticeController.statusIsError ? 1.0 : 0.7
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
         }
     }
@@ -11591,12 +11618,18 @@ Rectangle {
                 color: PropertiesPanelController.textColor; opacity: 0.5
                 font.pixelSize: 9
             }
-            Text {
+            TextEdit {
                 id: genStatus
                 property bool isError: false
                 visible: text.length > 0
-                width: parent.width - 16; wrapMode: Text.Wrap; font.pixelSize: 9; opacity: 0.85
+                width: parent.width - 16; wrapMode: TextEdit.Wrap; font.pixelSize: 9; opacity: 0.85
                 color: isError ? "#e06c6c" : PropertiesPanelController.textColor
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
             Connections {
                 target: AnimationControlController
