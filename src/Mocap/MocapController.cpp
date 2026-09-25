@@ -484,17 +484,20 @@ OneEuroFilter::Params faceSmoothParams(double cutoffHz)
 OneEuroFilter::Params landmarkSmoothParams(double cutoffHz)
 {
     OneEuroFilter::Params p;
-    p.minCutoff = std::max(0.15, cutoffHz * 0.45);
-    p.beta = 0.02;
-    p.dCutoff = 0.8;
+    // Keep body landmarks responsive enough for high knees even when the
+    // UI slider is toward "smooth" (low Hz). Floor used to be 0.15 Hz and
+    // crushed march amplitude.
+    p.minCutoff = std::max(0.45, cutoffHz * 0.75);
+    p.beta = 0.04;
+    p.dCutoff = 1.0;
     return p;
 }
 
 OneEuroFilter::Params boneOutputSmoothParams(double cutoffHz)
 {
     OneEuroFilter::Params p;
-    p.minCutoff = std::max(0.15, cutoffHz * 0.65);
-    p.beta = 0.025;
+    p.minCutoff = std::max(0.45, cutoffHz * 0.85);
+    p.beta = 0.05;
     return p;
 }
 
