@@ -19,9 +19,38 @@
 #include <QTemporaryDir>
 #include "AppStorage.h"
 
+#include <atomic>
 #include <cstdio>
+#include <optional>
 
 namespace {
+
+// ---- one generation at a time (process-wide) -------------------------------
+// A TRELLIS.2/Pixal3D run holds ~3-11 GB resident for minutes. Two concurrent
+// runs on a shared-memory Mac push the machine into sustained swap while the
+// GPU is saturated: a real session was captured with TWO trellis-cli processes
+// alive at once (3.2 GB + 4.3 GB, both blocked in Metal) at
+// ThermalPressureLevelHeavy, immediately before watchdogd restarted the
+// graphical session for a missed check-in. Nothing downstream serialises
+// these: the GUI runs generation on a worker thread, and CLI/MCP can be
+// driven concurrently, so the guard lives here at the single shared funnel.
+//
+// Deliberately an atomic flag rather than a mutex: a second request must be
+// REFUSED with a message the user can act on, not silently queued behind a
+// multi-minute run that looks like a hang.
+std::atomic<bool> g_generationActive{false};
+
+class GenerationSlot {
+public:
+    GenerationSlot()
+        : m_acquired(!g_generationActive.exchange(true)) {}
+    ~GenerationSlot() { if (m_acquired) g_generationActive.store(false); }
+    GenerationSlot(const GenerationSlot&) = delete;
+    GenerationSlot& operator=(const GenerationSlot&) = delete;
+    bool acquired() const { return m_acquired; }
+private:
+    bool m_acquired;
+};
 
 constexpr const char* kEnvDirVar     = "QTMESH_TRELLIS2_ENV";
 constexpr const char* kEnvPythonVar  = "QTMESH_TRELLIS2_PYTHON";
@@ -362,6 +391,25 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             "trellis2: --tex-res is only supported by the trellis.cpp runtime; "
             "the Python sidecar has no texture-volume-resolution option. "
             "Drop --tex-res (or install trellis-cli) and re-run."));
+    }
+
+    // Refuse a SECOND concurrent generation. Held for the whole call (RAII, so
+    // every early return and any exception releases it) and taken only after
+    // the cheap argument/runtime validation above, so an invalid request still
+    // gets its specific error rather than a spurious "already running".
+    //
+    // The import seam re-bakes a saved .qtm3d without running inference, so it
+    // is cheap and stays exempt.
+    // std::optional so the import path never even takes the slot (a
+    // constructed slot would acquire it and then block a real generation).
+    std::optional<GenerationSlot> slot;
+    if (importPath.isEmpty())
+        slot.emplace();
+    if (slot && !slot->acquired()) {
+        return failResult(QStringLiteral(
+            "trellis2: a generation is already running. Each run holds several "
+            "GB for minutes, and two at once drive the machine into swap — "
+            "wait for the current one to finish (or cancel it) and re-run."));
     }
 
     auto report = [&progress](Stage s, int done, int total) -> bool {
