@@ -732,7 +732,7 @@ MainWindow::MainWindow(QWidget *parent) :
             }
         }
     });
-    m_pTimer->start(0);
+    m_pTimer->start(kRenderIntervalMs);
 
     // Edit Mode indicator in status bar
     m_editModeLabel = new QLabel("Object Mode", this);
@@ -6476,7 +6476,7 @@ void MainWindow::onWidgetClosing(EditorViewport* const& widget)
     // Safety check: don't restart timer if MainWindow is being destroyed
     if(m_pTimer)
     {
-        m_pTimer->start(0);
+        m_pTimer->start(kRenderIntervalMs);
     }
 }
 // LCOV_EXCL_STOP
