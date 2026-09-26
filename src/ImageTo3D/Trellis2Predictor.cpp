@@ -949,9 +949,13 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     r.sourceInterchangePath = keptSourcePath;
     r.usedModel = !mockRun;
     r.bakeTripoSROrientation = false;   // not the TripoSR frame
-    // ...but not +Y-up either: it lands on its back, so MeshGenBuilder
-    // also applies -90° about X after the 180° turn.
-    r.bakeTrellisUprightX = true;
+    // TRELLIS.2 proper is +Y-up and the 180° turn alone already places it
+    // correctly — do NOT rotate it further. Only PIXAL3D lands on its back
+    // and needs the extra -90° about X (the fork reconstructs in a different
+    // frame; its projection conditioning is the only thing that differs, and
+    // it changes the axis convention with it). Applying the rotation to both
+    // over-rotated every TRELLIS.2 generation.
+    r.bakeTrellisUprightX = opts.pixal3d;
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------
     bool baked = false;

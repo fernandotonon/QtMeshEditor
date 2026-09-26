@@ -193,12 +193,12 @@ public:
         // trimesh as-is), so its dispatch sets this false to skip the bake.
         bool bakeTripoSROrientation = true;
 
-        // TRELLIS.2 / Pixal3D need a further -90° about X on top of the
-        // TripoSG 180°-Y flip: their reconstruction comes out lying on its
-        // back (the goblin's height landed on Z while Y held only its depth —
-        // measured 1.02 / 0.26 / 0.69 on the exported bbox). Reported from
-        // the GUI: "the pixal model needs to be rotated -90 degrees on x axis
-        // after generation, like the trellis one".
+        // PIXAL3D ONLY: it needs a further -90° about X on top of the
+        // 180°-Y flip, because the fork reconstructs on its back (the
+        // goblin's height landed on Z while Y held only its depth — measured
+        // 1.02 / 0.26 / 0.69 on the exported bbox). TRELLIS.2 proper is
+        // already placed correctly by the 180° turn alone; rotating it too
+        // OVER-rotates every generation, so this stays false for it.
         //   -90°X: (x, y, z) -> (x, z, -y)   (a proper rotation, det +1, so
         //   triangle winding and normals are unaffected).
         bool bakeTrellisUprightX = false;

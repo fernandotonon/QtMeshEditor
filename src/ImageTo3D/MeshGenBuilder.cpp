@@ -140,8 +140,9 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     // BUT TripoSG comes out facing AWAY (its front is -Z here), so rotate it
     // 180° about Y so the reconstructed front faces the camera (+Z):
     //   180°Y: (x, y, z) -> (-x, y, -z).
-    // TRELLIS.2 / Pixal3D additionally come out lying on their back, so after
-    // the 180° turn they need -90° about X to stand up:
+    // PIXAL3D additionally comes out lying on its back, so after the 180°
+    // turn it needs -90° about X to stand up (TRELLIS.2 proper does not —
+    // the flag is set only for the fork):
     //   -90°X: (x, y, z) -> (x, z, -y)
     // det +1, so winding and normals are unaffected by it.
     const bool bakeOrientation = result.bakeTripoSROrientation;
