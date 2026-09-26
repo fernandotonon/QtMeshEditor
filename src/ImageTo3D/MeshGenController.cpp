@@ -631,8 +631,11 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         backend = MeshGenPredictor::Backend::TripoSG;
     else if (backendStr.startsWith(QLatin1String("trellis")))
         backend = MeshGenPredictor::Backend::Trellis2;
+    else if (backendStr.startsWith(QLatin1String("pixal")))
+        backend = MeshGenPredictor::Backend::Pixal3D;
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
-    const bool useT2 = (backend == MeshGenPredictor::Backend::Trellis2);
+    // Pixal3D shares the trellis-cli runtime, so every useT2 gate applies.
+    const bool useT2 = MeshGenPredictor::isTrellisRuntime(backend);
     const int flowSteps = options.contains(QLatin1String("flow_steps"))
         ? options.value(QLatin1String("flow_steps")).toInt() : 25;
     const unsigned t2Seed = options.contains(QLatin1String("seed"))

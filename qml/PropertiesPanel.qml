@@ -2008,15 +2008,21 @@ Rectangle {
                 wrapMode: Text.Wrap
                 width: parent.width - 16
             }
-            Text {
+            TextEdit {
                 id: imgGenStatusTxt
                 width: parent.width - 16
                 visible: text.length > 0
                 property bool isError: false
                 color: isError ? "#e08080" : PropertiesPanelController.textColor
                 font.pixelSize: 10
-                wrapMode: Text.WordWrap
+                wrapMode: TextEdit.WordWrap
                 text: ""
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
             // Progress while the image generates: determinate once sampling
             // ticks arrive, indeterminate sweep during the (long) model load.
@@ -2260,16 +2266,27 @@ Rectangle {
                     // while the app runs is picked up on the next session /
                     // section reopen).
                     readonly property bool t2Ready: MeshGenController.trellis2Available()
-                    readonly property bool t2Selected: currentIndex === 0
-                    readonly property bool sgSelected: currentIndex === 2
+                    // Backend IDs, parallel to `model`. Everything keys off
+                    // these rather than a positional currentIndex — the list
+                    // previously hardcoded `currentIndex === 0/2` in 14 places,
+                    // so inserting an entry silently rewired all of them.
+                    readonly property var backendIds: ["trellis2", "pixal3d", "triposr", "triposg"]
+                    readonly property string backendId: backendIds[currentIndex]
+                    // Pixal3D rides the SAME trellis-cli runtime as TRELLIS.2,
+                    // so every trellis-only control applies to both.
+                    readonly property bool t2Selected: backendId === "trellis2"
+                                                    || backendId === "pixal3d"
+                    readonly property bool pxSelected: backendId === "pixal3d"
+                    readonly property bool sgSelected: backendId === "triposg"
                     model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
+                            "Pixal3D" + (t2Ready ? "" : " (needs runtime)"),
                             "TripoSR (fast, textured)",
                             "TripoSG (best geometry)"]
-                    currentIndex: t2Ready ? 0 : 1
+                    currentIndex: t2Ready ? 0 : 2
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
                     onCurrentIndexChanged: {
-                        if (currentIndex === 2)
+                        if (sgSelected)
                             mgQualityCombo.currentIndex = 0
                     }
                 }
@@ -2539,8 +2556,11 @@ Rectangle {
                     && MeshGenController.selectedImagePath.length > 0
                     && (!mgBackendCombo.t2Selected || mgBackendCombo.t2Ready)
                 onClicked: {
-                    var t2 = mgBackendCombo.currentIndex === 0   // TRELLIS.2
-                    var sg = mgBackendCombo.currentIndex === 2   // TripoSG
+                    // Value-based, not positional: t2 covers BOTH trellis-cli
+                    // families (TRELLIS.2 and Pixal3D), which share the sidecar
+                    // path and so emit the same progress stages.
+                    var t2 = mgBackendCombo.t2Selected
+                    var sg = mgBackendCombo.sgSelected
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     // The worker only posts a "background" stage on the TripoSR
                     // path; TripoSG/TRELLIS.2 remove the bg inside their
@@ -2608,7 +2628,7 @@ Rectangle {
                         "bake_texture": buildBake,
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
-                        "backend": t2 ? "trellis2" : (sg ? "triposg" : "triposr"),
+                        "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
                         "target_tris": mgT2Mesh.triValue
                     }
@@ -2691,14 +2711,29 @@ Rectangle {
                 }
             }
 
-            Text {
+            // A read-only TextEdit rather than a Text, so the message can be
+            // SELECTED and COPIED. Generation errors are often the backend's
+            // own multi-line output (a rejected argument makes trellis-cli
+            // print its whole usage), and a user reporting one had no way to
+            // get the text out of the panel except by retyping it from a
+            // screenshot. Read-only + no cursor keeps it looking like a label.
+            TextEdit {
                 id: mgStatus
                 width: parent.width - 16
-                wrapMode: Text.Wrap
+                wrapMode: TextEdit.Wrap
                 visible: text.length > 0
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: ""
+                readOnly: true
+                selectByMouse: true
+                // Selection needs focus, but taking it on load would steal it
+                // from the panel's inputs, so only a click focuses this.
+                activeFocusOnPress: true
+                cursorVisible: false
+                // Ctrl/Cmd+C works via the built-in TextEdit shortcut once
+                // there is a selection; Cmd+A selects the whole message.
+                persistentSelection: true
             }
 
             // Cancel (only while busy)
@@ -8301,14 +8336,20 @@ Rectangle {
                 }
             }
 
-            Text {
+            TextEdit {
                 width: parent.width - 16
-                wrapMode: Text.WordWrap
+                wrapMode: TextEdit.WordWrap
                 visible: LatticeController.statusText.length > 0
                 text: LatticeController.statusText
                 color: LatticeController.statusIsError ? "#e06060" : PropertiesPanelController.textColor
                 font.pixelSize: 10
                 opacity: LatticeController.statusIsError ? 1.0 : 0.7
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
         }
     }
@@ -11577,12 +11618,18 @@ Rectangle {
                 color: PropertiesPanelController.textColor; opacity: 0.5
                 font.pixelSize: 9
             }
-            Text {
+            TextEdit {
                 id: genStatus
                 property bool isError: false
                 visible: text.length > 0
-                width: parent.width - 16; wrapMode: Text.Wrap; font.pixelSize: 9; opacity: 0.85
+                width: parent.width - 16; wrapMode: TextEdit.Wrap; font.pixelSize: 9; opacity: 0.85
                 color: isError ? "#e06c6c" : PropertiesPanelController.textColor
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
             Connections {
                 target: AnimationControlController

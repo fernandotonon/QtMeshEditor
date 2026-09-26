@@ -60,7 +60,20 @@ public:
     // Trellis2Predictor + defaultBackend()); mesh cleanup/UVs/PBR baking are
     // done natively by Trellis2Bake, deliberately without NVIDIA
     // nvdiffrast/nvdiffrec (docs/trellis2-dependencies.md).
-    enum class Backend { TripoSR, TripoSG, Trellis2 };
+    // Pixal3D = TencentARC Pixal3D (SIGGRAPH 2026, MIT code+weights), run
+    // through the SAME trellis-cli runtime as Trellis2 — it is a fork of
+    // TRELLIS.2 that swaps the global DINOv3 cross-attention for view-aligned
+    // PROJECTION conditioning (`out = cross_attn(x, global) + proj_linear(proj)`),
+    // as an alternative conditioning path. Same samplers and byte-identical
+    // decoders; only the four flow models differ, so one model directory serves
+    // both families (flow weights take a `pixal3d_` prefix, decoders are shared).
+    enum class Backend { TripoSR, TripoSG, Trellis2, Pixal3D };
+
+    // True for the backends served by the trellis-cli runtime. Both share the
+    // Trellis2Predictor path, the game-ready pass and the native PBR bake —
+    // they differ only in which flow weights are loaded.
+    static bool isTrellisRuntime(Backend b)
+    { return b == Backend::Trellis2 || b == Backend::Pixal3D; }
 
     // The backend a surface should preselect when the user didn't choose one:
     // Trellis2 when its runtime is available on this machine, else TripoSR.
@@ -140,6 +153,11 @@ public:
         // (--tex-res): 0 keeps the sidecar's own default, 512 or 1024 pick it
         // explicitly. A simple prop does not need the larger volume.
         int  texVolumeRes = 0;
+        // Pixal3D only: horizontal FOV of the input image in degrees (0 =
+        // trellis-cli's own default of 49.13, Pixal3D's training value), and
+        // an opt-out for the NAF guided upsampler.
+        float pixal3dFovDeg = 0.0f;
+        bool  pixal3dNoNaf  = false;
         // Test hook: drive the sidecar's --mock synthetic generation (no GPU,
         // no TRELLIS.2 models) — used by the plumbing e2e tests.
         bool trellis2Mock = false;
@@ -174,6 +192,16 @@ public:
         // TripoSG's field is already +Y-up (upstream exports the marching-cubes
         // trimesh as-is), so its dispatch sets this false to skip the bake.
         bool bakeTripoSROrientation = true;
+
+        // PIXAL3D ONLY: it needs a further -90° about X on top of the
+        // 180°-Y flip, because the fork reconstructs on its back (the
+        // goblin's height landed on Z while Y held only its depth — measured
+        // 1.02 / 0.26 / 0.69 on the exported bbox). TRELLIS.2 proper is
+        // already placed correctly by the 180° turn alone; rotating it too
+        // OVER-rotates every generation, so this stays false for it.
+        //   -90°X: (x, y, z) -> (x, z, -y)   (a proper rotation, det +1, so
+        //   triangle winding and normals are unaffected).
+        bool bakeTrellisUprightX = false;
 
         // ---- TRELLIS.2 extras (empty/null for the other backends) -------------
         // Real baked PBR maps from the sparse attribute volume (Trellis2Bake).

@@ -19,9 +19,38 @@
 #include <QTemporaryDir>
 #include "AppStorage.h"
 
+#include <atomic>
 #include <cstdio>
+#include <optional>
 
 namespace {
+
+// ---- one generation at a time (process-wide) -------------------------------
+// A TRELLIS.2/Pixal3D run holds ~3-11 GB resident for minutes. Two concurrent
+// runs on a shared-memory Mac push the machine into sustained swap while the
+// GPU is saturated: a real session was captured with TWO trellis-cli processes
+// alive at once (3.2 GB + 4.3 GB, both blocked in Metal) at
+// ThermalPressureLevelHeavy, immediately before watchdogd restarted the
+// graphical session for a missed check-in. Nothing downstream serialises
+// these: the GUI runs generation on a worker thread, and CLI/MCP can be
+// driven concurrently, so the guard lives here at the single shared funnel.
+//
+// Deliberately an atomic flag rather than a mutex: a second request must be
+// REFUSED with a message the user can act on, not silently queued behind a
+// multi-minute run that looks like a hang.
+std::atomic<bool> g_generationActive{false};
+
+class GenerationSlot {
+public:
+    GenerationSlot()
+        : m_acquired(!g_generationActive.exchange(true)) {}
+    ~GenerationSlot() { if (m_acquired) g_generationActive.store(false); }
+    GenerationSlot(const GenerationSlot&) = delete;
+    GenerationSlot& operator=(const GenerationSlot&) = delete;
+    bool acquired() const { return m_acquired; }
+private:
+    bool m_acquired;
+};
 
 constexpr const char* kEnvDirVar     = "QTMESH_TRELLIS2_ENV";
 constexpr const char* kEnvPythonVar  = "QTMESH_TRELLIS2_PYTHON";
@@ -51,11 +80,22 @@ MeshGenPredictor::Result failResult(const QString& message)
 QString collapseTrellisCliStderr(const QByteArray& errBuf)
 {
     QString detail = QString::fromLocal8Bit(errBuf).trimmed();
+    // Keep the FRONT, not the tail. trellis-cli prints its reason first and
+    // then dumps ~2 KB of usage text, so tailing the buffer threw away the
+    // only informative line and surfaced boilerplate ("--gss F --gsh F
+    // guidance strengths …") as the error — an unreadable report that says
+    // nothing about what went wrong.
+    //
+    // The usage block is pure noise once we have the reason, so cut it at the
+    // "usage:" banner when trellis-cli emitted one.
+    const int usageAt = detail.indexOf(QLatin1String("usage:"));
+    if (usageAt > 0)
+        detail = detail.left(usageAt).trimmed();
     detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
     while (detail.contains(QLatin1String("  ")))
         detail.replace(QLatin1String("  "), QLatin1String(" "));
     if (detail.size() > 400)
-        detail = QStringLiteral("…") + detail.right(399);
+        detail = detail.left(399) + QStringLiteral("…");
     return detail;
 }
 
@@ -342,12 +382,45 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // .qtm3d and never reaches either runtime, so it never reads
     // texVolumeRes — rejecting there would fail a call the flag cannot
     // affect, and would contradict "must work with NO runtime installed".
+    // Pixal3D is a trellis.cpp-only family: every Pixal3D argument is passed
+    // in the TrellisCpp branch, and the Python sidecar has no --model switch.
+    // Silently running plain TRELLIS.2 here would report a SUCCESSFUL Pixal3D
+    // generation after minutes of work that used the wrong weights, which is
+    // far worse than refusing — the whole reason to pick this backend is that
+    // it differs.
+    if (opts.pixal3d && kind == RuntimeKind::PythonSidecar
+        && importPath.isEmpty()) {
+        return failResult(QStringLiteral(
+            "trellis2: the pixal3d backend needs the trellis.cpp runtime "
+            "(trellis-cli); the Python sidecar has no Pixal3D support and "
+            "would silently run ordinary TRELLIS.2. Install trellis-cli, or "
+            "choose the trellis2 backend."));
+    }
     if ((opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
         && kind == RuntimeKind::PythonSidecar && importPath.isEmpty()) {
         return failResult(QStringLiteral(
             "trellis2: --tex-res is only supported by the trellis.cpp runtime; "
             "the Python sidecar has no texture-volume-resolution option. "
             "Drop --tex-res (or install trellis-cli) and re-run."));
+    }
+
+    // Refuse a SECOND concurrent generation. Held for the whole call (RAII, so
+    // every early return and any exception releases it) and taken only after
+    // the cheap argument/runtime validation above, so an invalid request still
+    // gets its specific error rather than a spurious "already running".
+    //
+    // The import seam re-bakes a saved .qtm3d without running inference, so it
+    // is cheap and stays exempt.
+    // std::optional so the import path never even takes the slot (a
+    // constructed slot would acquire it and then block a real generation).
+    std::optional<GenerationSlot> slot;
+    if (importPath.isEmpty())
+        slot.emplace();
+    if (slot && !slot->acquired()) {
+        return failResult(QStringLiteral(
+            "trellis2: a generation is already running. Each run holds several "
+            "GB for minutes, and two at once drive the machine into swap — "
+            "wait for the current one to finish (or cancel it) and re-run."));
     }
 
     auto report = [&progress](Stage s, int done, int total) -> bool {
@@ -478,13 +551,24 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     else if (presetName == QLatin1String("high"))
         res = 1536;
     QString models2 = models;
-    const auto hasCascade = [](const QString& d) {
+    // Flow-weight filename prefix, mirroring trellis-cli's own
+    // `FP = pix ? "/pixal3d_" : "/"` (src/trellis_cli.cpp): the two families
+    // share one directory and differ only in the flow/naf filenames.
+    const QString flowPrefix = opts.pixal3d ? QStringLiteral("pixal3d_")
+                                            : QString();
+    const auto hasCascade = [&flowPrefix](const QString& d) {
         // BOTH cascade files, always — launching trellis-cli at 1024/1536
         // with only one of them (e.g. a cancelled two-file download) fails
         // mid-run instead of falling back.
+        //
+        // Family-aware: checking the UNPREFIXED names for a Pixal3D run
+        // downgraded a correctly-installed Pixal3D setup to --res 512, and
+        // Pixal3D has no 512 texture flow, so the "high quality" default
+        // silently produced an UNTEXTURED mesh unless the user also happened
+        // to install the unrelated TRELLIS.2 cascade card.
         const QDir q(d);
-        return q.exists(QStringLiteral("shape_flow_1024.gguf"))
-            && q.exists(QStringLiteral("tex_flow_1024.gguf"));
+        return q.exists(flowPrefix + QStringLiteral("shape_flow_1024.gguf"))
+            && q.exists(flowPrefix + QStringLiteral("tex_flow_1024.gguf"));
     };
     if (res > 512 && !hasCascade(models2)) {
         // The resolved dir (often the trellis-cli sibling with the 512 set)
@@ -496,13 +580,25 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         // catalog holds everything, it is used directly.
         const QString catalogDir =
             QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("trellis2"));
-        static const char* kBase[] = {
-            "ss_flow.gguf",  "shape_flow_512.gguf", "tex_flow_512.gguf",
+        // Decoders + DINOv3 are SHARED byte-for-byte between the families and
+        // stay unprefixed; only the flow weights carry the prefix. Pixal3D has
+        // no tex_flow_512 at all, so it is not part of its base set.
+        static const char* kShared[] = {
             "shape_dec.gguf", "tex_dec.gguf", "ss_dec.gguf", "dinov3.gguf"};
+        const QStringList flows =
+            opts.pixal3d
+                ? QStringList{QStringLiteral("pixal3d_ss_flow.gguf"),
+                              QStringLiteral("pixal3d_shape_flow_512.gguf")}
+                : QStringList{QStringLiteral("ss_flow.gguf"),
+                              QStringLiteral("shape_flow_512.gguf"),
+                              QStringLiteral("tex_flow_512.gguf")};
         const auto hasBase = [&](const QString& d) {
             const QDir q(d);
-            for (const char* f : kBase)
+            for (const char* f : kShared)
                 if (!q.exists(QLatin1String(f)))
+                    return false;
+            for (const QString& f : flows)
+                if (!q.exists(f))
                     return false;
             return true;
         };
@@ -514,18 +610,29 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                     QDir(tmp.path()).filePath(QStringLiteral("models"));
                 QDir().mkpath(merged);
                 bool mergedOk = true;
-                const auto place = [&](const QString& srcDir, const char* f) {
-                    const QString src = QDir(srcDir).filePath(QLatin1String(f));
-                    const QString dst = QDir(merged).filePath(QLatin1String(f));
+                const auto place = [&](const QString& srcDir, const QString& f) {
+                    const QString src = QDir(srcDir).filePath(f);
+                    const QString dst = QDir(merged).filePath(f);
                     if (QFile::link(src, dst) || QFile::copy(src, dst))
                         return true;
                     mergedOk = false;
                     return false;
                 };
-                for (const char* f : kBase)
+                for (const char* f : kShared)
+                    place(models2, QLatin1String(f));
+                for (const QString& f : flows)
                     place(models2, f);
-                place(catalogDir, "shape_flow_1024.gguf");
-                place(catalogDir, "tex_flow_1024.gguf");
+                // Prefixed for Pixal3D, bare for TRELLIS.2 — same rule as
+                // hasCascade, so a merged dir matches what trellis-cli loads.
+                place(catalogDir, flowPrefix + QStringLiteral("shape_flow_1024.gguf"));
+                place(catalogDir, flowPrefix + QStringLiteral("tex_flow_1024.gguf"));
+                // Pixal3D's shape/texture stages also read the NAF upsampler
+                // unless --no-naf; a merged dir without it would fail mid-run.
+                if (opts.pixal3d && !opts.noNaf) {
+                    const QString naf = QStringLiteral("pixal3d_naf.gguf");
+                    if (QDir(models2).exists(naf))      place(models2, naf);
+                    else if (QDir(catalogDir).exists(naf)) place(catalogDir, naf);
+                }
                 if (mergedOk)
                     models2 = merged;
             }
@@ -533,11 +640,20 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (!hasCascade(models2)) {
             if (!warning.isEmpty())
                 warning += QStringLiteral(" ");
+            // Pixal3D ships NO res-512 texture flow, so its fallback is
+            // geometry-only — say so, or a caller reads the successful
+            // result as a textured generation that merely lost fine detail.
             warning += QStringLiteral(
                 "the '%1' preset needs the 1024-cascade weights, which are "
                 "not installed — using the 512 pipeline (thin structures may "
-                "be lost). Download 'TRELLIS.2 cascade' in AI Model Settings "
-                "to enable it.").arg(presetName);
+                "be lost%2). Download '%3' in AI Model Settings to enable it.")
+                .arg(presetName,
+                     opts.pixal3d
+                         ? QStringLiteral(", and Pixal3D has no 512 texture "
+                                          "flow, so this run is GEOMETRY ONLY")
+                         : QString(),
+                     opts.pixal3d ? QStringLiteral("Pixal3D")
+                                  : QStringLiteral("TRELLIS.2 cascade"));
             res = 512;
         }
     }
@@ -552,6 +668,18 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
         args << QStringLiteral("--tex-res")
              << QString::number(opts.texVolumeRes);
+    if (opts.pixal3d) {
+        // Same runtime, same model directory — only the flow weights differ
+        // (trellis-cli prefixes them with `pixal3d_`; the decoders are shared).
+        args << QStringLiteral("--model") << QStringLiteral("pixal3d");
+        // Only pass a FOV when the caller set one: trellis-cli's default is
+        // 49.13, the value Pixal3D was trained with, and guessing here would
+        // silently mis-place the projection camera.
+        if (opts.fovDeg > 0.0f)
+            args << QStringLiteral("--fov") << QString::number(opts.fovDeg);
+        if (opts.noNaf)
+            args << QStringLiteral("--no-naf");
+    }
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);
@@ -645,6 +773,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                         static_cast<int>(opts.seed));
     rr.data.meta.insert(QStringLiteral("preset"), presetName);
     srcData = std::move(rr.data);
+    // Stamp the model family so a later QTMESH_TRELLIS2_IMPORT re-bake
+    // knows which orientation to apply: only Pixal3D needs the extra
+    // -90° about X, and an import-only run has no opts.pixal3d to read.
+    srcData.meta.insert(QStringLiteral("modelFamily"),
+                        opts.pixal3d ? QStringLiteral("pixal3d")
+                                     : QStringLiteral("trellis2"));
     } else {
     const QString python = pythonPath();
     const QString script = generateScriptPath();
@@ -827,7 +961,21 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     r.warning = warning;
     r.sourceInterchangePath = keptSourcePath;
     r.usedModel = !mockRun;
-    r.bakeTripoSROrientation = false;   // TRELLIS.2 is +Y-up like TripoSG
+    r.bakeTripoSROrientation = false;   // not the TripoSR frame
+    // TRELLIS.2 proper is +Y-up and the 180° turn alone already places it
+    // correctly — do NOT rotate it further. Only PIXAL3D lands on its back
+    // and needs the extra -90° about X (the fork reconstructs in a different
+    // frame; its projection conditioning is the only thing that differs, and
+    // it changes the axis convention with it). Applying the rotation to both
+    // over-rotated every TRELLIS.2 generation.
+    // An import-only re-bake has no opts.pixal3d (the caller just points at
+    // a preserved .qtm3d), so prefer the family stamped into the source.
+    // Files from before the stamp have no key and fall back to the option.
+    const QString srcFamily =
+        srcData.meta.value(QStringLiteral("modelFamily")).toString();
+    r.bakeTrellisUprightX = srcFamily.isEmpty()
+                                ? opts.pixal3d
+                                : srcFamily == QLatin1String("pixal3d");
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------
     bool baked = false;

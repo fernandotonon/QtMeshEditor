@@ -3141,9 +3141,20 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.backend = MeshGenPredictor::Backend::Trellis2;
         else if (b == "triposr")
             opts.backend = MeshGenPredictor::Backend::TripoSR;
+        else if (b == "pixal3d" || b == "pixal")
+            opts.backend = MeshGenPredictor::Backend::Pixal3D;
         else if (!b.isEmpty())
-            return makeErrorResult("'backend' must be 'trellis2', 'triposr' or 'triposg'.");
+            return makeErrorResult(
+                "'backend' must be 'trellis2', 'pixal3d', 'triposr' or 'triposg'.");
     }
+    if (args.contains("pixal_fov")) {
+        const double f = args["pixal_fov"].toDouble(0.0);
+        if (f <= 0.0 || f >= 180.0)
+            return makeErrorResult("'pixal_fov' must be in (0, 180) degrees.");
+        opts.pixal3dFovDeg = static_cast<float>(f);
+    }
+    if (args.contains("no_naf"))
+        opts.pixal3dNoNaf = args["no_naf"].toBool(false);
     if (args.contains("seed")) {
         const int s = args["seed"].toInt(42);
         if (s < 0) return makeErrorResult("'seed' must be >= 0.");
@@ -3160,6 +3171,31 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.targetTriangles < 0 || opts.targetTriangles > 10000000)
             return makeErrorResult("'target_tris' must be in [0, 10000000] (0 = original).");
     }
+    // Baking a texture on a FULL-DENSITY generation produces an unusable
+    // atlas. xatlas cuts a chart wherever it cannot flatten the surface, so an
+    // organic mesh at native density fragments into thousands of tiny islands
+    // (measured: a 299,988-tri goblin -> 16,043 islands, ~19 tris each) and at
+    // any sane texture size each chart gets too few texels for the dilation
+    // gutter to cover its border — every seam reads as a black line across the
+    // model. The same generation at target_tris 25000 gave 1,195 islands and a
+    // clean bake. The GUI never hits this because its mesh picker defaults to
+    // Game Medium (25k); target_tris defaults to 0 here, so a caller who omits
+    // it gets the broken result with no clue why. Warn rather than silently
+    // change the default, which would alter output for existing callers.
+    //
+    // Gated on the REQUEST here but re-checked against the RESULT below: a
+    // generation can silently end up geometry-only (Pixal3D falls back to
+    // res 512 when the 1024 cascade weights are missing, and it ships no 512
+    // texture flow), and an atlas-fragmentation note on a result with no
+    // texture would be nonsense.
+    const bool wantedDensityWarning = opts.bakeTexture && opts.targetTriangles == 0;
+    QString densityWarning;
+    if (wantedDensityWarning)
+        densityWarning = QStringLiteral(
+            "note: 'target_tris' was not set, so the mesh keeps its native "
+            "density; a texture bake on a dense organic mesh fragments the UV "
+            "atlas into thousands of charts and shows black seam lines. Pass "
+            "target_tris (25000 is the GUI default) for a clean bake.");
     opts.bakeNormalMap = generatePbr && opts.bakeTexture;
     if (args.contains("flow_steps")) {
         opts.flowSteps = args["flow_steps"].toInt(25);
@@ -3174,6 +3210,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
 
     const QString backendName =
         opts.backend == MeshGenPredictor::Backend::Trellis2 ? QStringLiteral("trellis2")
+        : opts.backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")
         : opts.backend == MeshGenPredictor::Backend::TripoSG ? QStringLiteral("triposg")
                                                              : QStringLiteral("triposr");
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
@@ -3182,13 +3219,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             .arg(backendName));
 
 #ifndef ENABLE_ONNX
-    if (opts.backend != MeshGenPredictor::Backend::Trellis2)
+    // Both trellis-cli families run out of process, so neither needs ONNX.
+    if (!MeshGenPredictor::isTrellisRuntime(opts.backend))
         return makeErrorResult(
             "This build was compiled without local AI image-to-3D generation "
             "(rebuild with -DENABLE_ONNX=ON, or install the TRELLIS.2 runtime "
-            "and use backend 'trellis2').");
+            "and use backend 'trellis2' or 'pixal3d').");
 #endif
-    if (opts.backend == MeshGenPredictor::Backend::Trellis2) {
+    if (MeshGenPredictor::isTrellisRuntime(opts.backend)) {
         if (!Trellis2Predictor::runtimeAvailable())
             return makeErrorResult(Trellis2Predictor::runtimeDescription());
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the
@@ -3324,7 +3362,17 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         result["sourcePath"] = res.sourceInterchangePath;
     // Surface non-fatal degradations (bake fell back to vertex colours, …) so
     // the MCP caller can tell a textured result from a fallback one.
-    if (!res.warning.isEmpty()) result["warning"] = res.warning;
+    // Join the predictor's own warning with the atlas-density note so a
+    // caller never loses either one.
+    QString warn = res.warning;
+    // Drop the note when nothing was actually textured (see above).
+    if (res.texture.isNull())
+        densityWarning.clear();
+    if (!densityWarning.isEmpty()) {
+        if (!warn.isEmpty()) warn += QStringLiteral(" ");
+        warn += densityWarning;
+    }
+    if (!warn.isEmpty()) result["warning"] = warn;
     return result;
 }
 
@@ -11555,19 +11603,23 @@ QJsonArray MCPServer::buildToolsList()
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
-        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the Python sidecar (Linux + NVIDIA GPU) — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "pixal3d", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the same trellis-cli runtime — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; pixal3d = TencentARC Pixal3D (MIT), a TRELLIS.2 fork that swaps the global DINOv3 cross-attention for view-aligned projection conditioning — an alternative to trellis2, same runtime, but needs its own pixal3d_* flow weights and has no res-512 texture flow (use resolution 1024 for textures); triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
+        props["pixal_fov"] = QJsonObject{{"type", "number"}, {"description", "pixal3d only: horizontal field of view of the input image in DEGREES, which fixes the projection camera. Omit to use Pixal3D's own training value (49.13) — guessing mis-places the camera the whole backend depends on."}};
+        props["no_naf"] = QJsonObject{{"type", "boolean"}, {"description", "pixal3d only: skip the NAF guided upsampler (removes the pixal3d_naf.gguf dependency, but the shape and texture stages lose their high-frequency projection branch). Default false."}};
         props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by the other backends."}};
         props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
         props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
         props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
-        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
+        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). STRONGLY recommended whenever a texture is baked: at native density xatlas fragments the atlas into thousands of charts and the bake shows black seam lines (a 300k-tri mesh gave 16,043 UV islands vs 1,195 at 25000). The GUI defaults to 25000. For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764 + TRELLIS.2): reconstruct a "
             "3D mesh from a single image. Backends: trellis2 (Microsoft TRELLIS.2-4B "
             "sidecar — the default when installed; PBR-textured, game-ready "
-            "processing + native texture bake), triposr (local ONNX, fast, "
-            "color), triposg (local ONNX, best local geometry). Returns "
+            "processing + native texture bake), pixal3d (a TRELLIS.2 fork on the "
+            "same runtime, view-aligned projection conditioning; needs its own "
+            "pixal3d_* weights and has no res-512 texture flow), triposr (local "
+            "ONNX, fast, color), triposg (local ONNX, best local geometry). Returns "
             "vertexCount/triangleCount/backend and, when 'output' is given, the "
             "saved meshPath (+ sourcePath for the preserved trellis2 full-res "
             "generation); otherwise the mesh is loaded into the scene. Models "

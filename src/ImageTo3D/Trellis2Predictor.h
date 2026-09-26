@@ -56,6 +56,21 @@ public:
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
         int  texVolumeRes  = 0;     // 0 = sidecar default | 512 | 1024
+        // Which flow weights the model directory holds. Pixal3D is a fork of
+        // TRELLIS.2 that replaces the global DINOv3 cross-attention with
+        // view-aligned PROJECTION conditioning; the samplers and decoders are
+        // unchanged, so trellis-cli serves both from ONE directory (flow
+        // weights carry a `pixal3d_` prefix, decoders are shared). Selected
+        // with `--model trellis|pixal3d`.
+        bool pixal3d       = false;
+        // Pixal3D only. Horizontal FOV of the input image in DEGREES, which
+        // fixes the projection camera. 0 = leave trellis-cli on its own
+        // default (49.13, Pixal3D's own training value) rather than guessing.
+        float fovDeg       = 0.0f;
+        // Pixal3D only. Skip the NAF guided upsampler. Costs the shape and
+        // texture stages their high-frequency projection branch, but removes
+        // the naf.gguf dependency.
+        bool noNaf         = false;
         bool removeBackground = true;   // alpha matte (skipped if the input
                                         // already carries real alpha)
         // #1016: which matting model. Fast = U²-Net 320² (default); Best =
