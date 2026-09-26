@@ -81,6 +81,38 @@ KEYWORDS = [
 ]
 
 
+# Character categories. The corpus mixes ordinary human performance with
+# undead/monster performance under the SAME action names — on the v5 library
+# 6 of 13 "walk" takes and 9 of 12 "attack" takes were zombie clips, so an
+# unqualified "walk" request had a ~46% chance of returning a Half-Life
+# shamble. Stamping the category lets the runtime filter on it.
+#
+# Kept in sync with categoryFromSource() in src/MotionLibrary.cpp, which is
+# the fallback for libraries built before this field existed. NB the word
+# boundary is [^a-z] and not \b: a real source is "Low-poly_orc_62f16371",
+# and '_' is a word character, so \borc\b misses it.
+UNDEAD_RE = re.compile(
+    r"zombie|undead|(^|[^a-z])orc([^a-z]|$)|ghoul|revenant"
+    r"|skeleton[ _-]?(free|demo|dance)|spooky[ _-]?skeleton", re.I)
+CREATURE_RE = re.compile(
+    r"dragon|wyvern|horse|canine|(^|[^a-z])dog([^a-z]|$)"
+    r"|(^|[^a-z])cat([^a-z]|$)|wolf|quadruped|beast|spider|raptor", re.I)
+
+
+def classify_category(source: str) -> str:
+    """Motion style of a clip, from its provenance string.
+
+    Conservative by design: anything unrecognised is "human", which is what
+    every clip was implicitly treated as before the field existed, so a miss
+    preserves the old behaviour rather than hiding a clip.
+    """
+    if UNDEAD_RE.search(source):
+        return "undead"
+    if CREATURE_RE.search(source):
+        return "creature"
+    return "human"
+
+
 STOPWORDS = {"armature", "action", "anim", "animation", "animations",
              "mixamo", "com", "take", "takes", "fbx", "rig", "rigged",
              "character", "model", "mesh", "skeleton", "base", "layer",
@@ -744,9 +776,11 @@ def main():
                             continue
                         seen.add(fp); seen.add(sem)
                         counts[action] = counts.get(action, 0) + 1
+                        src = f"{title} — {c.get('animation')}"
                         clip = {
                             "action": action,
-                            "source": f"{title} — {c.get('animation')}",
+                            "source": src,
+                            "category": classify_category(src),
                             "frames": len(w),
                             "quality": round(quality, 3),
                             "quats": w,
