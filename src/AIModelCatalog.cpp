@@ -282,10 +282,10 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     // same trellis-cli runtime — only the four flow models (plus NAF) differ,
     // and they live in the SAME directory under a `pixal3d_` prefix.
     out << ModelSpec{
-        QStringLiteral("pixal3d-gguf"), tr("Pixal3D (best humanoids)"), tr("Image to 3D"),
+        QStringLiteral("pixal3d-gguf"), tr("Pixal3D"), tr("Image to 3D"),
         tr("TencentARC Pixal3D GGUF weights (MIT) — a TRELLIS.2 fork that replaces the "
-           "global DINOv3 cross-attention with view-aligned projection conditioning, "
-           "which is markedly better on humanoids and characters. Runs on the same "
+           "global DINOv3 cross-attention with view-aligned projection conditioning. "
+           "An alternative to TRELLIS.2, worth trying on characters. Runs on the same "
            "trellis.cpp runtime and REUSES the TRELLIS.2 decoders, so install those "
            "weights too. Note Pixal3D ships no 512 texture flow: generate at 1024 for "
            "textures, or 512 for geometry only."),

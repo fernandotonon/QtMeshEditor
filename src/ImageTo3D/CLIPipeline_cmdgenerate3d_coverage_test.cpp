@@ -232,7 +232,7 @@ TEST(CLIPipelineCmdGenerate3dCoverage, NoSourceTakesNoValue)
 // ---- Pixal3D backend --------------------------------------------------------
 //
 // Pixal3D is a TRELLIS.2 fork with view-aligned projection conditioning,
-// markedly better on humanoids. It rides the SAME trellis-cli runtime, so the
+// as an alternative conditioning path. It rides the SAME trellis-cli runtime, so the
 // CLI only has to name it and carry its two camera knobs.
 
 TEST(CLIPipelineCmdGenerate3dCoverage, Pixal3DBackendIsAccepted)

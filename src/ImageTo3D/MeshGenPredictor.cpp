@@ -110,7 +110,7 @@ MeshGenPredictor::Backend MeshGenPredictor::defaultBackend()
 {
     // TRELLIS.2 becomes the default the moment its runtime is installed on
     // this machine; otherwise the local ONNX TripoSR path stays the default.
-    // Trellis2 stays the default even though Pixal3D is better on humanoids:
+    // Trellis2 stays the default; Pixal3D is an opt-in alternative:
     // Pixal3D needs its own ~11 GB of flow weights, so preselecting it would
     // point most users at models they have not downloaded.
     return Trellis2Predictor::runtimeAvailable() ? Backend::Trellis2

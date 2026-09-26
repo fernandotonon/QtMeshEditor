@@ -645,7 +645,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "not installed — using the 512 pipeline (thin structures may "
                 "be lost). Download '%2' in AI Model Settings to enable it.")
                 .arg(presetName,
-                     opts.pixal3d ? QStringLiteral("Pixal3D (best humanoids)")
+                     opts.pixal3d ? QStringLiteral("Pixal3D")
                                   : QStringLiteral("TRELLIS.2 cascade"));
             res = 512;
         }

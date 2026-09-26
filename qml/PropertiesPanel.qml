@@ -2279,7 +2279,7 @@ Rectangle {
                     readonly property bool pxSelected: backendId === "pixal3d"
                     readonly property bool sgSelected: backendId === "triposg"
                     model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
-                            "Pixal3D (best humanoids" + (t2Ready ? ")" : ", needs runtime)"),
+                            "Pixal3D" + (t2Ready ? "" : " (needs runtime)"),
                             "TripoSR (fast, textured)",
                             "TripoSG (best geometry)"]
                     currentIndex: t2Ready ? 0 : 2

@@ -64,7 +64,7 @@ public:
     // through the SAME trellis-cli runtime as Trellis2 — it is a fork of
     // TRELLIS.2 that swaps the global DINOv3 cross-attention for view-aligned
     // PROJECTION conditioning (`out = cross_attn(x, global) + proj_linear(proj)`),
-    // which is markedly better on humanoids. Same samplers and byte-identical
+    // as an alternative conditioning path. Same samplers and byte-identical
     // decoders; only the four flow models differ, so one model directory serves
     // both families (flow weights take a `pixal3d_` prefix, decoders are shared).
     enum class Backend { TripoSR, TripoSG, Trellis2, Pixal3D };
