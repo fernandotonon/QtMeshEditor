@@ -80,11 +80,22 @@ MeshGenPredictor::Result failResult(const QString& message)
 QString collapseTrellisCliStderr(const QByteArray& errBuf)
 {
     QString detail = QString::fromLocal8Bit(errBuf).trimmed();
+    // Keep the FRONT, not the tail. trellis-cli prints its reason first and
+    // then dumps ~2 KB of usage text, so tailing the buffer threw away the
+    // only informative line and surfaced boilerplate ("--gss F --gsh F
+    // guidance strengths …") as the error — an unreadable report that says
+    // nothing about what went wrong.
+    //
+    // The usage block is pure noise once we have the reason, so cut it at the
+    // "usage:" banner when trellis-cli emitted one.
+    const int usageAt = detail.indexOf(QLatin1String("usage:"));
+    if (usageAt > 0)
+        detail = detail.left(usageAt).trimmed();
     detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
     while (detail.contains(QLatin1String("  ")))
         detail.replace(QLatin1String("  "), QLatin1String(" "));
     if (detail.size() > 400)
-        detail = QStringLiteral("…") + detail.right(399);
+        detail = detail.left(399) + QStringLiteral("…");
     return detail;
 }
 
@@ -937,7 +948,10 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     r.warning = warning;
     r.sourceInterchangePath = keptSourcePath;
     r.usedModel = !mockRun;
-    r.bakeTripoSROrientation = false;   // TRELLIS.2 is +Y-up like TripoSG
+    r.bakeTripoSROrientation = false;   // not the TripoSR frame
+    // ...but not +Y-up either: it lands on its back, so MeshGenBuilder
+    // also applies -90° about X after the 180° turn.
+    r.bakeTrellisUprightX = true;
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------
     bool baked = false;

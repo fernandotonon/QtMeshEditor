@@ -193,6 +193,16 @@ public:
         // trimesh as-is), so its dispatch sets this false to skip the bake.
         bool bakeTripoSROrientation = true;
 
+        // TRELLIS.2 / Pixal3D need a further -90° about X on top of the
+        // TripoSG 180°-Y flip: their reconstruction comes out lying on its
+        // back (the goblin's height landed on Z while Y held only its depth —
+        // measured 1.02 / 0.26 / 0.69 on the exported bbox). Reported from
+        // the GUI: "the pixal model needs to be rotated -90 degrees on x axis
+        // after generation, like the trellis one".
+        //   -90°X: (x, y, z) -> (x, z, -y)   (a proper rotation, det +1, so
+        //   triangle winding and normals are unaffected).
+        bool bakeTrellisUprightX = false;
+
         // ---- TRELLIS.2 extras (empty/null for the other backends) -------------
         // Real baked PBR maps from the sparse attribute volume (Trellis2Bake).
         // When present, MeshGenBuilder binds them into the canonical
