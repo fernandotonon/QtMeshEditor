@@ -640,11 +640,18 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (!hasCascade(models2)) {
             if (!warning.isEmpty())
                 warning += QStringLiteral(" ");
+            // Pixal3D ships NO res-512 texture flow, so its fallback is
+            // geometry-only — say so, or a caller reads the successful
+            // result as a textured generation that merely lost fine detail.
             warning += QStringLiteral(
                 "the '%1' preset needs the 1024-cascade weights, which are "
                 "not installed — using the 512 pipeline (thin structures may "
-                "be lost). Download '%2' in AI Model Settings to enable it.")
+                "be lost%2). Download '%3' in AI Model Settings to enable it.")
                 .arg(presetName,
+                     opts.pixal3d
+                         ? QStringLiteral(", and Pixal3D has no 512 texture "
+                                          "flow, so this run is GEOMETRY ONLY")
+                         : QString(),
                      opts.pixal3d ? QStringLiteral("Pixal3D")
                                   : QStringLiteral("TRELLIS.2 cascade"));
             res = 512;
