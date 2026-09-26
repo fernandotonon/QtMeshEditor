@@ -467,3 +467,157 @@ TEST(MotionLibrary, ExplicitLoopableFalseOverridesDerivationOnACycle)
     EXPECT_FALSE(lib.clip(0).loopable)
         << "an explicit loopable:false must veto a derived-loopable cycle";
 }
+
+// ---- character categories --------------------------------------------------
+// The corpus mixes human and undead performance under the SAME action names —
+// measured on the shipped v5 library, 6 of 13 "walk" takes and 9 of 12
+// "attack" takes were zombie clips, so a plain "walk" had a ~46% chance of
+// returning a Half-Life shamble. These pin the filtering that fixes it.
+namespace {
+
+// Two walks (one human, one zombie) plus an undead-ONLY action, so the
+// fallback rule below is exercised on real-shaped data.
+QByteArray mixedLib()
+{
+    QByteArray pose = "[";
+    for (int j = 0; j < 22; ++j) pose += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+    pose += "]";
+    const QByteArray frames = "[" + pose + "," + pose + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"source\":\"CMU 02_01\",\"quats\":" + frames + "},";
+    json += "{\"action\":\"walk\",\"source\":\"Classic_Zombie_Half-Life_2 — a_walk3\",\"quats\":" + frames + "},";
+    json += "{\"action\":\"wallpound\",\"source\":\"Classic_Zombie_Half-Life_2 — WallPound\",\"quats\":" + frames + "}";
+    json += "]}";
+    return json;
+}
+
+} // namespace
+
+TEST(MotionLibrary, CategoryIsInferredFromProvenanceForOlderLibraries)
+{
+    // Libraries built before the build script stamped `category` must still
+    // be filtered — otherwise every ALREADY-INSTALLED library stays
+    // uncategorised and the feature does nothing until a ~28 MB re-download.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib())) << lib.error().toStdString();
+    EXPECT_EQ(lib.clip(0).category.toStdString(), "human");    // CMU
+    EXPECT_EQ(lib.clip(1).category.toStdString(), "undead");   // Half-Life zombie
+    EXPECT_EQ(lib.clip(2).category.toStdString(), "undead");
+}
+
+TEST(MotionLibrary, ExplicitCategoryFieldWinsOverProvenance)
+{
+    // The build script is authoritative: a stamped category must not be
+    // second-guessed by the source-string heuristic.
+    QByteArray json = mixedLib();
+    json.replace("{\"action\":\"walk\",\"source\":\"CMU 02_01\",",
+                 "{\"action\":\"walk\",\"category\":\"creature\",\"source\":\"CMU 02_01\",");
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    EXPECT_EQ(lib.clip(0).category.toStdString(), "creature");
+}
+
+TEST(MotionLibrary, TakesForActionFiltersByCategory)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib()));
+    EXPECT_EQ(lib.takesForAction("walk").size(), 2u);              // unfiltered
+    EXPECT_EQ(lib.takesForAction("walk", "human").size(), 1u);
+    EXPECT_EQ(lib.takesForAction("walk", "undead").size(), 1u);
+    EXPECT_EQ(lib.takesForAction("walk", "human").front(), 0);     // the CMU one
+}
+
+TEST(MotionLibrary, UndeadOnlyActionStaysReachableForAHumanRequest)
+{
+    // "wallpound"/"tantrum"/the swats exist ONLY as zombie clips. Filtering
+    // them to nothing would make them unreachable by default — a regression
+    // against the pre-category behaviour, which always returned them.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib()));
+    EXPECT_EQ(lib.takesForAction("wallpound", "human").size(), 1u);
+    EXPECT_GE(lib.pickTake("wallpound", "human"), 0);
+}
+
+TEST(MotionLibrary, PromptRoutesToTheRightCategory)
+{
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("walk").toStdString(), "human");
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("walking confidently").toStdString(), "human");
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("zombie walk").toStdString(), "undead");
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("an undead shamble").toStdString(), "undead");
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("dragon flying").toStdString(), "creature");
+    EXPECT_EQ(MotionLibrary::categoryForPrompt("a horse trotting").toStdString(), "creature");
+}
+
+TEST(MotionLibrary, PlainWalkNeverReturnsTheZombieTake)
+{
+    // The headline bug: an unqualified prompt drew from a pool that was 46%
+    // zombie. Selection is randomised across takes, so sample enough draws
+    // that a single leak would be overwhelmingly likely to show.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib()));
+    for (int i = 0; i < 200; ++i) {
+        QString action;
+        const int take = lib.matchPrompt(QStringLiteral("walk"), &action);
+        ASSERT_GE(take, 0);
+        EXPECT_EQ(lib.clipCategory(take).toStdString(), "human")
+            << "draw " << i << " returned an undead take for a plain walk";
+    }
+}
+
+TEST(MotionLibrary, ZombieWalkReturnsTheUndeadTake)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib()));
+    for (int i = 0; i < 50; ++i) {
+        const int take = lib.matchPrompt(QStringLiteral("zombie walk"));
+        ASSERT_GE(take, 0);
+        EXPECT_EQ(lib.clipCategory(take).toStdString(), "undead");
+    }
+}
+
+TEST(MotionLibrary, CategoriesListsWhatTheLibraryHolds)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedLib()));
+    const auto cats = lib.categories();
+    ASSERT_EQ(cats.size(), 2u);
+    EXPECT_EQ(cats[0].toStdString(), "human");    // sorted
+    EXPECT_EQ(cats[1].toStdString(), "undead");
+}
+
+TEST(MotionLibrary, UnderscoreDelimitedCreatureNamesAreClassified)
+{
+    // Regression: the first cut used \borc\b, but the real provenance string
+    // is "Low-poly_orc_62f16371" and '_' IS a word character — so both orc
+    // clips silently stayed "human". Found by diffing the classifier against
+    // a manual audit of the shipped corpus (85/37 vs the expected 83/39).
+    QByteArray pose = "[";
+    for (int j = 0; j < 22; ++j) pose += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+    pose += "]";
+    const QByteArray frames = "[" + pose + "," + pose + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"death\",\"source\":\"Low-poly_orc_62f16371 — ANM_DEATH\",\"quats\":" + frames + "},";
+    json += "{\"action\":\"walk\",\"source\":\"Some_horse_pack — Trot\",\"quats\":" + frames + "},";
+    // "record"/"cathedral" contain orc/cat as substrings and must NOT match.
+    json += "{\"action\":\"idle\",\"source\":\"Cathedral_record_session\",\"quats\":" + frames + "}";
+    json += "]}";
+
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    EXPECT_EQ(lib.clip(0).category.toStdString(), "undead");     // orc
+    EXPECT_EQ(lib.clip(1).category.toStdString(), "creature");   // horse
+    EXPECT_EQ(lib.clip(2).category.toStdString(), "human")
+        << "substring inside a longer word must not classify";
+}

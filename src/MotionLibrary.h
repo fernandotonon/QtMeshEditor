@@ -30,6 +30,16 @@ public:
     struct Clip {
         QString action;                 // "walk", "run", "jump", …
         QString source;                 // provenance, e.g. "CMU 02_01"
+        // Character category this clip's MOTION STYLE belongs to. The library
+        // mixes ordinary human performance with undead/monster performance,
+        // and they share action names: 6 of 13 "walk" takes and 9 of 12
+        // "attack" takes were zombie clips, so asking for a walk had a ~46%
+        // chance of returning a Half-Life zombie shamble. Filtering on this
+        // keeps a plain request human unless the prompt asks otherwise.
+        // Values: "human" (default), "undead", "creature". Clips from
+        // libraries written before the field carry "" and are treated as
+        // human, which is what they were implicitly assumed to be.
+        QString category;
         int frames = 0;
         int fps = 30;
         // quats[frame][joint] = (x,y,z,w) unit quaternion, joint in canonical
@@ -131,6 +141,12 @@ public:
     // map. Returns the clip index, or -1 if nothing matches. `matchedAction`
     // (optional) reports which action was chosen.
     int matchPrompt(const QString& prompt, QString* matchedAction = nullptr) const;
+    // Which character category a free-text prompt is asking for. "zombie
+    // walk" -> "undead", "dragon flying" -> "creature", anything unqualified
+    // -> "human" (the library mixes styles under the same action names, and
+    // an unqualified request should not draw a monster performance).
+    // Pure + static so it is unit-testable without a library on disk.
+    static QString categoryForPrompt(const QString& prompt);
 
     /// Mean chest forward-lean of a canonical clip (see Clip::uprightness).
     /// Pure — exposed for unit tests.
@@ -145,6 +161,19 @@ public:
     QString resolveAction(const QString& word) const;
     // Clip indices for an action, in library order (empty when unknown).
     std::vector<int> takesForAction(const QString& action) const;
+    // Same, restricted to a character category ("human"/"undead"/"creature").
+    // An empty category means "any". If the action exists but NOT in that
+    // category, the unfiltered takes are returned rather than nothing —
+    // several actions are undead-only, and hiding them would regress against
+    // the pre-category behaviour.
+    std::vector<int> takesForAction(const QString& action,
+                                    const QString& category) const;
+    // Category of a clip ("human"/"undead"/"creature"); see Clip::category.
+    QString clipCategory(int i) const { return m_clips.at(static_cast<size_t>(i)).category; }
+    // The categories present in this library, sorted, for help text / GUI.
+    std::vector<QString> categories() const;
+    // Pick one take of `action` within `category` (empty = any).
+    int pickTake(const QString& action, const QString& category) const;
     // Pick one take of `action` using the quality²/posture weighting
     // (#855) — the exact rule matchPrompt applies. -1 when unknown.
     int pickTake(const QString& action) const;
