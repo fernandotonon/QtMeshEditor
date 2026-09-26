@@ -621,3 +621,33 @@ TEST(MotionLibrary, UnderscoreDelimitedCreatureNamesAreClassified)
     EXPECT_EQ(lib.clip(2).category.toStdString(), "human")
         << "substring inside a longer word must not classify";
 }
+
+TEST(MotionLibrary, UnknownCategoryValueFallsBackInsteadOfMatchingNothing)
+{
+    // A typo'd category ("humn") stored verbatim would match no filter, and
+    // takesForAction's "don't return nothing" rule would then hand back the
+    // UNFILTERED pool — silently restoring the zombie takes. Unknown values
+    // are treated as absent and re-derived from the source.
+    QByteArray pose = "[";
+    for (int j = 0; j < 22; ++j) pose += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+    pose += "]";
+    const QByteArray frames = "[" + pose + "," + pose + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"category\":\"humn\",\"source\":\"CMU 02_01\",\"quats\":" + frames + "},";
+    json += "{\"action\":\"walk\",\"category\":\"UNDEAD\",\"source\":\"x\",\"quats\":" + frames + "}";
+    json += "]}";
+
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    EXPECT_EQ(lib.clip(0).category.toStdString(), "human")
+        << "a typo must fall back to provenance, not be stored verbatim";
+    EXPECT_EQ(lib.clip(1).category.toStdString(), "undead")
+        << "known values are case-insensitive";
+    EXPECT_EQ(lib.takesForAction("walk", "human").size(), 1u);
+}

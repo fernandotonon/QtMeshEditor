@@ -289,7 +289,16 @@ bool MotionLibrary::parse(const QByteArray& json)
         // string — otherwise every already-installed library would stay
         // uncategorised and the filter would be a no-op until the user
         // happened to re-download ~28 MB.
-        clip.category = co.value("category").toString();
+        clip.category = co.value("category").toString().toLower().trimmed();
+        // Only the three known values are honoured. A typo ("humn") would
+        // otherwise be stored verbatim, match no filter, and silently fall
+        // back to the UNFILTERED pool — quietly reintroducing the zombie
+        // takes this field exists to exclude. An unknown value is treated as
+        // absent and re-derived from the provenance string.
+        if (clip.category != QLatin1String("human")
+            && clip.category != QLatin1String("undead")
+            && clip.category != QLatin1String("creature"))
+            clip.category.clear();
         if (clip.category.isEmpty())
             clip.category = categoryFromSource(clip.source);
         // meanChestLean reads joint 2 as a WORLD orientation — only valid
