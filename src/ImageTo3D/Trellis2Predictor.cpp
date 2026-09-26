@@ -773,6 +773,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                         static_cast<int>(opts.seed));
     rr.data.meta.insert(QStringLiteral("preset"), presetName);
     srcData = std::move(rr.data);
+    // Stamp the model family so a later QTMESH_TRELLIS2_IMPORT re-bake
+    // knows which orientation to apply: only Pixal3D needs the extra
+    // -90° about X, and an import-only run has no opts.pixal3d to read.
+    srcData.meta.insert(QStringLiteral("modelFamily"),
+                        opts.pixal3d ? QStringLiteral("pixal3d")
+                                     : QStringLiteral("trellis2"));
     } else {
     const QString python = pythonPath();
     const QString script = generateScriptPath();
@@ -962,7 +968,14 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // frame; its projection conditioning is the only thing that differs, and
     // it changes the axis convention with it). Applying the rotation to both
     // over-rotated every TRELLIS.2 generation.
-    r.bakeTrellisUprightX = opts.pixal3d;
+    // An import-only re-bake has no opts.pixal3d (the caller just points at
+    // a preserved .qtm3d), so prefer the family stamped into the source.
+    // Files from before the stamp have no key and fall back to the option.
+    const QString srcFamily =
+        srcData.meta.value(QStringLiteral("modelFamily")).toString();
+    r.bakeTrellisUprightX = srcFamily.isEmpty()
+                                ? opts.pixal3d
+                                : srcFamily == QLatin1String("pixal3d");
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------
     bool baked = false;

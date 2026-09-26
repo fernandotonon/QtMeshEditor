@@ -152,6 +152,13 @@ struct FakeTrellisCli {
 
 TEST(Trellis2PredictorTest, SecondConcurrentGenerationIsRefused)
 {
+    // The stub is a /bin/sh script. runtimeAvailable() only checks that the
+    // files EXIST, so on Windows it would pass the gate and then fail to
+    // launch — skip there rather than assert on a process that cannot start.
+#ifdef Q_OS_WIN
+    GTEST_SKIP() << "the stub trellis-cli is a /bin/sh script; needs a native "
+                    "fake executable on Windows";
+#else
     FakeTrellisCli fake;
     if (!Trellis2Predictor::runtimeAvailable())
         GTEST_SKIP() << "stub runtime not picked up on this platform";
@@ -173,19 +180,32 @@ TEST(Trellis2PredictorTest, SecondConcurrentGenerationIsRefused)
     // Wait until the first run is genuinely inside the guarded region.
     for (int i = 0; i < 400 && !inFlight.load(); ++i)
         QThread::msleep(10);
-    ASSERT_TRUE(inFlight.load()) << "first generation never started";
+    // Release + join BEFORE asserting. ASSERT_* returns from the function, so
+    // a failure here would destroy a still-joinable std::thread, and that
+    // calls std::terminate — aborting the whole binary instead of reporting
+    // one failed test.
+    const bool started = inFlight.load();
+    if (!started) {
+        fake.release();
+        first.join();
+    }
+    ASSERT_TRUE(started) << "first generation never started";
 
     const auto second = Trellis2Predictor::predict(img, {});
+
+    // Same reasoning: finish the worker before any EXPECT can bail out early
+    // on a future edit, and so the assertions below run with no live thread.
+    fake.release();
+    first.join();
+
     EXPECT_FALSE(second.ok);
     EXPECT_TRUE(second.error.contains(QStringLiteral("already running")))
         << second.error.toStdString();
-
-    fake.release();
-    first.join();
 
     // The slot is released afterwards, so a later run is admitted (it fails
     // for its own reason — the stub exits 1 — never with "already running").
     const auto later = Trellis2Predictor::predict(img, {});
     EXPECT_FALSE(later.error.contains(QStringLiteral("already running")))
         << later.error.toStdString();
+#endif   // !Q_OS_WIN
 }

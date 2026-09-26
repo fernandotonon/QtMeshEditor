@@ -3182,8 +3182,15 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Game Medium (25k); target_tris defaults to 0 here, so a caller who omits
     // it gets the broken result with no clue why. Warn rather than silently
     // change the default, which would alter output for existing callers.
+    //
+    // Gated on the REQUEST here but re-checked against the RESULT below: a
+    // generation can silently end up geometry-only (Pixal3D falls back to
+    // res 512 when the 1024 cascade weights are missing, and it ships no 512
+    // texture flow), and an atlas-fragmentation note on a result with no
+    // texture would be nonsense.
+    const bool wantedDensityWarning = opts.bakeTexture && opts.targetTriangles == 0;
     QString densityWarning;
-    if (opts.bakeTexture && opts.targetTriangles == 0)
+    if (wantedDensityWarning)
         densityWarning = QStringLiteral(
             "note: 'target_tris' was not set, so the mesh keeps its native "
             "density; a texture bake on a dense organic mesh fragments the UV "
@@ -3358,6 +3365,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Join the predictor's own warning with the atlas-density note so a
     // caller never loses either one.
     QString warn = res.warning;
+    // Drop the note when nothing was actually textured (see above).
+    if (res.texture.isNull())
+        densityWarning.clear();
     if (!densityWarning.isEmpty()) {
         if (!warn.isEmpty()) warn += QStringLiteral(" ");
         warn += densityWarning;
@@ -11606,8 +11616,10 @@ QJsonArray MCPServer::buildToolsList()
             "AI image-to-3D mesh generation (epic #764 + TRELLIS.2): reconstruct a "
             "3D mesh from a single image. Backends: trellis2 (Microsoft TRELLIS.2-4B "
             "sidecar — the default when installed; PBR-textured, game-ready "
-            "processing + native texture bake), triposr (local ONNX, fast, "
-            "color), triposg (local ONNX, best local geometry). Returns "
+            "processing + native texture bake), pixal3d (a TRELLIS.2 fork on the "
+            "same runtime, view-aligned projection conditioning; needs its own "
+            "pixal3d_* weights and has no res-512 texture flow), triposr (local "
+            "ONNX, fast, color), triposg (local ONNX, best local geometry). Returns "
             "vertexCount/triangleCount/backend and, when 'output' is given, the "
             "saved meshPath (+ sourcePath for the preserved trellis2 full-res "
             "generation); otherwise the mesh is loaded into the scene. Models "
