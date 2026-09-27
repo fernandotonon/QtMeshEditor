@@ -653,41 +653,6 @@ QString MotionLibrary::libraryPath()
 
 bool MotionLibrary::libraryPresent() { return QFileInfo::exists(libraryPath()); }
 
-QString MotionLibrary::curationPath()
-{
-    return QDir(AppStorage::aiModelsRoot()).filePath(
-        QStringLiteral("motion/curation.json"));
-}
-
-QSet<QString> MotionLibrary::loadCuration()
-{
-    QSet<QString> out;
-    QFile f(curationPath());
-    if (!f.open(QIODevice::ReadOnly)) return out;
-    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
-    for (const QJsonValue& v : root.value(QStringLiteral("approved")).toArray())
-        if (v.isString()) out.insert(v.toString());
-    return out;
-}
-
-bool MotionLibrary::saveCuration(const QSet<QString>& approved)
-{
-    QJsonObject root;
-    root[QStringLiteral("schema")] =
-        QStringLiteral("qtmesh-motion-curation-v1");
-    QJsonArray arr;
-    // stable file diffs: sorted
-    QStringList sorted(approved.begin(), approved.end());
-    sorted.sort();
-    for (const QString& s : sorted) arr.append(s);
-    root[QStringLiteral("approved")] = arr;
-    QDir().mkpath(QFileInfo(curationPath()).absolutePath());
-    QFile f(curationPath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
-}
-
 QString MotionLibrary::ensureLibraryBlocking()
 {
     const QString dest = libraryPath();

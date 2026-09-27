@@ -2107,40 +2107,20 @@ QVariantList AnimationControlController::listMotionClips()
         QVariantMap m;
         // NOT "index": a ListModel role named "index" SHADOWS the delegate's
         // built-in row index in QML (bare `index` and `model.index` both
-        // resolve to the role), which broke the picker — toggleApproved(row)
-        // received the library index and get(row) went out of range on any
-        // filtered list, so starring silently did nothing once "Only good ★"
-        // kicked in.
+        // resolve to the role), so the delegate would read the library index
+        // instead of its own row and any filtered list would misaddress.
         m["libIndex"] = i;
         m["action"] = c.action;
         m["name"] = name;
         m["source"] = c.source;
         m["quality"] = c.quality;
         m["frames"] = c.frames;
+        // Character category ("human"/"undead"/"creature") so the picker can
+        // filter: the corpus mixes styles under the same action names.
+        m["category"] = c.category;
         out.append(m);
     }
-    // Curation (#838 ship-gate): mark the user-approved "good" clips so the
-    // picker can filter to them. Keyed by clip source — stable across rebuilds.
-    const QSet<QString> approved = MotionLibrary::loadCuration();
-    for (int i = 0; i < out.size(); ++i) {
-        QVariantMap m = out[i].toMap();
-        m["approved"] = approved.contains(m["source"].toString());
-        out[i] = m;
-    }
     return out;
-}
-
-void AnimationControlController::setClipApproved(const QString& source,
-                                                 bool approved)
-{
-    QSet<QString> set = MotionLibrary::loadCuration();
-    if (approved) set.insert(source);
-    else set.remove(source);
-    MotionLibrary::saveCuration(set);
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("curation %1: %2")
-            .arg(approved ? QStringLiteral("approve")
-                          : QStringLiteral("unapprove"), source.left(60)));
 }
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,

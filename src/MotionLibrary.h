@@ -234,16 +234,6 @@ public:
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
 
-    // ---- Curation (user-approved "good" clips) ------------------------------
-    // The user reviews retargeted clips in the Animation Library picker and
-    // marks the good ones; approvals persist as a set of clip `source` strings
-    // (stable across library rebuilds) in curation.json next to the library.
-    // The library builder consumes the same file (--curation/--approved-only)
-    // to SHIP only the approved set while the rest is iterated on.
-    static QString curationPath();                    // .../motion/curation.json
-    static QSet<QString> loadCuration();              // approved clip sources
-    static bool saveCuration(const QSet<QString>& approved);
-
     // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
     // model output carries no reference triple, so its base pose is
     // synthesized from a TEMPLATE clip's restDir instead of harvesting the

@@ -23,55 +23,33 @@ Window {
     // emitted after a successful apply so the panel can refresh its anim list
     signal applied(string animation, string entity)
 
-    property var allClips: []          // full [{libIndex,action,name,source,quality,frames,approved}]
+    property var allClips: []          // full [{libIndex,action,name,source,quality,frames,category}]
                                        // (role is libIndex, NOT index — a role named
                                        // "index" shadows the delegate's row index)
     property string filterText: ""
     property int busyIndex: -1         // row currently generating (for UI feedback)
-    property bool onlyApproved: true   // curation filter: show only "good" clips
-                                       // (default ON; refresh() unchecks it when
-                                       // nothing is starred so the list is never
-                                       // silently empty on a fresh install)
-    property int approvedCount: 0
+    // Character-category filter. The library mixes human and undead takes
+    // under the same action names, so browsing "walk" otherwise interleaves
+    // ordinary strides with zombie shambles. "" = show everything.
+    property string categoryFilter: ""
+    readonly property var categoryOptions: ["All", "Human", "Undead", "Creature"]
 
     function refresh() {
         allClips = AnimationControlController.listMotionClips()
-        // No starred clips (fresh install / un-curated library): the
-        // only-good default would show an empty list — fall back to all.
-        if (onlyApproved) {
-            var any = false
-            for (var i = 0; i < allClips.length; ++i)
-                if (allClips[i].approved) { any = true; break }
-            if (!any) onlyApproved = false
-        }
         rebuildModel()
     }
     function rebuildModel() {
         var f = filterText.trim().toLowerCase()
+        var cat = categoryFilter
         listModel.clear()
-        var ac = 0
         for (var i = 0; i < allClips.length; ++i) {
             var c = allClips[i]
-            if (c.approved) ac++
-            if (onlyApproved && !c.approved) continue
+            if (cat !== "" && c.category !== cat) continue
             if (f === "" || c.name.toLowerCase().indexOf(f) !== -1
                          || c.action.toLowerCase().indexOf(f) !== -1) {
                 listModel.append(c)
             }
         }
-        approvedCount = ac
-    }
-    // Curation (#838 ship-gate): toggle a clip's "good" mark. Persists via the
-    // controller (curation.json); the library builder ships --approved-only.
-    function toggleApproved(row) {
-        var src = listModel.get(row).source
-        var newVal = !listModel.get(row).approved
-        AnimationControlController.setClipApproved(src, newVal)
-        listModel.setProperty(row, "approved", newVal)
-        for (var i = 0; i < allClips.length; ++i)
-            if (allClips[i].source === src) { allClips[i].approved = newVal; break }
-        approvedCount += newVal ? 1 : -1
-        if (onlyApproved && !newVal) rebuildModel()
     }
     function open() { dialog.show(); dialog.raise(); dialog.requestActivate(); refresh() }
 
@@ -92,8 +70,8 @@ Window {
                 font.pixelSize: 12; font.bold: true
             }
             Text {
-                text: dialog.allClips.length + " animations · "
-                      + dialog.approvedCount + " marked good · click Apply to retarget"
+                text: listModel.count + " of " + dialog.allClips.length
+                      + " animations · click Apply to retarget"
                 color: PropertiesPanelController.textColor; opacity: 0.6
                 font.pixelSize: 10
             }
@@ -147,28 +125,44 @@ Window {
                         anchors.verticalCenter: parent.verticalCenter
                     }
                 }
-                // Curation filter: show only the clips marked good (★). The
-                // marks persist (curation.json) and gate what ships.
+                // Character category. The corpus mixes human and undead takes
+                // under the SAME action names, so an unfiltered "walk" list
+                // interleaves ordinary strides with zombie shambles.
                 Row {
                     spacing: 6
-                    Rectangle {
-                        id: onlyGoodChk
-                        width: 14; height: 14; radius: 2
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: dialog.onlyApproved
-                               ? PropertiesPanelController.highlightColor
-                               : PropertiesPanelController.inputColor
-                        border.color: PropertiesPanelController.borderColor
-                        Text { anchors.centerIn: parent; visible: dialog.onlyApproved
-                               text: "✓"; color: "white"; font.pixelSize: 10 }
-                        MouseArea { anchors.fill: parent
-                                    onClicked: { dialog.onlyApproved = !dialog.onlyApproved
-                                                 dialog.rebuildModel() } }
-                    }
                     Text {
-                        text: "Only good ★"
+                        text: "Category"
                         color: PropertiesPanelController.textColor; font.pixelSize: 10
                         anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Repeater {
+                        model: dialog.categoryOptions
+                        Rectangle {
+                            readonly property string catValue:
+                                modelData === "All" ? "" : modelData.toLowerCase()
+                            readonly property bool active:
+                                dialog.categoryFilter === catValue
+                            height: 18; radius: 3
+                            width: catLabel.implicitWidth + 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: active ? PropertiesPanelController.highlightColor
+                                          : PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                id: catLabel
+                                anchors.centerIn: parent
+                                text: modelData
+                                font.pixelSize: 10
+                                color: active ? "white"
+                                              : PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: { dialog.categoryFilter = catValue
+                                             dialog.rebuildModel() }
+                            }
+                        }
                     }
                 }
             }
@@ -196,27 +190,8 @@ Window {
                             anchors.fill: parent
                             anchors.leftMargin: 8; anchors.rightMargin: 6
                             spacing: 8
-                            // curation "good" toggle — persists, gates shipping
-                            Text {
-                                id: goodStar
-                                width: 18
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: model.approved ? "★" : "☆"
-                                color: model.approved ? "#e8c542"
-                                     : PropertiesPanelController.textColor
-                                opacity: model.approved ? 1.0
-                                       : (starMa.containsMouse ? 0.8 : 0.35)
-                                font.pixelSize: 15
-                                horizontalAlignment: Text.AlignHCenter
-                                MouseArea {
-                                    id: starMa; anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: dialog.toggleApproved(index)
-                                }
-                            }
                             Column {
-                                width: parent.width - applyBtn.width - goodStar.width - 22
+                                width: parent.width - applyBtn.width - 22
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 1
                                 Text {
