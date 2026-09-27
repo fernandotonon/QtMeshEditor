@@ -22,6 +22,7 @@
 #endif
 #include "AnimationMerger.h"
 #include "CreatureMotionExtract.h"
+#include "CreatureMotionRetarget.h"
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
 #include "MotionLibrary.h"
@@ -2584,6 +2585,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     // winged biped) instead of the 22-joint humanoid one.
     bool dumpCreatureMode = false;
     QString dumpCreaturePath;
+    // #1073: retarget a canonical creature clip onto this rig.
+    QString applyCreaturePath;   // --apply-creature <clips.json>
+    QString applyCreatureClip;   // --creature-clip <name> (else the first)
     bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
     QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool facingMode = false;          // #837 harness: report world-space facing
@@ -2671,6 +2675,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-model") { inbetweenNoModel = true; continue; }
+        if (arg == "--apply-creature" && i + 1 < argc) {
+            applyCreaturePath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--creature-clip" && i + 1 < argc) {
+            applyCreatureClip = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (arg == "--dump-creature" && i + 1 < argc) {
             dumpCreatureMode = true;
             dumpCreaturePath = QString::fromLocal8Bit(argv[++i]);
@@ -3217,7 +3229,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
         && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode
-        && !trimMode && !dumpCanonicalMode && !dumpCreatureMode) {
+        && !trimMode && !dumpCanonicalMode && !dumpCreatureMode
+        && applyCreaturePath.isEmpty()) {
         err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --trim, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
@@ -3298,6 +3311,100 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     const bool isAnimOnlyInput = (entity == nullptr);
+
+    if (!applyCreaturePath.isEmpty()) {
+        // #1073: play a canonical creature clip onto this rig and export.
+        if (isAnimOnlyInput) {
+            err() << "Error: --apply-creature needs a mesh with its rig."
+                  << Qt::endl;
+            return 1;
+        }
+        QFile jf(applyCreaturePath);
+        if (!jf.open(QIODevice::ReadOnly)) {
+            err() << "Error: cannot read " << applyCreaturePath << Qt::endl;
+            return 1;
+        }
+        const QJsonObject jroot =
+            QJsonDocument::fromJson(jf.readAll()).object();
+        jf.close();
+        if (jroot.value("schema").toString()
+            != QLatin1String("qtmesh-creature-clips-v1")) {
+            err() << "Error: not a creature clip file (schema mismatch)."
+                  << Qt::endl;
+            return 1;
+        }
+        const bool wingedSrc =
+            jroot.value("bodyPlan").toString() == QLatin1String("wingedBiped");
+        const CreatureSkeleton::BodyPlan srcPlan =
+            wingedSrc ? CreatureSkeleton::BodyPlan::WingedBiped
+                      : CreatureSkeleton::BodyPlan::Quadruped;
+        const QJsonArray jclips = jroot.value("clips").toArray();
+        QJsonObject chosen;
+        for (const QJsonValue& cv : jclips) {
+            const QJsonObject co = cv.toObject();
+            if (applyCreatureClip.isEmpty()
+                || co.value("animation").toString().contains(
+                       applyCreatureClip, Qt::CaseInsensitive)) {
+                chosen = co;
+                break;
+            }
+        }
+        if (chosen.isEmpty()) {
+            err() << "Error: no matching clip in " << applyCreaturePath
+                  << Qt::endl;
+            return 1;
+        }
+        std::vector<std::vector<std::array<float, 4>>> quats;
+        for (const QJsonValue& fv : chosen.value("quats").toArray()) {
+            std::vector<std::array<float, 4>> pose;
+            for (const QJsonValue& qv : fv.toArray()) {
+                const QJsonArray q = qv.toArray();
+                if (q.size() != 4) continue;
+                pose.push_back({static_cast<float>(q.at(0).toDouble()),
+                                static_cast<float>(q.at(1).toDouble()),
+                                static_cast<float>(q.at(2).toDouble()),
+                                static_cast<float>(q.at(3).toDouble())});
+            }
+            quats.push_back(std::move(pose));
+        }
+        const QString newName =
+            QStringLiteral("creature_") + chosen.value("animation").toString()
+                                              .section(QLatin1Char('|'), -1);
+        // Write to the MESH's master skeleton, not the entity's
+        // SkeletonInstance: the exporter serialises the master, so a clip
+        // added to the instance exports as a skeleton-less mesh with no
+        // animations (observed — the glb came out 0 bones, 0 clips).
+        Ogre::SkeletonPtr masterSkel = entity->getMesh()->getSkeleton();
+        if (!masterSkel) {
+            err() << "Error: mesh has no skeleton." << Qt::endl;
+            return 1;
+        }
+        const CreatureMotionRetarget::Result rr =
+            CreatureMotionRetarget::apply(masterSkel.get(),
+                                          newName.toStdString(), srcPlan,
+                                          quats, jroot.value("fps").toInt(30));
+        if (!rr.ok) {
+            err() << "Error: " << rr.error << Qt::endl;
+            return 1;
+        }
+        cliWrite(QString("Retargeted '%1' -> %2 (%3 tracks, %4 roles, %5 frames)\n")
+                     .arg(chosen.value("animation").toString(), newName)
+                     .arg(rr.tracksWritten).arg(rr.rolesResolved).arg(rr.frames));
+        if (!outputPath.isEmpty()) {
+            // The format MUST be passed: an empty format string makes the
+            // exporter write the mesh without its skeleton/animations (the
+            // glb came out 0 clips), which looks like the retarget failed.
+            if (MeshImporterExporter::exporter(
+                    entity->getParentSceneNode(),
+                    QFileInfo(outputPath).absoluteFilePath(),
+                    formatForExtension(outputPath)) != 0) {
+                err() << "Error: export failed." << Qt::endl;
+                return 1;
+            }
+            cliWrite(QString("Wrote %1\n").arg(outputPath));
+        }
+        return 0;
+    }
 
     if (dumpCreatureMode) {
         // #1073: creature rigs (quadruped / winged biped) cannot use the
