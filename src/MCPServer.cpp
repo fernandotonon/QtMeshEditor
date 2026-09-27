@@ -5242,6 +5242,26 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                 return makeErrorResult(QString("Error: %1").arg(lib.error()));
             int idx;
             if (hasVariant) {
+                // #1073: indices at/above the creature base address the
+                // CREATURE library, which uses a different canonical
+                // skeleton. Validating them against the humanoid clip count
+                // rejected every creature clip the picker can offer.
+                if (variantIndex >= AnimationControlController::kCreatureIndexBase) {
+                    auto* acc = AnimationControlController::instance();
+                    if (!acc)
+                        return makeErrorResult("Error: animation controller unavailable");
+                    const QVariantMap res = acc->applyCreatureClip(
+                        variantIndex - AnimationControlController::kCreatureIndexBase,
+                        duration);
+                    if (!res.value("ok").toBool())
+                        return makeErrorResult(
+                            QString("Error: %1").arg(res.value("error").toString()));
+                    return makeSuccessResult(
+                        QString("Applied creature clip '%1' (%2 tracks, %3 frames)")
+                            .arg(res.value("animation").toString())
+                            .arg(res.value("tracks").toInt())
+                            .arg(res.value("frames").toInt()));
+                }
                 if (variantIndex >= lib.clipCount())
                     return makeErrorResult(QString("Error: variant_index %1 out of range (0..%2)")
                                                .arg(variantIndex).arg(lib.clipCount() - 1));

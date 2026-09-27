@@ -2077,8 +2077,6 @@ double AnimationControlController::currentArmSpace(const QString& animName,
 // their library index is offset to keep the two libraries distinguishable.
 // 100000 is far above any plausible humanoid clip count (the shipped library
 // has 122) and keeps the offset obvious when it shows up in a log.
-static constexpr int kCreatureIndexBase = 100000;
-
 QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
                                                           double duration)
 {
@@ -2150,6 +2148,15 @@ QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
     // republishes the list the UI reads.
     ent->_initialise(true);
     ent->refreshAvailableAnimationState();
+    // ...but that DESTROYS the instance m_selectedSkeleton points at, and the
+    // next QML read of allBoneRows() then dereferences freed memory. Observed
+    // as a SIGSEGV in allBoneRows the moment the picker applied a clip. The
+    // morph path documents the same hazard and fixes it the same way.
+    if (m_selectedEntity == ent) {
+        rebindSelectedSkeleton();
+        refreshBoneList(QString::fromStdString(m_selectedBone));
+    }
+    updateAnimationTree();
 
     out["ok"] = true;
     out["animation"] = animName;

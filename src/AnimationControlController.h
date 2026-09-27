@@ -373,6 +373,12 @@ public:
     /// (`libIndex`, NOT `index` — a ListModel role named "index" shadows the
     /// QML delegate's row index.) Downloads the library on first use
     /// (blocking). Empty list if unavailable.
+    /// Creature clips share ONE picker list with humanoid ones, so their
+    /// library index is offset by this base to keep the two libraries
+    /// distinguishable. 100000 sits far above any plausible humanoid clip
+    /// count (the shipped library has 122) and stays obvious in a log.
+    static constexpr int kCreatureIndexBase = 100000;
+
     Q_INVOKABLE QVariantList listMotionClips();
     /// Apply a CREATURE clip (#1073) by its index within the creature
     /// library. Called by generateMotion when the picker's libIndex is at or
