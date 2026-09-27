@@ -94,6 +94,10 @@ MotionComposer::Script MotionComposer::parse(const QString& prompt,
                                              const MotionLibrary& lib)
 {
     Script out;
+    // Capture the requested category here: compose() only receives the
+    // Script, so without this a multi-step prompt would lose the filter and
+    // fall back to the unfiltered pool (Codex P1 on #1074).
+    out.category = MotionLibrary::categoryForPrompt(prompt);
     for (const QString& seg : segment(prompt)) {
         const QString action = lib.resolveAction(seg);
         if (action.isEmpty()) {
@@ -123,6 +127,10 @@ MotionComposer::Script MotionComposer::parseJson(const QByteArray& json,
 {
     Script out;
     const QJsonObject root = QJsonDocument::fromJson(json).object();
+    // A scripted caller states the category explicitly or gets "any" — unlike
+    // a text prompt there is no phrasing to infer it from, and defaulting to
+    // "human" would silently narrow an existing MCP caller's results.
+    out.category = root.value(QStringLiteral("category")).toString();
     for (const QJsonValue& sv : root.value(QStringLiteral("steps")).toArray()) {
         const QJsonObject so = sv.toObject();
         const QString raw = so.value(QStringLiteral("action")).toString();
@@ -236,7 +244,7 @@ MotionComposer::Composition MotionComposer::compose(const Script& script,
     int firstTake = -1;
 
     for (const Step& st : script.steps) {
-        const int idx = lib.pickTake(st.action);
+        const int idx = lib.pickTake(st.action, script.category);
         if (idx < 0) {
             out.error = QStringLiteral("no clip for action '%1'").arg(st.action);
             return out;

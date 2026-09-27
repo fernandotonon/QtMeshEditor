@@ -15,6 +15,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
@@ -77,6 +78,40 @@ const Syn kSynonyms[] = {
     {"fly", "fly"}, {"flying", "fly"},
     {"strafe", "strafeleft"},
 };
+
+// Classify a clip's motion style from its provenance string, for libraries
+// built before the build script stamped `category`. Patterns are taken from
+// the sources actually present in the shipped v5/v6 corpus rather than
+// invented: Quaternius "Zombie Animated", the Half-Life 2 classic/fast zombie
+// rips, a low-poly orc, and two skeleton (the undead kind) packs.
+//
+// Deliberately conservative — anything unrecognised is "human", because that
+// is what every clip was implicitly treated as before this field existed, so
+// a miss preserves the old behaviour instead of hiding a clip from the
+// default request.
+QString categoryFromSource(const QString& source)
+{
+    // NB the word boundary is spelled [^a-z] rather than \\b: a real source
+    // string is "Low-poly_orc_62f16371", and an underscore IS a word
+    // character, so \\borc\\b silently missed both orc clips. Caught by
+    // diffing this classifier against a manual audit of the shipped corpus
+    // (85/37 vs the expected 83/39) — worth keeping as a warning.
+    static const QRegularExpression undead(
+        QStringLiteral("zombie|undead|(^|[^a-z])orc([^a-z]|$)|ghoul|revenant|"
+                       "skeleton[ _-]?(free|demo|dance)|spooky[ _-]?skeleton"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression creature(
+        QStringLiteral("dragon|wyvern|horse|canine|(^|[^a-z])dog([^a-z]|$)|"
+                       "(^|[^a-z])cat([^a-z]|$)|wolf|quadruped|beast|spider|"
+                       "raptor"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (undead.match(source).hasMatch())
+        return QStringLiteral("undead");
+    if (creature.match(source).hasMatch())
+        return QStringLiteral("creature");
+    return QStringLiteral("human");
+}
+
 } // namespace
 
 bool MotionLibrary::loadFromFile(const QString& path)
@@ -249,6 +284,23 @@ bool MotionLibrary::parse(const QByteArray& json)
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
+        // Category: written by the build script from v6 on. Libraries built
+        // before it have no field, so fall back to classifying the provenance
+        // string — otherwise every already-installed library would stay
+        // uncategorised and the filter would be a no-op until the user
+        // happened to re-download ~28 MB.
+        clip.category = co.value("category").toString().toLower().trimmed();
+        // Only the three known values are honoured. A typo ("humn") would
+        // otherwise be stored verbatim, match no filter, and silently fall
+        // back to the UNFILTERED pool — quietly reintroducing the zombie
+        // takes this field exists to exclude. An unknown value is treated as
+        // absent and re-derived from the provenance string.
+        if (clip.category != QLatin1String("human")
+            && clip.category != QLatin1String("undead")
+            && clip.category != QLatin1String("creature"))
+            clip.category.clear();
+        if (clip.category.isEmpty())
+            clip.category = categoryFromSource(clip.source);
         // meanChestLean reads joint 2 as a WORLD orientation — only valid
         // for world-frame libraries (schema v3+). Legacy local-frame clips
         // keep a neutral 0 so the posture penalty can never misfire on a
@@ -296,6 +348,19 @@ std::vector<QString> MotionLibrary::actions() const
 {
     std::vector<QString> out;
     for (const auto& c : m_clips) out.push_back(c.action);
+    return out;
+}
+
+std::vector<QString> MotionLibrary::categories() const
+{
+    std::vector<QString> out;
+    for (const auto& c : m_clips) {
+        const QString cat = c.category.isEmpty() ? QStringLiteral("human")
+                                                 : c.category;
+        if (std::find(out.begin(), out.end(), cat) == out.end())
+            out.push_back(cat);
+    }
+    std::sort(out.begin(), out.end());
     return out;
 }
 
@@ -419,16 +484,40 @@ MotionLibrary::LoopRange MotionLibrary::findLoopRange(
 
 std::vector<int> MotionLibrary::takesForAction(const QString& action) const
 {
+    return takesForAction(action, QString());
+}
+
+std::vector<int> MotionLibrary::takesForAction(const QString& action,
+                                               const QString& category) const
+{
     std::vector<int> hits;
-    for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
-        if (m_clips[static_cast<size_t>(i)].action.compare(action, Qt::CaseInsensitive) == 0)
-            hits.push_back(i);
+    for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
+        const auto& c = m_clips[static_cast<size_t>(i)];
+        if (c.action.compare(action, Qt::CaseInsensitive) != 0)
+            continue;
+        if (!category.isEmpty()
+            && c.category.compare(category, Qt::CaseInsensitive) != 0)
+            continue;
+        hits.push_back(i);
+    }
+    // Never return NOTHING purely because of the category: an action that
+    // exists only as undead ("tantrum", "wallpound", the swats) would
+    // otherwise become unreachable for a default human request, which is a
+    // regression against today's behaviour. Fall back to the unfiltered set
+    // and let the caller report the mismatch instead of failing.
+    if (hits.empty() && !category.isEmpty())
+        return takesForAction(action, QString());
     return hits;
 }
 
 int MotionLibrary::pickTake(const QString& action) const
 {
-    const std::vector<int> hits = takesForAction(action);
+    return pickTake(action, QString());
+}
+
+int MotionLibrary::pickTake(const QString& action, const QString& category) const
+{
+    const std::vector<int> hits = takesForAction(action, category);
     if (hits.empty()) return -1;
     if (hits.size() == 1) return hits.front();
     // Quality-weighted sampling (P proportional to quality^2, #855) with the
@@ -476,27 +565,46 @@ QString MotionLibrary::resolveAction(const QString& word) const
     return {};
 }
 
+QString MotionLibrary::categoryForPrompt(const QString& prompt)
+{
+    const QString p = prompt.toLower();
+    static const QRegularExpression undead(
+        QStringLiteral("zombie|undead|ghoul|revenant|walker|\\borc\\b|"
+                       "skeletal|\\bskeleton\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression creature(
+        QStringLiteral("dragon|wyvern|horse|\\bdog\\b|\\bcat\\b|wolf|"
+                       "beast|quadruped|monster"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (undead.match(p).hasMatch())   return QStringLiteral("undead");
+    if (creature.match(p).hasMatch()) return QStringLiteral("creature");
+    return QStringLiteral("human");
+}
+
 int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
 {
     if (m_clips.empty()) return -1;
     const QString p = prompt.toLower();
+    // "zombie walk" must not return a brisk human stride, and a plain "walk"
+    // must not return a Half-Life shamble. An unqualified prompt means human.
+    const QString cat = categoryForPrompt(prompt);
 
     // 1. Direct: a library action name appears in the prompt.
     for (const auto& c : m_clips) {
         if (p.contains(c.action.toLower())) {
             if (matchedAction) *matchedAction = c.action;
-            return pickTake(c.action);   // shared quality/posture weighting
+            return pickTake(c.action, cat);   // shared quality/posture weighting
         }
     }
     // 2. Synonyms -> action.
     for (const auto& syn : kSynonyms) {
         if (p.contains(QLatin1String(syn.word))) {
             const QString a = QString::fromLatin1(syn.action);
-            const std::vector<int> hits = takesForAction(a);
+            const std::vector<int> hits = takesForAction(a, cat);
             if (!hits.empty()) {
                 if (matchedAction)
                     *matchedAction = m_clips[static_cast<size_t>(hits.front())].action;
-                return pickTake(a);
+                return pickTake(a, cat);
             }
         }
     }

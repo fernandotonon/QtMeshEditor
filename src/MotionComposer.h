@@ -39,6 +39,12 @@ public:
     struct Script {
         std::vector<Step> steps;
         std::vector<QString> unresolved;  ///< fragments no action matched
+        /// Character category the PROMPT asked for ("human"/"undead"/
+        /// "creature"; empty = any). Captured at parse time because compose()
+        /// only sees the script: without it a multi-step prompt ("walk
+        /// twice", "walk then wave") would sample the unfiltered pool and
+        /// still return the zombie takes the category split exists to avoid.
+        QString category;
         bool empty() const { return steps.empty(); }
     };
 

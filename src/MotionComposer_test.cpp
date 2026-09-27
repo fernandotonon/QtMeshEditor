@@ -671,3 +671,92 @@ TEST(MotionComposer, MultiStepDetectionNeedsNoLibraryAndIsConservative)
     EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(
         QStringLiteral("flibbertigibbet")));
 }
+
+// ---- category propagation through composition ------------------------------
+namespace {
+
+// Two "walk" takes: a human (CMU) and an undead (zombie) one, plus a "wave"
+// so multi-step prompts have somewhere to go.
+QByteArray mixedCategoryLib()
+{
+    auto pose = [](double ang) {
+        const double h = ang * 0.5;
+        const double x = std::sin(h), w = std::cos(h);
+        QByteArray p = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) p += ",";
+            p += "[" + QByteArray::number(x, 'g', 8) + ",0,0,"
+               + QByteArray::number(w, 'g', 8) + "]";
+        }
+        return p + "]";
+    };
+    auto frames = [&](double base) {
+        QByteArray fr = "[";
+        for (int f = 0; f < 8; ++f) {
+            if (f) fr += ",";
+            fr += pose(base + 0.02 * double(f));
+        }
+        return fr + "]";
+    };
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"source\":\"CMU 02_01\",\"quats\":" + frames(0.0) + "},";
+    json += "{\"action\":\"walk\",\"source\":\"Classic_Zombie_Half-Life_2 — a_walk3\",\"quats\":" + frames(4.0) + "},";
+    json += "{\"action\":\"wave\",\"source\":\"CMU 03_01\",\"quats\":" + frames(8.0) + "}";
+    json += "]}";
+    return json;
+}
+
+} // namespace
+
+TEST(MotionComposer, PromptCategoryIsCapturedOnTheScript)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib())) << lib.error().toStdString();
+    EXPECT_EQ(MotionComposer::parse("walk twice", lib).category.toStdString(), "human");
+    EXPECT_EQ(MotionComposer::parse("zombie walk twice", lib).category.toStdString(), "undead");
+}
+
+TEST(MotionComposer, MultiStepPromptStillExcludesTheZombieTake)
+{
+    // Codex P1 on #1074: compose() called the one-argument pickTake, so
+    // "walk twice" / "walk then wave" kept sampling the unfiltered pool and
+    // could still return a zombie take — the category filter only covered
+    // SINGLE-step prompts. Sample enough runs that a leak would show.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib()));
+    for (int i = 0; i < 120; ++i) {
+        const MotionComposer::Script s = MotionComposer::parse("walk then wave", lib);
+        ASSERT_GE(s.steps.size(), 2u);
+        const MotionComposer::Composition c = MotionComposer::compose(s, lib);
+        ASSERT_TRUE(c.ok) << c.error.toStdString();
+        // Composition exposes no take indices, so identify the source from
+        // the DATA: each clip sits in its own angular band, and the human
+        // walk starts near angle 0 (quat x ~ 0) while the undead walk starts
+        // near 4.0 rad (quat x = sin(2.0) ~ 0.909). A leak is unmistakable.
+        ASSERT_FALSE(c.quats.empty());
+        const float x0 = c.quats.front().front()[0];
+        EXPECT_LT(std::fabs(x0), 0.3f)
+            << "draw " << i << " composed a take from the undead band (x="
+            << x0 << ") for a plain prompt";
+    }
+}
+
+TEST(MotionComposer, ScriptedJsonCategoryIsHonouredAndDefaultsToAny)
+{
+    // A JSON caller has no phrasing to infer from, so an absent category
+    // means "any" — defaulting to human would silently narrow existing MCP
+    // callers' results.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib()));
+    EXPECT_TRUE(MotionComposer::parseJson("{\"steps\":[{\"action\":\"walk\"}]}", lib)
+                    .category.isEmpty());
+    EXPECT_EQ(MotionComposer::parseJson(
+                  "{\"category\":\"undead\",\"steps\":[{\"action\":\"walk\"}]}", lib)
+                  .category.toStdString(), "undead");
+}
