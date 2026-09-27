@@ -283,6 +283,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UniRigPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionInbetween.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadrupedSkeleton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PhotoDepth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PhotoDepth_test.cpp
