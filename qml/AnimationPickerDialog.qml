@@ -201,8 +201,15 @@ Window {
                                     width: parent.width
                                 }
                                 Text {
+                                    // `applicable` is only set for creature
+                                    // clips once a creature rig is selected;
+                                    // undefined means "unknown", which must
+                                    // read as normal rather than as a warning.
                                     text: "q " + model.quality.toFixed(2) + " · " + model.frames + "f"
-                                    color: PropertiesPanelController.textColor; opacity: 0.5
+                                          + (model.applicable === false
+                                             ? " · needs a " + model.skeleton + " rig" : "")
+                                    color: PropertiesPanelController.textColor
+                                    opacity: model.applicable === false ? 0.75 : 0.5
                                     font.pixelSize: 9
                                 }
                             }
@@ -211,7 +218,13 @@ Window {
                                 width: 58; height: 24; radius: 3
                                 anchors.verticalCenter: parent.verticalCenter
                                 property bool busy: dialog.busyIndex === model.libIndex
-                                opacity: busy ? 0.5 : 1.0
+                                // Dim, but do NOT disable: the plan check is
+                                // a heuristic on bone names, so a user who
+                                // knows better should still be able to try —
+                                // the retarget refuses safely with a clear
+                                // message if it really cannot map.
+                                property bool mismatched: model.applicable === false
+                                opacity: busy ? 0.5 : (mismatched ? 0.45 : 1.0)
                                 color: applyMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
                                      : applyMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
                                      : PropertiesPanelController.highlightColor

@@ -2156,7 +2156,38 @@ QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
         rebindSelectedSkeleton();
         refreshBoneList(QString::fromStdString(m_selectedBone));
     }
+
+    // SELECT the clip we just applied, exactly as the humanoid path does.
+    // Ogre AVERAGES every enabled animation state, so leaving the import's
+    // auto-enabled clip on blends it with the new one into a shaking
+    // mid-pose — applying a walk must visibly walk. Enabling only the new
+    // clip is therefore both the selection and a correctness requirement.
+    if (auto* animSet = ent->getAllAnimationStates()) {
+        for (const auto& [key, state] : animSet->getAnimationStates())
+            state->setEnabled(false);
+        if (animSet->hasAnimationState(animName.toStdString())) {
+            auto* st = animSet->getAnimationState(animName.toStdString());
+            st->setEnabled(true);
+            st->setLoop(true);
+            st->setTimePosition(0.0f);
+        }
+    }
+    // Make it the controller's selected animation so the timeline, dope
+    // sheet and Inspector all point at the clip the user just applied.
+    m_selectedEntityName = ent->getName();
+    m_selectedAnimation  = animName.toStdString();
+    m_selectedTrack      = nullptr;
+    m_currentKeyframe    = nullptr;
+    // The Inspector's Animations checkboxes read enabled flags through
+    // PropertiesPanelController — without this it shows STALE state and the
+    // user's next toggle crosses the enables back into a blended pose.
+    if (auto* ppc = PropertiesPanelController::instance())
+        emit ppc->animationStateChanged();
     updateAnimationTree();
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+    emit animationTreeChanged();
 
     out["ok"] = true;
     out["animation"] = animName;
@@ -2224,6 +2255,32 @@ QVariantList AnimationControlController::listMotionClips()
     // kCreatureIndexBase so apply() can tell the two libraries apart — the
     // indices would otherwise collide and silently select the wrong clip.
     if (MotionLibrary::creatureLibraryPresent()) {
+        // Which creature plan does the CURRENT selection have? Clips of a
+        // different plan cannot retarget onto it (a winged clip drives wings
+        // a quadruped does not have), so mark them so the picker can show
+        // the user what will actually work instead of letting them pick a
+        // clip that only fails on Apply.
+        QString targetPlan;
+        if (Manager* mgr = Manager::getSingletonPtr()) {
+            for (auto* e : mgr->getEntities()) {
+                if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton())
+                    continue;
+                if (!m_selectedEntityName.empty()
+                    && e->getName() != m_selectedEntityName)
+                    continue;
+                QStringList bones;
+                if (auto* sk = e->getSkeleton())
+                    for (auto* b : sk->getBones())
+                        bones << QString::fromStdString(b->getName());
+                bool planOk = false;
+                const auto plan = CreatureSkeleton::detectBodyPlan(bones, &planOk);
+                if (planOk)
+                    targetPlan = plan == CreatureSkeleton::BodyPlan::WingedBiped
+                                     ? QStringLiteral("wingedBiped")
+                                     : QStringLiteral("quadruped");
+                break;
+            }
+        }
         MotionLibrary clib;
         if (clib.loadFromFile(MotionLibrary::creatureLibraryPath())) {
             for (int i = 0; i < clib.clipCount(); ++i) {
@@ -2246,6 +2303,13 @@ QVariantList AnimationControlController::listMotionClips()
                 m["category"] = c.category.isEmpty()
                                     ? QStringLiteral("creature") : c.category;
                 m["skeleton"] = c.skeleton;
+                // Empty targetPlan (no creature selected, or a humanoid) →
+                // leave applicability UNSET rather than false: the user may
+                // simply not have selected the rig yet, and greying out the
+                // whole list would read as "creatures are broken".
+                if (!targetPlan.isEmpty())
+                    m["applicable"] =
+                        (c.skeleton.compare(targetPlan, Qt::CaseInsensitive) == 0);
                 out.append(m);
             }
         }
