@@ -459,6 +459,7 @@ private:
         dlg.setFileMode(QFileDialog::ExistingFile);
         dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
         dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        dlg.setOption(QFileDialog::DontUseCustomDirectoryIcons, true);
         if (dlg.exec() != QDialog::Accepted)
             return;
         const QStringList files = dlg.selectedFiles();
@@ -2968,6 +2969,7 @@ void MainWindow::initToolBar()
         dlg.setFileMode(QFileDialog::ExistingFile);
         dlg.setNameFilter(tr("Images (*.png *.tga *.jpg *.jpeg *.bmp)"));
         dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+        dlg.setOption(QFileDialog::DontUseCustomDirectoryIcons, true);
         if (dlg.exec() != QDialog::Accepted)
             return;
         const QStringList files = dlg.selectedFiles();
@@ -5871,7 +5873,9 @@ void MainWindow::on_actionOpen_Scene_triggered()
     QString fileName = QFileDialog::getOpenFileName(this, tr("Open Scene"),
                                                     "",
                                                     tr("Scene Files (*.scene.glb *.scene.gltf);;glTF / VRM (*.gltf *.glb *.vrm);;All Files (*)"),
-                                                    nullptr, QFileDialog::DontUseNativeDialog);
+                                                    nullptr,
+                                                    QFileDialog::DontUseNativeDialog
+                                                    | QFileDialog::DontUseCustomDirectoryIcons);
     if (fileName.isEmpty()) return;
 
     QElapsedTimer sceneImportTimer;
@@ -5916,7 +5920,9 @@ void MainWindow::on_actionSave_Scene_triggered()
     QString fileName = QFileDialog::getSaveFileName(this, tr("Save Scene"),
                                                     "scene.scene.glb",
                                                     tr("Scene glTF Binary (*.scene.glb);;Scene glTF (*.scene.gltf)"),
-                                                    nullptr, QFileDialog::DontUseNativeDialog);
+                                                    nullptr,
+                                                    QFileDialog::DontUseNativeDialog
+                                                    | QFileDialog::DontUseCustomDirectoryIcons);
     if (fileName.isEmpty()) return;
 
     QProgressDialog progressDialog(tr("Saving scene..."), QString(), 0, 100, this);
@@ -7128,6 +7134,7 @@ void MainWindow::buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* pa
                     // Native dialogs freeze against Ogre GL — the same reason
                     // every other file dialog in this file sets this.
                     dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+                    dlg.setOption(QFileDialog::DontUseCustomDirectoryIcons, true);
                     dlg.selectFile(name + QStringLiteral(".json"));
                     if (dlg.exec() != QDialog::Accepted) return;
                     const QStringList files = dlg.selectedFiles();
@@ -7147,6 +7154,7 @@ void MainWindow::buildBrushPresetSection(QWidget* paintSettings, QVBoxLayout* pa
                     dlg.setFileMode(QFileDialog::ExistingFile);
                     dlg.setNameFilter(tr("Brush preset (*.json)"));
                     dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+                    dlg.setOption(QFileDialog::DontUseCustomDirectoryIcons, true);
                     if (dlg.exec() != QDialog::Accepted) return;
                     const QStringList files = dlg.selectedFiles();
                     if (files.isEmpty()) return;

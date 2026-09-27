@@ -3908,7 +3908,8 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
     QString fileName = QFileDialog::getSaveFileName(parent, QObject::tr("Export Mesh"),
                                                     _sn->getName().data(),
                                                     exportFileDialogFilter(),&filter,
-                                                    QFileDialog::DontUseNativeDialog);
+                                                    QFileDialog::DontUseNativeDialog
+                                                    | QFileDialog::DontUseCustomDirectoryIcons);
     if(fileName.isEmpty()) return QString();
 
     QString uri = formatFileURI(fileName, filter);
