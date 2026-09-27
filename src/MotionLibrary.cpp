@@ -141,10 +141,16 @@ bool MotionLibrary::parse(const QByteArray& json)
     if (schema != QLatin1String("qtmesh-motion-library-v1") &&
         schema != QLatin1String("qtmesh-motion-library-v2") &&
         schema != QLatin1String("qtmesh-motion-library-v3") &&
-        schema != QLatin1String("qtmesh-motion-library-v4")) {
+        schema != QLatin1String("qtmesh-motion-library-v4") &&
+        schema != QLatin1String("qtmesh-creature-library-v1")) {
         m_error = QStringLiteral("unexpected library schema");
         return false;
     }
+    // A CREATURE library (#1073) mixes body plans, so its joint count is
+    // PER CLIP (quadruped 18, wingedBiped 16) rather than per library. The
+    // humanoid schemas keep their fixed count.
+    const bool creatureLib =
+        (schema == QLatin1String("qtmesh-creature-library-v1"));
     // v4 folds the fingers INTO the canonical skeleton (52 joints: 22 body + 30
     // finger); v1..v3 are 22-joint body-only (fingers ride the separate
     // `fingers` side-channel). The joint count per pose depends on the schema.
@@ -184,14 +190,23 @@ bool MotionLibrary::parse(const QByteArray& json)
         clip.quats.reserve(frames.size());
         for (const QJsonValue& fv : frames) {
             const QJsonArray joints = fv.toArray();
-            if (joints.size() != nJoints) {   // schema guard (22 v1..v3 / 52 v4)
+            // Creature clips declare their own width (their skeleton is
+            // recorded per clip), so validate against the FIRST frame of
+            // this clip rather than a library-wide constant.
+            const int expect = creatureLib
+                ? (clip.quats.empty()
+                       ? static_cast<int>(joints.size())
+                       : static_cast<int>(clip.quats.front().size()))
+                : nJoints;
+            if (joints.size() != expect) {   // schema guard
                 m_error = QStringLiteral("clip '%1' has %2 joints (expected %3)")
-                              .arg(clip.action).arg(joints.size()).arg(nJoints);
+                              .arg(clip.action).arg(joints.size()).arg(expect);
                 m_clips.clear();
                 return false;
             }
-            std::vector<std::array<float, 4>> pose(nJoints);
-            for (int j = 0; j < nJoints; ++j) {
+            std::vector<std::array<float, 4>> pose(
+                static_cast<size_t>(expect));
+            for (int j = 0; j < expect; ++j) {
                 const QJsonArray q = joints[j].toArray();
                 pose[j] = { static_cast<float>(q.at(0).toDouble()),
                             static_cast<float>(q.at(1).toDouble()),
@@ -204,9 +219,12 @@ bool MotionLibrary::parse(const QByteArray& json)
         // Optional per-clip source-bind orientations (bind-referenced
         // retarget). Malformed/absent → empty, the standing-pose path runs.
         const QJsonArray rest = co.value("restWorld").toArray();
-        if (rest.size() == nJoints) {
-            clip.restWorld.reserve(nJoints);
-            for (int j = 0; j < nJoints; ++j) {
+        const int restWant = creatureLib && !clip.quats.empty()
+                                 ? static_cast<int>(clip.quats.front().size())
+                                 : nJoints;
+        if (rest.size() == restWant) {
+            clip.restWorld.reserve(static_cast<size_t>(restWant));
+            for (int j = 0; j < restWant; ++j) {
                 const QJsonArray q = rest[j].toArray();
                 clip.restWorld.push_back({
                     static_cast<float>(q.at(0).toDouble()),
@@ -293,7 +311,12 @@ bool MotionLibrary::parse(const QByteArray& json)
         // creature support holds 22-joint humanoid clips, and silently
         // treating those as creatures would be the very mis-retarget
         // this field exists to prevent.
-        clip.skeleton = co.value("skeleton").toString().toLower().trimmed();
+        // Keep the AUTHORED spelling ("wingedBiped"), do not lower-case
+        // it: the value is compared case-insensitively everywhere, and
+        // flattening it here made clip.skeleton read back as
+        // "wingedbiped", which no longer matched what the extractor
+        // writes or what a caller would reasonably assert on.
+        clip.skeleton = co.value("skeleton").toString().trimmed();
         if (clip.skeleton.isEmpty())
             clip.skeleton = QStringLiteral("humanoid");
         clip.category = co.value("category").toString().toLower().trimmed();
@@ -652,6 +675,20 @@ QString MotionLibrary::libraryPath()
 }
 
 bool MotionLibrary::libraryPresent() { return QFileInfo::exists(libraryPath()); }
+
+QString MotionLibrary::creatureLibraryPath()
+{
+    // Separate FILE rather than extra clips in the humanoid library: the two
+    // use different canonical skeletons, ship on different schedules, and a
+    // user with no interest in creatures should not pay 4 MB for them.
+    return QDir(QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion")))
+        .filePath(QStringLiteral("creature-library.json"));
+}
+
+bool MotionLibrary::creatureLibraryPresent()
+{
+    return QFileInfo::exists(creatureLibraryPath());
+}
 
 QString MotionLibrary::ensureLibraryBlocking()
 {

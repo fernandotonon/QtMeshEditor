@@ -374,6 +374,11 @@ public:
     /// QML delegate's row index.) Downloads the library on first use
     /// (blocking). Empty list if unavailable.
     Q_INVOKABLE QVariantList listMotionClips();
+    /// Apply a CREATURE clip (#1073) by its index within the creature
+    /// library. Called by generateMotion when the picker's libIndex is at or
+    /// above the creature offset — creature clips use a different canonical
+    /// skeleton and must not go through the humanoid retarget.
+    QVariantMap applyCreatureClip(int creatureIdx, double duration);
 
     /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
     /// the selected entity. Positive `degrees` widens the arms away from the

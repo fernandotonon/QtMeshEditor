@@ -711,3 +711,36 @@ TEST(MotionLibrary, SkeletonFilterIsHardAndNeverFallsBack)
     EXPECT_TRUE(lib.takesForAction("walk", "", "wingedBiped").empty())
         << "a skeleton with no clips must return nothing, not a fallback";
 }
+
+TEST(MotionLibrary, CreatureLibraryUsesPerClipJointCounts)
+{
+    // A creature library mixes body plans, so clip width varies (quadruped
+    // 18, wingedBiped 16) — unlike the humanoid schemas where it is fixed
+    // per library. Validating against a library-wide constant would reject
+    // every clip of the other plan.
+    auto pose = [](int n) {
+        QByteArray p = "[";
+        for (int j = 0; j < n; ++j) p += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+        return p + "]";
+    };
+    const QByteArray q18 = "[" + pose(18) + "," + pose(18) + "]";
+    const QByteArray q16 = "[" + pose(16) + "," + pose(16) + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-creature-library-v1\",\"fps\":30,"
+                      "\"frame\":\"world\",\"clips\":[";
+    json += "{\"action\":\"walk\",\"skeleton\":\"quadruped\",\"category\":\"creature\","
+            "\"source\":\"Quaternius — Horse\",\"quats\":" + q18 + "},";
+    json += "{\"action\":\"fly\",\"skeleton\":\"wingedBiped\",\"category\":\"creature\","
+            "\"source\":\"Quaternius — Dragon\",\"quats\":" + q16 + "}";
+    json += "]}";
+
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_EQ(lib.clipCount(), 2);
+    EXPECT_EQ(lib.clip(0).quats.front().size(), 18u);
+    EXPECT_EQ(lib.clip(1).quats.front().size(), 16u);
+    EXPECT_EQ(lib.clip(0).skeleton.toStdString(), "quadruped");
+    EXPECT_EQ(lib.clip(1).skeleton.toStdString(), "wingedBiped");
+    // And the hard skeleton filter still separates them.
+    EXPECT_EQ(lib.takesForAction("walk", "", "quadruped").size(), 1u);
+    EXPECT_TRUE(lib.takesForAction("walk", "", "wingedBiped").empty());
+}

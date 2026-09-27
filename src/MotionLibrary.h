@@ -234,6 +234,13 @@ public:
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
 
+    /// Path of the optional CREATURE library (#1073) — quadruped / winged
+    /// clips on their own canonical skeletons. A separate file from the
+    /// humanoid library: different skeletons, different release cadence, and
+    /// a user who never animates creatures should not carry it.
+    static QString creatureLibraryPath();
+    static bool creatureLibraryPresent();
+
     // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
     // model output carries no reference triple, so its base pose is
     // synthesized from a TEMPLATE clip's restDir instead of harvesting the
