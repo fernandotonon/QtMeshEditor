@@ -289,6 +289,13 @@ bool MotionLibrary::parse(const QByteArray& json)
         // string — otherwise every already-installed library would stay
         // uncategorised and the filter would be a no-op until the user
         // happened to re-download ~28 MB.
+        // Skeleton id. Absent => humanoid: every library written before
+        // creature support holds 22-joint humanoid clips, and silently
+        // treating those as creatures would be the very mis-retarget
+        // this field exists to prevent.
+        clip.skeleton = co.value("skeleton").toString().toLower().trimmed();
+        if (clip.skeleton.isEmpty())
+            clip.skeleton = QStringLiteral("humanoid");
         clip.category = co.value("category").toString().toLower().trimmed();
         // Only the three known values are honoured. A typo ("humn") would
         // otherwise be stored verbatim, match no filter, and silently fall
@@ -490,10 +497,25 @@ std::vector<int> MotionLibrary::takesForAction(const QString& action) const
 std::vector<int> MotionLibrary::takesForAction(const QString& action,
                                                const QString& category) const
 {
+    return takesForAction(action, category, QString());
+}
+
+std::vector<int> MotionLibrary::takesForAction(const QString& action,
+                                               const QString& category,
+                                               const QString& skeletonWanted) const
+{
     std::vector<int> hits;
     for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
         const auto& c = m_clips[static_cast<size_t>(i)];
         if (c.action.compare(action, Qt::CaseInsensitive) != 0)
+            continue;
+        // A creature clip's quats are indexed by a DIFFERENT joint list, so
+        // it can never satisfy a humanoid request (or vice versa). This is a
+        // HARD filter, unlike the category fallback below: returning a
+        // quadruped clip for a human rig does not degrade gracefully, it
+        // produces the sideways-legs failure.
+        if (!skeletonWanted.isEmpty()
+            && c.skeleton.compare(skeletonWanted, Qt::CaseInsensitive) != 0)
             continue;
         if (!category.isEmpty()
             && c.category.compare(category, Qt::CaseInsensitive) != 0)
@@ -505,8 +527,11 @@ std::vector<int> MotionLibrary::takesForAction(const QString& action,
     // otherwise become unreachable for a default human request, which is a
     // regression against today's behaviour. Fall back to the unfiltered set
     // and let the caller report the mismatch instead of failing.
+    // Relax the CATEGORY when nothing matched (several actions are
+    // undead-only), but never the SKELETON — a humanoid rig must not be
+    // handed creature data as a consolation.
     if (hits.empty() && !category.isEmpty())
-        return takesForAction(action, QString());
+        return takesForAction(action, QString(), skeletonWanted);
     return hits;
 }
 
