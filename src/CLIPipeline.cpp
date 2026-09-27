@@ -21,6 +21,7 @@
 #include "Mocap/MocapCameraHints.h"
 #endif
 #include "AnimationMerger.h"
+#include "CreatureMotionExtract.h"
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
 #include "MotionLibrary.h"
@@ -2579,6 +2580,10 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool dumpCanonicalMode = false;   // #839: rig→canonical clip extraction
     QString dumpCanonicalPath;        // --dump-canonical <out.json>
     bool dumpCanonicalV2 = false;     // #838 --v2: 52-joint (fingers as joints)
+    // #1073: extract onto a CANONICAL CREATURE skeleton (quadruped /
+    // winged biped) instead of the 22-joint humanoid one.
+    bool dumpCreatureMode = false;
+    QString dumpCreaturePath;
     bool applyCanonicalMode = false;  // #837 parity harness: apply canonical json
     QString applyCanonicalPath;       // --apply-canonical <in.json>
     bool facingMode = false;          // #837 harness: report world-space facing
@@ -2666,6 +2671,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-model") { inbetweenNoModel = true; continue; }
+        if (arg == "--dump-creature" && i + 1 < argc) {
+            dumpCreatureMode = true;
+            dumpCreaturePath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (arg == "--dump-canonical" && i + 1 < argc) {
             dumpCanonicalMode = true;
             dumpCanonicalPath = QString(argv[++i]);
@@ -3207,7 +3217,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
         && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode
-        && !trimMode && !dumpCanonicalMode) {
+        && !trimMode && !dumpCanonicalMode && !dumpCreatureMode) {
         err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --trim, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
@@ -3288,6 +3298,83 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     const bool isAnimOnlyInput = (entity == nullptr);
+
+    if (dumpCreatureMode) {
+        // #1073: creature rigs (quadruped / winged biped) cannot use the
+        // humanoid canonical skeleton — its mapper collapses four legs onto
+        // two roles. Extract onto the matching creature skeleton instead,
+        // refusing rigs whose bone names no plan can read.
+        if (isAnimOnlyInput) {
+            err() << "Error: --dump-creature needs a mesh with its rig."
+                  << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb("ai.tool_call",
+            QString("anim dump-creature: %1").arg(fi.fileName()));
+        const CreatureMotionExtract::Result res =
+            CreatureMotionExtract::extract(entity, 30, animationFilter);
+        if (!res.ok) {
+            err() << "Error: " << res.error << Qt::endl;
+            return 1;
+        }
+        const bool winged =
+            res.plan == CreatureSkeleton::BodyPlan::WingedBiped;
+        const int nJ = winged ? CreatureSkeleton::WingedBiped::jointCount()
+                              : CreatureSkeleton::QuadrupedSkeleton::jointCount();
+        QJsonObject root;
+        root["schema"] = "qtmesh-creature-clips-v1";
+        root["frame"] = "world";
+        root["fps"] = 30;
+        root["bodyPlan"] = winged ? "wingedBiped" : "quadruped";
+        root["jointCount"] = nJ;
+        root["source"] = fi.fileName();
+        QJsonArray joints;
+        for (int j = 0; j < nJ; ++j)
+            joints.append(winged ? CreatureSkeleton::WingedBiped::jointName(j)
+                                 : CreatureSkeleton::QuadrupedSkeleton::jointName(j));
+        root["joints"] = joints;
+        QJsonArray clipArr;
+        for (const auto& c : res.clips) {
+            QJsonObject co;
+            co["animation"] = c.animation;
+            co["frames"] = c.frames;
+            co["resolvedRoles"] = c.resolvedRoles;
+            QJsonArray restArr;
+            for (const auto& q : c.restWorld) {
+                QJsonArray v; v.append(q[0]); v.append(q[1]);
+                v.append(q[2]); v.append(q[3]);
+                restArr.append(v);
+            }
+            co["restWorld"] = restArr;
+            QJsonArray frames;
+            for (const auto& pose : c.quats) {
+                QJsonArray fr;
+                for (const auto& q : pose) {
+                    QJsonArray v; v.append(q[0]); v.append(q[1]);
+                    v.append(q[2]); v.append(q[3]);
+                    fr.append(v);
+                }
+                frames.append(fr);
+            }
+            co["quats"] = frames;
+            clipArr.append(co);
+        }
+        root["clips"] = clipArr;
+        QFile cf(dumpCreaturePath);
+        if (!cf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            err() << "Error: cannot write " << dumpCreaturePath << Qt::endl;
+            return 1;
+        }
+        cf.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        cf.close();
+        cliWrite(QString("Dumped %1 %2 clip(s) (%3/%4 roles) to %5\n")
+                     .arg(res.clips.size())
+                     .arg(winged ? "wingedBiped" : "quadruped")
+                     .arg(res.clips.front().resolvedRoles)
+                     .arg(nJ)
+                     .arg(dumpCreaturePath));
+        return 0;
+    }
 
     if (dumpCanonicalMode) {
         // #839 (t2m-v2 Slice B): extract every skeletal animation onto the

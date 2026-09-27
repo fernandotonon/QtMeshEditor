@@ -162,6 +162,7 @@ LipsyncController.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
 QuadrupedSkeleton.cpp
+CreatureMotionExtract.cpp
 MotionComposer.cpp
 MotionGenerator.cpp
 MeshSegmenter.cpp
