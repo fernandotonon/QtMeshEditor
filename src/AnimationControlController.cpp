@@ -2290,13 +2290,24 @@ QVariantList AnimationControlController::listMotionClips()
                 m["action"] = c.action;
                 QString actLabel = c.action;
                 if (!actLabel.isEmpty()) actLabel[0] = actLabel[0].toUpper();
+                // source is "Quaternius — <asset> — <sourceClipName>".
                 const QStringList segs = c.source.split(QStringLiteral("—"));
                 const QString asset = segs.value(1).trimmed().isEmpty()
                                           ? segs.value(0).trimmed()
                                           : segs.value(1).trimmed();
-                m["name"] = asset.isEmpty()
-                                ? actLabel
-                                : QStringLiteral("%1 (%2)").arg(actLabel, asset);
+                // Include the SOURCE clip name when it differs from the
+                // canonical action: a rig often ships several takes that
+                // canonicalise the same ("Walk" and "WalkSlow" both become
+                // "walk"), and without the variant they render as two
+                // identical rows the user cannot tell apart.
+                const QString variant = segs.value(2).trimmed();
+                QString label = asset.isEmpty()
+                                    ? actLabel
+                                    : QStringLiteral("%1 (%2)").arg(actLabel, asset);
+                if (!variant.isEmpty()
+                    && variant.compare(c.action, Qt::CaseInsensitive) != 0)
+                    label += QStringLiteral(" · %1").arg(variant);
+                m["name"] = label;
                 m["source"] = c.source;
                 m["quality"] = c.quality;
                 m["frames"] = c.frames;
