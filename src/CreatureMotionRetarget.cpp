@@ -28,6 +28,13 @@ int planIndexForBone(BodyPlan p, const QString& bone)
                : CreatureSkeleton::QuadrupedSkeleton::indexForBone(bone);
 }
 
+int planSpecificity(BodyPlan p, const QString& bone)
+{
+    return p == BodyPlan::WingedBiped
+               ? CreatureSkeleton::WingedBiped::roleSpecificity(bone)
+               : CreatureSkeleton::QuadrupedSkeleton::roleSpecificity(bone);
+}
+
 Ogre::Quaternion toQ(const std::array<float, 4>& a)
 {
     // Stored x,y,z,w — Ogre's constructor takes w first.
@@ -81,14 +88,22 @@ Result apply(Ogre::Skeleton* skel,
         return r;
     }
 
+    // Several bones can claim one role, so take the most EXPLICIT rather
+    // than the first listed: these rigs carry both `FrontLeg.L` (a bare name
+    // indexForBone can only guess is the lower leg) and `FrontLowLeg.L`, and
+    // the bare one is listed first. First-wins therefore drove the shin
+    // rotation through the wrong bone and threw the hoof sideways.
     std::vector<Ogre::Bone*> roleBone(static_cast<size_t>(J), nullptr);
+    std::vector<int> roleScore(static_cast<size_t>(J), -1);
     for (auto* bone : skel->getBones()) {
-        const int role =
-            planIndexForBone(plan, QString::fromStdString(bone->getName()));
-        if (role >= 0 && role < J && !roleBone[static_cast<size_t>(role)]) {
-            roleBone[static_cast<size_t>(role)] = bone;
-            ++r.rolesResolved;
-        }
+        const QString bn = QString::fromStdString(bone->getName());
+        const int role = planIndexForBone(plan, bn);
+        if (role < 0 || role >= J) continue;
+        const int score = planSpecificity(plan, bn);
+        if (score <= roleScore[static_cast<size_t>(role)]) continue;
+        if (!roleBone[static_cast<size_t>(role)]) ++r.rolesResolved;
+        roleBone[static_cast<size_t>(role)] = bone;
+        roleScore[static_cast<size_t>(role)] = score;
     }
     if (r.rolesResolved == 0) {
         r.error = QStringLiteral("target rig resolved no canonical roles");

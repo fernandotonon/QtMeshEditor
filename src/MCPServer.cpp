@@ -5256,11 +5256,33 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                     if (!res.value("ok").toBool())
                         return makeErrorResult(
                             QString("Error: %1").arg(res.value("error").toString()));
+                    // Honour `output_path` as the humanoid branch does: this
+                    // return is BEFORE the shared re-export below, so without
+                    // this a caller passing output_path got a success message
+                    // and no file.
+                    const QString creatureOut = args.value("output_path").toString();
+                    if (!creatureOut.isEmpty()) {
+                        Ogre::Entity* ce = acc->selectedEntity();
+                        Ogre::SceneNode* cn =
+                            ce ? ce->getParentSceneNode() : nullptr;
+                        if (!cn)
+                            return makeErrorResult(
+                                "Error: applied creature clip but no entity to export");
+                        if (MeshImporterExporter::exporter(
+                                cn, creatureOut,
+                                CLIPipeline::formatForExtension(creatureOut)) != 0)
+                            return makeErrorResult(
+                                QString("Error: applied creature clip but export "
+                                        "to %1 failed").arg(creatureOut));
+                    }
                     return makeSuccessResult(
-                        QString("Applied creature clip '%1' (%2 tracks, %3 frames)")
+                        QString("Applied creature clip '%1' (%2 tracks, %3 frames)%4")
                             .arg(res.value("animation").toString())
                             .arg(res.value("tracks").toInt())
-                            .arg(res.value("frames").toInt()));
+                            .arg(res.value("frames").toInt())
+                            .arg(creatureOut.isEmpty()
+                                     ? QString()
+                                     : QStringLiteral(" -> ") + creatureOut));
                 }
                 if (variantIndex >= lib.clipCount())
                     return makeErrorResult(QString("Error: variant_index %1 out of range (0..%2)")

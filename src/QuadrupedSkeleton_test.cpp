@@ -15,6 +15,7 @@ using CreatureSkeleton::QuadrupedSkeleton::indexForBone;
 using CreatureSkeleton::QuadrupedSkeleton::jointCount;
 using CreatureSkeleton::QuadrupedSkeleton::jointName;
 using CreatureSkeleton::QuadrupedSkeleton::parentOf;
+using CreatureSkeleton::QuadrupedSkeleton::roleSpecificity;
 
 TEST(QuadrupedSkeleton, TopologyIsWellFormed)
 {
@@ -141,6 +142,25 @@ TEST(QuadrupedSkeleton, SideSpellingVariantsResolve)
     EXPECT_EQ(jointName(indexForBone("FrontUpLeg_L")).toStdString(), "frontUpLeg.L");
     EXPECT_EQ(jointName(indexForBone("LeftFrontUpLeg")).toStdString(), "frontUpLeg.L");
     EXPECT_EQ(jointName(indexForBone("foreleg.r")).toStdString(), "frontLowLeg.R");
+}
+
+TEST(QuadrupedSkeleton, ExplicitSegmentBeatsBareLegForTheSameRole)
+{
+    // The Quaternius rigs carry BOTH `FrontLeg.L` and `FrontLowLeg.L`, and
+    // `FrontLeg.L` -- which has no segment word, so indexForBone can only
+    // GUESS it is the lower leg -- is listed first in the skeleton. Taking
+    // the first bone that claims a role therefore gave the shin's rotation
+    // to the wrong bone and swung the hoof sideways, while the correctly
+    // named bone was dropped. Both still map to the role; specificity is
+    // what breaks the tie.
+    EXPECT_EQ(indexForBone("FrontLeg.L"), indexForBone("FrontLowLeg.L"));
+    EXPECT_GT(roleSpecificity("FrontLowLeg.L"), roleSpecificity("FrontLeg.L"));
+    EXPECT_GT(roleSpecificity("BackLowLeg.R"), roleSpecificity("BackLeg.R"));
+
+    // An explicitly named bone must not lose to another explicit one, and a
+    // segment word anywhere in the chain counts.
+    EXPECT_EQ(roleSpecificity("FrontUpLeg.L"), roleSpecificity("FrontLowLeg.L"));
+    EXPECT_GT(roleSpecificity("FrontFoot.L"), roleSpecificity("FrontLeg.L"));
 }
 
 // ---- winged biped (dragon / bat) -------------------------------------------

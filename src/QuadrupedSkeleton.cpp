@@ -144,6 +144,27 @@ bool isPlausibleQuadruped(const bool* resolvedRoles)
     return legs >= 3;
 }
 
+
+int roleSpecificity(const QString& boneName)
+{
+    const QString n = normalise(boneName);
+    if (n.isEmpty()) return 0;
+    // Named its own segment: trust it over any guess.
+    if (contains(n, {"foot", "paw", "hoof", "ankle",
+                     "lowleg", "lowerleg", "shin", "cannon", "knee",
+                     "upleg", "upperleg", "thigh", "femur", "humerus",
+                     "hips", "pelvis", "tail", "head", "skull", "neck",
+                     "chest", "withers", "spine"}))
+        return 2;
+    // A side+front/back leg bone with NO segment word ("FrontLeg.L") is the
+    // fallback guess in indexForBone -- it must lose to the explicit bone.
+    const char side = sideOf(n);
+    if (side && contains(n, {"front", "fore", "back", "hind", "rear"})
+             && contains(n, {"leg"}))
+        return 0;
+    return 1;
+}
+
 } // namespace QuadrupedSkeleton
 
 // ---- winged biped (dragon, bat) --------------------------------------------
@@ -252,6 +273,26 @@ bool isPlausible(const bool* resolvedRoles)
     // BOTH wing roots — that is what distinguishes this plan. Legs are
     // optional: a flying creature may have vestigial or absent leg bones.
     return resolvedRoles[5] && resolvedRoles[8];
+}
+
+
+int roleSpecificity(const QString& boneName)
+{
+    const QString n = normalise(boneName);
+    if (n.isEmpty()) return 0;
+    if (contains(n, {"wing1", "wing2", "wing3",
+                     "feet", "foot", "ankle", "claw",
+                     "lowerleg", "lowleg", "shin",
+                     "upperleg", "upleg", "thigh",
+                     "hips", "pelvis", "tail", "head", "skull", "neck",
+                     "chest", "withers", "spine"}))
+        return 2;
+    const char side = sideOf(n);
+    if (side && contains(n, {"leg"})
+             && !contains(n, {"upperleg", "upleg", "thigh",
+                              "lowerleg", "lowleg", "shin"}))
+        return 0;
+    return 1;
 }
 
 } // namespace WingedBiped

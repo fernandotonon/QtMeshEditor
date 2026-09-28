@@ -30,6 +30,13 @@ int planIndexForBone(BodyPlan p, const QString& bone)
                : CreatureSkeleton::QuadrupedSkeleton::indexForBone(bone);
 }
 
+int planSpecificity(BodyPlan p, const QString& bone)
+{
+    return p == BodyPlan::WingedBiped
+               ? CreatureSkeleton::WingedBiped::roleSpecificity(bone)
+               : CreatureSkeleton::QuadrupedSkeleton::roleSpecificity(bone);
+}
+
 std::array<float, 4> toArr(const Ogre::Quaternion& q)
 {
     return {static_cast<float>(q.x), static_cast<float>(q.y),
@@ -76,15 +83,22 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
     r.plan = plan;
 
     const int J = planJointCount(plan);
+    // Most EXPLICIT bone wins the role, not the first listed -- see
+    // CreatureMotionRetarget for why (`FrontLeg.L` vs `FrontLowLeg.L`).
+    // The extractor must agree with the retarget, or a clip is SAMPLED from
+    // one set of bones and REPLAYED on another.
     std::vector<Ogre::Bone*> roleBone(static_cast<size_t>(J), nullptr);
+    std::vector<int> roleScore(static_cast<size_t>(J), -1);
     int resolved = 0;
     for (auto* bone : skel->getBones()) {
-        const int role =
-            planIndexForBone(plan, QString::fromStdString(bone->getName()));
-        if (role >= 0 && role < J && !roleBone[static_cast<size_t>(role)]) {
-            roleBone[static_cast<size_t>(role)] = bone;
-            ++resolved;
-        }
+        const QString bn = QString::fromStdString(bone->getName());
+        const int role = planIndexForBone(plan, bn);
+        if (role < 0 || role >= J) continue;
+        const int score = planSpecificity(plan, bn);
+        if (score <= roleScore[static_cast<size_t>(role)]) continue;
+        if (!roleBone[static_cast<size_t>(role)]) ++resolved;
+        roleBone[static_cast<size_t>(role)] = bone;
+        roleScore[static_cast<size_t>(role)] = score;
     }
 
     // Reference orientations from the BIND pose. Unlike the humanoid

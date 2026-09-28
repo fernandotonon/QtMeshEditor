@@ -25,6 +25,13 @@ namespace Ogre { class Skeleton; }
 // only the ROLE correspondence has to hold, which is exactly what the
 // canonical creature skeleton provides.
 //
+// The delta is expressed in WORLD space, so it is already rig-independent:
+// two rigs whose rest poses differ still agree on "the shin swung 40 deg
+// about X". Conjugating it by the source rest pose was TRIED and is wrong --
+// it re-introduces the source's axes and visibly breaks the legs. What the
+// delta does NOT survive is being applied to the WRONG BONE, which is what
+// role resolution must get right (see roleSpecificity).
+//
 // Rotation only: translation and scale are left at the bind pose, so a
 // long-legged horse clip on a short-legged pug does not stretch the pug.
 namespace CreatureMotionRetarget {

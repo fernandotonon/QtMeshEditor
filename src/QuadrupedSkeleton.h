@@ -69,6 +69,9 @@ int jointCount();
 QString jointName(int i);
 int parentOf(int i);
 int indexForBone(const QString& boneName);
+
+/// See the quadruped overload.
+int roleSpecificity(const QString& boneName);
 /// Needs the spine anchor plus both wings — legs are optional (a dragon in
 /// flight may have stubby or absent leg bones), but a rig with no wings is
 /// not this plan.
@@ -93,6 +96,21 @@ int parentOf(int i);
 /// humanoid mapper lacks and is the whole point of this function, so it is
 /// resolved BEFORE the generic leg matching.
 int indexForBone(const QString& boneName);
+
+/// How EXPLICIT a bone's claim to its role is (higher wins a tie).
+///
+/// Several bones can map to one role, and taking whichever the skeleton
+/// lists first is wrong: the Quaternius rigs carry BOTH `FrontLeg.L` and
+/// `FrontLowLeg.L`, and `FrontLeg.L` (a bare name with no segment word,
+/// which indexForBone can only guess is the lower leg) is listed first. It
+/// therefore stole the lower-leg role while the explicitly named
+/// `FrontLowLeg.L` was dropped, so the clip's shin rotation drove the wrong
+/// bone and swung the hoof sideways -- the reported "feet moving sideways".
+///
+/// 2 = names its segment outright ("FrontLowLeg", "FrontFoot", "Hips")
+/// 1 = matched by a general keyword ("Body" -> spine)
+/// 0 = a bare fallback with no segment word ("FrontLeg")
+int roleSpecificity(const QString& boneName);
 
 /// True when `resolved` of jointCount() roles is enough to retarget: the
 /// spine chain plus at least three of the four legs. A rig that resolves
