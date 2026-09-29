@@ -11639,6 +11639,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool targetTrisSet = false; // explicit --target-tris (conflicts with --game-preset)
     bool targetTrisStrict = false; // the target is a hard ceiling (platform presets)
     int  textureMaxSize = 0;    // platform cap on the FINAL images (0 = none)
+    bool textureSizeSet = false; // explicit --texture-size (overrides a preset's)
     QString gamePreset;         // --game-preset <id> (GameReadyPresets.h)
     bool listGamePresets = false;
     int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
@@ -11818,6 +11819,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Error: --texture-size must be an integer in [64..8192]." << Qt::endl;
                 return 2;
             }
+            textureSizeSet = true;
             continue;
         }
         if (arg == "--quality") {
@@ -11896,23 +11898,44 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 line += QStringLiteral("  - ") + p.note;
             listing += line + QLatin1Char('\n');
         }
+        listing += QStringLiteral(
+            "\ncustom values (any number in range; alone, or with --game-preset to override its number):\n"
+            "  --target-tris N       0 = original density, else 1..10000000 "
+            "(border locking sets a floor around ~500; TRELLIS.2 raw decodes are "
+            "~150k at res 512 / ~300k cascade / up to several million uncapped)\n"
+            "  --texture-size N      64..8192 px for the baked maps (xatlas treats it as a hint)\n"
+            "  --tex-res 512|1024    TRELLIS.2 texture VOLUME resolution (separate from the bake size)\n"
+            "  a roblox-* preset with a custom value past its platform limit is honoured and warned about\n");
         cliWrite(listing);
         return 0;
     }
     if (!gamePreset.isEmpty()) {
-        if (targetTrisSet) {
-            err() << "Error: pass either --game-preset or --target-tris, not both." << Qt::endl;
-            return 2;
-        }
+        // A preset is a BASE: explicit --target-tris / --texture-size override
+        // its numbers with any value in the supported range (headless
+        // pipelines know their numbers; the GUI keeps the preset-only
+        // picker). Roblox presets keep the strict ceiling; a custom value
+        // past a platform limit is honoured and warned about, not clamped.
         const GameReady::Preset* gp = GameReady::find(gamePreset);
-        targetTris       = gp->targetTriangles;
         targetTrisStrict = gp->strictTriangles;
-        textureMaxSize   = gp->maxTextureSize;
-        if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize) {
-            err() << "Note: --texture-size " << textureSize << " exceeds the '"
-                  << gp->id << "' preset's " << gp->maxTextureSize
-                  << " px limit — clamped to " << gp->maxTextureSize << "." << Qt::endl;
-            textureSize = gp->maxTextureSize;
+        if (targetTrisSet) {
+            if (gp->strictTriangles && targetTris > gp->targetTriangles)
+                err() << "Warning: --target-tris " << targetTris << " exceeds the '"
+                      << gp->id << "' preset's " << gp->targetTriangles
+                      << "-triangle platform limit — honoured as requested (still "
+                         "enforced as a ceiling at " << targetTris << ")." << Qt::endl;
+        } else {
+            targetTris = gp->targetTriangles;
+        }
+        if (textureSizeSet) {
+            textureMaxSize = textureSize;   // the cap follows the user's number
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                err() << "Warning: --texture-size " << textureSize << " exceeds the '"
+                      << gp->id << "' preset's " << gp->maxTextureSize
+                      << " px platform limit — honoured as requested." << Qt::endl;
+        } else {
+            textureMaxSize = gp->maxTextureSize;
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                textureSize = gp->maxTextureSize;
         }
     }
 
@@ -11923,7 +11946,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
                  "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
-                 "[--seed 42] [--preset fast|balanced|high] [--target-tris N | --game-preset ID]"
+                 "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
               << Qt::endl;
@@ -11936,7 +11959,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "detail-normal bake) applies to every backend, as does "
                  "--game-preset (" << GameReady::ids().join("|") << "; the "
                  "roblox-* presets enforce Roblox's 4k / 20k triangle and "
-                 "1024 px texture upload limits). --prompt "
+                 "1024 px texture upload limits). Custom values: --target-tris "
+                 "(0 = original, else any 1..10000000) and --texture-size "
+                 "(any 64..8192) work alone or override a preset's numbers; "
+                 "see --list-game-presets. --prompt "
                  "generates the source image first (FLUX.2-klein-4B via "
                  "stable-diffusion.cpp — download it in AI Model Settings, or "
                  "any SD checkpoint via --image-model)." << Qt::endl;

@@ -286,15 +286,21 @@ TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetRequiresAKnownId)
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(unknown.argc(), unknown.argv()), 2);
 }
 
-TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAndTargetTrisAreMutuallyExclusive)
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAcceptsCustomOverridesInEitherOrder)
 {
-    // Both orders: the conflict is checked after the whole argv is read.
+    // A preset is a base: explicit --target-tris / --texture-size override
+    // its numbers (any value in range), so the combination parses and the
+    // missing image is the first failure (exit 1, not the usage code 2).
     Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart",
-                 "--target-tris", "5000"});
-    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 2);
-    Gen3dArgv b({"generate3d", kMissingImage, "--target-tris", "5000",
-                 "--game-preset", "roblox-accessory"});
-    EXPECT_EQ(CLIPipeline::cmdGenerate3d(b.argc(), b.argv()), 2);
+                 "--target-tris", "15000", "--texture-size", "512"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv b({"generate3d", kMissingImage, "--target-tris", "30000",
+                 "--texture-size", "2048", "--game-preset", "roblox-accessory"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(b.argc(), b.argv()), 1);   // warns, honours
+    // Out-of-range custom values are still usage errors with or without a preset.
+    Gen3dArgv c({"generate3d", kMissingImage, "--game-preset", "medium",
+                 "--texture-size", "32"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(c.argc(), c.argv()), 2);
 }
 
 TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAloneReachesTheImageCheck)

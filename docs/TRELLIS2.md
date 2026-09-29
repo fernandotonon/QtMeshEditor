@@ -129,8 +129,16 @@ under a preset that promised otherwise. The texture cap is enforced on the **fin
 images**, not just the bake request (xatlas treats the request as a hint and can
 hand back a larger atlas): every map in the result is downscaled to fit, and the
 optional 2× upscale is skipped when it would cross the cap. Picking a Roblox preset
-in the GUI snaps the Texture picker to 1024 px; the CLI/MCP clamp an explicit
-larger `--texture-size` and say so.
+in the GUI snaps the Texture picker to 1024 px.
+
+**Custom values (CLI/MCP only):** `--target-tris N` (0 = original density, else any
+`1..10000000` — the simplifier's border locking sets a floor around ~500; TRELLIS.2
+raw decodes are ~150k at res 512 / ~300k cascade / several million uncapped) and
+`--texture-size N` (any `64..8192` px; xatlas treats it as a hint) work on their own,
+or **together with `--game-preset` to override that preset's number**. A Roblox preset
+keeps its strict ceiling at whatever count you pass; a custom value past a platform
+limit is honoured and warned about, never clamped. `--tex-res 512|1024` is the
+separate TRELLIS.2 texture-volume knob. The GUI keeps the preset-only picker.
 
 **CLI:**
 
@@ -140,11 +148,13 @@ qtmesh generate3d photo.png -o out.glb --backend trellis2 \
     --preset high --target-tris 25000 --texture-size 4096 --seed 7
 qtmesh generate3d photo.png -o hat.glb --backend pixal3d --game-preset roblox-accessory   # <= 4k tris, 1024 px
 qtmesh generate3d photo.png -o prop.glb --game-preset roblox-meshpart                     # <= 20k tris, 1024 px
-qtmesh generate3d --list-game-presets
+qtmesh generate3d photo.png -o prop.glb --game-preset roblox-meshpart --target-tris 12000 --texture-size 512  # preset + custom overrides
+qtmesh generate3d --list-game-presets     # presets + the custom ranges
 ```
 
 **MCP:** `generate_mesh_from_image` with `backend: "trellis2"` (`seed`, `preset`,
-`target_tris` or `game_preset` args — mutually exclusive; the response carries
+`target_tris` / `texture_size` for custom values, `game_preset` for a named budget, or
+both to override the preset's numbers; the response carries
 `backend`, `sourcePath` and, for a named preset, `gamePreset` / `targetTriangles` /
 `strictTriangleBudget` / `textureSize`).
 

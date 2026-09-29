@@ -612,7 +612,10 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
         const bool gameReady =
             applyGameReady(out, opts.targetTriangles, opts.targetTrianglesStrict,
                            &gameReadySrcPos, &gameReadySrcIdx);
-        if (!out.ok)
+        // NB Result::ok defaults to false and is only set at the end of this
+        // function, so the failure signal here is a populated error (review
+        // finding: an `!out.ok` check aborted every TripoSR run before the bake).
+        if (!out.error.isEmpty())
             return out;   // strict budget unreachable — see applyGameReady
 
         // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
