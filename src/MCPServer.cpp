@@ -40,6 +40,7 @@
 #include "PaintChannel.h"
 #include "TexturePaintController.h"
 #include "AppStorage.h"
+#include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -3171,6 +3172,33 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.targetTriangles < 0 || opts.targetTriangles > 10000000)
             return makeErrorResult("'target_tris' must be in [0, 10000000] (0 = original).");
     }
+    // Named game-ready budget (GameReadyPresets.h) — the same table the
+    // Inspector picker and `qtmesh generate3d --game-preset` read. The
+    // Roblox presets also enforce the platform's upload limits: the triangle
+    // target becomes a hard ceiling and the bake size is clamped to 1024.
+    QString gamePresetId;
+    QString gamePresetNote;
+    if (args.contains("game_preset")) {
+        const QString requested = args["game_preset"].toString();
+        const GameReady::Preset* gp = GameReady::find(requested);
+        if (!gp)
+            return makeErrorResult(QStringLiteral(
+                "'game_preset' must be one of: %1 (got '%2').")
+                .arg(GameReady::ids().join(", "), requested));
+        if (args.contains("target_tris"))
+            return makeErrorResult(
+                "Pass either 'game_preset' or 'target_tris', not both.");
+        gamePresetId = gp->id;
+        opts.targetTriangles = gp->targetTriangles;
+        opts.targetTrianglesStrict = gp->strictTriangles;
+        if (gp->maxTextureSize > 0 && opts.textureSize > gp->maxTextureSize) {
+            gamePresetNote = QStringLiteral(
+                "note: texture_size %1 exceeds the %2 preset's %3 px limit — "
+                "clamped to %3.")
+                .arg(opts.textureSize).arg(gp->id).arg(gp->maxTextureSize);
+            opts.textureSize = gp->maxTextureSize;
+        }
+    }
     // Baking a texture on a FULL-DENSITY generation produces an unusable
     // atlas. xatlas cuts a chart wherever it cannot flatten the surface, so an
     // organic mesh at native density fragments into thousands of tiny islands
@@ -3357,6 +3385,12 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["triangleCount"] = res.triangleCount;
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     result["backend"] = backendName;
+    if (!gamePresetId.isEmpty()) {
+        result["gamePreset"] = gamePresetId;
+        result["targetTriangles"] = opts.targetTriangles;
+        result["strictTriangleBudget"] = opts.targetTrianglesStrict;
+        result["textureSize"] = opts.textureSize;
+    }
     // Phase 9 (trellis2): the preserved full-resolution generation.
     if (!res.sourceInterchangePath.isEmpty())
         result["sourcePath"] = res.sourceInterchangePath;
@@ -3368,6 +3402,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Drop the note when nothing was actually textured (see above).
     if (res.texture.isNull())
         densityWarning.clear();
+    if (!gamePresetNote.isEmpty()) {
+        if (!warn.isEmpty()) warn += QStringLiteral(" ");
+        warn += gamePresetNote;
+    }
     if (!densityWarning.isEmpty()) {
         if (!warn.isEmpty()) warn += QStringLiteral(" ");
         warn += densityWarning;
@@ -11610,6 +11648,11 @@ QJsonArray MCPServer::buildToolsList()
         props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
         props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
         props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
+        {
+            QJsonArray presetEnum;
+            for (const QString& id : GameReady::ids()) presetEnum.append(id);
+            props["game_preset"] = QJsonObject{{"type", "string"}, {"enum", presetEnum}, {"description", "ALL backends: a NAMED game-ready budget instead of a raw target_tris (mutually exclusive with it). max = keep density; prop-minimal ~500 / prop-tiny ~1k / prop-low ~5k; low ~10k / medium ~25k (the GUI default) / high ~50k; roblox-accessory = Roblox accessory/layered-clothing upload limit (HARD ceiling of 4,000 triangles + textures clamped to 1024 px); roblox-meshpart = Roblox MeshPart upload limit (HARD ceiling of 20,000 triangles + textures clamped to 1024 px). The Roblox presets guarantee the count (a sloppy simplify finishes the job when QEM stalls) because the platform rejects an upload over the limit."}};
+        }
         props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). STRONGLY recommended whenever a texture is baked: at native density xatlas fragments the atlas into thousands of charts and the bake shows black seam lines (a 300k-tri mesh gave 16,043 UV islands vs 1,195 at 25000). The GUI defaults to 25000. For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
         appendTool(
             "generate_mesh_from_image",

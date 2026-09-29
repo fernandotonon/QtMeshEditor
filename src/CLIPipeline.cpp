@@ -62,6 +62,7 @@
 #include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
 #include "FaceRig/FaceRigLandmarks.h"
+#include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -11634,7 +11635,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
     unsigned seed = 42;         // TRELLIS.2 generation seed
     QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
-    int targetTris = 0;         // TRELLIS.2 game-ready simplification target
+    int targetTris = 0;         // game-ready simplification target (all backends)
+    bool targetTrisSet = false; // explicit --target-tris (conflicts with --game-preset)
+    bool targetTrisStrict = false; // the target is a hard ceiling (platform presets)
+    QString gamePreset;         // --game-preset <id> (GameReadyPresets.h)
+    bool listGamePresets = false;
     int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
     int texVolumeRes = 0;       // 0 = sidecar auto | 512 | 1024
     bool keepSource = true;     // write the .qtm3d full-res source sidecar
@@ -11749,6 +11754,30 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Error: --target-tris must be in [0, 10000000] (0 = original)." << Qt::endl;
                 return 2;
             }
+            targetTrisSet = true;
+            continue;
+        }
+        // Named game-ready budget — the same table as the Inspector "Mesh"
+        // picker and MCP `game_preset`. The Roblox presets turn the target
+        // into a hard ceiling and clamp the bake size to the platform's
+        // 1024 px texture limit (applied after the loop, once every flag
+        // has been read).
+        if (arg == "--list-game-presets") { listGamePresets = true; continue; }
+        if (arg == "--game-preset") {
+            if (i + 1 >= argc) {
+                err() << "Error: --game-preset requires one of: "
+                      << GameReady::ids().join(", ") << Qt::endl;
+                return 2;
+            }
+            const QString requested = QString::fromLocal8Bit(argv[++i]);
+            const GameReady::Preset* gp = GameReady::find(requested);
+            if (!gp) {
+                err() << "Error: unknown --game-preset '" << requested
+                      << "'. Use one of: " << GameReady::ids().join(", ")
+                      << " (see --list-game-presets)." << Qt::endl;
+                return 2;
+            }
+            gamePreset = gp->id;
             continue;
         }
         if (arg == "--flow-steps") {
@@ -11847,6 +11876,44 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
     }
 
+    // --list-game-presets is a standalone op (no image needed): one line per
+    // preset — id, budget, and the platform limits it enforces.
+    if (listGamePresets) {
+        QString listing;
+        for (const GameReady::Preset& p : GameReady::presets()) {
+            QString line = p.id.leftJustified(18);
+            line += p.targetTriangles > 0
+                ? QStringLiteral("%1%2 tris")
+                      .arg(p.strictTriangles ? QStringLiteral("<= ") : QStringLiteral("~"))
+                      .arg(p.targetTriangles)
+                : QStringLiteral("original density");
+            if (p.maxTextureSize > 0)
+                line += QStringLiteral(", textures <= %1 px").arg(p.maxTextureSize);
+            if (p.id == GameReady::defaultId())
+                line += QStringLiteral(" (GUI default)");
+            if (!p.note.isEmpty())
+                line += QStringLiteral("  - ") + p.note;
+            listing += line + QLatin1Char('\n');
+        }
+        cliWrite(listing);
+        return 0;
+    }
+    if (!gamePreset.isEmpty()) {
+        if (targetTrisSet) {
+            err() << "Error: pass either --game-preset or --target-tris, not both." << Qt::endl;
+            return 2;
+        }
+        const GameReady::Preset* gp = GameReady::find(gamePreset);
+        targetTris       = gp->targetTriangles;
+        targetTrisStrict = gp->strictTriangles;
+        if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize) {
+            err() << "Note: --texture-size " << textureSize << " exceeds the '"
+                  << gp->id << "' preset's " << gp->maxTextureSize
+                  << " px limit — clamped to " << gp->maxTextureSize << "." << Qt::endl;
+            textureSize = gp->maxTextureSize;
+        }
+    }
+
     if (inputPath.isEmpty() && genPrompt.trimmed().isEmpty()) {
         err() << "Error: No input image (or --prompt) specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
@@ -11854,16 +11921,20 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
                  "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
-                 "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
+                 "[--seed 42] [--preset fast|balanced|high] [--target-tris N | --game-preset ID]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
+        err() << "       qtmesh generate3d --list-game-presets" << Qt::endl;
         err() << "  Default backend: trellis2 when its runtime is installed "
                  "(ai/trellis2/install.py), else triposr. --seed/--preset "
                  "apply to trellis2; --target-tris (game-ready simplify + "
-                 "detail-normal bake) applies to every backend. --prompt "
+                 "detail-normal bake) applies to every backend, as does "
+                 "--game-preset (" << GameReady::ids().join("|") << "; the "
+                 "roblox-* presets enforce Roblox's 4k / 20k triangle and "
+                 "1024 px texture upload limits). --prompt "
                  "generates the source image first (FLUX.2-klein-4B via "
                  "stable-diffusion.cpp — download it in AI Model Settings, or "
                  "any SD checkpoint via --image-model)." << Qt::endl;
@@ -12024,6 +12095,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.seed            = seed;
     opts.trellis2Preset  = preset;
     opts.targetTriangles = targetTris;
+    opts.targetTrianglesStrict = targetTrisStrict;
     opts.bakeNormalMap   = generatePbr && bake;
     opts.textureSupersample = textureSupersample;
     opts.texVolumeRes       = texVolumeRes;

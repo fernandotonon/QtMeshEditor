@@ -920,6 +920,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         return failResult(QStringLiteral("cancelled"));
     Trellis2Bake::GameReadyOptions gr;
     gr.targetTriangles = opts.targetTriangles;
+    gr.strictTriangleBudget = opts.strictTriangleBudget && opts.targetTriangles > 0;
     // "Original" (0) + texture bake: cap the density anyway. xatlas cannot
     // realistically unwrap a raw multi-million-triangle dual-grid mesh (its
     // chart compute is superlinear — a 4.86M-tri source burned 19 CPU-hours

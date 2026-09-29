@@ -275,3 +275,41 @@ TEST(CLIPipelineCmdGenerate3dCoverage, NoNafTakesNoValue)
     Gen3dArgv args({"generate3d", kMissingImage, "--no-naf"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
 }
+
+// ── Game-ready presets (--game-preset / --list-game-presets) ─────────────────
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetRequiresAKnownId)
+{
+    Gen3dArgv missing({"generate3d", kMissingImage, "--game-preset"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv unknown({"generate3d", kMissingImage, "--game-preset", "ultra"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(unknown.argc(), unknown.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAndTargetTrisAreMutuallyExclusive)
+{
+    // Both orders: the conflict is checked after the whole argv is read.
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart",
+                 "--target-tris", "5000"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 2);
+    Gen3dArgv b({"generate3d", kMissingImage, "--target-tris", "5000",
+                 "--game-preset", "roblox-accessory"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(b.argc(), b.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAloneReachesTheImageCheck)
+{
+    // A valid preset (incl. the forgiving alias) parses; the missing image is
+    // then the FIRST failure — exit 1 (not the usage code 2).
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv alias({"generate3d", kMissingImage, "--game-preset", "ROBLOX_ACCESSORY",
+                     "--texture-size", "4096"});   // clamps to 1024 with a note
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(alias.argc(), alias.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, ListGamePresetsNeedsNoImage)
+{
+    Gen3dArgv a({"generate3d", "--list-game-presets"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 0);
+}

@@ -142,6 +142,10 @@ public:
         // Game-ready simplification target (Phase 8 presets: Low ~10k /
         // Medium ~25k / High ~50k). 0 = keep the original TRELLIS.2 density.
         int  targetTriangles = 0;
+        // targetTriangles is a hard ceiling (platform upload limit) rather
+        // than a budget — set by the Roblox game-ready presets
+        // (GameReadyPresets.h). Ignored when targetTriangles == 0.
+        bool targetTrianglesStrict = false;
         // Bake a tangent-space normal map carrying the full-res source detail
         // (only meaningful when the target was simplified; needs bakeTexture).
         bool bakeNormalMap = true;

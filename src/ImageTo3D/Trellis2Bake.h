@@ -88,6 +88,13 @@ struct GameReadyOptions {
     // earlier; the achieved count is in the result).
     int   targetTriangles = 0;
     float simplifyTargetError = 0.01f;      // relative to bbox extent
+    // targetTriangles is a HARD CEILING (a platform upload limit — Roblox
+    // refuses a MeshPart past 20k / an accessory past 4k) rather than a
+    // budget: when the error-capped and uncapped QEM passes both leave the
+    // count above the target, finish with the topology-free sloppy
+    // simplifier, which always reaches it. Off = the ordinary pass, which
+    // accepts landing up to 2x above the target (see makeGameReady).
+    bool  strictTriangleBudget = false;
     // Taubin λ|μ smoothing passes applied to the welded mesh before
     // simplification (0 = off). The TRELLIS dual-grid callers enable this:
     // fuzzy subjects (fur/hair) decode with sub-voxel micro-pits that render

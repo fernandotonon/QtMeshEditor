@@ -101,8 +101,30 @@ The report prints the loaded stack, ending with
 **GUI:** Object mode → Mode Tools → *AI: Image → 3D*. The Backend combo lists
 *TRELLIS.2 (high quality)* first and preselects it when the runtime is present. Options:
 Quality (*Fast* = 512 / *Balanced* = 1024 cascade / *High* = 1536 cascade), Mesh
-(*Original*, *Game Low ~10k*, *Game Medium ~25k*, *Game High ~50k* triangles), Texture
-(1024/2048/4096), plus the shared Remove-background / Bake / PBR / Upscale toggles.
+(the game-ready presets below), Texture (64…4096), plus the shared
+Remove-background / Bake / PBR / Upscale toggles.
+
+**Game-ready presets** (one table for the GUI Mesh picker, `--game-preset` and MCP
+`game_preset` — `src/ImageTo3D/GameReadyPresets.h`; apply to TRELLIS.2, Pixal3D,
+TripoSR and TripoSG alike):
+
+| id | budget | notes |
+|---|---|---|
+| `max` | original density | dense TRELLIS sources still capped at ~150–300k for the bake |
+| `prop-minimal` / `prop-tiny` / `prop-low` | ~500 / ~1k / ~5k | flat-faced props |
+| `roblox-accessory` | **≤ 4,000** (hard ceiling) | Roblox accessory / layered-clothing upload limit; textures clamped to **1024 px** |
+| `low` | ~10k | |
+| `roblox-meshpart` | **≤ 20,000** (hard ceiling) | Roblox MeshPart upload limit; textures clamped to **1024 px** |
+| `medium` | ~25k | the GUI default |
+| `high` | ~50k | |
+
+The plain tiers are budgets (border locking can stop the simplifier early, and the
+pass tolerates landing up to 2× over). The Roblox tiers are **ceilings**: Roblox
+refuses an upload past the limit, so when QEM stalls above the target the pass
+finishes with the topology-free sloppy simplifier and the lost relief returns
+through the detail-normal bake. Picking a Roblox preset in the GUI snaps the
+Texture picker to 1024 px; the CLI/MCP clamp an explicit larger `--texture-size`
+and say so.
 
 **CLI:**
 
@@ -110,10 +132,15 @@ Quality (*Fast* = 512 / *Balanced* = 1024 cascade / *High* = 1536 cascade), Mesh
 qtmesh generate3d photo.png -o out.glb                       # trellis2 when installed, else triposr
 qtmesh generate3d photo.png -o out.glb --backend trellis2 \
     --preset high --target-tris 25000 --texture-size 4096 --seed 7
+qtmesh generate3d photo.png -o hat.glb --backend pixal3d --game-preset roblox-accessory   # <= 4k tris, 1024 px
+qtmesh generate3d photo.png -o prop.glb --game-preset roblox-meshpart                     # <= 20k tris, 1024 px
+qtmesh generate3d --list-game-presets
 ```
 
 **MCP:** `generate_mesh_from_image` with `backend: "trellis2"` (`seed`, `preset`,
-`target_tris` args; the response carries `backend` and `sourcePath`).
+`target_tris` or `game_preset` args — mutually exclusive; the response carries
+`backend`, `sourcePath` and, for a named preset, `gamePreset` / `targetTriangles` /
+`strictTriangleBudget` / `textureSize`).
 
 ## Errors you may see
 

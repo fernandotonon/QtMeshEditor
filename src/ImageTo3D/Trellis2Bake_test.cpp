@@ -172,6 +172,67 @@ TEST(Trellis2BakeTest, GameReadySimplifiesTowardTarget)
     EXPECT_EQ(r.inputTriangles, 2048);
 }
 
+// A platform preset (Roblox 4k / 20k) needs the count GUARANTEED under the
+// target. The ordinary pass tolerates landing up to 2x over budget when the
+// topology-preserving simplifier stalls; strict mode must not.
+TEST(Trellis2BakeTest, GameReadyStrictBudgetIsAHardCeiling)
+{
+    // One connected surface: a free 32x32 plane (2048 tris — QEM takes it
+    // down to a couple of triangles) plus a "book" of 60 pages hinged on ONE
+    // edge of the plane's right border. That edge is then shared by 61
+    // triangles: non-manifold, so meshoptimizer locks its two vertices, and a
+    // border vertex may not collapse onto a locked one — the pages are frozen
+    // under QEM. Target 40: the ordinary pass ends at ~65 tris — over budget
+    // but under the 2x line where it already falls back to the sloppy
+    // simplifier — which is exactly the window the strict flag closes. (The
+    // book hangs off the plane rather than floating beside it because the
+    // sloppy simplifier is a vertex-clustering grid: on disconnected pieces
+    // its count jumps straight from "too many" to zero, whereas one surface
+    // thins smoothly — the shape a real generation has.)
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    const int n = 33;
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x)
+            pos.insert(pos.end(), {x / float(n - 1), y / float(n - 1), 0.0f});
+    for (int y = 0; y + 1 < n; ++y)
+        for (int x = 0; x + 1 < n; ++x) {
+            const uint32_t a = y * n + x, b = a + 1, c = a + n, d = c + 1;
+            idx.insert(idx.end(), {a, b, c, b, d, c});
+        }
+    // Spine = the right-border edge between rows 16 and 17 at x = 1.
+    const uint32_t spineA = 16 * n + (n - 1);
+    const uint32_t spineB = 17 * n + (n - 1);
+    const float spineY = 16.5f / float(n - 1);
+    const int pages = 60;
+    for (int k = 0; k < pages; ++k) {
+        const float ang = 6.2831853f * k / pages;
+        const uint32_t tip = static_cast<uint32_t>(pos.size() / 3);
+        pos.insert(pos.end(), {1.0f + std::cos(ang), spineY, std::sin(ang)});
+        idx.insert(idx.end(), {spineA, spineB, tip});
+    }
+    ASSERT_EQ(idx.size() / 3, static_cast<size_t>(2048 + pages));
+
+    Trellis2Bake::GameReadyOptions soft;
+    soft.targetTriangles = 40;
+    soft.minComponentTriangles = 1;    // keep both pieces
+    soft.minComponentFraction = 0.0f;
+    const auto rs = Trellis2Bake::makeGameReady(pos, idx, soft);
+    ASSERT_TRUE(rs.ok) << rs.error.toStdString();
+    // The soft pass stalls on the frozen book: over budget, under 2x.
+    EXPECT_GT(rs.outputTriangles, 40);
+    EXPECT_LE(rs.outputTriangles, 80);
+
+    Trellis2Bake::GameReadyOptions strict = soft;
+    strict.strictTriangleBudget = true;
+    const auto rt = Trellis2Bake::makeGameReady(pos, idx, strict);
+    ASSERT_TRUE(rt.ok) << rt.error.toStdString();
+    EXPECT_LE(rt.outputTriangles, 40);
+    EXPECT_GE(rt.outputTriangles, 1);
+    for (uint32_t i : rt.indices)
+        EXPECT_LT(i, rt.positions.size() / 3);
+}
+
 TEST(Trellis2BakeTest, GameReadyRejectsGarbage)
 {
     EXPECT_FALSE(Trellis2Bake::makeGameReady({}, {}, {}).ok);

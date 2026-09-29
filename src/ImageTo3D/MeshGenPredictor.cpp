@@ -130,6 +130,7 @@ MeshGenPredictor::Result predictTrellis2(
     t2.preset           = opts.trellis2Preset;
     t2.seed             = opts.seed;
     t2.targetTriangles  = opts.targetTriangles;
+    t2.strictTriangleBudget = opts.targetTrianglesStrict;
     t2.bakeTexture      = opts.bakeTexture;
     t2.textureSize      = opts.textureSize;
     t2.bakeNormalMap    = opts.bakeNormalMap;
@@ -174,6 +175,7 @@ MeshGenPredictor::Result predictTrellis2(
 // Returns false only on a hard failure (result untouched, warning appended).
 bool applyGameReady(MeshGenPredictor::Result& out,
                     int targetTriangles,
+                    bool strictBudget,
                     std::vector<float>* srcPosOut,
                     std::vector<uint32_t>* srcIdxOut)
 {
@@ -181,6 +183,7 @@ bool applyGameReady(MeshGenPredictor::Result& out,
         return false;
     Trellis2Bake::GameReadyOptions gr;
     gr.targetTriangles = targetTriangles;
+    gr.strictTriangleBudget = strictBudget;
     const Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(out.positions, out.indices, gr);
     if (!processed.ok) {
@@ -359,7 +362,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         // the later GUI AI-texture pass unwraps/bakes the SIMPLIFIED mesh,
         // which is exactly what you want for skinning-friendly assets).
         if (r.ok)
-            applyGameReady(r, opts.targetTriangles, nullptr, nullptr);
+            applyGameReady(r, opts.targetTriangles, opts.targetTrianglesStrict,
+                           nullptr, nullptr);
         // TripoSG is geometry-only. Colour comes SOLELY from the AI image
         // generation pass (multi-view depth-ControlNet, run later in the GUI
         // layer) — no TripoSR field colouring. With no AI texture the mesh
@@ -598,7 +602,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         std::vector<float>    gameReadySrcPos;
         std::vector<uint32_t> gameReadySrcIdx;
         const bool gameReady =
-            applyGameReady(out, opts.targetTriangles,
+            applyGameReady(out, opts.targetTriangles, opts.targetTrianglesStrict,
                            &gameReadySrcPos, &gameReadySrcIdx);
 
         // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
