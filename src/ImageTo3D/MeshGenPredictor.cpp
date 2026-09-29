@@ -187,6 +187,14 @@ bool applyGameReady(MeshGenPredictor::Result& out,
     const Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(out.positions, out.indices, gr);
     if (!processed.ok) {
+        // A strict (platform-ceiling) budget that cannot be met is a failed
+        // generation, not a warning: keeping the dense mesh would export an
+        // asset the platform rejects under a preset that promised otherwise.
+        if (strictBudget) {
+            out.ok = false;
+            out.error = processed.error;
+            return false;
+        }
         if (!out.warning.isEmpty())
             out.warning += QStringLiteral(" ");
         out.warning += QStringLiteral("game-ready pass failed (%1) — keeping "
@@ -213,7 +221,7 @@ bool MeshGenPredictor::isAvailable() { return false; }
 
 QString MeshGenPredictor::ensureModelBlocking(Quality) { return {}; }
 
-MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
                                                    const QString&,
                                                    const QString&,
                                                    const Options& opts,
@@ -308,7 +316,7 @@ MeshGenPredictor::Result fail(const QString& msg)
 
 } // namespace
 
-MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
                                                    const QString& encoderModelPath,
                                                    const QString& decoderModelPath,
                                                    const Options& opts,
@@ -604,6 +612,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         const bool gameReady =
             applyGameReady(out, opts.targetTriangles, opts.targetTrianglesStrict,
                            &gameReadySrcPos, &gameReadySrcIdx);
+        if (!out.ok)
+            return out;   // strict budget unreachable — see applyGameReady
 
         // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
         if (wantColor && out.vertexCount > 0 && opts.bakeTexture) {
@@ -717,3 +727,35 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
 }
 
 #endif // ENABLE_ONNX
+
+// ---- Public entry: backend dispatch + the platform texture cap --------------
+
+void MeshGenPredictor::capResultTextures(Result& r, int maxSize)
+{
+    if (maxSize <= 0)
+        return;
+    auto cap = [maxSize](QImage& img) {
+        if (img.isNull() || (img.width() <= maxSize && img.height() <= maxSize))
+            return;
+        img = img.scaled(maxSize, maxSize, Qt::KeepAspectRatio,
+                         Qt::SmoothTransformation);
+    };
+    cap(r.texture);
+    cap(r.normalMap);
+    cap(r.roughnessMap);
+    cap(r.metallicMap);
+}
+
+MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+                                                   const QString& encoderModelPath,
+                                                   const QString& decoderModelPath,
+                                                   const Options& opts,
+                                                   const ProgressFn& progress)
+{
+    Result r = predictImpl(image, encoderModelPath, decoderModelPath, opts, progress);
+    // The bake honours textureSize only as a request (xatlas can hand back a
+    // larger atlas), so a platform cap is applied to what actually came out.
+    if (r.ok)
+        capResultTextures(r, opts.maxTextureSize);
+    return r;
+}

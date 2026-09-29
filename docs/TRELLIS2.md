@@ -122,9 +122,15 @@ The plain tiers are budgets (border locking can stop the simplifier early, and t
 pass tolerates landing up to 2× over). The Roblox tiers are **ceilings**: Roblox
 refuses an upload past the limit, so when QEM stalls above the target the pass
 finishes with the topology-free sloppy simplifier and the lost relief returns
-through the detail-normal bake. Picking a Roblox preset in the GUI snaps the
-Texture picker to 1024 px; the CLI/MCP clamp an explicit larger `--texture-size`
-and say so.
+through the detail-normal bake. If the ceiling cannot be met at all (a mesh of
+disconnected pieces where the clustering fallback collapses to nothing) the
+generation **fails with a clear error** instead of exporting an over-budget asset
+under a preset that promised otherwise. The texture cap is enforced on the **final
+images**, not just the bake request (xatlas treats the request as a hint and can
+hand back a larger atlas): every map in the result is downscaled to fit, and the
+optional 2× upscale is skipped when it would cross the cap. Picking a Roblox preset
+in the GUI snaps the Texture picker to 1024 px; the CLI/MCP clamp an explicit
+larger `--texture-size` and say so.
 
 **CLI:**
 

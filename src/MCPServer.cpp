@@ -3129,7 +3129,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.textureSize < 64 || opts.textureSize > 8192)
             return makeErrorResult("'texture_size' must be between 64 and 8192.");
     }
-    const bool upscaleTex  = args.value("upscale_texture").toBool();
+    bool upscaleTex        = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
     // Default backend: TRELLIS.2 when its sidecar runtime is installed on
@@ -3191,6 +3191,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         gamePresetId = gp->id;
         opts.targetTriangles = gp->targetTriangles;
         opts.targetTrianglesStrict = gp->strictTriangles;
+        opts.maxTextureSize = gp->maxTextureSize;   // enforced on the FINAL images
         if (gp->maxTextureSize > 0 && opts.textureSize > gp->maxTextureSize) {
             gamePresetNote = QStringLiteral(
                 "note: texture_size %1 exceeds the %2 preset's %3 px limit — "
@@ -3339,6 +3340,16 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
     // un-upscaled texture on any failure — same policy as the CLI).
 #ifdef ENABLE_ONNX
+    // A platform preset caps the FINAL image; skip a 2x that would cross it.
+    if (upscaleTex && opts.maxTextureSize > 0 && !res.texture.isNull()
+        && (res.texture.width() * 2 > opts.maxTextureSize
+            || res.texture.height() * 2 > opts.maxTextureSize)) {
+        if (!gamePresetNote.isEmpty()) gamePresetNote += QStringLiteral(" ");
+        gamePresetNote += QStringLiteral(
+            "note: upscale_texture skipped — the '%1' preset caps textures at %2 px.")
+            .arg(gamePresetId).arg(opts.maxTextureSize);
+        upscaleTex = false;
+    }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (!upModel.isEmpty()) {

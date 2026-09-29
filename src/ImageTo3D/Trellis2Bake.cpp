@@ -988,15 +988,25 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
                 std::numeric_limits<float>::max(), &strictError);
             // The sloppy simplifier is a vertex-clustering grid whose count
             // is not monotonic in grid size: on a mesh made of separate
-            // pieces it can jump from "over budget" straight to nothing. An
-            // empty mesh is a failed generation, an over-budget one is still
-            // an asset the user can see and decimate — keep the QEM result
-            // in that case rather than honour the ceiling with zero.
-            if (strictCount > 0) {
-                simplified.swap(strictIdx);
-                newCount = strictCount;
-                resultError = strictError;
+            // pieces it can jump from "over budget" straight to nothing.
+            // Neither outcome honours the ceiling — an empty mesh is no
+            // asset, and the over-budget QEM mesh is one the platform will
+            // reject — so a strict pass that cannot land under the target
+            // FAILS rather than returning ok with a count the preset
+            // promised not to exceed (review finding on #1075).
+            if (strictCount == 0 || strictCount > targetIndexCount) {
+                r.error = QStringLiteral(
+                    "strict triangle budget of %1 is unreachable: the "
+                    "topology-preserving simplifier stalled at %2 triangles "
+                    "and the clustering fallback collapsed the mesh entirely "
+                    "(disconnected pieces?) — choose a higher budget, or a "
+                    "non-strict tier and decimate the parts separately.")
+                    .arg(opts.targetTriangles).arg(newCount / 3);
+                return r;
             }
+            simplified.swap(strictIdx);
+            newCount = strictCount;
+            resultError = strictError;
         }
         simplified.resize(newCount);
         idx.swap(simplified);

@@ -11638,6 +11638,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int targetTris = 0;         // game-ready simplification target (all backends)
     bool targetTrisSet = false; // explicit --target-tris (conflicts with --game-preset)
     bool targetTrisStrict = false; // the target is a hard ceiling (platform presets)
+    int  textureMaxSize = 0;    // platform cap on the FINAL images (0 = none)
     QString gamePreset;         // --game-preset <id> (GameReadyPresets.h)
     bool listGamePresets = false;
     int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
@@ -11906,6 +11907,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         const GameReady::Preset* gp = GameReady::find(gamePreset);
         targetTris       = gp->targetTriangles;
         targetTrisStrict = gp->strictTriangles;
+        textureMaxSize   = gp->maxTextureSize;
         if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize) {
             err() << "Note: --texture-size " << textureSize << " exceeds the '"
                   << gp->id << "' preset's " << gp->maxTextureSize
@@ -12096,6 +12098,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.trellis2Preset  = preset;
     opts.targetTriangles = targetTris;
     opts.targetTrianglesStrict = targetTrisStrict;
+    opts.maxTextureSize  = textureMaxSize;
     opts.bakeNormalMap   = generatePbr && bake;
     opts.textureSupersample = textureSupersample;
     opts.texVolumeRes       = texVolumeRes;
@@ -12133,6 +12136,15 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         // (--no-bake-texture, --no-color, or the bake fell back).
         err() << "Warning: --upscale-texture ignored — no baked texture to "
                  "upscale (was the bake disabled or did it fall back?)." << Qt::endl;
+    }
+    // A platform preset caps the FINAL image (Roblox: 1024 px); a 2x that
+    // would cross it is skipped rather than upscaled and thrown away.
+    if (upscaleTex && textureMaxSize > 0 && !res.texture.isNull()
+        && (res.texture.width() * 2 > textureMaxSize
+            || res.texture.height() * 2 > textureMaxSize)) {
+        err() << "Note: --upscale-texture skipped — the '" << gamePreset
+              << "' preset caps textures at " << textureMaxSize << " px." << Qt::endl;
+        upscaleTex = false;
     }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
 #ifdef ENABLE_ONNX

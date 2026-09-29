@@ -146,6 +146,14 @@ public:
         // than a budget — set by the Roblox game-ready presets
         // (GameReadyPresets.h). Ignored when targetTriangles == 0.
         bool targetTrianglesStrict = false;
+        // Platform texture cap in pixels (0 = none) — the Roblox presets set
+        // 1024. textureSize is only the bake REQUEST: xatlas treats it as a
+        // hint (PackOptions::resolution seeds a texelsPerUnit estimate, so a
+        // 64 request measured 140x143), and callers may upscale afterwards.
+        // This is enforced on the FINAL images: predict() downscales every
+        // map in the Result to fit, and the upscale sites skip a 2x that
+        // would exceed it.
+        int  maxTextureSize = 0;
         // Bake a tangent-space normal map carrying the full-res source detail
         // (only meaningful when the target was simplified; needs bakeTexture).
         bool bakeNormalMap = true;
@@ -270,6 +278,12 @@ public:
                           const Options& opts = {},
                           const ProgressFn& progress = {});
 
+    // Downscale every image in `r` (diffuse + the TRELLIS PBR maps) so no
+    // side exceeds maxSize (0 = no-op), preserving aspect. predict() applies
+    // it with Options::maxTextureSize; exposed for the post-predict paths
+    // (upscale) and for tests.
+    static void capResultTextures(Result& r, int maxSize);
+
     // ---- Pure-data helpers (no ONNX / no Ogre — unit-testable) ----------------
 
     // Build the resolution^3 query-point grid TripoSR expects: points in
@@ -279,6 +293,15 @@ public:
     // count = res^3. Exposed for tests + so slice B's grid fill and the MC layout
     // provably agree.
     static std::vector<float> buildGridPoints(int resolution, float radius);
+
+private:
+    // The per-backend implementation; predict() wraps it with the
+    // Options::maxTextureSize cap so every backend's images obey it.
+    static Result predictImpl(const QImage& image,
+                              const QString& encoderModelPath,
+                              const QString& decoderModelPath,
+                              const Options& opts,
+                              const ProgressFn& progress);
 };
 
 #endif // MESH_GEN_PREDICTOR_H

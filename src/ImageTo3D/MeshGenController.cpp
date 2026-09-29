@@ -647,6 +647,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     int t2TargetTris = options.contains(QLatin1String("target_tris"))
         ? options.value(QLatin1String("target_tris")).toInt() : 0;
     bool t2TargetTrisStrict = false;
+    int  t2MaxTexture = 0;      // platform cap on the FINAL images (0 = none)
     // A named preset (the picker's id) wins over a raw target_tris: it is
     // the same table the CLI/MCP resolve, and the Roblox presets carry the
     // platform's upload limits — a hard triangle ceiling plus a 1024 px
@@ -657,6 +658,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         if (const GameReady::Preset* gp = GameReady::find(id)) {
             t2TargetTris = gp->targetTriangles;
             t2TargetTrisStrict = gp->strictTriangles;
+            t2MaxTexture = gp->maxTextureSize;
             if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
                 textureSize = gp->maxTextureSize;
             SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
@@ -785,7 +787,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
-                                     t2TargetTrisStrict,
+                                     t2TargetTrisStrict, t2MaxTexture,
                                      t2Supersample,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
@@ -846,6 +848,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // predictor; TRELLIS.2 does it natively in its own pipeline).
         opts.targetTriangles = t2TargetTris;
         opts.targetTrianglesStrict = t2TargetTrisStrict;
+        opts.maxTextureSize  = t2MaxTexture;
         opts.bakeNormalMap   = m_generatePbr;
         if (useT2) {
             opts.seed            = t2Seed;
@@ -887,7 +890,18 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
 
         // Optional Real-ESRGAN 2x on the baked diffuse — pure CPU, so it stays
         // on this worker. Model was ensured on the main thread; best-effort.
-        if (r.ok && m_upscaleTexture && !m_upscaleModelPath.isEmpty()
+        // A platform preset caps the FINAL image (Roblox: 1024 px): a 2x
+        // that would cross it is skipped, and the result says so.
+        const bool upscaleBlockedByCap = t2MaxTexture > 0 && !r.texture.isNull()
+            && (r.texture.width() * 2 > t2MaxTexture
+                || r.texture.height() * 2 > t2MaxTexture);
+        if (r.ok && m_upscaleTexture && upscaleBlockedByCap) {
+            if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
+            r.warning += tr("Upscale skipped: the preset caps textures at %1 px.")
+                             .arg(t2MaxTexture);
+        }
+        if (r.ok && m_upscaleTexture && !upscaleBlockedByCap
+            && !m_upscaleModelPath.isEmpty()
             && !r.uvs.empty() && !r.texture.isNull() && !m_cancel.load()) {
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Upscaling texture…")));

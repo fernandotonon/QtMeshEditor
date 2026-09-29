@@ -233,6 +233,50 @@ TEST(Trellis2BakeTest, GameReadyStrictBudgetIsAHardCeiling)
         EXPECT_LT(i, rt.positions.size() / 3);
 }
 
+// The mirror image of the case above: two DISCONNECTED pieces (the book
+// floating beside the plane). QEM stalls at ~62, and the clustering fallback
+// jumps straight to zero — the ceiling is unreachable, and a strict pass must
+// say so rather than return ok with an over-budget or empty mesh.
+TEST(Trellis2BakeTest, GameReadyStrictBudgetFailsWhenUnreachable)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    const int n = 33;
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x)
+            pos.insert(pos.end(), {x / float(n - 1), y / float(n - 1), 0.0f});
+    for (int y = 0; y + 1 < n; ++y)
+        for (int x = 0; x + 1 < n; ++x) {
+            const uint32_t a = y * n + x, b = a + 1, c = a + n, d = c + 1;
+            idx.insert(idx.end(), {a, b, c, b, d, c});
+        }
+    const uint32_t spineA = static_cast<uint32_t>(pos.size() / 3);
+    pos.insert(pos.end(), {3.0f, 0.0f, 0.0f});
+    pos.insert(pos.end(), {3.0f, 1.0f, 0.0f});
+    const int pages = 60;
+    for (int k = 0; k < pages; ++k) {
+        const float ang = 6.2831853f * k / pages;
+        const uint32_t tip = static_cast<uint32_t>(pos.size() / 3);
+        pos.insert(pos.end(), {3.0f + std::cos(ang), 0.5f, std::sin(ang)});
+        idx.insert(idx.end(), {spineA, spineA + 1, tip});
+    }
+
+    Trellis2Bake::GameReadyOptions soft;
+    soft.targetTriangles = 40;
+    soft.minComponentTriangles = 1;
+    soft.minComponentFraction = 0.0f;
+    const auto rs = Trellis2Bake::makeGameReady(pos, idx, soft);
+    ASSERT_TRUE(rs.ok) << rs.error.toStdString();
+    EXPECT_GT(rs.outputTriangles, 40);   // the soft pass tolerates this
+
+    Trellis2Bake::GameReadyOptions strict = soft;
+    strict.strictTriangleBudget = true;
+    const auto rt = Trellis2Bake::makeGameReady(pos, idx, strict);
+    EXPECT_FALSE(rt.ok);
+    EXPECT_TRUE(rt.error.contains("strict triangle budget")) << rt.error.toStdString();
+    EXPECT_TRUE(rt.error.contains("40")) << rt.error.toStdString();
+}
+
 TEST(Trellis2BakeTest, GameReadyRejectsGarbage)
 {
     EXPECT_FALSE(Trellis2Bake::makeGameReady({}, {}, {}).ok);

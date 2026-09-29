@@ -24,7 +24,11 @@
 //                          count guaranteed, so the pass re-runs the
 //                          topology-free simplifier until it fits.
 //   * `maxTextureSize`   — the largest texture the platform accepts (0 = no
-//                          cap). Callers clamp the bake size to it and say so.
+//                          cap). Callers clamp the bake REQUEST to it and say
+//                          so, and MeshGenPredictor::Options::maxTextureSize
+//                          enforces it on the FINAL images (xatlas treats the
+//                          request as a hint and can hand back a larger atlas;
+//                          the optional 2x upscale is skipped under a cap).
 //
 // Roblox numbers (the reason the platform presets exist): a MeshPart is
 // capped at 20,000 triangles and an accessory (rigid or layered clothing)
