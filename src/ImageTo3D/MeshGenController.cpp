@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 
 #include "MeshGenPredictor.h"
+#include "GameReadyPresets.h"
 #include "TripoSGPredictor.h"
 #include "Trellis2Predictor.h"
 #include "MeshGenBuilder.h"
@@ -616,7 +617,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const bool wantBake    = optBool("bake_texture", true);
     m_upscaleTexture       = optBool("upscale_texture", false);
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
-    const int  textureSize = options.contains(QLatin1String("texture_size"))
+    int textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
     // Backend: "trellis2" (the default whenever its sidecar runtime is
     // installed), "triposr" (fast + textured) or "triposg" (rectified flow —
@@ -643,8 +644,32 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const QString t2Preset = options.contains(QLatin1String("preset"))
         ? options.value(QLatin1String("preset")).toString().toLower()
         : QStringLiteral("balanced");
-    const int t2TargetTris = options.contains(QLatin1String("target_tris"))
+    int t2TargetTris = options.contains(QLatin1String("target_tris"))
         ? options.value(QLatin1String("target_tris")).toInt() : 0;
+    bool t2TargetTrisStrict = false;
+    int  t2MaxTexture = 0;      // platform cap on the FINAL images (0 = none)
+    // A named preset (the picker's id) wins over a raw target_tris: it is
+    // the same table the CLI/MCP resolve, and the Roblox presets carry the
+    // platform's upload limits — a hard triangle ceiling plus a 1024 px
+    // texture cap that is applied HERE, not only in QML, so a caller that
+    // bypasses the picker's snap still gets a Roblox-legal bake.
+    if (options.contains(QLatin1String("game_preset"))) {
+        const QString id = options.value(QLatin1String("game_preset")).toString();
+        if (const GameReady::Preset* gp = GameReady::find(id)) {
+            t2TargetTris = gp->targetTriangles;
+            t2TargetTrisStrict = gp->strictTriangles;
+            t2MaxTexture = gp->maxTextureSize;
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                textureSize = gp->maxTextureSize;
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+                QStringLiteral("game_preset=%1 tris=%2 strict=%3 tex=%4")
+                    .arg(gp->id).arg(t2TargetTris).arg(t2TargetTrisStrict)
+                    .arg(textureSize));
+        } else if (!id.isEmpty()) {
+            qWarning() << "MeshGenController: unknown game_preset" << id
+                       << "- using target_tris" << t2TargetTris;
+        }
+    }
     // Subsamples per baked texel (TRELLIS.2). 1 = one sample at the texel
     // centre (default); 2 = 2x2, which averages four positions and softens
     // the speckle a single centre sample leaves where a texel straddles a
@@ -762,6 +787,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
+                                     t2TargetTrisStrict, t2MaxTexture,
                                      t2Supersample,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
@@ -821,6 +847,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // run the weld/debris/simplify + detail-normal-bake pass in the
         // predictor; TRELLIS.2 does it natively in its own pipeline).
         opts.targetTriangles = t2TargetTris;
+        opts.targetTrianglesStrict = t2TargetTrisStrict;
+        opts.maxTextureSize  = t2MaxTexture;
         opts.bakeNormalMap   = m_generatePbr;
         if (useT2) {
             opts.seed            = t2Seed;
@@ -862,7 +890,18 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
 
         // Optional Real-ESRGAN 2x on the baked diffuse — pure CPU, so it stays
         // on this worker. Model was ensured on the main thread; best-effort.
-        if (r.ok && m_upscaleTexture && !m_upscaleModelPath.isEmpty()
+        // A platform preset caps the FINAL image (Roblox: 1024 px): a 2x
+        // that would cross it is skipped, and the result says so.
+        const bool upscaleBlockedByCap = t2MaxTexture > 0 && !r.texture.isNull()
+            && (r.texture.width() * 2 > t2MaxTexture
+                || r.texture.height() * 2 > t2MaxTexture);
+        if (r.ok && m_upscaleTexture && upscaleBlockedByCap) {
+            if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
+            r.warning += tr("Upscale skipped: the preset caps textures at %1 px.")
+                             .arg(t2MaxTexture);
+        }
+        if (r.ok && m_upscaleTexture && !upscaleBlockedByCap
+            && !m_upscaleModelPath.isEmpty()
             && !r.uvs.empty() && !r.texture.isNull() && !m_cancel.load()) {
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Upscaling texture…")));
@@ -942,4 +981,28 @@ void MeshGenController::buildOnMainThread()
                                        .arg(r.vertexCount).arg(r.triangleCount)
                                        .arg(r.texture.width()));
     emit completed(out);
+}
+
+// ── Game-ready presets (GameReadyPresets.h) ─────────────────────────────────
+
+QVariantList MeshGenController::gameReadyPresets() const
+{
+    QVariantList out;
+    for (const GameReady::Preset& p : GameReady::presets()) {
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), p.id);
+        m.insert(QStringLiteral("label"), p.label);
+        m.insert(QStringLiteral("tris"), p.targetTriangles);
+        m.insert(QStringLiteral("strict"), p.strictTriangles);
+        m.insert(QStringLiteral("maxTexture"), p.maxTextureSize);
+        m.insert(QStringLiteral("note"), p.note);
+        out.append(m);
+    }
+    return out;
+}
+
+int MeshGenController::gameReadyDefaultIndex() const
+{
+    const int i = GameReady::indexOf(GameReady::defaultId());
+    return i < 0 ? 0 : i;
 }

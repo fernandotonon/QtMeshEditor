@@ -2357,14 +2357,39 @@ Rectangle {
                     // the simplifier cannot deliver, so it is deliberately
                     // absent — the floor depends on the asset's seams, not on
                     // the request.
-                    model: ["Maximum detail (auto cap)", "Prop Minimal (~500 tris)",
-                            "Prop Tiny (~1k tris)", "Prop Low (~5k tris)",
-                            "Game Low (~10k tris)", "Game Medium (~25k tris)",
-                            "Game High (~50k tris)"]
-                    currentIndex: 5
-                    readonly property var triValues: [0, 500, 1000, 5000, 10000, 25000, 50000]
-                    property int triValue: triValues[currentIndex]
+                    //
+                    // The entries come from GameReadyPresets.h (via the
+                    // controller) so this picker, `qtmesh generate3d
+                    // --list-game-presets` and MCP `game_preset` agree. The
+                    // Roblox entries are PLATFORM presets: a hard triangle
+                    // ceiling (4k accessory / 20k MeshPart — Roblox rejects
+                    // the upload past it, so the pass guarantees the count)
+                    // plus Roblox's 1024 px texture cap, which snaps the
+                    // Texture picker below.
+                    readonly property var presets: MeshGenController.gameReadyPresets()
+                    model: presets.map(function(p) { return p.label })
+                    currentIndex: MeshGenController.gameReadyDefaultIndex()
+                    readonly property var preset: presets[currentIndex]
+                    property string presetId: preset ? preset.id : ""
+                    property int triValue: preset ? preset.tris : 0
+                    property int maxTexture: preset ? preset.maxTexture : 0
+                    property string presetNote: preset ? preset.note : ""
+                    onCurrentIndexChanged: {
+                        // typeof guard: this can fire while the section is
+                        // still instantiating, before the Texture picker exists.
+                        if (maxTexture > 0 && typeof mgT2Tex !== "undefined")
+                            mgT2Tex.clampTo(maxTexture)
+                    }
                 }
+            }
+            Text {
+                // Platform-limit hint (Roblox presets only).
+                visible: mgT2Mesh.maxTexture > 0
+                text: "  " + mgT2Mesh.presetNote
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
             }
             Row {
                 spacing: 6
@@ -2391,6 +2416,18 @@ Rectangle {
                     currentIndex: 5
                     readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
                     property int sizeValue: sizeValues[currentIndex]
+                    // A platform preset (Roblox: 1024 px) caps the bake size:
+                    // snap to the largest entry within the cap, and keep it
+                    // there while the preset is active (the controller clamps
+                    // too, so this is feedback, not the only guard).
+                    function clampTo(maxPx) {
+                        if (sizeValue <= maxPx) return
+                        var best = 0
+                        for (var i = 0; i < sizeValues.length; ++i)
+                            if (sizeValues[i] <= maxPx) best = i
+                        currentIndex = best
+                    }
+                    onCurrentIndexChanged: if (mgT2Mesh.maxTexture > 0) clampTo(mgT2Mesh.maxTexture)
                 }
             }
             Row {
@@ -2630,7 +2667,11 @@ Rectangle {
                         "upscale_texture": mgUpscale.checked && buildBake,
                         "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
-                        "target_tris": mgT2Mesh.triValue
+                        // The preset id carries the strict-ceiling + texture
+                        // cap of the Roblox entries; target_tris stays for
+                        // the plain budgets (and older callers).
+                        "target_tris": mgT2Mesh.triValue,
+                        "game_preset": mgT2Mesh.presetId
                     }
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue

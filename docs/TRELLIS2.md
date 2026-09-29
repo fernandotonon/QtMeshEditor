@@ -101,8 +101,44 @@ The report prints the loaded stack, ending with
 **GUI:** Object mode → Mode Tools → *AI: Image → 3D*. The Backend combo lists
 *TRELLIS.2 (high quality)* first and preselects it when the runtime is present. Options:
 Quality (*Fast* = 512 / *Balanced* = 1024 cascade / *High* = 1536 cascade), Mesh
-(*Original*, *Game Low ~10k*, *Game Medium ~25k*, *Game High ~50k* triangles), Texture
-(1024/2048/4096), plus the shared Remove-background / Bake / PBR / Upscale toggles.
+(the game-ready presets below), Texture (64…4096), plus the shared
+Remove-background / Bake / PBR / Upscale toggles.
+
+**Game-ready presets** (one table for the GUI Mesh picker, `--game-preset` and MCP
+`game_preset` — `src/ImageTo3D/GameReadyPresets.h`; apply to TRELLIS.2, Pixal3D,
+TripoSR and TripoSG alike):
+
+| id | budget | notes |
+|---|---|---|
+| `max` | original density | dense TRELLIS sources still capped at ~150–300k for the bake |
+| `prop-minimal` / `prop-tiny` / `prop-low` | ~500 / ~1k / ~5k | flat-faced props |
+| `roblox-accessory` | **≤ 4,000** (hard ceiling) | Roblox accessory / layered-clothing upload limit; textures clamped to **1024 px** |
+| `low` | ~10k | |
+| `roblox-meshpart` | **≤ 20,000** (hard ceiling) | Roblox MeshPart upload limit; textures clamped to **1024 px** |
+| `medium` | ~25k | the GUI default |
+| `high` | ~50k | |
+
+The plain tiers are budgets (border locking can stop the simplifier early, and the
+pass tolerates landing up to 2× over). The Roblox tiers are **ceilings**: Roblox
+refuses an upload past the limit, so when QEM stalls above the target the pass
+finishes with the topology-free sloppy simplifier and the lost relief returns
+through the detail-normal bake. If the ceiling cannot be met at all (a mesh of
+disconnected pieces where the clustering fallback collapses to nothing) the
+generation **fails with a clear error** instead of exporting an over-budget asset
+under a preset that promised otherwise. The texture cap is enforced on the **final
+images**, not just the bake request (xatlas treats the request as a hint and can
+hand back a larger atlas): every map in the result is downscaled to fit, and the
+optional 2× upscale is skipped when it would cross the cap. Picking a Roblox preset
+in the GUI snaps the Texture picker to 1024 px.
+
+**Custom values (CLI/MCP only):** `--target-tris N` (0 = original density, else any
+`1..10000000` — the simplifier's border locking sets a floor around ~500; TRELLIS.2
+raw decodes are ~150k at res 512 / ~300k cascade / several million uncapped) and
+`--texture-size N` (any `64..8192` px; xatlas treats it as a hint) work on their own,
+or **together with `--game-preset` to override that preset's number**. A Roblox preset
+keeps its strict ceiling at whatever count you pass; a custom value past a platform
+limit is honoured and warned about, never clamped. `--tex-res 512|1024` is the
+separate TRELLIS.2 texture-volume knob. The GUI keeps the preset-only picker.
 
 **CLI:**
 
@@ -110,10 +146,17 @@ Quality (*Fast* = 512 / *Balanced* = 1024 cascade / *High* = 1536 cascade), Mesh
 qtmesh generate3d photo.png -o out.glb                       # trellis2 when installed, else triposr
 qtmesh generate3d photo.png -o out.glb --backend trellis2 \
     --preset high --target-tris 25000 --texture-size 4096 --seed 7
+qtmesh generate3d photo.png -o hat.glb --backend pixal3d --game-preset roblox-accessory   # <= 4k tris, 1024 px
+qtmesh generate3d photo.png -o prop.glb --game-preset roblox-meshpart                     # <= 20k tris, 1024 px
+qtmesh generate3d photo.png -o prop.glb --game-preset roblox-meshpart --target-tris 12000 --texture-size 512  # preset + custom overrides
+qtmesh generate3d --list-game-presets     # presets + the custom ranges
 ```
 
 **MCP:** `generate_mesh_from_image` with `backend: "trellis2"` (`seed`, `preset`,
-`target_tris` args; the response carries `backend` and `sourcePath`).
+`target_tris` / `texture_size` for custom values, `game_preset` for a named budget, or
+both to override the preset's numbers; the response carries
+`backend`, `sourcePath` and, for a named preset, `gamePreset` / `targetTriangles` /
+`strictTriangleBudget` / `textureSize`).
 
 ## Errors you may see
 

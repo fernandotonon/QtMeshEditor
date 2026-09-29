@@ -51,6 +51,9 @@ public:
         // Game-ready simplification target; 0 keeps the raw density (Phase 8:
         // ~10k Low / ~25k Medium / ~50k High — no exact-count promise).
         int targetTriangles = 0;
+        // targetTriangles is a hard ceiling (Roblox-style upload limit), not
+        // a budget — see Trellis2Bake::GameReadyOptions::strictTriangleBudget.
+        bool strictTriangleBudget = false;
         bool bakeTexture   = true;  // false → per-vertex colours only
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
