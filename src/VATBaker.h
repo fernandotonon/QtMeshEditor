@@ -28,9 +28,11 @@ namespace Ogre { class Entity; }
  *
  *   - **Skeletal** (`Mode::Skeletal`, the original #371 design): step a
  *     skeletal animation state and read the post-skinning positions via
- *     `entity->_getSkelAnimVertexData()`. Output is bit-identical to the
- *     pre-#522 baker (same texture, same `os-remap` sidecar; only the
- *     extension keys grew).
+ *     `entity->_getSkelAnimVertexData()`. Same texture layout and
+ *     `os-remap` sidecar as the pre-#522 baker (extension keys grew),
+ *     with ONE data change: the last row is now the pose at t == length
+ *     (the bake used to inherit Ogre's loop wrap and re-sampled frame 0
+ *     there).
  *   - **Mesh-anim** (`Mode::MeshAnim`): a full-mesh vertex clip (Alembic
  *     cache / `VAT_POSE` stream from `VertexAnimationManager`). The
  *     sampler enables the mesh animation state and reads the software
@@ -106,7 +108,7 @@ public:
     static bool isValidTargetId(const QString& id);
 
     struct Options {
-        Mode     mode = Mode::Skeletal;   ///< Sampler. Skeletal keeps the pre-#522 behaviour bit-for-bit.
+        Mode     mode = Mode::Skeletal;   ///< Sampler. Skeletal is the pre-#522 behaviour (plus the last-frame fix).
         QString  animationName;           ///< Required — no default to avoid silently baking the wrong clip.
         double   fps          = 30.0;     ///< Frames per second to sample at.
         double   startTime    = -1.0;     ///< < 0 → animation start (0).

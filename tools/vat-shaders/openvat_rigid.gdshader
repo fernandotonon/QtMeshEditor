@@ -84,8 +84,13 @@ void vertex() {
 	if (!exr_raw_positions) {
 		pivot_frame = bounds_min + pivot_frame * (bounds_max - bounds_min);
 	}
-	// The bake keeps adjacent frames in the same hemisphere, so a
-	// plain lerp + normalize is a valid short-arc blend.
+	// The bake keeps adjacent frames in the same hemisphere, but the
+	// wrapped pair (last frame -> frame 0) of a clip that accumulates a
+	// full turn can be antipodal, and a lerp through q ~= 0 is garbage.
+	// Align the sign explicitly so every pair is a short-arc blend.
+	if (dot(qc, qn) < 0.0) {
+		qn = -qn;
+	}
 	vec4 q = normalize(mix(qc, qn, blend));
 
 	VERTEX = quat_rotate(q, VERTEX - pivot_bind) + pivot_frame;

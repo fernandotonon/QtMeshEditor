@@ -326,10 +326,10 @@ bool meshAnimationHasVertexTracks(Ogre::Mesh* mesh, const std::string& name)
 }
 
 // Morph target names (unique pose names) referenced by the clip's
-// VAT_POSE keyframes, in first-seen order. Falls back to every pose
-// on the mesh when the clip references none (a weight clip that only
-// keys a subset still deforms only that subset — the sidecar should
-// say which).
+// VAT_POSE keyframes, in first-seen order — ONLY those: a weight clip
+// that keys a subset deforms only that subset, and a consumer may use
+// this list to strip the unbaked shapes from its runtime mesh. A clip
+// that references no pose yields an empty list, never "every pose".
 QStringList morphTargetsDrivenBy(Ogre::Mesh* mesh, const std::string& clip)
 {
     QStringList out;
@@ -346,13 +346,6 @@ QStringList morphTargetsDrivenBy(Ogre::Mesh* mesh, const std::string& clip)
                 const QString n = QString::fromStdString(poses[ref.poseIndex]->getName());
                 if (!n.isEmpty() && !out.contains(n)) out << n;
             }
-        }
-    }
-    if (out.isEmpty()) {
-        for (const Ogre::Pose* p : poses) {
-            if (!p) continue;
-            const QString n = QString::fromStdString(p->getName());
-            if (!n.isEmpty() && !out.contains(n)) out << n;
         }
     }
     return out;
@@ -725,36 +718,41 @@ struct RigidFrameSample {
     float            maxResidual = 0.0f;
 };
 
-// Horn fit of `bind[start..start+count)` → `deformed[...]`. The scale
+// Horn fit of `bind[0..count)` → `deformed[0..count)` (raw pointers
+// into the caller's frame-invariant bind array and the frame's slice of
+// the deformed array — no per-frame copies). The scale
 // the solver reports is DISCARDED (a rigid chunk has none; on a
 // slightly non-rigid one it would smear the error into the rotation),
 // and the translation is recomputed from the centroids so the pivot
 // contract `p' = R*(p - pivot) + pivotFrame` holds exactly at the
 // centroid. Degenerate chunks (< 3 points, collinear) fall back to a
 // pure translation.
-RigidFrameSample fitRigidChunk(const std::vector<Ogre::Vector3>& bind,
-                               const std::vector<Ogre::Vector3>& deformed,
-                               size_t start, size_t count,
-                               const Ogre::Vector3& pivot)
+// `srcFlat`/`weights` are the chunk's bind points + unit weights in
+// the solver's flat layout, built ONCE per chunk by the caller.
+RigidFrameSample fitRigidChunk(const Ogre::Vector3* bind,
+                               const Ogre::Vector3* deformed,
+                               size_t count,
+                               const Ogre::Vector3& pivot,
+                               const std::vector<float>& srcFlat,
+                               const std::vector<float>& weights,
+                               std::vector<float>& dstScratch)
 {
     RigidFrameSample s;
     if (count == 0) return s;
 
     Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
-    for (size_t i = 0; i < count; ++i) centroid += deformed[start + i];
+    for (size_t i = 0; i < count; ++i) centroid += deformed[i];
     centroid /= static_cast<float>(count);
     s.pivotPos = centroid;
 
     if (count >= 3) {
-        std::vector<float> src(count * 3), dst(count * 3), w(count, 1.0f);
+        dstScratch.resize(count * 3);
         for (size_t i = 0; i < count; ++i) {
-            const auto& a = bind[start + i];
-            const auto& b = deformed[start + i];
-            src[i * 3 + 0] = a.x; src[i * 3 + 1] = a.y; src[i * 3 + 2] = a.z;
-            dst[i * 3 + 0] = b.x; dst[i * 3 + 1] = b.y; dst[i * 3 + 2] = b.z;
+            const auto& b = deformed[i];
+            dstScratch[i * 3 + 0] = b.x; dstScratch[i * 3 + 1] = b.y; dstScratch[i * 3 + 2] = b.z;
         }
         const FaceCapPose::Result r = FaceCapPose::solve(
-            src.data(), dst.data(), w.data(), static_cast<int>(count));
+            srcFlat.data(), dstScratch.data(), weights.data(), static_cast<int>(count));
         if (r.ok) {
             s.rot = Ogre::Quaternion(r.rotation[3], r.rotation[0],
                                      r.rotation[1], r.rotation[2]);
@@ -764,8 +762,8 @@ RigidFrameSample fitRigidChunk(const std::vector<Ogre::Vector3>& bind,
 
     float worst = 0.0f;
     for (size_t i = 0; i < count; ++i) {
-        const Ogre::Vector3 fitted = s.rot * (bind[start + i] - pivot) + s.pivotPos;
-        worst = std::max(worst, (fitted - deformed[start + i]).length());
+        const Ogre::Vector3 fitted = s.rot * (bind[i] - pivot) + s.pivotPos;
+        worst = std::max(worst, (fitted - deformed[i]).length());
     }
     s.maxResidual = worst;
     return s;
@@ -930,6 +928,17 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     case Mode::Skeletal:
         if (!entity->hasSkeleton()) {
             result.error = QStringLiteral("entity has no skeleton");
+            return result;
+        }
+        // A rigged mesh can ALSO carry a vertex/morph clip under the
+        // requested name; the state lookup below would find it and the
+        // bake would sample vertex deformation while labelling the
+        // output `_mode: skeletal`. Insist on a skeleton animation.
+        if (!skeletalClip) {
+            result.error = vertexClip
+                ? QStringLiteral("'%1' is a vertex/morph clip, not a skeletal animation - "
+                                 "use --mode mesh-anim or --mode morph").arg(opts.animationName)
+                : QStringLiteral("animation '%1' not found on the skeleton").arg(opts.animationName);
             return result;
         }
         break;
@@ -1142,21 +1151,28 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             return result;
         }
         rigidSamples.resize(static_cast<size_t>(frameCount) * chunkCount);
+        // Per-chunk solver inputs that never change across frames.
+        std::vector<std::vector<float>> chunkSrc(chunkCount), chunkW(chunkCount);
+        for (int ci = 0; ci < chunkCount; ++ci) {
+            const RigidChunk& c = result.chunks[ci];
+            chunkSrc[ci].resize(static_cast<size_t>(c.vertexCount) * 3);
+            chunkW[ci].assign(static_cast<size_t>(c.vertexCount), 1.0f);
+            for (int i = 0; i < c.vertexCount; ++i) {
+                const auto& a = bind[static_cast<size_t>(c.vertexStart) + i];
+                chunkSrc[ci][i * 3 + 0] = a.x; chunkSrc[ci][i * 3 + 1] = a.y; chunkSrc[ci][i * 3 + 2] = a.z;
+            }
+        }
+        std::vector<float> dstScratch;
         for (int f = 0; f < frameCount; ++f) {
             const size_t frameBase = static_cast<size_t>(f) * vertexCount;
             for (int ci = 0; ci < chunkCount; ++ci) {
                 RigidChunk& c = result.chunks[ci];
-                // Fit against a per-frame slice: `bind` is frame-
-                // independent, `flat` is offset by the frame.
-                std::vector<Ogre::Vector3> deformedSlice(
-                    flat.begin() + frameBase + c.vertexStart,
-                    flat.begin() + frameBase + c.vertexStart + c.vertexCount);
-                std::vector<Ogre::Vector3> bindSlice(
-                    bind.begin() + c.vertexStart,
-                    bind.begin() + c.vertexStart + c.vertexCount);
-                RigidFrameSample s = fitRigidChunk(bindSlice, deformedSlice, 0,
-                                                   static_cast<size_t>(c.vertexCount),
-                                                   c.pivot);
+                // `bind` is frame-invariant; `flat` is offset by the frame.
+                RigidFrameSample s = fitRigidChunk(
+                    bind.data() + c.vertexStart,
+                    flat.data() + frameBase + c.vertexStart,
+                    static_cast<size_t>(c.vertexCount),
+                    c.pivot, chunkSrc[ci], chunkW[ci], dstScratch);
                 // Hemisphere continuity so a consumer can lerp adjacent
                 // frames' quaternions without a 360° flip.
                 if (f > 0) {

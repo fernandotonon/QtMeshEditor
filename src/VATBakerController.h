@@ -64,6 +64,9 @@ class VATBakerController : public QObject
     Q_PROPERTY(bool isBaking READ isBaking NOTIFY isBakingChanged)
     Q_PROPERTY(int progressDone READ progressDone NOTIFY bakeProgress)
     Q_PROPERTY(int progressTotal READ progressTotal NOTIFY bakeProgress)
+    /// Non-fatal note from the last bake (e.g. "no rigid template for
+    /// unity"). Empty when the last bake had nothing to add.
+    Q_PROPERTY(QString lastWarning READ lastWarning NOTIFY lastWarningChanged)
 
 public:
     static VATBakerController* instance();
@@ -84,6 +87,7 @@ public:
     bool isBaking() const { return m_isBaking; }
     int progressDone()  const { return m_progressDone; }
     int progressTotal() const { return m_progressTotal; }
+    QString lastWarning() const { return m_lastWarning; }
 
     /// Repopulate `availableAnimations` from the first selected entity.
     /// QML calls this on mount and after selection changes.
@@ -122,6 +126,7 @@ signals:
     void availableAnimationsChanged();
     void isBakingChanged();
     void bakeProgress(int done, int total);
+    void lastWarningChanged();
     void bakeFinished(bool ok, const QString& posTexture, const QString& error);
 
 private:
@@ -132,6 +137,7 @@ private:
 
     QStringList m_animations;
     QStringList m_modes;
+    QString m_lastWarning;
     bool m_isBaking = false;
     int  m_progressDone  = 0;
     int  m_progressTotal = 0;

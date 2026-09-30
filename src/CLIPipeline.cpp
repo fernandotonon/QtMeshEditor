@@ -9562,7 +9562,7 @@ bool readGltfVertices(const QString& gltfPath,
         if (bufferIdx < 0 || bufferIdx >= bufData.size()) return fail(QStringLiteral("accessor %1: buffer out of range").arg(accIdx));
         const QByteArray& bd = bufData[bufferIdx];
         const int start = byteOffsetBv + byteOffsetAcc;
-        if (count <= 0 || byteStride <= 0 || start < 0
+        if (count < 0 || byteStride <= 0 || start < 0
             || static_cast<qint64>(start) + static_cast<qint64>(count) * byteStride > bd.size())
             return fail(QStringLiteral("accessor %1: %2 x %3 B at %4 exceeds buffer (%5 B)")
                             .arg(accIdx).arg(count).arg(byteStride).arg(start).arg(bd.size()));
@@ -10033,7 +10033,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     bool jsonOutput = false;
     QString includeShadersArg;
     // --mode (#522): which sampler drives the bake. Default skeletal -
-    // the pre-#522 behaviour, bit-identical output.
+    // the pre-#522 behaviour (plus the last-frame loop-wrap fix).
     VATBaker::Mode vatMode = VATBaker::Mode::Skeletal;
     QString modeArg;
     // --target (#522): engine id recorded in the sidecar; a non-agnostic
@@ -10516,8 +10516,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // A non-agnostic --target implies its own engine template.
     if (targetArg != QLatin1String("agnostic")) {
         if (includeShadersArg.isEmpty()) includeShadersArg = targetArg;
-        else if (!includeShadersArg.split(QLatin1Char(',')).contains(targetArg, Qt::CaseInsensitive)
-                 && !includeShadersArg.contains(QLatin1String("all"), Qt::CaseInsensitive))
+        else if (!VATShaderEmitter::parseEngineList(includeShadersArg).contains(targetArg))
             includeShadersArg += QLatin1Char(',') + targetArg;
     }
     if (!includeShadersArg.isEmpty()) {
@@ -10610,8 +10609,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             for (const auto& n : result.morphTargets) t.append(n);
             obj["morphTargets"] = t;
         }
-        if (sourceMeshMatchesBake)
+        if (sourceMeshMatchesBake) {
             obj["sourceMesh"] = gltfPath;
+            if (rigidMode) obj["chunkMapping"] = QStringLiteral("primitive index == chunk index");
+        }
         if (bindWritten)
             obj["bindSidecar"] = bindPath;
         if (!shadersWritten.isEmpty()) {
@@ -10662,7 +10663,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                                     "column order regardless of importer reordering)\n")
                 .arg(bindPath));
         if (sourceMeshMatchesBake)
-            cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
+            cliWrite(rigidMode
+                ? QStringLiteral("  mesh:     %1 (primitive i == chunk i; columns are CHUNKS, "
+                                 "not vertices - use openvat_rigid.gdshader)\n").arg(gltfPath)
+                : QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
         if (uv2Emitted)
             cliWrite(rigidMode
                 ? QStringLiteral("  uv2:      injected as TEXCOORD_%1 - UV%1.x is the vertex's "

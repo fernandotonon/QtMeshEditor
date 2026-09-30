@@ -950,3 +950,52 @@ TEST_F(VATBakerEndToEndTest, LiveEntityRejectsUnknownTarget) {
     EXPECT_FALSE(QFile::exists(QDir(tmp.path()).filePath(QStringLiteral("TestAnim_pos.png"))))
         << "nothing must be written on a refused bake";
 }
+
+// A rigged entity that ALSO carries a vertex clip: skeletal mode must
+// refuse the vertex clip's name (review finding — the state lookup alone
+// would have accepted it and mislabelled the bake), and mesh-anim mode
+// must bake it with the skeleton left in bind pose.
+TEST_F(VATBakerEndToEndTest, SkeletalModeRefusesVertexClipOnRiggedEntity) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_RiggedPlusVertex");
+    ASSERT_NE(entity, nullptr);
+    Ogre::MeshPtr mesh = entity->getMesh();
+    VertexAnimationManager::FrameSet fs;
+    fs.vertexCount = 3;
+    fs.fps = 10;
+    for (int f = 0; f < 3; ++f) {
+        VertexAnimationManager::FrameData fd;
+        fd.time = 0.5f * f;
+        const float dz = 0.5f * f;
+        fd.positions = { 0, 0, dz,   1, 0, dz,   0, 1, dz };
+        fs.frames.push_back(fd);
+    }
+    ASSERT_TRUE(VertexAnimationManager::buildClipFromFrames(mesh.get(), QStringLiteral("VCache"), fs));
+    entity->refreshAvailableAnimationState();
+    ASSERT_TRUE(entity->getAllAnimationStates()->hasAnimationState("VCache"));
+
+    QTemporaryDir tmp;
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("VCache");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("Mislabel");
+    auto r = VATBaker::bake(entity, opts);          // default mode == Skeletal
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("mesh-anim"))) << r.error.toStdString();
+
+    opts.mode = VATBaker::Mode::MeshAnim;
+    opts.basename = QStringLiteral("RiggedCache");
+    r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.mode, VATBaker::Mode::MeshAnim);
+    QImage img(r.posTexPath);
+    ASSERT_FALSE(img.isNull());
+    // Every vertex slides +1 in Z across the clip; the skeleton (bind
+    // pose) adds nothing.
+    for (int col = 0; col < 3; ++col) {
+        const Ogre::Vector3 first = decodePos16(img, col, 0, r.minBound, r.maxBound);
+        const Ogre::Vector3 last  = decodePos16(img, col, r.frameCount - 1, r.minBound, r.maxBound);
+        EXPECT_NEAR(last.z - first.z, 1.0f, 0.02f) << "column " << col;
+        EXPECT_NEAR(last.x - first.x, 0.0f, 0.02f) << "column " << col;
+    }
+}

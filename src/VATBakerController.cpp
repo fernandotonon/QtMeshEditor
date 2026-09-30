@@ -11,6 +11,7 @@ The MIT License
 #include "VATBakerController.h"
 
 #include "GamificationManager.h"
+#include "MorphAnimationManager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "VATBaker.h"
@@ -268,7 +269,15 @@ bool VATBakerController::bake(const QString& animationName,
     opts.animationName = animationName;
     opts.fps           = fps;
     opts.outputDir     = outputDir;
-    opts.basename      = basename.isEmpty() ? animationName : basename;
+    // Same default basename rule as the CLI/MCP: the internal morph
+    // weight clip ("MorphAnim") becomes `<entity>_morph`, so the three
+    // surfaces write the same filenames and two faces baked into one
+    // folder do not overwrite each other.
+    opts.basename      = !basename.isEmpty() ? basename
+        : (mode == VATBaker::Mode::Morph
+           && animationName == QLatin1String(MorphAnimationManager::kWeightClipName))
+            ? QString::fromStdString(entity->getName()) + QStringLiteral("_morph")
+            : animationName;
     opts.bitDepth      = bitDepth;
     opts.target        = target.trimmed().toLower();
 
@@ -289,6 +298,7 @@ bool VATBakerController::bake(const QString& animationName,
     // "baking..." state while bake() runs. A future slice can split
     // the per-frame sampling out if needed.
     setIsBaking(true);
+    if (!m_lastWarning.isEmpty()) { m_lastWarning.clear(); emit lastWarningChanged(); }
     // Reset progress before signalling so property-bound QML listeners
     // never read a stale value through the bound members.
     m_progressDone = 0;
@@ -312,6 +322,23 @@ bool VATBakerController::bake(const QString& animationName,
     if (!opts.target.isEmpty() && opts.target != QLatin1String("agnostic")
         && !engines.contains(opts.target, Qt::CaseInsensitive))
         engines << opts.target;
+    if (result.ok && mode == VATBaker::Mode::Rigid) {
+        // Only Godot has a rigid template today; tell the user which
+        // requested engines got nothing rather than reporting a clean
+        // success with a missing file.
+        QStringList skipped;
+        const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
+        for (const QString& e : engines)
+            if (!rigidCapable.contains(e.trimmed().toLower())) skipped << e;
+        if (!skipped.isEmpty()) {
+            m_lastWarning = QStringLiteral(
+                "No rigid-body shader template for %1 yet - Godot's "
+                "openvat_rigid.gdshader was written where requested; see "
+                "OpenVAT_README.md for the per-chunk math.")
+                    .arg(skipped.join(QStringLiteral(", ")));
+            emit lastWarningChanged();
+        }
+    }
     if (result.ok && !engines.isEmpty()) {
         const QStringList shadersWritten =
             VATShaderEmitter::writeShaders(outputDir, engines,

@@ -441,6 +441,8 @@ TEST_F(MCPServerBakeVatCoverageTest, MorphModeDefaultsAnimName)
 // error names it rather than silently baking a skeletal VAT.
 TEST_F(MCPServerBakeVatCoverageTest, MorphModeOnSkeletalMeshReportsNoMorphTargets)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context required to load skeletal mesh";
+    ASSERT_FALSE(testRobotMeshPath().isEmpty()) << "robot.mesh fixture not found";
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     QJsonObject args;
@@ -457,6 +459,8 @@ TEST_F(MCPServerBakeVatCoverageTest, MorphModeOnSkeletalMeshReportsNoMorphTarget
 // the payload carries chunk info and the mode tag.
 TEST_F(MCPServerBakeVatCoverageTest, RigidModePayloadCarriesChunks)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context required to load skeletal mesh";
+    ASSERT_FALSE(testRobotMeshPath().isEmpty()) << "robot.mesh fixture not found";
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     QJsonObject args;

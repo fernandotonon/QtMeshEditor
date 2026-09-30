@@ -1786,6 +1786,16 @@ Rectangle {
                 wrapMode: Text.Wrap
                 width: parent.width - 16
             }
+            // Non-fatal note (e.g. a rigid bake asked for a Unity/Unreal
+            // template that does not exist yet).
+            Text {
+                visible: VATBakerController.lastWarning !== ""
+                text: "⚠ " + VATBakerController.lastWarning
+                color: "#e0c060"
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
+            }
         }
     }
 

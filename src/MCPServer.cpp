@@ -8796,8 +8796,7 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     QString includeShaders = args.value("include_shaders").toString();
     if (target != QLatin1String("agnostic")) {
         if (includeShaders.isEmpty()) includeShaders = target;
-        else if (!includeShaders.contains(target, Qt::CaseInsensitive)
-                 && !includeShaders.contains(QLatin1String("all"), Qt::CaseInsensitive))
+        else if (!VATShaderEmitter::parseEngineList(includeShaders).contains(target))
             includeShaders += QLatin1Char(',') + target;
     }
 
@@ -8856,12 +8855,17 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         return makeErrorResult(QString("VAT bake failed: %1").arg(result.error));
 
     QStringList shadersWritten;
+    QStringList shadersSkipped;
     if (!includeShaders.isEmpty()) {
         QStringList engines = VATShaderEmitter::parseEngineList(includeShaders);
         if (mode == VATBaker::Mode::Rigid) {
+            // Only Godot has a rigid template; say so instead of
+            // silently returning ok with no shader file.
             const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
             QStringList kept;
-            for (const QString& e : engines) if (rigidCapable.contains(e)) kept << e;
+            for (const QString& e : engines) {
+                if (rigidCapable.contains(e)) kept << e; else shadersSkipped << e;
+            }
             engines = kept;
         }
         if (!engines.isEmpty())
@@ -8907,6 +8911,12 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         QJsonArray sh;
         for (const auto& pth : shadersWritten) sh.append(pth);
         content["shaders"] = sh;
+    }
+    if (!shadersSkipped.isEmpty()) {
+        content["shaders_skipped"] = shadersSkipped.join(",");
+        content["shaders_skipped_reason"] = QStringLiteral(
+            "no rigid-body shader template for these engines yet - see "
+            "OpenVAT_README.md for the per-chunk math (Godot: openvat_rigid.gdshader)");
     }
     QJsonObject bounds, lo, hi;
     lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
