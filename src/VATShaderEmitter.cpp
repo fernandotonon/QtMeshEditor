@@ -34,6 +34,14 @@ const EngineSpec kSpecs[] = {
     { "unreal", ":/vat-shaders/openvat.usf",      "openvat.usf"      },
 };
 
+// Rigid-body (#522) variants. An engine absent here has no rigid
+// template yet: `writeShaders(.., rigidMode=true)` skips it rather
+// than shipping the per-vertex shader, which would decode a chunk
+// texture as if every column were a vertex and render garbage.
+const EngineSpec kRigidSpecs[] = {
+    { "godot",  ":/vat-shaders/openvat_rigid.gdshader", "openvat_rigid.gdshader" },
+};
+
 const EngineSpec* findSpec(const QString& engineLower)
 {
     for (const auto& s : kSpecs) {
@@ -102,8 +110,16 @@ QStringList VATShaderEmitter::parseEngineList(const QString& csv,
     return out;
 }
 
+QStringList VATShaderEmitter::rigidEngines()
+{
+    QStringList out;
+    for (const auto& s : kRigidSpecs) out.append(QString::fromLatin1(s.engine));
+    return out;
+}
+
 QStringList VATShaderEmitter::writeShaders(const QString& outputDir,
-                                           const QStringList& engines)
+                                           const QStringList& engines,
+                                           bool rigidMode)
 {
     QStringList written;
     if (outputDir.isEmpty() || engines.isEmpty())
@@ -121,13 +137,18 @@ QStringList VATShaderEmitter::writeShaders(const QString& outputDir,
     for (const QString& e : engines)
         requested.insert(e.trimmed().toLower());
 
-    for (const auto& spec : kSpecs) {
+    auto writeSpec = [&](const EngineSpec& spec) {
         if (!requested.contains(QString::fromLatin1(spec.engine)))
-            continue;
+            return;
         const QString dst = QFileInfo(dir.filePath(QString::fromLatin1(
             spec.outputName))).absoluteFilePath();
         if (copyResource(QString::fromLatin1(spec.resourcePath), dst))
             written.append(dst);
+    };
+    if (rigidMode) {
+        for (const auto& spec : kRigidSpecs) writeSpec(spec);
+    } else {
+        for (const auto& spec : kSpecs) writeSpec(spec);
     }
 
     // README — only when at least one engine was actually written, so

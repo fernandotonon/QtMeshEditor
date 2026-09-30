@@ -202,6 +202,12 @@ qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / mac
 qtmesh lipsync take.wav --mesh head.glb -o spoken.glb        # audio -> ARKit weight animation
 qtmesh lipsync take.wav --mesh head.glb --fps 60 --clip Speech -o out.glb
 qtmesh lipsync take.wav --mesh head.glb --emotion joy=0.6 -o out.glb
+
+# Vertex Animation Textures (OpenVAT) — four modes, one baker
+qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
+qtmesh vat pieces.fbx --anim Explode --mode rigid --target godot -o out/  # rigid-body: one quaternion + pivot per submesh chunk (destruction / mechanical), ships openvat_rigid.gdshader
+qtmesh vat cache.abc --mode mesh-anim --anim Cache -o out/              # vertex cache (Alembic / VAT_POSE clip)
+qtmesh vat face.glb --mode morph --encoding exr -o out/                # keyed morph weights (default clip "MorphAnim"), float32 EXR; --encoding rgba8|rgba16|exr
 ```
 
 ---

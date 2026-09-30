@@ -16,6 +16,7 @@
 #include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
 #include "VATBaker.h"
+#include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
 #ifdef ENABLE_MOCAP
@@ -8754,8 +8755,31 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     SentryReporter::addBreadcrumb("ai.tool_call", "bake_vat");
 
     const QString filePath  = args.value("file").toString();
-    const QString animName  = args.value("anim").toString();
+    QString animName        = args.value("anim").toString();
     const QString outputDir = args.value("output_dir").toString();
+
+    // #522: mode / encoding / target. Validate BEFORE the import so a
+    // typo never costs a mesh load.
+    const QString modeArg = args.value("mode").toString(QStringLiteral("skeletal"));
+    VATBaker::Mode mode = VATBaker::Mode::Skeletal;
+    if (!VATBaker::modeFromId(modeArg.isEmpty() ? QStringLiteral("skeletal") : modeArg, &mode))
+        return makeErrorResult(QString("Error: unknown mode '%1' (accepted: %2)")
+                                   .arg(modeArg, VATBaker::modeIds().join(", ")));
+    const QString encodingArg = args.value("encoding").toString(QStringLiteral("rgba16"));
+    int bitDepth = 16;
+    if (!VATBaker::bitDepthFromEncodingId(
+            encodingArg.isEmpty() ? QStringLiteral("rgba16") : encodingArg, &bitDepth))
+        return makeErrorResult(QString("Error: unknown encoding '%1' (accepted: %2)")
+                                   .arg(encodingArg, VATBaker::encodingIds().join(", ")));
+    QString target = args.value("target").toString(QStringLiteral("agnostic")).trimmed().toLower();
+    if (target.isEmpty()) target = QStringLiteral("agnostic");
+    if (!VATBaker::isValidTargetId(target))
+        return makeErrorResult(QString("Error: unknown target '%1' (accepted: %2)")
+                                   .arg(target, VATBaker::targetIds().join(", ")));
+    // Morph mode defaults to the editor's weight clip (the CLI does the same).
+    if (animName.isEmpty() && mode == VATBaker::Mode::Morph)
+        animName = QString::fromLatin1(MorphAnimationManager::kWeightClipName);
+
     if (filePath.isEmpty() || animName.isEmpty() || outputDir.isEmpty())
         return makeErrorResult(
             "Error: missing required 'file', 'anim', or 'output_dir' arguments");
@@ -8767,6 +8791,14 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         return makeErrorResult("Error: fps must be > 0");
 
     const QString basename = args.value("basename").toString();
+    // Optional engine template list ("godot,unity" / "all"); a
+    // non-agnostic target implies its own.
+    QString includeShaders = args.value("include_shaders").toString();
+    if (target != QLatin1String("agnostic")) {
+        if (includeShaders.isEmpty()) includeShaders = target;
+        else if (!VATShaderEmitter::parseEngineList(includeShaders).contains(target))
+            includeShaders += QLatin1Char(',') + target;
+    }
 
     auto* mgr = Manager::getSingleton();
     SentryReporter::addBreadcrumb("file.import",
@@ -8778,37 +8810,114 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     if (imported.isEmpty())
         return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
 
-    // Pick the bake target by skeleton presence rather than list
-    // order. Some mesh formats produce auxiliary unskinned entities
-    // alongside the skinned mesh (e.g. helper geometry).
+    // Pick the bake target by MODE rather than list order: skeletal
+    // wants the skinned entity (some formats produce auxiliary
+    // unskinned helper entities); every other mode wants the entity
+    // that carries the requested clip. Fall back to the first entity
+    // so the baker's own error names what is missing.
     Ogre::Entity* entity = nullptr;
+    const std::string animStd = animName.toStdString();
     for (Ogre::Entity* e : imported) {
-        if (e && e->hasSkeleton()) { entity = e; break; }
+        if (!e) continue;
+        if (mode == VATBaker::Mode::Skeletal) {
+            if (e->hasSkeleton()) { entity = e; break; }
+        } else if (auto* states = e->getAllAnimationStates();
+                   states && states->hasAnimationState(animStd)) {
+            entity = e; break;
+        }
     }
-    if (!entity)
-        return makeErrorResult("Error: mesh has no skeleton — cannot bake VAT");
+    if (!entity && mode == VATBaker::Mode::Skeletal)
+        return makeErrorResult("Error: mesh has no skeleton — cannot bake a skeletal VAT "
+                               "(try mode mesh-anim / morph for vertex clips)");
+    if (!entity) entity = imported.first();
 
     VATBaker::Options opts;
+    opts.mode          = mode;
     opts.animationName = animName;
     opts.fps           = fps;
     opts.outputDir     = outputDir;
-    opts.basename      = basename.isEmpty() ? animName : basename;
+    opts.basename      = basename.isEmpty()
+        ? ((mode == VATBaker::Mode::Morph
+            && animName == QLatin1String(MorphAnimationManager::kWeightClipName))
+               ? QFileInfo(filePath).completeBaseName() + QStringLiteral("_morph")
+               : animName)
+        : basename;
+    opts.bitDepth      = bitDepth;
+    opts.target        = target;
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing OpenVAT bake to %1 (anim=%2)").arg(outputDir, animName));
+        QString("Writing OpenVAT bake to %1 (vat_mode=%2 anim=%3 encoding=%4 target=%5)")
+            .arg(outputDir, VATBaker::modeId(mode), animName,
+                 VATBaker::encodingId(bitDepth), target));
 
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok)
         return makeErrorResult(QString("VAT bake failed: %1").arg(result.error));
 
+    QStringList shadersWritten;
+    QStringList shadersSkipped;
+    if (!includeShaders.isEmpty()) {
+        QStringList engines = VATShaderEmitter::parseEngineList(includeShaders);
+        if (mode == VATBaker::Mode::Rigid) {
+            // Only Godot has a rigid template; say so instead of
+            // silently returning ok with no shader file.
+            const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
+            QStringList kept;
+            for (const QString& e : engines) {
+                if (rigidCapable.contains(e)) kept << e; else shadersSkipped << e;
+            }
+            engines = kept;
+        }
+        if (!engines.isEmpty())
+            shadersWritten = VATShaderEmitter::writeShaders(
+                outputDir, engines, mode == VATBaker::Mode::Rigid);
+    }
+
     QJsonObject content;
     content["ok"]          = true;
+    content["mode"]        = VATBaker::modeId(mode);
+    content["encoding"]    = VATBaker::encodingId(bitDepth);
+    content["target"]      = target;
     content["texture"]     = result.posTexPath;
     content["sidecar"]     = result.jsonPath;
     content["frameCount"]  = result.frameCount;
     content["vertexCount"] = result.vertexCount;
     content["animation"]   = animName;
     content["fps"]         = fps;
+    if (mode == VATBaker::Mode::Rigid) {
+        content["chunkCount"]  = result.chunkCount;
+        content["maxResidual"] = static_cast<double>(result.maxRigidResidual);
+        QJsonArray chunks;
+        for (const auto& c : result.chunks) {
+            QJsonObject jc;
+            jc["name"]        = c.name;
+            jc["pivot"]       = QJsonArray{ static_cast<double>(c.pivot.x),
+                                            static_cast<double>(c.pivot.y),
+                                            static_cast<double>(c.pivot.z) };
+            jc["vertexStart"] = c.vertexStart;
+            jc["vertexCount"] = c.vertexCount;
+            jc["maxResidual"] = static_cast<double>(c.maxResidual);
+            chunks.append(jc);
+        }
+        content["chunks"] = chunks;
+    }
+    if (!result.trackId.isEmpty()) content["track"] = result.trackId;
+    if (!result.morphTargets.isEmpty()) {
+        QJsonArray t;
+        for (const auto& n : result.morphTargets) t.append(n);
+        content["morphTargets"] = t;
+    }
+    if (!shadersWritten.isEmpty()) {
+        QJsonArray sh;
+        for (const auto& pth : shadersWritten) sh.append(pth);
+        content["shaders"] = sh;
+    }
+    if (!shadersSkipped.isEmpty()) {
+        content["shaders_skipped"] = shadersSkipped.join(",");
+        content["shaders_skipped_reason"] = QStringLiteral(
+            "no rigid-body shader template for these engines yet - see "
+            "OpenVAT_README.md for the per-chunk math (Godot: openvat_rigid.gdshader)");
+    }
     QJsonObject bounds, lo, hi;
     lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
     hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
@@ -13694,22 +13803,30 @@ QJsonArray MCPServer::buildToolsList()
     // bake_vat
     {
         QJsonObject props;
-        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, etc.). Mesh must expose per-vertex normals."}};
-        props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (use list_skeletal_animations to enumerate)."}};
+        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, .abc, etc.). Mesh must expose per-vertex normals."}};
+        props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (skeletal: list_skeletal_animations; mesh-anim: the vertex clip; morph: the weight clip, defaults to \"MorphAnim\" when omitted)."}};
+        props["mode"]       = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"skeletal", "rigid", "mesh-anim", "morph"}},
+            {"description", "VAT variant (#522). skeletal (default): per-vertex post-skinning positions. rigid: one rotation+pivot per chunk (submesh) per frame, fitted to the animation - destruction / mechanical pieces. mesh-anim: a full-mesh vertex clip (Alembic cache / VAT_POSE stream). morph: a morph-weight clip resolved to vertex positions."}};
+        props["encoding"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"rgba8", "rgba16", "exr"}},
+            {"description", "Texture bit depth: rgba8 (8-bit PNG, smallest), rgba16 (16-bit PNG, default), exr (float32, lossless)."}};
+        props["target"]     = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"agnostic", "unity", "unreal", "godot"}},
+            {"description", "Target engine recorded in the sidecar (`_target`); a non-agnostic target also copies that engine's shader template next to the bake. Default agnostic."}};
+        props["include_shaders"] = QJsonObject{{"type", "string"}, {"description", "Comma-separated engine templates to copy next to the bake: godot, unity, unreal, or all."}};
         props["fps"]        = QJsonObject{{"type", "number"}, {"description", "Sample rate in frames per second. Default 30."}};
         props["output_dir"] = QJsonObject{{"type", "string"}, {"description", "Directory to write the OpenVAT texture + sidecar into. Created if missing."}};
         props["basename"]   = QJsonObject{{"type", "string"}, {"description", "Base filename (no extension) for the outputs. Defaults to `anim` when empty."}};
         QJsonArray required;
         required.append("file");
-        required.append("anim");
         required.append("output_dir");
         appendTool(
             "bake_vat",
-            "Bake a skeletal animation into a Vertex Animation Texture in OpenVAT format "
-            "(sharpen3d/openvat). Output: a single 16-bit RGB PNG (height = 2 × frames; top half "
-            "positions, bottom half normals) plus `<basename>-remap_info.json` with the canonical "
-            "`os-remap` sidecar shape. Off-the-shelf openvat reference shaders for Godot / Unity / "
-            "Unreal / Blender consume the output unmodified.",
+            "Bake an animation into a Vertex Animation Texture in OpenVAT format "
+            "(sharpen3d/openvat) - four modes: skeletal (per-vertex), rigid (per-chunk quaternion+pivot), "
+            "mesh-anim (vertex cache) and morph (blend-shape weights). Output: a packed PNG/EXR "
+            "(height = 2 × frames; top half positions, bottom half normals - rigid: pivots + quaternions) "
+            "plus `<basename>-remap_info.json` with the canonical `os-remap` sidecar shape and a `_mode` key. "
+            "Off-the-shelf openvat reference shaders for Godot / Unity / Unreal / Blender consume the "
+            "per-vertex output unmodified; rigid bakes ship openvat_rigid.gdshader.",
             props,
             required
         );
