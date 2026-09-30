@@ -970,6 +970,12 @@ TEST_F(VATBakerEndToEndTest, SkeletalModeRefusesVertexClipOnRiggedEntity) {
         fs.frames.push_back(fd);
     }
     ASSERT_TRUE(VertexAnimationManager::buildClipFromFrames(mesh.get(), QStringLiteral("VCache"), fs));
+    // The clip was added to a LIVE entity's mesh, so its software
+    // vertex-animation buffers were never allocated — Ogre's skinning
+    // stage would then blend from a null source and segfault. Re-
+    // initialise first, exactly as MorphCommands does after attaching
+    // a pose to a live entity.
+    entity->_initialise(true);
     entity->refreshAvailableAnimationState();
     ASSERT_TRUE(entity->getAllAnimationStates()->hasAnimationState("VCache"));
 
