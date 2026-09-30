@@ -509,3 +509,99 @@ TEST(FaceRigger, RealTemplateHasNoFrozenLipVertices)
         << frozen << " vertices are frozen while 5+ of their neighbours move "
            ">2.0 — they matched a triangle on the wrong surface (#1061)";
 }
+
+// The back-of-the-head bug: a user head facing -Z (the template faces +Z).
+// With anchors the fit must solve the rotation and put the shapes on the
+// FACE, with deltas rotated back into the user's frame — i.e. the same
+// deformation the unrotated fit produces, turned 180° about Y.
+TEST(FaceRigger, FitsUserRotated180AboutYWhenAnchored)
+{
+    const Grid tmpl = makeGrid(12, 2.0f, 0.12f);
+    const int nt = int(tmpl.V.size()/3);
+    std::vector<float> smile(tmpl.V.size(), 0.0f);
+    for (int i = 0; i < nt; ++i) {
+        const float x = tmpl.V[size_t(i)*3], y = tmpl.V[size_t(i)*3+1];
+        smile[size_t(i)*3+2] = 0.15f * std::exp(-(x*x + y*y) * 5.0f);
+    }
+    const QString path = tempTemplatePath();
+    ASSERT_TRUE(writeSyntheticTemplate(path, tmpl, {{"mouthSmileLeft", smile}}));
+    FaceRig::ArkitTemplate at;
+    QString err;
+    ASSERT_TRUE(at.load(path, &err)) << err.toStdString();
+
+    // Reference: the unrotated fit (the pre-existing, passing path).
+    const Grid user = makeGrid(16, 2.0f, 0.12f);
+    const int nu = int(user.V.size()/3);
+    const auto ref = FaceRig::buildFaceRig(user.V, user.F, at);
+    ASSERT_TRUE(ref.ok) << ref.error;
+
+    // Rotated user: 180° about Y (x -> -x, z -> -z).
+    Grid turned = user;
+    for (int i = 0; i < nu; ++i) {
+        turned.V[size_t(i)*3]   = -user.V[size_t(i)*3];
+        turned.V[size_t(i)*3+2] = -user.V[size_t(i)*3+2];
+    }
+    // A handful of anchors: template corner/centre vertices -> where those
+    // template points land on the turned user (same surface, so the target
+    // is the rotated template point itself).
+    std::vector<FaceRig::NricpLandmark> anchors;
+    for (int tv : {0, 11, 132, 143, 66, 5, 138, 60, 71}) {
+        ASSERT_LT(tv, nt);
+        FaceRig::NricpLandmark lm;
+        lm.tmplVertex = tv;
+        lm.target = { -tmpl.V[size_t(tv)*3], tmpl.V[size_t(tv)*3+1], -tmpl.V[size_t(tv)*3+2] };
+        anchors.push_back(lm);
+    }
+    const auto r = FaceRig::buildFaceRig(turned.V, turned.F, at, {}, {}, anchors);
+    ASSERT_TRUE(r.ok) << r.error;
+    ASSERT_EQ(r.shapes.size(), 1u);
+    EXPECT_LT(r.fitMeanResidualPct, 5.0) << "the turned surface must fit as tightly as the reference";
+
+    // The smile pushes +Z on the template; on the turned user it must push -Z
+    // (rotated back), NOT +Z, and its magnitude must match the reference.
+    double sumZ = 0.0, sumZRef = 0.0, sumAbs = 0.0, sumAbsRef = 0.0;
+    for (int i = 0; i < nu; ++i) {
+        sumZ    += r.shapes[0].userDeltas[size_t(i)*3+2];
+        sumZRef += ref.shapes[0].userDeltas[size_t(i)*3+2];
+        sumAbs    += std::fabs(r.shapes[0].userDeltas[size_t(i)*3+2]);
+        sumAbsRef += std::fabs(ref.shapes[0].userDeltas[size_t(i)*3+2]);
+    }
+    EXPECT_GT(sumZRef, 0.0);
+    EXPECT_LT(sumZ, 0.0) << "deltas were not rotated back into the user's frame";
+    EXPECT_NEAR(sumAbs, sumAbsRef, 0.35 * sumAbsRef)
+        << "turned fit moved a very different amount of surface than the reference";
+    EXPECT_NEAR(r.shapes[0].maxDisp, ref.shapes[0].maxDisp, 0.35f * ref.shapes[0].maxDisp);
+}
+
+// Same head, no anchors, but a face-direction hint (what the attach path
+// passes when detection ranked a view without yielding anchors).
+TEST(FaceRigger, FaceDirHintYawsAnUnanchoredHead)
+{
+    const Grid tmpl = makeGrid(12, 2.0f, 0.12f);
+    const int nt = int(tmpl.V.size()/3);
+    std::vector<float> smile(tmpl.V.size(), 0.0f);
+    for (int i = 0; i < nt; ++i) {
+        const float x = tmpl.V[size_t(i)*3], y = tmpl.V[size_t(i)*3+1];
+        smile[size_t(i)*3+2] = 0.15f * std::exp(-(x*x + y*y) * 5.0f);
+    }
+    const QString path = tempTemplatePath();
+    ASSERT_TRUE(writeSyntheticTemplate(path, tmpl, {{"mouthSmileLeft", smile}}));
+    FaceRig::ArkitTemplate at;
+    QString err;
+    ASSERT_TRUE(at.load(path, &err)) << err.toStdString();
+
+    const Grid user = makeGrid(16, 2.0f, 0.12f);
+    const int nu = int(user.V.size()/3);
+    Grid turned = user;
+    for (int i = 0; i < nu; ++i) {
+        turned.V[size_t(i)*3]   = -user.V[size_t(i)*3];
+        turned.V[size_t(i)*3+2] = -user.V[size_t(i)*3+2];
+    }
+    FaceRig::FaceRigOptions opts;
+    opts.faceDirHint = {0, 0, -1};
+    const auto r = FaceRig::buildFaceRig(turned.V, turned.F, at, opts);
+    ASSERT_TRUE(r.ok) << r.error;
+    double sumZ = 0.0;
+    for (int i = 0; i < nu; ++i) sumZ += r.shapes[0].userDeltas[size_t(i)*3+2];
+    EXPECT_LT(sumZ, 0.0) << "hint must yaw the head so the smile pushes -Z in the user frame";
+}

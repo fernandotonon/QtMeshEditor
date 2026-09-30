@@ -145,6 +145,13 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
     FaceRig::headSubmesh(*geo, headV, headF);
     const std::vector<FaceRig::NricpLandmark> anchors =
         FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl);
+    // Too few anchors to solve the head's orientation from: fall back to the
+    // face-direction the view ranking reports (valid even on weak detections).
+    m_faceDirHint = {0, 0, 0};
+    if (anchors.size() < 3) {
+        const FaceRig::MeshLandmarks ulm = FaceRig::detectMeshLandmarks(entity, headV, headF);
+        if (ulm.faceDirValid) m_faceDirHint = ulm.faceDirLocal;
+    }
 
     m_geo = geo;
     return runRigAsync(tmpl, maxShapes, maxResidualPct, amplitude, anchors);
@@ -170,6 +177,7 @@ bool FaceRigController::runRigAsync(
     opts.maxShapes = maxShapes;
     opts.maxFitResidualPct = maxResidualPct;
     opts.amplitude = amplitude;
+    opts.faceDirHint = m_faceDirHint;
     auto anchors =
         std::make_shared<std::vector<FaceRig::NricpLandmark>>(anchorsIn);
 
@@ -546,6 +554,7 @@ bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct,
     auto tmpl = m_markerTmpl;
     if (!tmpl) { emit error(QStringLiteral("Template not loaded.")); return false; }
     const auto anchors = FaceRig::anchorsFromMarkers(m_markers, *tmpl);
+    m_faceDirHint = {0, 0, 0};   // orientation comes from the markers themselves
     int placedCount = 0;
     for (const auto& m : m_markers) placedCount += m.placed ? 1 : 0;
     qWarning("[facerig] rigFromMarkers: %d/%zu markers placed -> %zu anchors",

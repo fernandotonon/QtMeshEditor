@@ -1,4 +1,8 @@
 #include "FaceRigger.h"
+#include "FaceRigAlign.h"
+
+#include <cstdio>
+#include <cstdlib>
 
 #include <QtGlobal>
 #include <cstdio>
@@ -441,7 +445,6 @@ double bboxDiag(const std::vector<float>& v)
     for (int a = 0; a < 3; ++a) s += double(hi[a]-lo[a]) * double(hi[a]-lo[a]);
     return std::sqrt(s);
 }
-
 }  // namespace
 
 std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
@@ -596,6 +599,17 @@ std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
     return out;
 }
 
+namespace {
+// The fit proper — expects the user head in the template's orientation.
+FaceRigResult buildFaceRigAligned(const std::vector<float>& userV,
+                                  const std::vector<int>& userF,
+                                  const ArkitTemplate& tmpl,
+                                  const FaceRigOptions& opts,
+                                  const std::vector<char>& headMask,
+                                  const std::vector<NricpLandmark>& landmarks,
+                                  const FaceRigProgressFn& progress);
+}  // namespace
+
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
@@ -603,6 +617,86 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<char>& headMask,
                            const std::vector<NricpLandmark>& landmarks,
                            const FaceRigProgressFn& progress)
+{
+    // ── ORIENTATION ─────────────────────────────────────────────────────
+    // Everything below (NRICP's centroid+scale prealign, the RBF pre-warp's
+    // affine part, the surface-side tests) assumes the user head faces the
+    // way the template does. Solve the template->user rotation from the
+    // anchors (Horn similarity — a PROPER rotation, never a reflection), fit
+    // the user in the template frame, rotate the deltas back. A head facing
+    // -Z used to receive the template on the BACK of its skull; markers did
+    // not help because the marker-swap heuristic and the anchor gate were
+    // rotation-free too (fixed in FaceRigLandmarks via rotationAwareResidual).
+    std::array<float, 9> R{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::array<float, 3> pivot{0, 0, 0};
+    bool rotate = false;
+    constexpr float kMinAngleDeg = 3.0f;   // below this the legacy path is bit-identical
+    if (tmpl.valid() && landmarks.size() >= 3) {
+        const SimilarityAlign a = alignTemplateToUser(tmpl.neutral(), landmarks);
+        if (a.ok && a.angleDeg > kMinAngleDeg) {
+            R = a.R;
+            rotate = true;
+            double c[3] = {0, 0, 0}; int n = 0;
+            for (const auto& lm : landmarks) {
+                if (lm.tmplVertex < 0) continue;
+                for (int k = 0; k < 3; ++k) c[k] += lm.target[size_t(k)];
+                ++n;
+            }
+            if (n > 0) for (int k = 0; k < 3; ++k) pivot[size_t(k)] = float(c[k] / n);
+            if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                std::fprintf(stderr, "[facerig] orientation from %d anchors: "
+                             "rotation %.1f deg, residual %.3f -> fitting in the "
+                             "template frame\n", a.count, a.angleDeg, a.residual);
+        }
+    } else if (landmarks.size() < 3) {
+        const float hx = opts.faceDirHint[0], hy = opts.faceDirHint[1], hz = opts.faceDirHint[2];
+        if (hx*hx + hy*hy + hz*hz > 1e-8f) {
+            float deg = 0.0f;
+            const std::array<float, 9> Y = yawToPlusZ(opts.faceDirHint, kMinAngleDeg, &deg);
+            if (deg > 0.0f) {
+                // Y maps the user's face direction onto +Z, i.e. it is R^T.
+                R = { Y[0], Y[3], Y[6],  Y[1], Y[4], Y[7],  Y[2], Y[5], Y[8] };
+                rotate = true;
+                double c[3] = {0, 0, 0};
+                const size_t nv = userV.size() / 3;
+                for (size_t i = 0; i < nv; ++i)
+                    for (int k = 0; k < 3; ++k) c[k] += userV[i*3 + size_t(k)];
+                if (nv) for (int k = 0; k < 3; ++k) pivot[size_t(k)] = float(c[k] / double(nv));
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] orientation from face-direction "
+                                 "hint: yaw %.1f deg -> fitting in the template frame\n", deg);
+            }
+        }
+    }
+    if (!rotate)
+        return buildFaceRigAligned(userV, userF, tmpl, opts, headMask, landmarks, progress);
+
+    std::vector<float> alignedV = userV;
+    rotateInPlace(alignedV, R, pivot, /*transpose=*/true);
+    std::vector<NricpLandmark> alignedLm = landmarks;
+    for (auto& lm : alignedLm) {
+        const std::array<float, 3> p{ lm.target[0] - pivot[0], lm.target[1] - pivot[1],
+                                      lm.target[2] - pivot[2] };
+        const std::array<float, 3> q = rotateVec(R, p, true);
+        lm.target = { q[0] + pivot[0], q[1] + pivot[1], q[2] + pivot[2] };
+    }
+    FaceRigResult r = buildFaceRigAligned(alignedV, userF, tmpl, opts, headMask,
+                                          alignedLm, progress);
+    if (!r.ok) return r;
+    // Deltas are directions: rotate back with R (no pivot).
+    for (auto& sh : r.shapes)
+        rotateInPlace(sh.userDeltas, R, {0, 0, 0}, /*transpose=*/false);
+    return r;
+}
+
+namespace {
+FaceRigResult buildFaceRigAligned(const std::vector<float>& userV,
+                                  const std::vector<int>& userF,
+                                  const ArkitTemplate& tmpl,
+                                  const FaceRigOptions& opts,
+                                  const std::vector<char>& headMask,
+                                  const std::vector<NricpLandmark>& landmarks,
+                                  const FaceRigProgressFn& progress)
 {
     FaceRigResult r;
     if (userV.size() < 9 || userF.size() < 3) {
@@ -1112,13 +1206,16 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
             std::fprintf(stderr, "[facerig] anchored fit produced invisible "
                          "shapes (max %.5f on diag %.3f) — retrying "
                          "unanchored\n", maxAmp, diag);
-            return buildFaceRig(userV, userF, tmpl, opts, headMask, {},
-                                progress);
+            // Stay in the (already aligned) frame: the public wrapper
+            // rotates the deltas back once, after this returns.
+            return buildFaceRigAligned(userV, userF, tmpl, opts, headMask, {},
+                                       progress);
         }
     }
 
     r.ok = true;
     return r;
 }
+}  // namespace
 
 }  // namespace FaceRig

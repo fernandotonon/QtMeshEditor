@@ -78,6 +78,18 @@ ArkitTemplate  (ICT-FaceKit neutral + 52 expression deltas, one topology)
 
 ## Quality & limits
 
+**Orientation is solved, not assumed.** The head can face any direction:
+the fit derives the template→head rotation from the landmark anchors
+(auto-detected or your markers) with a Horn similarity fit, fits in the
+template's frame, and rotates the resulting blendshape deltas back. A
+head that faces −Z (common for glTF exports), +X, or is pitched/rolled
+rigs the same as one facing +Z. When detection finds no anchors but still
+ranked a facing view, that face direction alone yaws the head into place.
+Only with no detector at all does the old "faces +Z" assumption remain —
+place markers in that case. (Earlier builds draped the template over the
+back of the skull for any head not facing +Z, markers included, because
+the anchor-quality gate and the left/right marker check ignored rotation.)
+
 - **Humanoid faces only.** The fit residual is a gate: a non-face mesh fits
   poorly and is **rejected** (`--max-residual`, default 8% of the mesh
   diagonal), rather than emitting garbage shapes. This mirrors the

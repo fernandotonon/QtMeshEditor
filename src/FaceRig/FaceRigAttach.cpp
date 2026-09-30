@@ -279,7 +279,16 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
     const std::vector<NricpLandmark> anchors =
         buildLandmarkAnchors(entity, headV, headF, tmpl);
 
-    const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, opts,
+    // No anchors (weak/absent detection): still tell the fit which way the
+    // face points when the landmark view ranking knows, so the template is
+    // yawed onto the face instead of the back of the head.
+    FaceRigOptions fitOpts = opts;
+    if (anchors.size() < 3) {
+        const MeshLandmarks ulm = detectMeshLandmarks(entity, headV, headF);
+        if (ulm.faceDirValid) fitOpts.faceDirHint = ulm.faceDirLocal;
+    }
+
+    const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, fitOpts,
                                            geo.headMask, anchors);
     rep.userVertexCount = res.userVertexCount;
     rep.fitMeanResidualPct = res.fitMeanResidualPct;

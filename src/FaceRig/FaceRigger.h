@@ -27,6 +27,8 @@
 
 #include <QString>
 
+#include <array>
+
 #include <functional>
 #include <string>
 #include <vector>
@@ -67,6 +69,12 @@ struct FaceRigOptions {
     // >1 amplifies subtle results on stylized faces whose transfer comes out
     // conservative. Clamped by callers to a sane range.
     double amplitude = 1.0;
+    // Optional direction the USER face points (mesh-local, up = +Y), from the
+    // landmark view ranking. Used ONLY when fewer than 3 anchors are supplied:
+    // the fit then yaws the user head so this direction meets the template's
+    // +Z. With anchors, the rotation is solved from them instead (Horn fit),
+    // which also handles pitch/roll. Zero = no hint.
+    std::array<float, 3> faceDirHint{0, 0, 0};
 };
 
 // Progress callback: (done, total, phase). `phase` is a short static label
@@ -87,6 +95,12 @@ using FaceRigProgressFn =
 // vertices to USER positions (in the SAME frame as userV), computed externally
 // by the Ogre landmark layer. When present they anchor the NRICP fit so the
 // template lands on the real eyes/nose/mouth instead of a mis-oriented drape.
+// ORIENTATION: with >= 3 anchors the template->user rotation is solved from
+// them (Horn), the user mesh is fitted in the TEMPLATE's frame and the deltas
+// are rotated back — so a head facing -Z / +X / any yaw, pitch or roll rigs
+// correctly (it used to land on the back of the head). Without anchors,
+// `opts.faceDirHint` yaws the head to +Z; with neither, the pre-existing
+// front-facing contract applies.
 // `progress` (optional) reports fit + per-shape steps and can cancel.
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,

@@ -3,6 +3,8 @@
 
 #include "FaceRig/FaceRigLandmarks.h"   // FaceMarker, NricpLandmark
 
+#include <array>
+
 #include <QObject>
 #include <QQmlEngine>
 #include <QStringList>
@@ -147,6 +149,10 @@ private:
     bool m_seededConfident = false;
     std::string m_markerEntityName;
     std::vector<FaceRig::FaceMarker> m_markers;
+    // Face-forward direction (mesh-local) from the landmark view ranking,
+    // passed to the fit when the auto path found < 3 anchors so the template
+    // is yawed onto the face instead of the back of the head. Zero = none.
+    std::array<float, 3> m_faceDirHint{0, 0, 0};
     std::vector<Ogre::SceneNode*> m_markerNodes;
     std::shared_ptr<class FaceRig::ArkitTemplate> m_markerTmpl;
     // Geometry extracted on the main thread, handed to the worker rig run.

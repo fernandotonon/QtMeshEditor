@@ -1,4 +1,5 @@
 #include "FaceRigLandmarks.h"
+#include "FaceRigAlign.h"
 
 #include "ArkitTemplate.h"
 #include "FaceLandmarkDetector.h"
@@ -61,6 +62,13 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     MeshLandmarks out;
     if (!entity || localV.size() < 9 || localF.size() < 3) return out;
 
+    // Download-on-first-use, like every other model consumer: nothing else on
+    // the auto path fetched face_landmarks.onnx, so a fresh install never had
+    // a detector — no anchors, no face direction — and silently fitted with
+    // the "faces +Z" assumption (the back-of-the-head rig). Honours
+    // QTMESH_FACERIG_NO_DOWNLOAD; a failed fetch still returns !ok.
+    if (!FaceLandmarkDetector::present())
+        FaceLandmarkDetector::ensureModelBlocking();
     FaceLandmarkDetector det;
     if (!det.load()) return out;   // ONNX off / model missing → caller falls back
 
@@ -552,7 +560,10 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
     std::vector<NricpLandmark> anchors;
     if (!userEntity || !tmpl.valid()) return anchors;
     if (!FaceLandmarkDetector::backendAvailable()) return anchors;
-    // Cheap pre-check: no model → skip the renders entirely.
+    // Cheap pre-check: no model (after a first-use download attempt) → skip
+    // the renders entirely.
+    if (!FaceLandmarkDetector::present())
+        FaceLandmarkDetector::ensureModelBlocking();
     { FaceLandmarkDetector probe; if (!probe.load()) return anchors; }
 
     // template side: build a temp entity, detect, map each landmark → nearest
@@ -710,39 +721,14 @@ int nearestTemplateVertex(const std::vector<float>& tn, int tvc,
 double constellationResidual(const std::vector<std::array<float,3>>& C,
                              const std::vector<std::array<float,3>>& U)
 {
-    const int n = int(std::min(C.size(), U.size()));
-    if (n < 4) return 1e9;
-    std::array<double,3> cC{0,0,0}, cU{0,0,0};
-    for (int i = 0; i < n; ++i)
-        for (int d = 0; d < 3; ++d) {
-            cC[size_t(d)] += C[size_t(i)][size_t(d)] / n;
-            cU[size_t(d)] += U[size_t(i)][size_t(d)] / n;
-        }
-    double sC = 0, sU = 0;
-    for (int i = 0; i < n; ++i) {
-        double dc = 0, du = 0;
-        for (int d = 0; d < 3; ++d) {
-            const double a = C[size_t(i)][size_t(d)] - cC[size_t(d)];
-            const double b = U[size_t(i)][size_t(d)] - cU[size_t(d)];
-            dc += a*a; du += b*b;
-        }
-        sC += std::sqrt(dc); sU += std::sqrt(du);
-    }
-    if (sC < 1e-12 || sU < 1e-12) return 1e9;
-    const double scale = sU / sC;
-    double resid = 0;
-    for (int i = 0; i < n; ++i) {
-        double d2 = 0;
-        for (int d = 0; d < 3; ++d) {
-            const double m = (C[size_t(i)][size_t(d)] - cC[size_t(d)]) * scale
-                             + cU[size_t(d)];
-            const double e = U[size_t(i)][size_t(d)] - m;
-            d2 += e*e;
-        }
-        resid += std::sqrt(d2);
-    }
-    resid /= n;
-    return resid / (sU / n);   // normalise by mean spread of U
+    // Rotation-AWARE (FaceRigAlign): the old centroid+scale residual scored
+    // any head not facing the template's +Z as garbage — auto-detected anchors
+    // on a -Z face were discarded (resid >> 0.15) and the marker left/right
+    // swap fired on every yawed head, both of which sent the template to the
+    // back of the skull. A mirrored pairing still scores high here, since no
+    // proper rotation explains a reflection.
+    if (std::min(C.size(), U.size()) < 4) return 1e9;
+    return rotationAwareResidual(C, U);
 }
 }  // namespace
 
