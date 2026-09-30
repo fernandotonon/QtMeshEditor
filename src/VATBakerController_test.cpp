@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <QSignalSpy>
+#include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 
 #include "Manager.h"
@@ -169,4 +171,75 @@ TEST_F(VATBakerControllerSceneTest, AvailableAnimationsRefreshesOnSelectionChang
     ctrl->refreshAnimations();
     EXPECT_GT(spy.count(), beforeAttach);
     EXPECT_FALSE(ctrl->availableAnimations().isEmpty());
+}
+
+// ===========================================================================
+// #522 — mode family surface on the controller.
+// ===========================================================================
+
+TEST(VATBakerControllerStandalone, ModesEmptyWithoutSelection) {
+    clearSelection();
+    auto* ctrl = VATBakerController::instance();
+    ctrl->refreshAnimations();
+    EXPECT_TRUE(ctrl->availableModes().isEmpty());
+    EXPECT_TRUE(ctrl->animationsForMode(QStringLiteral("skeletal")).isEmpty());
+    EXPECT_TRUE(ctrl->animationsForMode(QStringLiteral("bogus")).isEmpty());
+    EXPECT_EQ(ctrl->encodingIds().size(), 3);
+    EXPECT_EQ(ctrl->targetIds().size(), 4);
+    EXPECT_EQ(ctrl->modeLabel(QStringLiteral("rigid")), QStringLiteral("Rigid body (per-chunk)"));
+    EXPECT_EQ(ctrl->modeLabel(QStringLiteral("bogus")), QStringLiteral("bogus"));
+}
+
+TEST(VATBakerControllerStandalone, BakeRefusesUnknownModeEncodingTarget) {
+    clearSelection();
+    auto* ctrl = VATBakerController::instance();
+    // These refusals come AFTER the selection check, so an entity is
+    // needed for them to be reached; without a scene the "no entity"
+    // refusal fires first — pinned in the scene fixture below. Here we
+    // only assert the call is refused and emits exactly one finish.
+    QSignalSpy spy(ctrl, &VATBakerController::bakeFinished);
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("Idle"), 30.0, QStringLiteral("/tmp/x"),
+                            QString(), QStringList(), QStringLiteral("bogus")));
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(VATBakerControllerSceneTest, ModesReflectSelectionAndBakeRefusesUnknownIds) {
+    auto* entity = createAnimatedTestEntity("VAT_Ctrl_Modes");
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->append(entity);
+    auto* ctrl = VATBakerController::instance();
+    ctrl->refreshAnimations();
+    // Skeletal test triangle: skeletal yes; rigid no (shared vertex
+    // data); no vertex clips → no mesh-anim / morph.
+    EXPECT_TRUE(ctrl->availableModes().contains(QStringLiteral("skeletal")));
+    EXPECT_FALSE(ctrl->availableModes().contains(QStringLiteral("rigid")));
+    EXPECT_FALSE(ctrl->availableModes().contains(QStringLiteral("morph")));
+    EXPECT_EQ(ctrl->animationsForMode(QStringLiteral("skeletal")),
+              QStringList{QStringLiteral("TestAnim")});
+    EXPECT_TRUE(ctrl->animationsForMode(QStringLiteral("mesh-anim")).isEmpty());
+
+    QTemporaryDir tmp;
+    QSignalSpy spy(ctrl, &VATBakerController::bakeFinished);
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 30.0, tmp.path(), QString(),
+                            QStringList(), QStringLiteral("bogus")));
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_TRUE(spy.last().at(2).toString().contains(QStringLiteral("mode")));
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 30.0, tmp.path(), QString(),
+                            QStringList(), QStringLiteral("skeletal"), QStringLiteral("jpeg")));
+    ASSERT_EQ(spy.count(), 2);
+    EXPECT_TRUE(spy.last().at(2).toString().contains(QStringLiteral("encoding")));
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 30.0, tmp.path(), QString(),
+                            QStringList(), QStringLiteral("skeletal"), QStringLiteral("rgba16"),
+                            QStringLiteral("blender")));
+    ASSERT_EQ(spy.count(), 3);
+    EXPECT_TRUE(spy.last().at(2).toString().contains(QStringLiteral("target")));
+
+    // A valid explicit skeletal + rgba8 + godot bake succeeds and ships
+    // the Godot template because of the target.
+    EXPECT_TRUE(ctrl->bake(QStringLiteral("TestAnim"), 30.0, tmp.path(), QString(),
+                           QStringList(), QStringLiteral("skeletal"), QStringLiteral("rgba8"),
+                           QStringLiteral("godot")));
+    ASSERT_EQ(spy.count(), 4);
+    EXPECT_TRUE(spy.last().at(0).toBool()) << spy.last().at(2).toString().toStdString();
+    EXPECT_TRUE(QFile::exists(QDir(tmp.path()).filePath(QStringLiteral("openvat.gdshader"))));
 }

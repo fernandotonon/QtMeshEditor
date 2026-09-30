@@ -384,3 +384,102 @@ TEST_F(MCPServerBakeVatCoverageTest, UnknownAnimationFailsBake)
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// #522 — mode / encoding / target validation happens BEFORE the import.
+// ---------------------------------------------------------------------------
+TEST_F(MCPServerBakeVatCoverageTest, UnknownModeIsErrorBeforeImport)
+{
+    QJsonObject args;
+    args["file"]       = "/nonexistent/model.fbx";   // would fail import — must not get there
+    args["anim"]       = "Walk";
+    args["output_dir"] = "/tmp/whatever";
+    args["mode"]       = "bogus";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("unknown mode")) << resultText(result).toStdString();
+}
+
+TEST_F(MCPServerBakeVatCoverageTest, UnknownEncodingIsError)
+{
+    QJsonObject args;
+    args["file"]       = "/nonexistent/model.fbx";
+    args["anim"]       = "Walk";
+    args["output_dir"] = "/tmp/whatever";
+    args["encoding"]   = "jpeg";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("unknown encoding")) << resultText(result).toStdString();
+}
+
+TEST_F(MCPServerBakeVatCoverageTest, UnknownTargetIsError)
+{
+    QJsonObject args;
+    args["file"]       = "/nonexistent/model.fbx";
+    args["anim"]       = "Walk";
+    args["output_dir"] = "/tmp/whatever";
+    args["target"]     = "blender";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("unknown target")) << resultText(result).toStdString();
+}
+
+// Morph mode fills in the default weight clip, so a missing 'anim' is
+// no longer the failing gate — the missing file is.
+TEST_F(MCPServerBakeVatCoverageTest, MorphModeDefaultsAnimName)
+{
+    QJsonObject args;
+    args["file"]       = "/nonexistent/model.glb";
+    args["output_dir"] = "/tmp/whatever";
+    args["mode"]       = "morph";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("file not found")) << resultText(result).toStdString();
+}
+
+// Skeletal mesh + morph mode: the baker refuses (no poses) and the
+// error names it rather than silently baking a skeletal VAT.
+TEST_F(MCPServerBakeVatCoverageTest, MorphModeOnSkeletalMeshReportsNoMorphTargets)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["file"]       = testRobotMeshPath();
+    args["anim"]       = "Walk";
+    args["output_dir"] = tmp.path();
+    args["mode"]       = "morph";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("morph targets")) << resultText(result).toStdString();
+}
+
+// Rigid mode on the robot (per-submesh vertex data, skeletal clip):
+// the payload carries chunk info and the mode tag.
+TEST_F(MCPServerBakeVatCoverageTest, RigidModePayloadCarriesChunks)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["file"]       = testRobotMeshPath();
+    args["anim"]       = "Walk";
+    args["output_dir"] = tmp.path();
+    args["mode"]       = "rigid";
+    args["encoding"]   = "rgba8";
+    args["target"]     = "godot";
+    const QJsonObject result = server->toolBakeVat(args);
+    if (resultIsError(result)) {
+        // A shared-vertex robot mesh cannot be chunked; that is a
+        // documented refusal, not a failure of the tool plumbing.
+        EXPECT_TRUE(resultText(result).contains("shared")) << resultText(result).toStdString();
+        return;
+    }
+    const QJsonObject payload = parsePayload(result);
+    EXPECT_EQ(payload["mode"].toString(), QStringLiteral("rigid"));
+    EXPECT_EQ(payload["encoding"].toString(), QStringLiteral("rgba8"));
+    EXPECT_EQ(payload["target"].toString(), QStringLiteral("godot"));
+    EXPECT_GT(payload["chunkCount"].toInt(), 0);
+    EXPECT_TRUE(payload.contains("chunks"));
+    EXPECT_TRUE(QFile::exists(payload["texture"].toString()));
+    // target=godot ships the rigid Godot template next to the bake.
+    EXPECT_TRUE(QFile::exists(QDir(tmp.path()).filePath("openvat_rigid.gdshader")));
+}

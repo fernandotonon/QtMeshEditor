@@ -49,4 +49,13 @@ bool writeRGB32F(const QString& path,
                  int height,
                  const std::vector<float>& rgbData);
 
+/// 4-channel variant: `rgbaData` is interleaved RGBA, `width*height*4`
+/// floats. Channels are declared A,B,G,R (EXR alphabetical order); a
+/// reader asking for R/G/B/A by name gets the caller's layout back.
+/// Used by the rigid-body VAT (quaternion x,y,z,w in one texel).
+bool writeRGBA32F(const QString& path,
+                  int width,
+                  int height,
+                  const std::vector<float>& rgbaData);
+
 } // namespace MinimalEXR

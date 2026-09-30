@@ -53,6 +53,14 @@ class VATBakerController : public QObject
     QML_SINGLETON
 
     Q_PROPERTY(QStringList availableAnimations READ availableAnimations NOTIFY availableAnimationsChanged)
+    /// Mode ids the current selection can bake (#522): `skeletal` when
+    /// the entity has a skeleton with clips, `mesh-anim` when the mesh
+    /// carries vertex clips, `morph` when it has poses + a weight clip,
+    /// `rigid` whenever any clip exists and every submesh owns its
+    /// vertex data. Empty when nothing bakeable is selected.
+    Q_PROPERTY(QStringList availableModes READ availableModes NOTIFY availableAnimationsChanged)
+    Q_PROPERTY(QStringList encodingIds READ encodingIds CONSTANT)
+    Q_PROPERTY(QStringList targetIds READ targetIds CONSTANT)
     Q_PROPERTY(bool isBaking READ isBaking NOTIFY isBakingChanged)
     Q_PROPERTY(int progressDone READ progressDone NOTIFY bakeProgress)
     Q_PROPERTY(int progressTotal READ progressTotal NOTIFY bakeProgress)
@@ -63,6 +71,16 @@ public:
     static void kill();
 
     QStringList availableAnimations() const { return m_animations; }
+    QStringList availableModes() const { return m_modes; }
+    QStringList encodingIds() const;
+    QStringList targetIds() const;
+
+    /// Animations the selected entity can bake in `modeId` (skeletal
+    /// clips for `skeletal`/`rigid`, vertex clips for `mesh-anim`,
+    /// morph weight clips for `morph`). Empty for an unknown mode.
+    Q_INVOKABLE QStringList animationsForMode(const QString& modeId) const;
+    /// Human label for a mode id (picker text).
+    Q_INVOKABLE QString modeLabel(const QString& modeId) const;
     bool isBaking() const { return m_isBaking; }
     int progressDone()  const { return m_progressDone; }
     int progressTotal() const { return m_progressTotal; }
@@ -79,11 +97,21 @@ public:
     /// callers can rely on a single observable channel), except for
     /// the "already baking" guard where the in-flight bake will emit
     /// its own `bakeFinished` separately.
+    ///
+    /// `modeId` selects the sampler (`skeletal` default — see
+    /// `VATBaker::Mode`), `encodingId` the texture bit depth
+    /// (`rgba8` | `rgba16` default | `exr`), `target` the engine id
+    /// recorded in the sidecar (`agnostic` default | `unity` | `unreal`
+    /// | `godot`; a non-agnostic target also ships that engine's shader
+    /// template). Unknown ids are refused with `bakeFinished(false…)`.
     Q_INVOKABLE bool bake(const QString& animationName,
                           double fps,
                           const QString& outputDir,
                           const QString& basename = QString(),
-                          const QStringList& includeShadersFor = QStringList());
+                          const QStringList& includeShadersFor = QStringList(),
+                          const QString& modeId = QStringLiteral("skeletal"),
+                          const QString& encodingId = QStringLiteral("rgba16"),
+                          const QString& target = QStringLiteral("agnostic"));
 
     /// Open a native folder picker. Returns the selected absolute path
     /// or an empty string if the user cancelled. Used by the Inspector
@@ -103,6 +131,7 @@ private:
     void setIsBaking(bool b);
 
     QStringList m_animations;
+    QStringList m_modes;
     bool m_isBaking = false;
     int  m_progressDone  = 0;
     int  m_progressTotal = 0;

@@ -11,6 +11,7 @@ The MIT License
 #include "VATBaker.h"
 
 #include "MinimalEXRWriter.h"
+#include "Mocap/FaceCapPose.h"
 
 #include <QDir>
 #include <QFile>
@@ -22,14 +23,18 @@ The MIT License
 
 #include <cstring>
 
+#include <OgreAnimation.h>
 #include <OgreAnimationState.h>
 #include <OgreCommon.h>
 #include <OgreEntity.h>
 #include <OgreFrameListener.h>
+#include <OgreKeyFrame.h>
 #include <OgreHardwareVertexBuffer.h>
 #include <OgreMesh.h>
+#include <OgreQuaternion.h>
 #include <OgreRoot.h>
 #include <OgreSkeleton.h>
+#include <OgreSkeletonInstance.h>
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <OgreVertexIndexData.h>
@@ -38,16 +43,171 @@ The MIT License
 #include <cmath>
 #include <limits>
 
+// ---------------------------------------------------------------------------
+// Mode / encoding / target ids.
+// ---------------------------------------------------------------------------
+
+QString VATBaker::modeId(Mode mode)
+{
+    switch (mode) {
+    case Mode::Skeletal: return QStringLiteral("skeletal");
+    case Mode::Rigid:    return QStringLiteral("rigid");
+    case Mode::MeshAnim: return QStringLiteral("mesh-anim");
+    case Mode::Morph:    return QStringLiteral("morph");
+    }
+    return QStringLiteral("skeletal");
+}
+
+bool VATBaker::modeFromId(const QString& id, Mode* out)
+{
+    const QString t = id.trimmed().toLower();
+    Mode m;
+    if (t == QLatin1String("skeletal") || t == QLatin1String("skin")
+        || t == QLatin1String("skinned")) {
+        m = Mode::Skeletal;
+    } else if (t == QLatin1String("rigid") || t == QLatin1String("rigid-body")
+               || t == QLatin1String("rigidbody") || t == QLatin1String("rbd")) {
+        m = Mode::Rigid;
+    } else if (t == QLatin1String("mesh-anim") || t == QLatin1String("mesh_anim")
+               || t == QLatin1String("meshanim") || t == QLatin1String("vertex")
+               || t == QLatin1String("vertex-anim") || t == QLatin1String("alembic")) {
+        m = Mode::MeshAnim;
+    } else if (t == QLatin1String("morph") || t == QLatin1String("blendshape")
+               || t == QLatin1String("blendshapes")) {
+        m = Mode::Morph;
+    } else {
+        return false;
+    }
+    if (out) *out = m;
+    return true;
+}
+
+QStringList VATBaker::modeIds()
+{
+    return { QStringLiteral("skeletal"), QStringLiteral("rigid"),
+             QStringLiteral("mesh-anim"), QStringLiteral("morph") };
+}
+
+QString VATBaker::encodingId(int bitDepth)
+{
+    if (bitDepth == 8)  return QStringLiteral("rgba8");
+    if (bitDepth == 32) return QStringLiteral("exr");
+    return QStringLiteral("rgba16");
+}
+
+bool VATBaker::bitDepthFromEncodingId(const QString& id, int* outBitDepth)
+{
+    const QString t = id.trimmed().toLower();
+    int bd;
+    if (t == QLatin1String("rgba8") || t == QLatin1String("8")
+        || t == QLatin1String("png8")) {
+        bd = 8;
+    } else if (t == QLatin1String("rgba16") || t == QLatin1String("16")
+               || t == QLatin1String("png16") || t == QLatin1String("png")) {
+        bd = 16;
+    } else if (t == QLatin1String("exr") || t == QLatin1String("32")
+               || t == QLatin1String("float") || t == QLatin1String("rgba32f")) {
+        bd = 32;
+    } else {
+        return false;
+    }
+    if (outBitDepth) *outBitDepth = bd;
+    return true;
+}
+
+QStringList VATBaker::encodingIds()
+{
+    return { QStringLiteral("rgba8"), QStringLiteral("rgba16"), QStringLiteral("exr") };
+}
+
+QStringList VATBaker::targetIds()
+{
+    return { QStringLiteral("agnostic"), QStringLiteral("unity"),
+             QStringLiteral("unreal"), QStringLiteral("godot") };
+}
+
+bool VATBaker::isValidTargetId(const QString& id)
+{
+    const QString t = id.trimmed().toLower();
+    if (t.isEmpty()) return true;   // empty == agnostic
+    return targetIds().contains(t);
+}
+
 namespace {
 
-// Read one frame of post-skin positions from `entity`. The vertex
+QString normalisedTarget(const QString& target)
+{
+    const QString t = target.trimmed().toLower();
+    return t.isEmpty() ? QStringLiteral("agnostic") : t;
+}
+
+// ---------------------------------------------------------------------------
+// Sampling.
+// ---------------------------------------------------------------------------
+
+// Resolve the vertex data that holds `entity`'s DEFORMED geometry for
+// submesh `si` this frame:
+//   - skinned entity → the software-skinned buffer. When the entity
+//     ALSO carries vertex animation, Ogre feeds the skinning stage from
+//     the vertex-anim buffer, so this buffer is "morph then skin" —
+//     which is exactly what every mode wants (skeletal mode enables a
+//     skeletal clip; mesh-anim/morph modes leave the skeleton in bind
+//     pose, so the skin stage is an identity pass-through).
+//   - unskinned entity with vertex animation on that submesh → the
+//     software vertex-anim buffer.
+//   - anything else → the mesh's original (static) buffer.
+// Requires `addSoftwareAnimationRequest(true)` to have been called so
+// the software buffers exist in a headless bake.
+const Ogre::VertexData* deformedVertexData(Ogre::Entity* entity,
+                                          Ogre::Mesh* mesh,
+                                          Ogre::SubMesh* sub,
+                                          unsigned short si)
+{
+    if (sub->useSharedVertices) {
+        if (entity->hasSkeleton())
+            return entity->_getSkelAnimVertexData();
+        if (mesh->getSharedVertexDataAnimationType() != Ogre::VAT_NONE)
+            return entity->_getSoftwareVertexAnimVertexData();
+        return mesh->sharedVertexData;
+    }
+    Ogre::SubEntity* se = entity->getSubEntity(si);
+    if (!se) return nullptr;
+    if (entity->hasSkeleton())
+        return se->_getSkelAnimVertexData();
+    if (sub->getVertexAnimationType() != Ogre::VAT_NONE)
+        return se->_getSoftwareVertexAnimVertexData();
+    return sub->vertexData;
+}
+
+// Append every vertex's `semantic` element (a float3) from `vData`.
+size_t appendFloat3(const Ogre::VertexData* vData,
+                    Ogre::VertexElementSemantic semantic,
+                    std::vector<Ogre::Vector3>& out)
+{
+    const auto* elem = vData->vertexDeclaration->findElementBySemantic(semantic);
+    if (!elem) return 0;
+    auto vbuf = vData->vertexBufferBinding->getBuffer(elem->getSource());
+    if (!vbuf) return 0;
+    auto* bytes = static_cast<unsigned char*>(
+        vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    const size_t vstride = vbuf->getVertexSize();
+    for (size_t j = 0; j < vData->vertexCount; ++j) {
+        Ogre::Real* p = nullptr;
+        elem->baseVertexPointerToElement(bytes + j * vstride, &p);
+        out.emplace_back(p[0], p[1], p[2]);
+    }
+    vbuf->unlock();
+    return vData->vertexCount;
+}
+
+// Read one frame of deformed positions from `entity`. The vertex
 // ordering follows the same submesh walk NormalVisualizer uses:
 // shared vertex data appears first (and only once across all submeshes
 // that share it), then each non-shared submesh contributes its own
 // vertex range in submesh-index order.
 //
 // Returns the appended count for the caller's sanity check.
-size_t collectPostSkinPositions(Ogre::Entity* entity,
+size_t collectDeformedPositions(Ogre::Entity* entity,
                                 std::vector<Ogre::Vector3>& out)
 {
     entity->_updateAnimation();
@@ -67,30 +227,10 @@ size_t collectPostSkinPositions(Ogre::Entity* entity,
         // vertex column count in the output texture).
         if (sub->useSharedVertices && sharedAppended) continue;
 
-        Ogre::VertexData* animData = sub->useSharedVertices
-            ? entity->_getSkelAnimVertexData()
-            : entity->getSubEntity(si)->_getSkelAnimVertexData();
+        const Ogre::VertexData* animData = deformedVertexData(entity, mesh.get(), sub, si);
         if (!animData) continue;
 
-        const auto* posElem = animData->vertexDeclaration->findElementBySemantic(
-            Ogre::VES_POSITION);
-        if (!posElem) continue;
-
-        auto vbuf = animData->vertexBufferBinding->getBuffer(posElem->getSource());
-        if (!vbuf) continue;
-
-        auto* bytes = static_cast<unsigned char*>(
-            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        const size_t vstride = vbuf->getVertexSize();
-
-        for (size_t j = 0; j < animData->vertexCount; ++j) {
-            Ogre::Real* pPos = nullptr;
-            posElem->baseVertexPointerToElement(bytes + j * vstride, &pPos);
-            out.emplace_back(pPos[0], pPos[1], pPos[2]);
-            ++appended;
-        }
-
-        vbuf->unlock();
+        appended += appendFloat3(animData, Ogre::VES_POSITION, out);
 
         if (sub->useSharedVertices) sharedAppended = true;
     }
@@ -106,7 +246,15 @@ inline uint16_t toShortNormalised(float v, float lo, float hi)
     return static_cast<uint16_t>(std::lround(clamped * 65535.0f));
 }
 
-// Same submesh walk as collectPostSkinPositions but for normals.
+inline uint8_t toByteNormalised(float v, float lo, float hi)
+{
+    if (hi <= lo) return 0;
+    const float t = (v - lo) / (hi - lo);
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+    return static_cast<uint8_t>(std::lround(clamped * 255.0f));
+}
+
+// Same submesh walk as collectDeformedPositions but for normals.
 //
 // On a submesh without `VES_NORMAL`, returns SIZE_MAX as a sentinel so
 // the caller can fail the bake with a clear error. We deliberately do
@@ -116,7 +264,7 @@ inline uint16_t toShortNormalised(float v, float lo, float hi)
 constexpr size_t kCollectNormalsMissingSentinel =
     std::numeric_limits<size_t>::max();
 
-size_t collectPostSkinNormals(Ogre::Entity* entity,
+size_t collectDeformedNormals(Ogre::Entity* entity,
                               std::vector<Ogre::Vector3>& out)
 {
     Ogre::MeshPtr mesh = entity->getMesh();
@@ -130,40 +278,84 @@ size_t collectPostSkinNormals(Ogre::Entity* entity,
         if (!sub) continue;
         if (sub->useSharedVertices && sharedAppended) continue;
 
-        Ogre::VertexData* animData = sub->useSharedVertices
-            ? entity->_getSkelAnimVertexData()
-            : entity->getSubEntity(si)->_getSkelAnimVertexData();
+        const Ogre::VertexData* animData = deformedVertexData(entity, mesh.get(), sub, si);
         if (!animData) continue;
 
-        const auto* normElem = animData->vertexDeclaration->findElementBySemantic(
-            Ogre::VES_NORMAL);
-        if (!normElem) {
+        if (!animData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL)) {
             // Missing-normal submesh: surface as a hard failure rather
             // than fabricate up-vectors. The caller's error message
             // identifies which submesh hit this.
             return kCollectNormalsMissingSentinel;
         }
-
-        auto vbuf = animData->vertexBufferBinding->getBuffer(normElem->getSource());
-        if (!vbuf) continue;
-
-        auto* bytes = static_cast<unsigned char*>(
-            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        const size_t vstride = vbuf->getVertexSize();
-
-        for (size_t j = 0; j < animData->vertexCount; ++j) {
-            Ogre::Real* pNorm = nullptr;
-            normElem->baseVertexPointerToElement(bytes + j * vstride, &pNorm);
-            out.emplace_back(pNorm[0], pNorm[1], pNorm[2]);
-            ++appended;
-        }
-
-        vbuf->unlock();
+        appended += appendFloat3(animData, Ogre::VES_NORMAL, out);
 
         if (sub->useSharedVertices) sharedAppended = true;
     }
 
     return appended;
+}
+
+// Bind-pose (undeformed) positions in the same walk order — the rigid
+// fit's source points.
+size_t collectBindPositions(Ogre::Entity* entity,
+                            std::vector<Ogre::Vector3>& out)
+{
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return 0;
+    size_t appended = 0;
+    bool sharedAppended = false;
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub) continue;
+        if (sub->useSharedVertices && sharedAppended) continue;
+        const Ogre::VertexData* vData = sub->useSharedVertices
+            ? mesh->sharedVertexData : sub->vertexData;
+        if (!vData) continue;
+        appended += appendFloat3(vData, Ogre::VES_POSITION, out);
+        if (sub->useSharedVertices) sharedAppended = true;
+    }
+    return appended;
+}
+
+// Does the mesh animation `name` carry at least one vertex track?
+bool meshAnimationHasVertexTracks(Ogre::Mesh* mesh, const std::string& name)
+{
+    if (!mesh || !mesh->hasAnimation(name)) return false;
+    Ogre::Animation* a = mesh->getAnimation(name);
+    return a && !a->_getVertexTrackList().empty();
+}
+
+// Morph target names (unique pose names) referenced by the clip's
+// VAT_POSE keyframes, in first-seen order. Falls back to every pose
+// on the mesh when the clip references none (a weight clip that only
+// keys a subset still deforms only that subset — the sidecar should
+// say which).
+QStringList morphTargetsDrivenBy(Ogre::Mesh* mesh, const std::string& clip)
+{
+    QStringList out;
+    if (!mesh || !mesh->hasAnimation(clip)) return out;
+    const auto& poses = mesh->getPoseList();
+    Ogre::Animation* anim = mesh->getAnimation(clip);
+    for (const auto& kv : anim->_getVertexTrackList()) {
+        const Ogre::VertexAnimationTrack* track = kv.second;
+        if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+        for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k) {
+            const auto* kf = static_cast<const Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(k));
+            for (const auto& ref : kf->getPoseReferences()) {
+                if (ref.poseIndex >= poses.size() || !poses[ref.poseIndex]) continue;
+                const QString n = QString::fromStdString(poses[ref.poseIndex]->getName());
+                if (!n.isEmpty() && !out.contains(n)) out << n;
+            }
+        }
+    }
+    if (out.isEmpty()) {
+        for (const Ogre::Pose* p : poses) {
+            if (!p) continue;
+            const QString n = QString::fromStdString(p->getName());
+            if (!n.isEmpty() && !out.contains(n)) out << n;
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -172,18 +364,14 @@ size_t collectPostSkinNormals(Ogre::Entity* entity,
 // Sidecar emission.
 // ---------------------------------------------------------------------------
 
-namespace { QString buildOpenVATSidecar(int frameCount,
-                                        const Ogre::Vector3& lo,
-                                        const Ogre::Vector3& hi,
-                                        int bitDepth); }
+namespace { QString buildOpenVATSidecar(const VATBaker::BakeResult& result,
+                                        int bitDepth,
+                                        const QString& target); }
 
 QString VATBaker::buildSidecarJson(const BakeResult& result,
                                    const Options& opts)
 {
-    return buildOpenVATSidecar(result.frameCount,
-                               result.minBound,
-                               result.maxBound,
-                               opts.bitDepth);
+    return buildOpenVATSidecar(result, opts.bitDepth, opts.target);
 }
 
 // ---------------------------------------------------------------------------
@@ -234,20 +422,14 @@ namespace {
 // run their own swizzle on read (the Godot reference shader does
 // `vec3(x, z, -y)` to go Blender → Godot). We document the source
 // space (Ogre Y-up RH) in the sidecar via an extra non-conflicting
-// `_origin` key so a consumer's shader knows what swizzle to apply.
+// `_axes` key so a consumer's shader knows what swizzle to apply.
 
 // Round a float OUTWARD to the nearest 0.1 — floor for min, ceil for
 // max — matching openvat's `round_to_nearest_ten` (utils.py:186-188).
-// We never want a bound tighter than the actual data, so even on a
-// value already exactly at 0.1 we still pad outward by 0.1 to match
-// the Blender add-on's behavior (their math.floor(v*10)/10 yields the
-// same value, then min/max are intentionally not snapped tighter).
 inline float openvatRoundMin(float v) {
-    // floor(v * 10) / 10 — pulls down to the nearest multiple of 0.1.
     return std::floor(v * 10.0f) / 10.0f;
 }
 inline float openvatRoundMax(float v) {
-    // ceil(v * 10) / 10 — pushes up to the nearest multiple of 0.1.
     return std::ceil(v * 10.0f) / 10.0f;
 }
 
@@ -257,24 +439,35 @@ inline QString openvatFormatFloat(float v) {
     return QString::number(static_cast<double>(v), 'f', 8);
 }
 
-// Build the openvat sidecar JSON. Returned string is a single root
-// object with `os-remap` at the top level. Optional `_origin` key
-// documents our source coordinate space for shader authors.
-// `lo`/`hi` are expected to already be on the 0.1 OpenVAT grid (use
-// openvatRoundMin/openvatRoundMax to snap before calling). We just
-// format them; rounding here would silently re-snap rounded values
-// and decouple the sidecar from whatever the texture encoder used.
-//
-// `bitDepth` is recorded as an extension field (`_bit_depth`) so a
-// consumer can tell at a glance whether the texture next to this
-// sidecar is uint16 (PNG) or float32 (EXR). Standard openvat
-// consumers ignore unknown top-level keys; the field is purely for
-// our own consumers (the Unreal demo dispatches on it).
-QString buildOpenVATSidecar(int frameCount,
-                            const Ogre::Vector3& lo,
-                            const Ogre::Vector3& hi,
-                            int bitDepth = 16)
+QJsonArray vec3Array(const Ogre::Vector3& v)
 {
+    return QJsonArray{ static_cast<double>(v.x), static_cast<double>(v.y),
+                       static_cast<double>(v.z) };
+}
+
+// Build the openvat sidecar JSON. Returned string is a single root
+// object with `os-remap` at the top level, plus extension keys.
+// `result.minBound/maxBound` are expected to already be on the 0.1
+// OpenVAT grid (bake() snaps them before encoding the texture). We
+// just format them; rounding here would silently re-snap rounded
+// values and decouple the sidecar from whatever the encoder used.
+//
+// Extension keys (openvat consumers ignore unknown top-level keys):
+//   _producer      "QtMeshEditor"
+//   _axes          "y-up-rh" — source coordinate convention
+//   _bit_depth     8 / 16 → PNG (uint8/uint16), 32 → EXR (float32)
+//   _mode          skeletal | rigid | mesh-anim | morph
+//   _target        agnostic | unity | unreal | godot
+//   _rigid         { chunk_count, chunks:[{name,pivot,vertex_start,
+//                    vertex_count,max_residual}], max_residual } (rigid)
+//   _track         the vertex clip id (mesh-anim)
+//   _morph_targets [names] (morph)
+QString buildOpenVATSidecar(const VATBaker::BakeResult& result,
+                            int bitDepth,
+                            const QString& target)
+{
+    const Ogre::Vector3& lo = result.minBound;
+    const Ogre::Vector3& hi = result.maxBound;
     QJsonArray jMin {
         openvatFormatFloat(lo.x),
         openvatFormatFloat(lo.y),
@@ -288,23 +481,53 @@ QString buildOpenVATSidecar(int frameCount,
     QJsonObject osRemap;
     osRemap["Min"]    = jMin;
     osRemap["Max"]    = jMax;
-    osRemap["Frames"] = frameCount;
+    osRemap["Frames"] = result.frameCount;
 
     QJsonObject root;
     root["os-remap"] = osRemap;
-    // Non-standard extension keys — openvat consumer shaders ignore
-    // unknown top-level fields. `_producer` identifies the tool that
-    // wrote the file. `_axes` documents the source coordinate
-    // convention so shader authors know what swizzle to apply on read
-    // (the openvat Godot reference shader hardcodes a Blender→Godot
-    // `vec3(x, z, -y)` swizzle; our output is Y-up right-handed Ogre,
-    // which needs a different one).
     root["_producer"]  = QStringLiteral("QtMeshEditor");
     root["_axes"]      = QStringLiteral("y-up-rh");
-    // Per-channel bit depth of the position+normal texture sitting
-    // next to this sidecar. 16 → PNG (uint16), 32 → EXR (float32).
-    // Consumers that don't care can ignore it.
     root["_bit_depth"] = bitDepth;
+    root["_mode"]      = VATBaker::modeId(result.mode);
+    root["_target"]    = normalisedTarget(target);
+
+    switch (result.mode) {
+    case VATBaker::Mode::Rigid: {
+        QJsonObject rigid;
+        rigid["chunk_count"] = result.chunkCount;
+        QJsonArray chunks;
+        for (const auto& c : result.chunks) {
+            QJsonObject jc;
+            jc["name"]         = c.name;
+            jc["pivot"]        = vec3Array(c.pivot);
+            jc["vertex_start"] = c.vertexStart;
+            jc["vertex_count"] = c.vertexCount;
+            jc["max_residual"] = static_cast<double>(c.maxResidual);
+            chunks.append(jc);
+        }
+        rigid["chunks"]       = chunks;
+        rigid["max_residual"] = static_cast<double>(result.maxRigidResidual);
+        // Documents the texel layout so a consumer never has to guess.
+        rigid["layout"] = QStringLiteral(
+            "column = chunk; rows [0..Frames) = pivot position normalized to "
+            "Min..Max; rows [Frames..2*Frames) = rotation quaternion (x,y,z,w) "
+            "encoded (q+1)/2 in RGBA; p' = q * (p - pivot) + pivot_frame");
+        root["_rigid"] = rigid;
+        break;
+    }
+    case VATBaker::Mode::MeshAnim:
+        root["_track"] = result.trackId;
+        break;
+    case VATBaker::Mode::Morph: {
+        QJsonArray names;
+        for (const QString& n : result.morphTargets) names.append(n);
+        root["_morph_targets"] = names;
+        root["_track"]         = result.trackId;
+        break;
+    }
+    case VATBaker::Mode::Skeletal:
+        break;
+    }
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
@@ -444,6 +667,217 @@ std::vector<float> packOpenVAT32(
     return out;
 }
 
+// Write a 16-bit-per-channel PNG from a packed 3-channel uint16 buffer.
+// RGBX64 is Qt's 16-bit-per-channel 4-channel format. The X channel
+// is padding; PNG can store 3-channel data losslessly but Qt's PNG
+// writer infers RGB-vs-RGBA from the QImage format, and Format_RGB
+// doesn't exist at 16-bit precision. Padding to RGBX64 costs a few
+// hundred KB on a 5828×142 image — acceptable for a one-off bake.
+bool writePng16From3(const QString& path, int width, int height,
+                     const std::vector<uint16_t>& packed)
+{
+    QImage img(width, height, QImage::Format_RGBX64);
+    img.fill(0);
+    for (int y = 0; y < height; ++y) {
+        const uint16_t* src = packed.data()
+                            + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+        auto* dst = reinterpret_cast<uint16_t*>(img.scanLine(y));
+        for (int x = 0; x < width; ++x) {
+            dst[x * 4 + 0] = src[x * 3 + 0];
+            dst[x * 4 + 1] = src[x * 3 + 1];
+            dst[x * 4 + 2] = src[x * 3 + 2];
+            dst[x * 4 + 3] = 65535;
+        }
+    }
+    return img.save(path, "PNG");
+}
+
+// 8-bit PNG from the SAME packed uint16 buffer: each channel is
+// re-quantized to 0..255 (rounded), alpha = 255. Deliberately derived
+// from the 16-bit pack so the two encodings decode against the same
+// bounds and differ only in precision.
+bool writePng8From3(const QString& path, int width, int height,
+                    const std::vector<uint16_t>& packed)
+{
+    QImage img(width, height, QImage::Format_RGBA8888);
+    img.fill(0);
+    for (int y = 0; y < height; ++y) {
+        const uint16_t* src = packed.data()
+                            + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+        auto* dst = img.scanLine(y);
+        for (int x = 0; x < width; ++x) {
+            for (int c = 0; c < 3; ++c)
+                dst[x * 4 + c] = static_cast<uint8_t>(
+                    std::lround(src[x * 3 + c] / 65535.0f * 255.0f));
+            dst[x * 4 + 3] = 255;
+        }
+    }
+    return img.save(path, "PNG");
+}
+
+// ---------------------------------------------------------------------------
+// Rigid-body helpers.
+// ---------------------------------------------------------------------------
+
+struct RigidFrameSample {
+    Ogre::Vector3    pivotPos = Ogre::Vector3::ZERO;   // where the bind pivot went
+    Ogre::Quaternion rot      = Ogre::Quaternion::IDENTITY;
+    float            maxResidual = 0.0f;
+};
+
+// Horn fit of `bind[start..start+count)` → `deformed[...]`. The scale
+// the solver reports is DISCARDED (a rigid chunk has none; on a
+// slightly non-rigid one it would smear the error into the rotation),
+// and the translation is recomputed from the centroids so the pivot
+// contract `p' = R*(p - pivot) + pivotFrame` holds exactly at the
+// centroid. Degenerate chunks (< 3 points, collinear) fall back to a
+// pure translation.
+RigidFrameSample fitRigidChunk(const std::vector<Ogre::Vector3>& bind,
+                               const std::vector<Ogre::Vector3>& deformed,
+                               size_t start, size_t count,
+                               const Ogre::Vector3& pivot)
+{
+    RigidFrameSample s;
+    if (count == 0) return s;
+
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    for (size_t i = 0; i < count; ++i) centroid += deformed[start + i];
+    centroid /= static_cast<float>(count);
+    s.pivotPos = centroid;
+
+    if (count >= 3) {
+        std::vector<float> src(count * 3), dst(count * 3), w(count, 1.0f);
+        for (size_t i = 0; i < count; ++i) {
+            const auto& a = bind[start + i];
+            const auto& b = deformed[start + i];
+            src[i * 3 + 0] = a.x; src[i * 3 + 1] = a.y; src[i * 3 + 2] = a.z;
+            dst[i * 3 + 0] = b.x; dst[i * 3 + 1] = b.y; dst[i * 3 + 2] = b.z;
+        }
+        const FaceCapPose::Result r = FaceCapPose::solve(
+            src.data(), dst.data(), w.data(), static_cast<int>(count));
+        if (r.ok) {
+            s.rot = Ogre::Quaternion(r.rotation[3], r.rotation[0],
+                                     r.rotation[1], r.rotation[2]);
+            s.rot.normalise();
+        }
+    }
+
+    float worst = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        const Ogre::Vector3 fitted = s.rot * (bind[start + i] - pivot) + s.pivotPos;
+        worst = std::max(worst, (fitted - deformed[start + i]).length());
+    }
+    s.maxResidual = worst;
+    return s;
+}
+
+// Pack rigid samples: width = chunkCount, height = 2*frameCount.
+// Top half = pivot positions (normalized 16-bit / raw float), bottom
+// half = quaternion (x,y,z,w) → (q+1)/2. 4 channels per texel.
+std::vector<uint16_t> packRigid16(const std::vector<RigidFrameSample>& samples,
+                                  int frameCount, int chunkCount,
+                                  const Ogre::Vector3& lo, const Ogre::Vector3& hi)
+{
+    const size_t F = static_cast<size_t>(frameCount);
+    const size_t C = static_cast<size_t>(chunkCount);
+    std::vector<uint16_t> out;
+    if (frameCount <= 0 || chunkCount <= 0 || samples.size() != F * C) return out;
+    out.resize(F * 2u * C * 4u, 0);
+    for (size_t f = 0; f < F; ++f) {
+        for (size_t c = 0; c < C; ++c) {
+            const auto& s = samples[f * C + c];
+            const size_t top = (f * C + c) * 4u;
+            out[top + 0] = toShortNormalised(s.pivotPos.x, lo.x, hi.x);
+            out[top + 1] = toShortNormalised(s.pivotPos.y, lo.y, hi.y);
+            out[top + 2] = toShortNormalised(s.pivotPos.z, lo.z, hi.z);
+            out[top + 3] = 65535;
+            const size_t bot = ((F + f) * C + c) * 4u;
+            const float q[4] = { s.rot.x, s.rot.y, s.rot.z, s.rot.w };
+            for (int k = 0; k < 4; ++k) {
+                const float v = std::clamp((q[k] + 1.0f) * 0.5f, 0.0f, 1.0f);
+                out[bot + k] = static_cast<uint16_t>(std::lround(v * 65535.0f));
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<float> packRigid32(const std::vector<RigidFrameSample>& samples,
+                               int frameCount, int chunkCount)
+{
+    const size_t F = static_cast<size_t>(frameCount);
+    const size_t C = static_cast<size_t>(chunkCount);
+    std::vector<float> out;
+    if (frameCount <= 0 || chunkCount <= 0 || samples.size() != F * C) return out;
+    out.resize(F * 2u * C * 4u, 0.0f);
+    for (size_t f = 0; f < F; ++f) {
+        for (size_t c = 0; c < C; ++c) {
+            const auto& s = samples[f * C + c];
+            const size_t top = (f * C + c) * 4u;
+            out[top + 0] = s.pivotPos.x;
+            out[top + 1] = s.pivotPos.y;
+            out[top + 2] = s.pivotPos.z;
+            out[top + 3] = 1.0f;
+            const size_t bot = ((F + f) * C + c) * 4u;
+            out[bot + 0] = (s.rot.x + 1.0f) * 0.5f;
+            out[bot + 1] = (s.rot.y + 1.0f) * 0.5f;
+            out[bot + 2] = (s.rot.z + 1.0f) * 0.5f;
+            out[bot + 3] = (s.rot.w + 1.0f) * 0.5f;
+        }
+    }
+    return out;
+}
+
+bool writePng16From4(const QString& path, int width, int height,
+                     const std::vector<uint16_t>& packed)
+{
+    QImage img(width, height, QImage::Format_RGBA64);
+    img.fill(0);
+    for (int y = 0; y < height; ++y) {
+        const uint16_t* src = packed.data()
+                            + static_cast<size_t>(y) * static_cast<size_t>(width) * 4u;
+        std::memcpy(img.scanLine(y), src, static_cast<size_t>(width) * 4u * sizeof(uint16_t));
+    }
+    return img.save(path, "PNG");
+}
+
+bool writePng8From4(const QString& path, int width, int height,
+                    const std::vector<uint16_t>& packed)
+{
+    QImage img(width, height, QImage::Format_RGBA8888);
+    img.fill(0);
+    for (int y = 0; y < height; ++y) {
+        const uint16_t* src = packed.data()
+                            + static_cast<size_t>(y) * static_cast<size_t>(width) * 4u;
+        auto* dst = img.scanLine(y);
+        for (int x = 0; x < width * 4; ++x)
+            dst[x] = static_cast<uint8_t>(std::lround(src[x] / 65535.0f * 255.0f));
+    }
+    return img.save(path, "PNG");
+}
+
+// Write the sidecar atomically-enough: full write + size check, remove
+// on short write so a consumer never reads a truncated file.
+bool writeSidecarFile(const QString& path, const QString& json, QString* error)
+{
+    QFile jf(path);
+    if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (error) *error = QStringLiteral("failed to open OpenVAT sidecar for write: %1").arg(path);
+        return false;
+    }
+    const QByteArray bytes = json.toUtf8();
+    const qint64 written = jf.write(bytes);
+    jf.close();
+    if (written != bytes.size()) {
+        QFile::remove(path);
+        if (error) *error = QStringLiteral(
+            "short write to OpenVAT sidecar %1 (wrote %2 of %3 bytes)")
+                .arg(path).arg(written).arg(bytes.size());
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -453,13 +887,10 @@ std::vector<float> packOpenVAT32(
 VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
 {
     BakeResult result;
+    result.mode = opts.mode;
 
     if (!entity) {
         result.error = QStringLiteral("entity is null");
-        return result;
-    }
-    if (!entity->hasSkeleton()) {
-        result.error = QStringLiteral("entity has no skeleton");
         return result;
     }
     if (opts.animationName.isEmpty()) {
@@ -474,13 +905,86 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         result.error = QStringLiteral("outputDir is required");
         return result;
     }
+    if (!isValidTargetId(opts.target)) {
+        result.error = QStringLiteral("unknown target '%1' (accepted: %2)")
+                           .arg(opts.target, targetIds().join(QStringLiteral(", ")));
+        return result;
+    }
+    if (opts.bitDepth != 8 && opts.bitDepth != 16 && opts.bitDepth != 32) {
+        result.error = QStringLiteral("bitDepth must be 8, 16 or 32 (got %1)").arg(opts.bitDepth);
+        return result;
+    }
+
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) {
+        result.error = QStringLiteral("entity has no mesh");
+        return result;
+    }
+    const std::string animStd = opts.animationName.toStdString();
+    const bool skeletalClip = entity->hasSkeleton()
+        && entity->getSkeleton()->hasAnimation(animStd);
+    const bool vertexClip = meshAnimationHasVertexTracks(mesh.get(), animStd);
+
+    // ── Per-mode preconditions ──────────────────────────────────────
+    switch (opts.mode) {
+    case Mode::Skeletal:
+        if (!entity->hasSkeleton()) {
+            result.error = QStringLiteral("entity has no skeleton");
+            return result;
+        }
+        break;
+    case Mode::MeshAnim:
+        if (!vertexClip) {
+            result.error = mesh->hasAnimation(animStd) || skeletalClip
+                ? QStringLiteral("animation '%1' has no vertex tracks — mesh-anim "
+                                 "mode needs a vertex clip (Alembic cache / "
+                                 "VAT_POSE stream); use --mode skeletal for a "
+                                 "skeletal clip").arg(opts.animationName)
+                : QStringLiteral("vertex animation '%1' not found on the mesh")
+                      .arg(opts.animationName);
+            return result;
+        }
+        break;
+    case Mode::Morph:
+        if (mesh->getPoseCount() == 0) {
+            result.error = QStringLiteral("mesh has no morph targets (poses) — "
+                                          "morph mode needs blend shapes");
+            return result;
+        }
+        if (!vertexClip) {
+            result.error = QStringLiteral(
+                "morph weight clip '%1' not found on the mesh (key some morph "
+                "weights first — the default clip is \"MorphAnim\")")
+                    .arg(opts.animationName);
+            return result;
+        }
+        break;
+    case Mode::Rigid:
+        if (!skeletalClip && !vertexClip) {
+            result.error = QStringLiteral("animation '%1' not found (rigid mode "
+                                          "accepts a skeletal or a vertex clip)")
+                               .arg(opts.animationName);
+            return result;
+        }
+        for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(si);
+            if (sub && sub->useSharedVertices) {
+                result.error = QStringLiteral(
+                    "rigid mode chunks per submesh, which needs every submesh "
+                    "to own its vertex data — submesh %1 uses shared vertices "
+                    "(re-export through glTF/FBX first)").arg(si);
+                return result;
+            }
+        }
+        break;
+    }
 
     auto* states = entity->getAllAnimationStates();
-    if (!states || !states->hasAnimationState(opts.animationName.toStdString())) {
+    if (!states || !states->hasAnimationState(animStd)) {
         result.error = QStringLiteral("animation '%1' not found").arg(opts.animationName);
         return result;
     }
-    auto* state = states->getAnimationState(opts.animationName.toStdString());
+    auto* state = states->getAnimationState(animStd);
 
     // Disable every animation state first so a previously-enabled state
     // doesn't blend into the bake.
@@ -490,6 +994,18 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         if (s) s->setEnabled(false);
     }
     state->setEnabled(true);
+    state->setWeight(1.0f);
+    // Ogre wraps `setTimePosition(t)` with `fmod(t, length)` while the
+    // state loops (the default), so sampling the LAST frame at t ==
+    // length silently reads frame 0 — a looping walk hides it, a
+    // lipsync clip ends on the wrong mouth shape. Bake with loop off
+    // (clamp semantics) and restore the caller's flag afterwards.
+    const bool wasLooping = state->getLoop();
+    state->setLoop(false);
+    struct LoopRestore {
+        Ogre::AnimationState* s; bool loop;
+        ~LoopRestore() { if (s) s->setLoop(loop); }
+    } loopRestore{ state, wasLooping };
 
     const float animLen = state->getLength();
     const double t0 = (opts.startTime < 0.0) ? 0.0 : opts.startTime;
@@ -505,8 +1021,10 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     int frameCount = static_cast<int>(std::lround(span * opts.fps));
     if (frameCount < 1) frameCount = 1;
 
-    // Ensure CPU-side skin data is available even when no render is
-    // happening (which is the case during a headless bake).
+    const bool rigid = (opts.mode == Mode::Rigid);
+
+    // Ensure CPU-side skin / vertex-anim data is available even when no
+    // render is happening (which is the case during a headless bake).
     entity->addSoftwareAnimationRequest(true);
 
     std::vector<Ogre::Vector3> flat;
@@ -514,7 +1032,7 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     Ogre::Vector3 lo(std::numeric_limits<float>::infinity());
     Ogre::Vector3 hi(-std::numeric_limits<float>::infinity());
     flat.reserve(static_cast<size_t>(frameCount) * 1024);
-    normals.reserve(static_cast<size_t>(frameCount) * 1024);
+    if (!rigid) normals.reserve(static_cast<size_t>(frameCount) * 1024);
 
     int vertexCount = -1;
     for (int f = 0; f < frameCount; ++f) {
@@ -540,7 +1058,7 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         Ogre::Root::getSingleton()._fireFrameRenderingQueued(ev);
 
         const size_t before = flat.size();
-        const size_t appended = collectPostSkinPositions(entity, flat);
+        const size_t appended = collectDeformedPositions(entity, flat);
         if (appended == 0) {
             entity->removeSoftwareAnimationRequest(true);
             result.error = QStringLiteral("frame %1 read 0 vertices").arg(f);
@@ -557,32 +1075,103 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             return result;
         }
 
-        for (size_t i = before; i < flat.size(); ++i) {
-            const auto& p = flat[i];
-            lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
-            hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
-        }
+        if (!rigid) {
+            for (size_t i = before; i < flat.size(); ++i) {
+                const auto& p = flat[i];
+                lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
+                hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
+            }
 
-        const size_t nrmAppended = collectPostSkinNormals(entity, normals);
-        if (nrmAppended == kCollectNormalsMissingSentinel) {
-            entity->removeSoftwareAnimationRequest(true);
-            result.error = QStringLiteral(
-                "frame %1 has a submesh without VES_NORMAL — "
-                "OpenVAT requires per-vertex normals "
-                "(regenerate normals on the source mesh and re-import)")
-                    .arg(f);
-            return result;
-        }
-        if (nrmAppended != static_cast<size_t>(frameVerts)) {
-            entity->removeSoftwareAnimationRequest(true);
-            result.error = QStringLiteral(
-                "frame %1 normals count (%2) differs from positions (%3)")
-                    .arg(f).arg(nrmAppended).arg(frameVerts);
-            return result;
+            const size_t nrmAppended = collectDeformedNormals(entity, normals);
+            if (nrmAppended == kCollectNormalsMissingSentinel) {
+                entity->removeSoftwareAnimationRequest(true);
+                result.error = QStringLiteral(
+                    "frame %1 has a submesh without VES_NORMAL — "
+                    "OpenVAT requires per-vertex normals "
+                    "(regenerate normals on the source mesh and re-import)")
+                        .arg(f);
+                return result;
+            }
+            if (nrmAppended != static_cast<size_t>(frameVerts)) {
+                entity->removeSoftwareAnimationRequest(true);
+                result.error = QStringLiteral(
+                    "frame %1 normals count (%2) differs from positions (%3)")
+                        .arg(f).arg(nrmAppended).arg(frameVerts);
+                return result;
+            }
         }
     }
 
     entity->removeSoftwareAnimationRequest(true);
+
+    // ── Rigid: fit one transform per chunk per frame ────────────────
+    std::vector<RigidFrameSample> rigidSamples;
+    int chunkCount = 0;
+    if (rigid) {
+        std::vector<Ogre::Vector3> bind;
+        const size_t bindCount = collectBindPositions(entity, bind);
+        if (bindCount != static_cast<size_t>(vertexCount)) {
+            result.error = QStringLiteral(
+                "bind-pose vertex count (%1) differs from deformed count (%2)")
+                    .arg(bindCount).arg(vertexCount);
+            return result;
+        }
+        // Chunk ranges in walk order (every submesh owns its data —
+        // validated above — so each is a contiguous range).
+        const auto& nameMap = mesh->getSubMeshNameMap();
+        size_t cursor = 0;
+        for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(si);
+            if (!sub || !sub->vertexData) continue;
+            RigidChunk c;
+            c.vertexStart = static_cast<int>(cursor);
+            c.vertexCount = static_cast<int>(sub->vertexData->vertexCount);
+            c.name = QString::number(si);
+            for (const auto& kv : nameMap)
+                if (kv.second == si) { c.name = QString::fromStdString(kv.first); break; }
+            Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+            for (int i = 0; i < c.vertexCount; ++i) centroid += bind[cursor + i];
+            if (c.vertexCount > 0) centroid /= static_cast<float>(c.vertexCount);
+            c.pivot = centroid;
+            result.chunks.push_back(c);
+            cursor += static_cast<size_t>(c.vertexCount);
+        }
+        chunkCount = static_cast<int>(result.chunks.size());
+        if (chunkCount == 0) {
+            result.error = QStringLiteral("rigid mode found no submesh chunks");
+            return result;
+        }
+        rigidSamples.resize(static_cast<size_t>(frameCount) * chunkCount);
+        for (int f = 0; f < frameCount; ++f) {
+            const size_t frameBase = static_cast<size_t>(f) * vertexCount;
+            for (int ci = 0; ci < chunkCount; ++ci) {
+                RigidChunk& c = result.chunks[ci];
+                // Fit against a per-frame slice: `bind` is frame-
+                // independent, `flat` is offset by the frame.
+                std::vector<Ogre::Vector3> deformedSlice(
+                    flat.begin() + frameBase + c.vertexStart,
+                    flat.begin() + frameBase + c.vertexStart + c.vertexCount);
+                std::vector<Ogre::Vector3> bindSlice(
+                    bind.begin() + c.vertexStart,
+                    bind.begin() + c.vertexStart + c.vertexCount);
+                RigidFrameSample s = fitRigidChunk(bindSlice, deformedSlice, 0,
+                                                   static_cast<size_t>(c.vertexCount),
+                                                   c.pivot);
+                // Hemisphere continuity so a consumer can lerp adjacent
+                // frames' quaternions without a 360° flip.
+                if (f > 0) {
+                    const auto& prev = rigidSamples[(static_cast<size_t>(f) - 1) * chunkCount + ci].rot;
+                    if (prev.Dot(s.rot) < 0.0f) s.rot = -s.rot;
+                }
+                c.maxResidual = std::max(c.maxResidual, s.maxResidual);
+                result.maxRigidResidual = std::max(result.maxRigidResidual, s.maxResidual);
+                lo.x = std::min(lo.x, s.pivotPos.x); lo.y = std::min(lo.y, s.pivotPos.y); lo.z = std::min(lo.z, s.pivotPos.z);
+                hi.x = std::max(hi.x, s.pivotPos.x); hi.y = std::max(hi.y, s.pivotPos.y); hi.z = std::max(hi.z, s.pivotPos.z);
+                rigidSamples[static_cast<size_t>(f) * chunkCount + ci] = s;
+            }
+        }
+        result.chunkCount = chunkCount;
+    }
 
     // Degenerate bounds (single point on an axis): pad so the encoder
     // doesn't divide-by-zero and the runtime decode reads back the
@@ -606,13 +1195,15 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                                   openvatRoundMax(hi.z));
 
     result.frameCount  = frameCount;
-    result.vertexCount = vertexCount;
+    result.vertexCount = rigid ? chunkCount : vertexCount;
     result.minBound    = roundedLo;
     result.maxBound    = roundedHi;
+    if (opts.mode == Mode::MeshAnim || opts.mode == Mode::Morph)
+        result.trackId = opts.animationName;
+    if (opts.mode == Mode::Morph)
+        result.morphTargets = morphTargetsDrivenBy(mesh.get(), animStd);
 
-    // bitDepth in {16, 32}; anything else is a caller bug. Normalize
-    // here so the rest of bake() doesn't have to defend against it.
-    const int bitDepth = (opts.bitDepth == 32) ? 32 : 16;
+    const int bitDepth = opts.bitDepth;
 
     QDir().mkpath(opts.outputDir);
     const QString base = opts.basename.isEmpty() ? opts.animationName : opts.basename;
@@ -620,7 +1211,7 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.posTexPath = QDir(opts.outputDir).filePath(base + QString::fromLatin1(posExt));
     result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
-    if (!opts.vertexPermutation.empty()) {
+    if (!rigid && !opts.vertexPermutation.empty()) {
         if (opts.vertexPermutation.size() != static_cast<size_t>(vertexCount)) {
             result.error = QStringLiteral(
                 "vertexPermutation size (%1) does not match vertex count (%2)")
@@ -645,8 +1236,28 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         }
     }
     const int imgHeight = frameCount * 2;
+    const int imgWidth  = result.vertexCount;
 
-    if (bitDepth == 32) {
+    bool wrote = false;
+    if (rigid) {
+        if (bitDepth == 32) {
+            auto packed = packRigid32(rigidSamples, frameCount, chunkCount);
+            if (packed.empty()) {
+                result.error = QStringLiteral("rigid 32-bit pack produced empty buffer");
+                return result;
+            }
+            wrote = MinimalEXR::writeRGBA32F(result.posTexPath, imgWidth, imgHeight, packed);
+        } else {
+            auto packed = packRigid16(rigidSamples, frameCount, chunkCount, roundedLo, roundedHi);
+            if (packed.empty()) {
+                result.error = QStringLiteral("rigid pack produced empty buffer");
+                return result;
+            }
+            wrote = (bitDepth == 8)
+                ? writePng8From4(result.posTexPath, imgWidth, imgHeight, packed)
+                : writePng16From4(result.posTexPath, imgWidth, imgHeight, packed);
+        }
+    } else if (bitDepth == 32) {
         // 32-bit float EXR. Bypasses uint16 quantization entirely: the
         // texture stores raw post-skin meters; the consumer reads them
         // back via `texel.rgb` directly (no bounds_min/bounds_max
@@ -659,12 +1270,7 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             result.error = QStringLiteral("OpenVAT 32-bit pack produced empty buffer");
             return result;
         }
-        if (!MinimalEXR::writeRGB32F(result.posTexPath, vertexCount,
-                                     imgHeight, packed)) {
-            result.error = QStringLiteral("failed to write OpenVAT EXR: %1")
-                               .arg(result.posTexPath);
-            return result;
-        }
+        wrote = MinimalEXR::writeRGB32F(result.posTexPath, vertexCount, imgHeight, packed);
     } else {
         auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
                                     roundedLo, roundedHi,
@@ -673,50 +1279,20 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             result.error = QStringLiteral("OpenVAT pack produced empty buffer");
             return result;
         }
-        // RGBX64 is Qt's 16-bit-per-channel 4-channel format. The X channel
-        // is padding; PNG can store 3-channel data losslessly but Qt's PNG
-        // writer infers RGB-vs-RGBA from the QImage format, and Format_RGB
-        // doesn't exist at 16-bit precision. Padding to RGBX64 costs a few
-        // hundred KB on a 5828×142 image — acceptable for a one-off bake.
-        QImage img(vertexCount, imgHeight, QImage::Format_RGBX64);
-        img.fill(0);
-        for (int y = 0; y < imgHeight; ++y) {
-            const uint16_t* src = packed.data()
-                                + static_cast<size_t>(y)
-                                  * static_cast<size_t>(vertexCount) * 3u;
-            auto* dst = reinterpret_cast<uint16_t*>(img.scanLine(y));
-            for (int x = 0; x < vertexCount; ++x) {
-                dst[x * 4 + 0] = src[x * 3 + 0];
-                dst[x * 4 + 1] = src[x * 3 + 1];
-                dst[x * 4 + 2] = src[x * 3 + 2];
-                dst[x * 4 + 3] = 65535;
-            }
-        }
-        if (!img.save(result.posTexPath, "PNG")) {
-            result.error = QStringLiteral("failed to write OpenVAT texture: %1")
-                               .arg(result.posTexPath);
-            return result;
-        }
+        wrote = (bitDepth == 8)
+            ? writePng8From3(result.posTexPath, vertexCount, imgHeight, packed)
+            : writePng16From3(result.posTexPath, vertexCount, imgHeight, packed);
     }
-
-    const QString sidecar = buildOpenVATSidecar(frameCount, roundedLo, roundedHi, bitDepth);
-    QFile jf(result.jsonPath);
-    if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        result.error = QStringLiteral("failed to open OpenVAT sidecar for write: %1")
-                           .arg(result.jsonPath);
+    if (!wrote) {
+        result.error = QStringLiteral("failed to write OpenVAT texture: %1")
+                           .arg(result.posTexPath);
         return result;
     }
-    const QByteArray sidecarBytes = sidecar.toUtf8();
-    const qint64 written = jf.write(sidecarBytes);
-    jf.close();
-    if (written != sidecarBytes.size()) {
-        // Short write — disk full, network volume hiccup, etc. Surface
-        // it instead of leaving a truncated sidecar behind that the
-        // consumer would read partially and misdecode against.
-        QFile::remove(result.jsonPath);
-        result.error = QStringLiteral(
-            "short write to OpenVAT sidecar %1 (wrote %2 of %3 bytes)")
-                .arg(result.jsonPath).arg(written).arg(sidecarBytes.size());
+
+    const QString sidecar = buildOpenVATSidecar(result, bitDepth, opts.target);
+    QString sidecarErr;
+    if (!writeSidecarFile(result.jsonPath, sidecar, &sidecarErr)) {
+        result.error = sidecarErr;
         return result;
     }
 

@@ -9500,18 +9500,22 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
 // Read positions + normals + UV0 per primitive from a glTF file. `out`
 // is a flat list parallel to `readOgreBindVertices` — concatenated in
 // primitive-index order. Returns true on success.
+// `why` (optional) receives a one-line reason on failure so the CLI can
+// say WHICH gate refused the file instead of a bare "failed to read back".
 bool readGltfVertices(const QString& gltfPath,
-                      std::vector<BakeVertex>& out)
+                      std::vector<BakeVertex>& out,
+                      QString* why = nullptr)
 {
     out.clear();
+    auto fail = [&](const QString& reason) { if (why) *why = reason; return false; };
     QFile f(gltfPath);
-    if (!f.open(QIODevice::ReadOnly)) return false;
+    if (!f.open(QIODevice::ReadOnly)) return fail(QStringLiteral("cannot open %1").arg(gltfPath));
     const QByteArray jsonBytes = f.readAll();
     f.close();
     QJsonParseError perr;
     QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject())
-        return false;
+        return fail(QStringLiteral("JSON parse: %1").arg(perr.errorString()));
     QJsonObject root = doc.object();
 
     QJsonArray buffers = root.value(QStringLiteral("buffers")).toArray();
@@ -9520,34 +9524,48 @@ bool readGltfVertices(const QString& gltfPath,
     for (int i = 0; i < buffers.size(); ++i) {
         QJsonObject b = buffers.at(i).toObject();
         QString uri = b.value(QStringLiteral("uri")).toString();
-        if (uri.isEmpty()) return false;
+        if (uri.isEmpty()) return fail(QStringLiteral("buffer %1 has no uri (GLB-embedded buffers unsupported)").arg(i));
+        // `data:` URIs: the exporter appends the morph-weights animation
+        // (and any other injected stream) as a base64 buffer AFTER the
+        // main `.bin`. Decode it instead of refusing the whole file —
+        // a morph bake used to lose its vertex alignment over this.
+        if (uri.startsWith(QLatin1String("data:"))) {
+            const int comma = uri.indexOf(QLatin1Char(','));
+            if (comma < 0 || !uri.left(comma).endsWith(QLatin1String(";base64")))
+                return fail(QStringLiteral("buffer %1: unsupported data URI encoding").arg(i));
+            bufData[i] = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
+            continue;
+        }
         QFile bf(gi.absoluteDir().filePath(uri));
-        if (!bf.open(QIODevice::ReadOnly)) return false;
+        if (!bf.open(QIODevice::ReadOnly)) return fail(QStringLiteral("cannot open buffer %1").arg(uri.left(60)));
         bufData[i] = bf.readAll();
     }
 
     QJsonArray accessors    = root.value(QStringLiteral("accessors")).toArray();
     QJsonArray bufferViews  = root.value(QStringLiteral("bufferViews")).toArray();
     QJsonArray meshes       = root.value(QStringLiteral("meshes")).toArray();
-    if (meshes.isEmpty()) return false;
+    if (meshes.isEmpty()) return fail(QStringLiteral("no meshes"));
 
     // Per-accessor reader returning N×3 (or N×2) floats. Returns false on
     // any decoding error so the caller can short-circuit alignment.
     auto readVec = [&](int accIdx, int components, std::vector<float>& dst) -> bool {
-        if (accIdx < 0 || accIdx >= accessors.size()) return false;
+        if (accIdx < 0 || accIdx >= accessors.size()) return fail(QStringLiteral("accessor %1 out of range").arg(accIdx));
         QJsonObject acc = accessors.at(accIdx).toObject();
         int bvIdx = acc.value(QStringLiteral("bufferView")).toInt(-1);
-        if (bvIdx < 0 || bvIdx >= bufferViews.size()) return false;
+        if (bvIdx < 0 || bvIdx >= bufferViews.size()) return fail(QStringLiteral("accessor %1: bufferView out of range").arg(accIdx));
         int count = acc.value(QStringLiteral("count")).toInt(0);
         int byteOffsetAcc = acc.value(QStringLiteral("byteOffset")).toInt(0);
         QJsonObject bv = bufferViews.at(bvIdx).toObject();
         int bufferIdx = bv.value(QStringLiteral("buffer")).toInt(-1);
         int byteOffsetBv = bv.value(QStringLiteral("byteOffset")).toInt(0);
         int byteStride = bv.value(QStringLiteral("byteStride")).toInt(components * 4);
-        if (bufferIdx < 0 || bufferIdx >= bufData.size()) return false;
+        if (bufferIdx < 0 || bufferIdx >= bufData.size()) return fail(QStringLiteral("accessor %1: buffer out of range").arg(accIdx));
         const QByteArray& bd = bufData[bufferIdx];
         const int start = byteOffsetBv + byteOffsetAcc;
-        if (start + count * byteStride > bd.size()) return false;
+        if (count <= 0 || byteStride <= 0 || start < 0
+            || static_cast<qint64>(start) + static_cast<qint64>(count) * byteStride > bd.size())
+            return fail(QStringLiteral("accessor %1: %2 x %3 B at %4 exceeds buffer (%5 B)")
+                            .arg(accIdx).arg(count).arg(byteStride).arg(start).arg(bd.size()));
         const auto* base = reinterpret_cast<const unsigned char*>(bd.constData() + start);
         dst.reserve(dst.size() + static_cast<size_t>(count) * components);
         for (int i = 0; i < count; ++i) {
@@ -9567,7 +9585,7 @@ bool readGltfVertices(const QString& gltfPath,
         const int uvIdx   = attrs.value(QStringLiteral("TEXCOORD_0")).toInt(-1);
 
         std::vector<float> posBuf, normBuf, uvBuf;
-        if (!readVec(posIdx, 3, posBuf)) return false;
+        if (!readVec(posIdx, 3, posBuf)) return fail(QStringLiteral("POSITION accessor %1 unreadable: %2").arg(posIdx).arg(why ? *why : QString()));
         const size_t n = posBuf.size() / 3;
         const bool hasNormal = (normIdx >= 0) && readVec(normIdx, 3, normBuf);
         const bool hasUV     = (uvIdx   >= 0) && readVec(uvIdx,   2, uvBuf);
@@ -9774,14 +9792,23 @@ static std::vector<uint32_t> buildVertexPermutationImpl(
 //
 // Returns true on success. On any failure the original glTF is left
 // untouched so the user still has a valid (if UV2-less) mesh.
+// `columnOverride` (optional): when non-null, the column written for
+// Ogre vertex `i` is `(*columnOverride)[i]` and the row is 0 - used by
+// the rigid-body bake, whose texture columns are CHUNKS, not vertices.
 bool emitGltfUv2(const QString& gltfPath,
                  const std::vector<uint32_t>& permutation,
                  const std::vector<size_t>& submeshStarts,
                  int texWidth,
                  int channel,
-                 QString& outError)
+                 QString& outError,
+                 const std::vector<uint32_t>* columnOverride = nullptr)
 {
     outError.clear();
+    if (columnOverride && columnOverride->size() != permutation.size()) {
+        outError = QStringLiteral("column override size (%1) != vertex count (%2)")
+            .arg(columnOverride->size()).arg(permutation.size());
+        return false;
+    }
     if (channel < 0 || channel > 7) {
         outError = QStringLiteral("invalid UV channel %1").arg(channel);
         return false;
@@ -9892,8 +9919,12 @@ bool emitGltfUv2(const QString& gltfPath,
             // *different* vertex's column — body parts visibly flew
             // apart on specific frames where the wrong-source motion
             // was large.
-            const uint32_t col = ogreIdx % static_cast<uint32_t>(texWidth);
-            const uint32_t row = ogreIdx / static_cast<uint32_t>(texWidth);
+            const uint32_t col = columnOverride
+                ? (*columnOverride)[i]
+                : ogreIdx % static_cast<uint32_t>(texWidth);
+            const uint32_t row = columnOverride
+                ? 0u
+                : ogreIdx / static_cast<uint32_t>(texWidth);
             // The destination is glTF index gltfIdx, which is offset
             // (gltfIdx - a) within this primitive.
             const size_t localDst = static_cast<size_t>(gltfIdx) - a;
@@ -9986,17 +10017,28 @@ bool emitGltfUv2(const QString& gltfPath,
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]
+    // Parse: vat <file> [--mode skeletal|rigid|mesh-anim|morph] --anim <name> [--fps N] [-o <dir>]
+    //            [--encoding rgba8|rgba16|exr] [--target agnostic|unity|unreal|godot]
+    //            [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]
     //
-    // Output is always OpenVAT (sharpen3d/openvat) — a single packed
-    // 16-bit RGB PNG (`<basename>_pos.png`, height = 2*frames, top half
-    // positions, bottom half normals) plus `<basename>-remap_info.json`
-    // with the canonical `os-remap` schema. Consumed unmodified by the
-    // openvat reference shaders for Godot / Unity / Unreal / Blender.
+    // Output is always OpenVAT (sharpen3d/openvat) - a single packed
+    // PNG/EXR (`<basename>_pos.png|exr`, height = 2*frames, top half
+    // positions, bottom half normals; rigid: pivots + quaternions per
+    // chunk) plus `<basename>-remap_info.json` with the canonical
+    // `os-remap` schema and the #522 `_mode`/`_target` extension keys.
+    // Consumed unmodified by the openvat reference shaders for Godot /
+    // Unity / Unreal / Blender.
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
     QString includeShadersArg;
+    // --mode (#522): which sampler drives the bake. Default skeletal -
+    // the pre-#522 behaviour, bit-identical output.
+    VATBaker::Mode vatMode = VATBaker::Mode::Skeletal;
+    QString modeArg;
+    // --target (#522): engine id recorded in the sidecar; a non-agnostic
+    // target also ships that engine's shader template.
+    QString targetArg = QStringLiteral("agnostic");
     // --emit-uv2 <channel>: inject the per-vertex bake-column index
     // as TEXCOORD_<channel> into source.gltf. -1 (default) = off.
     // The bake itself doesn't care about UV2 — this exists so
@@ -10017,6 +10059,47 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         if (arg == "--json") { jsonOutput = true; continue; }
         if ((arg == "--anim" || arg == "--animation") && i + 1 < argc) {
             animName = QString(argv[++i]); continue;
+        }
+        if (arg == "--mode") {
+            if (i + 1 >= argc) {
+                err() << "Error: --mode requires a value (skeletal, rigid, mesh-anim, morph)." << Qt::endl;
+                return 2;
+            }
+            modeArg = QString(argv[++i]);
+            if (!VATBaker::modeFromId(modeArg, &vatMode)) {
+                err() << "Error: --mode \"" << modeArg
+                      << "\" is not one of: skeletal, rigid, mesh-anim, morph." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--encoding") {
+            if (i + 1 >= argc) {
+                err() << "Error: --encoding requires a value (rgba8, rgba16, exr)." << Qt::endl;
+                return 2;
+            }
+            int bd = 16;
+            if (!VATBaker::bitDepthFromEncodingId(QString(argv[++i]), &bd)) {
+                err() << "Error: --encoding \"" << argv[i]
+                      << "\" is not one of: rgba8, rgba16, exr." << Qt::endl;
+                return 2;
+            }
+            bakeBitDepth = bd;
+            continue;
+        }
+        if (arg == "--target") {
+            if (i + 1 >= argc) {
+                err() << "Error: --target requires a value (agnostic, unity, unreal, godot)." << Qt::endl;
+                return 2;
+            }
+            targetArg = QString(argv[++i]).trimmed().toLower();
+            if (!VATBaker::isValidTargetId(targetArg)) {
+                err() << "Error: --target \"" << argv[i]
+                      << "\" is not one of: agnostic, unity, unreal, godot." << Qt::endl;
+                return 2;
+            }
+            if (targetArg.isEmpty()) targetArg = QStringLiteral("agnostic");
+            continue;
         }
         if (arg == "--fps" && i + 1 < argc) {
             bool ok = false;
@@ -10110,13 +10193,22 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> [--mode skeletal|rigid|mesh-anim|morph] --anim <name> [--fps N] [-o <dir>]\n"
+                 "                  [--encoding rgba8|rgba16|exr] [--target agnostic|unity|unreal|godot]\n"
+                 "                  [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]" << Qt::endl;
         return 2;
     }
+    // Morph mode defaults to the editor's weight clip - the clip every
+    // GUI key press writes into - so `qtmesh vat face.glb --mode morph`
+    // works without knowing the internal name.
+    if (animName.isEmpty() && vatMode == VATBaker::Mode::Morph)
+        animName = QString::fromLatin1(MorphAnimationManager::kWeightClipName);
     if (animName.isEmpty()) {
         err() << "Error: --anim <name> is required." << Qt::endl;
         return 2;
     }
+    const QString vatModeId = VATBaker::modeId(vatMode);
+    const bool rigidMode = (vatMode == VATBaker::Mode::Rigid);
     if (outDir.isEmpty()) {
         QFileInfo fi(filePath);
         outDir = fi.absoluteDir().filePath(fi.completeBaseName() + "_vat");
@@ -10131,28 +10223,44 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.vat",
-        QString("VAT bake .%1 anim=%2 fps=%3").arg(fi.suffix(), animName).arg(fps));
+        QString("VAT bake .%1 vat_mode=%2 anim=%3 fps=%4 encoding=%5 target=%6")
+            .arg(fi.suffix(), vatModeId, animName).arg(fps)
+            .arg(VATBaker::encodingId(bakeBitDepth), targetArg));
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
     auto& entities = Manager::getSingleton()->getEntities();
+    // Pick the bake target by MODE: skeletal wants the skinned entity;
+    // every other mode wants the entity that actually carries the
+    // requested clip (multi-entity files split face + body, and the
+    // morph clip lives on the face). Fall back to the first entity so
+    // the baker's own error names what is missing.
     Ogre::Entity* entity = nullptr;
+    Ogre::Entity* firstEntity = nullptr;
+    const std::string animStd = animName.toStdString();
     for (auto* obj : entities) {
-        if (obj && obj->getMovableType() == "Entity") {
-            entity = static_cast<Ogre::Entity*>(obj);
-            break;
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        auto* e = static_cast<Ogre::Entity*>(obj);
+        if (!firstEntity) firstEntity = e;
+        if (vatMode == VATBaker::Mode::Skeletal) {
+            if (e->hasSkeleton()) { entity = e; break; }
+        } else {
+            auto* states = e->getAllAnimationStates();
+            if (states && states->hasAnimationState(animStd)) { entity = e; break; }
         }
     }
+    if (!entity) entity = firstEntity;
     if (!entity) {
         SentryReporter::captureMessage(
             QString("CLI vat: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
-    if (!entity->hasSkeleton()) {
-        err() << "Error: File has no skeleton — cannot bake VAT." << Qt::endl;
+    if (vatMode == VATBaker::Mode::Skeletal && !entity->hasSkeleton()) {
+        err() << "Error: File has no skeleton - cannot bake a skeletal VAT "
+                 "(try --mode mesh-anim / morph for vertex clips)." << Qt::endl;
         return 1;
     }
 
@@ -10264,9 +10372,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (exportResult == 0) {
         std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
         std::vector<BakeVertex> gltfVerts;
-        if (!readGltfVertices(gltfPath, gltfVerts)) {
+        QString readbackWhy;
+        if (!readGltfVertices(gltfPath, gltfVerts, &readbackWhy)) {
             err() << "Warning: failed to read back source.gltf for VAT "
-                     "alignment — bake will use Ogre vertex-buffer order; "
+                     "alignment (" << readbackWhy << ") "
+                     " — bake will use Ogre vertex-buffer order; "
                      "the emitted mesh is NOT marked as matching the bake."
                   << Qt::endl;
         } else if (ogreVerts.size() != gltfVerts.size()) {
@@ -10308,25 +10418,49 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     }
 
     VATBaker::Options opts;
+    opts.mode              = vatMode;
     opts.animationName     = animName;
     opts.fps               = fps;
     opts.outputDir         = outDir;
-    opts.basename          = animName;
+    // The default basename is the clip name; the morph clip's internal
+    // name ("MorphAnim") is not what a user wants on disk.
+    opts.basename          = (vatMode == VATBaker::Mode::Morph
+                              && animName == QLatin1String(MorphAnimationManager::kWeightClipName))
+                             ? fi.completeBaseName() + QStringLiteral("_morph")
+                             : animName;
     opts.bitDepth          = bakeBitDepth;
+    opts.target            = targetArg;
     // Keep a copy for the UV2 post-pass (the move below sinks the
     // original into VATBaker::Options).
+    // Rigid bakes index columns by CHUNK, so the per-vertex permutation
+    // is not passed to the baker (it still drives the UV2 post-pass).
     std::vector<uint32_t> vertexPermCopy = vertexPerm;
-    opts.vertexPermutation = std::move(vertexPerm);
+    if (!rigidMode) opts.vertexPermutation = std::move(vertexPerm);
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing OpenVAT bake to %1 (anim=%2)")
-            .arg(QDir(outDir).absolutePath(), animName));
+        QString("Writing OpenVAT bake to %1 (vat_mode=%2 anim=%3)")
+            .arg(QDir(outDir).absolutePath(), vatModeId, animName));
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok) {
         SentryReporter::captureMessage(
-            QString("CLI vat: bake failed (%1)").arg(result.error), "error");
+            QString("CLI vat: bake failed (vat_mode=%1: %2)").arg(vatModeId, result.error), "error");
         err() << "Error: VAT bake failed: " << result.error << Qt::endl;
         return 1;
+    }
+    // Rigid UV2: column = chunk index of the vertex (its submesh in
+    // the bake walk), so a single material can address the chunk
+    // texture without per-surface uniforms.
+    std::vector<uint32_t> rigidColumnOfVertex;
+    if (rigidMode) {
+        rigidColumnOfVertex.assign(vertexPermCopy.size(), 0u);
+        for (size_t ci = 0; ci < result.chunks.size(); ++ci) {
+            const auto& c = result.chunks[ci];
+            for (int v = 0; v < c.vertexCount; ++v) {
+                const size_t idx = static_cast<size_t>(c.vertexStart) + static_cast<size_t>(v);
+                if (idx < rigidColumnOfVertex.size())
+                    rigidColumnOfVertex[idx] = static_cast<uint32_t>(ci);
+            }
+        }
     }
 
     if (exportResult != 0) {
@@ -10355,8 +10489,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         && sourceMeshMatchesBake && !vertexPermCopy.empty()) {
         QString uv2Err;
         uv2Emitted = emitGltfUv2(gltfPath, vertexPermCopy, submeshStarts,
-                                 result.vertexCount, emitUv2Channel,
-                                 uv2Err);
+                                 rigidMode ? static_cast<int>(vertexPermCopy.size())
+                                           : result.vertexCount,
+                                 emitUv2Channel, uv2Err,
+                                 rigidMode ? &rigidColumnOfVertex : nullptr);
         if (!uv2Emitted) {
             err() << "Warning: --emit-uv2 failed: " << uv2Err
                   << " — consumers will need the bind-sidecar matcher path."
@@ -10377,10 +10513,32 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // --include-shaders: drop the requested engine templates next to
     // the bake so a consumer has everything in one folder.
     QStringList shadersWritten;
+    // A non-agnostic --target implies its own engine template.
+    if (targetArg != QLatin1String("agnostic")) {
+        if (includeShadersArg.isEmpty()) includeShadersArg = targetArg;
+        else if (!includeShadersArg.split(QLatin1Char(',')).contains(targetArg, Qt::CaseInsensitive)
+                 && !includeShadersArg.contains(QLatin1String("all"), Qt::CaseInsensitive))
+            includeShadersArg += QLatin1Char(',') + targetArg;
+    }
     if (!includeShadersArg.isEmpty()) {
         QStringList rejectedTokens;
-        const QStringList engines = VATShaderEmitter::parseEngineList(
+        QStringList engines = VATShaderEmitter::parseEngineList(
             includeShadersArg, &rejectedTokens);
+        bool allFilteredForRigid = false;
+        if (rigidMode) {
+            // Only engines with a rigid template ship one; the
+            // per-vertex shader would misread the chunk texture.
+            const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
+            QStringList kept;
+            for (const QString& e : engines) {
+                if (rigidCapable.contains(e)) kept << e;
+                else err() << "Note: no rigid-body shader template for \"" << e
+                           << "\" yet - see OpenVAT_README.md for the per-chunk "
+                              "math (Godot template: openvat_rigid.gdshader)." << Qt::endl;
+            }
+            allFilteredForRigid = !engines.isEmpty() && kept.isEmpty();
+            engines = kept;
+        }
         // Surface invalid tokens even when SOME of the list was
         // recognised — otherwise `--include-shaders godot,blender`
         // silently drops "blender" and the user discovers the
@@ -10394,7 +10552,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 QStringLiteral("VAT shaders: rejected unknown engine(s): %1")
                     .arg(rejectedTokens.join(QStringLiteral(", "))));
         }
-        if (engines.isEmpty()) {
+        if (allFilteredForRigid) {
+            // Every requested engine lacks a rigid template - the
+            // per-engine notes above already said so.
+        } else if (engines.isEmpty()) {
             err() << "Warning: --include-shaders=\"" << includeShadersArg
                   << "\" did not match any known engine "
                      "(accepted: godot, unity, unreal, all)." << Qt::endl;
@@ -10402,7 +10563,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 QStringLiteral("VAT shaders: no valid engines parsed from '%1'")
                     .arg(includeShadersArg));
         } else {
-            shadersWritten = VATShaderEmitter::writeShaders(outDir, engines);
+            shadersWritten = VATShaderEmitter::writeShaders(outDir, engines, rigidMode);
             if (shadersWritten.isEmpty()) {
                 err() << "Warning: --include-shaders requested "
                       << engines.join(",") << " but no files could be written."
@@ -10421,8 +10582,34 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (jsonOutput) {
         QJsonObject obj;
         obj["ok"]          = true;
+        obj["mode"]        = vatModeId;
+        obj["encoding"]    = VATBaker::encodingId(bakeBitDepth);
+        obj["target"]      = targetArg;
         obj["texture"]     = result.posTexPath;
         obj["sidecar"]     = result.jsonPath;
+        if (rigidMode) {
+            obj["chunkCount"]  = result.chunkCount;
+            obj["maxResidual"] = static_cast<double>(result.maxRigidResidual);
+            QJsonArray chunks;
+            for (const auto& c : result.chunks) {
+                QJsonObject jc;
+                jc["name"] = c.name;
+                jc["pivot"] = QJsonArray{ static_cast<double>(c.pivot.x),
+                                          static_cast<double>(c.pivot.y),
+                                          static_cast<double>(c.pivot.z) };
+                jc["vertexStart"] = c.vertexStart;
+                jc["vertexCount"] = c.vertexCount;
+                jc["maxResidual"] = static_cast<double>(c.maxResidual);
+                chunks.append(jc);
+            }
+            obj["chunks"] = chunks;
+        }
+        if (!result.trackId.isEmpty()) obj["track"] = result.trackId;
+        if (!result.morphTargets.isEmpty()) {
+            QJsonArray t;
+            for (const auto& n : result.morphTargets) t.append(n);
+            obj["morphTargets"] = t;
+        }
         if (sourceMeshMatchesBake)
             obj["sourceMesh"] = gltfPath;
         if (bindWritten)
@@ -10446,10 +10633,29 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         obj["bounds"] = bounds;
         cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
     } else {
-        cliWrite(QStringLiteral("Baked OpenVAT for '%1' (%2 frames × %3 vertices)\n")
-                     .arg(animName).arg(result.frameCount).arg(result.vertexCount));
+        cliWrite(QStringLiteral("Baked OpenVAT [%1] for '%2' (%3 frames x %4 %5)\n")
+                     .arg(vatModeId, animName).arg(result.frameCount).arg(result.vertexCount)
+                     .arg(rigidMode ? QStringLiteral("chunks") : QStringLiteral("vertices")));
+        cliWrite(QStringLiteral("  mode:     %1  encoding: %2  target: %3\n")
+                     .arg(vatModeId, VATBaker::encodingId(bakeBitDepth), targetArg));
         cliWrite(QStringLiteral("  texture:  %1\n").arg(result.posTexPath));
         cliWrite(QStringLiteral("  sidecar:  %1\n").arg(result.jsonPath));
+        if (rigidMode) {
+            cliWrite(QStringLiteral("  chunks:   %1 (max rigid-fit residual %2; a large value means a "
+                                    "chunk is NOT moving rigidly - use --mode skeletal)\n")
+                         .arg(result.chunkCount).arg(result.maxRigidResidual, 0, 'g', 4));
+            for (size_t ci = 0; ci < result.chunks.size(); ++ci) {
+                const auto& c = result.chunks[ci];
+                cliWrite(QStringLiteral("            [%1] %2: %3 verts, pivot=(%4, %5, %6), residual %7\n")
+                             .arg(ci).arg(c.name).arg(c.vertexCount)
+                             .arg(c.pivot.x, 0, 'f', 3).arg(c.pivot.y, 0, 'f', 3).arg(c.pivot.z, 0, 'f', 3)
+                             .arg(c.maxResidual, 0, 'g', 4));
+            }
+        }
+        if (!result.morphTargets.isEmpty())
+            cliWrite(QStringLiteral("  targets:  %1\n").arg(result.morphTargets.join(QStringLiteral(", "))));
+        if (!result.trackId.isEmpty())
+            cliWrite(QStringLiteral("  track:    %1\n").arg(result.trackId));
         if (bindWritten)
             cliWrite(QStringLiteral("  bind:     %1 (per-vertex bind-pose signature; "
                                     "consumers use this to align UV2 to the bake's "
@@ -10458,10 +10664,14 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         if (sourceMeshMatchesBake)
             cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
         if (uv2Emitted)
-            cliWrite(QStringLiteral("  uv2:      injected as TEXCOORD_%1 — consumers can "
-                                    "drop the runtime bind-sidecar matcher and read "
-                                    "(col, row) from the mesh's UV%1 directly\n")
-                .arg(emitUv2Channel));
+            cliWrite(rigidMode
+                ? QStringLiteral("  uv2:      injected as TEXCOORD_%1 - UV%1.x is the vertex's "
+                                 "CHUNK column (set chunk_from_uv2 in openvat_rigid.gdshader)\n")
+                      .arg(emitUv2Channel)
+                : QStringLiteral("  uv2:      injected as TEXCOORD_%1 - consumers can "
+                                 "drop the runtime bind-sidecar matcher and read "
+                                 "(col, row) from the mesh's UV%1 directly\n")
+                      .arg(emitUv2Channel));
         cliWrite(QStringLiteral("  bounds:   min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
                      .arg(result.minBound.y, 0, 'f', 3)

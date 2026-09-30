@@ -11,6 +11,7 @@ no skeleton.
 | Godot 4 (Forward+) | [`openvat.gdshader`](./openvat.gdshader) | Tested |
 | Unity 2022+ (BiRP) | [`openvat.shader`](./openvat.shader) | Tested |
 | Unreal Engine 5 | [`openvat.usf`](./openvat.usf) | HLSL snippet — paste into a Custom node |
+| Godot 4 — **rigid-body** bakes (`--mode rigid`) | [`openvat_rigid.gdshader`](./openvat_rigid.gdshader) | Tested against the rigid fixture |
 
 URP and HDRP variants for Unity: the vertex math is identical. Swap
 the `LightMode` tag and the `#include`s for the pipeline you target —
@@ -111,6 +112,66 @@ the same export space), so the templates read the normal **as-is**:
 
 If you pair an OLD bake (made before this change) with these templates and
 see inverted lighting, re-bake — or re-add the negation locally.
+
+## Bake modes (#522)
+
+`qtmesh vat --mode …` picks the sampler; the texture and sidecar shape
+stay OpenVAT and the sidecar gains `_mode` (plus mode-specific keys) so
+a consumer can dispatch on it.
+
+| Mode | Source | Texture columns | Extra sidecar keys | Template |
+|---|---|---|---|---|
+| `skeletal` (default) | a skeletal clip, post-skinning positions | vertices | — | `openvat.gdshader` / `.shader` / `.usf` |
+| `mesh-anim` | a full-mesh vertex clip (Alembic cache, `VAT_POSE` stream) | vertices | `_track` (clip id) | same as skeletal |
+| `morph` | a morph-weight clip resolved to positions (default clip `MorphAnim`) | vertices | `_morph_targets`, `_track` | same as skeletal |
+| `rigid` | any clip, ONE rotation + pivot per **chunk** (= submesh) per frame | **chunks** | `_rigid.{chunk_count, chunks[], max_residual}` | `openvat_rigid.gdshader` |
+
+Skeletal, mesh-anim and morph bakes are interchangeable for the shaders
+above — the per-vertex layout is identical. `_bit_depth` is `8`, `16`
+or `32` (`--encoding rgba8 | rgba16 | exr`); an 8-bit PNG decodes with
+the same `bounds_min + texel * (bounds_max - bounds_min)` formula.
+
+### Rigid-body layout
+
+```text
+width  = chunk count
+height = 2 × Frames
+rows [0 .. Frames)         pivot position of chunk c this frame (RGB, normalized Min..Max;
+                           raw floats for EXR)
+rows [Frames .. 2×Frames)  rotation quaternion (x, y, z, w) encoded (q + 1) / 2 in RGBA
+_rigid.chunks[c].pivot     the chunk's BIND-pose pivot (its centroid)
+```
+
+Runtime per vertex of chunk `c`:
+
+```glsl
+vec3 pivot_frame = decode(texel(c, frame).rgb);
+vec4 q           = texel(c, Frames + frame) * 2.0 - 1.0;   // normalize after a frame lerp
+p' = rotate(q, p - pivot_bind) + pivot_frame;
+n' = rotate(q, n);
+```
+
+Chunk `c` is glTF primitive / Godot surface / Unity sub-mesh `c` of
+the bake's `source.gltf` (Ogre submesh order). Set the shader's chunk
+index per surface material, or bake with `--emit-uv2` — on a rigid bake
+UV2.x carries the vertex's chunk column. Adjacent frames are kept in
+the same quaternion hemisphere, so `normalize(mix(q0, q1, t))` is a
+valid short-arc blend.
+
+`_rigid.max_residual` is the worst `|fit − actual|` over every vertex
+and frame in source units. Near zero means the pieces really move
+rigidly (a one-bone-per-piece rig, an RBD cache); a large value means
+a chunk deforms and you want `--mode skeletal` instead.
+
+**Axis conventions per target.** The bake is Y-up right-handed. The
+Godot template applies no swizzle (Godot is Y-up RH). For **Unity**
+(Y-up left-handed) negate X on the pivot AND negate the quaternion's
+`x` and `w` components (equivalently mirror the rotation); for
+**Unreal** (Z-up left-handed, centimetres) swap Y/Z on the pivot and
+on `q.xyz`, negate `q.w`, and scale positions by 100. The per-vertex
+Unity/Unreal templates already carry the same swizzles for positions
+and normals — mirror them for the quaternion when you port the rigid
+shader.
 
 ## Where this came from
 

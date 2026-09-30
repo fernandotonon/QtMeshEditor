@@ -1207,8 +1207,14 @@ Rectangle {
             padding: 8
             spacing: 6
 
-            property var animList: VATBakerController.availableAnimations
+            // #522 mode family: the mode picker drives which clips the
+            // Anim picker offers (skeletal clips vs vertex/morph clips).
+            property var modeList: VATBakerController.availableModes
+            property string modeId: modeList.length > 0 ? modeList[0] : "skeletal"
+            property var animList: VATBakerController.animationsForMode(modeId)
             property string animName: animList.length > 0 ? animList[0] : ""
+            property string encoding: "rgba16"
+            property string target: "agnostic"
             property int fps: 30
             property string outputDir: ""
             property string lastResultText: ""
@@ -1225,20 +1231,66 @@ Rectangle {
             // Anim / FPS / Out rows align with each other.
             readonly property int labelWidth: 44
 
+            function refreshAnimList() {
+                animList = VATBakerController.animationsForMode(modeId)
+                if (animList.indexOf(animName) < 0)
+                    animName = animList.length > 0 ? animList[0] : ""
+            }
+            onModeIdChanged: refreshAnimList()
+
             Connections {
                 target: VATBakerController
                 function onAvailableAnimationsChanged() {
-                    animToolsCol.animList = VATBakerController.availableAnimations
-                    if (animToolsCol.animList.indexOf(animToolsCol.animName) < 0) {
-                        animToolsCol.animName = animToolsCol.animList.length > 0
-                            ? animToolsCol.animList[0]
-                            : ""
-                    }
+                    animToolsCol.modeList = VATBakerController.availableModes
+                    if (animToolsCol.modeList.indexOf(animToolsCol.modeId) < 0)
+                        animToolsCol.modeId = animToolsCol.modeList.length > 0
+                            ? animToolsCol.modeList[0] : "skeletal"
+                    animToolsCol.refreshAnimList()
                 }
                 function onBakeFinished(ok, posTex, err) {
                     animToolsCol.lastOk = ok
                     animToolsCol.lastResultText = ok ? "✓ " + posTex : "✗ " + err
                 }
+            }
+
+            // Mode picker (#522): skeletal / rigid / mesh-anim / morph.
+            // Only the modes the selection can actually bake are
+            // listed (a static mesh with morph targets never shows
+            // "Skeletal"), so an impossible combination cannot be
+            // requested from the panel.
+            Row {
+                spacing: 6; width: parent.width - 16
+                visible: animToolsCol.modeList.length > 0
+
+                Text {
+                    text: "Mode:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: vatModeCombo
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: animToolsCol.modeList.map(function(m) { return VATBakerController.modeLabel(m) })
+                    currentIndex: Math.max(0, animToolsCol.modeList.indexOf(animToolsCol.modeId))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < animToolsCol.modeList.length)
+                            animToolsCol.modeId = animToolsCol.modeList[index]
+                    }
+                    enabled: !VATBakerController.isBaking && animToolsCol.modeList.length > 0
+                }
+            }
+            Text {
+                visible: animToolsCol.modeList.length === 0
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Nothing bakeable selected: VAT needs a skeletal clip, a vertex "
+                    + "cache (Alembic) or keyed morph weights on the selected mesh."
             }
 
             // Animation picker — use ThemedComboBox so the dropdown
@@ -1464,6 +1516,53 @@ Rectangle {
                 }
             }
 
+            // Encoding (#522): rgba8 / rgba16 / exr.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Enc:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["RGBA8 PNG (smallest)", "RGBA16 PNG (default)", "EXR float32 (lossless)"]
+                    currentIndex: Math.max(0, VATBakerController.encodingIds.indexOf(animToolsCol.encoding))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.encodingIds.length)
+                            animToolsCol.encoding = VATBakerController.encodingIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
+            // Target engine (#522): recorded in the sidecar; a
+            // non-agnostic target also ships that engine's shader.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Target:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Agnostic", "Unity", "Unreal", "Godot"]
+                    currentIndex: Math.max(0, VATBakerController.targetIds.indexOf(animToolsCol.target))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.targetIds.length)
+                            animToolsCol.target = VATBakerController.targetIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
             // Include-shader master toggle. Off by default — the bake
             // produces all of the data files unconditionally, and the
             // shader templates are an opt-in convenience: copy
@@ -1670,7 +1769,10 @@ Rectangle {
                             animToolsCol.fps,
                             animToolsCol.outputDir,
                             "",
-                            engines)
+                            engines,
+                            animToolsCol.modeId,
+                            animToolsCol.encoding,
+                            animToolsCol.target)
                     }
                 }
             }
