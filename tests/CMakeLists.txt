@@ -89,6 +89,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/NonRigidICP.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/SparseSolve.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/DeformationTransfer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigAlign.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceRigAttach.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FaceRig/FaceLandmarkDetector.cpp
