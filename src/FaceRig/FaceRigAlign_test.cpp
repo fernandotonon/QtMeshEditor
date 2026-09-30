@@ -105,7 +105,7 @@ TEST(FaceRigAlign, DegenerateInputsAreRejected)
     if (a.ok) EXPECT_LT(a.residual, 1e-2f);
 }
 
-TEST(FaceRigAlign, RotateInPlaceAboutPivotAndYawToPlusZ)
+TEST(FaceRigAlign, RotateInPlaceAboutPivotAndRotationToPlusZ)
 {
     std::vector<float> xyz = { 1, 0, 0,   1, 1, 0 };
     const std::array<float, 9> R180{ -1, 0, 0,  0, 1, 0,  0, 0, -1 };
@@ -114,19 +114,34 @@ TEST(FaceRigAlign, RotateInPlaceAboutPivotAndYawToPlusZ)
     EXPECT_NEAR(xyz[3], 1.0f, 1e-6f); EXPECT_NEAR(xyz[4], 1.0f, 1e-6f);
 
     float deg = 0.0f;
-    const auto Y = FaceRig::yawToPlusZ({0, 0, -1}, 3.0f, &deg);
+    const auto Y = FaceRig::rotationToPlusZ({0, 0, -1}, 3.0f, &deg);
     EXPECT_NEAR(deg, 180.0f, 1e-3f);
     const V3 f = FaceRig::rotateVec(Y, {0, 0, -1}, false);
     EXPECT_NEAR(f[2], 1.0f, 1e-5f);
-    const auto Yx = FaceRig::yawToPlusZ({1, 0, 0}, 3.0f, &deg);
+    const auto Yx = FaceRig::rotationToPlusZ({1, 0, 0}, 3.0f, &deg);
     EXPECT_NEAR(deg, 90.0f, 1e-3f);
     const V3 g = FaceRig::rotateVec(Yx, {1, 0, 0}, false);
     EXPECT_NEAR(g[2], 1.0f, 1e-5f); EXPECT_NEAR(g[0], 0.0f, 1e-5f);
     // Already facing +Z (or within the dead band): identity.
-    const auto I = FaceRig::yawToPlusZ({0.01f, 0, 1}, 3.0f, &deg);
+    const auto I = FaceRig::rotationToPlusZ({0.01f, 0, 1}, 3.0f, &deg);
     EXPECT_EQ(deg, 0.0f);
     EXPECT_NEAR(I[0], 1.0f, 1e-6f); EXPECT_NEAR(I[8], 1.0f, 1e-6f);
-    // No horizontal component: identity, no NaN.
-    const auto U = FaceRig::yawToPlusZ({0, 1, 0}, 3.0f, &deg);
-    EXPECT_EQ(deg, 0.0f); EXPECT_NEAR(U[4], 1.0f, 1e-6f);
+    // Z-up head facing -Y (the review case): pitch it onto +Z, and its up
+    // (+Z) must land on +Y so the head is upright in the template frame.
+    const auto P = FaceRig::rotationToPlusZ({0, -1, 0}, 3.0f, &deg);
+    EXPECT_NEAR(deg, 90.0f, 1e-3f);
+    const V3 pf = FaceRig::rotateVec(P, {0, -1, 0}, false);
+    EXPECT_NEAR(pf[2], 1.0f, 1e-5f);
+    const V3 pu = FaceRig::rotateVec(P, {0, 0, 1}, false);
+    EXPECT_NEAR(pu[1], 1.0f, 1e-5f);
+    // An arbitrary tilted direction still lands exactly on +Z.
+    const V3 tilt{0.3f, 0.5f, -0.8f};
+    const auto T = FaceRig::rotationToPlusZ(tilt, 3.0f, &deg);
+    const V3 tf = FaceRig::rotateVec(T, tilt, false);
+    const float tl = std::sqrt(tilt[0]*tilt[0] + tilt[1]*tilt[1] + tilt[2]*tilt[2]);
+    EXPECT_NEAR(tf[0], 0.0f, 1e-5f); EXPECT_NEAR(tf[1], 0.0f, 1e-5f);
+    EXPECT_NEAR(tf[2], tl, 1e-5f);
+    // Degenerate: identity, no NaN.
+    const auto Z = FaceRig::rotationToPlusZ({0, 0, 0}, 3.0f, &deg);
+    EXPECT_EQ(deg, 0.0f); EXPECT_NEAR(Z[4], 1.0f, 1e-6f);
 }

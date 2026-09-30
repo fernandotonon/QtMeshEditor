@@ -2842,6 +2842,8 @@ QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
     j["shapes_attached"] = rep.shapesAttached;
     j["user_vertex_count"] = rep.userVertexCount;
     j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+    j["orientation_source"] = rep.orientationSource;
+    j["orientation_angle_deg"] = rep.orientationAngleDeg;
     j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
     result["facerig"] = j;
     return result;

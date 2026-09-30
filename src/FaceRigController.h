@@ -57,7 +57,7 @@ public:
     static void kill();
 
     bool hasMeshSelection() const;
-    bool busy() const { return m_busy; }
+    bool busy() const { return m_busy || m_preparing; }
     bool downloading() const { return m_downloading; }
     QString status() const { return m_status; }
     int progress() const { return m_progress; }
@@ -137,6 +137,11 @@ private:
 
     static FaceRigController* m_pSingleton;
     bool m_busy = false;
+    // Set while a rig/marker session PREPARES on the main thread (template +
+    // landmark-model waits spin nested event loops, so the UI could otherwise
+    // re-enter and start a second worker). busy() covers it.
+    bool m_preparing = false;
+    void setPreparing(bool p);
     bool m_downloading = false;
     QString m_status;
     int m_progress = 0;

@@ -1,13 +1,10 @@
 #include "FaceRigger.h"
-#include "FaceRigAlign.h"
-
-#include <cstdio>
-#include <cstdlib>
 
 #include <QtGlobal>
 #include <cstdio>
 
 #include "ArkitTemplate.h"
+#include "FaceRigAlign.h"
 #include "DeformationTransfer.h"
 #include "NonRigidICP.h"
 
@@ -630,12 +627,16 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     std::array<float, 9> R{1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::array<float, 3> pivot{0, 0, 0};
     bool rotate = false;
+    std::string source = "none";
+    double angleDeg = 0.0;
     constexpr float kMinAngleDeg = 3.0f;   // below this the legacy path is bit-identical
     if (tmpl.valid() && landmarks.size() >= 3) {
         const SimilarityAlign a = alignTemplateToUser(tmpl.neutral(), landmarks);
         if (a.ok && a.angleDeg > kMinAngleDeg) {
             R = a.R;
             rotate = true;
+            source = "anchors";
+            angleDeg = a.angleDeg;
             double c[3] = {0, 0, 0}; int n = 0;
             for (const auto& lm : landmarks) {
                 if (lm.tmplVertex < 0) continue;
@@ -652,11 +653,13 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         const float hx = opts.faceDirHint[0], hy = opts.faceDirHint[1], hz = opts.faceDirHint[2];
         if (hx*hx + hy*hy + hz*hz > 1e-8f) {
             float deg = 0.0f;
-            const std::array<float, 9> Y = yawToPlusZ(opts.faceDirHint, kMinAngleDeg, &deg);
+            const std::array<float, 9> Y = rotationToPlusZ(opts.faceDirHint, kMinAngleDeg, &deg);
             if (deg > 0.0f) {
                 // Y maps the user's face direction onto +Z, i.e. it is R^T.
                 R = { Y[0], Y[3], Y[6],  Y[1], Y[4], Y[7],  Y[2], Y[5], Y[8] };
                 rotate = true;
+                source = "face_dir";
+                angleDeg = deg;
                 double c[3] = {0, 0, 0};
                 const size_t nv = userV.size() / 3;
                 for (size_t i = 0; i < nv; ++i)
@@ -664,7 +667,7 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                 if (nv) for (int k = 0; k < 3; ++k) pivot[size_t(k)] = float(c[k] / double(nv));
                 if (std::getenv("QTMESH_FACERIG_DEBUG"))
                     std::fprintf(stderr, "[facerig] orientation from face-direction "
-                                 "hint: yaw %.1f deg -> fitting in the template frame\n", deg);
+                                 "hint: %.1f deg -> fitting in the template frame\n", deg);
             }
         }
     }
@@ -682,6 +685,8 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     }
     FaceRigResult r = buildFaceRigAligned(alignedV, userF, tmpl, opts, headMask,
                                           alignedLm, progress);
+    r.orientationSource = source;
+    r.orientationAngleDeg = angleDeg;
     if (!r.ok) return r;
     // Deltas are directions: rotate back with R (no pivot).
     for (auto& sh : r.shapes)

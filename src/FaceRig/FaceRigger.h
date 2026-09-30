@@ -49,6 +49,11 @@ struct FaceRigResult {
     int userVertexCount = 0;
     double fitMeanResidualPct = 0.0;   // NRICP mean residual / user diag (%)
     double fitMaxResidualPct = 0.0;
+    // How the head's orientation was resolved (see buildFaceRig): "anchors"
+    // (Horn fit), "face_dir" (hint-only minimal rotation), or "none" (the
+    // head already faced the template, or nothing to solve from).
+    std::string orientationSource = "none";
+    double orientationAngleDeg = 0.0;
     bool ok = false;
     std::string error;                 // set when !ok
 };
@@ -69,11 +74,12 @@ struct FaceRigOptions {
     // >1 amplifies subtle results on stylized faces whose transfer comes out
     // conservative. Clamped by callers to a sane range.
     double amplitude = 1.0;
-    // Optional direction the USER face points (mesh-local, up = +Y), from the
+    // Optional direction the USER face points (mesh-local), from the
     // landmark view ranking. Used ONLY when fewer than 3 anchors are supplied:
-    // the fit then yaws the user head so this direction meets the template's
-    // +Z. With anchors, the rotation is solved from them instead (Horn fit),
-    // which also handles pitch/roll. Zero = no hint.
+    // the fit then rotates the user head so this direction meets the
+    // template's +Z (yaw + pitch; roll about the view axis is unrecoverable
+    // from a direction). With anchors, the full rotation is solved from them
+    // instead (Horn fit). Zero = no hint.
     std::array<float, 3> faceDirHint{0, 0, 0};
 };
 
@@ -99,8 +105,9 @@ using FaceRigProgressFn =
 // them (Horn), the user mesh is fitted in the TEMPLATE's frame and the deltas
 // are rotated back — so a head facing -Z / +X / any yaw, pitch or roll rigs
 // correctly (it used to land on the back of the head). Without anchors,
-// `opts.faceDirHint` yaws the head to +Z; with neither, the pre-existing
-// front-facing contract applies.
+// `opts.faceDirHint` turns the head to +Z (yaw + pitch, no roll); with
+// neither, the pre-existing front-facing contract applies. The result
+// reports which path ran (orientationSource / orientationAngleDeg).
 // `progress` (optional) reports fit + per-shape steps and can cancel.
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,

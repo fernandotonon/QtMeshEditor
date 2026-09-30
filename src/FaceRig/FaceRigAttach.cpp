@@ -6,6 +6,7 @@
 #include "../AutoRig.h"
 #include "../MeshSegmenter.h"
 #include "../commands/MorphCommands.h"
+#include "../SentryReporter.h"
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -276,23 +277,28 @@ AttachReport attachFaceRig(Ogre::Entity* entity,
     // fit then runs unanchored (previous behaviour).
     std::vector<float> headV; std::vector<int> headF;
     headSubmesh(geo, headV, headF);
+    std::array<float, 3> faceDir{0, 0, 0};
     const std::vector<NricpLandmark> anchors =
-        buildLandmarkAnchors(entity, headV, headF, tmpl);
+        buildLandmarkAnchors(entity, headV, headF, tmpl, &faceDir);
 
     // No anchors (weak/absent detection): still tell the fit which way the
-    // face points when the landmark view ranking knows, so the template is
-    // yawed onto the face instead of the back of the head.
+    // face points when the landmark view ranking knows (same detection -
+    // no second render), so the template is turned onto the face instead
+    // of the back of the head.
     FaceRigOptions fitOpts = opts;
-    if (anchors.size() < 3) {
-        const MeshLandmarks ulm = detectMeshLandmarks(entity, headV, headF);
-        if (ulm.faceDirValid) fitOpts.faceDirHint = ulm.faceDirLocal;
-    }
+    if (anchors.size() < 3) fitOpts.faceDirHint = faceDir;
 
     const FaceRigResult res = buildFaceRig(geo.userV, geo.userF, tmpl, fitOpts,
                                            geo.headMask, anchors);
     rep.userVertexCount = res.userVertexCount;
     rep.fitMeanResidualPct = res.fitMeanResidualPct;
     rep.fitMaxResidualPct = res.fitMaxResidualPct;
+    rep.orientationSource = QString::fromStdString(res.orientationSource);
+    rep.orientationAngleDeg = res.orientationAngleDeg;
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+        QStringLiteral("orientation source=%1 angle=%2 anchors=%3")
+            .arg(rep.orientationSource).arg(rep.orientationAngleDeg, 0, 'f', 1)
+            .arg(anchors.size()));
     if (!res.ok) {
         rep.error = QString::fromStdString(res.error);
         return rep;

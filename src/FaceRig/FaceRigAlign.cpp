@@ -117,23 +117,29 @@ double rotationAwareResidual(const std::vector<std::array<float, 3>>& src,
     return a.ok ? double(a.residual) : 1e9;
 }
 
-std::array<float, 9> yawToPlusZ(const std::array<float, 3>& faceDir,
-                                float minAngleDeg, float* outAngleDeg)
+std::array<float, 9> rotationToPlusZ(const std::array<float, 3>& faceDir,
+                                     float minAngleDeg, float* outAngleDeg)
 {
-    std::array<float, 9> I{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const std::array<float, 9> I{1, 0, 0, 0, 1, 0, 0, 0, 1};
     if (outAngleDeg) *outAngleDeg = 0.0f;
-    const float fx = faceDir[0], fz = faceDir[2];
-    const float len = std::sqrt(fx*fx + fz*fz);
+    const float len = std::sqrt(faceDir[0]*faceDir[0] + faceDir[1]*faceDir[1]
+                                + faceDir[2]*faceDir[2]);
     if (!(len > 1e-6f)) return I;
-    const float nx = fx / len, nz = fz / len;
-    // angle from +Z to (nx, nz) about +Y
-    const float ang = std::atan2(nx, nz);
-    const float deg = std::fabs(ang) * 180.0f / 3.14159265358979f;
+    const float dx = faceDir[0] / len, dy = faceDir[1] / len, dz = faceDir[2] / len;
+    const float c = std::clamp(dz, -1.0f, 1.0f);            // dot(d, +Z)
+    const float deg = std::acos(c) * 180.0f / 3.14159265358979f;
     if (deg < minAngleDeg) return I;
     if (outAngleDeg) *outAngleDeg = deg;
-    // Rotation about +Y by -ang maps (nx, nz) onto (0, 1).
-    const float c = std::cos(-ang), s = std::sin(-ang);
-    return { c, 0, s,  0, 1, 0,  -s, 0, c };
+    if (c < -0.9999f)                                        // facing -Z: yaw 180
+        return { -1, 0, 0,  0, 1, 0,  0, 0, -1 };
+    // Rodrigues about axis = d x Z = (dy, -dx, 0), normalised.
+    float ax = dy, ay = -dx;
+    const float an = std::sqrt(ax*ax + ay*ay);
+    ax /= an; ay /= an;
+    const float sn = std::sqrt(std::max(0.0f, 1.0f - c*c)), t = 1.0f - c;
+    return { t*ax*ax + c,  t*ax*ay,       sn*ay,
+             t*ax*ay,      t*ay*ay + c,  -sn*ax,
+            -sn*ay,        sn*ax,         c };
 }
 
 }  // namespace FaceRig

@@ -67,8 +67,7 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
     // a detector — no anchors, no face direction — and silently fitted with
     // the "faces +Z" assumption (the back-of-the-head rig). Honours
     // QTMESH_FACERIG_NO_DOWNLOAD; a failed fetch still returns !ok.
-    if (!FaceLandmarkDetector::present())
-        FaceLandmarkDetector::ensureModelBlocking();
+    if (!ensureLandmarkModelOnce()) return out;
     FaceLandmarkDetector det;
     if (!det.load()) return out;   // ONNX off / model missing → caller falls back
 
@@ -551,19 +550,31 @@ double constellationResidual(const std::vector<std::array<float,3>>& C,
                              const std::vector<std::array<float,3>>& U);
 }  // namespace
 
+bool ensureLandmarkModelOnce()
+{
+    if (!FaceLandmarkDetector::backendAvailable()) return false;
+    if (FaceLandmarkDetector::present()) return true;
+    static bool attempted = false;       // main thread only
+    if (attempted) return false;
+    attempted = true;
+    FaceLandmarkDetector::ensureModelBlocking();
+    return FaceLandmarkDetector::present();
+}
+
 std::vector<NricpLandmark> buildLandmarkAnchors(
     Ogre::Entity* userEntity,
     const std::vector<float>& userLocalV,
     const std::vector<int>& userLocalF,
-    const ArkitTemplate& tmpl)
+    const ArkitTemplate& tmpl,
+    std::array<float, 3>* outFaceDir)
 {
     std::vector<NricpLandmark> anchors;
+    if (outFaceDir) *outFaceDir = {0, 0, 0};
     if (!userEntity || !tmpl.valid()) return anchors;
     if (!FaceLandmarkDetector::backendAvailable()) return anchors;
     // Cheap pre-check: no model (after a first-use download attempt) → skip
     // the renders entirely.
-    if (!FaceLandmarkDetector::present())
-        FaceLandmarkDetector::ensureModelBlocking();
+    if (!ensureLandmarkModelOnce()) return anchors;
     { FaceLandmarkDetector probe; if (!probe.load()) return anchors; }
 
     // template side: build a temp entity, detect, map each landmark → nearest
@@ -579,6 +590,7 @@ std::vector<NricpLandmark> buildLandmarkAnchors(
 
     // user side.
     const MeshLandmarks ulm = detectMeshLandmarks(userEntity, userLocalV, userLocalF);
+    if (outFaceDir && ulm.faceDirValid) *outFaceDir = ulm.faceDirLocal;
     if (!ulm.ok) return anchors;
 
     const int nl = int(std::min(tlm.points.size(), ulm.points.size()));
@@ -879,6 +891,23 @@ std::vector<FaceMarker> seedFaceMarkers(
         }
         const double ratio = (canonicalOk && tlm.ok && sT > 1e-9)
                              ? sUsr / sT : 0.0;
+        // The bias is measured in the TEMPLATE frame; on a head that is
+        // turned it must be rotated into the user's frame before it is
+        // subtracted (un-rotated, a 180-degree head had its markers pushed
+        // the WRONG way by the full bias). Rotation from the same raw pairs.
+        std::array<float,9> biasR{1,0,0, 0,1,0, 0,0,1};
+        {
+            std::vector<std::array<float,3>> rs, rd;
+            for (size_t k = 0; k < markers.size(); ++k) {
+                const int i = markers[k].mediapipeIndex;
+                if (!tlmSymOk[k] || i < 0 || i >= int(ulm.points.size())
+                    || !ulm.valid[size_t(i)]) continue;
+                rs.push_back(tlmSym[k]);
+                rd.push_back(ulm.points[size_t(i)]);
+            }
+            const SimilarityAlign ba = alignPoints(rs, rd);
+            if (ba.ok) biasR = ba.R;
+        }
         for (size_t k = 0; k < markers.size(); ++k) {
             const int i = markers[k].mediapipeIndex;
             if (i < 0 || i >= int(ulm.points.size()) || !ulm.valid[size_t(i)])
@@ -887,11 +916,13 @@ std::vector<FaceMarker> seedFaceMarkers(
             uOk[k] = 1;
             const int cv = markers[k].tmplVertex;
             if (ratio > 0.0 && tlmSymOk[k] && cv >= 0) {
-                for (int d = 0; d < 3; ++d) {
-                    const float bias = tlmSym[k][size_t(d)]
-                                       - tn[size_t(cv)*3 + size_t(d)];
-                    uCorr[k][size_t(d)] -= float(ratio * bias);
-                }
+                std::array<float,3> bias;
+                for (int d = 0; d < 3; ++d)
+                    bias[size_t(d)] = tlmSym[k][size_t(d)]
+                                      - tn[size_t(cv)*3 + size_t(d)];
+                const std::array<float,3> ub = rotateVec(biasR, bias, false);
+                for (int d = 0; d < 3; ++d)
+                    uCorr[k][size_t(d)] -= float(ratio * ub[size_t(d)]);
             }
         }
     }
@@ -921,40 +952,26 @@ std::vector<FaceMarker> seedFaceMarkers(
                      ulm.ok, ulm.confidence, seeded, markers.size(), resid,
                      confident ? "trusted" : "using proportional defaults");
 
-    if (confident) {
-        // Consensus outlier correction: fit the similarity model the
-        // constellation gate already uses (centroid + scale, no rotation)
-        // and predict each marker from the TEMPLATE layout. Individual
+    // Consensus model: the same rotation-aware similarity the gate scored.
+    // Without the rotation, a turned head's prediction lands MIRRORED across
+    // the centroid and every lateral marker looks like an outlier.
+    const SimilarityAlign consensus = alignPoints(detC, detU);
+    if (confident && consensus.ok) {
+        // Consensus outlier correction: predict each marker from the TEMPLATE
+        // layout through the fitted similarity. Individual
         // detections on low-contrast renders drift most at the eye/mouth
         // corners (measured up to 0.59 units on the reference vs ~0.07
         // for the nose); a detection that deviates from the consensus
-        // prediction by more than 2x the median is detector noise — replace
+        // prediction by more than 2x the median is detector noise - replace
         // it with the prediction, snapped to the head surface.
-        std::array<double,3> cC{0,0,0}, cU{0,0,0};
-        const int np = int(detC.size());
-        for (int i = 0; i < np; ++i)
-            for (int d = 0; d < 3; ++d) {
-                cC[size_t(d)] += detC[size_t(i)][size_t(d)] / np;
-                cU[size_t(d)] += detU[size_t(i)][size_t(d)] / np;
-            }
-        double sC = 0, sU = 0;
-        for (int i = 0; i < np; ++i) {
-            double dc = 0, du = 0;
-            for (int d = 0; d < 3; ++d) {
-                const double a = detC[size_t(i)][size_t(d)] - cC[size_t(d)];
-                const double b = detU[size_t(i)][size_t(d)] - cU[size_t(d)];
-                dc += a*a; du += b*b;
-            }
-            sC += std::sqrt(dc); sU += std::sqrt(du);
-        }
-        const double scale = (sC > 1e-12) ? sU / sC : 1.0;
-
         auto predictOf = [&](int tmplVertex) -> std::array<float,3> {
-            std::array<float,3> p;
-            for (int d = 0; d < 3; ++d)
-                p[size_t(d)] = float((double(tn[size_t(tmplVertex)*3 + d])
-                                      - cC[size_t(d)]) * scale + cU[size_t(d)]);
-            return p;
+            const std::array<float,3> t{tn[size_t(tmplVertex)*3],
+                                        tn[size_t(tmplVertex)*3+1],
+                                        tn[size_t(tmplVertex)*3+2]};
+            const std::array<float,3> q = rotateVec(consensus.R, t, false);
+            return { consensus.scale * q[0] + consensus.translation[0],
+                     consensus.scale * q[1] + consensus.translation[1],
+                     consensus.scale * q[2] + consensus.translation[2] };
         };
         std::vector<double> devs;
         for (size_t k = 0; k < markers.size(); ++k) {
@@ -1002,6 +1019,14 @@ std::vector<FaceMarker> seedFaceMarkers(
             }
             if (m.tmplVertex >= 0) ++di;
             m.placed = true;
+        }
+    } else if (confident) {
+        // Trusted constellation but the similarity solve failed: keep every
+        // detection as-is rather than predict from a model we do not have.
+        for (size_t k = 0; k < markers.size(); ++k) {
+            if (!uOk[k]) continue;
+            markers[k].userPos = uCorr[k];
+            markers[k].placed = true;
         }
     } else {
         // Garbage / weak detection: seed EVERY marker at the head-box-projected
@@ -1155,7 +1180,12 @@ std::vector<NricpLandmark> anchorsFromMarkers(const std::vector<FaceMarker>& mar
     std::vector<NricpLandmark> swapped = build(true);
     const double rn = residualOf(normal);
     const double rs = residualOf(swapped);
-    if (rs < rn) {
+    // Swap only on a CLEAR win: with a rotation-aware residual a reflection
+    // of a near-symmetric constellation differs from a 180-degree turn only
+    // by its depth relief, so on a flat stylized face noise alone can put
+    // the swapped pairing marginally ahead. Correctly placed markers must
+    // never be mirror-swapped by a coin flip.
+    if (rs < 0.5 * rn) {
         std::fprintf(stderr, "[facerig] markers look MIRRORED (residual %.3f "
                      "vs %.3f) — auto-swapping left/right pairs\n", rn, rs);
         return swapped;

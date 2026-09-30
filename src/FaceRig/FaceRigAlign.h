@@ -58,12 +58,16 @@ std::array<float, 3> rotateVec(const std::array<float, 9>& R,
 void rotateInPlace(std::vector<float>& xyz, const std::array<float, 9>& R,
                    const std::array<float, 3>& pivot, bool transpose);
 
-// Rotation that yaws `faceDir` (a face-forward direction, up = +Y) onto +Z —
-// the template's forward. Identity when `faceDir` is degenerate or already
-// within `minAngleDeg` of +Z. Used when a bake has no anchors but the
-// landmark ranking still told us which way the face points.
-std::array<float, 9> yawToPlusZ(const std::array<float, 3>& faceDir,
-                                float minAngleDeg, float* outAngleDeg = nullptr);
+// Smallest rotation taking `faceDir` (a face-forward direction) onto +Z —
+// the template's forward. Handles yaw AND pitch (a Z-up head facing -Y
+// maps with its up onto +Y); a direction alone cannot recover ROLL about
+// the view axis, so that stays unsolved on the hint-only path. The
+// antipodal case (facing -Z) turns 180 deg about +Y, keeping the head
+// upright. Identity when `faceDir` is degenerate or already within
+// `minAngleDeg` of +Z. Used when a bake has no anchors but the landmark
+// ranking still told us which way the face points.
+std::array<float, 9> rotationToPlusZ(const std::array<float, 3>& faceDir,
+                                     float minAngleDeg, float* outAngleDeg = nullptr);
 
 }  // namespace FaceRig
 

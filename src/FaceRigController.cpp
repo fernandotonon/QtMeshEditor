@@ -1,4 +1,7 @@
 #include "FaceRigController.h"
+#include "FaceRig/FaceLandmarkDetector.h"
+
+#include <array>
 
 #include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
@@ -77,6 +80,13 @@ void FaceRigController::setStatus(const QString& s)
     emit statusChanged();
 }
 
+void FaceRigController::setPreparing(bool p)
+{
+    if (m_preparing == p) return;
+    m_preparing = p;
+    emit busyChanged();
+}
+
 bool FaceRigController::hasMeshSelection() const
 {
     auto* sel = SelectionSet::getSingleton();
@@ -90,10 +100,12 @@ bool FaceRigController::hasMeshSelection() const
 bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidualPct,
                                                  double amplitude)
 {
-    if (m_busy) {
+    if (m_busy || m_preparing) {
         emit error(QStringLiteral("A face-rig is already running."));
         return false;
     }
+    setPreparing(true);
+    const std::shared_ptr<void> prepGuard(nullptr, [this](void*) { setPreparing(false); });
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
         QStringLiteral("Add ARKit Blendshapes requested"));
 
@@ -140,18 +152,20 @@ bool FaceRigController::addArkitBlendshapesAsync(int maxShapes, double maxResidu
     // MAIN thread: facial-landmark anchors (renders template + user — Ogre) so
     // the worker's fit lands on the real face features. Empty when ONNX/model/
     // face-detection unavailable → the fit runs unanchored (previous behaviour).
-    setStatus(QStringLiteral("Detecting face landmarks…"));
+    const bool fetchDetector = FaceRig::FaceLandmarkDetector::backendAvailable()
+                               && !FaceRig::FaceLandmarkDetector::present();
+    m_downloading = fetchDetector;
+    setStatus(fetchDetector ? QStringLiteral("Downloading face landmark model…")
+                            : QStringLiteral("Detecting face landmarks…"));
     std::vector<float> headV; std::vector<int> headF;
     FaceRig::headSubmesh(*geo, headV, headF);
+    std::array<float, 3> faceDir{0, 0, 0};
     const std::vector<FaceRig::NricpLandmark> anchors =
-        FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl);
+        FaceRig::buildLandmarkAnchors(entity, headV, headF, *tmpl, &faceDir);
+    m_downloading = false;
     // Too few anchors to solve the head's orientation from: fall back to the
-    // face-direction the view ranking reports (valid even on weak detections).
-    m_faceDirHint = {0, 0, 0};
-    if (anchors.size() < 3) {
-        const FaceRig::MeshLandmarks ulm = FaceRig::detectMeshLandmarks(entity, headV, headF);
-        if (ulm.faceDirValid) m_faceDirHint = ulm.faceDirLocal;
-    }
+    // face direction the same detection reported (valid even when weak).
+    m_faceDirHint = anchors.size() < 3 ? faceDir : std::array<float, 3>{0, 0, 0};
 
     m_geo = geo;
     return runRigAsync(tmpl, maxShapes, maxResidualPct, amplitude, anchors);
@@ -162,6 +176,10 @@ bool FaceRigController::runRigAsync(
     int maxShapes, double maxResidualPct, double amplitude,
     const std::vector<FaceRig::NricpLandmark>& anchorsIn)
 {
+    if (m_busy) {   // never start a second detached worker (it would own m_cancel)
+        emit error(QStringLiteral("A face-rig is already running."));
+        return false;
+    }
     auto geo = m_geo;
     if (!geo || !geo->valid()) {
         emit error(QStringLiteral("Could not read the mesh geometry."));
@@ -230,6 +248,10 @@ bool FaceRigController::runRigAsync(
             emit self->progressChanged();
             self->setStatus(QString());
 
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
+                QStringLiteral("orientation source=%1 angle=%2")
+                    .arg(QString::fromStdString(result->orientationSource))
+                    .arg(result->orientationAngleDeg, 0, 'f', 1));
             if (!result->ok) {
                 emit self->error(result->error == "cancelled"
                     ? QStringLiteral("Face-rig cancelled.")
@@ -402,7 +424,9 @@ bool FaceRigController::markerPlaced(int index) const
 
 bool FaceRigController::beginFaceMarkers()
 {
-    if (m_busy) { emit error(QStringLiteral("Busy.")); return false; }
+    if (m_busy || m_preparing) { emit error(QStringLiteral("Busy.")); return false; }
+    setPreparing(true);
+    const std::shared_ptr<void> prepGuard(nullptr, [this](void*) { setPreparing(false); });
     auto* sel = SelectionSet::getSingleton();
     const auto entities = sel ? sel->getResolvedEntities()
                               : QList<Ogre::Entity*>{};
@@ -551,6 +575,7 @@ bool FaceRigController::rigFromMarkers(int maxShapes, double maxResidualPct,
                                        double amplitude)
 {
     if (!m_markerMode) { emit error(QStringLiteral("Not in marker mode.")); return false; }
+    if (m_busy || m_preparing) { emit error(QStringLiteral("A face-rig is already running.")); return false; }
     auto tmpl = m_markerTmpl;
     if (!tmpl) { emit error(QStringLiteral("Template not loaded.")); return false; }
     const auto anchors = FaceRig::anchorsFromMarkers(m_markers, *tmpl);

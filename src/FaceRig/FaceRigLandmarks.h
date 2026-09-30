@@ -73,11 +73,21 @@ MeshLandmarks detectMeshLandmarks(Ogre::Entity* entity,
 // are the head sub-mesh (local frame) the fit uses, both for the user raycast
 // and the frame the returned targets live in. Returns empty when the detector
 // is unavailable / either face isn't found (caller then fits without anchors).
+// `outFaceDir` (optional) receives the user face direction from the SAME
+// detection (zero when unknown), so a caller that got < 3 anchors can pass
+// it as FaceRigOptions::faceDirHint without re-running the detector.
 std::vector<NricpLandmark> buildLandmarkAnchors(
     Ogre::Entity* userEntity,
     const std::vector<float>& userLocalV,
     const std::vector<int>& userLocalF,
-    const ArkitTemplate& tmpl);
+    const ArkitTemplate& tmpl,
+    std::array<float, 3>* outFaceDir = nullptr);
+
+// Make sure the landmark model is on disk: no-op on a non-ONNX build (the
+// detector can never load there) or when present; otherwise ONE blocking
+// first-use download per process - a failed fetch is not retried by every
+// later detection in the same run. Main thread. True when usable.
+bool ensureLandmarkModelOnce();
 
 // Seed the editable face-marker set: detect on the template (reliable — a real
 // human face) to resolve each marker's template vertex, then AUTO-DETECT on the
