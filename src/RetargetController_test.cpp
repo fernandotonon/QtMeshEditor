@@ -125,7 +125,8 @@ TEST_F(RetargetControllerSceneTest, ApplyCreatesAClipThatUndoAndRedoRemoveAndRes
     ASSERT_NE(um, nullptr);
     um->undo();
     EXPECT_FALSE(ts->hasAnimation("Copied"));
-    EXPECT_FALSE(tgt->getAllAnimationStates()->hasAnimationState("Copied"));
+    EXPECT_FALSE(tgt->getAllAnimationStates()->hasAnimationState("Copied"))
+        << "undo must not leave a ghost animation state";
     um->redo();
     ASSERT_TRUE(ts->hasAnimation("Copied"));
     EXPECT_TRUE(tgt->getAllAnimationStates()->hasAnimationState("Copied"));
@@ -159,6 +160,8 @@ TEST_F(RetargetControllerSceneTest, PreviewRestoresEverythingWhenItStops)
     c->stopPreview();
     EXPECT_FALSE(c->previewing());
     EXPECT_FALSE(tgt->getSkeleton()->hasAnimation("__qtme_retarget_preview"));
+    EXPECT_FALSE(tgt->getAllAnimationStates()->hasAnimationState("__qtme_retarget_preview"))
+        << "the preview must not leave a ghost animation state";
     EXPECT_TRUE(tgt->getAllAnimationStates()->getAnimationState("TestAnim")->getEnabled())
         << "the user's animation-state flags must come back";
     EXPECT_LT((tgt->getParentSceneNode()->getPosition() - before).length(), 1e-6f)

@@ -511,3 +511,74 @@ TEST(AnimationRetargeter, BranchingBoneAlignsToItsCentralChild)
     EXPECT_GT(std::fabs(out[0].rot[size_t(chest)].Dot(Ogre::Quaternion::IDENTITY)), 1.0f - 1e-5f)
         << "the chest rolled toward an arm instead of following the neck";
 }
+
+// Height ratio with DIFFERENT up axes: a Z-up source driving a Y-up target
+// must measure each rig along its own up (review finding — measuring along
+// G·Y measured the Z-up source's depth).
+TEST(AnimationRetargeter, HeightScaleUsesEachRigsOwnUpAxis)
+{
+    Ogre::Quaternion up;
+    const RigDesc zUp = unrealRig(&up);      // Z-up, 1.4x
+    const RigDesc yUp = mixamoRig();         // Y-up, 1x
+    // source = Z-up rig, so build a clip in ITS names
+    const BoneMap map = Retarget::autoMap(zUp.names, yUp.names).map;
+    const std::vector<LocalPose> still = {Retarget::bindPose(zUp), Retarget::bindPose(zUp)};
+    Retarget::RetargetReport rep;
+    const auto out = Retarget::retargetFrames(zUp, still, yUp, map, {}, &rep);
+    ASSERT_FALSE(out.empty()) << rep.error.toStdString();
+    ASSERT_TRUE(rep.globalAlignment);
+    EXPECT_NEAR(rep.heightScale, 1.0f / 1.4f, 1e-3f);
+}
+
+// Synonym outputs must not be rewritten by later entries (review finding:
+// "upperarm" became "uuarm" via the trailing "arm" rule, so upper arm and
+// forearm only matched by edit distance). With the upper arm already taken,
+// a source "arm" must find nothing rather than fall onto the forearm.
+TEST(AnimationRetargeter, ArmSynonymsMatchExactlyAndNeverFallOntoTheForearm)
+{
+    const auto a = Retarget::autoMap({"Bip01 L UpperArm", "Bip01 L ForeArm"}, {"lowerarm_l", "upperarm_l"});
+    EXPECT_EQ(a.map.targetFor("Bip01 L UpperArm"), "upperarm_l");
+    EXPECT_EQ(a.map.targetFor("Bip01 L ForeArm"), "lowerarm_l");
+    const auto b = Retarget::autoMap({"Bip01 L UpperArm", "L_Arm"}, {"upperarm_l", "lowerarm_l"});
+    EXPECT_EQ(b.map.targetFor("L_Arm"), "") << "an arm must not be mapped onto the forearm";
+}
+
+// A static helper root shared by both rigs ("Root" mapped by name) must not
+// steal the root translation from the hips (Codex review finding).
+TEST(AnimationRetargeter, RootTranslationGoesToTheHipsNotAHelperRoot)
+{
+    auto withHelper = [](const RigDesc& r) {
+        RigDesc o;
+        o.names = {"Root"};
+        o.parent = {-1};
+        o.bindPos = {Ogre::Vector3::ZERO};
+        o.bindRot = {Ogre::Quaternion::IDENTITY};
+        for (int i = 0; i < r.size(); ++i) {
+            o.names.push_back(r.names[size_t(i)]);
+            o.parent.push_back(r.parent[size_t(i)] >= 0 ? r.parent[size_t(i)] + 1 : 0);
+            o.bindPos.push_back(r.bindPos[size_t(i)]);
+            o.bindRot.push_back(r.bindRot[size_t(i)]);
+        }
+        return o;
+    };
+    const RigDesc src = withHelper(mixamoRig());
+    const RigDesc tgt = withHelper(unrealRig());
+    const BoneMap map = Retarget::autoMap(src.names, tgt.names).map;
+    ASSERT_EQ(map.targetFor("Root"), "Root");
+    std::vector<LocalPose> frames;
+    for (const auto& f : sourceClip(mixamoRig(), 3)) {
+        LocalPose lp;
+        lp.pos.push_back(Ogre::Vector3::ZERO);
+        lp.rot.push_back(Ogre::Quaternion::IDENTITY);
+        lp.pos.insert(lp.pos.end(), f.pos.begin(), f.pos.end());
+        lp.rot.insert(lp.rot.end(), f.rot.begin(), f.rot.end());
+        frames.push_back(lp);
+    }
+    Retarget::RetargetReport rep;
+    const auto out = Retarget::retargetFrames(src, frames, tgt, map, {}, &rep);
+    ASSERT_FALSE(out.empty()) << rep.error.toStdString();
+    EXPECT_EQ(rep.rootTarget, "pelvis");
+    const int pel = tgt.indexOf("pelvis");
+    EXPECT_GT((out.back().pos[size_t(pel)] - tgt.bindPos[size_t(pel)]).length(), 0.1f)
+        << "the hips must carry the travel";
+}

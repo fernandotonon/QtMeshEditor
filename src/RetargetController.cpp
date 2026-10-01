@@ -55,7 +55,11 @@ RetargetController* RetargetController::instance()
 
 RetargetController* RetargetController::qmlInstance(QQmlEngine*, QJSEngine*)
 {
-    return instance();
+    // C++ owns the process-wide singleton; without this a QML engine being
+    // destroyed would delete it and leave instance()/kill() dangling.
+    RetargetController* inst = instance();
+    QQmlEngine::setObjectOwnership(inst, QQmlEngine::CppOwnership);
+    return inst;
 }
 
 void RetargetController::kill()
@@ -208,9 +212,14 @@ void RetargetController::setTargetEntity(const QString& name)
 void RetargetController::setSourceAnimation(const QString& name)
 {
     if (name == m_sourceAnim) return;
+    // A different source clip changes BOTH sides of the preview: restart it
+    // (stop restores the source's states, start enables the new clip).
+    // Rebuilding only the target left the source frozen on the old clip.
+    const bool wasPreviewing = m_previewing;
+    if (wasPreviewing) stopPreview();
     m_sourceAnim = name;
     emit selectionChanged();
-    if (m_previewing) rebuildPreview();
+    if (wasPreviewing) startPreview();
 }
 
 void RetargetController::setTranslationMode(const QString& id)
@@ -409,9 +418,10 @@ bool RetargetController::rebuildPreview()
     if (!s || !t || !s->hasSkeleton() || !t->hasSkeleton() || m_sourceAnim.isEmpty()) return false;
     Ogre::SkeletonInstance* ts = t->getSkeleton();
     if (ts->hasAnimation(kPreviewAnim)) {
-        if (auto* st = t->getAllAnimationStates())
-            if (st->hasAnimationState(kPreviewAnim)) st->getAnimationState(kPreviewAnim)->setEnabled(false);
         ts->removeAnimation(kPreviewAnim);
+        // drop the state too: refreshAvailableAnimationState never removes
+        if (auto* st = t->getAllAnimationStates())
+            if (st->hasAnimationState(kPreviewAnim)) st->removeAnimationState(kPreviewAnim);
         t->refreshAvailableAnimationState();
     }
     const Retarget::Result r = Retarget::retarget(s->getSkeleton(), m_sourceAnim.toStdString(),
@@ -509,9 +519,9 @@ void RetargetController::stopPreview()
     Ogre::Entity* s = entityByName(m_source);
     Ogre::Entity* t = entityByName(m_target);
     if (t && t->hasSkeleton() && t->getSkeleton()->hasAnimation(kPreviewAnim)) {
-        if (auto* set = t->getAllAnimationStates())
-            if (set->hasAnimationState(kPreviewAnim)) set->getAnimationState(kPreviewAnim)->setEnabled(false);
         t->getSkeleton()->removeAnimation(kPreviewAnim);
+        if (auto* set = t->getAllAnimationStates())
+            if (set->hasAnimationState(kPreviewAnim)) set->removeAnimationState(kPreviewAnim);
         t->refreshAvailableAnimationState();
     }
     auto restore = [](Ogre::Entity* e, const std::map<std::string, SavedState>& saved) {

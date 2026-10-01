@@ -2687,7 +2687,9 @@ int CLIPipeline::cmdAnimRetarget(int argc, char* argv[])
         err() << "Saved bone map (" << map.pairs.size() << " pairs) to " << saveMapPath << Qt::endl;
     }
     if (printMap) {
-        if (json) cliWrite(QString::fromUtf8(map.toJson()));
+        // With -o the bone map rides inside the final JSON report, so stdout
+        // stays ONE document; a dry run prints the map alone.
+        if (json) { if (outputPath.isEmpty()) cliWrite(QString::fromUtf8(map.toJson())); }
         else {
             cliWrite(QStringLiteral("Bone map: %1 pairs\n").arg(map.pairs.size()));
             for (const auto& p : map.pairs)
@@ -2767,6 +2769,7 @@ int CLIPipeline::cmdAnimRetarget(int argc, char* argv[])
         root["source_rest"] = Retarget::sourceRestId(opts.sourceRest);
         root["align_directions"] = opts.alignDirections;
         root["animations"] = made;
+        if (printMap) root["bonemap_json"] = QJsonDocument::fromJson(map.toJson()).object();
         QJsonArray un;
         for (const QString& u : unresolved) un.append(u);
         root["unresolved_pairs"] = un;

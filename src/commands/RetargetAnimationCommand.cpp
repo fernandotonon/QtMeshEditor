@@ -61,6 +61,11 @@ void RetargetAnimationCommand::undo()
         if (states->hasAnimationState(m_animName))
             states->getAnimationState(m_animName)->setEnabled(false);
     skel->removeAnimation(m_animName);
+    // refreshAvailableAnimationState only ADDS states, never drops stale
+    // ones — without this the undone clip lingers as a ghost state (shown
+    // in the Inspector, throwing when resolved back to the skeleton).
+    if (auto* states = entity->getAllAnimationStates())
+        if (states->hasAnimationState(m_animName)) states->removeAnimationState(m_animName);
     entity->refreshAvailableAnimationState();
     SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.retarget.cmd"),
         QStringLiteral("undo '%1'").arg(QString::fromStdString(m_animName)));

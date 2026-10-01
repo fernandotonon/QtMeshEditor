@@ -8990,8 +8990,13 @@ QJsonObject MCPServer::toolRetargetAnimation(const QJsonObject &args)
         return nullptr;
     };
 
-    // Imports are transient: torn down when this call returns.
-    TransientImportSession srcSession(mgr), tgtSession(mgr);
+    // Imports are transient: torn down when this call returns. The target
+    // session is created only AFTER the source import — a session claims
+    // every entity added after its construction, so building both up front
+    // made the target session own (and tear down) the source too: the clip
+    // landed on the source and the source node was destroyed twice.
+    TransientImportSession srcSession(mgr);
+    std::optional<TransientImportSession> tgtSession;
     Ogre::Entity* src = nullptr;
     Ogre::Entity* tgt = nullptr;
     if (args.contains("source_entity")) {
@@ -9016,8 +9021,9 @@ QJsonObject MCPServer::toolRetargetAnimation(const QJsonObject &args)
         if (!dryRun && args.value("output_path").toString().isEmpty())
             return makeErrorResult("Error: a 'target_file' retarget needs 'output_path' (the imported "
                                    "target is not kept in the scene) - or use 'target_entity'");
-        if (QString e = tgtSession.runImporter(f); !e.isEmpty()) return makeErrorResult(e);
-        tgt = firstSkeletal(tgtSession.importedEntities());
+        tgtSession.emplace(mgr);
+        if (QString e = tgtSession->runImporter(f); !e.isEmpty()) return makeErrorResult(e);
+        tgt = firstSkeletal(tgtSession->importedEntities());
         if (!tgt) return makeErrorResult(QString("Error: %1 has no skinned mesh with a skeleton").arg(f));
     } else {
         return makeErrorResult("Error: give 'target_entity' or 'target_file'");
@@ -9080,17 +9086,28 @@ QJsonObject MCPServer::toolRetargetAnimation(const QJsonObject &args)
     SentryReporter::addBreadcrumb("scene.anim.retarget.apply",
         QString("MCP %1 -> %2 (%3 bones, %4 frames)").arg(anim, QString::fromStdString(name))
             .arg(r.report.mappedBones).arg(r.frames));
-    if (targetInScene)
-        UndoManager::getSingleton()->push(new RetargetAnimationCommand(tgt->getName(), name, true));
-
+    // Export BEFORE committing the undo step: a failed export must leave the
+    // scene as it was (the caller sees isError and assumes nothing changed;
+    // a retry would otherwise create "<name>_2").
     const QString out = args.value("output_path").toString();
     if (!out.isEmpty()) {
         SentryReporter::addBreadcrumb("file.export", QString("Retarget export %1").arg(out));
-        if (MeshImporterExporter::exporter(tgt->getParentSceneNode(), QFileInfo(out).absoluteFilePath(),
-                                           CLIPipeline::formatForExtension(out)) != 0)
-            return makeErrorResult(QString("Error: export to %1 failed").arg(out));
+        Ogre::SceneNode* node = tgt->getParentSceneNode();
+        const bool exported = node
+            && MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                              CLIPipeline::formatForExtension(out)) == 0;
+        if (!exported) {
+            tgt->getSkeleton()->removeAnimation(name);
+            if (auto* st = tgt->getAllAnimationStates())
+                if (st->hasAnimationState(name)) st->removeAnimationState(name);
+            tgt->refreshAvailableAnimationState();
+            return makeErrorResult(node ? QString("Error: export to %1 failed").arg(out)
+                                        : QString("Error: the target has no scene node to export"));
+        }
         content["output_path"] = QFileInfo(out).absoluteFilePath();
     }
+    if (targetInScene)
+        UndoManager::getSingleton()->push(new RetargetAnimationCommand(tgt->getName(), name, true));
     content["ok"] = true;
     content["animation"] = QString::fromStdString(name);
     content["target_entity"] = QString::fromStdString(tgt->getName());

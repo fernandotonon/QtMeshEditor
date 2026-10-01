@@ -280,16 +280,19 @@ QString synonymKey(const QString& raw)
     }
     QString k = rest.join(QString());
     // Ordered: longest compounds first so "upleg" is consumed before "leg".
+    // Outputs are UPPERCASE so no later lowercase pattern can rewrite them
+    // ("upperarm" → "UARM" must not then become "UUARM" via "arm").
     static const std::vector<std::pair<const char*, const char*>> syn = {
-        {"upperleg", "thigh"}, {"upleg", "thigh"}, {"femur", "thigh"},
-        {"lowerleg", "calf"}, {"shin", "calf"}, {"knee", "calf"}, {"leg", "calf"},
-        {"upperarm", "uarm"}, {"uparm", "uarm"}, {"humerus", "uarm"},
-        {"forearm", "farm"}, {"lowerarm", "farm"}, {"elbow", "farm"}, {"arm", "uarm"},
-        {"clavicle", "clav"}, {"collar", "clav"}, {"shoulder", "clav"},
-        {"toebase", "ball"}, {"toe0", "ball"},
-        {"pelvis", "hips"}, {"hip", "hips"}, {"hipss", "hips"},
-        {"neck01", "neck"}, {"spine01", "spine1"}, {"spine02", "spine2"},
-        {"spine03", "spine3"}, {"wrist", "hand"}, {"ankle", "foot"},
+        {"upperleg", "THIGH"}, {"upleg", "THIGH"}, {"femur", "THIGH"}, {"thigh", "THIGH"},
+        {"lowerleg", "CALF"}, {"shin", "CALF"}, {"knee", "CALF"}, {"calf", "CALF"}, {"leg", "CALF"},
+        {"upperarm", "UARM"}, {"uparm", "UARM"}, {"humerus", "UARM"},
+        {"forearm", "FARM"}, {"lowerarm", "FARM"}, {"elbow", "FARM"}, {"arm", "UARM"},
+        {"clavicle", "CLAV"}, {"collar", "CLAV"}, {"shoulder", "CLAV"},
+        {"toebase", "BALL"}, {"toe0", "BALL"}, {"ball", "BALL"},
+        {"pelvis", "HIPS"}, {"hips", "HIPS"}, {"hip", "HIPS"},
+        {"neck01", "NECK"}, {"spine01", "SPINE1"}, {"spine02", "SPINE2"},
+        {"spine03", "SPINE3"}, {"wrist", "HAND"}, {"hand", "HAND"},
+        {"ankle", "FOOT"}, {"foot", "FOOT"},
     };
     for (const auto& [a, b] : syn) k.replace(QLatin1String(a), QLatin1String(b));
     return side + QLatin1Char('|') + k;
@@ -596,8 +599,11 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
     forwardKinematics(source, srcRest, Rs, Ps);
     forwardKinematics(target, bindPose(target), Rt, Pt);
 
-    // Global alignment from the humanoid frame of both rests.
+    // Global alignment from the humanoid frame of both rests. The frames
+    // themselves are kept: each rig's own UP axis comes from its frame
+    // (qs/qt · Y), so a Z-up source measures height along ITS Z.
     Ogre::Quaternion G = Ogre::Quaternion::IDENTITY;
+    Ogre::Quaternion frameS = Ogre::Quaternion::IDENTITY, frameT = Ogre::Quaternion::IDENTITY;
     {
         auto targetRole = [&](std::initializer_list<int> roles) -> int {
             for (int role : roles)
@@ -621,6 +627,8 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
             if (okS && okT) {
                 G = qt * qs.Inverse();
                 G.normalise();
+                frameS = qs;
+                frameT = qt;
                 rep.globalAlignment = true;
             }
         }
@@ -691,10 +699,13 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
     }
 
     // Height ratio along the target up axis (translations only).
-    const Ogre::Vector3 upT = rep.globalAlignment ? (G * Ogre::Vector3::UNIT_Y) : Ogre::Vector3::UNIT_Y;
+    // Each rig's own up: the humanoid frame's Y (both are Y-up by
+    // convention only when no frame was found). G·Y would assume a Y-up
+    // SOURCE and measure depth for a Z-up one.
+    const Ogre::Vector3 upT = frameT * Ogre::Vector3::UNIT_Y;
     {
         float tmin = 1e30f, tmax = -1e30f, smin = 1e30f, smax = -1e30f;
-        const Ogre::Vector3 upS = Ginv * upT;
+        const Ogre::Vector3 upS = frameS * Ogre::Vector3::UNIT_Y;
         for (int t = 0; t < nt; ++t) {
             const int s = srcOf[size_t(t)];
             if (s < 0) continue;
@@ -715,11 +726,20 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
         std::vector<int> sdepth(size_t(source.size()), 0);
         for (int i = 0; i < source.size(); ++i)
             sdepth[size_t(i)] = source.parent[size_t(i)] >= 0 ? sdepth[size_t(source.parent[size_t(i)])] + 1 : 0;
+        // A mapped HIPS bone wins outright: rigs often share a static helper
+        // root ("Root", "Armature") that maps by name and sits above the
+        // hips, and giving it the root translation would leave the body
+        // walking in place.
+        for (int t = 0; t < nt && rootT < 0; ++t)
+            if (srcOf[size_t(t)] >= 0
+                && MotionInbetween::canonicalIndexForBone(QString::fromStdString(target.names[size_t(t)])) == 0)
+                rootT = t;
         int best = 1 << 30;
-        for (int t = 0; t < nt; ++t) {
-            const int s = srcOf[size_t(t)];
-            if (s >= 0 && sdepth[size_t(s)] < best) { best = sdepth[size_t(s)]; rootT = t; }
-        }
+        if (rootT < 0)
+            for (int t = 0; t < nt; ++t) {
+                const int s = srcOf[size_t(t)];
+                if (s >= 0 && sdepth[size_t(s)] < best) { best = sdepth[size_t(s)]; rootT = t; }
+            }
     }
     rep.rootTarget = target.names[size_t(rootT)];
 
