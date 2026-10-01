@@ -203,6 +203,9 @@ qtmesh lipsync take.wav --mesh head.glb -o spoken.glb        # audio -> ARKit we
 qtmesh lipsync take.wav --mesh head.glb --fps 60 --clip Speech -o out.glb
 qtmesh lipsync take.wav --mesh head.glb --emotion joy=0.6 -o out.glb
 
+# Retarget a clip onto a different skeleton (auto bone map, or a bundled / .bonemap map)
+qtmesh anim mixamo_walk.fbx --retarget hero.glb --bonemap mixamo_to_unity --anim Walk -o hero_walking.glb
+
 # Vertex Animation Textures (OpenVAT) — four modes, one baker
 qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
 qtmesh vat pieces.fbx --anim Explode --mode rigid --target godot -o out/  # rigid-body: one quaternion + pivot per submesh chunk (destruction / mechanical), ships openvat_rigid.gdshader

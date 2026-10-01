@@ -6,6 +6,8 @@
 #include <QImageReader>
 #include "MeshWeldOps.h"
 #include "commands/WeldVerticesCommand.h"
+#include "commands/RetargetAnimationCommand.h"
+#include "AnimationRetargeter.h"
 #include "mainwindow.h"
 #include "GamificationManager.h"
 #include "Manager.h"
@@ -780,6 +782,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("weld_vertices"), &MCPServer::toolWeldVertices},
         {QStringLiteral("generate_isometric_sprites"), &MCPServer::toolGenerateIsometricSprites},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
+        {QStringLiteral("retarget_animation"), &MCPServer::toolRetargetAnimation},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
@@ -862,6 +865,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
+        QStringLiteral("retarget_animation"),
         QStringLiteral("list_morph_targets"),
         QStringLiteral("import_alembic"),
         QStringLiteral("capture_face_from_video"),
@@ -954,6 +958,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
             {QStringLiteral("bake_vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("retarget_animation"), QStringLiteral("animation_blend")},
             {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
             {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
             {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
@@ -983,7 +988,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
-        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
@@ -8931,6 +8936,178 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 }
 
 // ---------------------------------------------------------------------------
+// #523 — retarget_animation
+// ---------------------------------------------------------------------------
+QJsonObject MCPServer::toolRetargetAnimation(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "retarget_animation");
+
+    Retarget::Options opts;
+    if (args.contains("translation")
+        && !Retarget::translationModeFromId(args.value("translation").toString(), &opts.translation))
+        return makeErrorResult("Error: translation must be none, root or all");
+    if (args.contains("source_rest")
+        && !Retarget::sourceRestFromId(args.value("source_rest").toString(), &opts.sourceRest))
+        return makeErrorResult("Error: source_rest must be bind or first-frame");
+    opts.alignDirections = args.value("align_directions").toBool(true);
+    const int fps = args.contains("fps") ? args.value("fps").toInt() : 30;
+    if (fps <= 0 || fps > 240) return makeErrorResult("Error: fps must be 1..240");
+    const bool dryRun = args.value("dry_run").toBool(false);
+
+    // Explicit map: inline pairs > bonemap (bundled name or .bonemap path) > auto.
+    Retarget::BoneMap map;
+    bool haveMap = false;
+    if (args.value("pairs").isArray()) {
+        for (const QJsonValue& v : args.value("pairs").toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString s = o.value("source").toString(), t = o.value("target").toString();
+            if (s.isEmpty() || t.isEmpty())
+                return makeErrorResult("Error: every entry of 'pairs' needs 'source' and 'target'");
+            map.setPair(s.toStdString(), t.toStdString());
+        }
+        map.name = QStringLiteral("inline");
+        haveMap = true;
+    } else if (args.contains("bonemap")) {
+        const QString b = args.value("bonemap").toString();
+        QString e;
+        if (Retarget::bundledBoneMap(b, &map)) haveMap = true;
+        else if (QFileInfo::exists(b) && Retarget::BoneMap::load(b, &map, &e)) haveMap = true;
+        else
+            return makeErrorResult(QString("Error: bonemap '%1' is neither a bundled map (%2) nor a readable "
+                                           ".bonemap%3").arg(b, Retarget::bundledBoneMapNames().join(", "),
+                                                             e.isEmpty() ? QString() : ": " + e));
+    }
+
+    auto* mgr = Manager::getSingleton();
+    auto byName = [&](const QString& name) -> Ogre::Entity* {
+        for (Ogre::Entity* e : mgr->getEntities())
+            if (e && e->getMovableType() == "Entity" && QString::fromStdString(e->getName()) == name)
+                return e;
+        return nullptr;
+    };
+    auto firstSkeletal = [](const QList<Ogre::Entity*>& list) -> Ogre::Entity* {
+        for (Ogre::Entity* e : list) if (e && e->hasSkeleton()) return e;
+        return nullptr;
+    };
+
+    // Imports are transient: torn down when this call returns.
+    TransientImportSession srcSession(mgr), tgtSession(mgr);
+    Ogre::Entity* src = nullptr;
+    Ogre::Entity* tgt = nullptr;
+    if (args.contains("source_entity")) {
+        src = byName(args.value("source_entity").toString());
+        if (!src) return makeErrorResult(QString("Error: no entity '%1'").arg(args.value("source_entity").toString()));
+    } else if (args.contains("source_file")) {
+        const QString f = args.value("source_file").toString();
+        if (!QFileInfo::exists(f)) return makeErrorResult(QString("Error: file not found: %1").arg(f));
+        if (QString e = srcSession.runImporter(f); !e.isEmpty()) return makeErrorResult(e);
+        src = firstSkeletal(srcSession.importedEntities());
+        if (!src) return makeErrorResult(QString("Error: %1 has no skinned mesh with a skeleton").arg(f));
+    } else {
+        return makeErrorResult("Error: give 'source_entity' or 'source_file'");
+    }
+    const bool targetInScene = args.contains("target_entity");
+    if (targetInScene) {
+        tgt = byName(args.value("target_entity").toString());
+        if (!tgt) return makeErrorResult(QString("Error: no entity '%1'").arg(args.value("target_entity").toString()));
+    } else if (args.contains("target_file")) {
+        const QString f = args.value("target_file").toString();
+        if (!QFileInfo::exists(f)) return makeErrorResult(QString("Error: file not found: %1").arg(f));
+        if (!dryRun && args.value("output_path").toString().isEmpty())
+            return makeErrorResult("Error: a 'target_file' retarget needs 'output_path' (the imported "
+                                   "target is not kept in the scene) - or use 'target_entity'");
+        if (QString e = tgtSession.runImporter(f); !e.isEmpty()) return makeErrorResult(e);
+        tgt = firstSkeletal(tgtSession.importedEntities());
+        if (!tgt) return makeErrorResult(QString("Error: %1 has no skinned mesh with a skeleton").arg(f));
+    } else {
+        return makeErrorResult("Error: give 'target_entity' or 'target_file'");
+    }
+    if (!src->hasSkeleton() || !tgt->hasSkeleton())
+        return makeErrorResult("Error: both source and target need a skeleton");
+
+    const auto srcNames = Retarget::boneNames(src->getSkeleton());
+    const auto tgtNames = Retarget::boneNames(tgt->getSkeleton());
+    QStringList unresolved;
+    Retarget::AutoMapReport autoRep;
+    if (haveMap) map = Retarget::resolveMap(map, srcNames, tgtNames, &unresolved);
+    else { autoRep = Retarget::autoMap(srcNames, tgtNames); map = autoRep.map; }
+
+    QJsonObject content;
+    QJsonArray pairs;
+    for (const auto& p : map.pairs)
+        pairs.append(QJsonObject{{"source", QString::fromStdString(p.source)},
+                                 {"target", QString::fromStdString(p.target)}});
+    content["pairs"] = pairs;
+    content["bonemap"] = haveMap ? map.name : QStringLiteral("auto");
+    QJsonArray unmapped;
+    for (const auto& n : autoRep.unmappedSource) unmapped.append(QString::fromStdString(n));
+    content["unmapped_source"] = unmapped;
+    QJsonArray unres;
+    for (const QString& u : unresolved) unres.append(u);
+    content["unresolved_pairs"] = unres;
+    if (const QString save = args.value("save_bonemap").toString(); !save.isEmpty()) {
+        QString e;
+        if (!map.save(save, &e)) return makeErrorResult(QString("Error: %1").arg(e));
+        content["saved_bonemap"] = save;
+    }
+    if (dryRun) {
+        content["ok"] = true;
+        content["dry_run"] = true;
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    }
+    if (map.pairs.empty()) return makeErrorResult("Error: no source bone maps onto the target");
+
+    const QString anim = args.value("animation").toString();
+    Ogre::SkeletonInstance* ss = src->getSkeleton();
+    if (anim.isEmpty() || !ss->hasAnimation(anim.toStdString())) {
+        QStringList have;
+        for (unsigned short i = 0; i < ss->getNumAnimations(); ++i)
+            have << QString::fromStdString(ss->getAnimation(i)->getName());
+        return makeErrorResult(QString("Error: %1 - the source's animations: %2")
+            .arg(anim.isEmpty() ? QStringLiteral("'animation' is required")
+                                : QStringLiteral("no animation '%1'").arg(anim),
+                 have.join(", ")));
+    }
+    const QString wantName = args.value("new_name").toString();
+    const std::string name = Retarget::uniqueAnimationName(
+        tgt->getSkeleton(), (wantName.isEmpty() ? anim + "_retargeted" : wantName).toStdString());
+    const Retarget::Result r = Retarget::retarget(ss, anim.toStdString(), tgt->getSkeleton(), name, map, opts, fps);
+    if (!r.ok) {
+        SentryReporter::addBreadcrumb("scene.anim.retarget.error", r.error);
+        return makeErrorResult(QString("Error: retarget failed: %1").arg(r.error));
+    }
+    tgt->refreshAvailableAnimationState();
+    SentryReporter::addBreadcrumb("scene.anim.retarget.apply",
+        QString("MCP %1 -> %2 (%3 bones, %4 frames)").arg(anim, QString::fromStdString(name))
+            .arg(r.report.mappedBones).arg(r.frames));
+    if (targetInScene)
+        UndoManager::getSingleton()->push(new RetargetAnimationCommand(tgt->getName(), name, true));
+
+    const QString out = args.value("output_path").toString();
+    if (!out.isEmpty()) {
+        SentryReporter::addBreadcrumb("file.export", QString("Retarget export %1").arg(out));
+        if (MeshImporterExporter::exporter(tgt->getParentSceneNode(), QFileInfo(out).absoluteFilePath(),
+                                           CLIPipeline::formatForExtension(out)) != 0)
+            return makeErrorResult(QString("Error: export to %1 failed").arg(out));
+        content["output_path"] = QFileInfo(out).absoluteFilePath();
+    }
+    content["ok"] = true;
+    content["animation"] = QString::fromStdString(name);
+    content["target_entity"] = QString::fromStdString(tgt->getName());
+    content["target_kept_in_scene"] = targetInScene;
+    content["frames"] = r.frames;
+    content["length"] = r.length;
+    content["mapped_bones"] = r.report.mappedBones;
+    content["global_alignment"] = r.report.globalAlignment;
+    content["height_scale"] = r.report.heightScale;
+    content["root_bone"] = QString::fromStdString(r.report.rootTarget);
+    content["translation"] = Retarget::translationModeId(opts.translation);
+    content["source_rest"] = Retarget::sourceRestId(opts.sourceRest);
+    content["align_directions"] = opts.alignDirections;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
 // Morph A6 — morph-target inspection + weight poke.
 // ---------------------------------------------------------------------------
 
@@ -13799,6 +13976,35 @@ QJsonArray MCPServer::buildToolsList()
             "skeleton (LOD change) are skipped silently.",
             props,
             required
+        );
+    }
+
+    // retarget_animation (#523)
+    {
+        QJsonObject props;
+        props["source_entity"] = QJsonObject{{"type", "string"}, {"description", "Scene entity carrying the clip to retarget (or use source_file)."}};
+        props["source_file"]   = QJsonObject{{"type", "string"}, {"description", "File to import the source clip from (imported transiently)."}};
+        props["target_entity"] = QJsonObject{{"type", "string"}, {"description", "Scene entity that receives the new clip (undoable). Or use target_file + output_path."}};
+        props["target_file"]   = QJsonObject{{"type", "string"}, {"description", "File whose skeleton receives the clip; the result is written to output_path."}};
+        props["animation"]     = QJsonObject{{"type", "string"}, {"description", "Source clip name (required unless dry_run)."}};
+        props["new_name"]      = QJsonObject{{"type", "string"}, {"description", "Name of the new clip. Default '<animation>_retargeted' (made unique)."}};
+        props["bonemap"]       = QJsonObject{{"type", "string"}, {"description", "Bundled map (mixamo_to_humanik, mixamo_to_unreal) or a .bonemap path. Omit to auto-map."}};
+        props["pairs"]         = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}}, {"description", "Inline map [{source, target}] — overrides bonemap."}};
+        props["translation"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"none", "root", "all"}}, {"description", "none = rotation only (keep bone lengths), root = scaled root motion (default), all = every bone's translation (faces/fingers)."}};
+        props["source_rest"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"bind", "first-frame"}}, {"description", "Source rest pose: its bind pose (default) or the clip's first frame."}};
+        props["align_directions"] = QJsonObject{{"type", "boolean"}, {"description", "Match rest bone directions (A-pose vs T-pose). Default true."}};
+        props["fps"]           = QJsonObject{{"type", "integer"}, {"description", "Sampling rate, default 30."}};
+        props["output_path"]   = QJsonObject{{"type", "string"}, {"description", "Export the target (with the new clip) here."}};
+        props["save_bonemap"]  = QJsonObject{{"type", "string"}, {"description", "Also write the resolved bone map as a .bonemap file."}};
+        props["dry_run"]       = QJsonObject{{"type", "boolean"}, {"description", "Only resolve/auto-map and return the bone map."}};
+        appendTool(
+            "retarget_animation",
+            "Retarget a skeletal clip from one skeleton onto an INCOMPATIBLE one (different bone names, axes, "
+            "proportions, Y/Z-up) through a bone map: auto-mapped by name / humanoid role / synonyms, or a bundled "
+            "or .bonemap map, or inline pairs. Creates a new ordinary skeletal clip on the target. Returns the map "
+            "used, unmapped bones, and per-run stats (mapped bones, humanoid alignment, height scale).",
+            props,
+            QJsonArray{}
         );
     }
 

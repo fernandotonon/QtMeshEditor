@@ -631,6 +631,17 @@ Rectangle {
                 Component.onCompleted: content = animationModeToolsComponent
             }
 
+            // ---- Retarget animation (#523) ----
+            CollapsibleSection {
+                title: "Retarget"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    RetargetController.canRetarget)
+                expanded: false
+
+                Component.onCompleted: content = retargetToolsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -1795,6 +1806,59 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.Wrap
                 width: parent.width - 16
+            }
+        }
+    }
+
+    // ---- Retarget Tools (Animation mode, #523) ----
+    Component {
+        id: retargetToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Map a clip from one skeleton onto another (e.g. a Mixamo "
+                    + "animation onto your character): auto bone mapping, manual "
+                    + "overrides, side-by-side preview."
+            }
+
+            Rectangle {
+                id: retargetBtn
+                width: Math.min(parent.width - 16, retargetLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: retargetMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: retargetBtn.activeFocus ? PropertiesPanelController.highlightColor
+                                                      : PropertiesPanelController.borderColor
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Retarget Animation"
+                Keys.onSpacePressed: root.openRetargetDialog()
+                Keys.onReturnPressed: root.openRetargetDialog()
+                Text {
+                    id: retargetLabel
+                    anchors.centerIn: parent
+                    text: "Retarget Animation…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: retargetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openRetargetDialog()
+                }
             }
         }
     }
@@ -10773,6 +10837,27 @@ Rectangle {
         onStatusChanged: {
             if (status === Loader.Error)
                 console.warn("IsometricSpritesDialog failed to load")
+        }
+    }
+    Loader {
+        id: retargetLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/RetargetAnimationDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+        onStatusChanged: {
+            if (status === Loader.Error)
+                console.warn("RetargetAnimationDialog failed to load")
+        }
+    }
+    function openRetargetDialog() {
+        if (!retargetLoader.active) {
+            retargetLoader.active = true
+        } else if (retargetLoader.item) {
+            retargetLoader.item.open()
+        } else if (retargetLoader.status === Loader.Error) {
+            retargetLoader.active = false
+            retargetLoader.active = true
         }
     }
     function openIsometricSpritesDialog() {
