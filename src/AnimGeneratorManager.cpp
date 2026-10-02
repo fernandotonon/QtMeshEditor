@@ -456,6 +456,33 @@ std::vector<std::pair<double, double>> runtimeKeys(const QJsonObject& base)
     }
     return out;
 }
+/// Ogre's AnimationState keeps its OWN copy of the clip length, taken when the
+/// state was created — Animation::setLength does not update it, so a clip
+/// lengthened to 100 s kept LOOPING at its old 1 s and only ever played the
+/// first 1 % of the motion. Every length change goes through these.
+void setNodeClipLength(Ogre::Animation* anim, double len)
+{
+    if (!anim) return;
+    anim->setLength(float(len));
+    if (Ogre::SceneManager* s = sceneMgr())
+        if (s->hasAnimationState(anim->getName())) {
+            Ogre::AnimationState* st = s->getAnimationState(anim->getName());
+            st->setLength(float(len));
+            if (st->getTimePosition() > float(len)) st->setTimePosition(0.0f);
+        }
+}
+
+void setEntityClipLength(Ogre::Entity* e, Ogre::Animation* anim, double len)
+{
+    if (!anim) return;
+    anim->setLength(float(len));
+    if (e && e->getAllAnimationStates() && e->getAllAnimationStates()->hasAnimationState(anim->getName())) {
+        Ogre::AnimationState* st = e->getAnimationState(anim->getName());
+        st->setLength(float(len));
+        if (st->getTimePosition() > float(len)) st->setTimePosition(0.0f);
+    }
+}
+
 void crumb(const char* op, const QString& msg)
 {
     SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.generator.%1").arg(QLatin1String(op)), msg);
@@ -901,7 +928,7 @@ bool AnimGeneratorManager::restoreBase(const QString& key, const QJsonObject& ba
         if (!base.value(QStringLiteral("clipExisted")).toBool()) {
             if (sceneAnim(t.clip)) NodeAnimationManager::instance()->deleteClip(t.clip);
         } else if (Ogre::Animation* anim = sceneAnim(t.clip)) {
-            anim->setLength(float(base.value(QStringLiteral("length")).toDouble(anim->getLength())));
+            setNodeClipLength(anim, base.value(QStringLiteral("length")).toDouble(anim->getLength()));
             Ogre::NodeAnimationTrack* track = nodeTrackFor(anim, node);
             if (!base.value(QStringLiteral("hadTrack")).toBool()) {
                 if (track) anim->destroyNodeTrack(track->getHandle());
@@ -940,7 +967,7 @@ bool AnimGeneratorManager::restoreBase(const QString& key, const QJsonObject& ba
                                                       : anim->createVertexTrack(h, Ogre::VAT_POSE);
                 writePoseKeys(mesh, h, track, poseKeysFromJson(tr.value(QStringLiteral("keys")).toArray()));
             }
-            anim->setLength(float(base.value(QStringLiteral("length")).toDouble()));
+            setEntityClipLength(e, anim, base.value(QStringLiteral("length")).toDouble());
             e->refreshAvailableAnimationState();
             if (states && states->hasAnimationState(clip))
                 e->getAnimationState(clip)->setEnabled(base.value(QStringLiteral("stateEnabled")).toBool());
@@ -1012,10 +1039,16 @@ bool AnimGeneratorManager::materialise(const QString& key, QJsonObject* base,
             anim = sceneAnim(t.clip);
             if (!anim) return false;
         }
-        const double baseLen = base->value(QStringLiteral("length")).toDouble(anim->getLength());
-        double required = baseLen;
+        // A clip the generator CREATED has no length of its own to keep: it is
+        // exactly the generators' window (so 100 s → 10 s shrinks it). A clip
+        // that existed keeps at least its original length.
+        const bool ownClip = !base->value(QStringLiteral("clipExisted")).toBool(true);
+        const double baseLen = ownClip ? 0.0 : base->value(QStringLiteral("length")).toDouble(anim->getLength());
+        double required = std::max(baseLen, 0.1);
         for (const Generator* g : gens) required = std::max(required, windowEnd(*g, baseLen));
-        if (required > anim->getLength()) anim->setLength(float(required));
+        // Exactly max(original, window): a shortened duration shrinks the clip
+        // back instead of leaving it at the longest length ever used.
+        if (std::abs(required - anim->getLength()) > 1e-6) setNodeClipLength(anim, required);
         const double clipLen = anim->getLength();
 
         TrsKeys baseKeys = trsKeysFromJson(base->value(QStringLiteral("keys")).toArray());
@@ -1051,6 +1084,7 @@ bool AnimGeneratorManager::materialise(const QString& key, QJsonObject* base,
         // node had a track), and the Animations list only shows clips that
         // animate the selected node — re-announce it now that it does.
         emit NodeAnimationManager::instance()->clipsChanged();
+        if (auto* acc = AnimationControlController::instance()) acc->notifyExternalAnimationEdit(); // timeline length
         return true;
     }
 
@@ -1083,10 +1117,11 @@ bool AnimGeneratorManager::materialise(const QString& key, QJsonObject* base,
         }
         (*base)[QStringLiteral("tracks")] = tracks;
 
-        const double baseLen = base->value(QStringLiteral("length")).toDouble();
-        double required = baseLen;
+        const bool ownClip = !base->value(QStringLiteral("clipExisted")).toBool(true);
+        const double baseLen = ownClip ? 0.0 : base->value(QStringLiteral("length")).toDouble();
+        double required = std::max(baseLen, 0.1);
         for (const Generator* g : gens) required = std::max(required, windowEnd(*g, baseLen));
-        if (required > anim->getLength()) anim->setLength(float(required));
+        if (std::abs(required - anim->getLength()) > 1e-6) setEntityClipLength(e, anim, required);
         const double clipLen = anim->getLength();
         double ws = 0, we = 0;
         int fps = 30;

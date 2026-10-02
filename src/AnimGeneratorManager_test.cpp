@@ -586,6 +586,40 @@ TEST_F(AnimGeneratorSceneTest, UpdateIsAtomic)
     (void)e;
 }
 
+TEST_F(AnimGeneratorSceneTest, ClipAndItsPlaybackStateFollowTheDuration)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("GEN_Dur");
+    Generator g;
+    g.type = Type::FollowPath;
+    ASSERT_TRUE(parseTarget(QStringLiteral("node:%1/position").arg(QString::fromStdString(e->getParentSceneNode()->getName())), &g.target));
+    g.pathPoints = {{0, 0, 0}, {10, 0, 0}};
+    const auto r = mgr()->add(g, false);
+    ASSERT_TRUE(r.ok);
+    Ogre::SceneManager* scene = Manager::getSingleton()->getSceneMgr();
+    auto length = [&] { return scene->getAnimation("Generators")->getLength(); };
+    auto stateLength = [&] { return scene->getAnimationState("Generators")->getLength(); };
+
+    ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("duration"), QStringLiteral("100")}}, false).ok);
+    EXPECT_NEAR(length(), 100.0f, 1e-3f);
+    EXPECT_NEAR(stateLength(), 100.0f, 1e-3f)
+        << "the PLAYBACK state must follow, or it loops at the old 1 s and only plays the first 1 %";
+
+    ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("duration"), QStringLiteral("5")}}, false).ok);
+    EXPECT_NEAR(length(), 5.0f, 1e-3f) << "a shorter duration shrinks the clip back";
+    EXPECT_NEAR(stateLength(), 5.0f, 1e-3f);
+
+    // Created at 100 s (the first window) must still shrink: a clip the
+    // generator made has no "original" length to protect.
+    ASSERT_TRUE(mgr()->remove(r.id, false).ok);
+    g.duration = 100.0;
+    const auto r2 = mgr()->add(g, false);
+    ASSERT_TRUE(r2.ok);
+    EXPECT_NEAR(length(), 100.0f, 1e-3f);
+    ASSERT_TRUE(mgr()->setParams(r2.id, {{QStringLiteral("duration"), QStringLiteral("10")}}, false).ok);
+    EXPECT_NEAR(length(), 10.0f, 1e-3f);
+    EXPECT_NEAR(stateLength(), 10.0f, 1e-3f);
+}
+
 TEST_F(AnimGeneratorSceneTest, PanelQmlLoadsWithoutErrors)
 {
     qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
