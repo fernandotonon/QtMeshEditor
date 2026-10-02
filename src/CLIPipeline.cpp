@@ -2810,7 +2810,8 @@ int CLIPipeline::cmdAnimGenerators(int argc, char* argv[])
     for (int i = 1; i < argc; ++i) {
         const QString a(argv[i]);
         auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
-        if (a == "anim" || a == "--cli") continue;
+        // Global flags CLIPipeline::run already honoured — never generator params.
+        if (a == "anim" || a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
         if (a == "--generator") { specs.append(Spec{next(), QString(), {}}); continue; }
         if (a == "--list-generators") { listOnly = true; continue; }
         if (a == "--target") {

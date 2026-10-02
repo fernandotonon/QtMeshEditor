@@ -10385,18 +10385,13 @@ QJsonObject MCPServer::toolSetGenerator(const QJsonObject& args)
     QList<QPair<QString, QString>> params;
     QString err;
     if (!generatorParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
-    if (!params.isEmpty()) {
-        // Validate every key before changing anything, so a typo is one clean error.
-        AnimGen::Generator probe = *gm->find(id);
-        for (const auto& p : params)
-            if (!AnimGen::applyParam(&probe, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
-        const auto r = gm->setParams(id, params);
-        if (!r.ok) return makeErrorResult("Error: " + r.error);
-    }
-    if (args.contains("enabled")) {
-        const auto r = gm->setEnabled(id, args.value("enabled").toBool());
-        if (!r.ok) return makeErrorResult("Error: " + r.error);
-    }
+    // One transaction: params + enabled are validated together and land as a
+    // single undo step (or not at all).
+    bool enabled = false;
+    const bool hasEnabled = args.contains("enabled");
+    if (hasEnabled) enabled = args.value("enabled").toBool();
+    const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
     QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))}};
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }

@@ -13,6 +13,7 @@
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
 #include "PropertiesPanelController.h"
+#include "ThemeManager.h"
 #include "TestHelpers.h"
 #include "UndoManager.h"
 #include "commands/AnimGeneratorCommands.h"
@@ -21,6 +22,8 @@
 #include <QFile>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QJsonArray>
+#include <QSet>
 #include <QTemporaryDir>
 
 #include <OgreAnimation.h>
@@ -43,6 +46,12 @@ using namespace AnimGen;
 namespace {
 
 AnimGeneratorManager* mgr() { return AnimGeneratorManager::instance(); }
+
+// The track holds 30 fps samples and Ogre interpolates linearly between them,
+// so check at exact sample times: 9/30 s and 21/30 s, where sin(2πt) = ±0.951.
+constexpr float kT = 9.0f / 30.0f;
+constexpr float kT2 = 21.0f / 30.0f;
+const float kS = float(std::sin(2.0 * 3.14159265358979323846 * 0.3));
 
 struct Key { float t; Ogre::Vector3 p; Ogre::Quaternion r; };
 
@@ -164,8 +173,8 @@ TEST_F(AnimGeneratorSceneTest, BoneSineIsWrittenIntoTheTrackAndMuteRestoresTheBa
     const auto live = boneKeys(e, "TestAnim", "Child");
     EXPECT_EQ(live.size(), 31u) << "dense samples over the 1 s clip at 30 fps";
     // base(t) + 0.5·sin(2πt): the base translation is x-only, so y is the sine.
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.75f).y, -0.5f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT2).y, -0.5f * kS, 1e-4f);
     EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.5f).x, 0.5f, 1e-4f) << "the base motion is kept";
 
     ASSERT_TRUE(mgr()->setEnabled(r.id, false, false).ok);
@@ -177,7 +186,7 @@ TEST_F(AnimGeneratorSceneTest, BoneSineIsWrittenIntoTheTrackAndMuteRestoresTheBa
         EXPECT_TRUE(muted[i].r.equals(before[i].r, Ogre::Radian(1e-6f)));
     }
     ASSERT_TRUE(mgr()->setEnabled(r.id, true, false).ok);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f) << "un-mute re-materialises";
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f) << "un-mute re-materialises";
 }
 
 TEST_F(AnimGeneratorSceneTest, ParameterEditsNeverAccumulate)
@@ -187,7 +196,7 @@ TEST_F(AnimGeneratorSceneTest, ParameterEditsNeverAccumulate)
     ASSERT_TRUE(r.ok);
     for (int i = 0; i < 4; ++i)
         ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("amplitude"), QStringLiteral("0.2")}}, false).ok);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.2f, 1e-4f)
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.2f * kS, 1e-4f)
         << "every edit re-materialises from the base, not from the previous result";
 }
 
@@ -207,7 +216,7 @@ TEST_F(AnimGeneratorSceneTest, TwoGeneratorsOnOneTrackShareTheBase)
     // the ORIGINAL track, not the first generator's output).
     ASSERT_TRUE(mgr()->setEnabled(a.id, false, false).ok);
     EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.5f).z, 1.0f, 1e-4f);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.0f, 1e-4f) << "the sine is gone";
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.0f * kS, 1e-4f) << "the sine is gone";
 }
 
 TEST_F(AnimGeneratorSceneTest, EveryOperationIsOneUndoStep)
@@ -220,18 +229,18 @@ TEST_F(AnimGeneratorSceneTest, EveryOperationIsOneUndoStep)
     const auto r = mgr()->add(sineOnChildY(QStringLiteral("GEN_Undo")));
     ASSERT_TRUE(r.ok);
     ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("amplitude"), QStringLiteral("1.0")}}).ok);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 1.0f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 1.0f * kS, 1e-4f);
 
     um->undo(); // edit
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
     um->undo(); // add
     EXPECT_EQ(mgr()->count(), 0);
     EXPECT_EQ(boneKeys(e, "TestAnim", "Child").size(), pristine.size()) << "undoing the add restores the track";
     um->redo(); // add
     EXPECT_EQ(mgr()->count(), 1);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
     um->redo(); // edit
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 1.0f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 1.0f * kS, 1e-4f);
     um->undo();
     um->undo();
 }
@@ -241,26 +250,26 @@ TEST_F(AnimGeneratorSceneTest, BakeKeepsTheMotionWhenTheGeneratorIsMutedOrRemove
     Ogre::Entity* e = createAnimatedTestEntity("GEN_Bake");
     const auto r = mgr()->add(sineOnChildY(QStringLiteral("GEN_Bake")));
     ASSERT_TRUE(r.ok);
-    const float liveY = boneTranslateAt(e, "TestAnim", "Child", 0.25f).y;
+    const float liveY = boneTranslateAt(e, "TestAnim", "Child", kT).y;
     ASSERT_TRUE(mgr()->bake(r.id).ok);
     const Generator* g = mgr()->find(r.id);
     ASSERT_NE(g, nullptr);
     EXPECT_TRUE(g->baked);
     EXPECT_FALSE(g->enabled) << "baked generators stay attached but inactive";
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, liveY, 1e-5f)
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f)
         << "the baked keys reproduce the generator with the generator muted";
     EXPECT_FALSE(mgr()->setEnabled(r.id, true, false).ok) << "a baked generator cannot be re-enabled";
 
     // Undo the bake → live again; redo → baked again; both keep the motion.
     UndoManager::getSingleton()->undo();
     EXPECT_FALSE(mgr()->find(r.id)->baked);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, liveY, 1e-5f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f);
     UndoManager::getSingleton()->redo();
     EXPECT_TRUE(mgr()->find(r.id)->baked);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, liveY, 1e-5f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f);
 
     ASSERT_TRUE(mgr()->remove(r.id, false).ok);
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, liveY, 1e-5f)
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f)
         << "removing a BAKED generator leaves its keyframes (they are the track now)";
 }
 
@@ -424,7 +433,7 @@ TEST_F(AnimGeneratorSceneTest, DocumentRoundTripsAndSidecarRebindsRenamedObjects
     const QJsonObject doc = mgr()->document();
     ASSERT_TRUE(mgr()->applyDocument(doc));
     EXPECT_EQ(mgr()->document(), doc) << "applying the current document is a no-op";
-    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
 
     QTemporaryDir dir;
     const QString asset = QDir(dir.path()).filePath(QStringLiteral("hero.glb"));
@@ -446,7 +455,62 @@ TEST_F(AnimGeneratorSceneTest, DocumentRoundTripsAndSidecarRebindsRenamedObjects
     ASSERT_EQ(mgr()->count(), 1);
     EXPECT_EQ(mgr()->generators().front().target.object, QStringLiteral("GEN_Doc2"));
     EXPECT_TRUE(mgr()->isBound(mgr()->generators().front().id));
-    EXPECT_NEAR(boneTranslateAt(e2, "TestAnim", "Child", 0.25f).y, 0.5f, 1e-4f);
+    EXPECT_NEAR(boneTranslateAt(e2, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
+}
+
+TEST_F(AnimGeneratorSceneTest, LoadingTwoSidecarsNeverCreatesDuplicateIds)
+{
+    createAnimatedTestEntity("GEN_Ids");
+    QTemporaryDir dir;
+    const QString asset = QDir(dir.path()).filePath(QStringLiteral("a.glb"));
+    // A file holding gen_1 + gen_2 (two channels of one bone).
+    ASSERT_TRUE(mgr()->add(sineOnChildY(QStringLiteral("GEN_Ids")), false).ok);
+    Generator z = sineOnChildY(QStringLiteral("GEN_Ids"));
+    ASSERT_TRUE(parseTarget(QStringLiteral("bone:GEN_Ids/Child/position.z@TestAnim"), &z.target));
+    ASSERT_TRUE(mgr()->add(z, false).ok);
+    ASSERT_TRUE(mgr()->writeSidecar(asset));
+    // Load it into a document that already holds gen_1 + gen_2: the old code
+    // renamed file gen_1 → gen_2 and kept file gen_2, so the merged document
+    // had two gen_2 and the whole load was silently dropped.
+    const int n = mgr()->loadSidecar(asset);
+    EXPECT_EQ(n, 2);
+    ASSERT_EQ(mgr()->count(), 4) << "all four generators present";
+    QSet<QString> ids;
+    for (const auto& g : mgr()->generators()) ids.insert(g.id);
+    EXPECT_EQ(ids.size(), 4) << "ids are unique";
+}
+
+TEST_F(AnimGeneratorSceneTest, ReplacingTheSceneDropsItsGenerators)
+{
+    createAnimatedTestEntity("GEN_Clear");
+    ASSERT_TRUE(mgr()->add(sineOnChildY(QStringLiteral("GEN_Clear")), false).ok);
+    ASSERT_EQ(mgr()->count(), 1);
+    emit Manager::getSingleton()->sceneClearing();
+    EXPECT_EQ(mgr()->count(), 0) << "a replaced scene takes its generators with it";
+    EXPECT_TRUE(mgr()->document().value(QStringLiteral("bases")).toArray().isEmpty());
+}
+
+TEST_F(AnimGeneratorSceneTest, UpdateIsAtomic)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("GEN_Atomic");
+    const auto r = mgr()->add(sineOnChildY(QStringLiteral("GEN_Atomic")), false);
+    ASSERT_TRUE(r.ok);
+    ASSERT_TRUE(mgr()->bake(r.id, false).ok);
+    const bool on = true;
+    const auto u = mgr()->update(r.id, {{QStringLiteral("amplitude"), QStringLiteral("2")}}, &on, false);
+    EXPECT_FALSE(u.ok) << "re-enabling a baked generator is refused";
+    EXPECT_DOUBLE_EQ(mgr()->find(r.id)->amplitude, 0.5) << "…and the params in the same request were NOT applied";
+
+    // params + mute land as ONE undo step.
+    const auto r2 = mgr()->add(sineOnChildY(QStringLiteral("GEN_Atomic"), 0.3));
+    ASSERT_TRUE(r2.ok);
+    const bool off = false;
+    ASSERT_TRUE(mgr()->update(r2.id, {{QStringLiteral("amplitude"), QStringLiteral("0.9")}}, &off).ok);
+    EXPECT_FALSE(mgr()->find(r2.id)->enabled);
+    UndoManager::getSingleton()->undo();
+    EXPECT_TRUE(mgr()->find(r2.id)->enabled);
+    EXPECT_DOUBLE_EQ(mgr()->find(r2.id)->amplitude, 0.3) << "one undo reverts both";
+    (void)e;
 }
 
 TEST_F(AnimGeneratorSceneTest, PanelQmlLoadsWithoutErrors)
@@ -457,6 +521,8 @@ TEST_F(AnimGeneratorSceneTest, PanelQmlLoadsWithoutErrors)
         [](QQmlEngine* e, QJSEngine* s) -> QObject* { return AnimGeneratorManager::qmlInstance(e, s); });
     qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
         [](QQmlEngine* e, QJSEngine*) -> QObject* { return PropertiesPanelController::qmlInstance(e, nullptr); });
+    qmlRegisterSingletonType<ThemeManager>("ThemeManager", 1, 0, "ThemeManager",
+        [](QQmlEngine* e, QJSEngine* s) -> QObject* { return ThemeManager::qmlInstance(e, s); });
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral("qrc:/"));
     QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/AnimationControl/GeneratorsPanel.qml")));

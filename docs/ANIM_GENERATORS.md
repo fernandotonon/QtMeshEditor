@@ -21,12 +21,12 @@ default to 4 s) and `fps` (the sampling density used for the track and for bakin
 
 | Kind | Object / sub | Channels | Bound how |
 |---|---|---|---|
-| `bone` | entity / bone | `position.x|y|z`, `rotation.x|y|z` (°, local axis), `scale.x|y|z`, `position` (path) | written into the skeletal clip (default: selected / first clip) |
+| `bone` | entity / bone | `position.x/y/z`, `rotation.x/y/z` (°, local axis), `scale.x/y/z`, `position` (path) | written into the skeletal clip (default: selected / first clip) |
 | `node` | scene node | same as bone | written into a node clip (default `Generators`, created and enabled) |
 | `morph` | entity / morph target | `weight` | written into the weight clip (default `MorphAnim`) |
 | `pose` | entity / saved pose | `weight` (0 = bind, 1 = pose) | driven every frame |
-| `light` | light | `intensity`, `diffuse.r|g|b`, `specular.r|g|b` | driven every frame |
-| `material` | material | `diffuse.r|g|b|a`, `ambient.*`, `specular.*`, `emissive.*`, `shininess` | driven every frame |
+| `light` | light | `intensity`, `diffuse.r/g/b`, `specular.r/g/b` | driven every frame |
+| `material` | material | `diffuse.r/g/b/a`, `ambient.*`, `specular.*`, `emissive.*`, `shininess` | driven every frame |
 
 On the CLI, `*` as the object means the imported mesh (or its node for `node:`).
 

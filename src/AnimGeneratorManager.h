@@ -47,6 +47,7 @@ The MIT License
 #include <QJsonObject>
 #include <QObject>
 #include <QPoint>
+#include <QPointer>
 #include <QString>
 #include <QVariant>
 #include <QtQml/qqmlregistration.h>
@@ -99,6 +100,11 @@ public:
     /// Apply `key=value` overrides (AnimGen::applyParam keys) as ONE step.
     Result setParams(const QString& id, const QList<QPair<QString, QString>>& params, bool undoable = true);
     Result setEnabled(const QString& id, bool enabled, bool undoable = true);
+    /// Parameters AND the live flag as ONE transaction / undo step: every key
+    /// is validated and the enabled change checked before anything is applied.
+    /// `enabled` null = leave as is.
+    Result update(const QString& id, const QList<QPair<QString, QString>>& params,
+                  const bool* enabled, bool undoable = true);
     Result bake(const QString& id, bool undoable = true);
     Result setPathPoints(const QString& id, const std::vector<Ogre::Vector3>& pts, bool undoable = true);
 
@@ -199,6 +205,12 @@ private:
     static QJsonObject makeDocument(const Doc& d);
     static bool parseDocument(const QJsonObject& doc, Doc* out, QString* error);
     Doc current() const { return Doc{m_gens, m_bases}; }
+    /// Subscribe to Manager::sceneClearing (once per Manager instance): a
+    /// replaced scene takes every target with it, so its generators and base
+    /// snapshots must go too — otherwise the next sidecar is appended to them
+    /// and a reused name would be re-materialised from the OLD scene's base.
+    void ensureSceneHook();
+    void discardForSceneClear();
 
     /// Apply `next` and push one undo step from the current state.
     Result commit(const Doc& next, const QString& label, const QString& id, bool undoable);
@@ -251,6 +263,7 @@ private:
     Ogre::Vector3 m_dragStartPoint;
     Ogre::SceneNode* m_overlayNode = nullptr;
     Ogre::ManualObject* m_overlayObj = nullptr;
+    QPointer<QObject> m_hookedManager;
 };
 
 #endif // ANIMGENERATORMANAGER_H

@@ -487,7 +487,38 @@ void AnimGeneratorManager::kill()
     m_pSingleton = nullptr;
 }
 
-AnimGeneratorManager::AnimGeneratorManager() = default;
+AnimGeneratorManager::AnimGeneratorManager()
+{
+    ensureSceneHook();
+}
+
+void AnimGeneratorManager::ensureSceneHook()
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr || m_hookedManager == mgr) return;
+    m_hookedManager = mgr;
+    connect(mgr, &Manager::sceneClearing, this, &AnimGeneratorManager::discardForSceneClear);
+}
+
+void AnimGeneratorManager::discardForSceneClear()
+{
+    // The scene is about to destroy every target; there is nothing left to
+    // restore, only state to drop. The overlay goes with the scene graph.
+    m_overlayObj = nullptr;
+    m_overlayNode = nullptr;
+    m_dragActive = false;
+    const bool hadPath = !m_pathEditId.isEmpty();
+    m_pathEditId.clear();
+    m_selectedPoint = -1;
+    const bool hadGens = !m_gens.empty() || !m_bases.isEmpty();
+    m_gens.clear();
+    m_bases.clear();
+    if (hadPath) emit pathEditChanged();
+    if (hadGens) {
+        emit generatorsChanged();
+        crumb("clear", QStringLiteral("scene replaced"));
+    }
+}
 
 AnimGeneratorManager::~AnimGeneratorManager()
 {
@@ -1320,6 +1351,7 @@ void AnimGeneratorManager::tick(double dt, bool playing)
 
 AnimGeneratorManager::Result AnimGeneratorManager::add(Generator g, bool undoable)
 {
+    ensureSceneHook();
     Result r;
     QString err;
     if (!resolveTarget(&g.target, &err) || !validate(g.type, g.target, &err)) {
@@ -1367,6 +1399,13 @@ AnimGeneratorManager::Result AnimGeneratorManager::setParams(const QString& id,
                                                             const QList<QPair<QString, QString>>& params,
                                                             bool undoable)
 {
+    return update(id, params, nullptr, undoable);
+}
+
+AnimGeneratorManager::Result AnimGeneratorManager::update(const QString& id,
+                                                         const QList<QPair<QString, QString>>& params,
+                                                         const bool* enabled, bool undoable)
+{
     Result r;
     r.id = id;
     Doc next = current();
@@ -1377,28 +1416,28 @@ AnimGeneratorManager::Result AnimGeneratorManager::setParams(const QString& id,
         QString err;
         if (!applyParam(g, p.first, p.second, &err)) { r.error = err; setStatus(err, false); return r; }
     }
-    r = commit(next, QStringLiteral("Edit generator"), id, undoable);
-    if (r.ok) crumb("edit", QStringLiteral("%1 (%2 params)").arg(id).arg(params.size()));
+    if (enabled) {
+        if (g->baked && *enabled) {
+            r.error = QStringLiteral("'%1' is baked — its motion is now keyframes; add a new generator to layer more").arg(id);
+            setStatus(r.error, false);
+            return r;
+        }
+        g->enabled = *enabled;
+    }
+    const QString label = !params.isEmpty() ? QStringLiteral("Edit generator")
+                        : (enabled && *enabled) ? QStringLiteral("Enable generator")
+                                                : QStringLiteral("Mute generator");
+    r = commit(next, label, id, undoable);
+    if (r.ok) {
+        if (!params.isEmpty()) crumb("edit", QStringLiteral("%1 (%2 params)").arg(id).arg(params.size()));
+        if (enabled) crumb("enable", QStringLiteral("%1 %2").arg(id, *enabled ? QStringLiteral("on") : QStringLiteral("off")));
+    }
     return r;
 }
 
 AnimGeneratorManager::Result AnimGeneratorManager::setEnabled(const QString& id, bool enabled, bool undoable)
 {
-    Result r;
-    r.id = id;
-    Doc next = current();
-    Generator* g = nullptr;
-    for (auto& x : next.gens) if (x.id == id) g = &x;
-    if (!g) { r.error = QStringLiteral("no generator '%1'").arg(id); setStatus(r.error, false); return r; }
-    if (g->baked && enabled) {
-        r.error = QStringLiteral("'%1' is baked — its motion is now keyframes; add a new generator to layer more").arg(id);
-        setStatus(r.error, false);
-        return r;
-    }
-    g->enabled = enabled;
-    r = commit(next, enabled ? QStringLiteral("Enable generator") : QStringLiteral("Mute generator"), id, undoable);
-    if (r.ok) crumb("enable", QStringLiteral("%1 %2").arg(id, enabled ? QStringLiteral("on") : QStringLiteral("off")));
-    return r;
+    return update(id, {}, &enabled, undoable);
 }
 
 AnimGeneratorManager::Result AnimGeneratorManager::bake(const QString& id, bool undoable)
@@ -1494,14 +1533,25 @@ int AnimGeneratorManager::loadSidecar(const QString& assetPath, const QHash<QStr
         if (rename.contains(t.object)) t.object = rename.value(t.object);
         return t;
     };
+    ensureSceneHook();
     Doc next = current();
+    // Every id the merged document will hold — the existing generators, the
+    // ones already appended, and the file's own (not yet appended) — so a
+    // renamed id can never collide with any of them.
+    QSet<QString> taken;
+    for (const auto& g : next.gens) taken.insert(g.id);
     for (Generator g : file.gens) {
         const QString oldKey = trackKey(g.target);
         g.target = renamed(g.target);
-        if (find(g.id)) {
-            std::vector<Generator> all = next.gens;
-            g.id = uniqueId(all);
+        if (taken.contains(g.id)) {
+            QSet<QString> reserved = taken;
+            for (const auto& f : file.gens) reserved.insert(f.id);
+            int n = 1;
+            QString id;
+            do { id = QStringLiteral("gen_%1").arg(n++); } while (reserved.contains(id));
+            g.id = id;
         }
+        taken.insert(g.id);
         const QString newKey = trackKey(g.target);
         if (file.bases.contains(oldKey) && !next.bases.contains(newKey)) {
             QJsonObject b = file.bases.value(oldKey);
@@ -1512,8 +1562,13 @@ int AnimGeneratorManager::loadSidecar(const QString& assetPath, const QHash<QStr
         }
         next.gens.push_back(g);
     }
+    const QJsonObject merged = makeDocument(next);
+    Doc check;
+    if (!parseDocument(merged, &check, error)) return -1; // nothing applied
     QString err;
-    applyDocument(makeDocument(next), &err); // re-adopt; the file's tracks already hold the motion
+    // Re-adopt; the file's tracks already hold the motion. A false return here
+    // only means some target was not found (reported, generator kept unbound).
+    applyDocument(merged, &err);
     if (error && !err.isEmpty()) *error = err;
     crumb("load", QStringLiteral("%1 generators").arg(file.gens.size()));
     return int(file.gens.size());
