@@ -10363,7 +10363,12 @@ QJsonObject MCPServer::toolAddGenerator(const QJsonObject& args)
     for (const auto& p : params)
         if (!AnimGen::applyParam(&g, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
     if (args.contains("name")) g.name = args.value("name").toString();
-    if (args.contains("enabled")) g.enabled = args.value("enabled").toBool(true);
+    if (args.contains("enabled")) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        g.enabled = args.value("enabled").toBool();
+    }
+    if (args.contains("bake") && !args.value("bake").isBool())
+        return makeErrorResult("Error: 'bake' must be a boolean");
     auto* gm = AnimGeneratorManager::instance();
     const auto r = gm->add(g);
     if (!r.ok) return makeErrorResult("Error: " + r.error);
@@ -10389,7 +10394,11 @@ QJsonObject MCPServer::toolSetGenerator(const QJsonObject& args)
     // single undo step (or not at all).
     bool enabled = false;
     const bool hasEnabled = args.contains("enabled");
-    if (hasEnabled) enabled = args.value("enabled").toBool();
+    if (hasEnabled) {
+        // toBool() reads "true" / 1 as false — refuse rather than silently mute.
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        enabled = args.value("enabled").toBool();
+    }
     const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
     if (!r.ok) return makeErrorResult("Error: " + r.error);
     QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))}};
