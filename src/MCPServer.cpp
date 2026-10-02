@@ -10399,8 +10399,19 @@ QJsonObject MCPServer::toolSetGenerator(const QJsonObject& args)
         if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
         enabled = args.value("enabled").toBool();
     }
-    const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
-    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    if (args.contains("show_path") && !args.value("show_path").isBool())
+        return makeErrorResult("Error: 'show_path' must be a boolean");
+    if (!params.isEmpty() || hasEnabled) {
+        const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
+        if (!r.ok) return makeErrorResult("Error: " + r.error);
+    }
+    if (args.contains("show_path")) {
+        if (args.value("show_path").toBool()) {
+            if (!gm->beginPathEdit(id)) return makeErrorResult("Error: " + gm->status());
+        } else {
+            gm->endPathEdit();
+        }
+    }
     QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))}};
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
@@ -14004,7 +14015,7 @@ QJsonArray MCPServer::buildToolsList()
                                                       "Bone clip defaults to the selected/first clip; node clip to 'Generators' (created); morph to MorphAnim."}};
         props["params"] = QJsonObject{{"type", "object"},
                                       {"description", "Parameters: amplitude, frequency (Hz), phase (deg), offset, seed, noise_frequency, octaves, "
-                                                      "from, to, ease (linear|smooth), stiffness (rad/s), damping (ratio), start, duration (0 = clip end), "
+                                                      "from, to, ease (linear|smooth), stiffness (rad/s), damping (ratio), start, duration (default 1 s; 0 = clip end), "
                                                       "fps, loops, closed, constant_speed, orient, points ([[x,y,z],...] for follow-path)."}};
         props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
         props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};
@@ -14019,8 +14030,9 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id (see list_generators)."}};
         props["params"] = QJsonObject{{"type", "object"}, {"description", "Parameters to change (same keys as add_generator)."}};
-        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the generator (the base track plays alone); true re-enables it."}};
-        appendTool("set_generator", "Edit a generator's parameters and/or mute it. One undo step.",
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the generator (the base track plays alone); true re-enables it. Re-enabling or editing a BAKED generator un-bakes it (the track goes back to how it was before the bake) so it can be changed and baked again."}};
+        props["show_path"] = QJsonObject{{"type", "boolean"}, {"description", "Follow-path only: show (true) or hide (false) the path and its draggable points in the viewport."}};
+        appendTool("set_generator", "Edit a generator's parameters and/or mute it (one undo step), or show its path in the viewport.",
                    props, QJsonArray{"id"});
     }
     {
@@ -14028,7 +14040,7 @@ QJsonArray MCPServer::buildToolsList()
         props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id."}};
         appendTool("bake_generator",
                    "Bake a generator to keyframes at its fps: the motion becomes ordinary keys and the generator stays "
-                   "attached but inactive. Undoable.",
+                   "attached but inactive. Editing it later (set_generator) un-bakes it so it can be changed and baked again. Undoable.",
                    props, QJsonArray{"id"});
     }
     {

@@ -25,7 +25,14 @@ Column {
     function refreshDetails() {
         details = selectedId !== "" ? AnimGeneratorManager.details(selectedId) : ({})
     }
-    onSelectedIdChanged: refreshDetails()
+    // Selecting a follow-path generator shows its path in the viewport right
+    // away (points draggable with the Select tool); selecting anything else
+    // hides it.
+    onSelectedIdChanged: {
+        refreshDetails()
+        if (details.type === "follow-path") AnimGeneratorManager.beginPathEdit(selectedId)
+        else if (AnimGeneratorManager.pathEditId !== "") AnimGeneratorManager.endPathEdit()
+    }
     Connections {
         target: AnimGeneratorManager
         function onGeneratorsChanged() {
@@ -254,8 +261,10 @@ Column {
                 InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     checked: rowRect.modelData.enabled
-                    enabled: !rowRect.modelData.baked
-                    ToolTip.visible: hovered; ToolTip.text: "Live (unchecked = muted: the base animation plays alone)"
+                    ToolTip.visible: hovered
+                    ToolTip.text: rowRect.modelData.baked
+                        ? "Baked. Check to un-bake: the track goes back to how it was before the bake, so you can change it and bake again"
+                        : "Live (unchecked = muted: the base animation plays alone)"
                     onToggled: AnimGeneratorManager.setEnabledFromUi(rowRect.modelData.id, checked)
                 }
                 Text {
@@ -272,7 +281,7 @@ Column {
                 ToolBtn {
                     anchors.verticalCenter: parent.verticalCenter
                     label: "Bake"; enabled: !rowRect.modelData.baked
-                    tip: "Replace the generator with keyframes (it stays attached, inactive)"
+                    tip: "Turn the generator into keyframes. Editing it afterwards un-bakes it, so you can change it and bake again"
                     onClicked: AnimGeneratorManager.bakeFromUi(rowRect.modelData.id)
                 }
                 ToolBtn {
@@ -342,12 +351,22 @@ Column {
                     onToggled: AnimGeneratorManager.setParamFromUi(genSection.selectedId, "orient", checked ? "true" : "false")
                 }
             }
+            Text {
+                width: genSection.width - 8
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                opacity: 0.8
+                color: AnimationControlController.textColor
+                text: AnimGeneratorManager.pathEditId === genSection.selectedId
+                      ? "The path is shown in the viewport (orange line, blue points). Drag a point with the Select tool (Q), or type coordinates below."
+                      : "Show the path to see and drag its points in the viewport."
+            }
             Row {
                 spacing: 4
                 ToolBtn {
-                    label: AnimGeneratorManager.pathEditId === genSection.selectedId ? "Done editing" : "Edit in viewport"
+                    label: AnimGeneratorManager.pathEditId === genSection.selectedId ? "Hide path" : "Show path"
                     accent: AnimGeneratorManager.pathEditId === genSection.selectedId
-                    tip: "Shows the path; drag its points with the Select tool"
+                    tip: "Shows the path in the viewport; drag its points with the Select tool (Q)"
                     onClicked: AnimGeneratorManager.pathEditId === genSection.selectedId
                                ? AnimGeneratorManager.endPathEdit()
                                : AnimGeneratorManager.beginPathEdit(genSection.selectedId)

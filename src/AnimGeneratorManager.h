@@ -105,6 +105,10 @@ public:
     /// `enabled` null = leave as is.
     Result update(const QString& id, const QList<QPair<QString, QString>>& params,
                   const bool* enabled, bool undoable = true);
+    /// Bake a generator into its track. A baked generator can be edited or
+    /// re-enabled later: that UN-BAKES it (the track goes back to how it was
+    /// before this bake) so it can be changed and baked again — refused only
+    /// when the same track was baked again afterwards.
     Result bake(const QString& id, bool undoable = true);
     Result setPathPoints(const QString& id, const std::vector<Ogre::Vector3>& pts, bool undoable = true);
 
@@ -221,7 +225,10 @@ private:
     bool resolveTarget(AnimGen::Target* t, QString* error) const;
 
     // Track-backed binding.
-    bool captureBase(const QString& key, const AnimGen::Target& t, QJsonObject* base, QString* error);
+    /// `clipLength`: length for a clip the capture has to CREATE (a node clip
+    /// that does not exist yet) — the generators' window, not a fixed 4 s.
+    bool captureBase(const QString& key, const AnimGen::Target& t, QJsonObject* base, QString* error,
+                     double clipLength = 1.0);
     bool restoreBase(const QString& key, const QJsonObject& base);
     bool materialise(const QString& key, QJsonObject* base, const std::vector<const AnimGen::Generator*>& gens);
     QJsonObject bakedBase(const QString& key, const QJsonObject& base, const AnimGen::Generator& g);

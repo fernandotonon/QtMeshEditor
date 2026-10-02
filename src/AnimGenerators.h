@@ -109,7 +109,7 @@ struct Generator {
     bool baked = false;         ///< baked to keyframes; inactive afterwards
 
     double startTime = 0.0;     ///< seconds, clip-local
-    double duration = 0.0;      ///< seconds; 0 = until the clip ends
+    double duration = 1.0;      ///< seconds; 0 = until the clip ends (default 1 s)
     int sampleFps = 30;         ///< bake / materialisation density
 
     double offset = 0.0;        ///< constant added to every scalar type

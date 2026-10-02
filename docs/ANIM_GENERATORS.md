@@ -12,8 +12,8 @@ baked into ordinary keyframes at any time.
 | `spring` | `from`, `to`, `stiffness` (ω, rad/s), `damping` (ζ; 1 = critical) | game-feel overshoot, settle |
 | `follow-path` | `points` (`x,y,z;…`), `closed`, `constant_speed`, `orient`, `loops` | patrols, fly-throughs |
 
-Every type also takes `start` and `duration` (seconds; `0` = until the clip ends — runtime targets
-default to 4 s) and `fps` (the sampling density used for the track and for baking).
+Every type also takes `start` and `duration` (seconds, default **1 s**; `0` = until the clip ends — runtime
+targets then default to 4 s) and `fps` (the sampling density used for the track and for baking).
 
 ## Targets
 
@@ -42,6 +42,9 @@ On the CLI, `*` as the object means the imported mesh (or its node for `node:`).
 * **Bake** folds the generator into the base. For track targets the keys become permanent (removing
   the generator later keeps them); for pose / light / material the baked curve is kept with the
   generators and is removed with its generator. A baked generator stays attached but inactive.
+* **Change it and bake again:** editing or re-enabling a baked generator *un-bakes* it — the track goes
+  back to how it was before that bake and the generator is live again. Refused only when the same track
+  was baked again afterwards (un-bake the later one first).
 * Pose / light / material targets run on the generator clock: it advances while playing and follows
   the timeline slider while paused.
 * Every operation is one undo step.
@@ -56,8 +59,9 @@ tools see it without the sidecar.
 ## Surfaces
 
 * **GUI:** Animation mode → Mode Tools → **Generators**. Pick type, target and channel, *Add
-  generator*, then edit the parameters of the selected row. For a follow-path, *Edit in viewport*
-  shows the path; drag its points with the Select tool.
+  generator*, then edit the parameters of the selected row. Selecting a follow-path generator shows its
+  path in the viewport (orange line, blue points); drag a point with the Select tool (Q). *Hide path* /
+  *Show path* toggles it. MCP: `set_generator {id, show_path: true}`.
 * **CLI:**
   ```
   qtmesh anim <file> --generator <type> --target <target> [--<param> <value> …] [--generator …] [--bake] -o <out>

@@ -98,6 +98,8 @@ TEST(AnimGenEval, SineMatchesTheFormula)
 TEST(AnimGenEval, DurationZeroRunsToTheClipEnd)
 {
     Generator g = make(Type::Sine);
+    EXPECT_DOUBLE_EQ(g.duration, 1.0) << "new generators default to a 1 s window";
+    g.duration = 0.0;
     g.frequency = 0.25; // a quarter cycle per second → peak at t=1
     EXPECT_NEAR(evaluateScalar(g, 1.0, 2.0), 1.0, 1e-12);
     EXPECT_EQ(evaluateScalar(g, 2.5, 2.0), 0.0);

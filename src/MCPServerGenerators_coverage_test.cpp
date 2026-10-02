@@ -88,8 +88,13 @@ TEST_F(MCPServerGeneratorsCoverageTest, AddEditBakeRemoveRoundTrip)
     const auto bake = server->toolBakeGenerator({{"id", id}});
     ASSERT_FALSE(bake["isError"].toBool()) << textOf(bake).toStdString();
     EXPECT_TRUE(payload(bake)["generator"].toObject()["baked"].toBool());
-    EXPECT_TRUE(server->toolSetGenerator({{"id", id}, {"enabled", true}})["isError"].toBool())
-        << "a baked generator cannot be re-enabled";
+    const auto unbake = server->toolSetGenerator({{"id", id}, {"enabled", true}});
+    ASSERT_FALSE(unbake["isError"].toBool()) << textOf(unbake).toStdString();
+    EXPECT_FALSE(payload(unbake)["generator"].toObject()["baked"].toBool())
+        << "re-enabling a baked generator un-bakes it";
+    EXPECT_TRUE(server->toolSetGenerator({{"id", id}, {"show_path", "yes"}})["isError"].toBool());
+    EXPECT_TRUE(server->toolSetGenerator({{"id", id}, {"show_path", true}})["isError"].toBool())
+        << "show_path on a non-path generator is an error";
     EXPECT_EQ(payload(server->toolListGenerators({}))["count"].toInt(), 1);
     ASSERT_FALSE(server->toolRemoveGenerator({{"id", id}})["isError"].toBool());
     EXPECT_EQ(payload(server->toolListGenerators({}))["count"].toInt(), 0);

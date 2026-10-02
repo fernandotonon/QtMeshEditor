@@ -263,7 +263,6 @@ TEST_F(AnimGeneratorSceneTest, BakeKeepsTheMotionWhenTheGeneratorIsMutedOrRemove
     EXPECT_FALSE(g->enabled) << "baked generators stay attached but inactive";
     EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f)
         << "the baked keys reproduce the generator with the generator muted";
-    EXPECT_FALSE(mgr()->setEnabled(r.id, true, false).ok) << "a baked generator cannot be re-enabled";
 
     // Undo the bake → live again; redo → baked again; both keep the motion.
     UndoManager::getSingleton()->undo();
@@ -276,6 +275,65 @@ TEST_F(AnimGeneratorSceneTest, BakeKeepsTheMotionWhenTheGeneratorIsMutedOrRemove
     ASSERT_TRUE(mgr()->remove(r.id, false).ok);
     EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, liveY, 1e-5f)
         << "removing a BAKED generator leaves its keyframes (they are the track now)";
+}
+
+TEST_F(AnimGeneratorSceneTest, EditingABakedGeneratorUnbakesItSoItCanBeBakedAgain)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("GEN_Rebake");
+    const auto pristine = boneKeys(e, "TestAnim", "Child");
+    const auto r = mgr()->add(sineOnChildY(QStringLiteral("GEN_Rebake")), false);
+    ASSERT_TRUE(r.ok);
+    ASSERT_TRUE(mgr()->bake(r.id, false).ok);
+
+    // Edit → un-baked, live with the new amplitude, base back to the ORIGINAL
+    // keys (not the baked ones — otherwise the edit would stack on the bake).
+    ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("amplitude"), QStringLiteral("0.2")}}, false).ok);
+    EXPECT_FALSE(mgr()->find(r.id)->baked);
+    EXPECT_TRUE(mgr()->find(r.id)->enabled);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.2f * kS, 1e-4f);
+    ASSERT_TRUE(mgr()->setEnabled(r.id, false, false).ok);
+    EXPECT_EQ(boneKeys(e, "TestAnim", "Child").size(), pristine.size()) << "muting now shows the pre-bake track";
+
+    // …and bake again.
+    ASSERT_TRUE(mgr()->setEnabled(r.id, true, false).ok);
+    ASSERT_TRUE(mgr()->bake(r.id, false).ok);
+    EXPECT_TRUE(mgr()->find(r.id)->baked);
+    EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.2f * kS, 1e-4f);
+
+    // Plain re-enable also un-bakes.
+    ASSERT_TRUE(mgr()->setEnabled(r.id, true, false).ok);
+    EXPECT_FALSE(mgr()->find(r.id)->baked);
+}
+
+TEST_F(AnimGeneratorSceneTest, UnbakeIsRefusedWhenTheTrackWasBakedAgainAfterwards)
+{
+    createAnimatedTestEntity("GEN_Order");
+    const auto a = mgr()->add(sineOnChildY(QStringLiteral("GEN_Order"), 0.5), false);
+    Generator z = sineOnChildY(QStringLiteral("GEN_Order"), 0.1);
+    ASSERT_TRUE(parseTarget(QStringLiteral("bone:GEN_Order/Child/position.z@TestAnim"), &z.target));
+    const auto b = mgr()->add(z, false);
+    ASSERT_TRUE(a.ok && b.ok);
+    ASSERT_TRUE(mgr()->bake(a.id, false).ok);
+    ASSERT_TRUE(mgr()->bake(b.id, false).ok);
+    const auto refused = mgr()->setEnabled(a.id, true, false);
+    EXPECT_FALSE(refused.ok) << "un-baking A would throw away B's bake";
+    EXPECT_TRUE(refused.error.contains(QStringLiteral("baked again"))) << refused.error.toStdString();
+    EXPECT_TRUE(mgr()->find(a.id)->baked) << "nothing changed";
+    // Un-baking the LATER one first is fine, then A can follow.
+    ASSERT_TRUE(mgr()->setEnabled(b.id, true, false).ok);
+    EXPECT_TRUE(mgr()->setEnabled(a.id, true, false).ok);
+}
+
+TEST_F(AnimGeneratorSceneTest, NewNodeClipCoversTheGeneratorWindow)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("GEN_NodeLen");
+    Generator g;
+    g.type = Type::Sine;
+    ASSERT_TRUE(parseTarget(QStringLiteral("node:%1/position.y").arg(QString::fromStdString(e->getParentSceneNode()->getName())), &g.target));
+    ASSERT_TRUE(mgr()->add(g, false).ok); // default 1 s
+    Ogre::Animation* anim = Manager::getSingleton()->getSceneMgr()->getAnimation("Generators");
+    ASSERT_NE(anim, nullptr);
+    EXPECT_NEAR(anim->getLength(), 1.0f, 1e-4f) << "a created clip is as long as the generator, not a fixed 4 s";
 }
 
 TEST_F(AnimGeneratorSceneTest, NodePathCreatesAClipThatFollowsTheCurveAndIsRemovedWithIt)
@@ -510,9 +568,11 @@ TEST_F(AnimGeneratorSceneTest, UpdateIsAtomic)
     ASSERT_TRUE(r.ok);
     ASSERT_TRUE(mgr()->bake(r.id, false).ok);
     const bool on = true;
-    const auto u = mgr()->update(r.id, {{QStringLiteral("amplitude"), QStringLiteral("2")}}, &on, false);
-    EXPECT_FALSE(u.ok) << "re-enabling a baked generator is refused";
-    EXPECT_DOUBLE_EQ(mgr()->find(r.id)->amplitude, 0.5) << "…and the params in the same request were NOT applied";
+    const auto u = mgr()->update(r.id, {{QStringLiteral("amplitude"), QStringLiteral("2")},
+                                        {QStringLiteral("wobble"), QStringLiteral("1")}}, &on, false);
+    EXPECT_FALSE(u.ok) << "an unknown key fails the whole request";
+    EXPECT_DOUBLE_EQ(mgr()->find(r.id)->amplitude, 0.5) << "…so the valid param was NOT applied";
+    EXPECT_TRUE(mgr()->find(r.id)->baked) << "…and the generator was not un-baked either";
 
     // params + mute land as ONE undo step.
     const auto r2 = mgr()->add(sineOnChildY(QStringLiteral("GEN_Atomic"), 0.3));

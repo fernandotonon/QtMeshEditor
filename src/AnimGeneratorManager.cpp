@@ -644,7 +644,9 @@ bool AnimGeneratorManager::applyDocument(const QJsonObject& docJson, QString* er
         if (!m_bases.contains(k)) {
             QJsonObject base;
             QString why;
-            if (!captureBase(k, first->target, &base, &why)) { failures << why; continue; }
+            double span = 0.0; // a clip the capture creates covers the generators' window
+            for (const auto& g : m_gens) if (trackKey(g.target) == k) span = std::max(span, windowEnd(g, 0.0));
+            if (!captureBase(k, first->target, &base, &why, span)) { failures << why; continue; }
             m_bases.insert(k, base);
         }
         QJsonObject base = m_bases.value(k);
@@ -779,7 +781,8 @@ double AnimGeneratorManager::clipLengthFor(const Target& t) const
 // Track-backed binding
 // ---------------------------------------------------------------------------
 
-bool AnimGeneratorManager::captureBase(const QString& key, const Target& t, QJsonObject* base, QString* error)
+bool AnimGeneratorManager::captureBase(const QString& key, const Target& t, QJsonObject* base, QString* error,
+                                       double clipLength)
 {
     auto fail = [&](const QString& m) { if (error) *error = m; return false; };
     QJsonObject b;
@@ -801,8 +804,9 @@ bool AnimGeneratorManager::captureBase(const QString& key, const Target& t, QJso
         if (!node) return fail(QStringLiteral("%1: scene node not found").arg(key));
         Ogre::Animation* anim = sceneAnim(t.clip);
         const bool existed = anim != nullptr;
+        const double newLen = std::max(0.1, clipLength);
         if (!existed) {
-            if (!NodeAnimationManager::instance()->createClip(t.clip, 4.0))
+            if (!NodeAnimationManager::instance()->createClip(t.clip, newLen))
                 return fail(QStringLiteral("could not create node clip '%1'").arg(t.clip));
             NodeAnimationManager::instance()->setClipEnabled(t.clip, true);
             anim = sceneAnim(t.clip);
@@ -819,7 +823,7 @@ bool AnimGeneratorManager::captureBase(const QString& key, const Target& t, QJso
         }
         b[QStringLiteral("kind")] = QStringLiteral("node");
         b[QStringLiteral("clipExisted")] = existed;
-        b[QStringLiteral("length")] = existed ? double(anim->getLength()) : 4.0;
+        b[QStringLiteral("length")] = existed ? double(anim->getLength()) : newLen;
         b[QStringLiteral("hadTrack")] = track != nullptr;
         b[QStringLiteral("keys")] = trsKeysJson(keys);
         break;
@@ -1000,7 +1004,9 @@ bool AnimGeneratorManager::materialise(const QString& key, QJsonObject* base,
         if (!node) return false;
         Ogre::Animation* anim = sceneAnim(t.clip);
         if (!anim) {
-            if (!NodeAnimationManager::instance()->createClip(t.clip, 4.0)) return false;
+            double span = 0.1;
+            for (const Generator* g : gens) span = std::max(span, windowEnd(*g, 0.0));
+            if (!NodeAnimationManager::instance()->createClip(t.clip, span)) return false;
             NodeAnimationManager::instance()->setClipEnabled(t.clip, true);
             anim = sceneAnim(t.clip);
             if (!anim) return false;
@@ -1412,23 +1418,39 @@ AnimGeneratorManager::Result AnimGeneratorManager::update(const QString& id,
     Generator* g = nullptr;
     for (auto& x : next.gens) if (x.id == id) g = &x;
     if (!g) { r.error = QStringLiteral("no generator '%1'").arg(id); setStatus(r.error, false); return r; }
+    // Editing or re-enabling a BAKED generator un-bakes it: its track goes back
+    // to the base it had before the bake, the generator is live again, and the
+    // user can change it and bake again.
+    bool unbaked = false;
+    if (g->baked && (!params.isEmpty() || (enabled && *enabled))) {
+        const QString key = trackKey(g->target);
+        const QJsonObject pre = g->state.value(QStringLiteral("preBakeBase")).toObject();
+        const QJsonObject baked = g->state.value(QStringLiteral("bakedBase")).toObject();
+        auto refuse = [&](const QString& why) { r.error = why; setStatus(why, false); return r; };
+        if (pre.isEmpty())
+            return refuse(QStringLiteral("'%1' was baked by an older build; add a new generator to change it").arg(id));
+        if (next.bases.value(key) != baked)
+            return refuse(QStringLiteral("'%1' cannot be un-baked: its track was baked again afterwards. "
+                                         "Un-bake the later generator first, or add a new one").arg(id));
+        next.bases[key] = pre;
+        g->baked = false;
+        g->enabled = true;
+        g->state.remove(QStringLiteral("preBakeBase"));
+        g->state.remove(QStringLiteral("bakedBase"));
+        unbaked = true;
+    }
     for (const auto& p : params) {
         QString err;
         if (!applyParam(g, p.first, p.second, &err)) { r.error = err; setStatus(err, false); return r; }
     }
-    if (enabled) {
-        if (g->baked && *enabled) {
-            r.error = QStringLiteral("'%1' is baked — its motion is now keyframes; add a new generator to layer more").arg(id);
-            setStatus(r.error, false);
-            return r;
-        }
-        g->enabled = *enabled;
-    }
-    const QString label = !params.isEmpty() ? QStringLiteral("Edit generator")
+    if (enabled) g->enabled = *enabled;
+    const QString label = unbaked ? QStringLiteral("Un-bake generator")
+                        : !params.isEmpty() ? QStringLiteral("Edit generator")
                         : (enabled && *enabled) ? QStringLiteral("Enable generator")
                                                 : QStringLiteral("Mute generator");
     r = commit(next, label, id, undoable);
     if (r.ok) {
+        if (unbaked) crumb("unbake", id);
         if (!params.isEmpty()) crumb("edit", QStringLiteral("%1 (%2 params)").arg(id).arg(params.size()));
         if (enabled) crumb("enable", QStringLiteral("%1 %2").arg(id, *enabled ? QStringLiteral("on") : QStringLiteral("off")));
     }
@@ -1450,8 +1472,17 @@ AnimGeneratorManager::Result AnimGeneratorManager::bake(const QString& id, bool 
     const QString key = trackKey(g->target);
     if (!m_bases.contains(key)) { r.error = QStringLiteral("'%1' is not bound to its target").arg(id); setStatus(r.error, false); return r; }
     Doc next = current();
-    next.bases[key] = bakedBase(key, m_bases.value(key), *g);
-    for (auto& x : next.gens) if (x.id == id) { x.baked = true; x.enabled = false; }
+    const QJsonObject pre = m_bases.value(key);
+    const QJsonObject baked = bakedBase(key, pre, *g);
+    next.bases[key] = baked;
+    for (auto& x : next.gens) {
+        if (x.id != id) continue;
+        x.baked = true;
+        x.enabled = false;
+        // Kept so an edit can un-bake it exactly (see update()).
+        x.state[QStringLiteral("preBakeBase")] = pre;
+        x.state[QStringLiteral("bakedBase")] = baked;
+    }
     r = commit(next, QStringLiteral("Bake generator to keyframes"), id, undoable);
     if (r.ok) crumb("bake", QStringLiteral("%1 → %2").arg(id, key));
     return r;
