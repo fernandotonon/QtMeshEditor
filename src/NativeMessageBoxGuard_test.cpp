@@ -9,6 +9,8 @@
 #include <QMessageBox>
 #include <QTimer>
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+
 TEST(NativeMessageBoxGuard, MarksABoxNonNativeWhileItIsConstructed)
 {
     NativeMessageBoxGuard* guard = NativeMessageBoxGuard::install(qApp);
@@ -19,6 +21,8 @@ TEST(NativeMessageBoxGuard, MarksABoxNonNativeWhileItIsConstructed)
                     QMessageBox::Ok);
     EXPECT_TRUE(box.testOption(QMessageBox::Option::DontUseNativeDialog));
 }
+
+#endif
 
 TEST(NativeMessageBoxGuard, InstallIsIdempotent)
 {
@@ -37,6 +41,8 @@ TEST(NativeMessageBoxGuard, LeavesOtherObjectsAlone)
     SUCCEED();
 }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+// Needs Qt 6.6 for QMessageBox::testOption.
 TEST(NativeMessageBoxGuard, StaticHelperRunsAsAWidgetDialog)
 {
     NativeMessageBoxGuard::install(qApp);
@@ -58,3 +64,4 @@ TEST(NativeMessageBoxGuard, StaticHelperRunsAsAWidgetDialog)
     QMessageBox::information(nullptr, QStringLiteral("T"), QStringLiteral("text"));
     EXPECT_TRUE(sawWidgetBox);
 }
+#endif

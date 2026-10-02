@@ -44,8 +44,8 @@
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
 #include "updater/UpdaterTelemetry.h"
-#include "NativeMessageBoxGuard.h"
 #endif
+#include "NativeMessageBoxGuard.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>

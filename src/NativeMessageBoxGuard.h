@@ -33,6 +33,7 @@ The MIT License
 #include <QEvent>
 #include <QMessageBox>
 #include <QObject>
+#include <QtGlobal>
 
 class NativeMessageBoxGuard : public QObject
 {
@@ -42,12 +43,14 @@ public:
 
     bool eventFilter(QObject* watched, QEvent* event) override
     {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         if (event->type() == QEvent::ChildAdded) {
             if (auto* box = qobject_cast<QMessageBox*>(watched)) {
                 if (!box->testOption(QMessageBox::Option::DontUseNativeDialog))
                     box->setOption(QMessageBox::Option::DontUseNativeDialog);
             }
         }
+#endif
         return QObject::eventFilter(watched, event);
     }
 
