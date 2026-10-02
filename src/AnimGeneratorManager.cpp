@@ -17,6 +17,7 @@ The MIT License
 #include "NodeAnimationManager.h"
 #include "OgreWidget.h"
 #include "PoseLibrary.h"
+#include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "SpaceCamera.h"
 #include "UndoManager.h"
@@ -1788,6 +1789,44 @@ QStringList AnimGeneratorManager::channelsFor(const QString& kindStr, const QStr
         if (validate(type, t)) out << ch;
     }
     return out;
+}
+
+QString AnimGeneratorManager::selectionKind() const
+{
+    SelectionSet* sel = SelectionSet::getSingletonPtr();
+    if (!sel) return {};
+    const QList<Ogre::SceneNode*> nodes = sel->getNodesSelectionList();
+    if (!nodes.isEmpty()) {
+        if (LightManager* lm = LightManager::getSingletonPtr())
+            if (lm->findLightBySceneNode(nodes.front())) return QStringLiteral("light");
+        return QStringLiteral("node");
+    }
+    return sel->getResolvedEntities().isEmpty() ? QString() : QStringLiteral("node");
+}
+
+QString AnimGeneratorManager::selectedObject(const QString& kindStr) const
+{
+    TargetKind kind;
+    SelectionSet* sel = SelectionSet::getSingletonPtr();
+    if (!sel || !kindFromId(kindStr, &kind)) return {};
+    const QList<Ogre::SceneNode*> nodes = sel->getNodesSelectionList();
+    const QList<Ogre::Entity*> ents = sel->getResolvedEntities();
+    Ogre::SceneNode* node = !nodes.isEmpty() ? nodes.front()
+                          : (!ents.isEmpty() ? ents.front()->getParentSceneNode() : nullptr);
+    switch (kind) {
+    case TargetKind::Node:
+        return node ? QString::fromStdString(node->getName()) : QString();
+    case TargetKind::Light:
+        if (LightManager* lm = LightManager::getSingletonPtr())
+            if (const LightHandle* h = node ? lm->findLightBySceneNode(node) : nullptr) return h->name;
+        return {};
+    case TargetKind::Material:
+        if (!ents.isEmpty() && ents.front()->getNumSubEntities() > 0)
+            return QString::fromStdString(ents.front()->getSubEntity(0)->getMaterialName());
+        return {};
+    default:
+        return ents.isEmpty() ? QString() : QString::fromStdString(ents.front()->getName());
+    }
 }
 
 bool AnimGeneratorManager::addFromUi(const QString& typeStr, const QString& targetStr, const QVariantMap& params)

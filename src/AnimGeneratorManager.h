@@ -175,6 +175,12 @@ public:
     Q_INVOKABLE QStringList subsFor(const QString& kind, const QString& object) const;
     Q_INVOKABLE QStringList clipsFor(const QString& kind, const QString& object) const;
     Q_INVOKABLE QStringList channelsFor(const QString& kind, const QString& typeId) const;
+    /// Defaults for the Add form from the viewport selection: the target kind
+    /// ("light" for a selected light, "node" otherwise; "" with nothing
+    /// selected) and, per kind, the selected object (its node, entity, light
+    /// or first material). "" when the selection has no such object.
+    Q_INVOKABLE QString selectionKind() const;
+    Q_INVOKABLE QString selectedObject(const QString& kind) const;
     /// Add from the panel: `target` is the string form; `params` key → value.
     Q_INVOKABLE bool addFromUi(const QString& typeId, const QString& target, const QVariantMap& params);
     Q_INVOKABLE bool removeFromUi(const QString& id);

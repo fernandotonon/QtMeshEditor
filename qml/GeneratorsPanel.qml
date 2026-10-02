@@ -28,6 +28,14 @@ Column {
     // Selecting a follow-path generator shows its path in the viewport right
     // away (points draggable with the Select tool); selecting anything else
     // hides it.
+    Connections {
+        target: PropertiesPanelController
+        function onSelectionChanged() {
+            genSection.refreshTick++   // object lists can change with the scene
+            kindBox.pickFromSelection()
+            objectBox.pickFromSelection()
+        }
+    }
     onSelectedIdChanged: {
         refreshDetails()
         if (details.type === "follow-path") AnimGeneratorManager.beginPathEdit(selectedId)
@@ -171,11 +179,37 @@ Column {
                 id: kindBox
                 width: 86; height: 22; font.pixelSize: 11
                 model: addCol.type === "follow-path" ? ["node", "bone"] : AnimGeneratorManager.kindIds
+                // Default to what is selected in the viewport: its node (or
+                // its light). Re-applied when the selection changes.
+                function pickFromSelection() {
+                    var k = AnimGeneratorManager.selectionKind()
+                    if (k === "") k = "node"
+                    var i = model.indexOf(k)
+                    if (i >= 0) currentIndex = i
+                }
+                property string lastKind: ""
+                onActivated: lastKind = currentText
+                Component.onCompleted: pickFromSelection()
+                // Type change rebuilds the list: keep the user's kind if still
+                // offered, else fall back to the selection.
+                onModelChanged: {
+                    var i = model.indexOf(lastKind)
+                    if (lastKind !== "" && i >= 0) currentIndex = i
+                    else pickFromSelection()
+                }
             }
             ThemedComboBox {
                 id: objectBox
                 width: genSection.width - 154; height: 22; font.pixelSize: 11
                 model: { genSection.refreshTick; return AnimGeneratorManager.objectsFor(addCol.kind) }
+                // Preselect the selected object for the current kind (its
+                // node, entity, light or material).
+                function pickFromSelection() {
+                    var i = model.indexOf(AnimGeneratorManager.selectedObject(addCol.kind))
+                    if (i >= 0) currentIndex = i
+                }
+                onModelChanged: pickFromSelection()
+                Component.onCompleted: pickFromSelection()
             }
         }
         Row {
