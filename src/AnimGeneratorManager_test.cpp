@@ -183,7 +183,12 @@ TEST_F(AnimGeneratorSceneTest, BoneSineIsWrittenIntoTheTrackAndMuteRestoresTheBa
     for (size_t i = 0; i < before.size(); ++i) {
         EXPECT_FLOAT_EQ(muted[i].t, before[i].t);
         EXPECT_LT((muted[i].p - before[i].p).length(), 1e-6f);
-        EXPECT_TRUE(muted[i].r.equals(before[i].r, Ogre::Radian(1e-6f)));
+        // Component-wise: Quaternion::equals takes acos of a float dot product,
+        // which reports ~5e-4 rad between two BIT-IDENTICAL quaternions.
+        EXPECT_FLOAT_EQ(muted[i].r.w, before[i].r.w);
+        EXPECT_FLOAT_EQ(muted[i].r.x, before[i].r.x);
+        EXPECT_FLOAT_EQ(muted[i].r.y, before[i].r.y);
+        EXPECT_FLOAT_EQ(muted[i].r.z, before[i].r.z);
     }
     ASSERT_TRUE(mgr()->setEnabled(r.id, true, false).ok);
     EXPECT_NEAR(boneTranslateAt(e, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f) << "un-mute re-materialises";
