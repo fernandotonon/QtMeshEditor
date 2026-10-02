@@ -268,15 +268,32 @@ Column {
                     onToggled: AnimGeneratorManager.setEnabledFromUi(rowRect.modelData.id, checked)
                 }
                 Text {
+                    // "Sine · position.y · Generators" reads at a glance; the
+                    // full target is in the tooltip.
+                    function shortTarget(t) {
+                        var at = t.lastIndexOf("@")
+                        var clip = at >= 0 ? t.substring(at + 1) : ""
+                        var path = at >= 0 ? t.substring(0, at) : t
+                        var channel = path.substring(path.lastIndexOf("/") + 1)
+                        return channel + (clip !== "" ? " · " + clip : "")
+                    }
                     width: genSection.width - 120
                     anchors.verticalCenter: parent.verticalCenter
-                    elide: Text.ElideMiddle
+                    elide: Text.ElideRight
                     color: rowRect.modelData.bound ? AnimationControlController.textColor : "#e08060"
                     font.pixelSize: 11
-                    text: rowRect.modelData.typeLabel + " → " + rowRect.modelData.target
+                    text: rowRect.modelData.typeLabel + " · " + shortTarget(rowRect.modelData.target)
                           + (rowRect.modelData.baked ? "  [baked]" : "")
                           + (rowRect.modelData.bound ? "" : "  [target missing]")
-                    MouseArea { anchors.fill: parent; onClicked: genSection.selectedId = rowRect.modelData.id }
+                    MouseArea {
+                        id: rowMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: genSection.selectedId = rowRect.modelData.id
+                    }
+                    ToolTip.visible: rowMa.containsMouse
+                    ToolTip.text: rowRect.modelData.target
+                    ToolTip.delay: 500
                 }
                 ToolBtn {
                     anchors.verticalCenter: parent.verticalCenter

@@ -11595,6 +11595,13 @@ Rectangle {
                 function onClipsChanged() { refreshAnimData() }
                 function onEditingClipChanged() { refreshAnimData() }
             }
+            // Procedural generators (#524) write into clips — a node clip they
+            // create (default "Generators") or the morph weight clip — so the
+            // list must follow every add / edit / bake / remove.
+            Connections {
+                target: AnimGeneratorManager
+                function onGeneratorsChanged() { refreshAnimData() }
+            }
             // #838: the animation picker applied a clip. Handle it HERE (in the
             // animation component scope) so lastGeneratedAnim / setArmSpaceTarget
             // / refreshAnimData resolve — the root-level Loader can't reach them.

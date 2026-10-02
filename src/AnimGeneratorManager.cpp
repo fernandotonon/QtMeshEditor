@@ -1046,6 +1046,10 @@ bool AnimGeneratorManager::materialise(const QString& key, QJsonObject* base,
             writeTrsKeys(track, out);
         }
         emit NodeAnimationManager::instance()->keyframesChanged(t.clip);
+        // The clip may have been created EMPTY (clipsChanged fired before this
+        // node had a track), and the Animations list only shows clips that
+        // animate the selected node — re-announce it now that it does.
+        emit NodeAnimationManager::instance()->clipsChanged();
         return true;
     }
 
@@ -1484,7 +1488,37 @@ AnimGeneratorManager::Result AnimGeneratorManager::bake(const QString& id, bool 
         x.state[QStringLiteral("bakedBase")] = baked;
     }
     r = commit(next, QStringLiteral("Bake generator to keyframes"), id, undoable);
-    if (r.ok) crumb("bake", QStringLiteral("%1 → %2").arg(id, key));
+    if (r.ok) {
+        crumb("bake", QStringLiteral("%1 → %2").arg(id, key));
+        // Bake changes nothing on screen (the live generator already showed
+        // the motion), so say where the keys went.
+        const Generator* done = find(id);
+        const Target& t = done->target;
+        int keys = 0;
+        const QJsonObject b = m_bases.value(key);
+        if (b.contains(QStringLiteral("tracks"))) {
+            for (const QJsonValue& v : b.value(QStringLiteral("tracks")).toArray())
+                keys = std::max(keys, int(v.toObject().value(QStringLiteral("keys")).toArray().size()));
+        } else {
+            keys = int(b.value(QStringLiteral("keys")).toArray().size());
+        }
+        QString where;
+        switch (t.kind) {
+        case TargetKind::Bone:
+            where = QStringLiteral("clip '%1' of %2 (bone %3)").arg(t.clip, t.object, t.sub);
+            break;
+        case TargetKind::Node:
+            where = QStringLiteral("node clip '%1' (animates %2)").arg(t.clip, t.object);
+            break;
+        case TargetKind::Morph:
+            where = QStringLiteral("morph clip '%1' of %2").arg(t.clip, t.object);
+            break;
+        default:
+            where = QStringLiteral("a keyed curve for %1 (kept with the generators)").arg(formatTarget(t));
+            break;
+        }
+        setStatus(QStringLiteral("Baked %1 keyframes into %2.").arg(keys).arg(where), true);
+    }
     return r;
 }
 
