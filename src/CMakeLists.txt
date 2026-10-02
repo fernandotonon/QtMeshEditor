@@ -457,6 +457,7 @@ MeshValidator.h
 MeshWeldOps.h
 AIChatManager.h
 ClickFocusFilter.h
+NativeMessageBoxGuard.h
 AIAgentManager.h
 AIAgentTypes.h
 AICapabilityRegistry.h
