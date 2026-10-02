@@ -368,6 +368,7 @@ private:
     /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,
     /// target, normals, output_dir, basename.
     QJsonObject toolBakeVat(const QJsonObject &args);
+    QJsonObject toolRetargetAnimation(const QJsonObject &args);   // #523
 
     /// Morph A6: list named morph targets / blend shapes on a mesh
     /// file. Args: `file` (path). Heavy — does a full mesh import.

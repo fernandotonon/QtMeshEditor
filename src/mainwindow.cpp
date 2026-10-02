@@ -150,6 +150,7 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
+#include "RetargetController.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
@@ -889,6 +890,7 @@ MainWindow::~MainWindow()
         LightGroupController::kill();
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
+        RetargetController::kill();
         MeshGenController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
@@ -1256,6 +1258,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<VATBakerController>("PropertiesPanel", 1, 0, "VATBakerController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VATBakerController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<RetargetController>("PropertiesPanel", 1, 0, "RetargetController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return RetargetController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<IsometricSpritesController>("PropertiesPanel", 1, 0, "IsometricSpritesController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

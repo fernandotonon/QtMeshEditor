@@ -81,6 +81,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationRetargeter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RetargetAnimationCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/RetargetController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FootContact.cpp
         # Face auto-rig (#889): MCPServer/CLIPipeline/mainwindow reference
         # these — without them the per-suite test executables fail to link.

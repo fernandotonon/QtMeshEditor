@@ -21,6 +21,7 @@
     <file alias="AttachBoneDialog.qml">../qml/AttachBoneDialog.qml</file>
     <file alias="BoneContextMenu.qml">../qml/BoneContextMenu.qml</file>
     <file alias="IsometricSpritesDialog.qml">../qml/IsometricSpritesDialog.qml</file>
+    <file alias="RetargetAnimationDialog.qml">../qml/RetargetAnimationDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>
