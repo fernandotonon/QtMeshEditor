@@ -151,6 +151,7 @@
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
 #include "RetargetController.h"
+#include "AnimGeneratorManager.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
@@ -891,6 +892,7 @@ MainWindow::~MainWindow()
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
         RetargetController::kill();
+        AnimGeneratorManager::kill();
         MeshGenController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
@@ -1262,6 +1264,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<RetargetController>("PropertiesPanel", 1, 0, "RetargetController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return RetargetController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AnimGeneratorManager>("PropertiesPanel", 1, 0, "AnimGeneratorManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AnimGeneratorManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<IsometricSpritesController>("PropertiesPanel", 1, 0, "IsometricSpritesController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -5046,6 +5052,13 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     // No-op (single hash check) when nothing is blending.
     if (auto* poseLib = PoseLibrary::instance())
         poseLib->tickBlend(static_cast<float>(dt));
+
+    // Procedural generators (#524): advance the generator clock and drive the
+    // runtime targets (pose weight / light / material). Track-backed targets
+    // are materialised into their clips and play with them, so they need
+    // nothing here. Paused, the clock follows the timeline slider.
+    if (auto* gens = AnimGeneratorManager::peek())
+        gens->tick(scaledDt, isPlaying);
 
     // Advance SceneManager-level animation states — the NodeAnimationManager's
     // transform clips (animated props/doors, #517 slice C) live here. They now

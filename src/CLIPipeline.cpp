@@ -22,6 +22,8 @@
 #endif
 #include "AnimationMerger.h"
 #include "AnimationRetargeter.h"
+#include "AnimGeneratorManager.h"
+#include "AnimGenerators.h"
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
 #include "MotionLibrary.h"
@@ -648,6 +650,9 @@ void CLIPipeline::printUsage()
         "  anim <file> --list [--json]       List animations\n"
         "  anim <source> --retarget <target> [--bonemap <file|bundled>] [--anim <name>] [-o <output>]\n"
         "                                    Retarget clips onto an incompatible skeleton (#523)\n"
+        "  anim <file> --generator <sine|noise|ramp|follow-path|spring> --target <kind:object/channel> [--<param> v] [--bake] -o <out>\n"
+        "                                    Procedural generator tracks (#524)\n"
+        "  anim <file> --list-generators [--json]\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
@@ -2783,10 +2788,178 @@ int CLIPipeline::cmdAnimRetarget(int argc, char* argv[])
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// #524 — anim <file> --generator <type> --target <kind:object/channel> [...]
+// ---------------------------------------------------------------------------
+int CLIPipeline::cmdAnimGenerators(int argc, char* argv[])
+{
+    struct Spec { QString type; QString target; QList<QPair<QString, QString>> params; };
+    QList<Spec> specs;
+    QString filePath, outputPath, animArg;
+    bool json = false, bake = false, listOnly = false;
+    auto usage = [&]() {
+        err() << "Usage: qtmesh anim <file> --generator <" << AnimGen::typeIds().join('|') << ">\n"
+                 "         --target <kind:object[/sub]/channel[@clip]> [--<param> <value> ...]\n"
+                 "         [--generator ... repeat] [--animation <clip>] [--bake] [--json] -o <output>\n"
+                 "       qtmesh anim <file> --list-generators [--json]\n"
+                 "  kinds: " << AnimGen::kindIds().join('|') << "   ('*' as the object = the imported mesh / its node)\n"
+                 "  params: amplitude frequency phase offset seed noise-frequency octaves from to ease\n"
+                 "          stiffness damping start duration fps loops closed constant-speed orient points name"
+              << Qt::endl;
+    };
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
+        if (a == "anim" || a == "--cli") continue;
+        if (a == "--generator") { specs.append(Spec{next(), QString(), {}}); continue; }
+        if (a == "--list-generators") { listOnly = true; continue; }
+        if (a == "--target") {
+            if (specs.isEmpty()) { err() << "Error: --target must follow --generator." << Qt::endl; return 2; }
+            specs.last().target = next();
+            continue;
+        }
+        if (a == "--animation" || a == "--anim") { animArg = next(); continue; }
+        if (a == "--bake") { bake = true; continue; }
+        if (a == "--json") { json = true; continue; }
+        if (a == "-o" || a == "--output") { outputPath = next(); continue; }
+        if (a.startsWith("--") && !specs.isEmpty()) {
+            if (i + 1 >= argc) { err() << "Error: " << a << " needs a value." << Qt::endl; return 2; }
+            specs.last().params.append({a.mid(2), next()});
+            continue;
+        }
+        if (!a.startsWith('-') && filePath.isEmpty()) { filePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'." << Qt::endl;
+        usage();
+        return 2;
+    }
+    if (filePath.isEmpty()) { usage(); return 2; }
+    if (!QFileInfo::exists(filePath)) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+
+    if (listOnly) {
+        // Pure file read — no mesh load.
+        QFile f(AnimGeneratorManager::sidecarPath(filePath));
+        std::vector<AnimGen::Generator> gens;
+        if (f.open(QIODevice::ReadOnly)) {
+            QString e;
+            if (!AnimGen::fromDocument(QJsonDocument::fromJson(f.readAll()).object(), &gens, &e)) {
+                err() << "Error: " << f.fileName() << ": " << e << Qt::endl;
+                return 1;
+            }
+        }
+        if (json) {
+            QJsonArray arr;
+            for (const auto& g : gens) { QJsonObject o = AnimGen::toJson(g); o.remove("state"); arr.append(o); }
+            cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"file", filePath}, {"generators", arr}})
+                                           .toJson(QJsonDocument::Indented)));
+        } else if (gens.empty()) {
+            cliWrite(QStringLiteral("No generators (%1 not found or empty)\n").arg(f.fileName()));
+        } else {
+            for (const auto& g : gens)
+                cliWrite(QStringLiteral("%1  %2  %3%4\n").arg(g.id, AnimGen::typeId(g.type), AnimGen::formatTarget(g.target),
+                                                             g.baked ? QStringLiteral("  [baked]")
+                                                             : !g.enabled ? QStringLiteral("  [muted]") : QString()));
+        }
+        return 0;
+    }
+    if (specs.isEmpty()) { err() << "Error: give at least one --generator." << Qt::endl; usage(); return 2; }
+    if (outputPath.isEmpty()) { err() << "Error: -o <output> is required." << Qt::endl; return 2; }
+
+    // Validate everything that needs no scene before the (slow) import.
+    for (const Spec& sp : specs) {
+        AnimGen::Type t;
+        if (!AnimGen::typeFromId(sp.type, &t)) {
+            err() << "Error: unknown generator type '" << sp.type << "' (" << AnimGen::typeIds().join('|') << ")." << Qt::endl;
+            return 2;
+        }
+        if (sp.target.isEmpty()) { err() << "Error: --generator " << sp.type << " needs --target." << Qt::endl; return 2; }
+        AnimGen::Target tg;
+        QString e;
+        if (!AnimGen::parseTarget(sp.target, &tg, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+        AnimGen::Generator probe;
+        probe.type = t;
+        for (const auto& p : sp.params)
+            if (!AnimGen::applyParam(&probe, p.first, p.second, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+    }
+
+    if (!initOgreHeadless()) return 1;
+    auto entitiesNow = []() {
+        QList<Ogre::Entity*> out;
+        for (Ogre::MovableObject* obj : Manager::getSingleton()->getEntities())
+            if (obj && obj->getMovableType() == "Entity") out.push_back(static_cast<Ogre::Entity*>(obj));
+        return out;
+    };
+    const QList<Ogre::Entity*> before = entitiesNow();
+    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+    Ogre::Entity* ent = nullptr;
+    for (Ogre::Entity* e : entitiesNow()) if (!before.contains(e)) { ent = e; break; }
+    if (!ent) { err() << "Error: " << filePath << " has no mesh." << Qt::endl; return 1; }
+
+    auto* gm = AnimGeneratorManager::instance();
+    QJsonArray made;
+    bool sceneLevel = false;
+    for (const Spec& sp : specs) {
+        AnimGen::Generator g;
+        AnimGen::typeFromId(sp.type, &g.type);
+        AnimGen::parseTarget(sp.target, &g.target);
+        if (g.target.object == QLatin1String("*")) {
+            g.target.object = QString::fromStdString(g.target.kind == AnimGen::TargetKind::Node
+                ? ent->getParentSceneNode()->getName() : ent->getName());
+        }
+        if (g.target.clip.isEmpty() && !animArg.isEmpty() && g.target.kind == AnimGen::TargetKind::Bone)
+            g.target.clip = animArg;
+        for (const auto& p : sp.params) AnimGen::applyParam(&g, p.first, p.second);
+        const auto r = gm->add(g, false);
+        if (!r.ok) { err() << "Error: " << r.error << Qt::endl; return 1; }
+        if (bake) {
+            const auto b = gm->bake(r.id, false);
+            if (!b.ok) { err() << "Error: bake failed: " << b.error << Qt::endl; return 1; }
+        }
+        const AnimGen::Generator* added = gm->find(r.id);
+        if (added->target.kind == AnimGen::TargetKind::Node || added->target.kind == AnimGen::TargetKind::Light
+            || added->target.kind == AnimGen::TargetKind::Material)
+            sceneLevel = true;
+        QJsonObject o = AnimGen::toJson(*added);
+        o.remove("state");
+        made.append(o);
+        if (!json)
+            cliWrite(QStringLiteral("%1 %2 -> %3%4\n").arg(bake ? QStringLiteral("Baked") : QStringLiteral("Added"),
+                                                          AnimGen::typeLabel(added->type),
+                                                          AnimGen::formatTarget(added->target),
+                                                          added->target.kind == AnimGen::TargetKind::Light
+                                                              || added->target.kind == AnimGen::TargetKind::Material
+                                                              || added->target.kind == AnimGen::TargetKind::Pose
+                                                          ? QStringLiteral(" (runtime target: kept in the .generators.json sidecar)")
+                                                          : QString()));
+    }
+    ent->refreshAvailableAnimationState();
+    const QString outAbs = QFileInfo(outputPath).absoluteFilePath();
+    // Node / light / material targets live on the scene, so export the scene;
+    // a bone / morph / pose generator travels with the mesh alone.
+    const int rc = sceneLevel ? MeshImporterExporter::sceneExporter(outAbs)
+                              : MeshImporterExporter::exporter(ent->getParentSceneNode(), outAbs, formatForExtension(outputPath));
+    if (rc != 0) { err() << "Error: export failed." << Qt::endl; return 1; }
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.generator.cli"),
+                                  QStringLiteral("%1 generators%2").arg(specs.size()).arg(bake ? " baked" : ""));
+    if (json) {
+        cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"output", outAbs}, {"baked", bake},
+                                                             {"sidecar", AnimGeneratorManager::sidecarPath(outAbs)},
+                                                             {"generators", made}})
+                                       .toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QStringLiteral("Wrote %1 (+ %2)\n").arg(outAbs, QFileInfo(AnimGeneratorManager::sidecarPath(outAbs)).fileName()));
+    }
+    return 0;
+}
+
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i)
         if (QString(argv[i]) == QLatin1String("--retarget")) return cmdAnimRetarget(argc, argv);
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        if (a == QLatin1String("--generator") || a == QLatin1String("--list-generators"))
+            return cmdAnimGenerators(argc, argv);
+    }
 
     // Parse: anim <file> --list [--json]
     //    or: anim <file> --analyze [--json]

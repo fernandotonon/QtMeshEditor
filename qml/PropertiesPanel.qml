@@ -642,6 +642,15 @@ Rectangle {
                 Component.onCompleted: content = retargetToolsComponent
             }
 
+            // ---- Procedural generators (#524) ----
+            CollapsibleSection {
+                title: "Generators"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = generatorsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -11499,6 +11508,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/NodeAnimationPanel.qml"
+        }
+    }
+
+    // ---- Procedural generators content (#524) ----
+    Component {
+        id: generatorsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/GeneratorsPanel.qml"
         }
     }
 

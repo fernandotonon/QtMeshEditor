@@ -33,6 +33,7 @@
 #include "EditModeController.h"
 #include "SkinWeightController.h"
 #include "LatticeController.h"
+#include "AnimGeneratorManager.h"
 #include "AutoRigController.h"
 #include "FaceRigController.h"
 #include "TexturePaintController.h"
@@ -138,6 +139,9 @@ TransformOperator::TransformOperator() : QObject(nullptr)
             this, &TransformOperator::onSelectionChanged);
     // Lattice session toggles hover tracking + cursor like the paint modes.
     connect(LatticeController::instance(), &LatticeController::sessionChanged,
+            this, &TransformOperator::onSelectionChanged);
+    // Generator path editing (#524) wants hover tracking for its points too.
+    connect(AnimGeneratorManager::instance(), &AnimGeneratorManager::pathEditChanged,
             this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
@@ -648,7 +652,8 @@ void TransformOperator::updateGizmo()
                     (EditModeController::instance()->isEditModeActive()
                      && EditModeController::instance()->vertexPaintEnabled())
                     || TexturePaintController::instance()->texturePaintEnabled()
-                    || LatticeController::instance()->sessionActive();
+                    || LatticeController::instance()->sessionActive()
+                    || AnimGeneratorManager::instance()->pathEditActive();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -1277,6 +1282,17 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         // control points. A click that misses every point clears the point
         // selection and is swallowed — falling through to scene selection
         // would deselect the entity under the cage mid-edit.
+        // Follow-path generator (#524): while its path is being edited, a press
+        // on a path point grabs it. A miss falls through, so orbiting and
+        // selecting keep working around the path.
+        if (mTransformState == TS_SELECT) {
+            if (auto* gens = AnimGeneratorManager::peek(); gens && gens->pathEditActive()
+                && gens->beginDrag(m_pActiveWidget, e->pos())) {
+                mGeneratorPathDragActive = true;
+                SentryReporter::addBreadcrumb("scene.anim.generator.path", "drag begin");
+                return;
+            }
+        }
         if (mTransformState == TS_SELECT) {
             if (auto* lat = LatticeController::instance(); lat && lat->sessionActive()) {
                 const bool additive = e->modifiers() & Qt::ShiftModifier;
@@ -1548,6 +1564,13 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    if (auto* gens = AnimGeneratorManager::peek(); gens && m_pActiveWidget && gens->pathEditActive()) {
+        if (mGeneratorPathDragActive && (e->buttons() & Qt::LeftButton)) {
+            gens->updateDrag(m_pActiveWidget, e->pos());
+            return;
+        }
+        gens->updateHover(m_pActiveWidget, e->pos());
+    }
     // Lattice deformer: a control-point drag owns the mouse; otherwise keep
     // the hover highlight live without consuming (camera hover still works).
     if (auto* lat = LatticeController::instance(); lat && m_pActiveWidget && lat->sessionActive()) {
@@ -2131,6 +2154,11 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (mGeneratorPathDragActive && e->button() == Qt::LeftButton) {
+        if (auto* gens = AnimGeneratorManager::peek()) gens->endDrag();
+        mGeneratorPathDragActive = false;
+        return;
+    }
     if (mLatticeDragActive && e->button() == Qt::LeftButton) {
         if (auto* lat = LatticeController::instance()) lat->endDrag();
         mLatticeDragActive = false;

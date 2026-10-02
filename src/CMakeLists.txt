@@ -69,8 +69,11 @@ BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
 AnimationRetargeter.cpp
+AnimGenerators.cpp
 commands/RetargetAnimationCommand.cpp
 RetargetController.cpp
+AnimGeneratorManager.cpp
+commands/AnimGeneratorCommands.cpp
 FootContact.cpp
 CLIPipeline.cpp
 ConsoleLogSanitize.cpp
@@ -370,8 +373,11 @@ BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
 AnimationRetargeter.h
+AnimGenerators.h
 commands/RetargetAnimationCommand.h
 RetargetController.h
+AnimGeneratorManager.h
+commands/AnimGeneratorCommands.h
 FootContact.h
 CLIPipeline.h
 MeshInfoOverlay.h
