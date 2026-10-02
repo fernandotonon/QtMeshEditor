@@ -305,6 +305,14 @@ TEST_F(AnimGeneratorSceneTest, NodePathCreatesAClipThatFollowsTheCurveAndIsRemov
     const Ogre::Vector3 fwd = end.getRotation() * Ogre::Vector3::NEGATIVE_UNIT_Z;
     EXPECT_GT(fwd.z, 0.9f);
 
+    // The panel's point grid reads details().points as a list of [x, y, z].
+    const QVariantList pts = mgr()->details(r.id).value(QStringLiteral("points")).toList();
+    ASSERT_EQ(pts.size(), 3) << "one entry per point, not a flattened coordinate list";
+    const QVariantList p1 = pts.at(1).toList();
+    ASSERT_EQ(p1.size(), 3);
+    EXPECT_DOUBLE_EQ(p1.at(0).toDouble(), 4.0);
+    EXPECT_DOUBLE_EQ(p1.at(2).toDouble(), 0.0);
+
     ASSERT_TRUE(mgr()->remove(r.id, false).ok);
     EXPECT_FALSE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Generators")))
         << "the clip the generator created goes with it";

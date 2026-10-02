@@ -1605,7 +1605,11 @@ QVariantMap AnimGeneratorManager::details(const QString& id) const
     QVariantMap m = toJson(*g).toVariantMap();
     m.remove(QStringLiteral("state"));
     QVariantList pts;
-    for (const auto& p : g->pathPoints) pts << QVariantList{p.x, p.y, p.z};
+    // append(QVariant(...)), NOT `pts << QVariantList{…}`: QList::operator<<
+    // with a list CONCATENATES, flattening the points into [x0,y0,z0,x1,…] —
+    // every row of the panel then read undefined coordinates and showed NaN.
+    for (const auto& p : g->pathPoints)
+        pts.append(QVariant(QVariantList{double(p.x), double(p.y), double(p.z)}));
     m[QStringLiteral("points")] = pts;
     m[QStringLiteral("typeLabel")] = AnimGen::typeLabel(g->type);
     return m;
