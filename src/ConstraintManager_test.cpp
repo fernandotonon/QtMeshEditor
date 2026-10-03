@@ -164,10 +164,14 @@ protected:
     {
         ASSERT_TRUE(tryInitOgre());
         mgr()->clear();
+        // Other suites leave undone commands on the shared stack; a push
+        // would truncate that redo tail and skew count-based assertions.
+        UndoManager::getSingleton()->clear();
     }
     void TearDown() override
     {
         mgr()->clear();
+        UndoManager::getSingleton()->clear();
         if (auto* sel = SelectionSet::getSingletonPtr()) sel->clear();
         if (auto* m = Manager::getSingletonPtr())
             if (auto* scene = m->getSceneMgr()) {
@@ -276,10 +280,10 @@ TEST_F(ConstraintSceneTest, MutingHandsTheNodeBackAndEveryEditIsOneUndoStep)
     Ogre::SceneNode* owner = makeNode("CON_UndoOwner", Ogre::Vector3(1, 2, 3));
     Ogre::SceneNode* target = makeNode("CON_UndoTarget", Ogre::Vector3(9, 9, 9));
     UndoManager* um = UndoManager::getSingleton();
-    const int before = um->stack()->count();
+    const int before = um->stack()->index();
     const auto r = mgr()->add(make(Type::CopyPosition, nodeRef(owner), nodeRef(target)));
     ASSERT_TRUE(r.ok);
-    EXPECT_EQ(um->stack()->count(), before + 1);
+    EXPECT_EQ(um->stack()->index(), before + 1);
     mgr()->evaluate();
     ASSERT_LT((owner->getPosition() - target->getPosition()).length(), 1e-5f);
 
@@ -289,7 +293,7 @@ TEST_F(ConstraintSceneTest, MutingHandsTheNodeBackAndEveryEditIsOneUndoStep)
     EXPECT_LT((owner->getPosition() - Ogre::Vector3(1, 2, 3)).length(), 1e-5f) << "muting restores the base";
 
     ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("influence"), QStringLiteral("0.25")}}, nullptr).ok);
-    EXPECT_EQ(um->stack()->count(), before + 3);
+    EXPECT_EQ(um->stack()->index(), before + 3);
     um->undo();
     EXPECT_DOUBLE_EQ(mgr()->find(r.id)->influence, 1.0);
     um->undo();
@@ -364,12 +368,12 @@ TEST_F(ConstraintSceneTest, BakeWritesIkIntoTheClipMutesAndUndoes)
     Ogre::Animation* anim = e->getSkeleton()->getAnimation("Idle");
     const unsigned short midH = e->getSkeleton()->getBone("Mid")->getHandle();
     ASSERT_FALSE(anim->hasNodeTrack(midH));
-    const int before = UndoManager::getSingleton()->stack()->count();
+    const int before = UndoManager::getSingleton()->stack()->index();
 
     ConstraintManager::BakeOptions o;
     o.clip = QStringLiteral("Idle");
     ASSERT_TRUE(mgr()->bake(o).ok) << mgr()->status().toStdString();
-    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), before + 1);
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->index(), before + 1);
     EXPECT_FALSE(mgr()->find(r.id)->enabled) << "the baked constraint is muted";
     ASSERT_TRUE(anim->hasNodeTrack(midH)) << "the IK's mid bone gets a track";
     EXPECT_EQ(anim->getNodeTrack(midH)->getNumKeyFrames(), 31u);
