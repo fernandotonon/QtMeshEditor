@@ -214,6 +214,8 @@ qtmesh anim drone.glb --generator follow-path --target "node:*/position" --point
 qtmesh anim hero.fbx --constraint ik --owner "bone:*/mixamorig:LeftHand" --target "node:Cup" \
                      --constraint limit-rotation --owner "bone:*/mixamorig:LeftForeArm" --max-y 10 \
                      --bake-constraints --animation Idle -o hero_cup.glb
+# Motion graph (preview/authoring): inspect the clip state machine saved beside the asset
+qtmesh anim hero.glb --graph-info --json
 
 # Vertex Animation Textures (OpenVAT) — four modes, one baker
 qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
