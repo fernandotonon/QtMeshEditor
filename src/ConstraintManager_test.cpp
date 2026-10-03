@@ -191,12 +191,12 @@ TEST_F(ConstraintSceneTest, LookAtAimsTheNodeAndRemovingRestoresIt)
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     EXPECT_EQ(mgr()->activeCount(), 1);
     mgr()->evaluate();
-    EXPECT_TRUE(sameDir(owner->_getDerivedOrientation() * Ogre::Vector3::UNIT_Z, Ogre::Vector3::UNIT_X))
-        << "the +Z aim axis points at the target";
+    EXPECT_TRUE(sameDir(owner->_getDerivedOrientation() * Ogre::Vector3::NEGATIVE_UNIT_Z, Ogre::Vector3::UNIT_X))
+        << "the default -Z aim axis (Ogre forward) points at the target";
 
     target->setPosition(0, 0, -5);
     mgr()->evaluate();
-    EXPECT_TRUE(sameDir(owner->_getDerivedOrientation() * Ogre::Vector3::UNIT_Z, Ogre::Vector3::NEGATIVE_UNIT_Z))
+    EXPECT_TRUE(sameDir(owner->_getDerivedOrientation() * Ogre::Vector3::NEGATIVE_UNIT_Z, Ogre::Vector3::NEGATIVE_UNIT_Z))
         << "re-evaluated every frame, from the base (no accumulation)";
 
     ASSERT_TRUE(mgr()->remove(r.id, false).ok);

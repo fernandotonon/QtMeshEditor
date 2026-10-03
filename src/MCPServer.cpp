@@ -14220,7 +14220,7 @@ QJsonArray MCPServer::buildToolsList()
         props["target"] = QJsonObject{{"type", "string"}, {"description", "Driving object (same syntax). Required for every type except limit-rotation."}};
         props["pole"] = QJsonObject{{"type", "string"}, {"description", "IK only, optional: object whose position picks the bend direction (e.g. a node in front of the knee)."}};
         props["params"] = QJsonObject{{"type", "object"},
-                                      {"description", "influence (0..1), aim / up (x|y|z|-x|-y|-z, look-at), x / y / z (booleans, copy-position axes), "
+                                      {"description", "influence (0..1), aim / up (x|y|z|-x|-y|-z, look-at; default aim -z = Ogre forward, up y), x / y / z (booleans, copy-position axes), "
                                                       "limit_x|y|z (booleans), min_x|y|z / max_x|y|z (degrees, limit-rotation)."}};
         props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
         props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};

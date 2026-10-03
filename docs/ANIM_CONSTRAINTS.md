@@ -6,7 +6,7 @@ When you're done, **Bake** writes the result into ordinary keyframes.
 
 | Type | What it does |
 |---|---|
-| **Look at** | Rotates the owner so its aim axis (default +Z) points at the target. The up axis (default +Y) stays as close to world up as it can. |
+| **Look at** | Rotates the owner so its aim axis (default −Z, Ogre's forward — the way cameras and lights face) points at the target. The up axis (default +Y) stays as close to world up as it can. |
 | **IK (2-bone)** | Analytical two-bone IK. Put it on the **END bone** (a hand or a foot). Its parent and grandparent (elbow/shoulder, knee/hip) bend so the end reaches the target. An optional **pole** object picks the bend direction; without one the current bend plane is kept. Bone lengths never change. |
 | **Child of** (`parent-of`) | The owner follows the target as if parented to it, without changing the scene hierarchy. The offset is captured when you add the constraint, so nothing jumps. |
 | **Copy rotation** | Takes the target's world rotation. |

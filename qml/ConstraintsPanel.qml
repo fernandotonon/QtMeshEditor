@@ -385,7 +385,7 @@ Column {
             ThemedComboBox {
                 width: (conSection.width - 104) / 2; height: 22; font.pixelSize: 11
                 model: ["x", "y", "z", "-x", "-y", "-z"]
-                currentIndex: Math.max(0, model.indexOf(conSection.details.aim || "z"))
+                currentIndex: Math.max(0, model.indexOf(conSection.details.aim || "-z"))
                 onActivated: function(i) { ConstraintManager.setParamFromUi(conSection.selectedId, "aim", model[i]) }
             }
             ThemedComboBox {

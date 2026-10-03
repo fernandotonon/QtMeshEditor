@@ -96,7 +96,7 @@ struct Constraint {
     double influence = 1.0;          ///< 0..1
 
     // look-at
-    Axis aimAxis = Axis::Z;
+    Axis aimAxis = Axis::NegZ;          ///< Ogre forward (cameras/lights look down -Z)
     Axis upAxis = Axis::Y;
 
     // copy-position

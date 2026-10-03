@@ -198,3 +198,14 @@ TEST(AnimConJson, RejectsBadInput)
     EXPECT_TRUE(applyParam(&c, "target", "bone:Hero/Head", &err));
     EXPECT_EQ(c.target.bone, QStringLiteral("Head"));
 }
+
+TEST(AnimConMaths, LookAtDefaultsToOgreForward)
+{
+    // Ogre cameras/lights/nodes face -Z; a look-at aims that axis unless told otherwise.
+    const Constraint c;
+    EXPECT_EQ(c.aimAxis, Axis::NegZ);
+    EXPECT_EQ(c.upAxis, Axis::Y);
+    const Ogre::Quaternion q = aimRotation(Ogre::Vector3::ZERO, Ogre::Vector3(5, 0, 0), c.aimAxis, c.upAxis,
+                                           Ogre::Vector3::UNIT_Y, Ogre::Quaternion::IDENTITY);
+    EXPECT_GT((q * Ogre::Vector3::NEGATIVE_UNIT_Z).dotProduct(Ogre::Vector3::UNIT_X), 0.9999f);
+}
