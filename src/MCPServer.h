@@ -472,6 +472,11 @@ private:
     QJsonObject toolMoveConstraint(const QJsonObject &args);
     QJsonObject toolRemoveConstraint(const QJsonObject &args);
     QJsonObject toolBakeConstraints(const QJsonObject &args);
+    QJsonObject toolGetMotionGraph(const QJsonObject &args);
+    QJsonObject toolSetMotionGraph(const QJsonObject &args);
+    QJsonObject toolPlayMotionGraph(const QJsonObject &args);
+    QJsonObject toolStopMotionGraph(const QJsonObject &args);
+    QJsonObject toolSetMotionGraphParam(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the

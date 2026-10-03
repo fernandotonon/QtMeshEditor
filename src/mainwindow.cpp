@@ -153,6 +153,7 @@
 #include "RetargetController.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "MotionGraphManager.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
@@ -895,6 +896,7 @@ MainWindow::~MainWindow()
         RetargetController::kill();
         AnimGeneratorManager::kill();
         ConstraintManager::kill();
+        MotionGraphManager::kill();
         MeshGenController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
@@ -1270,6 +1272,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimGeneratorManager>("PropertiesPanel", 1, 0, "AnimGeneratorManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimGeneratorManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MotionGraphManager>("PropertiesPanel", 1, 0, "MotionGraphManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MotionGraphManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<ConstraintManager>("PropertiesPanel", 1, 0, "ConstraintManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -5066,6 +5072,12 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     if (auto* gens = AnimGeneratorManager::peek())
         gens->tick(scaledDt, isPlaying);
 
+    // Motion graph preview (#526): the graph has its own Play/Stop and owns
+    // its entity's animation states while it runs, independent of the main
+    // transport (playback speed still applies).
+    auto* motionGraph = MotionGraphManager::peek();
+    if (motionGraph) motionGraph->tick(scaledDt);
+
     // Advance SceneManager-level animation states — the NodeAnimationManager's
     // transform clips (animated props/doors, #517 slice C) live here. They now
     // play from the MAIN transport like skeletal/vertex clips: setPlaying()
@@ -5099,6 +5111,7 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
             if (!obj || obj->getMovableType() != "Entity") continue;
 
             auto* ent = static_cast<Ogre::Entity*>(obj);
+            if (motionGraph && motionGraph->drives(ent)) continue;   // the graph advances it
             const bool isActiveEntity =
                 (!activeEntity.empty() && ent->getName() == activeEntity);
 

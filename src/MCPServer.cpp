@@ -36,6 +36,7 @@
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "MotionGraphManager.h"
 #include "AnimGenerators.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
@@ -797,6 +798,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("move_constraint"), &MCPServer::toolMoveConstraint},
         {QStringLiteral("remove_constraint"), &MCPServer::toolRemoveConstraint},
         {QStringLiteral("bake_constraints"), &MCPServer::toolBakeConstraints},
+        {QStringLiteral("get_motion_graph"), &MCPServer::toolGetMotionGraph},
+        {QStringLiteral("set_motion_graph"), &MCPServer::toolSetMotionGraph},
+        {QStringLiteral("play_motion_graph"), &MCPServer::toolPlayMotionGraph},
+        {QStringLiteral("stop_motion_graph"), &MCPServer::toolStopMotionGraph},
+        {QStringLiteral("set_motion_graph_param"), &MCPServer::toolSetMotionGraphParam},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
@@ -1010,6 +1016,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"), QStringLiteral("add_generator"), QStringLiteral("set_generator"), QStringLiteral("bake_generator"), QStringLiteral("remove_generator"),
         QStringLiteral("add_constraint"), QStringLiteral("set_constraint"), QStringLiteral("move_constraint"),
         QStringLiteral("remove_constraint"), QStringLiteral("bake_constraints"),
+        QStringLiteral("set_motion_graph"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
@@ -10591,6 +10598,105 @@ QJsonObject MCPServer::toolBakeConstraints(const QJsonObject& args)
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// #526 — motion graph (authoring is GUI-first; these load / inspect / drive)
+// ---------------------------------------------------------------------------
+namespace {
+QString motionGraphEntityArg(const QJsonObject& args)
+{
+    QString e = args.value("entity").toString();
+    auto* gm = MotionGraphManager::instance();
+    if (e.isEmpty()) e = gm->entity();
+    if (e.isEmpty()) e = gm->entityFromSelection();
+    return e;
+}
+
+QJsonObject motionGraphStatus()
+{
+    auto* gm = MotionGraphManager::instance();
+    QJsonObject o{{"playing", gm->playing()}, {"current_state", gm->currentState()},
+                  {"blending_from", gm->previousState()}, {"blend_progress", gm->blendProgress()},
+                  {"last_transition", gm->lastTransition()}};
+    QJsonArray params;
+    for (const QVariant& v : gm->paramRows()) params.append(QJsonObject::fromVariantMap(v.toMap()));
+    o["params"] = params;
+    return o;
+}
+} // namespace
+
+QJsonObject MCPServer::toolGetMotionGraph(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "get_motion_graph");
+    auto* gm = MotionGraphManager::instance();
+    const QString e = motionGraphEntityArg(args);
+    QJsonObject content = motionGraphStatus();
+    content["entity"] = e;
+    content["has_graph"] = gm->hasGraph(e);
+    if (gm->hasGraph(e)) content["graph"] = AnimGraph::toJson(gm->graph(e));
+    content["entities_with_graphs"] = QJsonArray::fromStringList(gm->graphEntities());
+    content["note"] = QStringLiteral("Preview / authoring only: export writes the clips, not the graph.");
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetMotionGraph(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_motion_graph");
+    auto* gm = MotionGraphManager::instance();
+    const QString e = motionGraphEntityArg(args);
+    if (e.isEmpty()) return makeErrorResult("Error: no entity (pass 'entity' or select an animated mesh)");
+    if (!gm->skinnedEntities().contains(e)) return makeErrorResult(QStringLiteral("Error: '%1' is not an animated entity").arg(e));
+    if (!args.value("graph").isObject()) return makeErrorResult("Error: 'graph' must be a qtmesh-anim-graph-v1 object");
+    QJsonObject json = args.value("graph").toObject();
+    if (!json.contains("schema")) json["schema"] = AnimGraph::schemaId();
+    AnimGraph::Graph g;
+    QString err;
+    if (!AnimGraph::fromJson(json, &g, &err)) return makeErrorResult("Error: " + err);
+    const QStringList clips = gm->clipsOf(e);
+    for (const auto& st : g.states)
+        if (!clips.contains(st.clip))
+            return makeErrorResult(QStringLiteral("Error: state '%1': '%2' has no clip '%3' (clips: %4)")
+                                       .arg(st.name, e, st.clip, clips.join(", ")));
+    if (!gm->setGraph(e, g, true, &err, QStringLiteral("Set motion graph"))) return makeErrorResult("Error: " + err);
+    gm->setEntity(e);
+    QJsonObject content{{"ok", true}, {"entity", e}, {"graph", AnimGraph::toJson(gm->graph(e))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolPlayMotionGraph(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "play_motion_graph");
+    auto* gm = MotionGraphManager::instance();
+    const QString e = motionGraphEntityArg(args);
+    QString err;
+    if (!gm->play(e, &err)) return makeErrorResult("Error: " + err);
+    QJsonObject content = motionGraphStatus();
+    content["entity"] = e;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolStopMotionGraph(const QJsonObject& /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "stop_motion_graph");
+    MotionGraphManager::instance()->stop();
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(motionGraphStatus()).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetMotionGraphParam(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_motion_graph_param");
+    auto* gm = MotionGraphManager::instance();
+    const QString name = args.value("name").toString();
+    const QJsonValue v = args.value("value");
+    double value = 0.0;
+    if (v.isBool()) value = v.toBool() ? 1.0 : 0.0;
+    else if (v.isDouble()) value = v.toDouble();
+    else if (!v.isUndefined()) return makeErrorResult("Error: 'value' must be a number or a boolean");
+    else value = 1.0;   // omitted: fire a trigger / set a bool
+    QString err;
+    if (!gm->setParamValue(name, value, &err)) return makeErrorResult("Error: " + err);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(motionGraphStatus()).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "list_poses");
@@ -14260,6 +14366,47 @@ QJsonArray MCPServer::buildToolsList()
                    "Bake constraints into keyframes (bones into the skeletal clip, including the bones an IK bends; nodes into a "
                    "node clip) and mute them. Do this before exporting: glTF/FBX cannot store constraints. One undo step.",
                    props);
+    }
+
+    // #526 — motion graph
+    {
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Animated entity (default: the panel's / selected entity)."}};
+        appendTool("get_motion_graph",
+                   "Inspect the motion graph (clip state machine) of an entity: states, transitions, parameters, and the "
+                   "live playback state. Preview/authoring only — graphs are not exported to engine formats.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Animated entity (default: the panel's / selected entity)."}};
+        props["graph"] = QJsonObject{{"type", "object"},
+                                     {"description", "qtmesh-anim-graph-v1: {entry, states:[{name, clip, loop?, speed?, x?, y?}], "
+                                                     "transitions:[{id, from (state or '*'), to, conditions:[{param, op (> < >= <= == != true false), value}], "
+                                                     "exitTime? (0..1), duration (s), curve (linear|ease|step), mask? [bone names: partial transition]}], "
+                                                     "params:[{name, type (float|bool|trigger), value}]}."}};
+        appendTool("set_motion_graph", "Replace an entity's motion graph (validated; every clip must exist). Undoable.",
+                   props, QJsonArray{"graph"});
+    }
+    {
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Animated entity (default: the panel's / selected entity)."}};
+        appendTool("play_motion_graph",
+                   "Run the entity's motion graph from its entry state. While it runs the graph owns the entity's clips; "
+                   "stop_motion_graph restores them.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        appendTool("stop_motion_graph", "Stop the running motion graph and restore the entity's animation states.", props);
+    }
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Parameter name."}};
+        props["value"] = QJsonObject{{"description", "Number (float) or boolean. Omit to fire a trigger."}};
+        appendTool("set_motion_graph_param",
+                   "Set a motion-graph parameter: the running copy while playing (transitions react live), else the stored default.",
+                   props, QJsonArray{"name"});
     }
 
     // list_poses
