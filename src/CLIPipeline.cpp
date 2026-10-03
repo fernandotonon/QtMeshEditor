@@ -23,6 +23,7 @@
 #include "AnimationMerger.h"
 #include "AnimationRetargeter.h"
 #include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "AnimGenerators.h"
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
@@ -653,6 +654,11 @@ void CLIPipeline::printUsage()
         "  anim <file> --generator <sine|noise|ramp|follow-path|spring> --target <kind:object/channel> [--<param> v] [--bake] -o <out>\n"
         "                                    Procedural generator tracks (#524)\n"
         "  anim <file> --list-generators [--json]\n"
+        "  anim <file> --list-constraints [--json]\n"
+        "  anim <file> [--constraint <look-at|ik|parent-of|copy-rotation|copy-position|limit-rotation> --owner <ref>\n"
+        "              --target <ref> ...] --bake-constraints [--animation <clip>] [--fps N] -o <out>\n"
+        "                                    Animation constraints (#525): list the .constraints.json sidecar,\n"
+        "                                    add constraints, bake them into keyframes\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
@@ -2952,6 +2958,189 @@ int CLIPipeline::cmdAnimGenerators(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::cmdAnimConstraints(int argc, char* argv[])
+{
+    struct Spec { QString type; QString owner; QString target; QString pole; QList<QPair<QString, QString>> params; };
+    QList<Spec> specs;
+    QString filePath, outputPath, animArg, nodeClip;
+    int fps = 30;
+    bool json = false, bake = false, listOnly = false;
+    auto usage = [&]() {
+        err() << "Usage: qtmesh anim <file> --list-constraints [--json]\n"
+                 "       qtmesh anim <file> [--constraint <" << AnimCon::typeIds().join('|') << ">\n"
+                 "         --owner <ref> [--target <ref>] [--pole <ref>] [--<param> <value> ...]] ...\n"
+                 "         [--bake-constraints [--animation <clip>] [--node-clip <name>] [--fps N]] [--json] -o <output>\n"
+                 "  ref: bone:<entity>/<bone> | node:<name>   ('*' as the entity/node = the imported mesh / its node)\n"
+                 "  params: influence aim up x y z limit-x|y|z min-x|y|z max-x|y|z name\n"
+                 "  Constraints already in <file>.constraints.json are loaded with the mesh."
+              << Qt::endl;
+    };
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
+        if (a == "anim" || a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (a == "--list-constraints") { listOnly = true; continue; }
+        if (a == "--bake-constraints") { bake = true; continue; }
+        if (a == "--constraint") { specs.append(Spec{next(), {}, {}, {}, {}}); continue; }
+        if (a == "--owner" || a == "--target" || a == "--pole") {
+            if (specs.isEmpty()) { err() << "Error: " << a << " must follow --constraint." << Qt::endl; return 2; }
+            QString& slot = a == "--owner" ? specs.last().owner : a == "--target" ? specs.last().target : specs.last().pole;
+            slot = next();
+            continue;
+        }
+        if (a == "--animation" || a == "--anim") { animArg = next(); continue; }
+        if (a == "--node-clip") { nodeClip = next(); continue; }
+        if (a == "--fps") {
+            bool ok = false;
+            fps = next().toInt(&ok);
+            if (!ok || fps < 1 || fps > 240) { err() << "Error: --fps must be 1..240." << Qt::endl; return 2; }
+            continue;
+        }
+        if (a == "--json") { json = true; continue; }
+        if (a == "-o" || a == "--output") { outputPath = next(); continue; }
+        if (a.startsWith("--") && !specs.isEmpty()) {
+            if (i + 1 >= argc) { err() << "Error: " << a << " needs a value." << Qt::endl; return 2; }
+            specs.last().params.append({a.mid(2).replace('-', '_'), next()});
+            continue;
+        }
+        if (!a.startsWith('-') && filePath.isEmpty()) { filePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'." << Qt::endl;
+        usage();
+        return 2;
+    }
+    if (filePath.isEmpty()) { usage(); return 2; }
+    if (!QFileInfo::exists(filePath)) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+
+    if (listOnly) {
+        // Pure file read — no mesh load.
+        QFile f(ConstraintManager::sidecarPath(filePath));
+        std::vector<AnimCon::Constraint> cons;
+        if (f.open(QIODevice::ReadOnly)) {
+            QString e;
+            if (!AnimCon::fromDocument(QJsonDocument::fromJson(f.readAll()).object(), &cons, &e)) {
+                err() << "Error: " << f.fileName() << ": " << e << Qt::endl;
+                return 1;
+            }
+        }
+        if (json) {
+            QJsonArray arr;
+            for (const auto& c : cons) arr.append(AnimCon::toJson(c));
+            cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"file", filePath}, {"constraints", arr}})
+                                           .toJson(QJsonDocument::Indented)));
+        } else if (cons.empty()) {
+            cliWrite(QStringLiteral("No constraints (%1 not found or empty)\n").arg(f.fileName()));
+        } else {
+            for (const auto& c : cons)
+                cliWrite(QStringLiteral("%1  %2  %3%4%5\n")
+                             .arg(c.id, AnimCon::typeId(c.type), AnimCon::formatRef(c.owner),
+                                  c.target.isEmpty() ? QString() : QStringLiteral(" <- ") + AnimCon::formatRef(c.target),
+                                  !c.enabled ? QStringLiteral("  [muted]")
+                                  : c.influence < 1.0 ? QStringLiteral("  [influence %1]").arg(c.influence) : QString()));
+        }
+        return 0;
+    }
+    if (specs.isEmpty() && !bake) { err() << "Error: give --constraint and/or --bake-constraints." << Qt::endl; usage(); return 2; }
+    if (outputPath.isEmpty()) { err() << "Error: -o <output> is required." << Qt::endl; return 2; }
+
+    // Validate everything that needs no scene before the (slow) import.
+    for (const Spec& sp : specs) {
+        AnimCon::Type t;
+        if (!AnimCon::typeFromId(sp.type, &t)) {
+            err() << "Error: unknown constraint type '" << sp.type << "' (" << AnimCon::typeIds().join('|') << ")." << Qt::endl;
+            return 2;
+        }
+        AnimCon::Ref r;
+        QString e;
+        if (sp.owner.isEmpty() || !AnimCon::parseRef(sp.owner, &r, &e)) {
+            err() << "Error: --constraint " << sp.type << " needs a valid --owner" << (e.isEmpty() ? "" : ": ") << e << Qt::endl;
+            return 2;
+        }
+        if (AnimCon::needsTarget(t) && sp.target.isEmpty()) {
+            err() << "Error: --constraint " << sp.type << " needs --target." << Qt::endl;
+            return 2;
+        }
+        if (!AnimCon::parseRef(sp.target, &r, &e) || !AnimCon::parseRef(sp.pole, &r, &e)) {
+            err() << "Error: " << e << Qt::endl;
+            return 2;
+        }
+        AnimCon::Constraint probe;
+        probe.type = t;
+        for (const auto& p : sp.params)
+            if (!AnimCon::applyParam(&probe, p.first, p.second, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+    }
+
+    if (!initOgreHeadless()) return 1;
+    auto entitiesNow = []() {
+        QList<Ogre::Entity*> out;
+        for (Ogre::MovableObject* obj : Manager::getSingleton()->getEntities())
+            if (obj && obj->getMovableType() == "Entity") out.push_back(static_cast<Ogre::Entity*>(obj));
+        return out;
+    };
+    const QList<Ogre::Entity*> before = entitiesNow();
+    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});  // also loads the .constraints.json sidecar
+    Ogre::Entity* ent = nullptr;
+    for (Ogre::Entity* e : entitiesNow()) if (!before.contains(e)) { ent = e; break; }
+    if (!ent) { err() << "Error: " << filePath << " has no mesh." << Qt::endl; return 1; }
+
+    auto* cm = ConstraintManager::instance();
+    const QString entName = QString::fromStdString(ent->getName());
+    const QString nodeName = QString::fromStdString(ent->getParentSceneNode()->getName());
+    auto resolveStar = [&](AnimCon::Ref r) {
+        if (r.object == QLatin1String("*")) r.object = r.isBone() ? entName : nodeName;
+        return r;
+    };
+    QJsonArray made;
+    for (const Spec& sp : specs) {
+        AnimCon::Constraint c;
+        AnimCon::typeFromId(sp.type, &c.type);
+        AnimCon::parseRef(sp.owner, &c.owner);
+        AnimCon::parseRef(sp.target, &c.target);
+        AnimCon::parseRef(sp.pole, &c.pole);
+        c.owner = resolveStar(c.owner);
+        c.target = resolveStar(c.target);
+        c.pole = resolveStar(c.pole);
+        for (const auto& p : sp.params) AnimCon::applyParam(&c, p.first, p.second);
+        const auto r = cm->add(c, false);
+        if (!r.ok) { err() << "Error: " << r.error << Qt::endl; return 1; }
+        made.append(AnimCon::toJson(*cm->find(r.id)));
+        if (!json) cliWrite(QStringLiteral("Added %1 on %2\n").arg(AnimCon::typeLabel(c.type), AnimCon::formatRef(c.owner)));
+    }
+    if (bake) {
+        if (cm->activeCount() == 0) { err() << "Error: no enabled constraints to bake." << Qt::endl; return 1; }
+        ConstraintManager::BakeOptions o;
+        o.clip = animArg;
+        o.nodeClip = nodeClip;
+        o.fps = fps;
+        const auto b = cm->bake(o, false);
+        if (!b.ok) { err() << "Error: bake failed: " << b.error << Qt::endl; return 1; }
+        if (!json) cliWrite(cm->status() + QLatin1Char('\n'));
+    }
+    bool sceneLevel = false;
+    for (const auto& c : cm->constraints()) if (!c.owner.isBone()) sceneLevel = true;
+    ent->refreshAvailableAnimationState();
+    const QString outAbs = QFileInfo(outputPath).absoluteFilePath();
+    // Node owners live on the scene (their baked clip is a scene clip), so
+    // export the scene; bone owners travel with the mesh alone.
+    const int rc = sceneLevel ? MeshImporterExporter::sceneExporter(outAbs)
+                              : MeshImporterExporter::exporter(ent->getParentSceneNode(), outAbs, formatForExtension(outputPath));
+    if (rc != 0) { err() << "Error: export failed." << Qt::endl; return 1; }
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.constraint.cli"),
+                                  QStringLiteral("%1 added%2").arg(specs.size()).arg(bake ? ", baked" : ""));
+    const bool hasSidecar = QFileInfo::exists(ConstraintManager::sidecarPath(outAbs));
+    if (json) {
+        QJsonArray all;
+        for (const auto& c : cm->constraints()) all.append(AnimCon::toJson(c));
+        cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"output", outAbs}, {"baked", bake},
+                                                             {"sidecar", hasSidecar ? ConstraintManager::sidecarPath(outAbs) : QString()},
+                                                             {"added", made}, {"constraints", all}})
+                                       .toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QStringLiteral("Wrote %1%2\n").arg(outAbs, hasSidecar ? QStringLiteral(" (+ ") +
+            QFileInfo(ConstraintManager::sidecarPath(outAbs)).fileName() + QLatin1Char(')') : QString()));
+    }
+    return 0;
+}
+
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i)
@@ -2960,6 +3149,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         const QString a(argv[i]);
         if (a == QLatin1String("--generator") || a == QLatin1String("--list-generators"))
             return cmdAnimGenerators(argc, argv);
+        if (a == QLatin1String("--constraint") || a == QLatin1String("--list-constraints")
+            || a == QLatin1String("--bake-constraints"))
+            return cmdAnimConstraints(argc, argv);
     }
 
     // Parse: anim <file> --list [--json]

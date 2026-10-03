@@ -70,10 +70,13 @@ NormalVisualizer.cpp
 AnimationMerger.cpp
 AnimationRetargeter.cpp
 AnimGenerators.cpp
+AnimConstraints.cpp
 commands/RetargetAnimationCommand.cpp
 RetargetController.cpp
 AnimGeneratorManager.cpp
 commands/AnimGeneratorCommands.cpp
+ConstraintManager.cpp
+commands/ConstraintCommands.cpp
 FootContact.cpp
 CLIPipeline.cpp
 ConsoleLogSanitize.cpp
@@ -374,10 +377,13 @@ NormalVisualizer.h
 AnimationMerger.h
 AnimationRetargeter.h
 AnimGenerators.h
+AnimConstraints.h
 commands/RetargetAnimationCommand.h
 RetargetController.h
 AnimGeneratorManager.h
 commands/AnimGeneratorCommands.h
+ConstraintManager.h
+commands/ConstraintCommands.h
 FootContact.h
 CLIPipeline.h
 MeshInfoOverlay.h

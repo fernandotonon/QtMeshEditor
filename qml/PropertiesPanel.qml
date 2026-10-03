@@ -651,6 +651,15 @@ Rectangle {
                 Component.onCompleted: content = generatorsComponent
             }
 
+            // ---- Animation constraints (#525) ----
+            CollapsibleSection {
+                title: "Constraints"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = constraintsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -11518,6 +11527,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/GeneratorsPanel.qml"
+        }
+    }
+
+    // ---- Animation constraints content (#525) ----
+    Component {
+        id: constraintsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/ConstraintsPanel.qml"
         }
     }
 
