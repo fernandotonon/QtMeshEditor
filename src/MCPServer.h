@@ -466,6 +466,12 @@ private:
     QJsonObject toolSetGenerator(const QJsonObject &args);
     QJsonObject toolBakeGenerator(const QJsonObject &args);
     QJsonObject toolRemoveGenerator(const QJsonObject &args);
+    QJsonObject toolListConstraints(const QJsonObject &args);
+    QJsonObject toolAddConstraint(const QJsonObject &args);
+    QJsonObject toolSetConstraint(const QJsonObject &args);
+    QJsonObject toolMoveConstraint(const QJsonObject &args);
+    QJsonObject toolRemoveConstraint(const QJsonObject &args);
+    QJsonObject toolBakeConstraints(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the

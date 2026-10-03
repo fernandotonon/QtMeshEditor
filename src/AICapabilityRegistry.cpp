@@ -75,7 +75,8 @@ QHash<QString, QString> buildTaxonomy()
                       "bake_animation_fps", "trim_animation", "set_playback_speed", "set_loop_region",
                       "get_playback_state", "select_animation", "select_bone", "set_keyframe_value",
                       "move_bone_keyframe", "step_keyframe", "get_channel_values", "play_vertex_animation",
-                      "bake_vat", "generate_isometric_sprites"});
+                      "bake_vat", "generate_isometric_sprites", "list_constraints", "add_constraint",
+                      "set_constraint", "move_constraint", "remove_constraint", "bake_constraints"});
     add("motion_ai", {"motion_in_between", "generate_motion", "adjust_arm_space", "pin_feet"});
     add("morph_pose", {"list_morph_targets", "set_morph_weight", "set_morph_weight_keyframe",
                        "clear_morph_weight_keyframe", "list_poses", "save_pose", "apply_pose", "delete_pose",
@@ -540,7 +541,7 @@ QString deleteReason(const QString& tool, const QJsonObject& args)
         {"paint_flatten", ""}, {"ungroup_node", "name"}, {"split_mesh_by_segments", "entity_name"},
         {"explode_mesh_parts", "entity_name"}, {"join_mesh_parts", ""}, {"decimate_mesh", "entity_name"},
         {"retopologize", "entity_name"}, {"weld_vertices", "entity_name"}, {"lattice_deform", "entity_name"},
-        {"lattice_apply", ""},
+        {"lattice_apply", ""}, {"remove_constraint", "id"},
     };
     const auto it = deletes.constFind(tool);
     if (it == deletes.constEnd()) return {};

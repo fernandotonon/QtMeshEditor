@@ -35,6 +35,7 @@
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "AnimGenerators.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
@@ -790,6 +791,12 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_generator"), &MCPServer::toolSetGenerator},
         {QStringLiteral("bake_generator"), &MCPServer::toolBakeGenerator},
         {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
+        {QStringLiteral("list_constraints"), &MCPServer::toolListConstraints},
+        {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
+        {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
+        {QStringLiteral("move_constraint"), &MCPServer::toolMoveConstraint},
+        {QStringLiteral("remove_constraint"), &MCPServer::toolRemoveConstraint},
+        {QStringLiteral("bake_constraints"), &MCPServer::toolBakeConstraints},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
@@ -969,6 +976,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("add_generator"), QStringLiteral("animation_blend")},
             {QStringLiteral("set_generator"), QStringLiteral("animation_blend")},
             {QStringLiteral("bake_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("add_constraint"), QStringLiteral("animation_blend")},
+            {QStringLiteral("bake_constraints"), QStringLiteral("animation_blend")},
             {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
             {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
             {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
@@ -999,6 +1008,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
         QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"), QStringLiteral("add_generator"), QStringLiteral("set_generator"), QStringLiteral("bake_generator"), QStringLiteral("remove_generator"),
+        QStringLiteral("add_constraint"), QStringLiteral("set_constraint"), QStringLiteral("move_constraint"),
+        QStringLiteral("remove_constraint"), QStringLiteral("bake_constraints"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
@@ -10439,6 +10450,147 @@ QJsonObject MCPServer::toolRemoveGenerator(const QJsonObject& args)
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"removed", id}}).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// #525 — animation constraints
+// ---------------------------------------------------------------------------
+namespace {
+QJsonObject constraintJson(const AnimCon::Constraint& c)
+{
+    QJsonObject o = AnimCon::toJson(c);
+    o[QStringLiteral("display_name")] = AnimCon::displayName(c);
+    return o;
+}
+
+/// `params` as an object of key → number/string/bool (the AnimCon::applyParam keys).
+bool constraintParamsFromJson(const QJsonValue& v, QList<QPair<QString, QString>>* out, QString* error)
+{
+    if (v.isUndefined() || v.isNull()) return true;
+    if (!v.isObject()) { *error = QStringLiteral("'params' must be an object"); return false; }
+    const QJsonObject o = v.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonValue x = it.value();
+        QString s;
+        if (x.isDouble()) s = QString::number(x.toDouble(), 'g', 17);
+        else if (x.isBool()) s = x.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        else if (x.isString()) s = x.toString();
+        else { *error = QStringLiteral("parameter '%1' has an unsupported type").arg(it.key()); return false; }
+        out->append({it.key(), s});
+    }
+    return true;
+}
+
+QJsonObject constraintListJson()
+{
+    auto* cm = ConstraintManager::instance();
+    QJsonArray arr;
+    for (const auto& c : cm->constraints()) arr.append(constraintJson(c));
+    return QJsonObject{{"count", int(cm->constraints().size())}, {"active", cm->activeCount()}, {"constraints", arr}};
+}
+} // namespace
+
+QJsonObject MCPServer::toolListConstraints(const QJsonObject& /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_constraints");
+    QJsonObject content = constraintListJson();
+    content["types"] = QJsonArray::fromStringList(AnimCon::typeIds());
+    content["note"] = QStringLiteral("Each owner's constraints are listed top first; the top-most is applied last and wins.");
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "add_constraint");
+    AnimCon::Constraint c;
+    QString err;
+    if (!AnimCon::typeFromId(args.value("type").toString(), &c.type))
+        return makeErrorResult(QStringLiteral("Error: 'type' must be one of %1").arg(AnimCon::typeIds().join(", ")));
+    if (!AnimCon::parseRef(args.value("owner").toString(), &c.owner, &err) || c.owner.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'owner' must be bone:<entity>/<bone> or node:<name>%1")
+                                   .arg(err.isEmpty() ? QString() : QStringLiteral(" (") + err + QLatin1Char(')')));
+    if (!AnimCon::parseRef(args.value("target").toString(), &c.target, &err)) return makeErrorResult("Error: " + err);
+    if (!AnimCon::parseRef(args.value("pole").toString(), &c.pole, &err)) return makeErrorResult("Error: " + err);
+    QList<QPair<QString, QString>> params;
+    if (!constraintParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    for (const auto& p : params)
+        if (!AnimCon::applyParam(&c, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
+    if (args.contains("name")) c.name = args.value("name").toString();
+    if (args.contains("enabled")) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        c.enabled = args.value("enabled").toBool();
+    }
+    auto* cm = ConstraintManager::instance();
+    const auto r = cm->add(c);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"id", r.id}, {"constraint", constraintJson(*cm->find(r.id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_constraint");
+    const QString id = args.value("id").toString();
+    auto* cm = ConstraintManager::instance();
+    if (!cm->find(id)) return makeErrorResult(QStringLiteral("Error: no constraint '%1' (see list_constraints)").arg(id));
+    QList<QPair<QString, QString>> params;
+    QString err;
+    if (!constraintParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    bool enabled = false;
+    const bool hasEnabled = args.contains("enabled");
+    if (hasEnabled) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        enabled = args.value("enabled").toBool();
+    }
+    if (params.isEmpty() && !hasEnabled) return makeErrorResult("Error: give 'params' and/or 'enabled'");
+    const auto r = cm->setParams(id, params, hasEnabled ? &enabled : nullptr);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"constraint", constraintJson(*cm->find(id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMoveConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "move_constraint");
+    const QString dir = args.value("direction").toString();
+    if (dir != QLatin1String("up") && dir != QLatin1String("down"))
+        return makeErrorResult("Error: 'direction' must be 'up' (toward the top — wins) or 'down'");
+    const auto r = ConstraintManager::instance()->move(args.value("id").toString(), dir == QLatin1String("up") ? -1 : 1);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(constraintListJson()).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolRemoveConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "remove_constraint");
+    const QString id = args.value("id").toString();
+    const auto r = ConstraintManager::instance()->remove(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"removed", id}}).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolBakeConstraints(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "bake_constraints");
+    ConstraintManager::BakeOptions o;
+    if (args.contains("ids")) {
+        if (!args.value("ids").isArray()) return makeErrorResult("Error: 'ids' must be an array of constraint ids");
+        for (const QJsonValue& v : args.value("ids").toArray()) o.ids << v.toString();
+    }
+    o.clip = args.value("clip").toString();
+    o.nodeClip = args.value("node_clip").toString();
+    if (args.contains("fps")) {
+        if (!args.value("fps").isDouble()) return makeErrorResult("Error: 'fps' must be a number");
+        o.fps = args.value("fps").toInt();
+        if (o.fps < 1 || o.fps > 240) return makeErrorResult("Error: 'fps' must be 1..240");
+    }
+    auto* cm = ConstraintManager::instance();
+    const auto r = cm->bake(o);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content = constraintListJson();
+    content["ok"] = true;
+    content["status"] = cm->status();
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "list_poses");
@@ -14050,6 +14202,64 @@ QJsonArray MCPServer::buildToolsList()
                    "Remove a generator and restore the target's base animation. A baked generator's keys stay "
                    "(track targets); for pose/light/material its baked curve is removed with it. Undoable.",
                    props, QJsonArray{"id"});
+    }
+
+    // #525 — animation constraints
+    {
+        QJsonObject props;
+        appendTool("list_constraints",
+                   "List animation constraints (look-at, ik, parent-of, copy-rotation, copy-position, limit-rotation) "
+                   "with owners, targets and parameters. Each owner's stack is listed top first; the top-most wins.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["type"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray::fromStringList(AnimCon::typeIds())},
+                                    {"description", "Constraint type. ik = analytical 2-bone IK: the owner is the END bone (hand/foot) and its parent + grandparent bend."}};
+        props["owner"] = QJsonObject{{"type", "string"}, {"description", "Driven object: bone:<entity>/<bone> or node:<scene node>. IK needs a bone."}};
+        props["target"] = QJsonObject{{"type", "string"}, {"description", "Driving object (same syntax). Required for every type except limit-rotation."}};
+        props["pole"] = QJsonObject{{"type", "string"}, {"description", "IK only, optional: object whose position picks the bend direction (e.g. a node in front of the knee)."}};
+        props["params"] = QJsonObject{{"type", "object"},
+                                      {"description", "influence (0..1), aim / up (x|y|z|-x|-y|-z, look-at; default aim -z = Ogre forward, up y), x / y / z (booleans, copy-position axes), "
+                                                      "limit_x|y|z (booleans), min_x|y|z / max_x|y|z (degrees, limit-rotation)."}};
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};
+        appendTool("add_constraint",
+                   "Add a constraint at the TOP of the owner's stack (so it wins). It drives the owner every frame on top of "
+                   "its animation; bake_constraints writes the result into keyframes. parent-of keeps the owner where it is "
+                   "now (offset captured). Undoable.",
+                   props, QJsonArray{"type", "owner"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id (see list_constraints)."}};
+        props["params"] = QJsonObject{{"type", "object"}, {"description", "Parameters to change (same keys as add_constraint, plus target / pole / name)."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the constraint, true re-enables it."}};
+        appendTool("set_constraint", "Edit a constraint's parameters and/or mute it (one undo step).", props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id."}};
+        props["direction"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"up", "down"}},
+                                         {"description", "up = toward the top of the owner's stack (applied later, wins)."}};
+        appendTool("move_constraint", "Reorder a constraint within its owner's stack. Undoable.", props, QJsonArray{"id", "direction"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id."}};
+        appendTool("remove_constraint", "Remove a constraint; the owner goes back to its animation. Undoable.", props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["ids"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}},
+                                   {"description", "Constraints to bake (default: every enabled one)."}};
+        props["clip"] = QJsonObject{{"type", "string"}, {"description", "Skeletal clip bone owners are baked into (default: the playing / selected / first clip)."}};
+        props["node_clip"] = QJsonObject{{"type", "string"}, {"description", "Node clip for node owners (default: the clip already animating the node, else 'Constraints', created)."}};
+        props["fps"] = QJsonObject{{"type", "integer"}, {"description", "Samples per second (default 30)."}};
+        appendTool("bake_constraints",
+                   "Bake constraints into keyframes (bones into the skeletal clip, including the bones an IK bends; nodes into a "
+                   "node clip) and mute them. Do this before exporting: glTF/FBX cannot store constraints. One undo step.",
+                   props);
     }
 
     // list_poses

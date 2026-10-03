@@ -210,6 +210,10 @@ qtmesh anim mixamo_walk.fbx --retarget hero.glb --bonemap mixamo_to_unity --anim
 qtmesh anim hero.fbx --generator sine --target "bone:*/mixamorig:Spine/rotation.z@Idle" --amplitude 8 --frequency 0.5 -o breathing.glb
 qtmesh anim drone.glb --generator follow-path --target "node:*/position" --points "0,2,0;4,2,0;4,2,4;0,2,4" --closed true --orient true \
                       --generator noise --target "node:*/position.y" --amplitude 0.1 --noise-frequency 3 --bake -o patrol.glb
+# Constraints: IK a hand onto a prop, clamp the elbow, bake into the clip
+qtmesh anim hero.fbx --constraint ik --owner "bone:*/mixamorig:LeftHand" --target "node:Cup" \
+                     --constraint limit-rotation --owner "bone:*/mixamorig:LeftForeArm" --max-y 10 \
+                     --bake-constraints --animation Idle -o hero_cup.glb
 
 # Vertex Animation Textures (OpenVAT) — four modes, one baker
 qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
