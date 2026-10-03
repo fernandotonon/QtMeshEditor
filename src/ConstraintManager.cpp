@@ -758,16 +758,42 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
 {
     Result r;
     Ogre::SceneManager* scene = sceneMgr();
-    // A bake works on whole owner STACKS: baking one constraint of a stack
-    // while a sibling stays live would apply the sibling twice (once in the
-    // keys, once live).
+    auto active = [](const Constraint& c) { return c.enabled && c.influence > 0.0; };
+
+    // A bake works on whole owner STACKS, and on every owner whose bone it
+    // keys: baking one constraint of a stack while a sibling stays live — or
+    // keying an IK's parent/grandparent while a constraint OWNED by them stays
+    // live — would apply that live constraint twice (once in the keys, once
+    // at playback). Grow the owner set to a fixed point.
     QSet<QString> bakedOwners;
     for (const auto& c : m_cons)
-        if (c.enabled && c.influence > 0.0 && (opts.ids.isEmpty() || opts.ids.contains(c.id)))
-            bakedOwners.insert(ownerKey(c.owner));
+        if (active(c) && (opts.ids.isEmpty() || opts.ids.contains(c.id))) bakedOwners.insert(ownerKey(c.owner));
+    QSet<QString> bakedBones; // "entity/bone" whose keys the bake writes
     std::vector<Constraint> selected;
-    for (const auto& c : m_cons)
-        if (c.enabled && c.influence > 0.0 && bakedOwners.contains(ownerKey(c.owner))) selected.push_back(c);
+    for (bool grew = true; grew;) {
+        grew = false;
+        selected.clear();
+        bakedBones.clear();
+        for (const auto& c : m_cons) {
+            if (!active(c) || !bakedOwners.contains(ownerKey(c.owner))) continue;
+            selected.push_back(c);
+            if (!c.owner.isBone()) continue;
+            bakedBones.insert(c.owner.object + QLatin1Char('/') + c.owner.bone);
+            Ogre::Bone* b = boneOf(entityByName(c.owner.object), c.owner.bone);
+            if (c.type != Type::IK || !b) continue;
+            Ogre::Node* mid = b->getParent();
+            Ogre::Node* root = mid ? mid->getParent() : nullptr;
+            for (Ogre::Node* n : {mid, root}) {
+                if (!n) continue;
+                const QString name = QString::fromStdString(n->getName());
+                bakedBones.insert(c.owner.object + QLatin1Char('/') + name);
+                const QString key = ownerKey(Ref{c.owner.object, name});
+                if (bakedOwners.contains(key)) continue;
+                for (const auto& x : m_cons)
+                    if (active(x) && ownerKey(x.owner) == key) { bakedOwners.insert(key); grew = true; break; }
+            }
+        }
+    }
     if (selected.empty() || !scene) {
         r.error = QStringLiteral("nothing to bake: no enabled constraint selected");
         setStatus(r.error, false);
@@ -775,8 +801,7 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
     }
 
     // Resolve every entity's target clip BEFORE touching anything, so a bake
-    // that cannot complete changes nothing (no half-written tracks without an
-    // undo step).
+    // that cannot complete changes nothing.
     QSet<QString> entities;
     for (const auto& c : selected) if (c.owner.isBone()) entities.insert(c.owner.object);
     QHash<QString, QString> clipFor;
@@ -804,34 +829,14 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
         }
         clipFor.insert(ename, clip);
     }
-    // Whether each node clip existed is recorded ONCE per clip: when two
-    // nodes bake into a new "Constraints" clip, the second must not see the
-    // clip the first just created, or undo would delete it and then recreate
-    // it empty.
-    QHash<QString, bool> nodeClipExisted;
 
-    // Sample with EVERY active constraint live — a baked owner may target an
-    // object that is itself constrained, and must see it as it is live — but
-    // write keys only for the baked owners (and the bones their IKs bend).
-    QSet<QString> bakedBones; // "entity/bone"
-    for (const auto& c : selected) {
-        if (!c.owner.isBone()) continue;
-        Ogre::Bone* b = boneOf(entityByName(c.owner.object), c.owner.bone);
-        if (!b) continue;
-        bakedBones.insert(c.owner.object + QLatin1Char('/') + c.owner.bone);
-        if (c.type == Type::IK) {
-            Ogre::Node* mid = b->getParent();
-            Ogre::Node* root = mid ? mid->getParent() : nullptr;
-            for (Ogre::Node* n : {mid, root})
-                if (n) bakedBones.insert(c.owner.object + QLatin1Char('/') + QString::fromStdString(n->getName()));
-        }
-    }
+    // ---------------------------------------------------------------------
+    // Phase 1 — SAMPLE everything with the scene untouched: every active
+    // constraint live, original tracks in place. Nothing is written until
+    // every owner has been sampled, so no owner ever reads another owner's
+    // freshly baked track while that owner's constraint is still live.
+    // ---------------------------------------------------------------------
     const int fps = std::clamp(opts.fps, 1, 240);
-    QJsonArray before, after;
-    int bakedKeys = 0;
-    QStringList places;
-
-    // Scene (node) animation states: their time drives animated targets.
     struct SceneStateSave { std::string name; float time; };
     std::vector<SceneStateSave> sceneStates;
     for (const auto& [name, st] : scene->getAnimationStates()) sceneStates.push_back({name, st->getTimePosition()});
@@ -841,65 +846,56 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
         scene->_applySceneAnimations();
     };
 
-    // ---- bone owners, per entity ----
+    struct BoneBake { QString entity; QString clip; QMap<QString, QJsonArray> samples; };
+    std::vector<BoneBake> boneBakes;
     for (auto cit = clipFor.cbegin(); cit != clipFor.cend(); ++cit) {
-        const QString& ename = cit.key();
-        const QString& clip = cit.value();
-        Ogre::Entity* e = entityByName(ename);
-        Ogre::SkeletonInstance* skel = e->getSkeleton();
+        BoneBake bb{cit.key(), cit.value(), {}};
+        Ogre::Entity* e = entityByName(bb.entity);
         Ogre::AnimationStateSet* states = e->getAllAnimationStates();
-        Ogre::Animation* anim = skel->getAnimation(clip.toStdString());
+        Ogre::Animation* anim = e->getSkeleton()->getAnimation(bb.clip.toStdString());
         // Play only the target clip while sampling; restore afterwards.
         struct Save { std::string name; bool enabled; float time; float weight; };
         std::vector<Save> saves;
         for (const auto& [n, st] : states->getAnimationStates()) {
             saves.push_back({n, st->getEnabled(), st->getTimePosition(), st->getWeight()});
-            st->setEnabled(n == clip.toStdString());
+            st->setEnabled(n == bb.clip.toStdString());
         }
-        Ogre::AnimationState* state = states->getAnimationState(clip.toStdString());
+        Ogre::AnimationState* state = states->getAnimationState(bb.clip.toStdString());
         state->setWeight(1.0f);
-        QHash<QString, QJsonArray> samples; // bone → keys (bind-relative)
+        const QString prefix = bb.entity + QLatin1Char('/');
         for (double t : times(anim->getLength(), fps)) {
             state->setTimePosition(float(t));
             setSceneTime(t);
             evaluate();
             for (const QString& tb : m_touchedBones) {
-                if (!tb.startsWith(ename + QLatin1Char('/')) || !bakedBones.contains(tb)) continue;
-                Ogre::Bone* b = boneOf(e, tb.mid(ename.size() + 1));
+                if (!tb.startsWith(prefix) || !bakedBones.contains(tb)) continue;
+                Ogre::Bone* b = boneOf(e, tb.mid(prefix.size()));
                 if (!b) continue;
                 const Ogre::Quaternion rot = b->getInitialOrientation().Inverse() * b->getOrientation();
                 const Ogre::Vector3 pos = b->getPosition() - b->getInitialPosition();
                 const Ogre::Vector3 sc = b->getScale() / b->getInitialScale();
-                samples[tb].append(trsKey(t, pos, rot, sc));
+                bb.samples[tb.mid(prefix.size())].append(trsKey(t, pos, rot, sc));
             }
         }
-        for (const auto& s : saves) {
-            Ogre::AnimationState* st = states->getAnimationState(s.name);
-            st->setEnabled(s.enabled);
-            st->setTimePosition(s.time);
-            st->setWeight(s.weight);
+        for (const auto& sv : saves) {
+            Ogre::AnimationState* st = states->getAnimationState(sv.name);
+            st->setEnabled(sv.enabled);
+            st->setTimePosition(sv.time);
+            st->setWeight(sv.weight);
         }
-        for (auto it = samples.cbegin(); it != samples.cend(); ++it) {
-            Ogre::Bone* b = boneOf(e, it.key().mid(ename.size() + 1));
-            const unsigned short h = b->getHandle();
-            const bool had = anim->hasNodeTrack(h);
-            QJsonObject snap{{QStringLiteral("kind"), QStringLiteral("bone")}, {QStringLiteral("entity"), ename},
-                             {QStringLiteral("bone"), QString::fromStdString(b->getName())}, {QStringLiteral("clip"), clip}};
-            QJsonObject b0 = snap, b1 = snap;
-            b0[QStringLiteral("hadTrack")] = had;
-            b0[QStringLiteral("keys")] = had ? readTrack(anim->getNodeTrack(h)) : QJsonArray{};
-            writeTrack(had ? anim->getNodeTrack(h) : anim->createNodeTrack(h, b), it.value());
-            b1[QStringLiteral("hadTrack")] = true;
-            b1[QStringLiteral("keys")] = it.value();
-            before.append(b0);
-            after.append(b1);
-            bakedKeys += int(it.value().size());
-        }
-        places << QStringLiteral("'%1' of %2 (%3 bones)").arg(clip, ename).arg(samples.size());
-        refreshEntity(e);
+        boneBakes.push_back(std::move(bb));
     }
 
-    // ---- node owners ----
+    // Node owners: pick each node's clip and its length now; whether a clip
+    // existed is recorded once per clip (two nodes may share a new one).
+    double defaultLen = opts.nodeLength;
+    if (defaultLen <= 0.0) {
+        for (const QString& cl : NodeAnimationManager::instance()->listClips())
+            defaultLen = std::max(defaultLen, NodeAnimationManager::instance()->clipLength(cl));
+        if (defaultLen <= 0.0) defaultLen = 1.0;
+    }
+    struct NodeBake { QString node; QString clip; bool clipExisted; double length; QJsonArray keys; };
+    std::vector<NodeBake> nodeBakes;
     QSet<QString> nodes;
     for (const auto& c : selected) if (!c.owner.isBone()) nodes.insert(c.owner.object);
     for (const QString& nname : nodes) {
@@ -910,60 +906,85 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
             for (const QString& cl : NodeAnimationManager::instance()->listClips())
                 if (NodeAnimationManager::instance()->animatedNodes(cl).contains(nname)) { clip = cl; break; }
         if (clip.isEmpty()) clip = QString::fromLatin1(kDefaultNodeClip);
-        if (!nodeClipExisted.contains(clip)) nodeClipExisted.insert(clip, scene->hasAnimation(clip.toStdString()));
-        const bool existed = nodeClipExisted.value(clip);
-        const bool exists = scene->hasAnimation(clip.toStdString());
-        double len = opts.nodeLength;
-        if (len <= 0.0) {
-            for (const QString& cl : NodeAnimationManager::instance()->listClips())
-                len = std::max(len, NodeAnimationManager::instance()->clipLength(cl));
-            if (len <= 0.0) len = 1.0;
+        const bool existed = scene->hasAnimation(clip.toStdString());
+        NodeBake nb{nname, clip, existed, existed ? double(scene->getAnimation(clip.toStdString())->getLength()) : defaultLen, {}};
+        for (double t : times(nb.length, fps)) {
+            setSceneTime(t);
+            evaluate();
+            nb.keys.append(trsKey(t, node->getPosition(), node->getOrientation(), node->getScale()));
         }
-        if (!exists) {
-            NodeAnimationManager::instance()->createClip(clip, len);
-            NodeAnimationManager::instance()->setClipEnabled(clip, true);
+        nodeBakes.push_back(std::move(nb));
+    }
+    for (const auto& sv : sceneStates)
+        if (scene->hasAnimationState(sv.name)) scene->getAnimationState(sv.name)->setTimePosition(sv.time);
+
+    // ---------------------------------------------------------------------
+    // Phase 2 — WRITE the collected keys, snapshotting what they replace.
+    // ---------------------------------------------------------------------
+    QJsonArray before, after;
+    int bakedKeys = 0;
+    QStringList places;
+    for (const BoneBake& bb : boneBakes) {
+        Ogre::Entity* e = entityByName(bb.entity);
+        Ogre::Animation* anim = e->getSkeleton()->getAnimation(bb.clip.toStdString());
+        for (auto it = bb.samples.cbegin(); it != bb.samples.cend(); ++it) {
+            Ogre::Bone* b = boneOf(e, it.key());
+            const unsigned short h = b->getHandle();
+            const bool had = anim->hasNodeTrack(h);
+            QJsonObject snap{{QStringLiteral("kind"), QStringLiteral("bone")}, {QStringLiteral("entity"), bb.entity},
+                             {QStringLiteral("bone"), it.key()}, {QStringLiteral("clip"), bb.clip}};
+            QJsonObject b0 = snap, b1 = snap;
+            b0[QStringLiteral("hadTrack")] = had;
+            b0[QStringLiteral("keys")] = had ? readTrack(anim->getNodeTrack(h)) : QJsonArray{};
+            writeTrack(had ? anim->getNodeTrack(h) : anim->createNodeTrack(h, b), it.value());
+            b1[QStringLiteral("hadTrack")] = true;
+            b1[QStringLiteral("keys")] = it.value();
+            before.append(b0);
+            after.append(b1);
+            bakedKeys += int(it.value().size());
         }
-        Ogre::Animation* anim = scene->getAnimation(clip.toStdString());
-        const double clipLen = exists ? anim->getLength() : len;
+        places << QStringLiteral("'%1' of %2 (%3 bones)").arg(bb.clip, bb.entity).arg(bb.samples.size());
+        refreshEntity(e);
+    }
+    QSet<QString> touchedClips;
+    for (const NodeBake& nb : nodeBakes) {
+        Ogre::SceneNode* node = nodeByName(nb.node);
+        if (!scene->hasAnimation(nb.clip.toStdString())) {
+            NodeAnimationManager::instance()->createClip(nb.clip, nb.length);
+            NodeAnimationManager::instance()->setClipEnabled(nb.clip, true);
+        }
+        Ogre::Animation* anim = scene->getAnimation(nb.clip.toStdString());
         Ogre::NodeAnimationTrack* track = nodeTrackFor(anim, node);
-        QJsonObject snap{{QStringLiteral("kind"), QStringLiteral("node")}, {QStringLiteral("node"), nname},
-                         {QStringLiteral("clip"), clip}};
+        QJsonObject snap{{QStringLiteral("kind"), QStringLiteral("node")}, {QStringLiteral("node"), nb.node},
+                         {QStringLiteral("clip"), nb.clip}};
         QJsonObject b0 = snap, b1 = snap;
-        b0[QStringLiteral("clipExisted")] = existed;
+        b0[QStringLiteral("clipExisted")] = nb.clipExisted;
         b0[QStringLiteral("length")] = double(anim->getLength());
         b0[QStringLiteral("hadTrack")] = track != nullptr;
         b0[QStringLiteral("keys")] = readTrack(track);
-        QJsonArray keys;
-        for (double t : times(clipLen, fps)) {
-            setSceneTime(t);
-            evaluate();
-            keys.append(trsKey(t, node->getPosition(), node->getOrientation(), node->getScale()));
-        }
         if (!track) {
-            NodeAnimationManager::instance()->addKeyframe(clip, nname, 0.0, node->getPosition(), node->getOrientation(),
-                                                          node->getScale());
+            NodeAnimationManager::instance()->addKeyframe(nb.clip, nb.node, 0.0, node->getPosition(),
+                                                          node->getOrientation(), node->getScale());
             track = nodeTrackFor(anim, node);
         }
-        if (track) writeTrack(track, keys);
+        if (track) writeTrack(track, nb.keys);
         b1[QStringLiteral("clipExisted")] = true;
         b1[QStringLiteral("length")] = double(anim->getLength());
         b1[QStringLiteral("hadTrack")] = true;
-        b1[QStringLiteral("keys")] = keys;
+        b1[QStringLiteral("keys")] = nb.keys;
         before.append(b0);
         after.append(b1);
-        bakedKeys += int(keys.size());
-        places << QStringLiteral("node clip '%1' (%2)").arg(clip, nname);
-        emit NodeAnimationManager::instance()->keyframesChanged(clip);
-        emit NodeAnimationManager::instance()->clipsChanged();
+        bakedKeys += int(nb.keys.size());
+        places << QStringLiteral("node clip '%1' (%2)").arg(nb.clip, nb.node);
+        touchedClips.insert(nb.clip);
     }
+    for (const QString& clip : touchedClips) emit NodeAnimationManager::instance()->keyframesChanged(clip);
+    if (!touchedClips.isEmpty()) emit NodeAnimationManager::instance()->clipsChanged();
 
-    // Restore scene clocks and the full constraint list, then mute what was
-    // baked (the keys now carry the motion).
-    for (const auto& s : sceneStates)
-        if (scene->hasAnimationState(s.name)) scene->getAnimationState(s.name)->setTimePosition(s.time);
+    // Mute what was baked (the keys now carry the motion).
     const QJsonObject docBefore = document();
     for (auto& c : m_cons)
-        for (const auto& s : selected) if (c.id == s.id) c.enabled = false;
+        for (const auto& sc : selected) if (c.id == sc.id) c.enabled = false;
     syncOwners();
     const QJsonObject docAfter = document();
     if (undoable)

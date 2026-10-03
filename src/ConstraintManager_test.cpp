@@ -479,6 +479,27 @@ TEST_F(ConstraintSceneTest, FilteredBakeSamplesTargetsWithTheirOwnConstraintsLiv
         << "keys reach where the constrained target really was";
 }
 
+TEST_F(ConstraintSceneTest, BakingAnIkAlsoBakesConstraintsOwnedByTheBonesItKeys)
+{
+    // The IK keys Mid and Root. A constraint OWNED by Root contributes to
+    // those keys, so leaving it live would apply it twice at playback.
+    makeChainEntity("CON_Chain2");
+    Ogre::SceneNode* t = makeNode("CON_Chain2T", Ogre::Vector3(0.5f, 1.2f, 0));
+    Constraint lim;
+    lim.type = Type::LimitRotation;
+    lim.influence = 0.5;
+    ASSERT_TRUE(parseRef(QStringLiteral("bone:CON_Chain2/Root"), &lim.owner));
+    const auto rl = mgr()->add(lim, false);
+    const auto ri = mgr()->add(make(Type::IK, QStringLiteral("bone:CON_Chain2/End"), nodeRef(t)), false);
+    ASSERT_TRUE(rl.ok && ri.ok);
+    ConstraintManager::BakeOptions o;
+    o.ids = {ri.id};
+    o.clip = QStringLiteral("Idle");
+    ASSERT_TRUE(mgr()->bake(o, false).ok);
+    EXPECT_FALSE(mgr()->find(ri.id)->enabled);
+    EXPECT_FALSE(mgr()->find(rl.id)->enabled) << "the Root's stack is in the keys, so it must not stay live";
+}
+
 TEST_F(ConstraintSceneTest, BakingANodeCreatesAConstraintsClip)
 {
     Ogre::SceneNode* owner = makeNode("CON_NodeBake", Ogre::Vector3::ZERO);
