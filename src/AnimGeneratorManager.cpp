@@ -1654,6 +1654,17 @@ int AnimGeneratorManager::loadSidecar(const QString& assetPath, const QHash<QStr
         }
         taken.insert(g.id);
         const QString newKey = trackKey(g.target);
+        // A baked generator carries its pre-bake / baked base snapshots in its
+        // state; they name the target too, and un-baking compares one with the
+        // live base and installs the other — rename them the same way.
+        for (const QString& snap : {QStringLiteral("preBakeBase"), QStringLiteral("bakedBase")}) {
+            if (!g.state.contains(snap)) continue;
+            QJsonObject sb = g.state.value(snap).toObject();
+            Target st;
+            if (parseTarget(sb.value(QStringLiteral("target")).toString(), &st))
+                sb[QStringLiteral("target")] = formatTarget(renamed(st));
+            g.state[snap] = sb;
+        }
         if (file.bases.contains(oldKey) && !next.bases.contains(newKey)) {
             QJsonObject b = file.bases.value(oldKey);
             Target bt;
@@ -1826,28 +1837,69 @@ QStringList AnimGeneratorManager::channelsFor(const QString& kindStr, const QStr
     return out;
 }
 
+namespace {
+/// The selection, keeping only nodes / entities the scene still owns. The
+/// SelectionSet can briefly hold pointers to objects already destroyed (a
+/// scene teardown that does not go through sceneNodeDestroyed), so membership
+/// is checked by POINTER against the Manager's lists before anything is
+/// dereferenced.
+bool nodeIsLive(Ogre::Node* root, Ogre::Node* wanted)
+{
+    if (!root) return false;
+    if (root == wanted) return true;
+    for (Ogre::Node* c : root->getChildren())
+        if (nodeIsLive(c, wanted)) return true;
+    return false;
+}
+
+void liveSelection(Ogre::SceneNode** nodeOut, Ogre::Entity** entOut)
+{
+    // Membership is checked against OGRE's own registries (the scene graph
+    // from the root, and the Entity map), comparing pointers only: the
+    // SelectionSet — and the Manager's node list — can briefly hold objects a
+    // teardown destroyed straight through Ogre, and dereferencing one crashes.
+    *nodeOut = nullptr;
+    *entOut = nullptr;
+    SelectionSet* sel = SelectionSet::getSingletonPtr();
+    Ogre::SceneManager* scene = sceneMgr();
+    if (!sel || !scene) return;
+    const auto& entities = scene->getMovableObjects("Entity");
+    auto entityLive = [&](Ogre::Entity* e) {
+        for (const auto& kv : entities) if (kv.second == e) return true;
+        return false;
+    };
+    Ogre::SceneNode* root = scene->getRootSceneNode();
+    for (Ogre::Entity* e : sel->getResolvedEntities())
+        if (e && entityLive(e)) { *entOut = e; break; }
+    for (Ogre::SceneNode* n : sel->getNodesSelectionList())
+        if (n && nodeIsLive(root, n)) { *nodeOut = n; break; }
+    if (!*nodeOut && *entOut) {
+        Ogre::SceneNode* parent = (*entOut)->getParentSceneNode();
+        if (parent && nodeIsLive(root, parent)) *nodeOut = parent;
+    }
+}
+} // namespace
+
 QString AnimGeneratorManager::selectionKind() const
 {
-    SelectionSet* sel = SelectionSet::getSingletonPtr();
-    if (!sel) return {};
-    const QList<Ogre::SceneNode*> nodes = sel->getNodesSelectionList();
-    if (!nodes.isEmpty()) {
+    Ogre::SceneNode* node = nullptr;
+    Ogre::Entity* ent = nullptr;
+    liveSelection(&node, &ent);
+    if (node) {
         if (LightManager* lm = LightManager::getSingletonPtr())
-            if (lm->findLightBySceneNode(nodes.front())) return QStringLiteral("light");
+            if (lm->findLightBySceneNode(node)) return QStringLiteral("light");
         return QStringLiteral("node");
     }
-    return sel->getResolvedEntities().isEmpty() ? QString() : QStringLiteral("node");
+    return ent ? QStringLiteral("node") : QString();
 }
 
 QString AnimGeneratorManager::selectedObject(const QString& kindStr) const
 {
     TargetKind kind;
-    SelectionSet* sel = SelectionSet::getSingletonPtr();
-    if (!sel || !kindFromId(kindStr, &kind)) return {};
-    const QList<Ogre::SceneNode*> nodes = sel->getNodesSelectionList();
-    const QList<Ogre::Entity*> ents = sel->getResolvedEntities();
-    Ogre::SceneNode* node = !nodes.isEmpty() ? nodes.front()
-                          : (!ents.isEmpty() ? ents.front()->getParentSceneNode() : nullptr);
+    if (!kindFromId(kindStr, &kind)) return {};
+    Ogre::SceneNode* node = nullptr;
+    Ogre::Entity* ent = nullptr;
+    liveSelection(&node, &ent);
     switch (kind) {
     case TargetKind::Node:
         return node ? QString::fromStdString(node->getName()) : QString();
@@ -1856,11 +1908,11 @@ QString AnimGeneratorManager::selectedObject(const QString& kindStr) const
             if (const LightHandle* h = node ? lm->findLightBySceneNode(node) : nullptr) return h->name;
         return {};
     case TargetKind::Material:
-        if (!ents.isEmpty() && ents.front()->getNumSubEntities() > 0)
-            return QString::fromStdString(ents.front()->getSubEntity(0)->getMaterialName());
+        if (ent && ent->getNumSubEntities() > 0)
+            return QString::fromStdString(ent->getSubEntity(0)->getMaterialName());
         return {};
     default:
-        return ents.isEmpty() ? QString() : QString::fromStdString(ents.front()->getName());
+        return ent ? QString::fromStdString(ent->getName()) : QString();
     }
 }
 

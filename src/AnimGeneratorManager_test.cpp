@@ -12,6 +12,7 @@
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "SelectionSet.h"
 #include "PropertiesPanelController.h"
 #include "ThemeManager.h"
 #include "TestHelpers.h"
@@ -152,6 +153,7 @@ protected:
     void TearDown() override
     {
         mgr()->clear();
+        if (auto* sel = SelectionSet::getSingletonPtr()) sel->clear();
         if (auto* m = Manager::getSingletonPtr())
             if (auto* scene = m->getSceneMgr()) {
                 try { scene->destroyAllEntities(); } catch (...) {}
@@ -618,6 +620,43 @@ TEST_F(AnimGeneratorSceneTest, ClipAndItsPlaybackStateFollowTheDuration)
     ASSERT_TRUE(mgr()->setParams(r2.id, {{QStringLiteral("duration"), QStringLiteral("10")}}, false).ok);
     EXPECT_NEAR(length(), 10.0f, 1e-3f);
     EXPECT_NEAR(stateLength(), 10.0f, 1e-3f);
+}
+
+TEST_F(AnimGeneratorSceneTest, BakedGeneratorCanBeUnbakedAfterARenamedReload)
+{
+    createAnimatedTestEntity("GEN_RnA");
+    const auto r = mgr()->add(sineOnChildY(QStringLiteral("GEN_RnA")), false);
+    ASSERT_TRUE(r.ok);
+    ASSERT_TRUE(mgr()->bake(r.id, false).ok);
+    QTemporaryDir dir;
+    const QString asset = QDir(dir.path()).filePath(QStringLiteral("rn.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset));
+    mgr()->clear();
+    Ogre::Entity* e2 = createAnimatedTestEntity("GEN_RnB");
+    ASSERT_EQ(mgr()->loadSidecar(asset, {{QStringLiteral("GEN_RnA"), QStringLiteral("GEN_RnB")}}), 1);
+    const QString id = mgr()->generators().front().id;
+    // Un-bake: the snapshots inside the generator must name the NEW entity,
+    // or the comparison fails ("baked again afterwards") and the restore
+    // targets a missing object.
+    const auto u = mgr()->setEnabled(id, true, false);
+    ASSERT_TRUE(u.ok) << u.error.toStdString();
+    EXPECT_FALSE(mgr()->find(id)->baked);
+    EXPECT_NEAR(boneTranslateAt(e2, "TestAnim", "Child", kT).y, 0.5f * kS, 1e-4f);
+}
+
+TEST_F(AnimGeneratorSceneTest, SelectionDefaultsIgnoreDestroyedObjects)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("GEN_Sel");
+    SelectionSet::getSingleton()->append(e->getParentSceneNode());
+    EXPECT_EQ(mgr()->selectionKind(), QStringLiteral("node"));
+    EXPECT_EQ(mgr()->selectedObject(QStringLiteral("node")), QString::fromStdString(e->getParentSceneNode()->getName()));
+    // Destroy the scene WITHOUT clearing the selection (what a teardown can
+    // do): the defaults must not dereference the dead node.
+    Manager::getSingleton()->getSceneMgr()->destroyAllEntities();
+    Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->removeAndDestroyAllChildren();
+    EXPECT_TRUE(mgr()->selectedObject(QStringLiteral("node")).isEmpty()) << "a dead node is not offered";
+    EXPECT_TRUE(mgr()->selectionKind().isEmpty());
+    SelectionSet::getSingleton()->clear();
 }
 
 TEST_F(AnimGeneratorSceneTest, PanelQmlLoadsWithoutErrors)
