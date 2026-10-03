@@ -475,6 +475,7 @@ TEST_F(AnimGeneratorSceneTest, RuntimeLightNoiseMovesTheIntensity)
     EXPECT_GE(lo, 0.5 - 1e-6);
     mgr()->clear();
     EXPECT_NEAR(h.light->getPowerScale(), 1.0f, 1e-6f) << "clearing restores the base intensity";
+    lm->deleteLight(h.name); // leave no stale handle for later tests
 }
 
 TEST_F(AnimGeneratorSceneTest, PoseWeightBlendsTowardTheSavedPose)

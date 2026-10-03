@@ -1878,6 +1878,19 @@ void liveSelection(Ogre::SceneNode** nodeOut, Ogre::Entity** entOut)
         if (parent && nodeIsLive(root, parent)) *nodeOut = parent;
     }
 }
+/// The Ogre light attached to `node`, if any. Checked on the node itself —
+/// LightManager::findLightBySceneNode compares stored pointers, and a stale
+/// handle whose node was destroyed can match a NEW node that reused the
+/// address (seen in CI: a mesh node reported as a light).
+Ogre::Light* attachedLight(Ogre::SceneNode* node)
+{
+    if (!node) return nullptr;
+    for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
+        Ogre::MovableObject* obj = node->getAttachedObject(i);
+        if (obj && obj->getMovableType() == "Light") return static_cast<Ogre::Light*>(obj);
+    }
+    return nullptr;
+}
 } // namespace
 
 QString AnimGeneratorManager::selectionKind() const
@@ -1885,11 +1898,7 @@ QString AnimGeneratorManager::selectionKind() const
     Ogre::SceneNode* node = nullptr;
     Ogre::Entity* ent = nullptr;
     liveSelection(&node, &ent);
-    if (node) {
-        if (LightManager* lm = LightManager::getSingletonPtr())
-            if (lm->findLightBySceneNode(node)) return QStringLiteral("light");
-        return QStringLiteral("node");
-    }
+    if (node) return attachedLight(node) ? QStringLiteral("light") : QStringLiteral("node");
     return ent ? QStringLiteral("node") : QString();
 }
 
@@ -1903,10 +1912,16 @@ QString AnimGeneratorManager::selectedObject(const QString& kindStr) const
     switch (kind) {
     case TargetKind::Node:
         return node ? QString::fromStdString(node->getName()) : QString();
-    case TargetKind::Light:
+    case TargetKind::Light: {
+        Ogre::Light* l = attachedLight(node);
+        if (!l) return {};
+        // The light's editor name (what the Target list shows) when the
+        // manager knows this exact light; else Ogre's own name.
         if (LightManager* lm = LightManager::getSingletonPtr())
-            if (const LightHandle* h = node ? lm->findLightBySceneNode(node) : nullptr) return h->name;
-        return {};
+            for (const LightHandle& h : lm->lights())
+                if (h.light == l) return h.name;
+        return QString::fromStdString(l->getName());
+    }
     case TargetKind::Material:
         if (ent && ent->getNumSubEntities() > 0)
             return QString::fromStdString(ent->getSubEntity(0)->getMaterialName());
