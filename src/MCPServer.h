@@ -460,6 +460,12 @@ private:
     /// Pose-lib D-MCP: list saved pose names on the first selected
     /// entity. Light read; returns `{ count, poses: [name…] }`.
     QJsonObject toolListPoses(const QJsonObject &args);
+    // #524 procedural animation generators
+    QJsonObject toolListGenerators(const QJsonObject &args);
+    QJsonObject toolAddGenerator(const QJsonObject &args);
+    QJsonObject toolSetGenerator(const QJsonObject &args);
+    QJsonObject toolBakeGenerator(const QJsonObject &args);
+    QJsonObject toolRemoveGenerator(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the

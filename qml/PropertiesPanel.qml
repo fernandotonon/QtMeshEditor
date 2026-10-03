@@ -642,6 +642,15 @@ Rectangle {
                 Component.onCompleted: content = retargetToolsComponent
             }
 
+            // ---- Procedural generators (#524) ----
+            CollapsibleSection {
+                title: "Generators"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = generatorsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -11502,6 +11511,16 @@ Rectangle {
         }
     }
 
+    // ---- Procedural generators content (#524) ----
+    Component {
+        id: generatorsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/GeneratorsPanel.qml"
+        }
+    }
+
     // ---- Pose Library Content (#521, own group) ----
     Component {
         id: poseLibraryComponent
@@ -11575,6 +11594,13 @@ Rectangle {
                 target: NodeAnimationManager
                 function onClipsChanged() { refreshAnimData() }
                 function onEditingClipChanged() { refreshAnimData() }
+            }
+            // Procedural generators (#524) write into clips — a node clip they
+            // create (default "Generators") or the morph weight clip — so the
+            // list must follow every add / edit / bake / remove.
+            Connections {
+                target: AnimGeneratorManager
+                function onGeneratorsChanged() { refreshAnimData() }
             }
             // #838: the animation picker applied a clip. Handle it HERE (in the
             // animation component scope) so lastGeneratedAnim / setArmSpaceTarget

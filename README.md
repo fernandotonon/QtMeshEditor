@@ -206,6 +206,11 @@ qtmesh lipsync take.wav --mesh head.glb --emotion joy=0.6 -o out.glb
 # Retarget a clip onto a different skeleton (auto bone map, or a bundled / .bonemap map)
 qtmesh anim mixamo_walk.fbx --retarget hero.glb --bonemap mixamo_to_unity --anim Walk -o hero_walking.glb
 
+# Procedural generators: drive a property from a formula, add it on top of the animation, bake when done
+qtmesh anim hero.fbx --generator sine --target "bone:*/mixamorig:Spine/rotation.z@Idle" --amplitude 8 --frequency 0.5 -o breathing.glb
+qtmesh anim drone.glb --generator follow-path --target "node:*/position" --points "0,2,0;4,2,0;4,2,4;0,2,4" --closed true --orient true \
+                      --generator noise --target "node:*/position.y" --amplitude 0.1 --noise-frequency 3 --bake -o patrol.glb
+
 # Vertex Animation Textures (OpenVAT) — four modes, one baker
 qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
 qtmesh vat pieces.fbx --anim Explode --mode rigid --target godot -o out/  # rigid-body: one quaternion + pivot per submesh chunk (destruction / mechanical), ships openvat_rigid.gdshader

@@ -351,6 +351,37 @@ bool PoseLibrary::applyPose(Ogre::Entity* entity, const QString& name)
     return true;
 }
 
+bool PoseLibrary::applyPoseWeighted(Ogre::Entity* entity, const QString& name, float weight)
+{
+    assertMainThread();
+    auto storeIt = m_byEntity.constFind(entity);
+    if (storeIt == m_byEntity.constEnd()) return false;
+    auto poseIt = storeIt->byName.constFind(name);
+    if (poseIt == storeIt->byName.constEnd()) return false;
+    auto* skel = skeletonOf(entity);
+    if (!skel) return false;
+
+    const float w = std::clamp(weight, 0.0f, 1.0f);
+    QList<unsigned short> handles;
+    for (auto it = poseIt->cbegin(); it != poseIt->cend(); ++it) {
+        const std::string boneName = it.key().toStdString();
+        if (!skel->hasBone(boneName)) continue;
+        Ogre::Bone* bone = skel->getBone(boneName);
+        if (!bone) continue;
+        const Ogre::Vector3 p0 = bone->getInitialPosition();
+        const Ogre::Vector3 s0 = bone->getInitialScale();
+        const Ogre::Quaternion r0 = bone->getInitialOrientation();
+        bone->setPosition(p0 + (it.value().translate - p0) * w);
+        bone->setScale(s0 + (it.value().scale - s0) * w);
+        bone->setOrientation(Ogre::Quaternion::Slerp(w, r0, it.value().rotation, true));
+        handles.append(bone->getHandle());
+    }
+    if (handles.isEmpty()) return false;
+    holdPosedBones(entity, handles);
+    flushSkeletonPose(entity, skel);
+    return true;
+}
+
 bool PoseLibrary::applyPoseMasked(Ogre::Entity* entity,
                                   const QString& name,
                                   const QSet<QString>& boneFilter)

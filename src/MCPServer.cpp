@@ -34,6 +34,8 @@
 #endif
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "AnimGeneratorManager.h"
+#include "AnimGenerators.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -783,6 +785,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_isometric_sprites"), &MCPServer::toolGenerateIsometricSprites},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
         {QStringLiteral("retarget_animation"), &MCPServer::toolRetargetAnimation},
+        {QStringLiteral("list_generators"), &MCPServer::toolListGenerators},
+        {QStringLiteral("add_generator"), &MCPServer::toolAddGenerator},
+        {QStringLiteral("set_generator"), &MCPServer::toolSetGenerator},
+        {QStringLiteral("bake_generator"), &MCPServer::toolBakeGenerator},
+        {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
@@ -959,6 +966,9 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
             {QStringLiteral("bake_vat"), QStringLiteral("vat_bake")},
             {QStringLiteral("retarget_animation"), QStringLiteral("animation_blend")},
+            {QStringLiteral("add_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("set_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("bake_generator"), QStringLiteral("animation_blend")},
             {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
             {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
             {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
@@ -988,7 +998,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
-        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"), QStringLiteral("add_generator"), QStringLiteral("set_generator"), QStringLiteral("bake_generator"), QStringLiteral("remove_generator"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
@@ -10279,6 +10289,156 @@ QJsonObject MCPServer::toolGetChannelValues(const QJsonObject &args)
 // drive `load_mesh` / `save_scene` around them for persistence — the
 // `.poselib` sidecar arrives with D-Project.
 
+
+// ---------------------------------------------------------------------------
+// #524 — procedural animation generators
+// ---------------------------------------------------------------------------
+namespace {
+QJsonObject generatorJson(const AnimGen::Generator& g, bool bound)
+{
+    QJsonObject o = AnimGen::toJson(g);
+    o.remove(QStringLiteral("state"));
+    o[QStringLiteral("display_name")] = AnimGen::displayName(g);
+    o[QStringLiteral("bound")] = bound;
+    return o;
+}
+
+/// `params` as an object of key → number/string/bool/array-of-points.
+bool generatorParamsFromJson(const QJsonValue& v, QList<QPair<QString, QString>>* out, QString* error)
+{
+    if (v.isUndefined() || v.isNull()) return true;
+    if (!v.isObject()) { *error = QStringLiteral("'params' must be an object"); return false; }
+    const QJsonObject o = v.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonValue x = it.value();
+        QString s;
+        if (x.isDouble()) s = QString::number(x.toDouble(), 'g', 17);
+        else if (x.isBool()) s = x.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        else if (x.isString()) s = x.toString();
+        else if (x.isArray() && it.key() == QLatin1String("points")) {
+            QStringList pts;
+            for (const QJsonValue& p : x.toArray()) {
+                const QJsonArray a = p.toArray();
+                if (a.size() != 3 || !a[0].isDouble() || !a[1].isDouble() || !a[2].isDouble()) {
+                    *error = QStringLiteral("every path point must be [x, y, z] numbers");
+                    return false;
+                }
+                pts << QStringLiteral("%1,%2,%3").arg(a[0].toDouble(), 0, 'g', 17).arg(a[1].toDouble(), 0, 'g', 17).arg(a[2].toDouble(), 0, 'g', 17);
+            }
+            s = pts.join(QLatin1Char(';'));
+        } else {
+            *error = QStringLiteral("parameter '%1' has an unsupported type").arg(it.key());
+            return false;
+        }
+        out->append({it.key(), s});
+    }
+    return true;
+}
+} // namespace
+
+QJsonObject MCPServer::toolListGenerators(const QJsonObject& /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_generators");
+    auto* gm = AnimGeneratorManager::instance();
+    QJsonArray arr;
+    for (const auto& g : gm->generators())
+        arr.append(generatorJson(g, gm->isBound(g.id)));
+    QJsonObject content{{"count", int(gm->generators().size())}, {"generators", arr},
+                        {"types", QJsonArray::fromStringList(AnimGen::typeIds())},
+                        {"kinds", QJsonArray::fromStringList(AnimGen::kindIds())}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolAddGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "add_generator");
+    AnimGen::Generator g;
+    QString err;
+    if (!AnimGen::typeFromId(args.value("type").toString(), &g.type))
+        return makeErrorResult(QStringLiteral("Error: 'type' must be one of %1").arg(AnimGen::typeIds().join(", ")));
+    if (!AnimGen::parseTarget(args.value("target").toString(), &g.target, &err))
+        return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    QList<QPair<QString, QString>> params;
+    if (!generatorParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    for (const auto& p : params)
+        if (!AnimGen::applyParam(&g, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
+    if (args.contains("name")) g.name = args.value("name").toString();
+    if (args.contains("enabled")) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        g.enabled = args.value("enabled").toBool();
+    }
+    if (args.contains("bake") && !args.value("bake").isBool())
+        return makeErrorResult("Error: 'bake' must be a boolean");
+    auto* gm = AnimGeneratorManager::instance();
+    const auto r = gm->add(g);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"id", r.id}, {"generator", generatorJson(*gm->find(r.id), gm->isBound(r.id))}};
+    if (args.value("bake").toBool(false)) {
+        const auto b = gm->bake(r.id);
+        if (!b.ok) return makeErrorResult("Error: added but bake failed: " + b.error);
+        content["generator"] = generatorJson(*gm->find(r.id), gm->isBound(r.id));
+    }
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_generator");
+    const QString id = args.value("id").toString();
+    auto* gm = AnimGeneratorManager::instance();
+    if (!gm->find(id)) return makeErrorResult(QStringLiteral("Error: no generator '%1' (see list_generators)").arg(id));
+    QList<QPair<QString, QString>> params;
+    QString err;
+    if (!generatorParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    // One transaction: params + enabled are validated together and land as a
+    // single undo step (or not at all).
+    bool enabled = false;
+    const bool hasEnabled = args.contains("enabled");
+    if (hasEnabled) {
+        // toBool() reads "true" / 1 as false — refuse rather than silently mute.
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        enabled = args.value("enabled").toBool();
+    }
+    if (args.contains("show_path") && !args.value("show_path").isBool())
+        return makeErrorResult("Error: 'show_path' must be a boolean");
+    if (!params.isEmpty() || hasEnabled) {
+        const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
+        if (!r.ok) return makeErrorResult("Error: " + r.error);
+    }
+    if (args.contains("show_path")) {
+        if (args.value("show_path").toBool()) {
+            if (!gm->beginPathEdit(id)) return makeErrorResult("Error: " + gm->status());
+        } else {
+            gm->endPathEdit();
+        }
+    }
+    QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolBakeGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "bake_generator");
+    const QString id = args.value("id").toString();
+    auto* gm = AnimGeneratorManager::instance();
+    const auto r = gm->bake(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))},
+                        {"note", AnimGen::kindIsTrackBacked(gm->find(id)->target.kind)
+                                     ? QStringLiteral("baked into the target's animation track")
+                                     : QStringLiteral("baked into a keyed curve kept with the generators (lights, materials and pose weights have no native track)")}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolRemoveGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "remove_generator");
+    const QString id = args.value("id").toString();
+    const auto r = AnimGeneratorManager::instance()->remove(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"removed", id}}).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "list_poses");
@@ -13832,6 +13992,64 @@ QJsonArray MCPServer::buildToolsList()
             "Read a bone channel's value at every keyframe of the selected animation, "
             "in time order. Use for inspecting or plotting a curve.",
             props, required);
+    }
+
+    // #524 — procedural animation generators
+    {
+        QJsonObject props;
+        appendTool("list_generators",
+                   "List procedural animation generators (sine / noise / ramp / follow-path / spring) with "
+                   "their targets and parameters, plus the valid generator types and target kinds.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["type"] = QJsonObject{{"type", "string"},
+                                    {"enum", QJsonArray::fromStringList(AnimGen::typeIds())},
+                                    {"description", "Generator type. follow-path drives a node/bone 'position'; every other type a scalar channel."}};
+        props["target"] = QJsonObject{{"type", "string"},
+                                      {"description", "kind:object[/sub]/channel[@clip]. Examples: node:Hand/position.y, "
+                                                      "bone:Rumba/mixamorig:Spine/rotation.z@Dance, morph:Head/jawOpen/weight, "
+                                                      "pose:Rumba/Smile/weight, light:KeyLight/intensity, material:Body_MAT/diffuse.r, "
+                                                      "node:Drone/position (follow-path). Rotations are degrees about the local axis. "
+                                                      "Bone clip defaults to the selected/first clip; node clip to 'Generators' (created); morph to MorphAnim."}};
+        props["params"] = QJsonObject{{"type", "object"},
+                                      {"description", "Parameters: amplitude, frequency (Hz), phase (deg), offset, seed, noise_frequency, octaves, "
+                                                      "from, to, ease (linear|smooth), stiffness (rad/s), damping (ratio), start, duration (default 1 s; 0 = clip end), "
+                                                      "fps, loops, closed, constant_speed, orient, points ([[x,y,z],...] for follow-path)."}};
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};
+        props["bake"] = QJsonObject{{"type", "boolean"}, {"description", "Bake to keyframes right after adding."}};
+        appendTool("add_generator",
+                   "Add a procedural generator that ADDS its value to the target's animation (follow-path replaces the "
+                   "position). Bone/node/morph targets are written into the real animation track, so playback and "
+                   "export see the motion; pose/light/material targets are driven every frame. Undoable.",
+                   props, QJsonArray{"type", "target"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id (see list_generators)."}};
+        props["params"] = QJsonObject{{"type", "object"}, {"description", "Parameters to change (same keys as add_generator)."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the generator (the base track plays alone); true re-enables it. Re-enabling or editing a BAKED generator un-bakes it (the track goes back to how it was before the bake) so it can be changed and baked again."}};
+        props["show_path"] = QJsonObject{{"type", "boolean"}, {"description", "Follow-path only: show (true) or hide (false) the path and its draggable points in the viewport."}};
+        appendTool("set_generator", "Edit a generator's parameters and/or mute it (one undo step), or show its path in the viewport.",
+                   props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id."}};
+        appendTool("bake_generator",
+                   "Bake a generator to keyframes at its fps: the motion becomes ordinary keys and the generator stays "
+                   "attached but inactive. Editing it later (set_generator) un-bakes it so it can be changed and baked again. Undoable.",
+                   props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id."}};
+        appendTool("remove_generator",
+                   "Remove a generator and restore the target's base animation. A baked generator's keys stay "
+                   "(track targets); for pose/light/material its baked curve is removed with it. Undoable.",
+                   props, QJsonArray{"id"});
     }
 
     // list_poses

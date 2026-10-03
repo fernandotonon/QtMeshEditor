@@ -111,6 +111,14 @@ public:
                           const QString& name,
                           const QSet<QString>& boneFilter);
 
+    /// Apply a saved pose at `weight` (0..1, clamped): every captured bone is
+    /// set to its BIND state blended toward the pose (translation/scale lerp,
+    /// rotation shortest-path slerp), then held like a snap apply. Weight 0 is
+    /// the bind pose, 1 the pose itself. Drives the `pose:` generator target
+    /// (#524) once per frame, so it neither cancels nor starts a time blend.
+    /// Returns false when the pose isn't found on `entity`.
+    bool applyPoseWeighted(Ogre::Entity* entity, const QString& name, float weight);
+
     /// Drop a saved pose. Returns false when the name doesn't exist.
     bool deletePose(Ogre::Entity* entity, const QString& name);
 
