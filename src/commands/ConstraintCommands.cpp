@@ -13,7 +13,13 @@ ConstraintDocCommand::ConstraintDocCommand(const QString& text, QJsonObject befo
 void ConstraintDocCommand::undo()
 {
     ConstraintManager* m = ConstraintManager::instance();
-    if (!m_tracksBefore.isEmpty()) m->restoreTracks(m_tracksBefore);
+    if (!m_tracksBefore.isEmpty()) {
+        // Reverse of the order the bake wrote them, so a clip the bake
+        // created is only removed after every track in it was restored.
+        QJsonArray reversed;
+        for (qsizetype i = m_tracksBefore.size() - 1; i >= 0; --i) reversed.append(m_tracksBefore.at(i));
+        m->restoreTracks(reversed);
+    }
     m->applyDocument(m_before);
     SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.constraint.undo"), text());
 }

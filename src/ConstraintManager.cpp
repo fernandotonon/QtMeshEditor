@@ -152,13 +152,28 @@ bool sameTransform(const Transform& a, const Transform& b)
         && (a.scale - b.scale).squaredLength() < 1e-10f;
 }
 
+/// `world` expressed in `parent`'s space: the exact inverse of compose()
+/// (translate, then inverse rotation, THEN inverse scale). compose(inverse(p),
+/// w) applies scale before rotation and is wrong for a non-uniformly scaled,
+/// rotated parent.
+Transform relativeTo(const Transform& parent, const Transform& world)
+{
+    auto div = [](const Ogre::Vector3& a, const Ogre::Vector3& b) {
+        return Ogre::Vector3(b.x != 0 ? a.x / b.x : 0.0f, b.y != 0 ? a.y / b.y : 0.0f, b.z != 0 ? a.z / b.z : 0.0f);
+    };
+    Transform t;
+    t.position = div(parent.rotation.Inverse() * (world.position - parent.position), parent.scale);
+    t.rotation = parent.rotation.Inverse() * world.rotation;
+    t.scale = div(world.scale, parent.scale);
+    return t;
+}
+
 /// One non-IK constraint on a LOCAL transform whose parent space is
 /// `parentWorld`. Returns the new local.
 Transform applyLocal(const Constraint& c, const Transform& parentWorld, const Transform& local)
 {
     Transform out = local;
     const Transform ownerWorld = compose(parentWorld, local);
-    const Transform parentInv = inverse(parentWorld);
     Transform target;
     const bool hasTarget = refWorld(c.target, &target);
     switch (c.type) {
@@ -179,13 +194,15 @@ Transform applyLocal(const Constraint& c, const Transform& parentWorld, const Tr
         if (c.useX) p.x = target.position.x;
         if (c.useY) p.y = target.position.y;
         if (c.useZ) p.z = target.position.z;
-        const Ogre::Vector3 lp = parentInv.position + parentInv.rotation * (parentInv.scale * p);
+        Transform w;
+        w.position = p;
+        const Ogre::Vector3 lp = relativeTo(parentWorld, w).position;
         out.position = blend(local.position, lp, c.influence);
         break;
     }
     case Type::ParentOf: {
         if (!hasTarget || !c.hasOffset) return local;
-        const Transform want = compose(parentInv, compose(target, c.offset));
+        const Transform want = relativeTo(parentWorld, compose(target, c.offset));
         out.position = blend(local.position, want.position, c.influence);
         out.rotation = blend(local.rotation, want.rotation, c.influence);
         out.scale = blend(local.scale, want.scale, c.influence);
@@ -566,7 +583,7 @@ bool ConstraintManager::validate(Constraint* c, QString* error) const
             owner = derivedOf(nodeByName(c->owner.object));
         }
         refWorld(c->target, &target);
-        c->offset = compose(inverse(target), owner);
+        c->offset = relativeTo(target, owner);
         c->hasOffset = true;
     }
     return true;
@@ -713,8 +730,10 @@ void ConstraintManager::restoreTracks(const QJsonArray& snapshots)
                 if (s->hasAnimation(clip.toStdString())) NodeAnimationManager::instance()->deleteClip(clip);
                 continue;
             }
-            if (!s->hasAnimation(clip.toStdString()))
+            if (!s->hasAnimation(clip.toStdString())) {
                 NodeAnimationManager::instance()->createClip(clip, o.value(QStringLiteral("length")).toDouble(1.0));
+                NodeAnimationManager::instance()->setClipEnabled(clip, true);
+            }
             Ogre::Animation* a = s->getAnimation(clip.toStdString());
             a->setLength(float(o.value(QStringLiteral("length")).toDouble(a->getLength())));
             if (s->hasAnimationState(clip.toStdString())) s->getAnimationState(clip.toStdString())->setLength(a->getLength());
@@ -748,6 +767,42 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
         return r;
     }
 
+    // Resolve every entity's target clip BEFORE touching anything, so a bake
+    // that cannot complete changes nothing (no half-written tracks without an
+    // undo step).
+    QSet<QString> entities;
+    for (const auto& c : selected) if (c.owner.isBone()) entities.insert(c.owner.object);
+    QHash<QString, QString> clipFor;
+    for (const QString& ename : entities) {
+        Ogre::Entity* e = entityByName(ename);
+        if (!e || !e->hasSkeleton()) continue;
+        Ogre::SkeletonInstance* skel = e->getSkeleton();
+        Ogre::AnimationStateSet* states = e->getAllAnimationStates();
+        QString clip = opts.clip;
+        if (clip.isEmpty() || !skel->hasAnimation(clip.toStdString())) {
+            clip.clear();
+            if (states)
+                for (const auto& [n, st] : states->getAnimationStates())
+                    if (st->getEnabled() && skel->hasAnimation(n)) { clip = QString::fromStdString(n); break; }
+            auto* acc = AnimationControlController::instance();
+            if (clip.isEmpty() && acc && acc->selectedEntityName() == ename && skel->hasAnimation(acc->selectedAnimation().toStdString()))
+                clip = acc->selectedAnimation();
+            if (clip.isEmpty() && skel->getNumAnimations() > 0) clip = QString::fromStdString(skel->getAnimation(0)->getName());
+        }
+        if (clip.isEmpty() || !states || !states->hasAnimationState(clip.toStdString())) {
+            r.error = QStringLiteral("'%1' has no skeletal clip to bake into").arg(ename);
+            setStatus(r.error, false);
+            crumb("error", r.error);
+            return r;
+        }
+        clipFor.insert(ename, clip);
+    }
+    // Whether each node clip existed is recorded ONCE per clip: when two
+    // nodes bake into a new "Constraints" clip, the second must not see the
+    // clip the first just created, or undo would delete it and then recreate
+    // it empty.
+    QHash<QString, bool> nodeClipExisted;
+
     // Evaluate ONLY the selected constraints while sampling.
     const std::vector<Constraint> all = m_cons;
     m_cons = selected;
@@ -767,36 +822,18 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
     };
 
     // ---- bone owners, per entity ----
-    QSet<QString> entities;
-    for (const auto& c : selected) if (c.owner.isBone()) entities.insert(c.owner.object);
-    for (const QString& ename : entities) {
+    for (auto cit = clipFor.cbegin(); cit != clipFor.cend(); ++cit) {
+        const QString& ename = cit.key();
+        const QString& clip = cit.value();
         Ogre::Entity* e = entityByName(ename);
-        if (!e || !e->hasSkeleton()) continue;
         Ogre::SkeletonInstance* skel = e->getSkeleton();
-        QString clip = opts.clip;
         Ogre::AnimationStateSet* states = e->getAllAnimationStates();
-        if (clip.isEmpty() || !skel->hasAnimation(clip.toStdString())) {
-            clip.clear();
-            if (states)
-                for (const auto& [n, st] : states->getAnimationStates())
-                    if (st->getEnabled() && skel->hasAnimation(n)) { clip = QString::fromStdString(n); break; }
-            auto* acc = AnimationControlController::instance();
-            if (clip.isEmpty() && acc && acc->selectedEntityName() == ename && skel->hasAnimation(acc->selectedAnimation().toStdString()))
-                clip = acc->selectedAnimation();
-            if (clip.isEmpty() && skel->getNumAnimations() > 0) clip = QString::fromStdString(skel->getAnimation(0)->getName());
-        }
-        if (clip.isEmpty() || !states || !states->hasAnimationState(clip.toStdString())) {
-            m_cons = all;
-            r.error = QStringLiteral("'%1' has no skeletal clip to bake into").arg(ename);
-            setStatus(r.error, false);
-            return r;
-        }
         Ogre::Animation* anim = skel->getAnimation(clip.toStdString());
         // Play only the target clip while sampling; restore afterwards.
-        struct Save { std::string name; bool enabled; float time; };
+        struct Save { std::string name; bool enabled; float time; float weight; };
         std::vector<Save> saves;
         for (const auto& [n, st] : states->getAnimationStates()) {
-            saves.push_back({n, st->getEnabled(), st->getTimePosition()});
+            saves.push_back({n, st->getEnabled(), st->getTimePosition(), st->getWeight()});
             st->setEnabled(n == clip.toStdString());
         }
         Ogre::AnimationState* state = states->getAnimationState(clip.toStdString());
@@ -820,6 +857,7 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
             Ogre::AnimationState* st = states->getAnimationState(s.name);
             st->setEnabled(s.enabled);
             st->setTimePosition(s.time);
+            st->setWeight(s.weight);
         }
         for (auto it = samples.cbegin(); it != samples.cend(); ++it) {
             Ogre::Bone* b = boneOf(e, it.key().mid(ename.size() + 1));
@@ -852,19 +890,21 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
             for (const QString& cl : NodeAnimationManager::instance()->listClips())
                 if (NodeAnimationManager::instance()->animatedNodes(cl).contains(nname)) { clip = cl; break; }
         if (clip.isEmpty()) clip = QString::fromLatin1(kDefaultNodeClip);
-        const bool existed = scene->hasAnimation(clip.toStdString());
+        if (!nodeClipExisted.contains(clip)) nodeClipExisted.insert(clip, scene->hasAnimation(clip.toStdString()));
+        const bool existed = nodeClipExisted.value(clip);
+        const bool exists = scene->hasAnimation(clip.toStdString());
         double len = opts.nodeLength;
         if (len <= 0.0) {
             for (const QString& cl : NodeAnimationManager::instance()->listClips())
                 len = std::max(len, NodeAnimationManager::instance()->clipLength(cl));
             if (len <= 0.0) len = 1.0;
         }
-        if (!existed) {
+        if (!exists) {
             NodeAnimationManager::instance()->createClip(clip, len);
             NodeAnimationManager::instance()->setClipEnabled(clip, true);
         }
         Ogre::Animation* anim = scene->getAnimation(clip.toStdString());
-        const double clipLen = existed ? anim->getLength() : len;
+        const double clipLen = exists ? anim->getLength() : len;
         Ogre::NodeAnimationTrack* track = nodeTrackFor(anim, node);
         QJsonObject snap{{QStringLiteral("kind"), QStringLiteral("node")}, {QStringLiteral("node"), nname},
                          {QStringLiteral("clip"), clip}};
@@ -967,10 +1007,21 @@ int ConstraintManager::loadSidecar(const QString& assetPath, const QHash<QString
     for (const auto& c : next) taken.insert(c.id);
     QSet<QString> reserved = taken;
     for (const auto& c : file) reserved.insert(c.id);
+    // Same content (ignoring the id) on the same owner = already loaded:
+    // re-importing an asset must not stack a second copy of its constraints.
+    auto sameContent = [](const Constraint& a, const Constraint& b) {
+        QJsonObject ja = toJson(a), jb = toJson(b);
+        ja.remove(QStringLiteral("id"));
+        jb.remove(QStringLiteral("id"));
+        return ja == jb;
+    };
+    int added = 0;
     for (Constraint c : file) {
         c.owner = ren(c.owner);
         c.target = ren(c.target);
         c.pole = ren(c.pole);
+        if (std::any_of(next.begin(), next.end(), [&](const Constraint& x) { return sameContent(x, c); })) continue;
+        ++added;
         if (taken.contains(c.id)) {
             int n = 1;
             QString id;
@@ -983,8 +1034,8 @@ int ConstraintManager::loadSidecar(const QString& assetPath, const QHash<QString
     m_cons = std::move(next);
     syncOwners();
     emit constraintsChanged();
-    crumb("load", QStringLiteral("%1 constraints").arg(file.size()));
-    return int(file.size());
+    crumb("load", QStringLiteral("%1 constraints (%2 new)").arg(file.size()).arg(added));
+    return added;
 }
 
 // ---------------------------------------------------------------------------

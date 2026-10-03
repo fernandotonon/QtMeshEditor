@@ -5955,7 +5955,14 @@ static bool offerConstraintBakeBeforeExport(QWidget* parent)
     box.exec();
     if (box.clickedButton() == bake) {
         SentryReporter::addBreadcrumb("ui.action", "Export: bake constraints");
-        cm->bake(ConstraintManager::BakeOptions{});
+        const ConstraintManager::Result r = cm->bake(ConstraintManager::BakeOptions{});
+        if (!r.ok) {
+            // The user asked for the motion in the file; exporting without it
+            // would silently drop it.
+            QMessageBox::warning(parent, QObject::tr("Animation Constraints"),
+                                 QObject::tr("Could not bake the constraints, so the export was cancelled:\n%1").arg(r.error));
+            return false;
+        }
         return true;
     }
     if (box.clickedButton() == skip) {

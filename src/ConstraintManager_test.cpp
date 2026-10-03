@@ -393,6 +393,66 @@ TEST_F(ConstraintSceneTest, BakeWritesIkIntoTheClipMutesAndUndoes)
     EXPECT_FALSE(mgr()->find(r.id)->enabled);
 }
 
+TEST_F(ConstraintSceneTest, BakeRestoresTheClipBlendWeight)
+{
+    Ogre::Entity* e = makeChainEntity("CON_Weight");
+    Ogre::SceneNode* target = makeNode("CON_WeightTarget", Ogre::Vector3(0.5f, 1.2f, 0));
+    ASSERT_TRUE(mgr()->add(make(Type::IK, QStringLiteral("bone:CON_Weight/End"), nodeRef(target)), false).ok);
+    e->getAnimationState("Idle")->setWeight(0.4f);
+    ConstraintManager::BakeOptions o;
+    o.clip = QStringLiteral("Idle");
+    ASSERT_TRUE(mgr()->bake(o, false).ok);
+    EXPECT_FLOAT_EQ(e->getAnimationState("Idle")->getWeight(), 0.4f);
+}
+
+TEST_F(ConstraintSceneTest, UndoingATwoNodeBakeRemovesTheClipItCreated)
+{
+    Ogre::SceneNode* a = makeNode("CON_TwoA", Ogre::Vector3::ZERO);
+    Ogre::SceneNode* b = makeNode("CON_TwoB", Ogre::Vector3::ZERO);
+    Ogre::SceneNode* t = makeNode("CON_TwoT", Ogre::Vector3(2, 0, 0));
+    ASSERT_TRUE(mgr()->add(make(Type::CopyPosition, nodeRef(a), nodeRef(t)), false).ok);
+    ASSERT_TRUE(mgr()->add(make(Type::CopyPosition, nodeRef(b), nodeRef(t)), false).ok);
+    ASSERT_FALSE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Constraints")));
+    ASSERT_TRUE(mgr()->bake({}).ok);
+    ASSERT_TRUE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Constraints")));
+    UndoManager::getSingleton()->undo();
+    EXPECT_FALSE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Constraints")))
+        << "the clip did not exist before the bake";
+    UndoManager::getSingleton()->redo();
+    EXPECT_TRUE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Constraints")));
+    EXPECT_TRUE(NodeAnimationManager::instance()->isClipEnabled(QStringLiteral("Constraints")));
+}
+
+TEST_F(ConstraintSceneTest, CopyPositionUnderARotatedNonUniformlyScaledParent)
+{
+    Ogre::SceneNode* parent = makeNode("CON_NuParent", Ogre::Vector3(1, 0, 0));
+    parent->setOrientation(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_Z));
+    parent->setScale(2, 1, 1);
+    Ogre::SceneNode* owner = parent->createChildSceneNode("CON_NuOwner");
+    Ogre::SceneNode* target = makeNode("CON_NuTarget", Ogre::Vector3(3, 4, 5));
+    ASSERT_TRUE(mgr()->add(make(Type::CopyPosition, QStringLiteral("node:CON_NuOwner"), nodeRef(target)), false).ok);
+    mgr()->evaluate();
+    EXPECT_LT((owner->_getDerivedPosition() - target->getPosition()).length(), 1e-4f)
+        << "the owner lands exactly on the target in world space";
+}
+
+TEST_F(ConstraintSceneTest, AFailedBakeChangesNothing)
+{
+    Ogre::Entity* good = makeChainEntity("CON_FailGood");
+    Ogre::Entity* bad = makeChainEntity("CON_FailBad");
+    bad->getSkeleton()->removeAnimation("Idle");
+    bad->refreshAvailableAnimationState();
+    Ogre::SceneNode* t = makeNode("CON_FailT", Ogre::Vector3(0.5f, 1.2f, 0));
+    ASSERT_TRUE(mgr()->add(make(Type::IK, QStringLiteral("bone:CON_FailGood/End"), nodeRef(t)), false).ok);
+    ASSERT_TRUE(mgr()->add(make(Type::IK, QStringLiteral("bone:CON_FailBad/End"), nodeRef(t)), false).ok);
+    const unsigned short midH = good->getSkeleton()->getBone("Mid")->getHandle();
+    const int before = UndoManager::getSingleton()->stack()->index();
+    EXPECT_FALSE(mgr()->bake({}).ok);
+    EXPECT_FALSE(good->getSkeleton()->getAnimation("Idle")->hasNodeTrack(midH)) << "no half-written tracks";
+    EXPECT_EQ(mgr()->activeCount(), 2) << "nothing was muted";
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->index(), before);
+}
+
 TEST_F(ConstraintSceneTest, BakingANodeCreatesAConstraintsClip)
 {
     Ogre::SceneNode* owner = makeNode("CON_NodeBake", Ogre::Vector3::ZERO);
@@ -428,8 +488,14 @@ TEST_F(ConstraintSceneTest, SidecarRoundTripRebindsRenamedObjects)
     EXPECT_EQ(back.aimAxis, Axis::NegY);
     EXPECT_DOUBLE_EQ(back.influence, 0.75);
 
-    // Loading again never duplicates ids.
-    ASSERT_EQ(mgr()->loadSidecar(asset, rename), 1);
+    // Loading the same sidecar again is idempotent: no duplicate stack.
+    EXPECT_EQ(mgr()->loadSidecar(asset, rename), 0);
+    EXPECT_EQ(mgr()->count(), 1);
+
+    // A DIFFERENT owner (renamed import) still loads, with a fresh id.
+    Ogre::SceneNode* third = makeNode("CON_SideOwner3", Ogre::Vector3::ZERO);
+    QHash<QString, QString> rename2{{QString::fromStdString(owner->getName()), QString::fromStdString(third->getName())}};
+    ASSERT_EQ(mgr()->loadSidecar(asset, rename2), 1);
     EXPECT_NE(mgr()->constraints()[0].id, mgr()->constraints()[1].id);
 }
 
