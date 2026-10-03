@@ -594,8 +594,13 @@ bool MotionGraphManager::play(const QString& entity, QString* error)
 
     // Snapshot everything we are about to drive.
     m_stateSaves.clear();
-    for (const auto& [name, st] : e->getAllAnimationStates()->getAnimationStates())
-        m_stateSaves.push_back({name, st->getEnabled(), st->getTimePosition(), st->getWeight(), st->getLoop(), st->hasBlendMask()});
+    const size_t numBones = e->getSkeleton()->getNumBones();
+    for (const auto& [name, st] : e->getAllAnimationStates()->getAnimationStates()) {
+        StateSave sv{name, st->getEnabled(), st->getTimePosition(), st->getWeight(), st->getLoop(), st->hasBlendMask(), {}};
+        if (sv.hadMask)
+            for (size_t b = 0; b < numBones; ++b) sv.mask.push_back(st->getBlendMaskEntry(b));
+        m_stateSaves.push_back(std::move(sv));
+    }
     m_savedBlendMode = e->getSkeleton()->getBlendMode();
     e->getSkeleton()->setBlendMode(Ogre::ANIMBLEND_CUMULATIVE);
 
@@ -710,7 +715,10 @@ void MotionGraphManager::applyToOgre()
             continue;
         }
         st->setEnabled(true);
-        st->setLoop(true);
+        // The runtime already wraps looping items into [0, length) and clamps
+        // one-shots at length; an Ogre LOOPING state would fmod(length) back
+        // to 0 and show a finished one-shot's FIRST frame.
+        st->setLoop(false);
         st->setWeight(1.0f);
         st->setTimePosition(float(it->time));
         if (!st->hasBlendMask()) st->createBlendMask(numBones, 0.0f);
@@ -728,6 +736,8 @@ void MotionGraphManager::restoreOgre()
         if (!states->hasAnimationState(s.name)) continue;
         Ogre::AnimationState* st = states->getAnimationState(s.name);
         if (!s.hadMask && st->hasBlendMask()) st->destroyBlendMask();
+        if (s.hadMask && st->hasBlendMask())
+            for (size_t b = 0; b < s.mask.size(); ++b) st->setBlendMaskEntry(b, s.mask[b]);
         st->setEnabled(s.enabled);
         st->setLoop(s.loop);
         st->setTimePosition(s.time);

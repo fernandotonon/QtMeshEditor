@@ -203,6 +203,34 @@ TEST_F(MotionGraphSceneTest, MaskedTransitionDrivesOnlyTheMaskedBones)
     EXPECT_FLOAT_EQ(maskEntry(e, "TestAnim", "Child"), 0.0f);
 }
 
+TEST_F(MotionGraphSceneTest, StopRestoresAPreExistingBlendMaskEntryForEntry)
+{
+    Ogre::Entity* e = makeTwoClipEntity("MG_PreMask");
+    Ogre::AnimationState* st = e->getAnimationState("TestAnim");
+    const size_t n = e->getSkeleton()->getNumBones();
+    st->createBlendMask(n, 1.0f);
+    const unsigned short child = e->getSkeleton()->getBone("Child")->getHandle();
+    st->setBlendMaskEntry(child, 0.0f);   // e.g. a pose-library hold
+    ASSERT_TRUE(mgr()->setGraph(QStringLiteral("MG_PreMask"), twoStates(), false));
+    ASSERT_TRUE(mgr()->play(QStringLiteral("MG_PreMask")));
+    EXPECT_FLOAT_EQ(st->getBlendMaskEntry(child), 1.0f) << "the graph drives the mask while playing";
+    mgr()->stop();
+    ASSERT_TRUE(st->hasBlendMask()) << "a mask the graph did not create stays";
+    EXPECT_FLOAT_EQ(st->getBlendMaskEntry(child), 0.0f) << "and gets its own entries back";
+}
+
+TEST_F(MotionGraphSceneTest, AFinishedOneShotHoldsItsLastFrame)
+{
+    Ogre::Entity* e = makeTwoClipEntity("MG_Once");
+    Graph g = twoStates();
+    g.states[0].loop = false;   // TestAnim is 1 s
+    ASSERT_TRUE(mgr()->setGraph(QStringLiteral("MG_Once"), g, false));
+    ASSERT_TRUE(mgr()->play(QStringLiteral("MG_Once")));
+    mgr()->tick(1.5);
+    EXPECT_NEAR(e->getAnimationState("TestAnim")->getTimePosition(), 1.0f, 1e-5f)
+        << "a looping Ogre state would fmod the clamped time back to 0";
+}
+
 TEST_F(MotionGraphSceneTest, AuthoringIsUndoable)
 {
     makeTwoClipEntity("MG_Undo");

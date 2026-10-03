@@ -192,7 +192,15 @@ private:
     AnimGraph::Graph m_playGraph;            ///< snapshot taken at Play
     std::vector<AnimGraph::Param> m_runParams;
     AnimGraph::Runtime m_rt;
-    struct StateSave { std::string name; bool enabled; float time; float weight; bool loop; bool hadMask; };
+    struct StateSave {
+        std::string name;
+        bool enabled;
+        float time;
+        float weight;
+        bool loop;
+        bool hadMask;
+        std::vector<float> mask;   ///< entries of a pre-existing blend mask
+    };
     std::vector<StateSave> m_stateSaves;
     Ogre::SkeletonAnimationBlendMode m_savedBlendMode = Ogre::ANIMBLEND_AVERAGE;
     bool m_savedSkip = false;

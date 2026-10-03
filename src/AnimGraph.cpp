@@ -42,8 +42,12 @@ Item makeItem(const State& s, ClipLength len, const void* ctx)
 void advance(Item* it, double dt)
 {
     it->time += dt * it->speed;
+    it->wrapped = false;
     if (it->length <= 0.0) { it->time = 0.0; return; }
     if (it->loop) {
+        // Remember a pass over the end: an exit time the wrap jumped over
+        // (a frame hitch, a fast state) has still been reached.
+        it->wrapped = it->time >= it->length;
         it->time = std::fmod(it->time, it->length);
         if (it->time < 0) it->time += it->length;
     } else {
@@ -275,13 +279,21 @@ QString step(const Graph& g, std::vector<Param>* params, Runtime* rt, double dt,
     for (const auto& t : g.transitions) {
         if (t.from != QLatin1String("*") && t.from != cur) continue;
         if (t.to == cur && t.from == QLatin1String("*")) continue;
-        if (t.exitTime >= 0.0 && normalisedTime(rt->current.primary) < std::min(t.exitTime, 1.0)) continue;
+        if (t.exitTime >= 0.0 && !rt->current.primary.wrapped
+            && normalisedTime(rt->current.primary) < std::min(t.exitTime, 1.0))
+            continue;
         if (!conditionsHold(t, *params)) continue;
         const State* target = g.state(t.to);
         if (!target) continue;
 
         Pose next;
         next.primary = makeItem(*target, len, ctx);
+        // Ogre has ONE AnimationState per clip: when the target plays a clip
+        // that is still playing (run → wave(partial) → run), continue its
+        // clock instead of restarting it, or the blend would jump phase.
+        const Pose& cp = rt->current;
+        if (cp.hasBase && !cp.mask.isEmpty() && cp.base.clip == target->clip) next.primary.time = cp.base.time;
+        else if (cp.primary.clip == target->clip) next.primary.time = cp.primary.time;
         if (!t.mask.isEmpty()) {
             // Partial transition: the target drives only the mask; whatever
             // drove the remaining bones keeps playing there.

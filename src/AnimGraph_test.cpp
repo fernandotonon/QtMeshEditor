@@ -239,3 +239,45 @@ TEST(AnimGraphJson, RoundTripAndValidation)
     EXPECT_EQ(uniqueStateName(g, QStringLiteral("idle")), QStringLiteral("idle 2"));
     EXPECT_EQ(uniqueTransitionId(g), QStringLiteral("t5"));
 }
+
+TEST(AnimGraphRuntime, ExitTimeIsNotMissedWhenALoopWrapsPastIt)
+{
+    Graph g = locomotion();
+    Transition t = tr("x", "walk", "idle", {}, 0.1);
+    t.exitTime = 0.9;
+    g.transitions = {tr("t1", "idle", "walk", {{"speed", Op::Greater, 0.1}}, 0.0), t};
+    Runtime rt;
+    ASSERT_TRUE(start(g, &rt, clipLen, nullptr));
+    auto params = g.params;
+    params[0].value = 1.0;
+    step(g, &params, &rt, 0.0, clipLen, nullptr);   // → walk (1 s clip)
+    step(g, &params, &rt, 0.8, clipLen, nullptr);   // 0.8: before the exit time
+    ASSERT_EQ(rt.current.primary.state, QStringLiteral("walk"));
+    // A hitch jumps 0.8 → 1.1 → wraps to 0.1: the 0.9 exit time WAS passed.
+    EXPECT_EQ(step(g, &params, &rt, 0.3, clipLen, nullptr), QStringLiteral("x"));
+}
+
+TEST(AnimGraphRuntime, ReturningToAClipThatIsStillPlayingKeepsItsClock)
+{
+    Graph g = locomotion();
+    g.states.push_back({QStringLiteral("wave"), QStringLiteral("Wave")});
+    g.params.push_back({QStringLiteral("waving"), ParamType::Bool, 0.0});
+    Transition wave = tr("w", "run", "wave", {{"waving", Op::IsTrue, 0}}, 0.2);
+    wave.mask = {QStringLiteral("Spine")};
+    g.transitions = {tr("t1", "idle", "run", {{"speed", Op::Greater, 2.0}}, 0.0), wave,
+                     tr("unwave", "wave", "run", {{"waving", Op::IsFalse, 0}}, 0.2)};
+    Runtime rt;
+    ASSERT_TRUE(start(g, &rt, clipLen, nullptr));
+    auto params = g.params;
+    params[0].value = 3.0;
+    step(g, &params, &rt, 0.0, clipLen, nullptr);   // → run
+    params[1].value = 1.0;
+    step(g, &params, &rt, 0.3, clipLen, nullptr);   // → wave over run
+    step(g, &params, &rt, 0.3, clipLen, nullptr);
+    const double legPhase = rt.current.base.time;
+    params[1].value = 0.0;
+    ASSERT_EQ(step(g, &params, &rt, 0.0, clipLen, nullptr), QStringLiteral("unwave"));
+    EXPECT_NEAR(rt.current.primary.time, legPhase, 1e-9) << "run continues, it does not restart at 0";
+    for (const auto& c : contributions(rt))
+        if (c.clip == QLatin1String("Run")) EXPECT_NEAR(c.time, legPhase, 1e-9) << "one Run clock, no phase jump";
+}

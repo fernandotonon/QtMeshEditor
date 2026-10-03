@@ -3163,7 +3163,17 @@ int CLIPipeline::cmdAnimGraphInfo(int argc, char* argv[])
     QFile f(side);
     QJsonArray graphs;
     if (f.open(QIODevice::ReadOnly)) {
-        const QJsonObject doc = QJsonDocument::fromJson(f.readAll()).object();
+        QJsonParseError pe;
+        const QJsonDocument jd = QJsonDocument::fromJson(f.readAll(), &pe);
+        if (pe.error != QJsonParseError::NoError || !jd.isObject()) {
+            err() << "Error: " << side << ": not valid JSON (" << pe.errorString() << ")" << Qt::endl;
+            return 1;
+        }
+        const QJsonObject doc = jd.object();
+        if (doc.value("schema").toString() != QLatin1String("qtmesh-anim-graphs-v1")) {
+            err() << "Error: " << side << ": not a qtmesh-anim-graphs-v1 file" << Qt::endl;
+            return 1;
+        }
         for (const QJsonValue& v : doc.value("graphs").toArray()) {
             AnimGraph::Graph g;
             QString e;

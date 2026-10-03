@@ -121,6 +121,7 @@ struct Item {
     double length = 0.0;
     double speed = 1.0;
     bool loop = true;
+    bool wrapped = false;   ///< a looping clip passed its end during the last step
 };
 
 /// What drives the skeleton: `primary` on the masked bones (all bones when
