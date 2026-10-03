@@ -758,9 +758,16 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
 {
     Result r;
     Ogre::SceneManager* scene = sceneMgr();
+    // A bake works on whole owner STACKS: baking one constraint of a stack
+    // while a sibling stays live would apply the sibling twice (once in the
+    // keys, once live).
+    QSet<QString> bakedOwners;
+    for (const auto& c : m_cons)
+        if (c.enabled && c.influence > 0.0 && (opts.ids.isEmpty() || opts.ids.contains(c.id)))
+            bakedOwners.insert(ownerKey(c.owner));
     std::vector<Constraint> selected;
     for (const auto& c : m_cons)
-        if (c.enabled && c.influence > 0.0 && (opts.ids.isEmpty() || opts.ids.contains(c.id))) selected.push_back(c);
+        if (c.enabled && c.influence > 0.0 && bakedOwners.contains(ownerKey(c.owner))) selected.push_back(c);
     if (selected.empty() || !scene) {
         r.error = QStringLiteral("nothing to bake: no enabled constraint selected");
         setStatus(r.error, false);
@@ -803,9 +810,22 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
     // it empty.
     QHash<QString, bool> nodeClipExisted;
 
-    // Evaluate ONLY the selected constraints while sampling.
-    const std::vector<Constraint> all = m_cons;
-    m_cons = selected;
+    // Sample with EVERY active constraint live — a baked owner may target an
+    // object that is itself constrained, and must see it as it is live — but
+    // write keys only for the baked owners (and the bones their IKs bend).
+    QSet<QString> bakedBones; // "entity/bone"
+    for (const auto& c : selected) {
+        if (!c.owner.isBone()) continue;
+        Ogre::Bone* b = boneOf(entityByName(c.owner.object), c.owner.bone);
+        if (!b) continue;
+        bakedBones.insert(c.owner.object + QLatin1Char('/') + c.owner.bone);
+        if (c.type == Type::IK) {
+            Ogre::Node* mid = b->getParent();
+            Ogre::Node* root = mid ? mid->getParent() : nullptr;
+            for (Ogre::Node* n : {mid, root})
+                if (n) bakedBones.insert(c.owner.object + QLatin1Char('/') + QString::fromStdString(n->getName()));
+        }
+    }
     const int fps = std::clamp(opts.fps, 1, 240);
     QJsonArray before, after;
     int bakedKeys = 0;
@@ -844,7 +864,7 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
             setSceneTime(t);
             evaluate();
             for (const QString& tb : m_touchedBones) {
-                if (!tb.startsWith(ename + QLatin1Char('/'))) continue;
+                if (!tb.startsWith(ename + QLatin1Char('/')) || !bakedBones.contains(tb)) continue;
                 Ogre::Bone* b = boneOf(e, tb.mid(ename.size() + 1));
                 if (!b) continue;
                 const Ogre::Quaternion rot = b->getInitialOrientation().Inverse() * b->getOrientation();
@@ -941,7 +961,6 @@ ConstraintManager::Result ConstraintManager::bake(const BakeOptions& opts, bool 
     // baked (the keys now carry the motion).
     for (const auto& s : sceneStates)
         if (scene->hasAnimationState(s.name)) scene->getAnimationState(s.name)->setTimePosition(s.time);
-    m_cons = all;
     const QJsonObject docBefore = document();
     for (auto& c : m_cons)
         for (const auto& s : selected) if (c.id == s.id) c.enabled = false;

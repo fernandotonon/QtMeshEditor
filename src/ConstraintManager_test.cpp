@@ -453,6 +453,32 @@ TEST_F(ConstraintSceneTest, AFailedBakeChangesNothing)
     EXPECT_EQ(UndoManager::getSingleton()->stack()->index(), before);
 }
 
+TEST_F(ConstraintSceneTest, FilteredBakeSamplesTargetsWithTheirOwnConstraintsLive)
+{
+    // The IK target is itself constrained (it follows U). Baking ONLY the IK
+    // must still see the target where its constraint puts it, and must leave
+    // the target's constraint live.
+    Ogre::Entity* e = makeChainEntity("CON_Dep");
+    Ogre::SceneNode* t = makeNode("CON_DepT", Ogre::Vector3::ZERO);
+    Ogre::SceneNode* u = makeNode("CON_DepU", Ogre::Vector3(0.6f, 1.1f, 0.2f));
+    const auto follow = mgr()->add(make(Type::CopyPosition, nodeRef(t), nodeRef(u)), false);
+    const auto ik = mgr()->add(make(Type::IK, QStringLiteral("bone:CON_Dep/End"), nodeRef(t)), false);
+    ASSERT_TRUE(follow.ok && ik.ok);
+    ConstraintManager::BakeOptions o;
+    o.ids = {ik.id};
+    o.clip = QStringLiteral("Idle");
+    ASSERT_TRUE(mgr()->bake(o, false).ok) << mgr()->status().toStdString();
+    EXPECT_FALSE(mgr()->find(ik.id)->enabled);
+    EXPECT_TRUE(mgr()->find(follow.id)->enabled) << "only the requested owner's stack is baked";
+
+    Ogre::AnimationState* st = e->getAnimationState("Idle");
+    st->setEnabled(true);
+    st->setTimePosition(0.5f);
+    e->getSkeleton()->setAnimationState(*e->getAllAnimationStates());
+    EXPECT_LT((boneWorld(e, "End") - u->getPosition()).length(), 2e-3f)
+        << "keys reach where the constrained target really was";
+}
+
 TEST_F(ConstraintSceneTest, BakingANodeCreatesAConstraintsClip)
 {
     Ogre::SceneNode* owner = makeNode("CON_NodeBake", Ogre::Vector3::ZERO);
