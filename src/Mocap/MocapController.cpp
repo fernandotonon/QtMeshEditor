@@ -1630,6 +1630,7 @@ void MocapController::stopRecording()
     }
 
     QStringList summary;
+    QString bodyFailure;
     int faceKeys = 0, bodyTracks = 0;
     double clipLen = 0.0;
     const bool combinedHead = d->bodyRetargeter && std::count_if(
@@ -1694,6 +1695,28 @@ void MocapController::stopRecording()
                 clipLen = std::max(clipLen, br.clipLength);
                 summary << tr("'%1' (%2 tracks)")
                                .arg(br.clipName).arg(bodyTracks);
+            } else {
+                bodyFailure = br.error;
+                if (combinedHead) {
+                    // The face take was held back for the body clip. If body
+                    // calibration fails, record that head motion on its own
+                    // clip so the failed body bake does not discard it.
+                    MocapRecorder::FaceRecordOptions fallback;
+                    fallback.clipName = d->clipName;
+                    fallback.head = true;
+                    auto* fcmd = new RecordMocapClipCommand(
+                        d->entityName, d->take, d->mapping, fallback);
+                    UndoManager::getSingleton()->push(fcmd);
+                    const auto& fr = fcmd->report();
+                    if (fr.ok()) {
+                        faceKeys = fr.keyframesWritten + fr.headKeyframesWritten;
+                        clipLen = std::max(clipLen, fr.clipLength);
+                        summary << tr("'%1' fallback (%2 keys)")
+                                       .arg(fr.clipName).arg(faceKeys);
+                    } else {
+                        bodyFailure += tr("; face/head fallback failed: %1").arg(fr.error);
+                    }
+                }
             }
             GamificationManager::noteOperation(
                 QStringLiteral("mocap_body"),
@@ -1704,10 +1727,17 @@ void MocapController::stopRecording()
         }
     }
 
-    if (!summary.isEmpty())
+    if (!summary.isEmpty() && bodyFailure.isEmpty())
         setStatusMessage(tr("Recorded %1s → %2 — Ctrl+Z to discard.")
                              .arg(clipLen, 0, 'f', 1)
                              .arg(summary.join(QStringLiteral(" + "))));
+    else if (!bodyFailure.isEmpty()) {
+        if (summary.isEmpty())
+            setStatusMessage(bodyFailure);
+        else
+            setStatusMessage(tr("Recorded %1; body recording failed: %2")
+                                 .arg(summary.join(QStringLiteral(" + ")), bodyFailure));
+    }
 }
 
 void MocapController::restoreEntityState()
