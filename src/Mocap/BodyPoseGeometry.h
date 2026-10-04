@@ -74,15 +74,30 @@ inline Pose solve(const float* world, const float* visibility = nullptr,
         if (frame(dir, axis, out.orientations[role]))
             out.mask |= 1u << role;
     };
-    if (!visible(11) || !visible(12) || !visible(23) || !visible(24))
-        return out;
-    const Ogre::Vector3 up = (p[11] + p[12] - p[23] - p[24]) * 0.5f;
-    // Anatomical left is +X. Unlike an unsigned line, this preserves turns
-    // through profile and back-facing poses without an artificial 180° flip.
-    set(PoseIK::Hip, up, p[23] - p[24]);
-    set(PoseIK::Chest, up, p[11] - p[12]);
-    if (!out.resolved(PoseIK::Hip) || !out.resolved(PoseIK::Chest))
-        return Pose{};
+    const bool fullTorso = visible(11) && visible(12) && visible(23) && visible(24);
+    if (fullTorso) {
+        const Ogre::Vector3 up = (p[11] + p[12] - p[23] - p[24]) * 0.5f;
+        // Anatomical left is +X. Unlike an unsigned line, this preserves turns
+        // through profile and back-facing poses without an artificial 180° flip.
+        set(PoseIK::Hip, up, p[23] - p[24]);
+        set(PoseIK::Chest, up, p[11] - p[12]);
+    }
+    // Torso orientation needs a complete shoulder/hip frame. If a torso point
+    // drops out, keep that frame from the previous sample and still solve each
+    // limb independently from its visible landmarks.
+    if (!out.resolved(PoseIK::Hip)) {
+        if (!previous || !previous->resolved(PoseIK::Hip))
+            return out;
+        out.orientations[PoseIK::Hip] = previous->orientations[PoseIK::Hip];
+        out.mask |= 1u << PoseIK::Hip;
+    }
+    if (!out.resolved(PoseIK::Chest)) {
+        if (previous && previous->resolved(PoseIK::Chest))
+            out.orientations[PoseIK::Chest] = previous->orientations[PoseIK::Chest];
+        else
+            out.orientations[PoseIK::Chest] = out.orientations[PoseIK::Hip];
+        out.mask |= 1u << PoseIK::Chest;
+    }
     out.orientations[PoseIK::Abdomen] = Ogre::Quaternion::Slerp(
         0.5f, out.orientations[PoseIK::Hip], out.orientations[PoseIK::Chest], true);
     out.mask |= 1u << PoseIK::Abdomen;

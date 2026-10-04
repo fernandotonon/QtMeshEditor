@@ -41,9 +41,11 @@ The retargeting changes do not require a new pose-model download.
 
 ## Regression coverage
 
-The broader selected regression run passed 119 tests across 14 suites
+The broader selected regression run passed 121 tests across 14 suites
 (animation merger, mocap controller/recorder, face pose/geometry/mapping,
-video sources, filters and the new body solver). The opt-in video test skips
+video sources, filters and the new body solver). Regression cases also cover
+continuing visible limb tracking during partial torso occlusion and holding
+the combined head pose through face-tracking gaps. The opt-in video test skips
 in that run and is executed separately with each supplied video.
 
 The new geometric fixture exercises relaxed-pose calibration, high knees,

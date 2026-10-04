@@ -22,8 +22,9 @@
 #include <OgreSkeletonInstance.h>
 
 #include <algorithm>
-#include <map>
 #include <cmath>
+#include <limits>
+#include <map>
 
 namespace MocapRecorder {
 
@@ -513,6 +514,14 @@ BodyRecordReport bakeRetargeterClip(
         clip, static_cast<Ogre::Real>(clipDuration));
     anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
     std::map<unsigned short, Ogre::NodeAnimationTrack*> tracks;
+    const bool hasCombinedHead = std::count_if(frames.begin(), frames.end(),
+        [](const BodyLiveFrame& frame) { return frame.headWorldValid; }) >= 2;
+    const QString headName = hasCombinedHead ? resolveHeadBone(entity) : QString{};
+    const unsigned short headHandle = !headName.isEmpty()
+        ? skel->getBone(headName.toStdString())->getHandle()
+        : std::numeric_limits<unsigned short>::max();
+    Ogre::Quaternion heldHeadLocal = headHandle < skel->getNumBones()
+        ? bindLocal[headHandle] : Ogre::Quaternion::IDENTITY;
     size_t frameIndex = 0;
     for (size_t f = 0; f < frames.size(); ++f) {
         const auto& frame = frames[f];
@@ -523,23 +532,25 @@ BodyRecordReport bakeRetargeterClip(
         const float* vis = useLandmarks ? frame.visibility.data() : nullptr;
         auto locals = rt.evaluateFrame(q, frame.resolvedMask, skipRolesMask,
                                              world, vis);
-        if (frame.headWorldValid) {
+        if (frame.headWorldValid && headHandle < skel->getNumBones()) {
             for (const auto& [handle, local] : locals)
                 skel->getBone(handle)->setOrientation(local);
             for (auto* root : skel->getRootBones()) root->_update(true, true);
-            const QString headName = resolveHeadBone(entity);
-            if (!headName.isEmpty() && skel->hasBone(headName.toStdString())) {
-                auto* head = skel->getBone(headName.toStdString());
-                const Ogre::Quaternion parent = head->getParent()
-                    ? head->getParent()->_getDerivedOrientation() : Ogre::Quaternion::IDENTITY;
-                const auto& h = frame.headWorldRotation;
-                const Ogre::Quaternion local = parent.Inverse() * Ogre::Quaternion(h[3],h[0],h[1],h[2]);
-                auto it = std::find_if(locals.begin(), locals.end(), [&](const auto& entry) {
-                    return entry.first == head->getHandle();
-                });
-                if (it == locals.end()) locals.emplace_back(head->getHandle(), local);
-                else it->second = local;
-            }
+            auto* head = skel->getBone(headHandle);
+            const Ogre::Quaternion parent = head->getParent()
+                ? head->getParent()->_getDerivedOrientation() : Ogre::Quaternion::IDENTITY;
+            const auto& h = frame.headWorldRotation;
+            heldHeadLocal = parent.Inverse() * Ogre::Quaternion(h[3],h[0],h[1],h[2]);
+        }
+        if (hasCombinedHead && headHandle < skel->getNumBones()) {
+            // Key every body sample while FaceCap owns the head. This freezes
+            // the last tracked local pose through camera dropouts, instead of
+            // interpolating a turn between distant confident samples.
+            auto it = std::find_if(locals.begin(), locals.end(), [&](const auto& entry) {
+                return entry.first == headHandle;
+            });
+            if (it == locals.end()) locals.emplace_back(headHandle, heldHeadLocal);
+            else it->second = heldHeadLocal;
         }
         const Ogre::Vector3 rootOffset = useLandmarks && options.rootMotion
             ? rt.rootOffset(rootMotion.evaluate(frame)) : Ogre::Vector3::ZERO;

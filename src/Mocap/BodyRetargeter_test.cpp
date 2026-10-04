@@ -259,6 +259,34 @@ TEST_F(BodyRetargeterGeometryTest, OccludedOrNonfiniteLegHoldsLastLocalPose)
     EXPECT_FALSE(rt.hasNeutralReference());
 }
 
+TEST_F(BodyRetargeterGeometryTest, VisibleLimbsContinueWhenTorsoPointIsOccluded)
+{
+    auto f = sample(standing());
+    const auto previous = BodyPoseGeometry::solve(f.world.data(), f.visibility.data());
+    ASSERT_TRUE(previous.resolved(PoseIK::Hip));
+    point(f.world, 14, {-.23f, .20f, .12f});
+    point(f.world, 16, {-.35f, .25f, .30f});
+    f.visibility[11] = 0.f;
+
+    const auto pose = BodyPoseGeometry::solve(
+        f.world.data(), f.visibility.data(), &previous);
+    EXPECT_TRUE(pose.resolved(PoseIK::Hip));
+    EXPECT_TRUE(pose.resolved(PoseIK::Chest));
+    EXPECT_TRUE(pose.resolved(PoseIK::RShoulder));
+    EXPECT_TRUE(pose.resolved(PoseIK::RElbow));
+    EXPECT_TRUE(pose.resolved(PoseIK::LHip));
+    EXPECT_TRUE(pose.resolved(PoseIK::RHip));
+    EXPECT_GT(std::abs(pose.orientations[PoseIK::Hip].Dot(
+        previous.orientations[PoseIK::Hip])), .9999f);
+    const Ogre::Vector3 expected(
+        f.world[16*3] - f.world[14*3],
+        -f.world[16*3+1] + f.world[14*3+1],
+        -f.world[16*3+2] + f.world[14*3+2]);
+    EXPECT_NEAR((pose.orientations[PoseIK::RElbow] * Ogre::Vector3::UNIT_Y)
+                    .dotProduct(expected.normalisedCopy()),
+                1.f, 1e-4f);
+}
+
 TEST_F(BodyRetargeterGeometryTest, HeadingCalibrationDoesNotEraseCapturedTorsoLean)
 {
     rig(); BodyRetargeter rt(entity->getSkeleton());
@@ -379,6 +407,33 @@ TEST_F(BodyRetargeterGeometryTest, RecordedFaceHeadDoesNotDoubleBodyYaw)
     animation->apply(skeleton.get(), 1.f);
     for (auto* root : skeleton->getRootBones()) root->_update(true, true);
     EXPECT_GT(std::abs(skeleton->getBone("Head")->_getDerivedOrientation().Dot(turn)), .9999f);
+}
+
+TEST_F(BodyRetargeterGeometryTest, RecordedFaceHeadHoldsAcrossTrackingGap)
+{
+    rig();
+    auto first = sample(standing(), 0.0);
+    auto gap = sample(standing(), 0.1);
+    auto last = sample(standing(), 1.0);
+    first.headWorldValid = last.headWorldValid = true;
+    first.headWorldRotation = {0.f, 0.f, 0.f, 1.f};
+    const Ogre::Quaternion turn(Ogre::Degree(90), Ogre::Vector3::UNIT_Y);
+    last.headWorldRotation = {turn.x, turn.y, turn.z, turn.w};
+    MocapRecorder::BodyRecordOptions options;
+    options.clipName = "HeadTrackingGap";
+    options.skipRolesMask = (1u << PoseIK::Neck) | (1u << PoseIK::Neck1)
+                            | (1u << PoseIK::Head);
+    ASSERT_TRUE(MocapRecorder::recordBodyLive(entity, {first, gap, last}, 30, options).ok());
+
+    auto* track = skeleton->getAnimation("HeadTrackingGap")
+                      ->getNodeTrack(skeleton->getBone("Head")->getHandle());
+    ASSERT_NE(track, nullptr);
+    ASSERT_EQ(track->getNumKeyFrames(), 3);
+    const auto firstKey = track->getNodeKeyFrame(0)->getRotation();
+    const auto gapKey = track->getNodeKeyFrame(1)->getRotation();
+    const auto lastKey = track->getNodeKeyFrame(2)->getRotation();
+    EXPECT_GT(std::abs(firstKey.Dot(gapKey)), .9999f);
+    EXPECT_LT(std::abs(gapKey.Dot(lastKey)), .9999f);
 }
 
 TEST_F(BodyRetargeterGeometryTest, InvalidTakeCannotOverwriteExistingAnimation)
