@@ -1,6 +1,7 @@
 #ifdef ENABLE_MOCAP
 
 #include "MocapRecorder.h"
+#include "BodyRootMotion.h"
 #include "MocapPoseFix.h"
 
 #include "FaceCapCanonicalData.h"
@@ -456,8 +457,10 @@ BodyRecordReport bakeRetargeterClip(
         return report;
     }
 
-    const BodyLiveFrame* neutralFrame = nullptr;
+    const BodyLiveFrame* neutralFrame = options.neutralFrame && options.neutralFrame->valid
+                                        ? &*options.neutralFrame : nullptr;
     for (const auto& frame : frames) {
+        if (neutralFrame) break;
         if (!frame.valid)
             continue;
         if ((frame.resolvedMask & kTorsoResolvedMask) != kTorsoResolvedMask)
@@ -478,8 +481,6 @@ BodyRecordReport bakeRetargeterClip(
         return report;
     }
 
-    if (skel->hasAnimation(clip))
-        skel->removeAnimation(clip);
     skel->reset(true);
     std::map<unsigned short, Ogre::Quaternion> bindLocal;
     for (unsigned short i = 0; i < skel->getNumBones(); ++i)
@@ -492,6 +493,14 @@ BodyRecordReport bakeRetargeterClip(
                                neutralFrame->visibility.data());
     else
         rt.setNeutralReference(neutralQuats, neutralFrame->resolvedMask);
+    if (!rt.hasNeutralReference()) {
+        report.error = QStringLiteral("no reliable torso geometry to calibrate");
+        return report;
+    }
+    if (skel->hasAnimation(clip))
+        skel->removeAnimation(clip);
+    BodyRootMotion rootMotion;
+    rootMotion.calibrate(*neutralFrame);
 
     const double dt = 1.0 / static_cast<double>(fps);
     const double t0 = frames.front().timeSec;
@@ -512,8 +521,28 @@ BodyRecordReport bakeRetargeterClip(
         const auto q = frameQuats(frame);
         const float* world = useLandmarks ? frame.world.data() : nullptr;
         const float* vis = useLandmarks ? frame.visibility.data() : nullptr;
-        const auto locals = rt.evaluateFrame(q, frame.resolvedMask, skipRolesMask,
+        auto locals = rt.evaluateFrame(q, frame.resolvedMask, skipRolesMask,
                                              world, vis);
+        if (frame.headWorldValid) {
+            for (const auto& [handle, local] : locals)
+                skel->getBone(handle)->setOrientation(local);
+            for (auto* root : skel->getRootBones()) root->_update(true, true);
+            const QString headName = resolveHeadBone(entity);
+            if (!headName.isEmpty() && skel->hasBone(headName.toStdString())) {
+                auto* head = skel->getBone(headName.toStdString());
+                const Ogre::Quaternion parent = head->getParent()
+                    ? head->getParent()->_getDerivedOrientation() : Ogre::Quaternion::IDENTITY;
+                const auto& h = frame.headWorldRotation;
+                const Ogre::Quaternion local = parent.Inverse() * Ogre::Quaternion(h[3],h[0],h[1],h[2]);
+                auto it = std::find_if(locals.begin(), locals.end(), [&](const auto& entry) {
+                    return entry.first == head->getHandle();
+                });
+                if (it == locals.end()) locals.emplace_back(head->getHandle(), local);
+                else it->second = local;
+            }
+        }
+        const Ogre::Vector3 rootOffset = useLandmarks && options.rootMotion
+            ? rt.rootOffset(rootMotion.evaluate(frame)) : Ogre::Vector3::ZERO;
         const double keyTime =
             useSampleTimes ? (frame.timeSec - t0)
                            : dt * static_cast<double>(frameIndex);
@@ -527,11 +556,18 @@ BodyRecordReport bakeRetargeterClip(
             auto* kf = it->second->createNodeKeyFrame(
                 static_cast<Ogre::Real>(keyTime));
             kf->setRotation(bindLocal[handle].Inverse() * local);
+            if (static_cast<int>(handle) == rt.rootBoneHandle())
+                kf->setTranslate(rootOffset);
         }
     }
     report.tracksWritten = static_cast<int>(tracks.size());
     report.rolesResolved = static_cast<int>(tracks.size());
     report.clipLength = anim->getLength();
+    // Head compensation temporarily poses the master skeleton. Exporters
+    // read that master as the bind pose; leave only animation keys changed.
+    skel->reset(true);
+    for (auto* root : skel->getRootBones()) root->_update(true, true);
+    skel->_updateTransforms();
     entity->refreshAvailableAnimationState();
     return report;
 }
@@ -571,6 +607,13 @@ BodyRecordReport recordBodyLive(
         report.error = QStringLiteral("need at least 2 pose frames");
         return report;
     }
+    for (size_t i = 0; i < valid.size(); ++i) {
+        if (!std::isfinite(valid[i].timeSec)
+            || (i > 0 && valid[i].timeSec < valid[i - 1].timeSec)) {
+            report.error = QStringLiteral("body sample timestamps must be finite and ascending");
+            return report;
+        }
+    }
 
     Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
     const std::string clip = options.clipName.toStdString();
@@ -583,6 +626,7 @@ BodyRecordReport recordBodyLive(
     report = bakeRetargeterClip(entity, skel.get(), clip, fps, options, valid,
                                 /*useLandmarks=*/true, options.skipRolesMask);
     if (report.ok()) {
+        entity->setUpdateBoundingBoxFromSkeleton(true);
         SentryReporter::addBreadcrumb(
             "ai.assist.mocap_body",
             QStringLiteral("recorded '%1' via BodyRetargeter+landmarks: %2 frames, "

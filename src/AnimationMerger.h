@@ -15,11 +15,10 @@
 // once from the target skeleton (bind frame, torso Ct, per-role bind directions,
 // harvested STANDING pose). evaluateFrame() per pose.
 //
-// Live mocap (mediaPipeWorld33 passed): landmark-direction matching — the same
-// per-frame aim math applyMotionClip uses for direction retarget. MediaPipe
-// landmarks are canonicalized and each bone is aimed at its live segment
-// direction relative to the neutral calibration frame. This matches the PoseIK
-// debug overlay geometry without a mirror-L/R swap.
+// Live mocap (mediaPipeWorld33 passed): MediaPipe landmarks are canonicalized
+// and each bone follows its anatomical frame, including knee bend planes and
+// stable limb pole transport. Calibration establishes camera heading;
+// pelvis/chest retain full rotation and occluded joints hold their last pose.
 //
 // Clip bake / tests (no landmarks): parent-relative PoseIK quaternion delta vs
 // neutral, composed onto standing with Mc roll correction.
@@ -30,27 +29,28 @@ public:
     // applyMotionClip uses for -Z-facing meshes).
     explicit BodyRetargeter(Ogre::Skeleton* skel, bool yaw180 = false);
     bool valid() const { return m_valid; }
-    // resolvedMask bit i set => canonical role i is tracked this frame; roles
-    // not set hold the standing pose. Returns {boneHandle -> local quat}.
-    // NOTE: the FIRST call lazily caches the neutral reference + precomputes Mc
-    // (hence the const method mutates *d through the shared_ptr). Single-thread
-    // use only (the mocap live/bake paths); call frames in order.
+    // Quaternion-only inputs use resolvedMask and hold standing for missing
+    // roles. Landmark inputs use finite, visible anatomical frames and hold
+    // the previous local pose for missing joints. Returns absolute locals.
+    // Stateful, single-thread use only; feed frames in timestamp order.
     std::vector<std::pair<unsigned short, Ogre::Quaternion>>
     evaluateFrame(const std::array<std::array<float, 4>, 22>& canonicalQuats,
                   uint32_t resolvedMask,
                   uint32_t skipRolesMask = 0,
                   const float* mediaPipeWorld33 = nullptr,
                   const float* mediaPipeVisibility33 = nullptr) const;
-    // Live mocap: capture the reference pose and precompute direction anchors.
-    // When mediaPipeWorld33 is supplied, neutral landmark directions + Qbase
-    // are stored for the direction-matching path. Until set, evaluateFrame()
-    // holds the standing pose.
+    // Capture camera-to-rig orientation and metric scale. Landmark limbs use
+    // absolute segment directions, so a seated calibration stays seated.
+    // Until set, landmark evaluation holds bind.
     void setNeutralReference(
         const std::array<std::array<float, 4>, 22>& canonicalQuats,
         uint32_t resolvedMask = 0xFFFFFFFFu,
         const float* mediaPipeWorld33 = nullptr,
         const float* mediaPipeVisibility33 = nullptr);
     bool hasNeutralReference() const;
+    int rootBoneHandle() const;
+    // Camera-space (+Y up, +Z toward camera) metres -> hip-parent bind space.
+    Ogre::Vector3 rootOffset(const Ogre::Vector3& cameraMetres) const;
     // Forget the neutral reference so the next setNeutralReference() re-calibrates.
     void resetLiveNeutral();
 private:

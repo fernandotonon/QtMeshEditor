@@ -22,6 +22,9 @@ qtmesh mocap talk.mp4 --face --mesh avatar.glb -o out.glb
 # full-body performance onto a rigged humanoid:
 qtmesh mocap dance.mp4 --body --mesh rigged.fbx -o out.glb
 
+# retain body turns but lock translation:
+qtmesh mocap dance.mp4 --body --in-place --mesh rigged.fbx -o in-place.glb
+
 # both in one pass over the same video:
 qtmesh mocap take.mp4 --face --body --mesh character.glb -o out.glb
 ```
@@ -58,10 +61,10 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 - **Body capture** needs a **humanoid skeleton** resolving at least half of
   the 22 canonical roles (hips/spine/neck/head, both arms, both legs —
   standard humanoid bone names resolve). Unrigged meshes: run
-  `qtmesh rig --skeleton humanoid --skin` first. The root stays locked to
-  the standing pose (v1 accepts some foot slide). Body limbs calibrate on
-  the first visible frame too — start preview with arms in a natural rest
-  pose (similar to the character's idle) so raised/movement reads correctly.
+  `qtmesh rig --skeleton humanoid --skin` first. Stand facing the camera for
+  the initial calibration; subsequent body turns and movement are tracked.
+  Limbs follow the captured pose directly, including seated poses and knee
+  lifts, without requiring the rig's bind pose to match your starting pose.
 
 ## Backends
 
@@ -81,8 +84,9 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 - `--smooth-cutoff HZ` (default 1.0) / `--no-smooth`: One-Euro filter
   minimum cutoff — lower is smoother at rest, `beta` tracks fast motion.
   The live panel exposes the same smoothing.
-- `--clip-name NAME`: default `FaceCap` / `BodyCap` (`<name>_Head` for the
-  head track, `<name>_Body` when `--face --body` run together).
+- `--clip-name NAME`: default `FaceCap` / `BodyCap` (`<name>_Head` for a
+  face-only head track, `<name>_Body` including head compensation when
+  `--face --body` run together).
 - `--frames-dir DIR`: use an image sequence instead of a video (headless
   debugging/CI; no video decode involved).
 - Model base URL override: `QTMESH_MOCAP_MODEL_BASE_URL` /
@@ -138,13 +142,23 @@ startup (software decode only; fine for live webcam preview).
   rotation. Keep the camera static. Up/down (pitch) and left/right (yaw) are
   corrected for typical humanoid rigs and mirrored webcam previews (body uses
   landmark directions separately; no mirror-L/R toggle).
-- Body retargeting uses MediaPipe landmark directions (same geometry as the
-  PoseIK debug overlay) to aim skeleton bones — no mirror-L/R toggle.
-- Body root is locked (no root motion); some foot slide is expected. Live
-  pose-ik uses anatomical bone names (no CMU L/R swap) and CMU-aligned solver
-  output; recorded body clips use the same path.
+- Body retargeting uses anatomical frames from MediaPipe landmarks: full
+  pelvis/chest rotation, limb directions and knee bend planes. Imported bone
+  roll and target facing are accounted for. Anatomical names keep left/right
+  consistent through turns, and occluded joints hold their last local pose.
+- Root movement is estimated from image-space hips and torso scale. The
+  hip-centred world landmarks alone cannot provide global translation. Keep
+  the camera fixed; lateral/vertical movement follows the projection, while
+  depth is approximate without camera intrinsics. Some foot slide and depth
+  ambiguity remain possible with a single camera. Use CLI `--in-place` or
+  MCP `root_motion:false` to lock translation while retaining body turns.
+- Webcam, file preview, CLI and MCP share landmark smoothing and geometric
+  retargeting. Recording retains timestamps and preview calibration. Root
+  translation is baked onto the hip bone and survives animation export.
 - Live mode drives face, head, and (humanoid rig) body; when Face + Body are
-  both enabled, head rotation always comes from the face graph (not PoseIK).
+  both enabled, head rotation comes from the face graph. It is converted from
+  world orientation after driving the body so body yaw is not doubled. A
+  combined recording puts this compensated head track in the body clip.
 - Live camera needs a notarized build on macOS (see above); the CLI/MCP
   video paths work regardless.
 - Video decode is playback-driven (a 60 s video takes 60 s to capture).

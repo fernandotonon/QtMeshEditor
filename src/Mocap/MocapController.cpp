@@ -13,6 +13,9 @@
 #include "MocapPoseIkFk.h"
 #include "MocapBodyDriveDebug.h"
 #include "MocapPoseFix.h"
+#include "BodyRootMotion.h"
+#include "BodyPoseStream.h"
+#include <atomic>
 #include "FaceCapGeom.h"
 #include "../AnimationMerger.h"
 #include "../MotionInbetween.h"
@@ -269,10 +272,8 @@ public:
     bool bodyEnabled = false;
     std::shared_ptr<PoseCapPredictor> posePredictor;
     std::shared_ptr<HandCapPredictor> handPredictor;
-    PoseIK::Solver poseSolver;
-    std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
-    std::array<std::array<OneEuroFilter, 3>, PoseIK::kLandmarkCount> worldFilters;
-    bool requestPoseReset = false;
+    BodyPoseStream bodyStream;
+    std::atomic<bool> requestPoseReset{false};
 
 public slots:
     void processPending()
@@ -281,10 +282,8 @@ public slots:
             return;
         MocapFrame frame;
         while (mailbox->take(&frame)) {
-            if (requestPoseReset) {
-                poseSolver.reset();
-                requestPoseReset = false;
-            }
+            if (requestPoseReset.exchange(false))
+                bodyStream.reset();
 
             FaceSample s = predictor.predict(frame.image, frame.timeSec);
             if (smooth && s.confidence > 0.f) {
@@ -296,44 +295,11 @@ public slots:
 
             BodyLiveFrame body;
             if (bodyEnabled && posePredictor) {
-                PoseSample ps =
-                    posePredictor->predict(frame.image, frame.timeSec);
-                if (ps.confidence > 0.f) {
-                    PoseIK::FrameResult fr = poseSolver.solveFrame(
-                        ps.world.data(), ps.visibility.data());
-                    if (smooth)
-                        for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                            fr.quats[r] =
-                                roleFilters[r].filter(fr.quats[r], frame.timeSec);
-                    body.valid = true;
-                    body.timeSec = frame.timeSec;
-                    body.quats = fr.quats;
-                    body.resolvedMask = fr.resolvedMask;
-                    body.world = ps.world;
-                    body.visibility = ps.visibility;
-                    body.screenCrop = ps.screenCrop;
-                    body.imageXy = ps.imageXy;
-                    if (handPredictor && handPredictor->isAvailable())
-                        body.hands = handPredictor->predict(
-                            frame.image, ps.imageXy.data(),
-                            ps.visibility.data(), frame.timeSec);
-                    if (smooth) {
-                        for (int lm = 0; lm < PoseIK::kLandmarkCount; ++lm) {
-                            // BlazePose world coords for fingertip LMs (17–22) barely
-                            // move; screen-crop deltas carry the motion instead.
-                            if (lm >= 17 && lm <= 22)
-                                continue;
-                            for (int axis = 0; axis < 3; ++axis) {
-                                const size_t idx =
-                                    static_cast<size_t>(lm * 3 + axis);
-                                body.world[idx] = static_cast<float>(
-                                    worldFilters[static_cast<size_t>(lm)]
-                                                [static_cast<size_t>(axis)]
-                                        .filter(body.world[idx], frame.timeSec));
-                            }
-                        }
-                    }
-                }
+                const auto ps = posePredictor->predict(frame.image, frame.timeSec);
+                body = bodyStream.process(ps, frame.image.width(), frame.image.height());
+                if (body.valid && handPredictor && handPredictor->isAvailable())
+                    body.hands = handPredictor->predict(
+                        frame.image, ps.imageXy.data(), ps.visibility.data(), frame.timeSec);
             }
 
             // HUD preview — every frame, small + smooth scale to avoid flicker
@@ -484,17 +450,9 @@ OneEuroFilter::Params faceSmoothParams(double cutoffHz)
 OneEuroFilter::Params landmarkSmoothParams(double cutoffHz)
 {
     OneEuroFilter::Params p;
-    p.minCutoff = std::max(0.15, cutoffHz * 0.45);
-    p.beta = 0.02;
+    p.minCutoff = std::max(0.5, cutoffHz);
+    p.beta = 0.5;
     p.dCutoff = 0.8;
-    return p;
-}
-
-OneEuroFilter::Params boneOutputSmoothParams(double cutoffHz)
-{
-    OneEuroFilter::Params p;
-    p.minCutoff = std::max(0.15, cutoffHz * 0.65);
-    p.beta = 0.025;
     return p;
 }
 
@@ -502,16 +460,17 @@ void configureWorkerSmoothing(MocapInferenceWorker* worker, double cutoffHz)
 {
     if (!worker)
         return;
+    if (worker->thread() != QThread::currentThread()) {
+        QMetaObject::invokeMethod(worker, [worker, cutoffHz] {
+            configureWorkerSmoothing(worker, cutoffHz);
+        }, Qt::QueuedConnection);
+        return;
+    }
     const auto face = faceSmoothParams(cutoffHz);
-    const auto landmarks = landmarkSmoothParams(cutoffHz);
     for (auto& f : worker->weightFilters)
         f = OneEuroFilter(face);
     worker->headFilter = OneEuroQuatFilter(face);
-    for (auto& f : worker->roleFilters)
-        f = OneEuroQuatFilter(face);
-    for (auto& lm : worker->worldFilters)
-        for (auto& axis : lm)
-            axis = OneEuroFilter(landmarks);
+    worker->bodyStream.setSmoothing(cutoffHz, worker->smooth);
 }
 
 struct MocapController::Impl {
@@ -545,6 +504,8 @@ struct MocapController::Impl {
     QStringList savedEnabledAnimations;
     bool savedSkipAnimStateUpdate = false;
     bool savedAlwaysUpdateMainSkeleton = false;
+    bool savedBoundsFromSkeleton = false;
+    float bodyDebugHeight = 1.8f;
 
     // channel enables (persist across sessions; body gated on a humanoid rig)
     bool faceEnabled = true;
@@ -555,7 +516,6 @@ struct MocapController::Impl {
     // body live-drive: landmark-direction retarget (BodyRetargeter) + restore list.
     std::unique_ptr<BodyRetargeter> bodyRetargeter;
     std::vector<BodyDriveBone> bodyBones;
-    QHash<unsigned short, OneEuroQuatFilter> bodyBoneFilters;
     std::vector<BodyManualBoneSnapshot> bodyManualRestore;
     std::vector<BodyAnimMaskEntry> bodyAnimMaskRestore;
     bool bodyDetected = false;
@@ -565,13 +525,11 @@ struct MocapController::Impl {
     static constexpr int kBodyTorsoStableFrames = 3;
     static constexpr uint32_t kTorsoResolvedMask =
         (1u << 0) | (1u << 1) | (1u << 2);  // hip, abdomen, chest
-    // Live vertical shift on the entity node (world Y), not hip bone local Y —
-    // hip rotation must not skew the translation axis.
+    // Restore the scene placement separately from animated hip translation.
     Ogre::Vector3 entityBindPosition = Ogre::Vector3::ZERO;
     bool haveEntityBindPosition = false;
-    float bodyRigLegLen = 0.f;
-    float bodyNeutralLegSpan = -1.f;
-    OneEuroFilter bodyHipHeightFilter;
+    BodyRootMotion bodyRootMotion;
+    std::optional<BodyLiveFrame> bodyReferenceFrame;
     std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>
         fingerNeutralScreen2d{};
     std::array<float, AnimationMerger::kFingerSlots> fingerNeutralFlex{};
@@ -767,7 +725,6 @@ void MocapController::setSmoothingCutoff(double hz)
     QSettings settings;
     settings.setValue(QStringLiteral("mocap/smoothingCutoff"), hz);
     configureWorkerSmoothing(d->worker, d->smoothingCutoff);
-    d->bodyBoneFilters.clear();
     emit smoothingChanged();
 }
 
@@ -796,12 +753,14 @@ void MocapController::setShowPoseDebug(bool on)
 
 void MocapController::resetLiveCaptureCalibration()
 {
+    if (d->worker)
+        d->worker->requestPoseReset.store(true);
     d->calibrated = false;
     d->bodyTorsoStableFrames = 0;
     d->bodyNeutralReady = false;
     d->bodyNeutralCapturedMask = 0;
-    d->bodyNeutralLegSpan = -1.f;
-    d->bodyHipHeightFilter = OneEuroFilter();
+    d->bodyRootMotion = {};
+    d->bodyReferenceFrame.reset();
     d->haveFingerNeutralScreen = false;
     d->haveFingerNeutralFlex = false;
     d->haveFingerNeutralFlexRight = false;
@@ -1062,6 +1021,10 @@ bool MocapController::beginPreviewWithLiveSource(
     entity->setSkipAnimationStateUpdate(true);
     d->savedAlwaysUpdateMainSkeleton = entity->getAlwaysUpdateMainSkeleton();
     entity->setAlwaysUpdateMainSkeleton(true);
+    d->savedBoundsFromSkeleton = entity->getUpdateBoundingBoxFromSkeleton();
+    d->bodyDebugHeight = entity->getMesh()->getBounds().getSize().y;
+    if (bodyDrivable)
+        entity->setUpdateBoundingBoxFromSkeleton(true);
     // Head-bone drive uses FaceCap (dense landmarks) even when Body is on —
     // PoseIK's Neck/Head roles aim at the nose and tip the head down if
     // left enabled alongside FaceCap.
@@ -1107,9 +1070,8 @@ bool MocapController::beginPreviewWithLiveSource(
     d->bodyBones.clear();
     d->bodyAnimMaskRestore.clear();
     d->haveEntityBindPosition = false;
-    d->bodyRigLegLen = 0.f;
-    d->bodyNeutralLegSpan = -1.f;
-    d->bodyHipHeightFilter = OneEuroFilter();
+    d->bodyRootMotion = {};
+    d->bodyReferenceFrame.reset();
     d->fingerLiveCtx = {};
     d->fingerScreenFilters = {};
     d->haveFingerNeutralScreen = false;
@@ -1164,29 +1126,11 @@ bool MocapController::beginPreviewWithLiveSource(
                     }
                 }
             }
-            Ogre::Bone* hipBone = nullptr;
-            Ogre::Bone* footBone = nullptr;
             for (Ogre::Bone* root : skel->getRootBones())
                 root->_update(true, true);
             skel->_updateTransforms();
             d->fingerLiveCtx =
                 AnimationMerger::buildFingerLiveDriveContext(skel);
-            for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
-                Ogre::Bone* bone = skel->getBone(i);
-                const int role = MotionInbetween::canonicalIndexForBone(
-                    QString::fromStdString(bone->getName()));
-                if (role == 0)
-                    hipBone = bone;
-                else if (role == 17)
-                    footBone = bone;
-                else if (role == 21 && !footBone)
-                    footBone = bone;
-            }
-            if (hipBone && footBone) {
-                const Ogre::Vector3 hipW = hipBone->_getDerivedPosition();
-                const Ogre::Vector3 footW = footBone->_getDerivedPosition();
-                d->bodyRigLegLen = (hipW - footW).length();
-            }
         }
     } else {
         d->bodyBones.clear();
@@ -1228,7 +1172,6 @@ bool MocapController::beginPreviewWithLiveSource(
             for (auto& ax : slot)
                 ax = OneEuroFilter(fingerSmooth);
     }
-    d->bodyBoneFilters.clear();
     if (!d->worker->predictor.load()) {
         const QString msg = d->worker->predictor.lastError();
         delete d->worker;
@@ -1435,7 +1378,7 @@ void MocapController::onSample(const FaceSample& sample,
     if (!entity)
         return;
 
-    bool skeletonDriven = false;
+    std::optional<Ogre::Quaternion> faceHeadWorld;
 
     // live drive — morphs + head (face graph)
     if (sample.confidence > 0.f) {
@@ -1459,16 +1402,7 @@ void MocapController::onSample(const FaceSample& sample,
             // Selfie/webcam preview is mirrored; video-file playback is not.
             if (d->mirroredLivePreview)
                 delta = MocapPoseFix::invertCameraYawDelta(delta);
-            const Ogre::Quaternion local =
-                d->headBindWorld.Inverse() * delta * d->headBindWorld;
-            Ogre::SkeletonInstance* skel = entity->getSkeleton();
-            Ogre::Bone* bone = skel->getBone(d->headBone.toStdString());
-            bone->setOrientation(d->headBindLocal * local);
-            bone->needUpdate(true);
-            skel->_notifyManualBonesDirty();
-            if (auto* states = entity->getAllAnimationStates())
-                states->_notifyDirty();
-            skeletonDriven = true;
+            faceHeadWorld = delta * d->headBindWorld;
         }
     }
 
@@ -1494,13 +1428,8 @@ void MocapController::onSample(const FaceSample& sample,
                     canonQuats, body.resolvedMask, body.world.data(),
                     body.visibility.data());
                 d->bodyNeutralCapturedMask = body.resolvedMask;
-                const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
-                    body.world.data(), body.visibility.data());
-                if (span > 1e-4f) {
-                    d->bodyNeutralLegSpan = span;
-                    d->bodyHipHeightFilter =
-                        OneEuroFilter(landmarkSmoothParams(d->smoothingCutoff));
-                }
+                d->bodyReferenceFrame = body;
+                d->bodyRootMotion.calibrate(body);
                 tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
                 d->haveFingerNeutralScreen =
                     countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
@@ -1521,13 +1450,8 @@ void MocapController::onSample(const FaceSample& sample,
                     canonQuats, body.resolvedMask, body.world.data(),
                     body.visibility.data());
                 d->bodyNeutralCapturedMask = body.resolvedMask;
-                const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
-                    body.world.data(), body.visibility.data());
-                if (span > 1e-4f) {
-                    d->bodyNeutralLegSpan = span;
-                    d->bodyHipHeightFilter =
-                        OneEuroFilter(landmarkSmoothParams(d->smoothingCutoff));
-                }
+                d->bodyReferenceFrame = body;
+                d->bodyRootMotion.calibrate(body);
                 tryCaptureFingerNeutralScreen(body, d->fingerNeutralScreen2d);
                 d->haveFingerNeutralScreen =
                     countFingerScreen2dSlots(d->fingerNeutralScreen2d) >= 4;
@@ -1568,43 +1492,20 @@ void MocapController::onSample(const FaceSample& sample,
             canonQuats, body.resolvedMask, skipFaceHeadChain, body.world.data(),
             body.visibility.data());
         Ogre::SkeletonInstance* skel = entity->getSkeleton();
-        const auto boneSmooth = boneOutputSmoothParams(d->smoothingCutoff);
         for (const auto& [handle, local] : locals) {
             Ogre::Bone* bone = skel->getBone(handle);
             bone->setManuallyControlled(true);
-            std::array<float, 4> q{
-                local.x, local.y, local.z, local.w};
-            auto it = d->bodyBoneFilters.find(handle);
-            if (it == d->bodyBoneFilters.end())
-                it = d->bodyBoneFilters.insert(
-                    handle, OneEuroQuatFilter(boneSmooth));
-            const std::array<float, 4> smoothed =
-                it->filter(q, sample.timeSec);
-            bone->setOrientation(Ogre::Quaternion(
-                smoothed[3], smoothed[0], smoothed[1], smoothed[2]));
+            bone->setOrientation(local);
             bone->needUpdate(true);
         }
         for (Ogre::Bone* root : skel->getRootBones())
             root->_update(true, false);
         skel->_updateTransforms();
-        if (d->haveEntityBindPosition && d->bodyNeutralLegSpan > 1e-4f
-            && d->bodyRigLegLen > 1e-4f) {
-            const float span = MocapPoseIkFk::canonicalHipFootVerticalSpan(
-                body.world.data(), body.visibility.data());
-            if (Ogre::SceneNode* node = entity->getParentSceneNode()) {
-                float offsetY = 0.f;
-                if (span > 1e-4f) {
-                    offsetY = (span - d->bodyNeutralLegSpan)
-                              * (d->bodyRigLegLen / d->bodyNeutralLegSpan);
-                    const float maxShift = d->bodyRigLegLen * 0.45f;
-                    offsetY = std::clamp(offsetY, -maxShift, maxShift);
-                }
-                offsetY = static_cast<float>(d->bodyHipHeightFilter.filter(
-                    static_cast<double>(offsetY), sample.timeSec));
-                Ogre::Vector3 pos = d->entityBindPosition;
-                pos.y += offsetY;
-                node->setPosition(pos);
-            }
+        const int hipHandle = d->bodyRetargeter->rootBoneHandle();
+        if (hipHandle >= 0 && d->bodyNeutralReady) {
+            Ogre::Bone* hip = skel->getBone(static_cast<unsigned short>(hipHandle));
+            hip->setPosition(hip->getInitialPosition()
+                + d->bodyRetargeter->rootOffset(d->bodyRootMotion.evaluate(body)));
         }
         std::array<std::array<float, 2>, AnimationMerger::kFingerSlots>
             fingerLive2d{};
@@ -1636,8 +1537,6 @@ void MocapController::onSample(const FaceSample& sample,
                     skel, d->fingerNeutralScreen2d, fingerLive2d,
                     d->fingerLiveCtx, cropMask);
             }
-            if (fingerDriven > 0)
-                skeletonDriven = true;
         }
         for (Ogre::Bone* root : skel->getRootBones())
             root->_update(true, true);
@@ -1648,7 +1547,6 @@ void MocapController::onSample(const FaceSample& sample,
         entity->_updateAnimation();
         if (Ogre::SceneNode* node = entity->getParentSceneNode())
             node->needUpdate();
-        skeletonDriven = true;
 
         MocapBodyDriveDebug::logFrame(
             entity, skel, body, d->bodyRetargeter.get(), sample.timeSec,
@@ -1657,22 +1555,45 @@ void MocapController::onSample(const FaceSample& sample,
             locals.size());
     }
 
+    // Face solve is camera-relative WORLD orientation. Convert AFTER driving
+    // the body so a pelvis turn is not added a second time at the head.
+    if (faceHeadWorld && entity->hasSkeleton()) {
+        auto* skel = entity->getSkeleton();
+        auto* bone = skel->getBone(d->headBone.toStdString());
+        const Ogre::Quaternion parent = bone->getParent()
+            ? bone->getParent()->_getDerivedOrientation() : Ogre::Quaternion::IDENTITY;
+        bone->setOrientation(parent.Inverse() * *faceHeadWorld);
+        bone->needUpdate(true);
+        skel->_notifyManualBonesDirty();
+        if (auto* states = entity->getAllAnimationStates()) states->_notifyDirty();
+        entity->_updateAnimation();
+    }
+
     if (d->showPoseDebug && body.valid && entity) {
-        const Ogre::AxisAlignedBox box = entity->getBoundingBox();
-        const float height = box.getMaximum().y - box.getMinimum().y;
-        d->poseDebugOverlay.update(body, height);
+        d->poseDebugOverlay.update(body, d->bodyDebugHeight);
     }
 
     if (d->state == Recording) {
         d->take.push_back(sample);
-        if (d->bodyRetargeter)
-            d->bodyTake.push_back(body);
+        if (d->bodyRetargeter) {
+            auto recordedBody = body;
+            if (faceHeadWorld) {
+                recordedBody.headWorldValid = true;
+                recordedBody.headWorldRotation = {faceHeadWorld->x, faceHeadWorld->y,
+                                                 faceHeadWorld->z, faceHeadWorld->w};
+            }
+            d->bodyTake.push_back(recordedBody);
+        }
         d->lastSampleTime = sample.timeSec;
     }
 }
 
 void MocapController::calibrateNeutral()
 {
+    if (d->state == Recording) {
+        setStatusMessage(tr("Stop recording before changing the neutral reference."));
+        return;
+    }
     resetLiveCaptureCalibration();
     // Next frame with a stable full torso will capture neutral immediately.
     d->bodyTorsoStableFrames = Impl::kBodyTorsoStableFrames;
@@ -1711,13 +1632,17 @@ void MocapController::stopRecording()
     QStringList summary;
     int faceKeys = 0, bodyTracks = 0;
     double clipLen = 0.0;
+    const bool combinedHead = d->bodyRetargeter && std::count_if(
+        d->bodyTake.begin(), d->bodyTake.end(), [](const BodyLiveFrame& f) {
+            return f.valid && f.headWorldValid;
+        }) >= 2;
 
     // face + head clip (only when a face/head channel actually drove)
     if (!d->mapping.channels.isEmpty()
-        || (d->headEnabled && !d->headBone.isEmpty())) {
+        || (d->headEnabled && !d->headBone.isEmpty() && !combinedHead)) {
         MocapRecorder::FaceRecordOptions options;
         options.clipName = d->clipName;
-        options.head = d->headEnabled && !d->headBone.isEmpty();
+        options.head = d->headEnabled && !d->headBone.isEmpty() && !combinedHead;
         auto* cmd = new RecordMocapClipCommand(d->entityName, d->take,
                                                d->mapping, options);
         UndoManager::getSingleton()->push(cmd);
@@ -1750,6 +1675,7 @@ void MocapController::stopRecording()
             MocapRecorder::BodyRecordOptions bopts;
             bopts.clipName = d->clipName + QStringLiteral("_Body");
             bopts.algorithmUsed = QStringLiteral("pose-ik-landmarks");
+            bopts.neutralFrame = d->bodyReferenceFrame;
             bopts.skipRolesMask = faceHeadChainSkipMask(
                 d->headEnabled && !d->headBone.isEmpty());
             const int fps =
@@ -1761,6 +1687,9 @@ void MocapController::stopRecording()
             UndoManager::getSingleton()->push(bcmd);
             const auto& br = bcmd->report();
             if (br.ok()) {
+                // The recorded clip also needs moving bounds after preview
+                // restores its snapshots (root motion can leave bind AABB).
+                d->savedBoundsFromSkeleton = true;
                 bodyTracks = br.tracksWritten;
                 clipLen = std::max(clipLen, br.clipLength);
                 summary << tr("'%1' (%2 tracks)")
@@ -1796,6 +1725,7 @@ void MocapController::restoreEntityState()
         morphMgr->setWeight(entity, it.key(), it.value());
     entity->setSkipAnimationStateUpdate(d->savedSkipAnimStateUpdate);
     entity->setAlwaysUpdateMainSkeleton(d->savedAlwaysUpdateMainSkeleton);
+    entity->setUpdateBoundingBoxFromSkeleton(d->savedBoundsFromSkeleton);
     if (d->addedSoftwareAnimRequest) {
         entity->removeSoftwareAnimationRequest(true);
         d->addedSoftwareAnimRequest = false;

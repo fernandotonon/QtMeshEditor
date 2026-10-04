@@ -68,6 +68,8 @@ inline Ogre::Quaternion localArtic(
 }
 
 // PoseIK canonical FK used by the debug overlay and body-drive diagnostics.
+// World quaternions aim +Y down each outgoing segment. Captured offsets are
+// already posed: rotating them again double-applies articulation and yaw.
 inline void fkPoseIkJoints(
     const std::array<std::array<float, 4>, PoseIK::kCanonicalRoles>& quats,
     uint32_t resolvedMask,
@@ -78,59 +80,31 @@ inline void fkPoseIkJoints(
     const Vec3 hip = mid(canonLmPts[23], canonLmPts[24]);
     out[static_cast<size_t>(PoseIK::Hip)] = hip;
 
-    struct BoneSeg {
-        int role;
-        int fromLm;
-        int toLm;
+    const Vec3 chest = mid(canonLmPts[11], canonLmPts[12]);
+    const Vec3 head = mid(canonLmPts[7], canonLmPts[8]);
+    out[PoseIK::Abdomen] = mid(hip, chest);
+    out[PoseIK::Chest] = chest;
+    out[PoseIK::Neck] = out[PoseIK::Neck1] = mid(chest, head);
+    out[PoseIK::Head] = head;
+    struct Chain { int upper, lower, end, a, b, c; };
+    const Chain chains[] = {
+        {PoseIK::LHip, PoseIK::LKnee, PoseIK::LFoot, 23, 25, 27},
+        {PoseIK::RHip, PoseIK::RKnee, PoseIK::RFoot, 24, 26, 28},
+        {PoseIK::LShoulder, PoseIK::LElbow, PoseIK::LHand, 11, 13, 15},
+        {PoseIK::RShoulder, PoseIK::RElbow, PoseIK::RHand, 12, 14, 16},
     };
-    static const BoneSeg segs[] = {
-        {PoseIK::Abdomen, 23, 11}, {PoseIK::Chest, 11, 12},
-        {PoseIK::Neck, 12, 0}, {PoseIK::Head, 0, 8},
-        {PoseIK::RShoulder, 12, 14}, {PoseIK::RElbow, 14, 16},
-        {PoseIK::RHand, 14, 16},
-        {PoseIK::LShoulder, 11, 13}, {PoseIK::LElbow, 13, 15},
-        {PoseIK::LHand, 13, 15},
-        {PoseIK::RHip, 24, 26}, {PoseIK::RKnee, 26, 28},
-        {PoseIK::RFoot, 28, 32},
-        {PoseIK::LHip, 23, 25}, {PoseIK::LKnee, 25, 27},
-        {PoseIK::LFoot, 27, 31},
-    };
-
-    std::array<Vec3, PoseIK::kCanonicalRoles> restOffset{};
-    for (const BoneSeg& s : segs) {
-        Vec3 dir = sub(canonLmPts[static_cast<size_t>(s.toLm)],
-                       canonLmPts[static_cast<size_t>(s.fromLm)]);
-        const float d = len(dir);
-        if (d < 1e-5f)
-            dir = {0.f, 0.12f, 0.f};
-        else
-            dir = mul(dir, 1.f / d);
-        restOffset[static_cast<size_t>(s.role)] = mul(dir, std::max(d, 0.05f));
-    }
-
-    std::array<Ogre::Quaternion, PoseIK::kCanonicalRoles> worldRot{};
-    worldRot.fill(Ogre::Quaternion::IDENTITY);
-
-    for (int role = 0; role < PoseIK::kCanonicalRoles; ++role) {
-        if (!(resolvedMask & (1u << static_cast<unsigned>(role))))
-            continue;
-        const int parent = MotionInbetween::canonicalParentOf(role);
-        const Ogre::Quaternion local = localArtic(quats, role, resolvedMask);
-        if (parent >= 0 && (resolvedMask & (1u << static_cast<unsigned>(parent)))) {
-            worldRot[static_cast<size_t>(role)] =
-                worldRot[static_cast<size_t>(parent)] * local;
-            out[static_cast<size_t>(role)] =
-                add(out[static_cast<size_t>(parent)],
-                    mulVec3(worldRot[static_cast<size_t>(parent)],
-                            restOffset[static_cast<size_t>(role)]));
-        } else if (role == PoseIK::Hip) {
-            worldRot[0] = quatFromArray(quats[0]);
-        } else {
-            worldRot[static_cast<size_t>(role)] =
-                quatFromArray(quats[static_cast<size_t>(role)]);
-            out[static_cast<size_t>(role)] =
-                add(hip, restOffset[static_cast<size_t>(role)]);
-        }
+    for (const Chain& chain : chains) {
+        out[chain.upper] = canonLmPts[chain.a];
+        out[chain.lower] = canonLmPts[chain.b];
+        out[chain.end] = canonLmPts[chain.c];
+        auto aim = [&](int role, int child, int from, int to) {
+            if (!(resolvedMask & (1u << role))) return;
+            const float length = len(sub(canonLmPts[to], canonLmPts[from]));
+            if (!std::isfinite(length)) return;
+            out[child] = add(out[role], mulVec3(quatFromArray(quats[role]), {0.f, length, 0.f}));
+        };
+        aim(chain.upper, chain.lower, chain.a, chain.b);
+        aim(chain.lower, chain.end, chain.b, chain.c);
     }
 }
 

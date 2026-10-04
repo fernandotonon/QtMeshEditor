@@ -27,6 +27,10 @@ int run(int, char*[])
 #include "OneEuroFilter.h"
 #include "PoseCapPredictor.h"
 #include "PoseIKSolver.h"
+#include "MocapLiveTypes.h"
+#include "BodyPoseStream.h"
+#include "BodyPoseGeometry.h"
+#include "MocapPoseFix.h"
 #include "VideoFrameSource.h"
 
 #include "../GamificationManager.h"
@@ -45,6 +49,7 @@ int run(int, char*[])
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -56,14 +61,15 @@ const char* kUsage =
     "Usage: qtmesh mocap <video> [--face] [--body] --mesh <meshfile> [-o out.glb]\n"
     "              [--clip-name NAME] [--fps 30] [--smooth-cutoff HZ]\n"
     "              [--no-smooth] [--map overrides.json] [--no-head]\n"
-    "              [--algo sam3dbody|pose-ik] [--no-model]\n"
+    "              [--algo sam3dbody|pose-ik] [--no-model] [--in-place]\n"
     "              [--frames-dir DIR] [--json]\n"
     "\n"
     "  --face: facial performance from a video (or an image sequence via\n"
     "  --frames-dir) onto the mesh's ARKit-style morph targets as a weight\n"
     "  clip, plus head rotation on the Head bone (skinned) or node (static).\n"
     "  --body: full-body pose onto the mesh's humanoid skeleton as a skeletal\n"
-    "  clip (root locked; --algo pose-ik or --no-model force the analytic\n"
+    "  clip with body turns and estimated root movement (--in-place locks\n"
+    "  translation; --algo pose-ik or --no-model force the analytic\n"
     "  fallback backend). Both can run in one pass over the same video.\n";
 
 QJsonObject reportToJson(const MocapRecorder::FaceRecordReport& r)
@@ -115,6 +121,7 @@ int run(int argc, char* argv[])
     double fps = 30.0;
     double smoothCutoff = 1.0;
     bool smooth = true;
+    bool rootMotion = true;
     bool face = false;
     bool body = false;
     bool noModel = false;
@@ -129,12 +136,8 @@ int run(int argc, char* argv[])
         if (arg == QLatin1String("--body")) { body = true; continue; }
         if (arg == QLatin1String("--no-model")) { noModel = true; continue; }
         if (arg == QLatin1String("--root-motion")) {
-            CLIPipeline::writeCliError(QStringLiteral(
-                "Error: --root-motion is not available on the pose-ik backend "
-                "(its world landmarks are hip-centred, so they carry no root "
-                "translation) — the root stays locked to the standing pose. "
-                "Tracked for the SAM 3D Body backend in #874.\n"));
-            return 2;
+            rootMotion = true;
+            continue;
         }
         if (arg == QLatin1String("--algo")) {
             if (i + 1 >= argc) {
@@ -154,6 +157,7 @@ int run(int argc, char* argv[])
         if (arg == QLatin1String("--json")) { jsonOutput = true; continue; }
         if (arg == QLatin1String("--no-head")) { head = false; continue; }
         if (arg == QLatin1String("--no-smooth")) { smooth = false; continue; }
+        if (arg == QLatin1String("--in-place")) { rootMotion = false; continue; }
         auto value = [&](const char* flag) -> QString {
             if (i + 1 >= argc) {
                 CLIPipeline::writeCliError(
@@ -402,7 +406,9 @@ int run(int argc, char* argv[])
     }
 
     std::vector<FaceSample> samples;
-    std::vector<PoseSample> poseSamples;
+    std::vector<BodyLiveFrame> poseSamples;
+    BodyPoseStream bodyStream;
+    bodyStream.setSmoothing(smoothCutoff, smooth);
     std::array<OneEuroFilter, 52> weightFilters;
     OneEuroQuatFilter headFilter;
     if (smooth) {
@@ -432,8 +438,8 @@ int run(int argc, char* argv[])
                              samples.push_back(s);
                          }
                          if (body) {
-                             poseSamples.push_back(posePredictor.predict(
-                                 frame.image, frame.timeSec));
+                             poseSamples.push_back(bodyStream.process(posePredictor.predict(
+                                 frame.image, frame.timeSec), frame.image.width(), frame.image.height()));
                          }
                      });
     QObject::connect(source.get(), &VideoFrameSource::finished, [&] {
@@ -460,15 +466,45 @@ int run(int argc, char* argv[])
         return 1;
     }
 
+    bool combinedHead = false;
+    if (face && body && head && entity->hasSkeleton()) {
+        const auto headName = MocapRecorder::resolveHeadBone(entity);
+        if (!headName.isEmpty()) {
+            auto* skel = entity->getSkeleton();
+            skel->reset(true);
+            skel->_updateTransforms();
+            const auto bindWorld = skel->getBone(headName.toStdString())->_getDerivedOrientation();
+            std::optional<Ogre::Quaternion> neutral;
+            for (size_t i = 0; i < std::min(samples.size(), poseSamples.size()); ++i) {
+                if (!(samples[i].confidence > 0.f) || !poseSamples[i].valid
+                    || !BodyPoseGeometry::solve(poseSamples[i].world.data(),
+                        poseSamples[i].visibility.data()).resolved(PoseIK::Hip)) continue;
+                const auto& q = samples[i].headRotation;
+                const Ogre::Quaternion current(q[3],q[0],q[1],q[2]);
+                if (!neutral) neutral = current;
+                const auto world = MocapPoseFix::invertCameraPitchDelta(current * neutral->Inverse()) * bindWorld;
+                poseSamples[i].headWorldValid = true;
+                poseSamples[i].headWorldRotation = {world.x,world.y,world.z,world.w};
+            }
+            combinedHead = std::count_if(poseSamples.begin(), poseSamples.end(),
+                [](const BodyLiveFrame& frame) { return frame.valid && frame.headWorldValid; }) >= 2;
+        }
+    }
+
     // --- record: face ------------------------------------------------------------
     // In combined --face --body mode a failed stream (e.g. the face is too
     // small to track in full-body footage) reports its error but doesn't
     // abort the other stream; the exit code is 0 if at least one recorded.
     MocapRecorder::FaceRecordReport report;
-    if (face) {
+    const bool headInBodyOnly = face && combinedHead && mapping.channels.isEmpty();
+    if (headInBodyOnly) {
+        // An ordinary humanoid can have a Head but no facial morphs. Its
+        // requested head take is in the body clip, not a failed empty face clip.
+        report.error = QStringLiteral("head recording pending body bake");
+    } else if (face) {
         MocapRecorder::FaceRecordOptions options;
         options.clipName = clipName;
-        options.head = head;
+        options.head = head && !combinedHead;
         report = MocapRecorder::recordFace(entity, samples, mapping, options);
         if (!report.ok()) {
             CLIPipeline::writeCliError(
@@ -481,30 +517,13 @@ int run(int argc, char* argv[])
     // --- record: body ------------------------------------------------------------
     MocapRecorder::BodyRecordReport bodyReport;
     if (body) {
-        std::vector<std::vector<std::array<float, 4>>> clipQuats;
-        std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
-        if (smooth) {
-            OneEuroFilter::Params params;
-            params.minCutoff = smoothCutoff;
-            for (auto& f : roleFilters)
-                f = OneEuroQuatFilter(params);
-        }
-        PoseIK::Solver solver;
+        std::vector<BodyLiveFrame> bodyFrames;
         int noPose = 0;
-        for (const PoseSample& s : poseSamples) {
-            if (s.confidence <= 0.f) {
-                ++noPose;
-                continue;  // dropped frame; the take compresses across gaps
-            }
-            PoseIK::FrameResult fr =
-                solver.solveFrame(s.world.data(), s.visibility.data());
-            if (smooth)
-                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                    fr.quats[r] = roleFilters[r].filter(fr.quats[r], s.timeSec);
-            clipQuats.push_back(std::vector<std::array<float, 4>>(
-                fr.quats.begin(), fr.quats.end()));
+        for (const auto& frame : poseSamples) {
+            if (!frame.valid) { ++noPose; continue; }
+            bodyFrames.push_back(frame);
         }
-        if (clipQuats.size() < 2) {
+        if (bodyFrames.size() < 2) {
             CLIPipeline::writeCliError(QStringLiteral(
                 "Error: no person tracked in the source (%1 of %2 frames had "
                 "no pose).\n").arg(noPose).arg(poseSamples.size()));
@@ -521,16 +540,39 @@ int run(int argc, char* argv[])
                                         : clipName;
             bodyOptions.algorithmUsed = bodyAlgoUsed;
             bodyOptions.fallbackReason = bodyFallbackReason;
-            bodyReport = MocapRecorder::recordBody(
-                entity, clipQuats, static_cast<int>(fps), bodyOptions);
+            bodyOptions.rootMotion = rootMotion;
+            bodyReport = MocapRecorder::recordBodyLive(
+                entity, bodyFrames, static_cast<int>(fps), bodyOptions);
             bodyReport.framesProcessed = static_cast<int>(poseSamples.size());
             if (!bodyReport.ok()) {
                 CLIPipeline::writeCliError(
                     QStringLiteral("Error: %1\n").arg(bodyReport.error));
+                if (face && combinedHead) {
+                    // Keep face/head capture usable if body calibration fails.
+                    MocapRecorder::FaceRecordOptions fallback;
+                    fallback.clipName = clipName;
+                    fallback.head = head;
+                    report = MocapRecorder::recordFace(entity, samples, mapping, fallback);
+                }
                 if (!face || !report.ok())
                     return 1;
             }
         }
+    }
+    if (face && combinedHead && bodyReport.ok()) {
+        if (headInBodyOnly) {
+            report.error.clear();
+            report.clipName = bodyReport.clipName;
+            report.framesProcessed = static_cast<int>(samples.size());
+            report.framesNoFace = static_cast<int>(std::count_if(samples.begin(), samples.end(),
+                [](const FaceSample& sample) { return !(sample.confidence > 0.f); }));
+            report.unmatchedCanonical = mapping.unmatchedCanonical;
+            report.unmatchedMesh = mapping.unmatchedMesh;
+        }
+        report.headTarget = QStringLiteral("body:%1").arg(MocapRecorder::resolveHeadBone(entity));
+        report.headKeyframesWritten = static_cast<int>(std::count_if(poseSamples.begin(), poseSamples.end(),
+            [](const BodyLiveFrame& frame) { return frame.valid && frame.headWorldValid; }));
+        report.clipLength = std::max(report.clipLength, bodyReport.clipLength);
     }
     if (face && body && !report.ok() && !bodyReport.ok())
         return 1;
