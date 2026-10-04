@@ -5,8 +5,9 @@
 // permissive fallback backend. Pure data: no Qt/Ogre/ONNX.
 //
 // Input: MediaPipe pose WORLD landmarks per frame (33 x xyz, metres,
-// hip-centred, MediaPipe's frame: +x subject's-left, +y DOWN, +z toward the
-// camera). Canonicalized to CMU (+Y up, +Z forward, LEFT at +X) via (x,-y,+z).
+// hip-centred, MediaPipe's camera frame: +x image-right, +y DOWN, +z AWAY
+// from the camera). Canonicalized to CMU (+Y up, +Z forward, LEFT at +X)
+// via the handedness-preserving rotation (x,-y,-z).
 // Output: WORLD orientation quaternions (x,y,z,w) for the 22 canonical CMU
 // roles MotionInbetween/AnimationMerger retarget with
 // (`applyMotionClip(..., worldFrame=true)` takes the delta vs frame 0 and
@@ -68,7 +69,7 @@ public:
     void reset();
 
     // Canonicalize MediaPipe world landmarks (+x subject-left, +y down, +z
-    // toward camera) into the CMU frame (+Y up, +Z forward, LEFT at +X).
+    // away from camera) into the CMU frame (+Y up, +Z forward, LEFT at +X).
     static void canonicalizeMediaPipeWorld(
         const float* world33x3,
         std::array<std::array<float, 3>, kLandmarkCount>& out);
@@ -94,9 +95,6 @@ private:
     std::array<std::array<float, 3>, kCanonicalRoles> m_prevSecondary{};
     std::array<std::array<float, 3>, kCanonicalRoles> m_prevPrimary{};
     std::array<std::array<float, 4>, kCanonicalRoles> m_prevQuats{};
-    // previous hip horizontal line (world frame) — keeps the torso frame
-    // from flipping 180° on a noisy/occluded seated subject.
-    std::array<float, 3> m_prevHipLine{0.f, 0.f, 0.f};
 };
 
 }  // namespace PoseIK

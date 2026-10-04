@@ -28,6 +28,7 @@
 #include "Mocap/OneEuroFilter.h"
 #include "Mocap/PoseCapPredictor.h"
 #include "Mocap/PoseIKSolver.h"
+#include "Mocap/BodyPoseStream.h"
 #include "Mocap/VideoFrameSource.h"
 #include "commands/RecordMocapClipCommand.h"
 #include "Mocap/MocapController.h"
@@ -9566,14 +9567,17 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     if (!source->open(&openError))
         return makeErrorResult(QString("Error: %1").arg(openError));
 
-    auto poseSamples = std::make_shared<std::vector<PoseSample>>();
+    auto poseSamples = std::make_shared<std::vector<BodyLiveFrame>>();
+    BodyPoseStream bodyStream;
+    bodyStream.setSmoothing(1.0, smooth);
     QEventLoop loop;
     bool finished = false;
     QString streamError;
     QObject::connect(source.get(), &VideoFrameSource::frameReady,
                      [&, posePredictor, poseSamples](const MocapFrame& frame) {
-                         poseSamples->push_back(
-                             posePredictor->predict(frame.image, frame.timeSec));
+                         poseSamples->push_back(bodyStream.process(
+                             posePredictor->predict(frame.image, frame.timeSec),
+                             frame.image.width(), frame.image.height()));
                      });
     QObject::connect(source.get(), &VideoFrameSource::finished, [&] {
         finished = true; loop.quit();
@@ -9589,35 +9593,23 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     if (!streamError.isEmpty())
         return makeErrorResult(QString("Error: %1").arg(streamError));
 
-    std::vector<std::vector<std::array<float, 4>>> clipQuats;
-    {
-        std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
-        PoseIK::Solver solver;
-        for (const PoseSample& s : *poseSamples) {
-            if (s.confidence <= 0.f)
-                continue;
-            PoseIK::FrameResult fr =
-                solver.solveFrame(s.world.data(), s.visibility.data());
-            if (smooth)
-                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                    fr.quats[r] = roleFilters[r].filter(fr.quats[r], s.timeSec);
-            clipQuats.push_back(std::vector<std::array<float, 4>>(
-                fr.quats.begin(), fr.quats.end()));
-        }
-    }
-    if (clipQuats.size() < 2)
+    std::vector<BodyLiveFrame> bodyFrames;
+    for (const auto& sample : *poseSamples)
+        if (sample.valid) bodyFrames.push_back(sample);
+    if (bodyFrames.size() < 2)
         return makeErrorResult("Error: no person tracked in the video");
 
     MocapRecorder::BodyRecordOptions options;
     options.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
     options.algorithmUsed = QStringLiteral("pose-ik");
+    options.rootMotion = args.value("root_motion").toBool(true);
     options.fallbackReason = algo == QLatin1String("pose-ik")
         ? QString()
         : QStringLiteral("sam3dbody model not available (checkpoint access "
                          "pending — see THIRD_PARTY_AI_MODELS.md); used pose-ik");
 
     return runOgreOp([&]() -> QJsonObject {
-        auto* cmd = new RecordBodyClipCommand(entity->getName(), clipQuats,
+        auto* cmd = new RecordBodyClipCommand(entity->getName(), std::move(bodyFrames),
                                               static_cast<int>(fps), options);
         UndoManager::getSingleton()->push(cmd);
         MocapRecorder::BodyRecordReport report = cmd->report();
@@ -13804,6 +13796,7 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Target skinned entity (default: first/selected)."}};
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional export path written after recording."}};
         props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "Skeletal clip name (default BodyCap)."}};
+        props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "Estimate root movement from the camera projection (default true); false records in place."}};
         props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
         props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (quality path; falls back while its checkpoints are gated) or pose-ik."}};
@@ -13812,7 +13805,7 @@ QJsonArray MCPServer::buildToolsList()
         appendTool(
             "capture_body_from_video",
             "Performance capture: track a person in a video and record the full-body pose as a "
-            "skeletal animation on the entity's humanoid rig (rotation-only, root locked, "
+            "skeletal animation on the entity's humanoid rig (body turns and estimated root movement, "
             "ONE undoable clip). Needs a skinned mesh resolving at least half of the 22 "
             "canonical roles. Requires a build with ENABLE_MOCAP=ON; models download on first use.",
             props,
