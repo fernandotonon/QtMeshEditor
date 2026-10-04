@@ -62,6 +62,19 @@ struct NricpOptions {
     // loosened once alpha dropped below 1 and the fitted lip line drifted a few
     // mm below the marked lips (field-observed offset).
     double landmarkWeight = 30.0;
+    // Optional vertex sets used ONLY for the rigid pre-align (centroid +
+    // bbox scale). The pre-align is correspondence-free, so it must compare
+    // LIKE WITH LIKE: the caller may fit a SUBSET of the template (the ICT
+    // main surface, with eyeballs/teeth/lashes split out) against a user
+    // mesh that still contains its own equivalents of those parts. Aligning
+    // those two directly is a category error — measured on the template
+    // fitted to ITSELF, the two centroids differ by 0.875 units in Z, so
+    // the anneal warps the surface by ~0.55 mean just to close a gap that
+    // should not exist, and that warp detunes the deformation transfer's
+    // target rest frames (every blendshape came out 4-9x too weak).
+    // Leave empty to pre-align on the fitted geometry itself.
+    std::vector<float> prealignTmplV;
+    std::vector<float> prealignUserV;
 };
 
 // Progress callback for the annealing loop: (level, levelCount). Return false

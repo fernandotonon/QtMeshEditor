@@ -49,6 +49,53 @@ TurntableState &state()
   return s;
 }
 
+/// RAII save/restore for the editor's selection. prepareSceneForCapture clears
+/// it so the capture has no selection highlight, which is fine for the CLI
+/// (the process exits right after) but destructive in-editor: the #521 Pose
+/// Library renders a thumbnail on a LIVE scene, so saving a pose deselected
+/// whatever the author had selected. Same class of bug as RecenterGuard below.
+struct SelectionGuard {
+  QList<Ogre::SceneNode *> nodes;
+  QList<Ogre::Entity *> entities;
+  QList<Ogre::SubEntity *> subEntities;
+  bool active = false;
+
+  SelectionGuard()
+  {
+    auto *sel = SelectionSet::getSingletonPtr();
+    if (!sel)
+      return;
+    nodes = sel->getNodesSelectionList();
+    entities = sel->getEntitiesSelectionList();
+    subEntities = sel->getSubEntitiesSelectionList();
+    active = true;
+  }
+  SelectionGuard(const SelectionGuard &) = delete;
+  SelectionGuard &operator=(const SelectionGuard &) = delete;
+  ~SelectionGuard() noexcept
+  {
+    if (!active)
+      return;
+    try {
+      auto *sel = SelectionSet::getSingletonPtr();
+      if (!sel)
+        return;
+      sel->clear();
+      for (Ogre::SceneNode *n : nodes)
+        if (n)
+          sel->append(n);
+      for (Ogre::Entity *e : entities)
+        if (e)
+          sel->append(e);
+      for (Ogre::SubEntity *se : subEntities)
+        if (se)
+          sel->append(se);
+    } catch (...) {
+      // Best-effort restore; keep the destructor noexcept.
+    }
+  }
+};
+
 void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
 {
   SelectionSet::getSingleton()->clear();
@@ -224,14 +271,23 @@ Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
 }
 
 /// Move loaded entities so the combined bounds center sits at the world origin.
-void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisAlignedBox &bounds)
+/// Reports the applied shift through `outOffset` so an in-editor caller can put
+/// the nodes back — see RecenterGuard.
+void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisAlignedBox &bounds,
+                              Ogre::Vector3 *outOffset = nullptr)
 {
+  if (outOffset)
+    *outOffset = Ogre::Vector3::ZERO;
+
   if (bounds.isNull() || bounds.isInfinite())
     return;
 
   const Ogre::Vector3 center = bounds.getCenter();
   if (center.squaredLength() < 1e-10f)
     return;
+
+  if (outOffset)
+    *outOffset = center;
 
   std::unordered_set<Ogre::SceneNode *> shifted;
   for (Ogre::Entity *entity : entities) {
@@ -246,6 +302,51 @@ void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisA
   bounds.setExtents(bounds.getMinimum() - center, bounds.getMaximum() - center);
   refreshEntityBounds(entities);
 }
+
+/// Undo `recenterEntitiesAtOrigin`, putting every shifted node back.
+void restoreEntitiesFromRecenter(const QList<Ogre::Entity *> &entities, const Ogre::Vector3 &offset)
+{
+  if (offset.squaredLength() < 1e-10f)
+    return;
+
+  std::unordered_set<Ogre::SceneNode *> shifted;
+  for (const Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    Ogre::SceneNode *node = entity->getParentSceneNode();
+    if (!node || !shifted.insert(node).second)
+      continue;
+    node->translate(offset, Ogre::Node::TS_WORLD);
+  }
+  refreshEntityBounds(entities);
+}
+
+/// RAII restore for the capture-time recenter. The CLI exits after rendering so
+/// it never noticed the shift, but in-editor callers (e.g. the #521 Pose Library
+/// thumbnail) render a LIVE scene entity — without this the model stays parked
+/// at the world origin after every thumbnail.
+struct RecenterGuard {
+  const QList<Ogre::Entity *> &entities;
+  Ogre::Vector3 offset;
+  bool active = false;
+
+  RecenterGuard(const QList<Ogre::Entity *> &ents, Ogre::Vector3 off) : entities(ents), offset(off)
+  {
+    active = offset.squaredLength() >= 1e-10f;
+  }
+  RecenterGuard(const RecenterGuard &) = delete;
+  RecenterGuard &operator=(const RecenterGuard &) = delete;
+  ~RecenterGuard() noexcept
+  {
+    if (!active)
+      return;
+    try {
+      restoreEntitiesFromRecenter(entities, offset);
+    } catch (...) {
+      // Best-effort restore; swallow to keep the destructor noexcept.
+    }
+  }
+};
 
 Ogre::Vector3 orbitAxisVector(TurntableAxis axis)
 {
@@ -592,12 +693,16 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
     return false;
   }
 
-  recenterEntitiesAtOrigin(entities, bounds);
+  Ogre::Vector3 recenterOffset = Ogre::Vector3::ZERO;
+  recenterEntitiesAtOrigin(entities, bounds, &recenterOffset);
   bounds = combinedWorldBounds(entities);
+  RecenterGuard recenterGuard(entities, recenterOffset);
 
   const float elevationRad =
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
 
+  // Restore the author's selection when we're done — see SelectionGuard.
+  SelectionGuard selectionGuard;
   prepareSceneForCapture(entities);
   // Tangents + RTSS normal wiring, then strip any duplicate normal-map TUS that
   // would still modulate in the FFP chain (common on FBX like Jump.fbx).

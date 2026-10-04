@@ -4,6 +4,7 @@
 
 #include "FaceCapGeom.h"
 #include "../ModelDownloader.h"
+#include "../ModelFetch.h"
 #include "../OnnxRuntimeSettings.h"
 
 #include <QDir>
@@ -60,39 +61,17 @@ bool downloadFileBlocking(const QStringList& urls, const QString& dest,
     for (const QString& url : urls) {
         if (url.isEmpty())
             continue;
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(
-            dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) {
-                    ok = true;
-                    loop.quit();
-                }
-            });
-        auto onErr = QObject::connect(
-            dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) {
-                    ok = false;
-                    loop.quit();
-                }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() {
-            timedOut = true;
-            loop.quit();
-        });
-        timeout.start(180000);
-        dl->startDownload(url, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut && dl)
-            dl->cancelDownload();
-        if (ok && !timedOut && QFileInfo::exists(dest)
-            && QFileInfo(dest).size() > 1024)
+        // #1037: one shared blocking wait — keeps the downloader's own error
+        // text and the synchronous-rejection guard this loop used to lack.
+        ModelFetch::Request req;
+        req.url = url;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 180000;
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        // fo.ok already implies the file exists; the size floor stays — a
+        // truncated/HTML-error body must not be accepted as a model.
+        if (fo.ok && QFileInfo(dest).size() > 1024)
             return true;
         QFile::remove(dest);
     }

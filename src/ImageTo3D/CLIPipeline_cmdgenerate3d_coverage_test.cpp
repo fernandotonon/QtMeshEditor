@@ -165,3 +165,157 @@ TEST(CLIPipelineCmdGenerate3dCoverage, Trellis2BackendAcceptedButUnknownRejected
     qunsetenv("QTMESH_TRELLIS2_PYTHON");
     qunsetenv("QTMESH_TRELLIS2_CLI");
 }
+
+// ---- TRELLIS.2 texture options ---------------------------------------------
+//
+// These three flags exist so a simple prop (a pizza box, a floor mat) is not
+// forced to a hero asset's budget. The backend always accepted the values;
+// only the pickers were capped. Argument validation is what these pin.
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TextureSupersampleRequiresValue)
+{
+    Gen3dArgv args({"generate3d", kMissingImage, "--texture-supersample"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TextureSupersampleRejectsAnythingButOneOrTwo)
+{
+    // The bake clamps to [1,2] anyway, but a silently-clamped 4 would read as
+    // "the flag did nothing" — reject it at the boundary instead.
+    for (const char* bad : {"0", "3", "4", "abc", "-1"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--texture-supersample", bad});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2)
+            << "should reject --texture-supersample " << bad;
+    }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TextureSupersampleAcceptsTheAlias)
+{
+    // `--supersample` is accepted as a shorthand. It reaches the same
+    // validation, so a bad value must fail identically — otherwise the alias
+    // would be a way around the check.
+    Gen3dArgv bad({"generate3d", kMissingImage, "--supersample", "7"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(bad.argc(), bad.argv()), 2);
+    // A GOOD value gets past argument parsing and fails later on the missing
+    // image (exit 1), which is how these tests distinguish "rejected the
+    // flag" (2) from "accepted the flag" (1).
+    Gen3dArgv ok({"generate3d", kMissingImage, "--supersample", "2"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(ok.argc(), ok.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TexResRequiresValueAndRejectsOffMenuSizes)
+{
+    Gen3dArgv missing({"generate3d", kMissingImage, "--tex-res"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    // Only the two sizes trellis-cli actually offers; 2048 is NOT one of them,
+    // so it must be refused rather than passed through and ignored.
+    for (const char* bad : {"256", "2048", "999", "xyz"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--tex-res", bad});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2)
+            << "should reject --tex-res " << bad;
+    }
+    for (const char* good : {"512", "1024"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--tex-res", good});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1)
+            << "should accept --tex-res " << good;
+    }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, NoSourceTakesNoValue)
+{
+    // A bare switch: it must not swallow the next argument, or
+    // `--no-source -o out.glb` would silently lose the output path.
+    Gen3dArgv args({"generate3d", kMissingImage, "--no-source"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
+}
+
+// ---- Pixal3D backend --------------------------------------------------------
+//
+// Pixal3D is a TRELLIS.2 fork with view-aligned projection conditioning,
+// as an alternative conditioning path. It rides the SAME trellis-cli runtime, so the
+// CLI only has to name it and carry its two camera knobs.
+
+TEST(CLIPipelineCmdGenerate3dCoverage, Pixal3DBackendIsAccepted)
+{
+    // exit 1 (not 2) = the argument parsed and the run failed later on the
+    // missing image, which is how this file distinguishes accept from reject.
+    for (const char* name : {"pixal3d", "pixal", "PIXAL3D"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--backend", name});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1)
+            << "should accept --backend " << name;
+    }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, UnknownBackendStillRejected)
+{
+    // Adding a backend must not turn the enum into a catch-all.
+    Gen3dArgv args({"generate3d", kMissingImage, "--backend", "pixal4d"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, PixalFovRejectsOutOfRangeAngles)
+{
+    // 0 is reserved for "leave trellis-cli on its own 49.13 default", so an
+    // explicit 0 is a caller error rather than a silent no-op — otherwise
+    // `--pixal-fov 0` would look like it set something and do nothing.
+    for (const char* bad : {"0", "-10", "180", "999", "abc"}) {
+        Gen3dArgv args({"generate3d", kMissingImage, "--pixal-fov", bad});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2)
+            << "should reject --pixal-fov " << bad;
+    }
+    Gen3dArgv missing({"generate3d", kMissingImage, "--pixal-fov"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv ok({"generate3d", kMissingImage, "--pixal-fov", "49.13"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(ok.argc(), ok.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, NoNafTakesNoValue)
+{
+    // Bare switch: must not swallow the next argument.
+    Gen3dArgv args({"generate3d", kMissingImage, "--no-naf"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
+}
+
+// ── Game-ready presets (--game-preset / --list-game-presets) ─────────────────
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetRequiresAKnownId)
+{
+    Gen3dArgv missing({"generate3d", kMissingImage, "--game-preset"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv unknown({"generate3d", kMissingImage, "--game-preset", "ultra"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(unknown.argc(), unknown.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAcceptsCustomOverridesInEitherOrder)
+{
+    // A preset is a base: explicit --target-tris / --texture-size override
+    // its numbers (any value in range), so the combination parses and the
+    // missing image is the first failure (exit 1, not the usage code 2).
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart",
+                 "--target-tris", "15000", "--texture-size", "512"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv b({"generate3d", kMissingImage, "--target-tris", "30000",
+                 "--texture-size", "2048", "--game-preset", "roblox-accessory"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(b.argc(), b.argv()), 1);   // warns, honours
+    // Out-of-range custom values are still usage errors with or without a preset.
+    Gen3dArgv c({"generate3d", kMissingImage, "--game-preset", "medium",
+                 "--texture-size", "32"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(c.argc(), c.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAloneReachesTheImageCheck)
+{
+    // A valid preset (incl. the forgiving alias) parses; the missing image is
+    // then the FIRST failure — exit 1 (not the usage code 2).
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv alias({"generate3d", kMissingImage, "--game-preset", "ROBLOX_ACCESSORY",
+                     "--texture-size", "4096"});   // clamps to 1024 with a note
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(alias.argc(), alias.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, ListGamePresetsNeedsNoImage)
+{
+    Gen3dArgv a({"generate3d", "--list-game-presets"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 0);
+}

@@ -42,7 +42,12 @@ QNetworkRequest authorizedJsonRequest(const QUrl& url, const QString& bearerToke
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
-    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    // Omit the header entirely when there is no token — sending a bare
+    // "Bearer " reads as a malformed credential rather than an
+    // unauthenticated request, which matters for the anonymous feedback
+    // path (#1058). Every other caller always passes a token.
+    if (!bearerToken.isEmpty())
+        req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
     return req;
 }
@@ -1835,6 +1840,13 @@ QJsonObject QtMeshCloudClient::buildFeedbackPayload(const FeedbackSubmission& su
     if (!submission.relatedFormat.trimmed().isEmpty())
         body.insert(QStringLiteral("relatedFormat"), submission.relatedFormat.trimmed());
 
+    if (!submission.category.trimmed().isEmpty())
+        body.insert(QStringLiteral("category"), submission.category.trimmed());
+    if (!submission.anonymousInstallationId.trimmed().isEmpty()) {
+        body.insert(QStringLiteral("anonymousInstallationId"),
+                    submission.anonymousInstallationId.trimmed());
+    }
+
     body.insert(QStringLiteral("includeDiagnostics"), submission.includeDiagnostics);
     body.insert(QStringLiteral("contactAllowed"), submission.contactAllowed);
 
@@ -1899,8 +1911,11 @@ QtMeshCloudClient::FeedbackResult QtMeshCloudClient::submitFeedback(const QStrin
                                                                     int timeoutMs)
 {
     FeedbackResult out;
-    if (bearerToken.isEmpty()) {
-        out.errorString = QStringLiteral("missing bearer token");
+    // Either identity is acceptable: a bearer token (signed in) or an
+    // anonymous installation id (#1058). Only refuse when we have neither,
+    // since the server would just 401.
+    if (bearerToken.isEmpty() && submission.anonymousInstallationId.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("no bearer token or anonymous installation id");
         out.userMessage = friendlyFeedbackError(401, QStringLiteral("unauthorized"), out.errorString);
         return out;
     }

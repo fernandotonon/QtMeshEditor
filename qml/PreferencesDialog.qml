@@ -217,6 +217,31 @@ Rectangle {
                             font.pixelSize: 11; font.italic: true; color: dimTextColor; wrapMode: Text.WordWrap; width: parent.width
                         }
 
+                        // Contextual feedback prompt opt-out (#1058).
+                        Row {
+                            spacing: 6
+                            width: parent.width
+
+                            property bool feedbackOn: readSetting("Feedback/promptEnabled", true) === true
+                                                   || readSetting("Feedback/promptEnabled", true) === "true"
+
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: parent.feedbackOn ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: parent.parent.feedbackOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { parent.parent.feedbackOn = !parent.parent.feedbackOn; writeSetting("Feedback/promptEnabled", parent.parent.feedbackOn) }
+                                }
+                            }
+                            Text { text: "Ask for occasional feedback"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                        }
+
+                        Text {
+                            text: "At most one short question per session, after an import or export. Never sends your models, file names or paths. Requires anonymous telemetry."
+                            font.pixelSize: 11; font.italic: true; color: dimTextColor; wrapMode: Text.WordWrap; width: parent.width
+                        }
+
                         // Welcome screen toggle
                         Row {
                             spacing: 6

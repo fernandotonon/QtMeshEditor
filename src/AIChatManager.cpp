@@ -1,4 +1,5 @@
 #include "AIChatManager.h"
+#include "AIAgentManager.h"
 #include "LLMManager.h"
 #include "MCPServer.h"
 #include "SentryReporter.h"
@@ -40,6 +41,87 @@ AIChatManager::AIChatManager(QObject* parent) : QObject(parent)
     connect(llm, &LLMManager::generationStopped,   this, &AIChatManager::onGenerationStopped);
     connect(llm, &LLMManager::modelLoadedChanged,      this, &AIChatManager::modelAvailableChanged);
     connect(llm, &LLMManager::currentModelNameChanged, this, &AIChatManager::currentModelNameChanged);
+    QSettings settings;
+    m_agentMode = settings.value("ai/agentMode", true).toBool();
+}
+
+void AIChatManager::setAgentMode(bool on)
+{
+    if (m_agentMode == on) return;
+    m_agentMode = on;
+    QSettings settings;
+    settings.setValue("ai/agentMode", on);
+    SentryReporter::addBreadcrumb("ui.action", on ? "AI Chat: agent mode on" : "AI Chat: agent mode off");
+    emit agentModeChanged();
+}
+
+// Connect the agent's transcript + lifecycle to this facade exactly once.
+void AIChatManager::wireAgent()
+{
+    if (m_agentWired) return;
+    m_agentWired = true;
+    auto* agent = AIAgentManager::instance();
+    connect(agent, &AIAgentManager::chatMessage, this,
+            [this](const QString& role, const QString& text, bool isTool) {
+                appendMessage(role, text, isTool);
+            });
+    connect(agent, &AIAgentManager::taskFinished, this, [this](bool, const QString&) {
+        m_agentDriving = false;
+        m_isGenerating = false;
+        m_streamingText.clear();
+        emit streamingTextChanged();
+        emit isGeneratingChanged();
+    });
+    agent->setContextProvider([this]() { return sceneSummaryForAgent(); });
+}
+
+// The agent owns the LLM while a task runs AND while a cancelled/finished
+// planner request is still draining out of the worker thread — a late
+// completion must not be mistaken for a v1 reply and start a new loop.
+bool AIChatManager::agentOwnsGeneration() const
+{
+    return m_agentDriving || (m_agentWired && AIAgentManager::instance()->plannerPending());
+}
+
+QString AIChatManager::sceneSummaryForAgent() const
+{
+    if (!m_mcpServer) return {};
+    auto extractText = [](const QJsonObject& result) -> QString {
+        QJsonArray content = result["content"].toArray();
+        if (!content.isEmpty())
+            return content.first().toObject()["text"].toString().trimmed();
+        return {};
+    };
+    QString s = extractText(m_mcpServer->callTool("get_scene_info", {}));
+    // Materials the user created (built-ins are noise for the planner).
+    const QString matRaw = extractText(m_mcpServer->callTool("list_materials", {}));
+    QStringList userMats;
+    static const QStringList sysMatPrefixes = {
+        "Available", "BaseWhite", "Ogre/", "RTSS/", "SdkTrays/", "Debug", "Default", "GUI_",
+        "NormalVisualizer", "BoneWeight", "MeshInfo", "SelectionBox", "Procedural/", "Axes/"
+    };
+    for (const QString& line : matRaw.split('\n')) {
+        const QString m = line.trimmed();
+        if (m.isEmpty()) continue;
+        bool isSystem = false;
+        for (const QString& prefix : sysMatPrefixes) if (m.startsWith(prefix)) { isSystem = true; break; }
+        if (!isSystem) userMats << m;
+    }
+    if (userMats.size() > 20) userMats = userMats.mid(0, 20);
+    if (!userMats.isEmpty()) s += "\nUser materials: " + userMats.join(", ");
+    QSettings settings;
+    QStringList recent;
+    for (const QString& path : settings.value("RecentFiles/files").toStringList())
+        if (QFileInfo::exists(path) && recent.size() < 8) recent << path;
+    if (!recent.isEmpty()) s += "\nRecent files (usable with load_mesh):\n  " + recent.join("\n  ");
+    return s.trimmed();
+}
+
+void AIChatManager::setMcpServer(MCPServer* server)
+{
+    m_mcpServer = server;
+    AIAgentManager::instance()->setExecutor(std::make_shared<McpToolExecutor>(server));
+    wireAgent();
 }
 
 bool AIChatManager::modelAvailable() const
@@ -64,11 +146,28 @@ void AIChatManager::sendMessage(const QString& text)
     m_toolLoopDepth = 0;
     m_lastToolSignatures.clear();
     appendMessage("user", text.trimmed());
+
+    if (m_agentMode) {
+        wireAgent();
+        auto* agent = AIAgentManager::instance();
+        m_agentDriving = true;
+        m_isGenerating = true;
+        emit isGeneratingChanged();
+        if (!agent->startTask(text.trimmed())) {
+            // startTask already explained why in the transcript
+            m_agentDriving = false;
+            m_isGenerating = false;
+            emit isGeneratingChanged();
+        }
+        return;
+    }
     startGeneration(buildSystemPrompt(), buildConversationPrompt());
 }
 
 void AIChatManager::clearHistory()
 {
+    if (m_agentDriving) AIAgentManager::instance()->cancel();
+    AIAgentManager::instance()->clearHistory();
     if (m_isGenerating)
         LLMManager::instance()->stopGeneration();
     m_messages.clear();
@@ -82,6 +181,7 @@ void AIChatManager::clearHistory()
 
 void AIChatManager::stopGeneration()
 {
+    if (m_agentDriving) { AIAgentManager::instance()->cancel(); return; }
     m_stopRequested = true;
     LLMManager::instance()->stopGeneration();
 }
@@ -131,12 +231,14 @@ static QString cleanGeneratedText(const QString& raw)
 
 void AIChatManager::onGenerationProgress(const QString& partial, float /*progress*/)
 {
+    if (agentOwnsGeneration()) return;   // the agent owns this generation
     m_streamingText = cleanGeneratedText(partial);
     emit streamingTextChanged();
 }
 
 void AIChatManager::onGenerationCompleted(const QString& fullText)
 {
+    if (agentOwnsGeneration()) return;
     m_streamingText.clear();
     emit streamingTextChanged();
 
@@ -145,6 +247,7 @@ void AIChatManager::onGenerationCompleted(const QString& fullText)
 
 void AIChatManager::onGenerationError(const QString& error)
 {
+    if (agentOwnsGeneration()) return;
     m_streamingText.clear();
     m_isGenerating = false;
     emit streamingTextChanged();
@@ -154,6 +257,7 @@ void AIChatManager::onGenerationError(const QString& error)
 
 void AIChatManager::onGenerationStopped()
 {
+    if (agentOwnsGeneration()) return;
     if (!m_streamingText.isEmpty()) {
         appendMessage("assistant", m_streamingText);
         m_streamingText.clear();

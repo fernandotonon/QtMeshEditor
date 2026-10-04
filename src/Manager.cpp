@@ -38,6 +38,8 @@ THE SOFTWARE.
 #include "PrimitiveObject.h"
 
 #include "Manager.h"
+
+#include "PoseLibrary.h"
 #include "RTShaderHelper.h"
 #include <OgreSkeletonManager.h>
 #include <OgreSkeleton.h>
@@ -743,6 +745,12 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
                if (attachedObject->getMovableType() == "Entity")
                {
                    auto* entity = static_cast<Ogre::Entity*>(attachedObject);
+                   // #521: drop every PoseLibrary reference to this entity
+                   // BEFORE it is destroyed. An in-flight timed blend keys
+                   // m_blends on the Entity*, and the next render tick would
+                   // dereference a dangling pointer.
+                   if (auto* poseLib = PoseLibrary::instance())
+                       poseLib->forgetEntity(entity);
                    auto mesh = entity->getMesh();
                    if (mesh)
                    {

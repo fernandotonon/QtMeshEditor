@@ -2,6 +2,7 @@
 #define PROPERTIES_PANEL_CONTROLLER_H
 
 #include <QObject>
+#include <QPointer>
 #include <QStringList>
 #include <QColor>
 #include <QVariantList>
@@ -256,6 +257,16 @@ public:
     void applySkeletonDebug(const QString& entityName, bool show);
     /// Rebuild skeleton/weight viewport overlays after bone CRUD.
     Q_INVOKABLE void refreshSkeletonOverlays(const QString& entityName);
+
+    /// Give the Inspector's hosting QQuickWidget WIDGET-level focus. QML text
+    /// inputs inside a QQuickWidget lose keyboard routing when the app window
+    /// deactivates: on return, the QQuickWidget still believes its item has
+    /// activeFocus, so clicking the same input is a no-op while key events go
+    /// to whichever QWidget holds focus (the viewport). Text-input MouseAreas
+    /// call this before forceActiveFocus(). The widget is registered by
+    /// MainWindow after the panel is created.
+    Q_INVOKABLE void focusPanel();
+    void setPanelWidget(QWidget* widget);
     /// Rest-pose ghost overlay (#557) across active skeleton debug instances.
     void setRestPoseGhostVisible(bool show);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
@@ -346,6 +357,7 @@ private:
     SceneTreeModel* mSceneTreeModel = nullptr;
     bool mPlaying = false;
     class AnimationWidget* mAnimationWidget = nullptr;
+    QPointer<QWidget> mPanelWidget;   ///< the hosting QQuickWidget (focusPanel)
     QString m_draggedNodeName;
 };
 

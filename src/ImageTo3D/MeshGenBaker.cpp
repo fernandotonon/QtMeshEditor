@@ -195,6 +195,9 @@ Result bake(const std::vector<float>& positions,
     // Each pass copies every uncovered texel that has a covered 8-neighbour.
     std::vector<uint8_t> covered(static_cast<size_t>(W) * H, 0);
     for (uint32_t lin : queryTexel) covered[lin] = 1;
+    // Publish the PRE-dilation coverage (#1017): the dilated ring is smeared
+    // border colour, so an inpaint seam-fill wants the true chart coverage.
+    r.coverage = covered;
     for (int pass = 0; pass < opts.dilatePx; ++pass) {
         std::vector<uint8_t> next = covered;
         for (int y = 0; y < H; ++y) {

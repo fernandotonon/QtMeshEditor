@@ -178,6 +178,14 @@ private:
     Ogre::Root*                 m_pRoot = nullptr;
     QList<EditorViewport*>      mDockWidgetList;
 
+    // Viewport render-loop interval, in ms. The loop used to run at
+    // start(0) — a zero-interval QTimer fires as fast as the event loop can
+    // dispatch, so renderOneFrame() ran unbounded with no vsync (the render
+    // window is created without one) and no frame cap. Measured on an idle,
+    // EMPTY scene that cost ~38% CPU and kept the GPU busy continuously,
+    // while the same binary headless (--mcp) sat at 0.0%. Nothing above
+    // display refresh is visible, so cap it.
+    static constexpr int kRenderIntervalMs = 16;   // ~60 fps
     QTimer*                     m_pTimer = nullptr;
     // TransformWidget removed — replaced by QML Inspector panel
     PrimitivesWidget*           m_pPrimitivesWidget = nullptr;

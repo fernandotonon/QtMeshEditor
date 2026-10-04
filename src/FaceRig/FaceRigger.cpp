@@ -1,6 +1,10 @@
 #include "FaceRigger.h"
 
+#include <QtGlobal>
+#include <cstdio>
+
 #include "ArkitTemplate.h"
+#include "FaceRigAlign.h"
 #include "DeformationTransfer.h"
 #include "NonRigidICP.h"
 
@@ -94,6 +98,55 @@ public:
         return best;
     }
 
+    /// The k nearest point indices to q, nearest first. The sampler needs
+    /// several candidates because the SINGLE nearest vertex can sit on the
+    /// wrong surface where two surfaces nearly touch — see
+    /// SurfaceSampler::sample.
+    void nearestK(const float* q, int k, std::vector<int>& out) const
+    {
+        out.clear();
+        if (!m_pts || m_cells.empty() || k <= 0) return;
+        float qc[3];
+        for (int a = 0; a < 3; ++a)
+            qc[a] = std::min(std::max(q[a], m_lo[a]), m_hi[a]);
+        const std::array<int,3> c = cellOf(qc);
+        int spanCells = 1;
+        for (int a = 0; a < 3; ++a)
+            spanCells = std::max(spanCells,
+                                 int(std::ceil((m_hi[a]-m_lo[a]) / m_cell)) + 1);
+        const int rMax = spanCells + 1;
+
+        std::vector<std::pair<double,int>> best;   // (dist², idx), worst last
+        best.reserve(size_t(k) + 1);
+        for (int r = 0; r <= rMax; ++r) {
+            for (int dx = -r; dx <= r; ++dx)
+              for (int dy = -r; dy <= r; ++dy)
+                for (int dz = -r; dz <= r; ++dz) {
+                    if (std::max({std::abs(dx),std::abs(dy),std::abs(dz)}) != r) continue;
+                    auto it = m_cells.find(key({c[0]+dx, c[1]+dy, c[2]+dz}));
+                    if (it == m_cells.end()) continue;
+                    for (int idx : it->second) {
+                        const float* p = &(*m_pts)[size_t(idx)*3];
+                        const double d = (double(p[0]-q[0])*(p[0]-q[0]) +
+                                          double(p[1]-q[1])*(p[1]-q[1]) +
+                                          double(p[2]-q[2])*(p[2]-q[2]));
+                        if (int(best.size()) == k && d >= best.back().first) continue;
+                        auto pos = std::lower_bound(
+                            best.begin(), best.end(), d,
+                            [](const std::pair<double,int>& e, double v){ return e.first < v; });
+                        best.insert(pos, {d, idx});
+                        if (int(best.size()) > k) best.pop_back();
+                    }
+                }
+            if (int(best.size()) == k) {
+                const double guaranteed = double(r) * m_cell;
+                if (guaranteed * guaranteed >= best.back().first) break;
+            }
+        }
+        out.reserve(best.size());
+        for (const auto& e : best) out.push_back(e.second);
+    }
+
 private:
     std::array<int,3> cellOf(const float* p) const
     {
@@ -116,6 +169,266 @@ private:
     std::unordered_map<long long, std::vector<int>> m_cells;
 };
 
+// Barycentric resample over the correspondence SURFACE (fitted verts +
+// template topology), replacing a nearest-VERTEX pick.
+//
+// Why (measured 2026-09-18 on the ICT template): a facial mesh has creases
+// where spatially ADJACENT vertices carry completely different motion — at
+// the lip seam upper and lower lip touch in the neutral pose, but under
+// jawOpen one moves ~1.6 units and the other EXACTLY 0. A single
+// nearest-vertex lookup there is a coin flip: offsetting the query by half
+// a median edge (what a different mesh's vertex placement does) changed the
+// sampled motion drastically for 3.2% of vertices near a seam, so a slice
+// of lips and eyelids inherited the opposite side's motion or none at all.
+// Scattered enough to read as "mushy expressions" rather than a bug, and
+// invisible to the fit-residual gate (which measures the NEUTRAL match).
+//
+// Projecting onto the nearest TRIANGLE and blending its three corner deltas
+// by barycentric weight keeps the interpolation ON the surface: a query on
+// the upper lip lands on an upper-lip triangle and can only mix upper-lip
+// corners — it cannot jump the crease, because no triangle joins the lips.
+class SurfaceSampler {
+public:
+    void build(const std::vector<float>& pts, const std::vector<int>& faces)
+    {
+        m_pts = &pts;
+        m_faces = &faces;
+        m_grid.build(pts);
+        m_vertN = vertexNormals(pts, faces);
+        // vertex → incident triangles: a nearest-vertex hit yields the few
+        // triangles worth testing (testing the whole surface is hopeless).
+        const int nv = int(pts.size() / 3);
+        m_vertFaces.assign(size_t(std::max(0, nv)), {});
+        for (size_t f = 0; f + 2 < faces.size(); f += 3)
+            for (int k = 0; k < 3; ++k) {
+                const int v = faces[f + size_t(k)];
+                if (v >= 0 && v < nv) m_vertFaces[size_t(v)].push_back(int(f / 3));
+            }
+    }
+
+    struct Hit { float w[3] = {0, 0, 0}; int vi[3] = {-1, -1, -1}; };
+
+    /// +1 when the two meshes' normals broadly agree, -1 when the query mesh
+    /// is wound the OPPOSITE way and its normals are therefore globally
+    /// negated. Review finding (Codex P2): `buildFaceRig`'s contract does not
+    /// require template-matching winding, and with a reversed user mesh the
+    /// raw sign test picks the surface facing the other way — measured on the
+    /// real template, seeding flips from the correct main vertex 5941 to the
+    /// mouth-interior island vertex 18154, silently recreating the exact
+    /// frozen-vertex bug this seeding is meant to prevent.
+    ///
+    /// Decided by VOTE over a sample of query vertices rather than by any one
+    /// pair, so local disagreement at a seam cannot flip the global answer.
+    static float orientationSign(const std::vector<float>& queryPts,
+                                 const std::vector<float>& queryN,
+                                 const SurfaceSampler& corr)
+    {
+        const int nq = int(queryN.size() / 3);
+        if (nq <= 0 || corr.m_vertN.empty()) return 1.0f;
+        const int step = std::max(1, nq / 512);      // ~512 samples, cheap
+        double agree = 0.0, disagree = 0.0;
+        for (int i = 0; i < nq; i += step) {
+            if (size_t(i)*3+2 >= queryPts.size()) break;
+            const int nv = corr.m_grid.nearest(&queryPts[size_t(i)*3]);
+            if (nv < 0 || size_t(nv)*3+2 >= corr.m_vertN.size()) continue;
+            const double d = double(queryN[size_t(i)*3])   * corr.m_vertN[size_t(nv)*3]
+                           + double(queryN[size_t(i)*3+1]) * corr.m_vertN[size_t(nv)*3+1]
+                           + double(queryN[size_t(i)*3+2]) * corr.m_vertN[size_t(nv)*3+2];
+            if (d > 0.1) agree += d;
+            else if (d < -0.1) disagree += -d;
+        }
+        return (disagree > agree) ? -1.0f : 1.0f;
+    }
+
+    /// Area-weighted per-vertex normals. Public so the caller can compute the
+    /// QUERY mesh's normals with the identical convention.
+    static std::vector<float> vertexNormals(const std::vector<float>& pts,
+                                            const std::vector<int>& faces)
+    {
+        std::vector<float> n(pts.size(), 0.0f);
+        const int nv = int(pts.size() / 3);
+        for (size_t f = 0; f + 2 < faces.size(); f += 3) {
+            const int a = faces[f], b = faces[f+1], c = faces[f+2];
+            if (a < 0 || b < 0 || c < 0 || a >= nv || b >= nv || c >= nv) continue;
+            float e1[3], e2[3], cr[3];
+            for (int d = 0; d < 3; ++d) {
+                e1[d] = pts[size_t(b)*3+size_t(d)] - pts[size_t(a)*3+size_t(d)];
+                e2[d] = pts[size_t(c)*3+size_t(d)] - pts[size_t(a)*3+size_t(d)];
+            }
+            cr[0] = e1[1]*e2[2] - e1[2]*e2[1];
+            cr[1] = e1[2]*e2[0] - e1[0]*e2[2];
+            cr[2] = e1[0]*e2[1] - e1[1]*e2[0];
+            for (const int v : {a, b, c})
+                for (int d = 0; d < 3; ++d) n[size_t(v)*3+size_t(d)] += cr[d];
+        }
+        for (int v = 0; v < nv; ++v) {
+            float L = 0;
+            for (int d = 0; d < 3; ++d)
+                L += n[size_t(v)*3+size_t(d)] * n[size_t(v)*3+size_t(d)];
+            L = std::sqrt(L);
+            if (L > 1e-20f)
+                for (int d = 0; d < 3; ++d) n[size_t(v)*3+size_t(d)] /= L;
+        }
+        return n;
+    }
+
+    // Closest point on the surface to q. Falls back to the nearest VERTEX
+    // (weight 1) when it has no incident triangles, so an isolated
+    // correspondence point still contributes instead of dropping out.
+    /// `qn` (optional, 3 floats) is the query's own surface normal. When
+    /// supplied, the SEED vertex is the nearest one whose normal agrees with
+    /// it, instead of the nearest one outright.
+    ///
+    /// The seed decides which surface is searched: only triangles incident to
+    /// it are ever considered. Where two surfaces nearly touch that makes the
+    /// nearest-vertex pick load-bearing, and at the lip centre it is wrong —
+    /// the mouth-interior island passes ~0.14 from the outer lip, so three lip
+    /// vertices seeded on the island, and EVERY triangle incident to an island
+    /// vertex is an island triangle (measured: 7, 5 and 7 of 7, 5 and 7). The
+    /// correct lip triangle was never a candidate, so those vertices inherited
+    /// the island's zero motion and froze while every neighbour moved ~4.0 —
+    /// the spiky lip line (#1061).
+    ///
+    /// That is also why filtering the candidates cannot help, and three
+    /// attempts confirmed it: widening the seed set to the 8 nearest vertices
+    /// made it WORSE (8 frozen became 19) because it added more island
+    /// triangles; restricting to the seed's connected component did nothing
+    /// because the seed is itself on the island; and rejecting opposed
+    /// triangles did nothing because it rejected them ALL and the fallback
+    /// restored the island match. The answer was never in the set — so fix
+    /// the SEED, not the filter.
+    ///
+    /// Orientation separates the surfaces decisively. Measured at the three
+    /// failing vertices, over the 8 nearest correspondence vertices:
+    ///
+    ///     nearest overall      v18154  d=0.144  island  dot = -0.974
+    ///     nearest AGREEING     v5941   d=0.118  main    dot = +0.993
+    ///
+    /// The agreeing vertex is both closer AND on the right surface; the
+    /// island scores about -0.9 because the two surfaces face opposite ways,
+    /// which is exactly what makes them distinct surfaces. If no candidate
+    /// agrees, the nearest is used unchanged, so this can never lose a
+    /// correspondence.
+    Hit sample(const float* q, const float* qn = nullptr, float nsign = 1.0f) const
+    {
+        Hit h;
+        int nv = -1;
+        if (qn) {
+            // Widening the candidate list is safe here (unlike widening the
+            // TRIANGLE set, which made things worse): the first AGREEING
+            // vertex still wins, so extra candidates only matter when the
+            // near ones all disagree. Exhaust the surface rather than give up
+            // at a fixed count — falling back to the unfiltered nearest is
+            // what reintroduces the wrong-surface match this exists to stop.
+            const int total = int(m_vertN.size() / 3);
+            // Grow geometrically, but CLAMP the last request to `total` so the
+            // whole surface really is covered. Letting `want` quadruple past
+            // the end and exiting on `want <= total` silently stops early:
+            // with 26,719 vertices the requests are 8, 32, … 8192 and the next
+            // is 32768, so 18,527 vertices are never inspected and the
+            // unfiltered fallback can still pick the wrong surface (CodeRabbit
+            // finding — my previous claim that this was exhaustive was wrong).
+            int want = std::min(kSeedCandidates, total);
+            while (nv < 0 && want > 0) {
+                m_grid.nearestK(q, want, m_seeds);
+                if (m_seeds.empty()) break;
+                for (const int cand : m_seeds) {
+                    if (cand < 0 || size_t(cand)*3+2 >= m_vertN.size()) continue;
+                    const float d = nsign * (qn[0]*m_vertN[size_t(cand)*3]
+                                           + qn[1]*m_vertN[size_t(cand)*3+1]
+                                           + qn[2]*m_vertN[size_t(cand)*3+2]);
+                    if (d > 0.0f) { nv = cand; break; }   // nearest that agrees
+                }
+                if (int(m_seeds.size()) < want) break;    // surface exhausted
+                if (want >= total) break;                 // everything searched
+                want = std::min(want * 4, total);
+            }
+        }
+        if (nv < 0) nv = m_grid.nearest(q);
+        if (nv < 0) return h;
+        h.vi[0] = nv; h.w[0] = 1.0f;
+        if (size_t(nv) >= m_vertFaces.size()) return h;
+
+        float best = std::numeric_limits<float>::max();
+        for (const int t : m_vertFaces[size_t(nv)]) {
+            const int a = (*m_faces)[size_t(t)*3];
+            const int b = (*m_faces)[size_t(t)*3+1];
+            const int c = (*m_faces)[size_t(t)*3+2];
+            float w[3];
+            const float d2 = closestOnTri(q, a, b, c, w);
+            if (d2 < best) {
+                best = d2;
+                h.vi[0] = a; h.vi[1] = b; h.vi[2] = c;
+                h.w[0] = w[0]; h.w[1] = w[1]; h.w[2] = w[2];
+            }
+        }
+        return h;
+    }
+
+private:
+    // Squared distance q→triangle, writing the closest point's barycentric
+    // weights. Ericson, Real-Time Collision Detection: the standard region
+    // test, clamped so an off-triangle query lands on the nearest edge or
+    // corner rather than extrapolating past it.
+    float closestOnTri(const float* q, int a, int b, int c, float* w) const
+    {
+        const float* A = &(*m_pts)[size_t(a)*3];
+        const float* B = &(*m_pts)[size_t(b)*3];
+        const float* C = &(*m_pts)[size_t(c)*3];
+        float ab[3], ac[3], ap[3];
+        for (int i = 0; i < 3; ++i) { ab[i]=B[i]-A[i]; ac[i]=C[i]-A[i]; ap[i]=q[i]-A[i]; }
+        const float d1 = ab[0]*ap[0]+ab[1]*ap[1]+ab[2]*ap[2];
+        const float d2 = ac[0]*ap[0]+ac[1]*ap[1]+ac[2]*ap[2];
+        if (d1 <= 0 && d2 <= 0) { w[0]=1; w[1]=0; w[2]=0; return dist2(q, A); }
+        float bp[3]; for (int i=0;i<3;++i) bp[i]=q[i]-B[i];
+        const float d3 = ab[0]*bp[0]+ab[1]*bp[1]+ab[2]*bp[2];
+        const float d4 = ac[0]*bp[0]+ac[1]*bp[1]+ac[2]*bp[2];
+        if (d3 >= 0 && d4 <= d3) { w[0]=0; w[1]=1; w[2]=0; return dist2(q, B); }
+        float cp[3]; for (int i=0;i<3;++i) cp[i]=q[i]-C[i];
+        const float d5 = ab[0]*cp[0]+ab[1]*cp[1]+ab[2]*cp[2];
+        const float d6 = ac[0]*cp[0]+ac[1]*cp[1]+ac[2]*cp[2];
+        if (d6 >= 0 && d5 <= d6) { w[0]=0; w[1]=0; w[2]=1; return dist2(q, C); }
+        const float vc = d1*d4 - d3*d2;
+        if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+            const float v = d1 / std::max(1e-20f, d1 - d3);
+            w[0]=1-v; w[1]=v; w[2]=0; return distToSeg(q, A, B, v);
+        }
+        const float vb = d5*d2 - d1*d6;
+        if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+            const float v = d2 / std::max(1e-20f, d2 - d6);
+            w[0]=1-v; w[1]=0; w[2]=v; return distToSeg(q, A, C, v);
+        }
+        const float va = d3*d6 - d5*d4;
+        if (va <= 0 && (d4-d3) >= 0 && (d5-d6) >= 0) {
+            const float v = (d4-d3) / std::max(1e-20f, (d4-d3) + (d5-d6));
+            w[0]=0; w[1]=1-v; w[2]=v; return distToSeg(q, B, C, v);
+        }
+        const float denom = 1.0f / std::max(1e-20f, va + vb + vc);
+        const float v = vb * denom, ww = vc * denom;
+        w[0] = 1.0f - v - ww; w[1] = v; w[2] = ww;
+        float pt[3];
+        for (int i = 0; i < 3; ++i) pt[i] = A[i] + ab[i]*v + ac[i]*ww;
+        return dist2(q, pt);
+    }
+    static float dist2(const float* p, const float* q)
+    { float s=0; for (int i=0;i<3;++i) { const float d=p[i]-q[i]; s+=d*d; } return s; }
+    static float distToSeg(const float* q, const float* A, const float* B, float t)
+    { float pt[3]; for (int i=0;i<3;++i) pt[i]=A[i]+(B[i]-A[i])*t; return dist2(q, pt); }
+
+    const std::vector<float>* m_pts = nullptr;
+    const std::vector<int>* m_faces = nullptr;
+    PointGrid m_grid;
+    std::vector<std::vector<int>> m_vertFaces;
+    std::vector<float> m_vertN;          // unit normal per correspondence vertex
+    mutable std::vector<int> m_seeds;    // scratch, reused across calls
+
+    // How many nearby vertices to consider before giving up on finding one
+    // whose normal agrees. The correct seed was the 1st or 2nd candidate in
+    // every measured case; 8 is slack for a denser seam.
+    static constexpr int kSeedCandidates = 8;
+};
+
+
 double bboxDiag(const std::vector<float>& v)
 {
     if (v.empty()) return 0.0;
@@ -129,7 +442,6 @@ double bboxDiag(const std::vector<float>& v)
     for (int a = 0; a < 3; ++a) s += double(hi[a]-lo[a]) * double(hi[a]-lo[a]);
     return std::sqrt(s);
 }
-
 }  // namespace
 
 std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
@@ -284,6 +596,17 @@ std::vector<float> rbfWarpByAnchors(const std::vector<float>& tmplV,
     return out;
 }
 
+namespace {
+// The fit proper — expects the user head in the template's orientation.
+FaceRigResult buildFaceRigAligned(const std::vector<float>& userV,
+                                  const std::vector<int>& userF,
+                                  const ArkitTemplate& tmpl,
+                                  const FaceRigOptions& opts,
+                                  const std::vector<char>& headMask,
+                                  const std::vector<NricpLandmark>& landmarks,
+                                  const FaceRigProgressFn& progress);
+}  // namespace
+
 FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<int>& userF,
                            const ArkitTemplate& tmpl,
@@ -291,6 +614,94 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
                            const std::vector<char>& headMask,
                            const std::vector<NricpLandmark>& landmarks,
                            const FaceRigProgressFn& progress)
+{
+    // ── ORIENTATION ─────────────────────────────────────────────────────
+    // Everything below (NRICP's centroid+scale prealign, the RBF pre-warp's
+    // affine part, the surface-side tests) assumes the user head faces the
+    // way the template does. Solve the template->user rotation from the
+    // anchors (Horn similarity — a PROPER rotation, never a reflection), fit
+    // the user in the template frame, rotate the deltas back. A head facing
+    // -Z used to receive the template on the BACK of its skull; markers did
+    // not help because the marker-swap heuristic and the anchor gate were
+    // rotation-free too (fixed in FaceRigLandmarks via rotationAwareResidual).
+    std::array<float, 9> R{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::array<float, 3> pivot{0, 0, 0};
+    bool rotate = false;
+    std::string source = "none";
+    double angleDeg = 0.0;
+    constexpr float kMinAngleDeg = 3.0f;   // below this the legacy path is bit-identical
+    if (tmpl.valid() && landmarks.size() >= 3) {
+        const SimilarityAlign a = alignTemplateToUser(tmpl.neutral(), landmarks);
+        if (a.ok && a.angleDeg > kMinAngleDeg) {
+            R = a.R;
+            rotate = true;
+            source = "anchors";
+            angleDeg = a.angleDeg;
+            double c[3] = {0, 0, 0}; int n = 0;
+            for (const auto& lm : landmarks) {
+                if (lm.tmplVertex < 0) continue;
+                for (int k = 0; k < 3; ++k) c[k] += lm.target[size_t(k)];
+                ++n;
+            }
+            if (n > 0) for (int k = 0; k < 3; ++k) pivot[size_t(k)] = float(c[k] / n);
+            if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                std::fprintf(stderr, "[facerig] orientation from %d anchors: "
+                             "rotation %.1f deg, residual %.3f -> fitting in the "
+                             "template frame\n", a.count, a.angleDeg, a.residual);
+        }
+    } else if (landmarks.size() < 3) {
+        const float hx = opts.faceDirHint[0], hy = opts.faceDirHint[1], hz = opts.faceDirHint[2];
+        if (hx*hx + hy*hy + hz*hz > 1e-8f) {
+            float deg = 0.0f;
+            const std::array<float, 9> Y = rotationToPlusZ(opts.faceDirHint, kMinAngleDeg, &deg);
+            if (deg > 0.0f) {
+                // Y maps the user's face direction onto +Z, i.e. it is R^T.
+                R = { Y[0], Y[3], Y[6],  Y[1], Y[4], Y[7],  Y[2], Y[5], Y[8] };
+                rotate = true;
+                source = "face_dir";
+                angleDeg = deg;
+                double c[3] = {0, 0, 0};
+                const size_t nv = userV.size() / 3;
+                for (size_t i = 0; i < nv; ++i)
+                    for (int k = 0; k < 3; ++k) c[k] += userV[i*3 + size_t(k)];
+                if (nv) for (int k = 0; k < 3; ++k) pivot[size_t(k)] = float(c[k] / double(nv));
+                if (std::getenv("QTMESH_FACERIG_DEBUG"))
+                    std::fprintf(stderr, "[facerig] orientation from face-direction "
+                                 "hint: %.1f deg -> fitting in the template frame\n", deg);
+            }
+        }
+    }
+    if (!rotate)
+        return buildFaceRigAligned(userV, userF, tmpl, opts, headMask, landmarks, progress);
+
+    std::vector<float> alignedV = userV;
+    rotateInPlace(alignedV, R, pivot, /*transpose=*/true);
+    std::vector<NricpLandmark> alignedLm = landmarks;
+    for (auto& lm : alignedLm) {
+        const std::array<float, 3> p{ lm.target[0] - pivot[0], lm.target[1] - pivot[1],
+                                      lm.target[2] - pivot[2] };
+        const std::array<float, 3> q = rotateVec(R, p, true);
+        lm.target = { q[0] + pivot[0], q[1] + pivot[1], q[2] + pivot[2] };
+    }
+    FaceRigResult r = buildFaceRigAligned(alignedV, userF, tmpl, opts, headMask,
+                                          alignedLm, progress);
+    r.orientationSource = source;
+    r.orientationAngleDeg = angleDeg;
+    if (!r.ok) return r;
+    // Deltas are directions: rotate back with R (no pivot).
+    for (auto& sh : r.shapes)
+        rotateInPlace(sh.userDeltas, R, {0, 0, 0}, /*transpose=*/false);
+    return r;
+}
+
+namespace {
+FaceRigResult buildFaceRigAligned(const std::vector<float>& userV,
+                                  const std::vector<int>& userF,
+                                  const ArkitTemplate& tmpl,
+                                  const FaceRigOptions& opts,
+                                  const std::vector<char>& headMask,
+                                  const std::vector<NricpLandmark>& landmarks,
+                                  const FaceRigProgressFn& progress)
 {
     FaceRigResult r;
     if (userV.size() < 9 || userF.size() < 3) {
@@ -451,6 +862,18 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
     const std::vector<float>& fitTV = splitTmpl ? mainV : fitTmplV;
     const std::vector<int>&   fitTF = splitTmpl ? mainF : tmpl.faces();
 
+    // Pre-align on the WHOLE template vs the WHOLE fit-user mesh, even though
+    // only the main surface is FITTED. The component split removes the
+    // template's eyeballs/teeth/lashes while the user mesh still has its own,
+    // so aligning those two directly compares different subsets of a head:
+    // measured on the template fitted to ITSELF the centroids differed by
+    // 0.875 in Z, and the anneal warped the surface by ~0.55 mean to close a
+    // gap that should not exist — detuning the transfer's rest frames and
+    // leaving every blendshape 4-9x too weak.
+    if (splitTmpl) {
+        fitOpts.prealignTmplV = fitTmplV;   // whole template (pre-warped)
+        fitOpts.prealignUserV = fitV;       // whole fit-side user mesh
+    }
     // 1) NRICP: (pre-warped) template MAIN SURFACE → user neutral.
     // Report each annealing level so the (long) fit phase visibly advances.
     const NricpResult fit = FaceRig::fit(
@@ -500,99 +923,186 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
             for (int d = 0; d < 3; ++d)
                 fitted[size_t(mainToFull[m])*3 + d] = fit.fitted[m*3 + d];
 
-        // group satellite verts per component
-        std::unordered_map<int, std::vector<int>> sats;
-        for (int i = 0; i < tvc; ++i)
-            if (comp[size_t(i)] != mainComp) sats[comp[size_t(i)]].push_back(i);
+        // Place the satellite islands (mouth interior, teeth, eyeballs,
+        // lashes) by transporting them with the displacement the main surface
+        // underwent, sampled as a globally-supported inverse-distance blend.
+        //
+        // The previous rule fitted a least-squares AFFINE to the 60 main verts
+        // nearest each island's centroid. That is an extrapolation problem in
+        // disguise, and it failed badly on the mouth interior (#1059): its
+        // deepest vertices sit up to 2.6 units from ANY main-surface vertex on
+        // a head only ~22 units across, so their nearest neighbours form a
+        // distant, nearly co-planar patch of outer skin. The fitted affine was
+        // ill-conditioned there and extrapolated wildly — measured on the
+        // template fitted to ITSELF (where a correct placement is exact), it
+        // misplaced the island by 0.347 mean / 3.29 max, inverting the
+        // front-to-back ordering of the throat vertices. That is the artifact
+        // the user saw as the mouth interior lagging the teeth on jawOpen.
+        //
+        // An affine is the wrong model because it has a linear part that must
+        // be EXTRAPOLATED far outside its support. A displacement blend has
+        // no linear part to diverge: every sample is a convex combination of
+        // displacements that actually occurred, so the island can never leave
+        // the convex hull of the motion around it. Measured on the same
+        // control mesh, sweeping neighbourhood size and falloff exponent:
+        //
+        //   rule                                mean      max
+        //   affine, K=60   (what shipped)      0.3468    3.2853
+        //   affine, K=2000                     0.1839    0.4482
+        //   IDW p=1, K=60                      0.3051    1.3607
+        //   IDW p=1, K=2000                    0.1038    0.3820
+        //   IDW p=1, all main                  0.0274    0.0759
+        //   IDW p=0.5, all main                0.0172    0.0340   <- chosen
+        //
+        // Both knobs are monotone: more support and a gentler falloff are
+        // always better, because the true displacement field is smooth and a
+        // wide blend is what recovers that smoothness. Using ALL main verts
+        // also removes the neighbourhood-size parameter entirely. The result
+        // is more accurate than the main surface's own fit drift (0.120 mean),
+        // i.e. satellite placement is no longer a meaningful error source.
+        //
+        // End to end, as per-island jawOpen amplitude ratios on the control
+        // mesh (1.000 is exact; the main surface sits at 1.008 either way):
+        //
+        //   island           before   after
+        //   mouth interior    0.912   0.997
+        //   212               0.915   0.997
+        //   179               0.902   0.997
+        //   176               0.898   0.997
+        //
+        // The p10 outliers go with them: islands 212 and 176 had vertices
+        // receiving ZERO motion (p10 = 0.000), and the worst island p10 is
+        // now 0.995. Every island was lagging, not just the mouth — the
+        // reported symptom was simply where it was most visible.
+        //
+        // Cost is O(satellites x main) — 12,657 x 14,062 = 178M distance
+        // evaluations for the ICT template, measured at 0.24 s against a
+        // ~10 min total run, i.e. dwarfed by the deformation-transfer solves.
+        // A spatial index would cut it further but is not worth the code:
+        // the whole point of the rule is that EVERY main vertex contributes.
 
-        for (auto& [cid, verts] : sats) {
-            // centroid in the (warped) template space
-            std::array<double,3> ctr{0,0,0};
-            for (int v : verts)
-                for (int d = 0; d < 3; ++d)
-                    ctr[size_t(d)] += fitTmplV[size_t(v)*3+d] / double(verts.size());
-            // K nearest FINITE main verts to the centroid
-            constexpr int K = 60;
-            std::vector<std::pair<float,int>> near;   // (dist², main idx)
-            near.reserve(mainToFull.size());
-            for (size_t m = 0; m < mainToFull.size(); ++m) {
-                bool finite = true;
-                for (int d = 0; d < 3; ++d)
-                    if (!std::isfinite(fit.fitted[m*3+d])) { finite = false; break; }
-                if (!finite) continue;
-                const int fv = mainToFull[m];
-                float d2 = 0;
+        // Main verts with a finite fit, with their displacement precomputed.
+        std::vector<int>    srcFull;     // template vertex index
+        std::vector<double> srcDisp;     // fitted - warped rest, xyz
+        srcFull.reserve(mainToFull.size());
+        srcDisp.reserve(mainToFull.size() * 3);
+        for (size_t m = 0; m < mainToFull.size(); ++m) {
+            bool finite = true;
+            for (int d = 0; d < 3; ++d)
+                if (!std::isfinite(fit.fitted[m*3+d])) { finite = false; break; }
+            if (!finite) continue;
+            const int fv = mainToFull[m];
+            srcFull.push_back(fv);
+            for (int d = 0; d < 3; ++d)
+                srcDisp.push_back(double(fit.fitted[m*3+size_t(d)])
+                                - double(fitTmplV[size_t(fv)*3+size_t(d)]));
+        }
+
+        // No usable main correspondence at all (a fit that diverged wholesale):
+        // leave every satellite at the template rest. It simply won't deform,
+        // which is the same degradation the old code chose, and the NRICP gate
+        // above would normally have rejected such a fit already.
+        const bool haveSources = srcFull.size() >= 4;
+
+        // Fit the global SIMILARITY (uniform scale + translation) that the main
+        // surface underwent, and apply it EXACTLY; blend only what is left.
+        //
+        // Without this the blend is wrong under a global scale, which NRICP's
+        // bbox prealign produces routinely for meshes in different units. A
+        // uniform scale s about the origin gives every main vertex the
+        // displacement (s-1)*p — a POSITION-DEPENDENT term. Averaging those
+        // and adding the result to a satellite at q yields
+        // q + (s-1)*weightedMean(mainPositions) instead of s*q, so an eye or
+        // tooth sitting away from the main surface's centroid keeps roughly
+        // its original position and size while the head scales around it.
+        // Measured on the ICT template under a synthetic pure scale, placing
+        // 12,657 satellites (error vs the exact s*p):
+        //
+        //   scale   mean     max      worst relative
+        //   1.00    0.0000   0.0000    0.0 %
+        //   1.05    0.1991   0.3430    8.0 %
+        //   1.20    0.7963   1.3721   28.1 %
+        //   2.00    3.9817   6.8604   84.4 %
+        //
+        // Even 5 % costs more than the main surface's own fit drift (0.120).
+        // The residual after removing the similarity carries no such term, so
+        // the blend sees only local, position-independent deformation — which
+        // is the thing an average is valid for.
+        double gScale = 1.0;
+        std::array<double,3> srcCtr{0,0,0}, dstCtr{0,0,0};
+        if (haveSources) {
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
                 for (int d = 0; d < 3; ++d) {
-                    const float dd = fitTmplV[size_t(fv)*3+d] - float(ctr[size_t(d)]);
-                    d2 += dd*dd;
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    srcCtr[size_t(d)] += p;
+                    dstCtr[size_t(d)] += p + srcDisp[k*3+size_t(d)];
                 }
-                near.push_back({d2, int(m)});
             }
-            const int k = std::min<int>(K, int(near.size()));
-            if (k < 4) {
-                // no usable neighbours — leave the satellite at the template
-                // rest (it just won't deform meaningfully).
-                for (int v : verts)
-                    for (int d = 0; d < 3; ++d)
-                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
+            const double inv = 1.0 / double(srcFull.size());
+            for (int d = 0; d < 3; ++d) { srcCtr[size_t(d)] *= inv; dstCtr[size_t(d)] *= inv; }
+            // Uniform scale from the RMS radius about each centroid. Rotation
+            // is deliberately NOT extracted: the prealign is axis-aligned
+            // (centroid + bbox), so scale + translation is the part that
+            // carries a position-dependent term, and a wrong rotation would
+            // be worse than none.
+            double sn = 0.0, sd = 0.0;
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double a = double(fitTmplV[size_t(fv)*3+size_t(d)]) - srcCtr[size_t(d)];
+                    const double b = a + srcDisp[k*3+size_t(d)] - (dstCtr[size_t(d)] - srcCtr[size_t(d)]);
+                    sn += a * b; sd += a * a;
+                }
+            }
+            if (sd > 1e-12) {
+                const double cand = sn / sd;
+                // Guard against a degenerate estimate; 1.0 falls back to the
+                // pure-blend behaviour, which is correct when there is no
+                // global scale.
+                if (std::isfinite(cand) && cand > 1e-3 && cand < 1e3) gScale = cand;
+            }
+            // Re-express every source displacement as the RESIDUAL left after
+            // the global similarity, so the blend never averages (s-1)*p.
+            for (size_t k = 0; k < srcFull.size(); ++k) {
+                const int fv = srcFull[k];
+                for (int d = 0; d < 3; ++d) {
+                    const double p = double(fitTmplV[size_t(fv)*3+size_t(d)]);
+                    const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                    srcDisp[k*3+size_t(d)] = (p + srcDisp[k*3+size_t(d)]) - sim;
+                }
+            }
+        }
+
+        for (int i = 0; i < tvc; ++i) {
+            if (comp[size_t(i)] == mainComp) continue;
+            if (!haveSources) {
+                for (int d = 0; d < 3; ++d)
+                    fitted[size_t(i)*3+size_t(d)] = tn[size_t(i)*3+size_t(d)];
                 continue;
             }
-            std::partial_sort(near.begin(), near.begin()+k, near.end());
-            // least-squares affine: (warped rest) → (fitted), normal equations
-            // per output dim: (SᵀS) w = Sᵀ t, S rows = [x y z 1].
-            double StS[4][4] = {{0}}, Stt[3][4] = {{0}};
-            for (int n = 0; n < k; ++n) {
-                const int m = near[size_t(n)].second;
-                const int fv = mainToFull[size_t(m)];
-                const double s[4] = {fitTmplV[size_t(fv)*3], fitTmplV[size_t(fv)*3+1],
-                                     fitTmplV[size_t(fv)*3+2], 1.0};
-                for (int a = 0; a < 4; ++a)
-                    for (int b = 0; b < 4; ++b)
-                        StS[a][b] += s[a]*s[b];
-                for (int d = 0; d < 3; ++d)
-                    for (int a = 0; a < 4; ++a)
-                        Stt[d][a] += double(fit.fitted[size_t(m)*3+d]) * s[a];
+            const double px = fitTmplV[size_t(i)*3];
+            const double py = fitTmplV[size_t(i)*3+1];
+            const double pz = fitTmplV[size_t(i)*3+2];
+            // Inverse-distance blend with exponent 1/2 (w = d^-0.5, i.e.
+            // 1/sqrt(d)), which the sweep above picked over 1 and 1.5.
+            double acc[3] = {0,0,0}, wsum = 0.0;
+            for (size_t n = 0; n < srcFull.size(); ++n) {
+                const int fv = srcFull[n];
+                const double dx = double(fitTmplV[size_t(fv)*3])   - px;
+                const double dy = double(fitTmplV[size_t(fv)*3+1]) - py;
+                const double dz = double(fitTmplV[size_t(fv)*3+2]) - pz;
+                const double d2 = dx*dx + dy*dy + dz*dz;
+                // w = d^-0.5 = (d2)^-0.25; the floor keeps a coincident
+                // vertex from producing an infinite weight.
+                const double w = 1.0 / std::sqrt(std::sqrt(std::max(d2, 1e-12)));
+                wsum += w;
+                for (int d = 0; d < 3; ++d) acc[d] += w * srcDisp[n*3+size_t(d)];
             }
-            // solve 4x4 (Gaussian, shared factorisation for the 3 rhs)
-            double A[4][7];
-            for (int a = 0; a < 4; ++a) {
-                for (int b = 0; b < 4; ++b) A[a][b] = StS[a][b];
-                for (int d = 0; d < 3; ++d) A[a][4+d] = Stt[d][a];
-            }
-            bool singular = false;
-            for (int col = 0; col < 4 && !singular; ++col) {
-                int piv = col;
-                for (int rr = col+1; rr < 4; ++rr)
-                    if (std::abs(A[rr][col]) > std::abs(A[piv][col])) piv = rr;
-                if (std::abs(A[piv][col]) < 1e-12) { singular = true; break; }
-                if (piv != col) for (int cc = 0; cc < 7; ++cc) std::swap(A[piv][cc], A[col][cc]);
-                for (int rr = col+1; rr < 4; ++rr) {
-                    const double f2 = A[rr][col] / A[col][col];
-                    for (int cc = col; cc < 7; ++cc) A[rr][cc] -= f2 * A[col][cc];
-                }
-            }
-            double W[3][4];   // affine rows per output dim
-            if (!singular) {
-                for (int d = 0; d < 3; ++d)
-                    for (int rr = 3; rr >= 0; --rr) {
-                        double acc = A[rr][4+d];
-                        for (int cc = rr+1; cc < 4; ++cc) acc -= A[rr][cc] * W[d][cc];
-                        W[d][rr] = acc / A[rr][rr];
-                    }
-            }
-            for (int v : verts) {
-                if (singular) {
-                    for (int d = 0; d < 3; ++d)
-                        fitted[size_t(v)*3+d] = tn[size_t(v)*3+d];
-                    continue;
-                }
-                const double p[4] = {fitTmplV[size_t(v)*3], fitTmplV[size_t(v)*3+1],
-                                     fitTmplV[size_t(v)*3+2], 1.0};
-                for (int d = 0; d < 3; ++d) {
-                    double o = 0;
-                    for (int a = 0; a < 4; ++a) o += W[d][a] * p[a];
-                    fitted[size_t(v)*3+d] = float(o);
-                }
+            for (int d = 0; d < 3; ++d) {
+                const double p = double(fitTmplV[size_t(i)*3+size_t(d)]);
+                const double sim = dstCtr[size_t(d)] + gScale * (p - srcCtr[size_t(d)]);
+                fitted[size_t(i)*3+size_t(d)] = float(sim + acc[d] / wsum);
             }
         }
     }
@@ -612,12 +1122,24 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         return r;
     }
 
-    // 3) resample map: fit vertex → nearest correspondence vertex (built once).
-    PointGrid grid;
-    grid.build(fitted);
-    std::vector<int> userToTmpl(size_t(nu), -1);
-    for (int i = 0; i < nu; ++i)
-        userToTmpl[size_t(i)] = grid.nearest(&fitV[size_t(i)*3]);
+    // 3) resample map: fit vertex → closest point ON the correspondence
+    //    SURFACE (barycentric, template topology), built once for all shapes.
+    //    Deliberately not a nearest-VERTEX pick — see SurfaceSampler.
+    SurfaceSampler sampler;
+    sampler.build(fitted, tmpl.faces());
+    // NB braces, not parens: `vector<Hit> userHit(size_t(nu))` is the most
+    // vexing parse — the compiler reads it as a function declaration.
+    std::vector<SurfaceSampler::Hit> userHit{size_t(nu)};
+    // The query's own normal lets the sampler seed on the RIGHT surface where
+    // two surfaces nearly touch — see SurfaceSampler::sample.
+    const std::vector<float> userN = SurfaceSampler::vertexNormals(fitV, fitF);
+    // A user mesh wound opposite to the template has globally negated normals;
+    // without this the sign test would pick the WRONG surface every time.
+    const float nsign = SurfaceSampler::orientationSign(fitV, userN, sampler);
+    for (int i = 0; i < nu; ++i) {
+        const float* qn = (size_t(i)*3+2 < userN.size()) ? &userN[size_t(i)*3] : nullptr;
+        userHit[size_t(i)] = sampler.sample(&fitV[size_t(i)*3], qn, nsign);
+    }
 
     // noise floor scaled by the FIT region diagonal (a head is smaller than a
     // whole body, so scaling on the full-body diag would swallow real motion).
@@ -645,11 +1167,19 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
         out.userDeltas.assign(size_t(nuFull) * 3, 0.0f);
         const float amp = float(std::clamp(opts.amplitude, 0.1, 5.0));
         for (int i = 0; i < nu; ++i) {
-            const int t = userToTmpl[size_t(i)];
-            if (t < 0) continue;
-            float dvec[3] = {amp * tmplDelta[size_t(t)*3],
-                             amp * tmplDelta[size_t(t)*3+1],
-                             amp * tmplDelta[size_t(t)*3+2]};
+            const SurfaceSampler::Hit& h = userHit[size_t(i)];
+            if (h.vi[0] < 0) continue;
+            // Blend the hit triangle's corner deltas by barycentric weight.
+            // The corners belong to ONE triangle, so a query on the upper
+            // lip mixes only upper-lip motion; it cannot reach across the
+            // seam the way a nearest-vertex pick could.
+            float dvec[3] = {0.0f, 0.0f, 0.0f};
+            for (int k = 0; k < 3; ++k) {
+                if (h.vi[k] < 0 || h.w[k] == 0.0f) continue;
+                for (int a = 0; a < 3; ++a)
+                    dvec[a] += h.w[k] * tmplDelta[size_t(h.vi[k])*3 + size_t(a)];
+            }
+            for (int a = 0; a < 3; ++a) dvec[a] *= amp;
             const double mag = std::sqrt(double(dvec[0])*dvec[0] +
                                          double(dvec[1])*dvec[1] +
                                          double(dvec[2])*dvec[2]);
@@ -681,13 +1211,16 @@ FaceRigResult buildFaceRig(const std::vector<float>& userV,
             std::fprintf(stderr, "[facerig] anchored fit produced invisible "
                          "shapes (max %.5f on diag %.3f) — retrying "
                          "unanchored\n", maxAmp, diag);
-            return buildFaceRig(userV, userF, tmpl, opts, headMask, {},
-                                progress);
+            // Stay in the (already aligned) frame: the public wrapper
+            // rotates the deltas back once, after this returns.
+            return buildFaceRigAligned(userV, userF, tmpl, opts, headMask, {},
+                                       progress);
         }
     }
 
     r.ok = true;
     return r;
 }
+}  // namespace
 
 }  // namespace FaceRig

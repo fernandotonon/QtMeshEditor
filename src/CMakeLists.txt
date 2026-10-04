@@ -60,6 +60,7 @@ LLMWorker.cpp
 LLMManager.cpp
 OnnxRuntimeSettings.cpp
 ModelDownloader.cpp
+ModelFetch.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
 MCPSettingsDialog.cpp
@@ -67,6 +68,15 @@ SentryReporter.cpp
 BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
+AnimationRetargeter.cpp
+AnimGenerators.cpp
+AnimConstraints.cpp
+commands/RetargetAnimationCommand.cpp
+RetargetController.cpp
+AnimGeneratorManager.cpp
+commands/AnimGeneratorCommands.cpp
+ConstraintManager.cpp
+commands/ConstraintCommands.cpp
 FootContact.cpp
 CLIPipeline.cpp
 ConsoleLogSanitize.cpp
@@ -97,9 +107,11 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/SplitMeshCommand.cpp
+commands/LatticeCommands.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
 commands/SkeletonBoneCommands.cpp
+commands/WeldVerticesCommand.cpp
 commands/UVEditCommand.cpp
 commands/UvSeamCommands.cpp
 UvSeamData.cpp
@@ -142,11 +154,24 @@ FaceRig/NonRigidICP.cpp
 FaceRig/SparseSolve.cpp
 FaceRig/DeformationTransfer.cpp
 FaceRig/FaceRigger.cpp
+FaceRig/FaceRigAlign.cpp
 FaceRig/FaceRigAttach.cpp
 FaceRig/FaceLandmarkDetector.cpp
 FaceRig/FaceRigLandmarks.cpp
+# Audio2Face (#1019): audio -> ARKit blendshape weights. The solve is pure
+# data and always compiles; the ONNX predictor above it is guarded.
+AudioToFace/BlendshapeSolve.cpp
+AudioToFace/A2FCoefficients.cpp
+AudioToFace/AudioPreprocess.cpp
+AudioToFace/NpzReader.cpp
+AudioToFace/A2FPredictor.cpp
+AudioToFace/WavReader.cpp
+AudioToFace/LipsyncApply.cpp
+AudioToFace/LipsyncCLI.cpp
+LipsyncController.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
+MotionComposer.cpp
 MotionGenerator.cpp
 MeshSegmenter.cpp
 MeshDepthRenderer.cpp
@@ -158,6 +183,7 @@ TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
 PaintLayerBlend.cpp
 PaintLayerStack.cpp
+PaintBakeTargets.cpp
 PaintSelectionMask.cpp
 GradientRamp.cpp
 ColorPaletteLibrary.cpp
@@ -206,6 +232,7 @@ Mocap/MocapPoseDebugOverlay.cpp
 Mocap/MocapBodyDriveDebug.cpp
 Mocap/HandCapPredictor.cpp
 commands/RecordMocapClipCommand.cpp
+commands/LipsyncClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
@@ -213,6 +240,7 @@ ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
+ImageTo3D/GameReadyPresets.cpp
 ImageTo3D/TripoSGPredictor.cpp
 ImageTo3D/Trellis2Interchange.cpp
 ImageTo3D/Trellis2Bake.cpp
@@ -222,6 +250,8 @@ ImageTo3D/MeshGenController.cpp
 ImageTo3D/BackgroundRemover.cpp
 ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
+PhotoDepth.cpp
+TextureInpaint.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
 MemoryEstimator.cpp
@@ -230,7 +260,12 @@ VertexCacheOptimizer.cpp
 MeshDecimator.cpp
 MeshDecimatorController.cpp
 MeshValidator.cpp
+MeshWeldOps.cpp
 AIChatManager.cpp
+AIAgentManager.cpp
+AIAgentTypes.cpp
+AICapabilityRegistry.cpp
+AIToolRouter.cpp
 AIModelCatalog.cpp
 AppStorage.cpp
 WelcomeScreenController.cpp
@@ -256,6 +291,7 @@ CloudUploadProgress.cpp
 CloudCLIPipeline.cpp
 FeedbackDiagnostics.cpp
 FeedbackDialog.cpp
+FeedbackPromptController.cpp
 FeedbackReportHelper.cpp
 AssetBrowserController.cpp
 AssetScanController.cpp
@@ -270,6 +306,8 @@ SubMeshOps.cpp
 PartOpsMesh.cpp
 PartOpsScene.cpp
 PartOpsController.cpp
+LatticeDeformer.cpp
+LatticeController.cpp
 )
 
 set(HEADER_FILES
@@ -329,6 +367,7 @@ LLMWorker.h
 LLMManager.h
 OnnxRuntimeSettings.h
 ModelDownloader.h
+ModelFetch.h
 LLMSettingsWidget.h
 MCPServer.h
 MCPSettingsDialog.h
@@ -336,6 +375,15 @@ SentryReporter.h
 BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
+AnimationRetargeter.h
+AnimGenerators.h
+AnimConstraints.h
+commands/RetargetAnimationCommand.h
+RetargetController.h
+AnimGeneratorManager.h
+commands/AnimGeneratorCommands.h
+ConstraintManager.h
+commands/ConstraintCommands.h
 FootContact.h
 CLIPipeline.h
 MeshInfoOverlay.h
@@ -384,6 +432,9 @@ FaceRigController.h
 UniRigPredictor.h
 MotionInbetween.h
 MotionLibrary.h
+MotionComposer.h
+PhotoDepth.h
+TextureInpaint.h
 MotionGenerator.h
 MeshSegmenter.h
 MeshDepthRenderer.h
@@ -396,6 +447,7 @@ TextureAtlasPacker.h
 PaintBufferImageProvider.h
 PaintLayerBlend.h
 PaintLayerStack.h
+PaintBakeTargets.h
 PaintChannel.h
 SymmetryMirrorMap.h
 PaintSelectionMask.h
@@ -416,8 +468,18 @@ VertexCacheOptimizer.h
 MeshDecimator.h
 MeshDecimatorController.h
 PartOpsController.h
+LatticeDeformer.h
+LatticeController.h
+commands/LatticeCommands.h
 MeshValidator.h
+MeshWeldOps.h
 AIChatManager.h
+ClickFocusFilter.h
+NativeMessageBoxGuard.h
+AIAgentManager.h
+AIAgentTypes.h
+AICapabilityRegistry.h
+AIToolRouter.h
 AIModelCatalog.h
 WelcomeScreenController.h
 WelcomeDialog.h
@@ -442,6 +504,7 @@ CloudCLIPipeline.h
 FeedbackPrefill.h
 FeedbackDiagnostics.h
 FeedbackDialog.h
+FeedbackPromptController.h
 FeedbackReportHelper.h
 AssetBrowserController.h
 AssetScanController.h
@@ -840,7 +903,7 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 -DOUT=${_trellis_lic}
-                "-DIN=${_trellis_src}/LICENSE\;${_trellis_src}/thirdparty/ggml/LICENSE\;${_trellis_src}/thirdparty/fqms/LICENSE.md\;${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
+                "-DIN=${_trellis_src}/LICENSE|${_trellis_src}/thirdparty/ggml/LICENSE|${_trellis_src}/thirdparty/fqms/LICENSE.md|${_trellis_src}/thirdparty/meshoptimizer/LICENSE.md"
                 -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
         COMMAND ${CMAKE_COMMAND}
                 -DDEST=$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
@@ -848,7 +911,11 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
                 -DBUILD_DIR=${_trellis_build}
                 -DLIC=${_trellis_lic}
                 -P ${CMAKE_SOURCE_DIR}/cmake/CopyTrellisRuntime.cmake
-        COMMENT "Copying bundled trellis-cli (+ ggml libs) next to QtMeshEditor")
+        COMMENT "Copying bundled trellis-cli (+ ggml libs) next to QtMeshEditor"
+        # VERBATIM is what keeps the '|' separators inside -DIN as literal
+        # argument characters — without it the recipe shell can parse the
+        # unquoted command line and treat '|' as a pipe.
+        VERBATIM)
     # `make install` (the CI packaging path) must carry the runtime too —
     # the POST_BUILD copy only reaches the build tree. install(CODE) reuses
     # the same scoop so any leftover libggml*.so land beside the CLI AND get

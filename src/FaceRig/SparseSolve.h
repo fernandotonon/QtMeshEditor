@@ -22,6 +22,9 @@ public:
 
     void mul(const std::vector<double>& x, std::vector<double>& y) const;   // y = A x
     void mulT(const std::vector<double>& x, std::vector<double>& y) const;  // y = Aᵀ x
+    /// diag(AᵀA) — the per-column sum of squares. Used as a Jacobi
+    /// preconditioner; `out` is resized to cols.
+    void diagOfNormalEquations(std::vector<double>& out) const;
 
 private:
     std::vector<int> m_rowPtr, m_col;

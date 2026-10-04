@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QTcpSocket>
+#include <QSettings>
 #include <QTcpServer>
 #include <QSignalSpy>
 #include <QElapsedTimer>
@@ -931,6 +932,31 @@ TEST_F(MCPServerTest, GetSceneInfoMultipleObjects)
     EXPECT_TRUE(text.contains("SceneCube"));
     EXPECT_TRUE(text.contains("SceneCylinder"));
     EXPECT_TRUE(text.contains("Scene Information"));
+}
+
+// #1052: the AI agent needs to target the ~25 selection-based tools.
+TEST_F(MCPServerTest, SelectEntityDrivesSelectionBasedToolsAndSceneInfoShowsIt)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    server->callTool("create_primitive", QJsonObject{{"type", "cube"}, {"name", "SelCube"}});
+    server->callTool("create_primitive", QJsonObject{{"type", "sphere"}, {"name", "SelSphere"}});
+
+    QJsonObject r = server->callTool("select_entity", QJsonObject{{"name", "SelSphere"}});
+    EXPECT_FALSE(isError(r)) << getResultText(r).toStdString();
+    EXPECT_TRUE(getResultText(r).contains("Selected 'SelSphere'"));
+    EXPECT_TRUE(getResultText(server->callTool("get_scene_info", QJsonObject())).contains("Selected: SelSphere"));
+
+    // a selection-based tool now resolves the sphere
+    const QJsonObject info = server->callTool("get_lod_info", QJsonObject());
+    EXPECT_FALSE(isError(info)) << getResultText(info).toStdString();
+
+    r = server->callTool("select_entity", QJsonObject{{"name", "Nope"}});
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("get_scene_info lists the names"));
+
+    r = server->callTool("select_entity", QJsonObject{{"name", ""}});
+    EXPECT_FALSE(isError(r));
+    EXPECT_TRUE(getResultText(server->callTool("get_scene_info", QJsonObject())).contains("Selected: (nothing"));
 }
 
 TEST_F(MCPServerTest, GetSceneInfoEmptyScene)
@@ -1962,6 +1988,11 @@ protected:
         // HTTP tests only need MCPServer — not full Ogre.
         // Tool calls that need Ogre will return errors, which is fine for
         // testing the HTTP routing and response handling.
+        // #984: the token/bind resolution reads the environment + QSettings —
+        // scrub both so a developer's shell cannot flip the open-access cases.
+        qunsetenv("QTMESH_HTTP_TOKEN");
+        qunsetenv("QTMESH_HTTP_BIND");
+        QSettings().remove(QStringLiteral("mcp/httpToken"));
         server = std::make_unique<MCPServer>();
     }
 
@@ -2118,22 +2149,31 @@ TEST_F(MCPServerHttpTest, PostToolCall)
     EXPECT_TRUE(response.contains("application/json"));
 }
 
-// --- HTTP GET /api/tools/<name> (no body) ---
+// --- HTTP GET /api/tools/<name> — refused (#984) ---
 
-TEST_F(MCPServerHttpTest, GetToolCallNoBody)
+TEST_F(MCPServerHttpTest, GetToolCallIsRefusedWith405AndRunsNothing)
 {
     server->setOgreInitFailed(true);
 
     ASSERT_TRUE(server->startHttp(0));
     int port = server->httpPort();
 
+    // Before #984 this executed list_materials with no arguments — and would
+    // equally have executed decimate_mesh or delete_light from a bare link.
     QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
                          "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
     ASSERT_FALSE(response.isEmpty());
-    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_EQ(getHttpStatus(response), 405);
+    EXPECT_TRUE(response.contains("Allow: POST"));
+    const QJsonObject json = parseHttpResponse(response);
+    EXPECT_TRUE(json.contains("error"));
+    EXPECT_TRUE(json["error"].toString().contains("POST"));
+    // Nothing was dispatched: no tool result shape (content/isError) leaks out.
+    EXPECT_FALSE(json.contains("content"));
+    EXPECT_FALSE(json.contains("isError"));
 }
 
 // --- HTTP OPTIONS (CORS preflight) ---
@@ -2238,13 +2278,14 @@ TEST_F(MCPServerHttpTest, GetToolCallWithQueryStringStripsSuffix)
     ASSERT_TRUE(server->startHttp(0));
     int port = server->httpPort();
 
+    // A query string does not turn a GET into an execution either (#984).
     QByteArray request = "GET /api/tools/list_materials?format=json HTTP/1.1\r\n"
                          "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
     ASSERT_FALSE(response.isEmpty());
-    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_EQ(getHttpStatus(response), 405);
     EXPECT_TRUE(response.contains("application/json"));
 }
 
@@ -2256,8 +2297,8 @@ TEST_F(MCPServerHttpTest, BusyToolRequestReturns503)
     server->m_httpBusy = true;
     int port = server->httpPort();
 
-    QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
-                         "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    QByteArray request = "POST /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
     QByteArray response = sendHttpRequest(port, request);
 
@@ -4556,6 +4597,197 @@ TEST_F(MCPServerHttpTest, StartHttp_PortAlreadyInUseReturnsFalse)
 
     EXPECT_FALSE(server->startHttp(usedPort));
     EXPECT_EQ(server->m_httpServer, nullptr);
+}
+
+// ==========================================================================
+// #984 — HTTP API hardening: token + bind address
+// ==========================================================================
+
+namespace {
+QByteArray postListMaterials(const QByteArray &extraHeaders = {})
+{
+    return "POST /api/tools/list_materials HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+           + extraHeaders + "Content-Length: 0\r\nConnection: close\r\n\r\n";
+}
+} // namespace
+
+TEST_F(MCPServerHttpTest, TokenConfigured_PostWithoutTokenIs401)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(server->httpPort(), postListMaterials());
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 401);
+    EXPECT_TRUE(response.contains("WWW-Authenticate: Bearer"));
+    EXPECT_FALSE(parseHttpResponse(response).contains("content"));   // tool did not run
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_WrongTokenIs401)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    // Same length as the real token — the compare must not pass on length alone.
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("Authorization: Bearer s3cret-tokeX\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 401);
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_BearerTokenIsAccepted)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("Authorization: Bearer s3cret-token\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(parseHttpResponse(response).contains("content"));    // reached the tool
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_XApiKeyIsAccepted)
+{
+    server->setOgreInitFailed(true);
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(
+        server->httpPort(), postListMaterials("x-api-key: s3cret-token\r\n"));
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_ListingRequiresTokenToo)
+{
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    QByteArray response = sendHttpRequest(server->httpPort(),
+        "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 401);
+
+    response = sendHttpRequest(server->httpPort(),
+        "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer s3cret-token\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(parseHttpResponse(response).contains("tools"));
+}
+
+TEST_F(MCPServerHttpTest, TokenConfigured_CorsPreflightNeedsNoTokenAndAdvertisesAuthHeaders)
+{
+    // A browser preflight cannot carry credentials by spec; refusing it would
+    // make the token unusable from any web client.
+    server->setHttpToken("s3cret-token");
+    ASSERT_TRUE(server->startHttp(0));
+
+    const QByteArray response = sendHttpRequest(server->httpPort(),
+        "OPTIONS /api/tools/list_materials HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Origin: http://localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_EQ(getHttpStatus(response), 204);
+    EXPECT_TRUE(response.contains("Authorization"));
+    EXPECT_TRUE(response.contains("X-Api-Key"));
+}
+
+TEST_F(MCPServerHttpTest, NoTokenConfigured_StaysOpenForLocalCallers)
+{
+    // Default behaviour is unchanged: no token → no 401 (existing harnesses).
+    server->setOgreInitFailed(true);
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->httpToken().isEmpty());
+    const QByteArray response = sendHttpRequest(server->httpPort(), postListMaterials());
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+TEST_F(MCPServerHttpTest, TokenResolution_EnvWinsOverSettings_ExplicitWinsOverBoth)
+{
+    QSettings().setValue(QStringLiteral("mcp/httpToken"), QStringLiteral("from-settings"));
+    EXPECT_EQ(MCPServer::resolveHttpToken(), QStringLiteral("from-settings"));
+
+    qputenv("QTMESH_HTTP_TOKEN", "from-env ");
+    EXPECT_EQ(MCPServer::resolveHttpToken(), QStringLiteral("from-env"));   // trimmed
+
+    // startHttp() picks the resolved token up when none was set explicitly…
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_EQ(server->httpToken(), QStringLiteral("from-env"));
+    server->stopHttp();
+
+    // …and an explicit setter beats env + settings.
+    auto other = std::make_unique<MCPServer>();
+    other->setHttpToken("explicit");
+    ASSERT_TRUE(other->startHttp(0));
+    EXPECT_EQ(other->httpToken(), QStringLiteral("explicit"));
+    other->stopHttp();
+
+    qunsetenv("QTMESH_HTTP_TOKEN");
+    QSettings().remove(QStringLiteral("mcp/httpToken"));
+    EXPECT_TRUE(MCPServer::resolveHttpToken().isEmpty());
+}
+
+TEST_F(MCPServerHttpTest, TokenFile_TrimmedContentOrError)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString good = dir.filePath(QStringLiteral("token"));
+    { QFile f(good); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("  s3cret-token\n\n"); }
+    QString err;
+    EXPECT_EQ(MCPServer::readHttpTokenFile(good, &err), QStringLiteral("s3cret-token"));
+    EXPECT_TRUE(err.isEmpty());
+
+    const QString blank = dir.filePath(QStringLiteral("blank"));
+    { QFile f(blank); ASSERT_TRUE(f.open(QIODevice::WriteOnly)); f.write("\n   \n"); }
+    EXPECT_TRUE(MCPServer::readHttpTokenFile(blank, &err).isEmpty());
+    EXPECT_TRUE(err.contains("empty"));
+
+    err.clear();
+    EXPECT_TRUE(MCPServer::readHttpTokenFile(dir.filePath(QStringLiteral("missing")), &err).isEmpty());
+    EXPECT_FALSE(err.isEmpty());
+
+    // The file-sourced token protects the API exactly like an explicit one.
+    server->setOgreInitFailed(true);
+    server->setHttpToken(MCPServer::readHttpTokenFile(good));
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_EQ(getHttpStatus(sendHttpRequest(server->httpPort(), postListMaterials())), 401);
+    EXPECT_EQ(getHttpStatus(sendHttpRequest(server->httpPort(),
+                  postListMaterials("Authorization: Bearer s3cret-token\r\n"))), 200);
+}
+
+TEST_F(MCPServerHttpTest, BindAddress_DefaultIsLoopback_AnyIsOptIn)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->httpBindAddress().isLoopback())
+        << server->httpBindAddress().toString().toStdString();
+    server->stopHttp();
+
+    auto exposed = std::make_unique<MCPServer>();
+    exposed->setHttpBindAddress(QHostAddress::Any);
+    ASSERT_TRUE(exposed->startHttp(0));
+    EXPECT_FALSE(exposed->httpBindAddress().isLoopback());
+    exposed->stopHttp();
+
+    qputenv("QTMESH_HTTP_BIND", "not an address");
+    EXPECT_TRUE(MCPServer::resolveHttpBindAddress().isLoopback());   // invalid → safe default
+    qputenv("QTMESH_HTTP_BIND", "0.0.0.0");
+    EXPECT_FALSE(MCPServer::resolveHttpBindAddress().isLoopback());
+    qunsetenv("QTMESH_HTTP_BIND");
+}
+
+TEST(MCPServerHttpAuthParse, BearerAndApiKeyParsing)
+{
+    using M = MCPServer;
+    EXPECT_TRUE (M::httpRequestAuthorized("Host: x\r\nAuthorization: Bearer abc\r\n", "abc"));
+    EXPECT_TRUE (M::httpRequestAuthorized("authorization:   bearer   abc  \r\n", "abc"));   // case + spaces
+    EXPECT_TRUE (M::httpRequestAuthorized("X-API-KEY: abc\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Basic abc\r\n", "abc"));         // wrong scheme
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer ab\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer abcd\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer abd\r\n", "abc"));  // same length, wrong bytes
+    EXPECT_FALSE(M::httpRequestAuthorized("X-Api-Key: abd\r\n", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Authorization: Bearer\r\n", "abc"));            // no value
+    EXPECT_FALSE(M::httpRequestAuthorized("X-Api-Key: abc\r\n", ""));                      // empty token never authorizes
+    EXPECT_FALSE(M::httpRequestAuthorized("", "abc"));
+    EXPECT_FALSE(M::httpRequestAuthorized("Cookie: token=abc\r\n", "abc"));                // other header
 }
 
 TEST_F(MCPServerProtocolTest, HandleResourcesReadCurrentMaterialUsesMaterialEditorTextWhenAvailable)
@@ -7055,4 +7287,74 @@ TEST_F(MCPServerTest, ApplyPoseMasked_NonStringBoneRejected)
     QJsonObject r = server->callTool("apply_pose_masked", args);
     EXPECT_TRUE(isError(r));
     EXPECT_TRUE(getResultText(r).contains("bones"));
+}
+
+// ── generate_mesh_from_image: game_preset validation ────────────────────────
+// Argument validation runs BEFORE any model/runtime probe, so these cases
+// need no ONNX build, no downloaded model and no GPU — only a real PNG so
+// the image gate is satisfied first.
+
+TEST_F(MCPServerTest, GenerateMeshFromImage_GamePresetIsValidatedBeforeAnyRuntime)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString png = dir.filePath("subject.png");
+    QImage img(32, 32, QImage::Format_RGBA8888);
+    img.fill(Qt::red);
+    ASSERT_TRUE(img.save(png));
+
+    QJsonObject bad;
+    bad["image_path"] = png;
+    bad["game_preset"] = "ultra";
+    QJsonObject r1 = server->callTool("generate_mesh_from_image", bad);
+    EXPECT_TRUE(isError(r1));
+    EXPECT_TRUE(getResultText(r1).contains("game_preset")) << getResultText(r1).toStdString();
+    EXPECT_TRUE(getResultText(r1).contains("roblox-meshpart")) << "the listing names the valid ids";
+
+    // An unknown preset is rejected BEFORE the prompt-image phase, which can
+    // take minutes (review finding) — no image_path, prompt only.
+    QJsonObject promptOnly;
+    promptOnly["prompt"] = "a goblin";
+    promptOnly["game_preset"] = "ultra";
+    QJsonObject r2 = server->callTool("generate_mesh_from_image", promptOnly);
+    EXPECT_TRUE(isError(r2));
+    EXPECT_TRUE(getResultText(r2).contains("game_preset")) << getResultText(r2).toStdString();
+
+    // A preset plus explicit overrides is VALID (custom values in range win);
+    // whatever fails next is the runtime/model, never the argument check.
+    QJsonObject both;
+    both["image_path"] = png;
+    both["game_preset"] = "roblox-accessory";
+    both["target_tris"] = 5000;
+    both["texture_size"] = 2048;
+    QJsonObject r3 = server->callTool("generate_mesh_from_image", both);
+    EXPECT_FALSE(getResultText(r3).contains("game_preset")) << getResultText(r3).toStdString();
+    EXPECT_FALSE(getResultText(r3).contains("not both")) << getResultText(r3).toStdString();
+    // Out-of-range custom values are still rejected with a preset present.
+    both["texture_size"] = 32;
+    QJsonObject r4 = server->callTool("generate_mesh_from_image", both);
+    EXPECT_TRUE(isError(r4));
+    EXPECT_TRUE(getResultText(r4).contains("texture_size")) << getResultText(r4).toStdString();
+}
+
+TEST_F(MCPServerTest, GenerateMeshFromImage_SchemaAdvertisesGamePresetEnum)
+{
+    const QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const QJsonValue& t : tools) {
+        const QJsonObject tool = t.toObject();
+        if (tool["name"].toString() != "generate_mesh_from_image") continue;
+        found = true;
+        const QJsonObject props = tool["inputSchema"].toObject()["properties"].toObject();
+        ASSERT_TRUE(props.contains("game_preset"));
+        const QJsonArray e = props["game_preset"].toObject()["enum"].toArray();
+        QStringList ids;
+        for (const QJsonValue& v : e) ids << v.toString();
+        EXPECT_TRUE(ids.contains("roblox-accessory")) << ids.join(",").toStdString();
+        EXPECT_TRUE(ids.contains("roblox-meshpart")) << ids.join(",").toStdString();
+        EXPECT_TRUE(ids.contains("medium"));
+    }
+    // buildToolsList() registers the tool unconditionally (the TRELLIS
+    // backends need no ONNX), so a missing entry is a regression.
+    EXPECT_TRUE(found) << "generate_mesh_from_image is not advertised";
 }

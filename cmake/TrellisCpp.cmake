@@ -64,7 +64,8 @@ set(_trellis_cmake_args
 # INS_ENB=ON (AVX2+FMA+F16C+BMI2) — Haswell+. 3.37.7 snap SIGILL'd
 # (vfmadd213ss / exit 4) on Ivy Bridge (AVX+F16C, no FMA). Pin an
 # AVX+SSE4.2 baseline without FMA/AVX2/F16C/BMI2 so Sandy Bridge+.
-if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+# Applies to Windows x86_64 too — the same shipping-binary rule.
+if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
     list(APPEND _trellis_cmake_args
          -DGGML_SSE42=ON
          -DGGML_AVX=ON
@@ -72,6 +73,21 @@ if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
          -DGGML_FMA=OFF
          -DGGML_F16C=OFF
          -DGGML_BMI2=OFF)
+endif()
+# Windows (MinGW): self-contained trellis-cli.exe. -static folds the MinGW
+# runtimes (libgcc/libstdc++/winpthread) into the exe so the package's
+# transitive-import verifier sees only system DLLs; GGML_OPENMP=OFF avoids a
+# libgomp dependency (ggml falls back to its own thread pool). CPU backend
+# for now — Vulkan needs the SDK on the runner + a driver-provided
+# vulkan-1.dll on user machines (tracked follow-up).
+if(WIN32)
+    list(APPEND _trellis_cmake_args
+         "-DCMAKE_EXE_LINKER_FLAGS=-static"
+         -DGGML_OPENMP=OFF)
+    if(CMAKE_MAKE_PROGRAM)
+        list(APPEND _trellis_cmake_args
+             "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+    endif()
 endif()
 # Linux: Vulkan GPU backend (runtime dep: libvulkan1). Falls back to CPU
 # when no suitable device is present.
@@ -93,13 +109,22 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 ExternalProject_Add(qtmesh_trelliscpp
-    GIT_REPOSITORY https://github.com/pwilkin/trellis.cpp.git
-    GIT_TAG        2516c48b677050c570f47eba2e68dc8a5bc918b0
+    # fernandotonon/trellis.cpp @ qtmesh-pixal3d = upstream pwilkin/main plus the
+    # three macOS commits QtMeshEditor depends on (Metal backend, direct CONV_3D
+    # in the SS decoder, and --dump-post, which is how we take over the asset
+    # pipeline after inference). Upstream shipped Pixal3D support in v0.8.0, so
+    # the fork carries no generation logic of its own — only the platform work.
+    GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
+    GIT_TAG        f46ea9a8c5cb6b7cf0d58ea6594db7d918d4e384
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
     BINARY_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-build"
     LIST_SEPARATOR |
+    # MinGW header compat (see cmake/PatchTrellisMinGW.cmake) — idempotent,
+    # runs on every platform, errors loudly if the pin moves past the pattern.
+    PATCH_COMMAND  ${CMAKE_COMMAND} -DSRC=<SOURCE_DIR>
+                   -P ${CMAKE_CURRENT_LIST_DIR}/PatchTrellisMinGW.cmake
     CMAKE_ARGS     ${_trellis_cmake_args}
     BUILD_COMMAND  ${CMAKE_COMMAND} --build <BINARY_DIR> --target trellis-cli
                    --config Release -j4

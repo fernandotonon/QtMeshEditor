@@ -53,6 +53,7 @@ void LLMManager::initializeWorkerThread()
 
     // Connect worker signals
     connect(m_worker, &LLMWorker::modelLoaded, this, &LLMManager::onWorkerModelLoaded);
+    connect(m_worker, &LLMWorker::contextReady, this, &LLMManager::onWorkerContextReady);
     connect(m_worker, &LLMWorker::modelLoadError, this, &LLMManager::onWorkerModelLoadError);
     connect(m_worker, &LLMWorker::modelUnloaded, this, &LLMManager::onWorkerModelUnloaded);
     connect(m_worker, &LLMWorker::generationStarted, this, &LLMManager::onWorkerGenerationStarted);
@@ -96,15 +97,22 @@ void LLMManager::populateRecommendedModels()
 {
     m_recommendedModels.clear();
 
-    // Recommended GGUF models from Hugging Face - ordered by size (smallest first)
-    // Curated to avoid near-duplicates (no Coder variants or older Gemma 2)
+    // Recommended GGUF models from Hugging Face — ordered by size (smallest
+    // first). Every URL is a SINGLE-FILE quant that answered HTTP 200 when this
+    // list was last verified (2026-09-17); the official Qwen repos split their
+    // larger quants into -00001-of-00002 parts, which our downloader cannot
+    // reassemble, so those come from bartowski/unsloth mirrors instead.
+    // Qwen3 entries are the NON-thinking "Instruct-2507" variants: the worker
+    // feeds a generic chat template, which cannot switch thinking off, and
+    // the hybrid Qwen3 models would spend the token budget on <think> blocks
+    // instead of the agent's JSON.
 
     m_recommendedModels.append({
         "Gemma 3 1B Q4_K_M",
         "gemma-3-1b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 1B. Ultra-fast, great for quick tasks.",
-        900000000, // ~0.9GB
+        "Google's Gemma 3 1B. Ultra-fast, great for quick single-step commands.",
+        806000000, // ~0.75GB
         false
     });
 
@@ -113,7 +121,7 @@ void LLMManager::populateRecommendedModels()
         "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         "Meta's Llama 3.2 3B. Well-rounded performance.",
-        2000000000, // ~2.0GB
+        2020000000, // ~1.9GB
         false
     });
 
@@ -122,7 +130,7 @@ void LLMManager::populateRecommendedModels()
         "qwen2.5-3b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
         "Alibaba's Qwen 2.5 3B. Great for structured output.",
-        2100000000, // ~2.1GB
+        2100000000, // ~2.0GB
         false
     });
 
@@ -131,16 +139,26 @@ void LLMManager::populateRecommendedModels()
         "gemma-3-4b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
         "Google's Gemma 3 4B. Excellent balance of speed and quality.",
-        3100000000, // ~3.1GB
+        2490000000, // ~2.3GB
         false
     });
 
     m_recommendedModels.append({
+        "Qwen3 4B Instruct 2507 Q4_K_M",
+        "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "Qwen3 4B, non-thinking Instruct edition. Best small model for the AI agent's multi-step tool calls; fits 8 GB machines. Apache-2.0.",
+        2500000000, // ~2.3GB
+        false
+    });
+
+
+    m_recommendedModels.append({
         "Qwen 2.5 7B Q4_K_M",
-        "qwen2.5-7b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 7B. Strong instruction following and tool use.",
-        4700000000, // ~4.7GB
+        "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 7B. Strong instruction following and tool use — a reliable AI-agent model on 16 GB machines. Apache-2.0.",
+        4680000000, // ~4.4GB
         false
     });
 
@@ -148,17 +166,17 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 12B Q4_K_M",
         "gemma-3-12b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 12B. High quality, needs 8GB+ RAM.",
-        8100000000, // ~8.1GB
+        "Google's Gemma 3 12B. High quality, needs 12GB+ RAM.",
+        7300000000, // ~6.8GB
         false
     });
 
     m_recommendedModels.append({
         "Qwen 2.5 14B Q4_K_M",
-        "qwen2.5-14b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 14B. Very capable, excellent reasoning.",
-        9400000000, // ~9.4GB
+        "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 14B. Very capable, excellent reasoning; needs ~12 GB RAM. Apache-2.0.",
+        8990000000, // ~8.4GB
         false
     });
 
@@ -166,17 +184,26 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 27B Q4_K_M",
         "gemma-3-27b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 27B. Excellent quality, needs 16GB+ RAM.",
-        17000000000, // ~17GB
+        "Google's Gemma 3 27B. Excellent quality, needs 20GB+ RAM.",
+        16546405002, // ~15.4GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen3 30B-A3B Instruct 2507 Q4_K_M",
+        "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        "Qwen3 30B mixture-of-experts (3B active): the strongest local tool caller, fast per token. Needs 32 GB RAM — on a 24 GB Mac the 17 GB weights load but the GPU budget cannot hold the KV cache (\"could not process the prompt\"). Apache-2.0.",
+        18550000000, // ~17.3GB
         false
     });
 
     m_recommendedModels.append({
         "Qwen 2.5 32B Q4_K_M",
-        "qwen2.5-32b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-GGUF/resolve/main/qwen2.5-32b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 32B. Near top-tier quality, needs 20GB+ RAM.",
-        20000000000, // ~20GB
+        "Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+        "Qwen 2.5 32B. Near top-tier quality, needs 24GB+ RAM. Apache-2.0.",
+        19860000000, // ~18.5GB
         false
     });
 }
@@ -422,6 +449,61 @@ void LLMManager::browseForModelFile()
         loadModelFromPath(file);
 }
 
+bool LLMManager::deleteModelFile(const QString &fileName)
+{
+    const QString name = QFileInfo(fileName).fileName();   // strip any directory part
+    if (name.isEmpty() || name != fileName.trimmed() || name.contains(QLatin1String(".."))) {
+        qWarning() << "LLMManager: refusing to delete a path outside the models directory:" << fileName;
+        return false;
+    }
+    const QString path = QDir(m_modelsDirectory).filePath(name);
+    const bool exists = QFileInfo::exists(path) || QFileInfo::exists(path + QLatin1String(".part"));
+    if (!exists) return false;
+    if (isActiveModelFile(name)) {
+        // The worker still maps this file until its queued unloadModel() ran;
+        // delete it from onWorkerModelUnloaded instead of racing the mapping.
+        m_pendingDeletions << path;
+        unloadModel();
+        qDebug() << "LLMManager: model file deletion deferred until the model is unloaded" << path;
+        return true;
+    }
+    const bool removed = removeModelFileNow(path);
+    if (removed) scanForModels();
+    return removed;
+}
+
+int LLMManager::deleteAllModelFiles()
+{
+    int count = 0;
+    QDir dir(m_modelsDirectory);
+    if (!dir.exists()) return 0;
+    // the same set scanForModels() lists (.gguf AND .bin), plus their partials
+    for (const QFileInfo& fi : dir.entryInfoList({"*.gguf", "*.gguf.part", "*.bin", "*.bin.part"}, QDir::Files)) {
+        if (isActiveModelFile(fi.fileName())) { m_pendingDeletions << fi.absoluteFilePath(); ++count; continue; }
+        if (QFile::remove(fi.absoluteFilePath())) ++count;
+    }
+    if (!m_pendingDeletions.isEmpty()) unloadModel();
+    if (count) scanForModels();
+    return count;
+}
+
+bool LLMManager::isActiveModelFile(const QString& fileName) const
+{
+    if (!isModelLoaded() || m_currentModelName.isEmpty()) return false;
+    QString stem = fileName;
+    if (stem.endsWith(QLatin1String(".part"))) stem.chop(5);
+    return m_currentModelName == stem || m_currentModelName == QFileInfo(stem).completeBaseName();
+}
+
+bool LLMManager::removeModelFileNow(const QString& path)
+{
+    bool removed = false;
+    if (QFileInfo::exists(path)) removed = QFile::remove(path);
+    if (QFileInfo::exists(path + QLatin1String(".part"))) removed = QFile::remove(path + QLatin1String(".part")) || removed;
+    if (removed) qDebug() << "LLMManager: deleted model file" << path;
+    return removed;
+}
+
 void LLMManager::unloadModel()
 {
     if (m_worker) {
@@ -586,7 +668,7 @@ void LLMManager::loadSettings()
     QSettings settings;
     settings.beginGroup("LLM");
     m_modelsDirectory = settings.value("modelsDirectory", getDefaultModelsDirectory()).toString();
-    m_settings.contextSize = settings.value("contextSize", 4096).toInt();
+    m_settings.contextSize = settings.value("contextSize", 8192).toInt();
     m_settings.maxTokens = settings.value("maxTokens", 2048).toInt();
     m_settings.temperature = settings.value("temperature", 0.7).toFloat();
     m_settings.gpuLayers = settings.value("gpuLayers", 99).toInt();
@@ -682,6 +764,13 @@ void LLMManager::onWorkerModelLoaded(const QString &modelPath)
     saveSettings(); // Save last loaded model
 }
 
+void LLMManager::onWorkerContextReady(int nCtx)
+{
+    if (m_effectiveContextSize == nCtx) return;
+    m_effectiveContextSize = nCtx;
+    emit effectiveContextSizeChanged();
+}
+
 void LLMManager::onWorkerModelLoadError(const QString &error)
 {
     qWarning() << "LLMManager: Model load error:" << error;
@@ -695,11 +784,29 @@ void LLMManager::onWorkerModelLoadError(const QString &error)
 
 void LLMManager::onWorkerModelUnloaded()
 {
+    if (m_effectiveContextSize != 0) {
+        m_effectiveContextSize = 0;
+        emit effectiveContextSizeChanged();
+    }
     qDebug() << "LLMManager: Model unloaded";
     // Don't clear the model name if we're loading a new model (switching models)
     if (!m_isLoading) {
         m_currentModelName.clear();
         emit currentModelNameChanged();
+    }
+    if (!m_pendingDeletions.isEmpty()) {
+        // the worker released the mapping — now the deferred deletes are safe
+        const QStringList pending = m_pendingDeletions;
+        m_pendingDeletions.clear();
+        QStringList removed, failed;
+        for (const QString& path : pending) {
+            if (removeModelFileNow(path)) removed << QFileInfo(path).fileName();
+            else                          failed  << QFileInfo(path).fileName();
+        }
+        if (!removed.isEmpty()) scanForModels();
+        // The callers returned optimistically (the removal had not happened
+        // yet) — this is the only place that knows what actually went.
+        emit deferredDeletionFinished(removed, failed);
     }
     emit modelUnloaded();
     emit modelLoadedChanged();

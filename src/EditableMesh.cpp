@@ -726,7 +726,7 @@ void EditableMesh::weldByPosition(float tolerance)
     }
 }
 
-bool EditableMesh::commitToEntity(Ogre::Entity* entity)
+bool EditableMesh::commitToEntity(Ogre::Entity* entity, bool recomputeNormals)
 {
     if (!entity)
         return false;
@@ -741,10 +741,12 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
         return false;
 
     // Recalculate normals before writing back (respects current mode)
-    if (m_flatNormals)
-        recalculateNormalsFlat();
-    else
-        recalculateNormals();
+    if (recomputeNormals) {
+        if (m_flatNormals)
+            recalculateNormalsFlat();
+        else
+            recalculateNormals();
+    }
 
     // For submeshes that use shared vertices, write the first such submesh's
     // data back to the shared buffer (all such submeshes share the same vertex data).

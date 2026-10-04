@@ -1,5 +1,6 @@
 #include "SparseSolve.h"
 
+
 namespace FaceRig {
 
 void SparseMatrix::fromTriplets(int r, int c,
@@ -45,6 +46,14 @@ void SparseMatrix::mulT(const std::vector<double>& x, std::vector<double>& y) co
     }
 }
 
+void SparseMatrix::diagOfNormalEquations(std::vector<double>& out) const
+{
+    out.assign(size_t(cols), 0.0);
+    for (int r = 0; r < rows; ++r)
+        for (int k = m_rowPtr[size_t(r)]; k < m_rowPtr[size_t(r) + 1]; ++k)
+            out[size_t(m_col[size_t(k)])] += m_val[size_t(k)] * m_val[size_t(k)];
+}
+
 void solveLeastSquaresCG(const SparseMatrix& A, const std::vector<double>& b,
                          std::vector<double>& x, int maxIters, double tol)
 {
@@ -54,7 +63,28 @@ void solveLeastSquaresCG(const SparseMatrix& A, const std::vector<double>& b,
     for (int i = 0; i < A.rows; ++i)
         resid[size_t(i)] = b[size_t(i)] - Ax[size_t(i)];
     A.mulT(resid, r);                     // r = Aᵀ(b - Ax)
-    p = r;
+
+    // JACOBI PRECONDITIONER: M = diag(AᵀA). CG on the normal equations
+    // squares the condition number, and this system is badly scaled — the
+    // deformation-transfer matrix mixes per-triangle gradient rows with a
+    // handful of anchor rows, so unpreconditioned CG crawled: measured on a
+    // 27k-vertex head it burned 12000 iterations WITHOUT reaching tol, and
+    // the truncated answer was not merely small but distorted (per-vertex
+    // amplitude scattered 0.22-1.41 of target). Diagonal scaling is O(nnz)
+    // to build, one divide per iteration, and needs no extra storage beyond
+    // this vector.
+    std::vector<double> invDiag(size_t(A.cols), 0.0);
+    A.diagOfNormalEquations(invDiag);
+    for (double& d : invDiag)
+        d = d > 1e-300 ? 1.0 / d : 1.0;   // a zero column must not divide
+
+    std::vector<double> z(size_t(A.cols));
+    for (int i = 0; i < A.cols; ++i)
+        z[size_t(i)] = invDiag[size_t(i)] * r[size_t(i)];
+    p = z;
+    double rz = 0;
+    for (int i = 0; i < A.cols; ++i)
+        rz += r[size_t(i)] * z[size_t(i)];
     double rs = 0;
     for (double v : r)
         rs += v * v;
@@ -69,18 +99,22 @@ void solveLeastSquaresCG(const SparseMatrix& A, const std::vector<double>& b,
             pAp += p[size_t(i)] * AtAp[size_t(i)];
         if (pAp <= 1e-30)
             break;
-        const double a = rs / pAp;
+        const double a = rz / pAp;
         for (int i = 0; i < A.cols; ++i) {
             x[size_t(i)] += a * p[size_t(i)];
             r[size_t(i)] -= a * AtAp[size_t(i)];
         }
-        double rsn = 0;
-        for (double v : r)
-            rsn += v * v;
-        const double beta = rsn / rs;
+        double rsn = 0, rzn = 0;
+        for (int i = 0; i < A.cols; ++i) {
+            z[size_t(i)] = invDiag[size_t(i)] * r[size_t(i)];
+            rsn += r[size_t(i)] * r[size_t(i)];
+            rzn += r[size_t(i)] * z[size_t(i)];
+        }
+        const double beta = rzn / (rz > 1e-300 ? rz : 1e-300);
         for (int i = 0; i < A.cols; ++i)
-            p[size_t(i)] = r[size_t(i)] + beta * p[size_t(i)];
+            p[size_t(i)] = z[size_t(i)] + beta * p[size_t(i)];
         rs = rsn;
+        rz = rzn;
     }
 }
 

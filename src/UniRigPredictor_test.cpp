@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <limits>
 // Unit tests for UniRigPredictor (#408, retargeted from RigNet to UniRig:
 // VAST-AI-Research/UniRig, SIGGRAPH 2025). No Ogre / GL / ONNX needed: these
 // exercise the pure-data tokenizer (undiscretize + the detokenize FSM) and the
@@ -14,6 +16,8 @@
 //   static double undiscretize(int bin);
 
 #include <gtest/gtest.h>
+#include <QRegularExpression>
+#include <random>
 
 #include <QString>
 #include <array>
@@ -23,6 +27,7 @@
 #include <vector>
 
 #include "UniRigPredictor.h"
+#include "AutoRig.h"
 #include "MotionInbetween.h"
 
 namespace {
@@ -524,4 +529,271 @@ TEST(UniRigPredictor, LabelJointsClassifiesAPoseArmsByAttachHeight)
     EXPECT_EQ(armChains, 2) << "both A-pose chains must be named as arms";
     EXPECT_EQ(legChains, 2) << "exactly the two root chains are legs";
     EXPECT_EQ(legNamedHigh, 0) << "no leg name may land at chest height";
+}
+
+// #1025 — the NaN-latents guard itself lives inside the ENABLE_ONNX inference
+// path and needs a loaded encoder session, so it cannot be reached from these
+// pure-data tests. What IS testable here is the predicate the guard applies, so
+// a future refactor cannot silently weaken it: an all-non-finite prefix must be
+// rejected, and a prefix with any finite value must not be.
+//
+// The live behaviour was verified manually against the hosted export
+// (jana.obj, buick_riviera*.glb): 1x1024x1024 latents, 1048576/1048576
+// non-finite, now reported as "the encoder export is numerically broken"
+// instead of the misleading downstream "constrained decode reached a dead
+// state", and failing in 2.4s instead of 2m24s.
+namespace {
+// Mirrors the guard in UniRigPredictor.cpp: all sampled values non-finite.
+bool looksLikeBrokenExport(const std::vector<float>& latents, int probeLen)
+{
+    const int probe = std::min<int>(static_cast<int>(latents.size()), probeLen);
+    int bad = 0;
+    for (int i = 0; i < probe; ++i)
+        if (!std::isfinite(latents[static_cast<size_t>(i)])) ++bad;
+    return probe > 0 && bad == probe;
+}
+} // namespace
+
+TEST(UniRigPredictor, BrokenExportPredicateRejectsAllNaNLatents)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_TRUE(looksLikeBrokenExport(std::vector<float>(2048, nan), 1024));
+    EXPECT_TRUE(looksLikeBrokenExport(
+        std::vector<float>(2048, std::numeric_limits<float>::infinity()), 1024));
+}
+
+TEST(UniRigPredictor, BrokenExportPredicateAcceptsUsableLatents)
+{
+    std::vector<float> ok(2048, 0.25f);
+    EXPECT_FALSE(looksLikeBrokenExport(ok, 1024));
+    // A single finite value inside the probe window is enough to proceed — the
+    // guard must only fire on a WHOLLY broken export, never on a mesh that
+    // happens to produce one bad activation.
+    std::vector<float> mostlyBad(2048, std::numeric_limits<float>::quiet_NaN());
+    mostlyBad[7] = 1.0f;
+    EXPECT_FALSE(looksLikeBrokenExport(mostlyBad, 1024));
+}
+
+// #1025: the default-hosted files carry published digests; a corrupt download
+// is detected by ModelFetch before the graph is ever loaded.
+TEST(UniRigPredictorDigests, DefaultHostedFilesHaveDistinctSha256)
+{
+    const QString e = UniRigPredictor::expectedSha256("encoder.onnx");
+    const QString d = UniRigPredictor::expectedSha256("decoder.onnx");
+    const QString m = UniRigPredictor::expectedSha256("embed.onnx");
+    for (const QString& s : {e, d, m}) {
+        EXPECT_EQ(s.size(), 64);
+        EXPECT_TRUE(QRegularExpression("^[0-9a-f]{64}$").match(s).hasMatch()) << s.toStdString();
+    }
+    EXPECT_NE(e, d); EXPECT_NE(d, m); EXPECT_NE(e, m);
+    EXPECT_TRUE(UniRigPredictor::expectedSha256("other.onnx").isEmpty());
+}
+
+// #1046: the first k points after front-loading must cover the cloud far
+// better than the first k points of the raw (random) order, normals must stay
+// paired with their points, and nothing may be lost or duplicated.
+TEST(UniRigPredictorFps, FrontLoadedPrefixCoversTheCloud)
+{
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> U(-1.f, 1.f);
+    const int n = 6000, k = 128;
+    std::vector<float> pts(n * 3), nrm(n * 3);
+    for (int i = 0; i < n; ++i) {
+        // an elongated shape with a thin "tail": most points in a body blob,
+        // 20 along a long thin spike, and NONE of them within the first k
+        // indices — so the raw prefix cannot see the tail while FPS must.
+        const bool tail = (i % 300 == 299);
+        pts[3*i]   = tail ? 3.f + U(rng) * 0.05f : U(rng) * 0.5f;
+        pts[3*i+1] = tail ? U(rng) * 0.02f : U(rng) * 0.5f;
+        pts[3*i+2] = tail ? U(rng) * 0.02f : U(rng) * 0.5f;
+        for (int c = 0; c < 3; ++c) nrm[3*i+c] = pts[3*i+c];   // normals == points: pairing probe
+    }
+    auto coverageRadius = [&](const std::vector<float>& p) {
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            double best = 1e30;
+            for (int j = 0; j < k; ++j) {
+                const double dx = p[3*i]-p[3*j], dy = p[3*i+1]-p[3*j+1], dz = p[3*i+2]-p[3*j+2];
+                best = std::min(best, dx*dx+dy*dy+dz*dz);
+            }
+            worst = std::max(worst, best);
+        }
+        return std::sqrt(worst);
+    };
+    const double before = coverageRadius(pts);
+    std::vector<float> p2 = pts, n2 = nrm;
+    UniRigPredictor::frontLoadFarthestPoints(p2, n2, n, k);
+    const double after = coverageRadius(p2);
+    // The raw prefix misses the tail entirely (coverage radius ~ the tail's
+    // length, ~2.5); FPS reaches it, leaving only the body's packing radius.
+    EXPECT_GT(before, 2.0) << "fixture: the raw prefix must not reach the tail";
+    EXPECT_LT(after, 0.5) << "before=" << before << " after=" << after;
+    bool tailInPrefix = false;
+    for (int j = 0; j < k; ++j) if (p2[3*j] > 2.5f) tailInPrefix = true;
+    EXPECT_TRUE(tailInPrefix) << "FPS must reach the thin tail within the prefix";
+    EXPECT_EQ(p2, n2) << "normals must move with their points";
+    std::vector<float> a = pts, b = p2; std::sort(a.begin(), a.end()); std::sort(b.begin(), b.end());
+    EXPECT_EQ(a, b) << "must be a permutation of the input";
+    // pool: candidates limited to the first `pool` points, nothing dropped
+    std::vector<float> p3 = pts, n3 = nrm;
+    UniRigPredictor::frontLoadFarthestPoints(p3, n3, n, k, 1000);
+    EXPECT_EQ(p3.size(), pts.size());
+    { std::vector<float> a2 = pts, b2 = p3; std::sort(a2.begin(), a2.end()); std::sort(b2.begin(), b2.end()); EXPECT_EQ(a2, b2); }
+    // the tail (indices 299, 599, 899 lie inside the 1000-point pool) is still reached
+    bool tailInPrefix3 = false;
+    for (int j = 0; j < k; ++j) if (p3[3*j] > 2.5f) tailInPrefix3 = true;
+    EXPECT_TRUE(tailInPrefix3);
+    std::vector<float> tiny = {0,0,0, 1,1,1}, tn = tiny;
+    UniRigPredictor::frontLoadFarthestPoints(tiny, tn, 2, 2048);
+    EXPECT_EQ(tiny, (std::vector<float>{0,0,0, 1,1,1})) << "degenerate input is a no-op";
+}
+
+// #1046: Both-mode chooser — a failed run never wins, the richer skeleton
+// wins, ties go to fps (the paper's sampling).
+TEST(UniRigPredictorFps, PickRicherPrefersSuccessThenJointCountThenFps)
+{
+    UniRigPredictor::Result fps, rnd;
+    fps.ok = true; fps.joints.resize(24); fps.querySampling = "fps";
+    rnd.ok = true; rnd.joints.resize(6);  rnd.querySampling = "random";
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps");
+    rnd.joints.resize(64);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "random");
+    rnd.joints.resize(24);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps") << "tie -> fps";
+    fps.ok = false;
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "random") << "a failed run never wins";
+    rnd.ok = false; fps.ok = true; fps.joints.resize(1);
+    EXPECT_EQ(UniRigPredictor::pickRicher(fps, rnd).querySampling, "fps");
+}
+
+// The env override must only narrow the default Both — an explicit single
+// ordering (what predictBoth sets on its inner calls) must win, or
+// QTMESH_UNIRIG_QUERIES=both recurses forever.
+TEST(UniRigPredictorFps, EnvOverrideNarrowsBothButNeverWidensAnExplicitMode)
+{
+    using Q = UniRigPredictor::Options::QuerySampling;
+    UniRigPredictor::Options both; both.querySampling = Q::Both;
+    UniRigPredictor::Options fps;  fps.querySampling  = Q::Fps;
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps);
+    qputenv("QTMESH_UNIRIG_QUERIES", "random");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Random);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "explicit mode wins over the env";
+    qputenv("QTMESH_UNIRIG_QUERIES", "both");
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(both), Q::Both);
+    EXPECT_EQ(UniRigPredictor::resolveQuerySampling(fps),  Q::Fps) << "inner Fps call must not be widened back to Both";
+    qunsetenv("QTMESH_UNIRIG_QUERIES");
+}
+
+// #1013: the humanoid labeller must SAY when the geometry does not read as a
+// humanoid, and Auto must then fall back to neutral names.
+namespace {
+UniRigPredictor::Joint mkJ(double x, double y, double z, int parent, int id)
+{
+    UniRigPredictor::Joint j; j.pos = {x, y, z}; j.parent = parent;
+    j.name = QStringLiteral("joint_%1").arg(id); return j;
+}
+std::vector<UniRigPredictor::Joint> syntheticHumanoid()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    return { J(0,0,0,-1), J(0,.3,0,0), J(0,.6,0,1), J(0,.8,0,2), J(0,.95,0,3),
+             J(-.2,.6,0,2), J(-.45,.6,0,5), J(-.65,.6,0,6),
+             J(.2,.6,0,2),  J(.45,.6,0,8),  J(.65,.6,0,9),
+             J(-.1,-.1,0,0), J(-.1,-.5,0,11), J(-.1,-.9,0,12),
+             J(.1,-.1,0,0),  J(.1,-.5,0,14),  J(.1,-.9,0,15) };
+}
+// A car: a long chain along +Z (its length) with four short chains dropping to
+// the wheels. The labeller reads the long axis as "up" → not a humanoid.
+std::vector<UniRigPredictor::Joint> syntheticCar()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = { J(0,0.3,-1.0,-1), J(0,0.3,-0.3,0), J(0,0.3,0.3,1), J(0,0.3,1.0,2) };
+    for (int side = -1; side <= 1; side += 2) for (int end : {0, 3}) {
+        const int a = static_cast<int>(j.size());
+        j.push_back(J(side*0.5, 0.15, j[end].pos[2], end));
+        j.push_back(J(side*0.5, 0.0,  j[end].pos[2], a));
+    }
+    return j;
+}
+// A tree: a vertical trunk with six branches fanning out at the top.
+std::vector<UniRigPredictor::Joint> syntheticTree()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = { J(0,0,0,-1), J(0,.4,0,0), J(0,.8,0,1), J(0,1.2,0,2) };
+    for (int b = 0; b < 6; ++b) {
+        const double ang = b * 1.0471975512;
+        const int a = static_cast<int>(j.size());
+        j.push_back(J(.3*std::cos(ang), 1.4, .3*std::sin(ang), 2));
+        j.push_back(J(.6*std::cos(ang), 1.6, .6*std::sin(ang), a));
+    }
+    return j;
+}
+bool hasName(const std::vector<UniRigPredictor::Joint>& j, const char* nm)
+{ for (const auto& x : j) if (x.name == QLatin1String(nm)) return true; return false; }
+bool anyHumanoidName(const std::vector<UniRigPredictor::Joint>& j)
+{ for (const auto& x : j) if (x.name.contains("Arm") || x.name.contains("Leg") || x.name == "Hips" || x.name == "Head") return true; return false; }
+} // namespace
+
+TEST(UniRigLabeling, HumanoidIsPlausibleAndKeepsAnatomicalNamesUnderAuto)
+{
+    auto j = syntheticHumanoid();
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    auto k = syntheticHumanoid();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(k, 1, UniRigPredictor::Labeling::Auto), "humanoid");
+    EXPECT_TRUE(hasName(k, "Hips")); EXPECT_TRUE(hasName(k, "LeftArm")); EXPECT_TRUE(hasName(k, "RightUpLeg"));
+}
+
+TEST(UniRigLabeling, CarAndTreeAreNotPlausibleAndGetNeutralNamesUnderAuto)
+{
+    auto car = syntheticCar();
+    EXPECT_FALSE(UniRigPredictor::labelJointsAnatomically(car, 1)) << "its long axis is not the up axis";
+    auto car2 = syntheticCar();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(car2, 1, UniRigPredictor::Labeling::Auto), "generic");
+    EXPECT_FALSE(anyHumanoidName(car2)) << "no Neck/Head/LeftFoot on a car";
+    EXPECT_EQ(car2[0].name, "root");
+
+    auto tree = syntheticTree();
+    EXPECT_FALSE(UniRigPredictor::labelJointsAnatomically(tree, 1)) << "six branches are not two arms";
+    auto tree2 = syntheticTree();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(tree2, 1, UniRigPredictor::Labeling::Auto), "generic");
+    EXPECT_FALSE(anyHumanoidName(tree2));
+}
+
+TEST(UniRigLabeling, ForcedModesAndGenericUniqueness)
+{
+    auto car = syntheticCar();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(car, 1, UniRigPredictor::Labeling::Humanoid), "humanoid");
+    EXPECT_TRUE(anyHumanoidName(car)) << "forced humanoid = the pre-#1013 behaviour";
+    auto hum = syntheticHumanoid();
+    EXPECT_EQ(UniRigPredictor::applyLabeling(hum, 1, UniRigPredictor::Labeling::Generic), "generic");
+    EXPECT_FALSE(anyHumanoidName(hum));
+    std::set<QString> names; for (const auto& x : hum) names.insert(x.name);
+    EXPECT_EQ(names.size(), hum.size()) << "generic names must be unique (Ogre rejects duplicates)";
+    EXPECT_EQ(hum[0].name, "root"); EXPECT_EQ(hum[1].name, "bone_01");
+    // detokenize keeps its legacy default (Humanoid) so existing tests hold
+    (void)UniRigPredictor::detokenize({}, 1.0, {0, 0, 0});
+}
+
+TEST(UniRigLabeling, TemplateMapsToLabelingWithBipedForcingHumanoid)
+{
+    using L = UniRigPredictor::Labeling; using T = AutoRig::Template;
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Humanoid),  L::Auto);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Biped),     L::Humanoid);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Quadruped), L::Generic);
+    EXPECT_EQ(AutoRig::uniRigLabelingForTemplate(T::Generic),   L::Generic);
+}
+
+// Review on #1013: side must be judged relative to the root, so translating a
+// valid humanoid entirely off the sagittal plane changes neither its names
+// nor its plausibility.
+TEST(UniRigLabeling, TranslatedHumanoidKeepsSidesAndPlausibility)
+{
+    auto j = syntheticHumanoid();
+    for (auto& x : j) { x.pos[0] += 5.0; x.pos[2] += 2.0; }   // whole rig at x in [4.35, 5.65]
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_TRUE(hasName(j, "LeftArm"));  EXPECT_TRUE(hasName(j, "RightArm"));
+    EXPECT_TRUE(hasName(j, "LeftUpLeg")); EXPECT_TRUE(hasName(j, "RightUpLeg"));
+    // and the character's LEFT is still the −X side of the ROOT
+    for (const auto& x : j) if (x.name == "LeftArm") EXPECT_LT(x.pos[0], 5.0);
 }

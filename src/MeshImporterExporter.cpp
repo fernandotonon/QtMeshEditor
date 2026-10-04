@@ -84,6 +84,9 @@ THE SOFTWARE.
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
 #include "NodeAnimationManager.h"
+#include "PoseLibrary.h"
+#include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
@@ -980,6 +983,19 @@ static void splitLargeMeshesForExport(aiScene* scene)
 // `remapAiMeshMorphTargets` after to keep the arrays parallel.
 //
 // `new` allocations cross the Assimp C-API ownership boundary
+// #921: Assimp's glTF2 exporter DOES know how to write per-target names
+// (`mesh.extras.targetNames`, the convention Blender/Godot/three.js read,
+// filled from aiAnimMesh::mName) — but only when the export property
+// GLTF2_TARGETNAMES_EXP is set. It never was, so every glb we wrote carried
+// nameless blend shapes and needed the `<file>.arkit.json` sidecar. Every
+// glTF/glb export site passes these; other exporters ignore the property.
+static Assimp::ExportProperties assimpExportProperties()
+{
+    Assimp::ExportProperties props;
+    props.SetPropertyBool("GLTF2_TARGETNAMES_EXP", true);
+    return props;
+}
+
 // (aiScene's dtor frees mAnimMeshes), so smart pointers don't fit
 // here — same convention every other aiScene field uses in this
 // file.
@@ -2676,6 +2692,181 @@ static void reconstructNodeClipsFromSidecar(const QString& meshPath,
     }
 }
 
+// ── Pose-library sidecar (#521) ──────────────────────────────────────
+// A pose library is editor-side data with no representation in any mesh
+// format, so it rides alongside the asset in a `.poselib` sidecar — the
+// same shape the `.nodeanim.json` / `.lights.json` sidecars use. Written
+// on every single-entity export and read back on import, so "save,
+// close, reopen" keeps the library without the user having to remember
+// to export it. The explicit Export/Import .poselib buttons remain for
+// sharing a library between assets.
+//
+// Scope: this helper derives the SINGLE-entity sidecar path. A pose
+// library is keyed per entity while the path comes from the FILE, so a
+// multi-entity scene needs the libraries nested under the owning SCENE
+// NODE name — that is what writeScenePoseLibrarySidecar /
+// loadScenePoseLibrarySidecar below do (same `.poselib` path, same
+// schema string, `entities[]` instead of a bare `poses[]`), wired into
+// sceneExporter / sceneImporter.
+static QString poseLibrarySidecarPath(const QString& meshPath)
+{
+    const QFileInfo fi(meshPath);
+    return fi.absoluteDir().filePath(fi.completeBaseName()
+                                     + QStringLiteral(".poselib"));
+}
+
+static void writePoseLibrarySidecar(const QString& meshPath, Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !en) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(meshPath);
+    if (lib->listPoses(en).isEmpty()) {
+        // Nothing to persist — drop any stale sidecar from a prior
+        // export so a deleted library doesn't resurrect on reimport.
+        QFile::remove(sidecarPath);
+        return;
+    }
+    if (!lib->savePoseLibrary(en, sidecarPath)) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "Pose library sidecar write failed: " + sidecarPath.toStdString());
+    }
+}
+
+static void loadPoseLibrarySidecar(const QString& meshPath, Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !en) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(meshPath);
+    if (!QFileInfo::exists(sidecarPath)) return;
+    // loadPoseLibrary validates the schema and payload before touching
+    // the in-memory store, so a malformed sidecar is a silent no-op
+    // rather than a wiped library.
+    lib->loadPoseLibrary(en, sidecarPath);
+}
+
+// Scene variants (#521 follow-up). A scene export has many entities and
+// one file, so the sidecar nests each entity's library under its SCENE
+// NODE name (see PoseLibrary::saveSceneLibraries). Same path convention
+// as the single-entity sidecar: `foo.scene.glb` -> `foo.scene.poselib`.
+static void writeScenePoseLibrarySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty()) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(scenePath);
+    // saveSceneLibraries returns false when NO entity has poses; drop any
+    // stale sidecar in that case so a cleared library doesn't resurrect.
+    if (!lib->saveSceneLibraries(nodesToEntities, sidecarPath))
+        QFile::remove(sidecarPath);
+}
+
+static void loadScenePoseLibrarySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty() || nodesToEntities.isEmpty()) return;
+    auto* lib = PoseLibrary::instance();
+    if (!lib) return;
+    const QString sidecarPath = poseLibrarySidecarPath(scenePath);
+    if (!QFileInfo::exists(sidecarPath)) return;
+    // Validates schema + payload before touching any in-memory library,
+    // so a malformed sidecar is a no-op rather than a wipe.
+    lib->loadSceneLibraries(nodesToEntities, sidecarPath);
+}
+
+// Procedural animation generators (#524). The motion itself is already in the
+// exported tracks (generators are materialised into them); the sidecar keeps
+// the GENERATORS + their base snapshots so they stay editable / mutable after
+// a reload. Single-entity export keeps only the generators aimed at that
+// entity or its node and records both names, so a re-import under a new name
+// can rebind them.
+static void writeGeneratorSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty()) return;
+    AnimGeneratorManager* gm = AnimGeneratorManager::peek();
+    if (!gm) {
+        QFile::remove(AnimGeneratorManager::sidecarPath(meshPath));
+        return;
+    }
+    QStringList objects;
+    QJsonObject meta;
+    if (en) {
+        objects << QString::fromStdString(en->getName());
+        meta[QStringLiteral("entity")] = objects.front();
+        if (const Ogre::SceneNode* sn = en->getParentSceneNode()) {
+            objects << QString::fromStdString(sn->getName());
+            meta[QStringLiteral("node")] = objects.back();
+        }
+        // Lights/materials the entity uses travel with it.
+        for (unsigned i = 0; i < en->getNumSubEntities(); ++i)
+            objects << QString::fromStdString(en->getSubEntity(i)->getMaterialName());
+    }
+    gm->writeSidecar(meshPath, en ? objects : QStringList{}, meta);
+}
+
+static void loadGeneratorSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !QFileInfo::exists(AnimGeneratorManager::sidecarPath(meshPath))) return;
+    QHash<QString, QString> rename;
+    if (en) {
+        const QJsonObject meta = AnimGeneratorManager::sidecarMeta(meshPath);
+        const QString oldEntity = meta.value(QStringLiteral("entity")).toString();
+        const QString oldNode = meta.value(QStringLiteral("node")).toString();
+        if (!oldEntity.isEmpty()) rename.insert(oldEntity, QString::fromStdString(en->getName()));
+        if (!oldNode.isEmpty() && en->getParentSceneNode())
+            rename.insert(oldNode, QString::fromStdString(en->getParentSceneNode()->getName()));
+    }
+    QString err;
+    if (AnimGeneratorManager::instance()->loadSidecar(meshPath, rename, &err) < 0)
+        Ogre::LogManager::getSingleton().logWarning("Generator sidecar load failed: " + err.toStdString());
+}
+
+// Animation constraints (#525). glTF/FBX cannot store constraints, so they
+// live in a `<file>.constraints.json` sidecar (export offers to bake them
+// first). Single-entity export keeps the constraints OWNED by that entity or
+// its node and records both names so a renamed re-import can rebind them.
+static void writeConstraintSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty()) return;
+    ConstraintManager* cm = ConstraintManager::peek();
+    if (!cm) {
+        QFile::remove(ConstraintManager::sidecarPath(meshPath));
+        return;
+    }
+    QStringList objects;
+    QJsonObject meta;
+    if (en) {
+        objects << QString::fromStdString(en->getName());
+        meta[QStringLiteral("entity")] = objects.front();
+        if (const Ogre::SceneNode* sn = en->getParentSceneNode()) {
+            objects << QString::fromStdString(sn->getName());
+            meta[QStringLiteral("node")] = objects.back();
+        }
+    }
+    cm->writeSidecar(meshPath, en ? objects : QStringList{}, meta);
+}
+
+static void loadConstraintSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !QFileInfo::exists(ConstraintManager::sidecarPath(meshPath))) return;
+    QHash<QString, QString> rename;
+    if (en) {
+        const QJsonObject meta = ConstraintManager::sidecarMeta(meshPath);
+        const QString oldEntity = meta.value(QStringLiteral("entity")).toString();
+        const QString oldNode = meta.value(QStringLiteral("node")).toString();
+        if (!oldEntity.isEmpty()) rename.insert(oldEntity, QString::fromStdString(en->getName()));
+        if (!oldNode.isEmpty() && en->getParentSceneNode())
+            rename.insert(oldNode, QString::fromStdString(en->getParentSceneNode()->getName()));
+    }
+    QString err;
+    if (ConstraintManager::instance()->loadSidecar(meshPath, rename, &err) < 0)
+        Ogre::LogManager::getSingleton().logWarning("Constraint sidecar load failed: " + err.toStdString());
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -3256,6 +3447,18 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // FBX/.mesh carry them in a `.nodeanim.json` sidecar instead.
             reconstructNodeClipsFromFile(file.filePath(), sn, en);
             reconstructNodeClipsFromSidecar(file.filePath(), sn, en);
+
+            // Restore the entity's named-pose library from its `.poselib`
+            // sidecar (#521) — poses are editor-side data no mesh format
+            // carries, so this is what makes "save, close, reopen" keep them.
+            // const_cast: PoseLibrary keys on a mutable Entity* because
+            // applying a pose writes to the skeleton. Loading only stores
+            // data against the pointer, but the API is shared.
+            loadPoseLibrarySidecar(file.filePath(), const_cast<Ogre::Entity*>(en));
+            // Procedural generators (#524) — after the poses and node clips
+            // they may target exist.
+            loadGeneratorSidecar(file.filePath(), en);
+            loadConstraintSidecar(file.filePath(), en);
 
             // If a node-transform clip was reconstructed for this node, select
             // the entity so the Inspector Animations list + dope sheet populate
@@ -3897,6 +4100,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .mesh (Ogre serializer) cannot store SceneManager node-transform
         // clips — persist them to a `.nodeanim.json` sidecar (#517).
         writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
+        // Pose libraries have no representation in any mesh format —
+        // persist them beside the asset so they survive save/reopen (#521).
+        writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
         // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
@@ -3913,6 +4121,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // The custom FBXExporter has no node-transform-clip path — persist
         // SceneManager node clips to a `.nodeanim.json` sidecar (#517).
         writeNodeAnimSidecar(_uri, const_cast<Ogre::SceneNode*>(_sn));
+        // Pose libraries have no representation in any mesh format —
+        // persist them beside the asset so they survive save/reopen (#521).
+        writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4343,9 +4556,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             // Split >65535-vertex meshes so Assimp's exporters don't truncate
             // the vertex accessors at 65536 (which tears large meshes apart).
             splitLargeMeshesForExport(scene);
+            const Assimp::ExportProperties exportProps = assimpExportProperties();
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
-                                             exportFlags);
+                                             exportFlags, &exportProps);
             if (result != AI_SUCCESS)
             {
                 auto msg = QString("Assimp export to %1 failed (code %2): %3")
@@ -4374,13 +4588,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     injectMorphWeightAnimations(file.filePath(), e,
                                                 /*isBinary=*/formatId == "glb2");
 
-                // Morph-target NAME sidecar: Assimp's glTF2 exporter also
-                // drops `targetNames`, so a rigged mesh re-imported from this
-                // export would degrade to "Shape_N" names. Persist the
-                // ordered pose names next to the file (the same
-                // `<file>.arkit.json` the CLI/MCP face-rig paths write); the
-                // importer restores them on load.
-                if (e->getMesh() && e->getMesh()->getPoseCount() > 0)
+                // Morph-target NAME sidecar for formats whose exporter cannot
+                // carry the names. glTF/glb now carry them natively
+                // (`mesh.extras.targetNames`, #921) and FBX writes them per
+                // blend-shape channel, so this is for the remaining formats;
+                // the importer still reads sidecars written by older builds.
+                const bool namesTravelNatively = formatId == "gltf2" || formatId == "glb2";
+                if (!namesTravelNatively && e->getMesh() && e->getMesh()->getPoseCount() > 0)
                 {
                     std::vector<QString> poseNames;
                     QSet<QString> seen;
@@ -4405,6 +4619,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             Ogre::LogManager::getSingleton().logError("Assimp export failed with unknown exception");
             SentryReporter::captureMessage("Assimp export failed with unknown exception", "error");
         }
+        // Pose libraries have no representation in any mesh format —
+        // persist them beside the asset so they survive save/reopen
+        // (#521). The .mesh / FBX branches above return before here and
+        // write their own; this covers the Assimp-backed formats.
+        writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     }
 
     return 0;
@@ -4657,9 +4878,10 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
                 (formatId == "x") ? 0 : aiProcess_FlipUVs;
             // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
             splitLargeMeshesForExport(scene);
+            const Assimp::ExportProperties exportProps = assimpExportProperties();
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),
                                                 file.filePath().toStdString().c_str(),
-                                                exportFlags);
+                                                exportFlags, &exportProps);
             if (aiResult == AI_SUCCESS) {
                 result = 0;
                 // For FBX, prefer a single-file export. Assimp FBX export may still
@@ -5063,8 +5285,9 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
         splitLargeMeshesForExport(scene);
         // Both Ogre and glTF are right-handed — no ConvertToLeftHanded
+        const Assimp::ExportProperties exportProps = assimpExportProperties();
         aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
-                                         file.filePath().toStdString().c_str(), 0);
+                                         file.filePath().toStdString().c_str(), 0, &exportProps);
         if (result != AI_SUCCESS)
         {
             auto msg = QString("Scene export failed (code %1): %2")
@@ -5090,6 +5313,22 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
             if (entityPair && entityPair->getMesh() && entityPair->getMesh()->getPoseCount() > 0)
                 injectMorphWeightAnimations(file.filePath(), entityPair,
                                             /*isBinary=*/formatId == "glb2");
+        }
+
+        // Pose libraries have no representation in any mesh format, and a
+        // scene has many entities, so they go in a sidecar keyed by scene
+        // node name (#521). Written unconditionally: the helper removes a
+        // stale sidecar when nothing has poses.
+        {
+            QHash<QString, Ogre::Entity*> nodesToEntities;
+            for (const auto& [snPair, entityPair] : entities) {
+                if (snPair && entityPair)
+                    nodesToEntities.insert(QString::fromStdString(snPair->getName()),
+                                           entityPair);
+            }
+            writeScenePoseLibrarySidecar(_uri, nodesToEntities);
+            writeGeneratorSidecar(_uri, nullptr);
+            writeConstraintSidecar(_uri, nullptr);
         }
 
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
@@ -5155,6 +5394,9 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     emit manager->sceneClearing();  // let listeners clean up before nodes are destroyed
     if (auto* lights = LightManager::getSingletonPtr())
         lights->deleteAllUserLights();
+    // node name -> entity, filled as we build the scene; consumed by the
+    // pose-library sidecar load after the loop (#521).
+    QHash<QString, Ogre::Entity*> sceneNodeEntities;
     auto sceneNodesCopy = manager->getSceneNodes();
     for (auto* sn : sceneNodesCopy)
         manager->destroySceneNode(sn);
@@ -5518,10 +5760,22 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             // Select the entity so a reconstructed node clip appears in the
             // Animations list / dope sheet without a manual select (#517).
             selectEntityIfHasNodeClip(sn);
+
+            // Collect for the pose-library sidecar below — it keys each
+            // entity's library by SCENE NODE name (#521).
+            if (nodeEnt) sceneNodeEntities.insert(nodeName, nodeEnt);
         }
 
         if (!SceneLightsIO::importLightsSidecar(_uri, true))
             SceneLightsIO::importFromAssimpScene(scene, true);
+
+        // Restore each entity's named-pose library from the scene's
+        // `.poselib` sidecar (#521). No mesh format can carry a pose
+        // library, so this is what makes Save Scene / Open Scene keep
+        // them. Missing sidecar returns -1 and is a silent no-op.
+        loadScenePoseLibrarySidecar(_uri, sceneNodeEntities);
+        loadGeneratorSidecar(_uri, nullptr);
+        loadConstraintSidecar(_uri, nullptr);
 
         return true;
     } catch (Ogre::Exception& e) {

@@ -4,6 +4,7 @@
 #include <QRandomGenerator>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
 
@@ -14,6 +15,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
@@ -27,6 +29,17 @@ constexpr const char* kDefaultBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/motion/";
 constexpr const char* kBaseUrlSettingsKey = "ai/motionLibraryBaseUrl";
 constexpr int kCanonJoints = 22;
+// #1009: summed squared quaternion geodesic (radians^2 over all joints) below
+// which a start/end pair reads as a seamless repeat. CALIBRATED on the shipped
+// 122-clip library, and the two groups separate by orders of magnitude:
+//   loopable   — every *loop-named clip <= 0.18; wave 0.0006, walk 0.0008,
+//                jump 0.006, idle 0.016, run 0.13, attack 0.46
+//   one-shot   — death 18.7 (median), pickup 36.1, landright 4.1
+// 1.0 sits in the empty band between them with margin on both sides.
+constexpr double kLoopSeamMaxDistance = 1.0;
+// A loop must also carry most of the clip's motion. Without this a one-shot
+// that merely HOLDS its end pose looks perfectly loopable over its still tail.
+constexpr double kLoopMinEnergyCoverage = 0.5;
 
 // Synonyms → a canonical action keyword. Maps prompt words onto the library's
 // actions so e.g. "jog"/"sprint" pick "run", "stand"/"idle" pick "idle".
@@ -65,6 +78,40 @@ const Syn kSynonyms[] = {
     {"fly", "fly"}, {"flying", "fly"},
     {"strafe", "strafeleft"},
 };
+
+// Classify a clip's motion style from its provenance string, for libraries
+// built before the build script stamped `category`. Patterns are taken from
+// the sources actually present in the shipped v5/v6 corpus rather than
+// invented: Quaternius "Zombie Animated", the Half-Life 2 classic/fast zombie
+// rips, a low-poly orc, and two skeleton (the undead kind) packs.
+//
+// Deliberately conservative — anything unrecognised is "human", because that
+// is what every clip was implicitly treated as before this field existed, so
+// a miss preserves the old behaviour instead of hiding a clip from the
+// default request.
+QString categoryFromSource(const QString& source)
+{
+    // NB the word boundary is spelled [^a-z] rather than \\b: a real source
+    // string is "Low-poly_orc_62f16371", and an underscore IS a word
+    // character, so \\borc\\b silently missed both orc clips. Caught by
+    // diffing this classifier against a manual audit of the shipped corpus
+    // (85/37 vs the expected 83/39) — worth keeping as a warning.
+    static const QRegularExpression undead(
+        QStringLiteral("zombie|undead|(^|[^a-z])orc([^a-z]|$)|ghoul|revenant|"
+                       "skeleton[ _-]?(free|demo|dance)|spooky[ _-]?skeleton"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression creature(
+        QStringLiteral("dragon|wyvern|horse|canine|(^|[^a-z])dog([^a-z]|$)|"
+                       "(^|[^a-z])cat([^a-z]|$)|wolf|quadruped|beast|spider|"
+                       "raptor"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (undead.match(source).hasMatch())
+        return QStringLiteral("undead");
+    if (creature.match(source).hasMatch())
+        return QStringLiteral("creature");
+    return QStringLiteral("human");
+}
+
 } // namespace
 
 bool MotionLibrary::loadFromFile(const QString& path)
@@ -237,11 +284,56 @@ bool MotionLibrary::parse(const QByteArray& json)
         }
         clip.quality = static_cast<float>(
             std::clamp(co.value("quality").toDouble(1.0), 0.0, 1.0));
+        // Category: written by the build script from v6 on. Libraries built
+        // before it have no field, so fall back to classifying the provenance
+        // string — otherwise every already-installed library would stay
+        // uncategorised and the filter would be a no-op until the user
+        // happened to re-download ~28 MB.
+        clip.category = co.value("category").toString().toLower().trimmed();
+        // Only the three known values are honoured. A typo ("humn") would
+        // otherwise be stored verbatim, match no filter, and silently fall
+        // back to the UNFILTERED pool — quietly reintroducing the zombie
+        // takes this field exists to exclude. An unknown value is treated as
+        // absent and re-derived from the provenance string.
+        if (clip.category != QLatin1String("human")
+            && clip.category != QLatin1String("undead")
+            && clip.category != QLatin1String("creature"))
+            clip.category.clear();
+        if (clip.category.isEmpty())
+            clip.category = categoryFromSource(clip.source);
         // meanChestLean reads joint 2 as a WORLD orientation — only valid
         // for world-frame libraries (schema v3+). Legacy local-frame clips
         // keep a neutral 0 so the posture penalty can never misfire on a
         // parent-relative chest value.
         clip.uprightness = m_worldFrame ? meanChestLean(clip.quats) : 0.0f;
+        // #1009 loop metadata. Prefer values the builder supplied; otherwise
+        // derive them here so OLD libraries (every one shipped so far) gain
+        // loop points without a regeneration + redownload.
+        // Bounds alone must NOT imply loopable: a supplied range would then
+        // bypass the seam + energy checks below and be repeated on a one-shot.
+        // The flag therefore defaults to FALSE rather than true — a builder
+        // that means "this loops" has to say so. (Requiring `loopable` to be
+        // present as well would be redundant: with a false default the two
+        // guards are behaviourally identical, and no test can tell them apart.)
+        if (co.contains("loop_start") && co.contains("loop_end")) {
+            clip.loopStart = std::clamp(co.value("loop_start").toInt(0),
+                                        0, std::max(0, clip.frames - 1));
+            clip.loopEnd = std::clamp(co.value("loop_end").toInt(clip.frames - 1),
+                                      clip.loopStart, std::max(0, clip.frames - 1));
+            clip.loopable = co.value("loopable").toBool(false);
+        } else if (clip.frames >= 4) {
+            const LoopRange lr = findLoopRange(clip.quats);
+            clip.loopStart = lr.start;
+            clip.loopEnd = lr.end;
+            // Threshold in squared-radians summed over the joints. A clean
+            // repeat needs the two ends to be near-identical; one-shot actions
+            // (death, pickup) never get close and stay non-loopable.
+            // BOTH conditions: a tight seam AND a range that actually spans
+            // the clip's motion. A one-shot holding its final pose satisfies
+            // the seam alone (measured: 0.39 over a 6.7%-energy tail).
+            clip.loopable = lr.distance < kLoopSeamMaxDistance
+                            && lr.energyCoverage > kLoopMinEnergyCoverage;
+        }
         if (clip.frames > 0 && !clip.action.isEmpty())
             m_clips.push_back(std::move(clip));
     }
@@ -256,6 +348,19 @@ std::vector<QString> MotionLibrary::actions() const
 {
     std::vector<QString> out;
     for (const auto& c : m_clips) out.push_back(c.action);
+    return out;
+}
+
+std::vector<QString> MotionLibrary::categories() const
+{
+    std::vector<QString> out;
+    for (const auto& c : m_clips) {
+        const QString cat = c.category.isEmpty() ? QStringLiteral("human")
+                                                 : c.category;
+        if (std::find(out.begin(), out.end(), cat) == out.end())
+            out.push_back(cat);
+    }
+    std::sort(out.begin(), out.end());
     return out;
 }
 
@@ -290,61 +395,216 @@ double MotionLibrary::takeWeight(const QString& action, float quality,
     return w;
 }
 
-int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
+double MotionLibrary::framePoseDistance(
+    const std::vector<std::array<float, 4>>& a,
+    const std::vector<std::array<float, 4>>& b)
 {
-    const QString p = prompt.toLower();
-    auto findAction = [&](const QString& action) -> int {
-        for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
-            if (m_clips[i].action.compare(action, Qt::CaseInsensitive) == 0) return i;
-        return -1;
-    };
+    const size_t n = std::min(a.size(), b.size());
+    double sum = 0.0;
+    for (size_t j = 0; j < n; ++j) {
+        // |dot| — q and -q are the same rotation, so a sign-sensitive metric
+        // would rank an identical pose as maximally distant.
+        double d = std::abs(static_cast<double>(a[j][0]) * b[j][0]
+                          + static_cast<double>(a[j][1]) * b[j][1]
+                          + static_cast<double>(a[j][2]) * b[j][2]
+                          + static_cast<double>(a[j][3]) * b[j][3]);
+        d = std::clamp(d, 0.0, 1.0);
+        const double ang = 2.0 * std::acos(d);
+        sum += ang * ang;
+    }
+    return sum;
+}
 
-    // The v4 library carries SEVERAL takes per action — pick one at random so
-    // repeat generates give variety (real-mocap quality is the draw; variety
-    // is what the generative path was chasing).
-    auto pickAmong = [&](const QString& action) -> int {
-        QList<int> hits;
-        for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
-            if (m_clips[i].action.compare(action, Qt::CaseInsensitive) == 0)
-                hits.append(i);
-        if (hits.isEmpty()) return -1;
-        if (hits.size() == 1) return hits.first();
-        // Quality-weighted sampling (P ∝ quality², #855): keeps take variety
-        // but one weak take no longer poisons its whole action. Libraries
-        // without curation scores (quality defaults to 1) stay uniform.
-        double total = 0.0;
-        QList<double> weights;
-        weights.reserve(hits.size());
-        for (int i : hits) {
-            const auto& c = m_clips[static_cast<size_t>(i)];
-            const double w = takeWeight(c.action, c.quality, c.uprightness);
-            weights.append(w);
-            total += w;
-        }
-        if (total <= 1e-9)
-            return hits.at(QRandomGenerator::global()->bounded(hits.size()));
-        double r = QRandomGenerator::global()->generateDouble() * total;
-        for (int k = 0; k < hits.size(); ++k) {
-            r -= weights.at(k);
-            if (r <= 0.0) return hits.at(k);
-        }
-        return hits.last();
-    };
+MotionLibrary::LoopRange MotionLibrary::findLoopRange(
+    const std::vector<std::vector<std::array<float, 4>>>& quats, int minLen)
+{
+    LoopRange best;
+    const int n = static_cast<int>(quats.size());
+    if (n < 2) return best;
+    minLen = std::max(2, minLen);
+    if (n <= minLen) {              // too short to hold a sub-loop
+        best.start = 0;
+        best.end = n - 1;
+        best.distance = framePoseDistance(quats.front(), quats.back());
+        best.span = 1.0;
+        return best;
+    }
+    // Per-frame motion, prefix-summed so each candidate range's energy is O(1).
+    std::vector<double> cum(static_cast<size_t>(n), 0.0);
+    for (int f = 1; f < n; ++f)
+        cum[static_cast<size_t>(f)] =
+            cum[static_cast<size_t>(f - 1)]
+            + framePoseDistance(quats[static_cast<size_t>(f - 1)],
+                                quats[static_cast<size_t>(f)]);
 
-    // 1. Direct: a library action name appears in the prompt.
+    // Seam distance ALONE is not a loop test: most clips open and close near a
+    // rest pose, and a one-shot that HOLDS its final pose has dozens of
+    // near-identical late pairs. Measured on the shipped library, a death take
+    // scored a "perfect" loop over a still 8% tail (0.16 energy) while a real
+    // run cycle carried 74.9.
+    //
+    // Seam quality is therefore a GATE, not a term to trade against coverage:
+    // blending the two lets a tail with a flawless seam (score 0.133) beat a
+    // true cycle with a loose one (0.111). Among ranges whose seam is good
+    // enough to splice, take the one covering the most motion.
+    const double totalEnergy = cum.back();
+    auto scan = [&](double seamGate) {
+        bool found = false;
+        double bestCoverage = -1.0;
+        for (int i = 0; i + minLen <= n - 1; ++i) {
+            for (int j = i + minLen; j < n; ++j) {
+                const double d = framePoseDistance(quats[static_cast<size_t>(i)],
+                                                   quats[static_cast<size_t>(j)]);
+                if (d > seamGate) continue;
+                const double energy =
+                    cum[static_cast<size_t>(j)] - cum[static_cast<size_t>(i)];
+                const double coverage =
+                    totalEnergy > 1e-9 ? energy / totalEnergy : 0.0;
+                if (coverage > bestCoverage) {
+                    bestCoverage = coverage;
+                    best.distance = d;
+                    best.start = i;
+                    best.end = j;
+                    best.span = double(j - i + 1) / double(n);
+                    best.energyCoverage = coverage;
+                    found = true;
+                }
+            }
+        }
+        return found;
+    };
+    // Try the splice-quality gate first; if NOTHING in the clip seams that
+    // well (a true one-shot), fall back to reporting the widest-coverage range
+    // with its real — large — seam distance, so the caller's loopable test
+    // rejects it on the distance rather than on a missing answer.
+    if (!scan(kLoopSeamMaxDistance))
+        scan(std::numeric_limits<double>::max());
+    return best;
+}
+
+std::vector<int> MotionLibrary::takesForAction(const QString& action) const
+{
+    return takesForAction(action, QString());
+}
+
+std::vector<int> MotionLibrary::takesForAction(const QString& action,
+                                               const QString& category) const
+{
+    std::vector<int> hits;
     for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
-        if (p.contains(m_clips[i].action.toLower())) {
-            if (matchedAction) *matchedAction = m_clips[i].action;
-            return pickAmong(m_clips[i].action);
+        const auto& c = m_clips[static_cast<size_t>(i)];
+        if (c.action.compare(action, Qt::CaseInsensitive) != 0)
+            continue;
+        if (!category.isEmpty()
+            && c.category.compare(category, Qt::CaseInsensitive) != 0)
+            continue;
+        hits.push_back(i);
+    }
+    // Never return NOTHING purely because of the category: an action that
+    // exists only as undead ("tantrum", "wallpound", the swats) would
+    // otherwise become unreachable for a default human request, which is a
+    // regression against today's behaviour. Fall back to the unfiltered set
+    // and let the caller report the mismatch instead of failing.
+    if (hits.empty() && !category.isEmpty())
+        return takesForAction(action, QString());
+    return hits;
+}
+
+int MotionLibrary::pickTake(const QString& action) const
+{
+    return pickTake(action, QString());
+}
+
+int MotionLibrary::pickTake(const QString& action, const QString& category) const
+{
+    const std::vector<int> hits = takesForAction(action, category);
+    if (hits.empty()) return -1;
+    if (hits.size() == 1) return hits.front();
+    // Quality-weighted sampling (P proportional to quality^2, #855) with the
+    // posture penalty — identical to matchPrompt's rule, shared so the
+    // composer cannot drift from single-clip generation.
+    double total = 0.0;
+    std::vector<double> weights;
+    weights.reserve(hits.size());
+    for (int i : hits) {
+        const auto& c = m_clips[static_cast<size_t>(i)];
+        const double w = takeWeight(c.action, c.quality, c.uprightness);
+        weights.push_back(w);
+        total += w;
+    }
+    if (total <= 1e-9)
+        return hits.at(static_cast<size_t>(
+            QRandomGenerator::global()->bounded(static_cast<int>(hits.size()))));
+    double r = QRandomGenerator::global()->generateDouble() * total;
+    for (size_t k = 0; k < hits.size(); ++k) {
+        r -= weights[k];
+        if (r <= 0.0) return hits[k];
+    }
+    return hits.back();
+}
+
+QString MotionLibrary::resolveAction(const QString& word) const
+{
+    const QString w = word.toLower().trimmed();
+    if (w.isEmpty()) return {};
+    // Direct action-name hit first (matchPrompt's rule 1), longest action
+    // name wins so "strafeleft" beats a bare "strafe" substring.
+    QString best;
+    for (const auto& c : m_clips) {
+        const QString a = c.action.toLower();
+        if (w.contains(a) && a.size() > best.size()) best = c.action;
+    }
+    if (!best.isEmpty()) return best;
+    // Then synonyms (matchPrompt's rule 2).
+    for (const auto& syn : kSynonyms) {
+        if (w.contains(QLatin1String(syn.word))) {
+            const QString a = QString::fromLatin1(syn.action);
+            if (!takesForAction(a).empty()) return a;
         }
     }
-    // 2. Synonyms → action.
-    for (const auto& s : kSynonyms) {
-        if (p.contains(QLatin1String(s.word))) {
-            const int idx = findAction(QString::fromLatin1(s.action));
-            if (idx >= 0) {
-                if (matchedAction) *matchedAction = m_clips[idx].action;
-                return pickAmong(m_clips[idx].action);
+    return {};
+}
+
+QString MotionLibrary::categoryForPrompt(const QString& prompt)
+{
+    const QString p = prompt.toLower();
+    static const QRegularExpression undead(
+        QStringLiteral("zombie|undead|ghoul|revenant|walker|\\borc\\b|"
+                       "skeletal|\\bskeleton\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression creature(
+        QStringLiteral("dragon|wyvern|horse|\\bdog\\b|\\bcat\\b|wolf|"
+                       "beast|quadruped|monster"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (undead.match(p).hasMatch())   return QStringLiteral("undead");
+    if (creature.match(p).hasMatch()) return QStringLiteral("creature");
+    return QStringLiteral("human");
+}
+
+int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) const
+{
+    if (m_clips.empty()) return -1;
+    const QString p = prompt.toLower();
+    // "zombie walk" must not return a brisk human stride, and a plain "walk"
+    // must not return a Half-Life shamble. An unqualified prompt means human.
+    const QString cat = categoryForPrompt(prompt);
+
+    // 1. Direct: a library action name appears in the prompt.
+    for (const auto& c : m_clips) {
+        if (p.contains(c.action.toLower())) {
+            if (matchedAction) *matchedAction = c.action;
+            return pickTake(c.action, cat);   // shared quality/posture weighting
+        }
+    }
+    // 2. Synonyms -> action.
+    for (const auto& syn : kSynonyms) {
+        if (p.contains(QLatin1String(syn.word))) {
+            const QString a = QString::fromLatin1(syn.action);
+            const std::vector<int> hits = takesForAction(a, cat);
+            if (!hits.empty()) {
+                if (matchedAction)
+                    *matchedAction = m_clips[static_cast<size_t>(hits.front())].action;
+                return pickTake(a, cat);
             }
         }
     }

@@ -2,6 +2,7 @@
 #define AUTO_RIG_H
 
 #include <QString>
+#include "UniRigPredictor.h"
 #include <QJsonObject>
 #include <QList>
 #include <array>
@@ -60,7 +61,9 @@ public:
         Humanoid,    // pelvis/spine/head + 2 arms + 2 legs (≈ Mixamo-lite)
         Biped,       // simplified humanoid: spine + 2 legs + stub arms
         Quadruped,   // spine + 4 legs + head + tail
-        Generic      // a simple 3-joint spine chain (fallback for anything)
+        Generic,     // a simple 3-joint spine chain (fallback for anything)
+        Vehicle      // #1013: chassis root + 2 axles + 4 wheels, wheels snapped
+                     // to the lowest geometry of each quadrant (fitVehicle)
     };
 
     // Skeleton-prediction backend (issue #408).
@@ -115,6 +118,9 @@ public:
         // inference on a worker thread (off the UI thread, with a progress bar)
         // and then build the skeleton on the main thread. Empty = predict inline.
         std::vector<Joint> prePredictedJoints;
+        // #1013: the naming predictUniRig applied to prePredictedJoints
+        // ("humanoid"/"generic"), so the report can say so.
+        QString prePredictedLabeling;
     };
 
     // Mixamo-style placement markers (humanoid). The user clicks these on the
@@ -161,6 +167,9 @@ public:
         // Set when the requested algorithm wasn't usable and we fell back
         // (empty when the requested algorithm ran). Surfaced to the user.
         QString  fallbackReason;
+        // #1013: joint naming UniRig applied — "humanoid" or "generic" (empty
+        // for the template backends, whose names are the template's).
+        QString  jointLabeling;
         bool     applied          = false;
         QString  error;
     };
@@ -204,12 +213,31 @@ public:
     static std::vector<int> rigPriorPartLabels(Ogre::Entity* entity,
                                                int vertexCount,
                                                int* outResolved = nullptr);
+    // `tmpl` is the #1013 category hint — see uniRigLabelingForTemplate;
+    // `outLabeling` receives which naming was applied ("humanoid"/"generic").
+    /// #1013: how --skeleton maps onto UniRig joint naming. humanoid → Auto
+    /// (humanoid names only when the geometry reads as one), biped → Humanoid
+    /// forced (the user asserts a biped — the way to name a cartoon rat whose
+    /// arm chains the plausibility check rejects), quadruped/generic → Generic.
+    static UniRigPredictor::Labeling uniRigLabelingForTemplate(Template tmpl);
+    /// #1013: the Vehicle template is fitted from geometry, not by box-mapping:
+    /// the longer in-plane axis is the car's length, and each wheel joint is
+    /// the centroid of the lowest 30% of the mesh in its (front/back × left/
+    /// right) quadrant — axles are the midpoints of their wheel pair, the
+    /// chassis root sits at the body centre. A quadrant without low geometry
+    /// keeps the box-mapped default. Pure; unit-tested.
+    static std::vector<Joint> fitVehicle(const float* verts, int vertexCount, const Options& opts);
+    /// True for templates whose parts move rigidly (vehicles/props): the skin
+    /// chain then uses SkinWeights::rigidOptions() instead of the soft default.
+    static bool templateIsRigid(Template tmpl) { return tmpl == Template::Vehicle; }
     static std::vector<Joint> predictUniRig(
         const std::vector<float>& verts,
         const std::vector<uint32_t>& indices,
         int upAxis,
         const std::function<bool(int,int)>& progress,
-        QString* outError);
+        QString* outError,
+        Template tmpl = Template::Humanoid,
+        QString* outLabeling = nullptr);
 
     // Marker-guided variant: same as rigEntity but anchors the placed markers
     // (and interpolates the limb chains between them) before building the

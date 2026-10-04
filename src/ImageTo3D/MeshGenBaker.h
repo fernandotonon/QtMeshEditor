@@ -49,6 +49,15 @@ struct Result {
     int vertexCount   = 0;
     int triangleCount = 0;
     QImage texture;                    // baked diffuse (textureSize², RGB)
+    // #1017: per-texel chart coverage BEFORE the dilation pass, row-major and
+    // sized to `texture` — NOT to Options::textureSize, which is only a hint
+    // (xatlas picks its own atlas dimensions, e.g. 59x59 for a 64 request).
+    // Read texture.width()/height() when building a mask from this.
+    // 1 = a chart covered this texel. The dilation below only
+    // SMEARS border colour outward to stop filtering bleed; it does not
+    // continue the texture, so these are the texels a seam-fill inpaint should
+    // replace. Feed straight to TextureInpaint::maskFromCoverage.
+    std::vector<uint8_t> coverage;
 };
 
 struct Options {

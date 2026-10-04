@@ -252,33 +252,53 @@ bool MorphAnimationManager::writeWeightKeyOn(Ogre::Entity* entity,
     Ogre::MeshPtr mesh = entity->getMesh();
     if (!mesh) return false;
 
-    const int pi = poseIndexForName(mesh.get(), targetName);
-    if (pi < 0) return false;
-    Ogre::VertexAnimationTrack* track =
-        weightTrackFor(mesh.get(), targetName, clip, true);
-    if (!track) return false;
-
     const float t = time;
     const float w = std::clamp(weight, 0.0f, 1.0f);
 
-    // Update in place if a keyframe already exists at ~t, else create one.
-    Ogre::VertexPoseKeyFrame* kf = nullptr;
-    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-        auto* k = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
-        if (std::abs(k->getTime() - t) < 1e-4f) { kf = k; break; }
-    }
-    if (!kf) kf = track->createVertexPoseKeyFrame(t);
+    // ALL same-named poses, not just the first. A morph target on a
+    // multi-submesh character exists once PER SUBMESH — `AddMorphTargetCommand`
+    // calls `createPose(slice.submeshHandle, name)` for every slice — so a face
+    // split into skin / teeth / eyelashes has three poses called `jawOpen`,
+    // each on its own track. Keying only `poseIndexForName`'s first hit
+    // animated one submesh and left the rest frozen: the jaw opens, the teeth
+    // stay put. Review finding on #1068; invisible on a single-submesh test
+    // mesh, which is why it survived.
+    const auto& poses = mesh->getPoseList();
+    bool wroteAny = false;
+    for (unsigned short pi = 0; pi < poses.size(); ++pi) {
+        if (!poses[pi] || poses[pi]->getName() != targetName) continue;
 
-    // A VAT_POSE keyframe holds a LIST of pose references. Targets on the same
-    // submesh share one track, so a keyframe at time t may already reference
-    // OTHER targets' poses — clearing them all would clobber a sibling target
-    // keyed at the same time. Update only THIS pose's reference (or add it),
-    // leaving the others intact. updatePoseReference is add-or-update in Ogre.
-    kf->updatePoseReference(static_cast<unsigned short>(pi), w);
+        const unsigned short handle = poses[pi]->getTarget();
+        Ogre::Animation* anim = mesh->hasAnimation(clip)
+            ? mesh->getAnimation(clip)
+            : mesh->createAnimation(clip, 0.0f);
+        if (!anim) continue;
+        Ogre::VertexAnimationTrack* track = anim->hasVertexTrack(handle)
+            ? anim->getVertexTrack(handle)
+            : anim->createVertexTrack(handle, Ogre::VAT_POSE);
+        if (!track) continue;
+
+        // Update in place if a keyframe already exists at ~t, else create one.
+        Ogre::VertexPoseKeyFrame* kf = nullptr;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            auto* k = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+            if (std::abs(k->getTime() - t) < 1e-4f) { kf = k; break; }
+        }
+        if (!kf) kf = track->createVertexPoseKeyFrame(t);
+
+        // A VAT_POSE keyframe holds a LIST of pose references. Targets on the
+        // same submesh share one track, so a keyframe at time t may already
+        // reference OTHER targets' poses — clearing them all would clobber a
+        // sibling target keyed at the same time. Update only THIS pose's
+        // reference (or add it). updatePoseReference is add-or-update in Ogre.
+        kf->updatePoseReference(pi, w);
+        wroteAny = true;
+    }
+    if (!wroteAny) return false;
 
     // Extend the clip length to cover the new time.
-    Ogre::Animation* anim = mesh->getAnimation(clip);
-    if (anim && t > anim->getLength())
+    if (Ogre::Animation* anim = mesh->hasAnimation(clip)
+            ? mesh->getAnimation(clip) : nullptr; anim && t > anim->getLength())
         anim->setLength(t);
     return true;
 }

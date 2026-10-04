@@ -20,7 +20,8 @@ the binary). Attribution + licenses for the models and their training data:
 > [`QtMeshEditor-facemesh-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx),
 > [`QtMeshEditor-faceblendshapes-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-faceblendshapes-onnx),
 > [`QtMeshEditor-blazepose-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-blazepose-onnx),
-> [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx)
+> [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx),
+> [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx)
 > (plus the in-house
 > [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
 > [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
@@ -183,6 +184,139 @@ the binary). Attribution + licenses for the models and their training data:
   first use to `AppData/ai_models/rembg/u2net.onnx` (override
   `QTMESH_REMBG_MODEL_BASE_URL` / `QSettings ai/rembgModelBaseUrl`; offline guard
   `QTMESH_REMBG_NO_DOWNLOAD`). Falls back to the raw image when unavailable.
+
+## Depth-Anything-V2-Small — photo depth estimation (issue #1018, epic #818 C4)
+
+- **Model:** `depth-anything/Depth-Anything-V2-Small-hf` exported to ONNX
+  (`depth/da2_small.onnx`, ~99 MB), monocular relative-depth estimation from a
+  single photograph.
+- **Licence: Apache-2.0 — the Small variant ONLY.**
+  **Depth-Anything-V2 Base and Large are `cc-by-nc-4.0` and must NEVER be
+  shipped** (non-commercial, fails the project's permissive-redistribution bar
+  the same way SF3D and Hunyuan3D did). This is not left to reviewer vigilance:
+  `scripts/export-depth-anything-onnx.py` queries the HF model API at export
+  time and **hard-fails** on any licence outside its allow-list, before
+  downloading a single weight.
+- **Mirror repo:**
+  [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx)
+  (standalone model card + I/O contract; the runtime downloads from the
+  aggregate repo under `depth/`). Refresh with
+  `scripts/sync-hf-model-repos.sh depthanything`.
+- **Used by** `src/PhotoDepth.{h,cpp}`: CLI `qtmesh material --photo-depth
+  <img> [-o out.png] [--depth-letterbox]`. Produces an 8-bit grayscale map with
+  **near = bright**, the same convention `MeshDepthRenderer` emits, so a photo
+  and a rendered mesh can feed `SDWorker::generateTextureControlled`
+  interchangeably. Downloads on first use to `AppData/ai_models/depth/`
+  (override `QTMESH_DEPTH_MODEL_BASE_URL` / `QSettings ai/depthModelBaseUrl`;
+  offline guard `QTMESH_DEPTH_NO_DOWNLOAD`).
+- **Export contract:** input `pixel_values` float32 `[1,3,518,518]`
+  ImageNet-normalised; output `predicted_depth` float32 `[1,518,518]`, larger =
+  nearer. The spatial dims are **pinned, not dynamic**: a dynamic-axis export
+  traces cleanly but drifts from the traced resolution (measured 2.3e-02
+  relative error at 462² and 4.9e-02 at 392², versus 2.7e-06 at 518²) because
+  the ViT position-embedding interpolation is only partly captured. The
+  reference preprocessor resizes every input to 518 anyway, so pinning costs
+  nothing and removes a silent-wrong-answer failure mode.
+- **Parity-verified before upload:** the export script asserts torch-vs-ORT
+  agreement on both noise and a smooth structured image (measured 4.1e-06 and
+  6.9e-06 max abs difference) and refuses to write a graph with any non-finite
+  output. This exists because the UniRig export (#1025) shipped a graph
+  emitting 100% NaN latents that went unnoticed for months.
+
+## Audio2Face-3D — audio-driven ARKit lipsync (issue #1019, epic #818 C1)
+
+- **Model:** NVIDIA **Audio2Face-3D v2.3 "Mark"** — `network.onnx` (~76 MB),
+  `model_data.npz` (~204 MB, the PCA basis), `bs_skin.npz` (~39 MB, the
+  character's ARKit-52 blendshape deltas), plus two small JSON configs. Audio
+  in, 301 coefficients out, reconstructed to a mesh deformation and solved
+  into ARKit blendshape weights.
+- **Licence: NVIDIA Open Model License — commercial use and redistribution
+  explicitly permitted, NOTICE file REQUIRED.** `A2FPredictor::load` writes
+  that NOTICE beside the weights on first fetch so the attribution travels
+  with any copy of the directory.
+  <https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/>
+- **Audio2Emotion is DELIBERATELY NOT SHIPPED.** NVIDIA licenses those weights
+  separately, permitting use only together with Audio2Face — a use-restriction
+  that fails this project's bar. Emotion is therefore a **user-supplied
+  26-dimensional vector** (`--emotion joy=0.6`), never a predicted one. Do not
+  add the A2E model to the fetch list to "complete" the feature.
+- **Hosting — the one model we do NOT mirror.** Every other entry here is
+  re-hosted on `fernandotonon/QtMeshEditor-models`; this one is fetched
+  directly from NVIDIA's own repo
+  [`nvidia/Audio2Face-3D-v2.3-Mark`](https://huggingface.co/nvidia/Audio2Face-3D-v2.3-Mark),
+  because re-hosting would take on a redistribution obligation for no benefit.
+  Overridable via `QTMESH_A2F_MODEL_BASE_URL` / `ai/a2fModelBaseUrl`; offline
+  guard `QTMESH_A2F_NO_DOWNLOAD`.
+- **Integrity:** the three large files carry NVIDIA's published Git-LFS oids,
+  pinned in `kFiles` and verified by `ModelFetch` on download AND on files
+  already on disk (the #1025 lesson: a corrupted model is byte-identical in
+  size, loads without complaint, and produces garbage). Pinning is applied
+  only for the default base URL, since a mirror override may legitimately
+  serve a different export. The two JSON files are not LFS-tracked and carry
+  no published oid, so they stay unpinned rather than pinned to a value we
+  invented.
+- **Why no mesh correspondence is needed:** the network emits a deformation of
+  NVIDIA's own character, but NVIDIA also ships that character's ARKit-52
+  deltas — so the weights are recovered by projecting the predicted motion
+  onto those 52 shapes. Weights carry no topology, so they drive any mesh with
+  ARKit targets, including the ones `qtmesh facerig` generates. 51 of our 52
+  names match NVIDIA's verbatim (they spell `_neutral` as `neutral` and add a
+  bonus `tongueOut`).
+- **Convention trap — `mouthClose`.** ARKit defines it as a counter-shape to
+  `jawOpen`; NVIDIA's character authors it with the OPPOSITE sign (cosine with
+  `jawOpen` +0.41 on their basis vs −0.46 on a true ARKit rig), so the solved
+  weight over-drives the lower lip on replay. Corrected by a 0.5 multiplier
+  through NVIDIA's own `bsWeightMultipliers` table, keyed by pose NAME — the
+  npz is a zip, so its entry order is arbitrary and the `poseNames` array
+  inside it is authoritative.
+
+## LaMa — texture inpainting (issue #1017, epic #818 C3)
+
+- **Model:** LaMa (large-mask inpainting) exported to ONNX, hosted as
+  `pbr/lama.onnx` (~200 MB). Fills masked regions of a texture with plausible,
+  seamlessly continued content.
+- **Algorithm/paper:** Suvorov et al., *"Resolution-robust Large Mask Inpainting
+  with Fourier Convolutions"*, WACV 2022.
+- **Licence: Apache-2.0 — code AND weights**, so it clears the project's
+  permissive-redistribution bar (the same test TripoSR / UniRig / BiRefNet
+  passed). Source graph: [`Carve/LaMa-ONNX`](https://huggingface.co/Carve/LaMa-ONNX).
+  `scripts/export-lama-onnx.py` queries the HF model API and **hard-fails** on
+  any licence outside its allow-list before downloading a weight.
+- **WHICH FILE — the plainly-named `lama.onnx` in that repo is BROKEN.** It
+  fails ONNX Runtime shape inference on a `DFT` node (LaMa's Fourier
+  convolution) and cannot be loaded at all:
+  `Op (DFT) [ShapeInferenceError] one-sided DFT requires real input`. The
+  sibling **`lama_fp32.onnx` loads and runs correctly**, and is what we fetch
+  and re-host under the plain name. The export script asserts this by loading
+  the graph and printing an actionable message if it is the broken one — the
+  trap is otherwise invisible until first use in the field.
+- **Mirror repo:**
+  [`QtMeshEditor-lama-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-lama-onnx)
+  (standalone model card + I/O contract; the runtime downloads from the
+  aggregate repo under `pbr/`). Refresh with
+  `scripts/sync-hf-model-repos.sh lama`.
+- **Used by** `src/TextureInpaint.{h,cpp}`: CLI `qtmesh material --texture
+  <img> --inpaint --mask <mask.png> [-o out.png] [--mask-dilate N]`, MCP
+  `inpaint_texture`, and the texture-paint **Inpaint** button (fills the current
+  smart selection). Downloads on first use to `AppData/ai_models/pbr/`
+  (override `QTMESH_INPAINT_MODEL_BASE_URL` / `QSettings ai/inpaintModelBaseUrl`;
+  offline guard `QTMESH_INPAINT_NO_DOWNLOAD`).
+- **Export contract (measured, not documented upstream):**
+  input `image` float32 `[1,3,512,512]` RGB **scaled to [0,1]**;
+  input `mask` float32 `[1,1,512,512]`, 1 = inpaint, 0 = keep;
+  output `output` float32 `[1,3,512,512]` RGB **already in 0..255**.
+  Note the **asymmetry** — in [0,1], out 0..255. Feeding an un-scaled image
+  produces a near-white result (measured mean 246.6 vs a correct 128.6) with no
+  error raised, so both the export script and `TextureInpaint_test.cpp` assert
+  it. The spatial dims are pinned, so larger textures are processed in
+  overlapping 512² tiles with a feathered seam blend (the `PbrMapSynth`
+  approach).
+- **Verified before upload:** the export script refuses to host a graph that
+  does not load, emits non-finite values, alters unmasked texels (measured
+  leakage MAE 0.0000), or leaves the masked region unchanged (a pass-through
+  would satisfy every other check). Measured on a thin-seam mask — the real
+  UV-bleed case — LaMa reconstructs held-out ground truth to **MAE 9.15 / 255
+  (3.6%)** with zero leakage.
 
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
@@ -443,3 +577,39 @@ distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
 unlicensed weights — in favour of UniRig; ShapeNet-Part/PartNet were rejected
 for #410 — non-commercial — in favour of synthetic bone-weight-derived labels).
+
+## Prompt-to-3D image generation (FLUX.2-klein-4B)
+
+- **FLUX.2-klein-4B** (Black Forest Labs) — text-to-image model used to
+  GENERATE the source image for image-to-3D from a prompt. **Apache-2.0
+  weights** (the open klein release; unlike FLUX.2-dev, which is
+  non-commercial and NOT used). Downloaded on demand from the official/
+  community conversions: diffusion GGUF (leejet/FLUX.2-klein-4B-GGUF, Q4_0),
+  VAE (Comfy-Org flux2-klein split files), text encoder **Qwen3-4B**
+  (Apache-2.0, unsloth GGUF Q4_K_M). ~5.2 GB total, installed under
+  `ai_models/flux2_klein/`; runs on the same stable-diffusion.cpp backend as
+  texture generation (distilled flow: cfg 1.0, euler, `flux2Steps` steps —
+  default 8, clamped [4,20]; 4 is the distillation's MINIMUM, and the extra
+  steps are what resolve anatomy, i.e. the extra-limb / malformed-hand
+  artifacts users hit on character prompts).
+- **SDXL Base 1.0** (Stability AI) — offered ALONGSIDE klein as a modern
+  non-distilled option. The two DISTILLED entries (klein: guidance-distilled;
+  SDXL Turbo: adversarial-distilled) are the ones whose few-step schedules
+  cost limb/finger coherence; SDXL Base runs the full 30-step schedule with
+  real classifier-free guidance and a negative prompt. (SD 1.5 is also
+  non-distilled, just an older and weaker model.) **CreativeML OpenRAIL++-M**
+  — verified 2026-09-18 against the HF API: `license: openrail++`, ungated,
+  `content-length` 6938078334 matching the catalog entry. Slower per image
+  and ~6.9 GB, so it is a user choice rather than the default.
+- **SDXL Turbo — REMOVED from the catalog (2026-09-18).** Verified against
+  the HF API: `license: other`, `license_name: sai-nc-community` — the
+  Stability AI **Non-Commercial** Community License. QtMeshEditor is **MIT**,
+  so users reasonably assume anything the app offers them is safe for
+  commercial work; shipping a non-commercial model in the download list is a
+  trap they have no reason to check for. It also failed the exact bar that
+  rejected SF3D, FLUX.2-dev and LAFAN1, so keeping it was inconsistent.
+  SDXL Base 1.0 (openrail++) is the permissive replacement, and is the
+  better anatomy model anyway since Turbo is adversarial-distilled.
+  **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
+  is non-commercial, which fails the redistribution bar (Homebrew / Snap /
+  WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.

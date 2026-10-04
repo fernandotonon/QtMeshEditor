@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 
 #include "MeshGenPredictor.h"
+#include "GameReadyPresets.h"
 #include "TripoSGPredictor.h"
 #include "Trellis2Predictor.h"
 #include "MeshGenBuilder.h"
@@ -12,11 +13,14 @@
 #include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
 #include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
 #include "ImageCaptioner.h"     // background SmolVLM caption of the picked image
+#include "SDManager.h"          // prompt-to-3D: text → source image (FLUX.2)
+#include "SDWorker.h"           // Flux2Set detection
 
 #include <OgreSceneNode.h>
 
 #include <QBuffer>
 #include <QByteArray>
+#include <QApplication>
 #include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
@@ -26,6 +30,9 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QUrl>
 
 #include <thread>
 #include "AppStorage.h"
@@ -155,7 +162,11 @@ void MeshGenController::selectImage()
         tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
+    applySelectedImage(path);
+}
 
+void MeshGenController::applySelectedImage(const QString& path)
+{
     m_selectedImage = path;
 
     // Build a small preview thumbnail as a data:image/png;base64 URL (same idiom
@@ -182,6 +193,326 @@ void MeshGenController::selectImage()
     // blocking the UI to caption. Shown under the thumbnail as it lands.
     m_caption.clear();
     startCaptioning(path);
+}
+
+QString MeshGenController::selectedImageUrl() const
+{
+    return m_selectedImage.isEmpty()
+        ? QString()
+        : QUrl::fromLocalFile(m_selectedImage).toString();
+}
+
+void MeshGenController::clearSelectedImage()
+{
+    if (m_busy || m_imageGenActive) return;
+    m_selectedImage.clear();
+    m_previewSource.clear();
+    m_caption.clear();
+    m_captioning = false;
+    // Drop any in-flight caption for the cleared image — its late result
+    // must not repopulate the caption of a selection that no longer exists.
+    m_captionForPath.clear();
+    emit selectedImageChanged();
+    emit captionChanged();
+    emit statusMessage(tr("Image cleared."));
+}
+
+int MeshGenController::imageGenSizeForModel(const QString& model)
+{
+    if (model == SDManager::flux2KleinModelName()) return 1024;
+    // SDXL checkpoints train at 1024²; SD 1.x at 512² (bigger makes SD 1.5
+    // duplicate the subject). Matches SDManager's own auto-detect naming.
+    const QString lower = model.toLower();
+    if (lower.contains(QLatin1String("sdxl")) || lower.contains(QLatin1String("sd_xl")))
+        return 1024;
+    return 512;
+}
+
+QString MeshGenController::normalisedSavePath(const QString& destPath)
+{
+    QString dest = destPath.trimmed();
+    if (dest.startsWith(QLatin1String("file://"))) dest = QUrl(dest).toLocalFile();
+    if (!dest.isEmpty() && QFileInfo(dest).suffix().isEmpty())
+        dest += QStringLiteral(".png");
+    return dest;
+}
+
+QString MeshGenController::suggestedImageFileName() const
+{
+    // Prefer the caption/prompt so a folder of saved images is readable;
+    // fall back to the source file's own name.
+    QString stem = m_caption.trimmed();
+    if (stem.isEmpty()) stem = QFileInfo(m_selectedImage).completeBaseName();
+    if (stem.isEmpty()) return QStringLiteral("generated_image.png");
+    // Keep it filesystem-safe and short: captions are sentences, not names.
+    stem.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9 _-]")), QString());
+    stem = stem.simplified();
+    stem.replace(' ', '_');
+    if (stem.size() > 60) stem = stem.left(60);
+    if (stem.isEmpty()) return QStringLiteral("generated_image.png");
+    return stem + QStringLiteral(".png");
+}
+
+bool MeshGenController::saveSelectedImageAs(const QString& destPath)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Save source image"));
+    if (m_selectedImage.isEmpty() || !QFileInfo::exists(m_selectedImage)) {
+        emit error(tr("There is no source image to save."));
+        return false;
+    }
+    // QML's FileDialog hands back a file:// URL; a caller may pass a plain
+    // path. One normaliser, shared with the interactive variant so the path
+    // it RETURNS is the path this writes.
+    const QString dest = normalisedSavePath(destPath);
+    if (dest.isEmpty()) {
+        emit error(tr("No save location chosen."));
+        return false;
+    }
+    // Saving onto the source would delete it via the overwrite below.
+    if (QFileInfo(dest).absoluteFilePath()
+        == QFileInfo(m_selectedImage).absoluteFilePath()) {
+        emit statusMessage(tr("Image is already saved there."));
+        return true;
+    }
+    QDir().mkpath(QFileInfo(dest).absolutePath());
+    // Write through QSaveFile: it stages into a temporary and commits on
+    // commit(), so a failure part-way leaves an EXISTING destination intact.
+    // Removing the target first (QFile::copy refuses to overwrite) would
+    // destroy the user's previous file if the copy then failed.
+    QFile src(m_selectedImage);
+    if (!src.open(QIODevice::ReadOnly)) {
+        emit error(tr("Could not read the source image."));
+        return false;
+    }
+    QSaveFile out(dest);
+    if (!out.open(QIODevice::WriteOnly)) {
+        emit error(tr("Could not save the image to %1.").arg(dest));
+        return false;
+    }
+    char buf[64 * 1024];
+    while (!src.atEnd()) {
+        const qint64 n = src.read(buf, sizeof(buf));
+        if (n < 0 || out.write(buf, n) != n) {
+            out.cancelWriting();     // existing destination untouched
+            emit error(tr("Could not save the image to %1.").arg(dest));
+            return false;
+        }
+    }
+    if (!out.commit()) {
+        emit error(tr("Could not save the image to %1.").arg(dest));
+        return false;
+    }
+    emit statusMessage(tr("Saved %1").arg(QFileInfo(dest).fileName()));
+    return true;
+}
+
+QString MeshGenController::saveSelectedImageInteractive()
+{
+    if (m_selectedImage.isEmpty() || !QFileInfo::exists(m_selectedImage)) {
+        emit error(tr("There is no source image to save."));
+        return {};
+    }
+    const QString startDir =
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString suggested =
+        QDir(startDir.isEmpty() ? QDir::homePath() : startDir)
+            .filePath(suggestedImageFileName());
+    // Same recipe as MaterialEditorQML::openFileDialog — a dialog opened
+    // from a QQuickWidget context with a null parent and the NATIVE backend
+    // silently fails to appear on macOS (the button looks dead). Pump the
+    // queue, raise/activate the real window, parent to it, and use Qt's own
+    // dialog.
+    QApplication::processEvents();
+    if (QWidget* activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    const QString dest = QFileDialog::getSaveFileName(
+        QApplication::activeWindow(), tr("Save Source Image"), suggested,
+        tr("PNG image (*.png);;All files (*)"), nullptr,
+        QFileDialog::DontUseNativeDialog
+            | QFileDialog::DontUseCustomDirectoryIcons);
+    if (dest.isEmpty()) return {};          // cancelled — not an error
+    // Return the path actually WRITTEN: saveSelectedImageAs appends .png to a
+    // suffix-less name, so returning the raw dialog result would hand callers
+    // a path that does not exist.
+    const QString written = normalisedSavePath(dest);
+    return saveSelectedImageAs(written) ? written : QString();
+}
+
+// ── Prompt-to-3D: generate the SOURCE image from text (FLUX.2-klein via
+// stable-diffusion.cpp) instead of importing one ─────────────────────────────
+
+bool MeshGenController::imageGenAvailable() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sd = SDManager::instance();
+    if (!sd) return false;
+    return SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid()
+           || sd->isModelLoaded()
+           || !sd->availableModels().isEmpty();
+#else
+    return false;
+#endif
+}
+
+QString MeshGenController::imageGenModelName() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sd = SDManager::instance();
+    // An EXPLICITLY LOADED model wins. Klein used to short-circuit here, so
+    // downloading and loading another checkpoint (e.g. SDXL Base, the whole
+    // point of offering a non-distilled option) silently still generated
+    // with klein — the alternative was unusable unless klein was deleted.
+    if (sd && sd->isModelLoaded() && !sd->currentModelName().isEmpty())
+        return sd->currentModelName();
+    if (SDWorker::detectFlux2Set(SDManager::flux2KleinDirectory()).valid())
+        return SDManager::flux2KleinModelName();
+    if (sd && !sd->availableModels().isEmpty())
+        return sd->availableModels().first();
+#endif
+    return {};
+}
+
+void MeshGenController::generateSourceImage(const QString& prompt)
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (m_busy || m_imageGenActive) {
+        // The QML button flips its local busy flag BEFORE calling in — a
+        // silent return would leave it stuck. Report the rejection.
+        emit imageGenStatus(
+            tr("Busy — wait for the current generation to finish."), true);
+        return;
+    }
+    const QString trimmed = prompt.trimmed();
+    if (trimmed.isEmpty()) {
+        emit imageGenStatus(tr("Enter a prompt first."), true);
+        return;
+    }
+    SDManager* sd = SDManager::instance();
+    const QString model = imageGenModelName();
+    if (!sd || model.isEmpty()) {
+        emit imageGenStatus(
+            tr("No image model — download FLUX.2-klein-4B in AI Model "
+               "Settings (or install a Stable Diffusion model)."), true);
+        return;
+    }
+
+    // EDIT mode: an image is already selected → the prompt describes a
+    // CHANGE to it (FLUX.2 kontext-style reference editing). Only klein can
+    // do that; on an SD checkpoint tell the user instead of silently
+    // generating something unrelated.
+    m_imageGenRef.clear();
+    if (!m_selectedImage.isEmpty()) {
+        if (model != SDManager::flux2KleinModelName()) {
+            emit imageGenStatus(
+                tr("Editing the loaded image needs FLUX.2-klein-4B (AI Model "
+                   "Settings) — or remove the image (🗑) to generate from "
+                   "scratch."), true);
+            return;
+        }
+        m_imageGenRef = m_selectedImage;
+    }
+
+    // Fresh generation: steer toward what the 3D reconstruction wants — one
+    // isolated subject on a plain backdrop. Edits keep the reference image's
+    // composition, so no suffix there.
+    // NB "full body" and "single subject" caption HUMAN figure photography
+    // in the training data, and on a short prompt that association can beat
+    // the subject itself: "capybara" reproducibly generated a person in
+    // plain clothes on a grey backdrop — the suffix, rendered literally,
+    // with the animal absent. Steering must describe the FRAMING without
+    // implying a person.
+    m_imageGenPrompt = m_imageGenRef.isEmpty()
+        ? trimmed + QStringLiteral(", the entire subject fully visible, centered, "
+                                   "isolated on a plain light gray background")
+        : trimmed;
+    // Explicit output name: SDManager's generationCompleted is GLOBAL, so a
+    // texture generation finishing while we wait must not be mistaken for our
+    // image — onImageGenCompleted correlates on this exact filename.
+    m_imageGenFileName = QStringLiteral("prompt3d_%1.png")
+        .arg(QDateTime::currentMSecsSinceEpoch());
+    m_imageGenActive = true;
+
+    // One-time signal wiring. NB: Qt::UniqueConnection only works with
+    // member-function-pointer connections — on a LAMBDA it silently fails to
+    // connect at all (which is how the progress bar stayed "indeterminate"
+    // forever: the forwarder below never fired). Guard with a flag instead.
+    if (!m_imageGenWired) {
+        m_imageGenWired = true;
+        connect(sd, &SDManager::modelLoadCompleted, this,
+                &MeshGenController::onImageGenModelLoaded);
+        connect(sd, &SDManager::modelLoadError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationCompleted, this,
+                &MeshGenController::onImageGenCompleted);
+        connect(sd, &SDManager::generationError, this,
+                &MeshGenController::onImageGenError);
+        connect(sd, &SDManager::generationProgressChanged, this, [this, sd]() {
+            if (!m_imageGenActive) return;
+            emit imageGenProgress(sd->generationStep(),
+                                  sd->generationTotalSteps());
+        });
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QStringLiteral("prompt-to-3d image gen (%1)").arg(model));
+
+    const bool loadedIsTarget =
+        sd->isModelLoaded() && sd->currentModelName() == model;
+    // Native training resolution: klein and SDXL are 1024 models; SD 1.x is
+    // 512 (and duplicates the subject when pushed higher). Running SDXL at
+    // 512 would quarter the pixel count of the very option added for quality.
+    m_imageGenSize = imageGenSizeForModel(model);
+    if (loadedIsTarget) {
+        emit imageGenStatus(m_imageGenRef.isEmpty()
+                                ? tr("Generating image…")
+                                : tr("Editing the loaded image…"), false);
+        sd->generateImage(m_imageGenPrompt, m_imageGenSize, m_imageGenSize,
+                          m_imageGenFileName, m_imageGenRef);
+    } else {
+        emit imageGenStatus(tr("Loading %1…").arg(model), false);
+        sd->loadModel(model);   // continues in onImageGenModelLoaded
+    }
+#else
+    Q_UNUSED(prompt);
+    emit imageGenStatus(
+        tr("This build has no Stable Diffusion support."), true);
+#endif
+}
+
+void MeshGenController::onImageGenModelLoaded()
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (!m_imageGenActive) return;
+    emit imageGenStatus(m_imageGenRef.isEmpty()
+                            ? tr("Generating image…")
+                            : tr("Editing the loaded image…"), false);
+    SDManager::instance()->generateImage(m_imageGenPrompt,
+                                         m_imageGenSize, m_imageGenSize,
+                                         m_imageGenFileName, m_imageGenRef);
+#endif
+}
+
+void MeshGenController::onImageGenCompleted(const QString& outputPath)
+{
+    if (!m_imageGenActive) return;   // someone else's SD generation
+    // Correlate: only OUR file ends the run (a texture generation finishing
+    // in parallel emits the same global signal with a different path).
+    if (QFileInfo(outputPath).fileName() != m_imageGenFileName) return;
+    m_imageGenActive = false;
+    applySelectedImage(outputPath);
+    emit imageGenStatus(
+        tr("Image ready — press Generate to build the 3D model."), false);
+}
+
+void MeshGenController::onImageGenError(const QString& message)
+{
+    if (!m_imageGenActive) return;
+    m_imageGenActive = false;
+    emit imageGenStatus(message, true);
 }
 
 void MeshGenController::startCaptioning(const QString& path)
@@ -275,12 +606,18 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         return options.contains(QLatin1String(key))
             ? options.value(QLatin1String(key)).toBool() : def;
     };
+    // #1016: matting tier. "best" = BiRefNet 1024² (MIT, ~930 MB, ~3x crisper
+    // edges on hair/fur); anything else keeps U²-Net 320². Only meaningful when
+    // background removal is on.
+    const bool wantBestMatte =
+        options.value(QLatin1String("matting")).toString().toLower()
+            == QLatin1String("best");
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
     m_upscaleTexture       = optBool("upscale_texture", false);
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
-    const int  textureSize = options.contains(QLatin1String("texture_size"))
+    int textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
     // Backend: "trellis2" (the default whenever its sidecar runtime is
     // installed), "triposr" (fast + textured) or "triposg" (rectified flow —
@@ -295,8 +632,11 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         backend = MeshGenPredictor::Backend::TripoSG;
     else if (backendStr.startsWith(QLatin1String("trellis")))
         backend = MeshGenPredictor::Backend::Trellis2;
+    else if (backendStr.startsWith(QLatin1String("pixal")))
+        backend = MeshGenPredictor::Backend::Pixal3D;
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
-    const bool useT2 = (backend == MeshGenPredictor::Backend::Trellis2);
+    // Pixal3D shares the trellis-cli runtime, so every useT2 gate applies.
+    const bool useT2 = MeshGenPredictor::isTrellisRuntime(backend);
     const int flowSteps = options.contains(QLatin1String("flow_steps"))
         ? options.value(QLatin1String("flow_steps")).toInt() : 25;
     const unsigned t2Seed = options.contains(QLatin1String("seed"))
@@ -304,8 +644,39 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const QString t2Preset = options.contains(QLatin1String("preset"))
         ? options.value(QLatin1String("preset")).toString().toLower()
         : QStringLiteral("balanced");
-    const int t2TargetTris = options.contains(QLatin1String("target_tris"))
+    int t2TargetTris = options.contains(QLatin1String("target_tris"))
         ? options.value(QLatin1String("target_tris")).toInt() : 0;
+    bool t2TargetTrisStrict = false;
+    int  t2MaxTexture = 0;      // platform cap on the FINAL images (0 = none)
+    // A named preset (the picker's id) wins over a raw target_tris: it is
+    // the same table the CLI/MCP resolve, and the Roblox presets carry the
+    // platform's upload limits — a hard triangle ceiling plus a 1024 px
+    // texture cap that is applied HERE, not only in QML, so a caller that
+    // bypasses the picker's snap still gets a Roblox-legal bake.
+    if (options.contains(QLatin1String("game_preset"))) {
+        const QString id = options.value(QLatin1String("game_preset")).toString();
+        if (const GameReady::Preset* gp = GameReady::find(id)) {
+            t2TargetTris = gp->targetTriangles;
+            t2TargetTrisStrict = gp->strictTriangles;
+            t2MaxTexture = gp->maxTextureSize;
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                textureSize = gp->maxTextureSize;
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+                QStringLiteral("game_preset=%1 tris=%2 strict=%3 tex=%4")
+                    .arg(gp->id).arg(t2TargetTris).arg(t2TargetTrisStrict)
+                    .arg(textureSize));
+        } else if (!id.isEmpty()) {
+            qWarning() << "MeshGenController: unknown game_preset" << id
+                       << "- using target_tris" << t2TargetTris;
+        }
+    }
+    // Subsamples per baked texel (TRELLIS.2). 1 = one sample at the texel
+    // centre (default); 2 = 2x2, which averages four positions and softens
+    // the speckle a single centre sample leaves where a texel straddles a
+    // colour boundary — at roughly 4x the bake cost. Anything else is
+    // ignored rather than trusted, since it comes in as a loose QVariant.
+    const int t2Supersample =
+        options.value(QLatin1String("texture_supersample")).toInt() == 2 ? 2 : 1;
 
     GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
@@ -314,6 +685,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // and could re-enter generate(), racing over m_pending. setBusy disables it.
     m_cancel = false;
     setBusy(true);
+    // #1016: set once the matte model has been ensured, so the generic
+    // pre-ensure below does not repeat a failed (and slow) Best download.
+    bool matteEnsured = false;
     emit progress(QStringLiteral("prep"), 0, 1);
 
     // Ensure the chosen backend's models on the MAIN thread first —
@@ -328,8 +702,19 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
         // The alpha-matte model must be ensured HERE (main thread — nested
-        // event loop); the worker-side predictor only reads it.
-        BackgroundRemover::ensureModelBlocking();
+        // event loop); the worker-side predictor only reads it. #1016: ensure
+        // the REQUESTED tier — pre-ensuring Fast while the predictor then asks
+        // for Best leaves BiRefNet uncached and silently degrades the matte.
+        // resolveModelBlocking (not ensureModelBlocking) so a failed ~930 MB
+        // BiRefNet fetch still leaves U²-Net cached: the worker cannot download
+        // (no nested event loop off the main thread), so without the Fast
+        // fallback HERE it would find nothing and skip matting entirely.
+        matteEnsured = true;
+        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ);
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -359,8 +744,16 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
     }
-    if (removeBackground)
-        BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
+    // Skip when the TRELLIS.2 branch above already ensured it: repeating a
+    // failed Best fetch would burn a SECOND ~930 MB / 40-minute timeout before
+    // generation even starts.
+    if (removeBackground && !matteEnsured) {
+        BackgroundRemover::Quality ensuredQ2 = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(   // best-effort, Best -> Fast
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ2);
+    }
 
     // The optional post-bake upscale runs on the WORKER, so its model must be
     // ensured here on the main thread (event loop) first. Best-effort: an empty
@@ -390,10 +783,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // --- Worker thread: model download + background removal + inference --------
     // Everything here is pure data (no Ogre). Progress is emitted via a queued
     // connection so the GUI thread updates the bar.
-    m_pending->worker = std::thread([this, image, res, rembg,
+    m_pending->worker = std::thread([this, image, res, rembg, wantBestMatte,
                                      wantSmooth, wantRefine, wantBake,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
+                                     t2TargetTrisStrict, t2MaxTexture,
+                                     t2Supersample,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -411,8 +806,19 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
-            const QString bgModel = BackgroundRemover::modelPath();
-            const auto br = BackgroundRemover::removeBackground(image, bgModel, {});
+            // #1016: pick the model for the requested tier, degrading to Fast
+            // when Best is not cached. Passing a Best tier with a Fast model
+            // feeds a 1024² tensor into U²-Net's fixed 320² graph — inference
+            // throws and the matte is silently lost.
+            BackgroundRemover::Quality mq =
+                wantBestMatte ? BackgroundRemover::Quality::Best
+                              : BackgroundRemover::Quality::Fast;
+            if (!BackgroundRemover::modelPresent(mq))
+                mq = BackgroundRemover::Quality::Fast;
+            BackgroundRemover::Options bgo;
+            bgo.quality = mq;
+            const QString bgModel = BackgroundRemover::modelPath(mq);
+            const auto br = BackgroundRemover::removeBackground(image, bgModel, bgo);
             subject = br.image;
             post(QStringLiteral("background"), 1, 1);
         }
@@ -427,6 +833,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // rembg model unused, so the GUI checkbox only governs the Tripo
         // backends.
         opts.removeBackground = useT2 || (rembg && useSG);
+        opts.mattingQuality  = wantBestMatte
+            ? BackgroundRemover::Quality::Best
+            : BackgroundRemover::Quality::Fast;
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
@@ -438,10 +847,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // run the weld/debris/simplify + detail-normal-bake pass in the
         // predictor; TRELLIS.2 does it natively in its own pipeline).
         opts.targetTriangles = t2TargetTris;
+        opts.targetTrianglesStrict = t2TargetTrisStrict;
+        opts.maxTextureSize  = t2MaxTexture;
         opts.bakeNormalMap   = m_generatePbr;
         if (useT2) {
             opts.seed            = t2Seed;
             opts.trellis2Preset  = t2Preset;
+            opts.textureSupersample = t2Supersample;
             // Phase 9: keep the raw full-res generation in AppData so
             // textures/LODs can be re-baked without re-running inference.
             opts.trellis2SourceKeepDir =
@@ -478,7 +890,18 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
 
         // Optional Real-ESRGAN 2x on the baked diffuse — pure CPU, so it stays
         // on this worker. Model was ensured on the main thread; best-effort.
-        if (r.ok && m_upscaleTexture && !m_upscaleModelPath.isEmpty()
+        // A platform preset caps the FINAL image (Roblox: 1024 px): a 2x
+        // that would cross it is skipped, and the result says so.
+        const bool upscaleBlockedByCap = t2MaxTexture > 0 && !r.texture.isNull()
+            && (r.texture.width() * 2 > t2MaxTexture
+                || r.texture.height() * 2 > t2MaxTexture);
+        if (r.ok && m_upscaleTexture && upscaleBlockedByCap) {
+            if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
+            r.warning += tr("Upscale skipped: the preset caps textures at %1 px.")
+                             .arg(t2MaxTexture);
+        }
+        if (r.ok && m_upscaleTexture && !upscaleBlockedByCap
+            && !m_upscaleModelPath.isEmpty()
             && !r.uvs.empty() && !r.texture.isNull() && !m_cancel.load()) {
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Upscaling texture…")));
@@ -558,4 +981,28 @@ void MeshGenController::buildOnMainThread()
                                        .arg(r.vertexCount).arg(r.triangleCount)
                                        .arg(r.texture.width()));
     emit completed(out);
+}
+
+// ── Game-ready presets (GameReadyPresets.h) ─────────────────────────────────
+
+QVariantList MeshGenController::gameReadyPresets() const
+{
+    QVariantList out;
+    for (const GameReady::Preset& p : GameReady::presets()) {
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), p.id);
+        m.insert(QStringLiteral("label"), p.label);
+        m.insert(QStringLiteral("tris"), p.targetTriangles);
+        m.insert(QStringLiteral("strict"), p.strictTriangles);
+        m.insert(QStringLiteral("maxTexture"), p.maxTextureSize);
+        m.insert(QStringLiteral("note"), p.note);
+        out.append(m);
+    }
+    return out;
+}
+
+int MeshGenController::gameReadyDefaultIndex() const
+{
+    const int i = GameReady::indexOf(GameReady::defaultId());
+    return i < 0 ? 0 : i;
 }

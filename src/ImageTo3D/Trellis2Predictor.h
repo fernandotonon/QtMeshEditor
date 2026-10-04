@@ -1,6 +1,7 @@
 #ifndef TRELLIS2_PREDICTOR_H
 #define TRELLIS2_PREDICTOR_H
 
+#include "BackgroundRemover.h"
 #include "MeshGenPredictor.h"   // shared Result / Stage / ProgressFn contract
 
 #include <QImage>
@@ -50,12 +51,36 @@ public:
         // Game-ready simplification target; 0 keeps the raw density (Phase 8:
         // ~10k Low / ~25k Medium / ~50k High — no exact-count promise).
         int targetTriangles = 0;
+        // targetTriangles is a hard ceiling (Roblox-style upload limit), not
+        // a budget — see Trellis2Bake::GameReadyOptions::strictTriangleBudget.
+        bool strictTriangleBudget = false;
         bool bakeTexture   = true;  // false → per-vertex colours only
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
-        bool removeBackground = true;   // U²-Net alpha matte (skipped if the
-                                        // input already carries real alpha)
+        int  texVolumeRes  = 0;     // 0 = sidecar default | 512 | 1024
+        // Which flow weights the model directory holds. Pixal3D is a fork of
+        // TRELLIS.2 that replaces the global DINOv3 cross-attention with
+        // view-aligned PROJECTION conditioning; the samplers and decoders are
+        // unchanged, so trellis-cli serves both from ONE directory (flow
+        // weights carry a `pixal3d_` prefix, decoders are shared). Selected
+        // with `--model trellis|pixal3d`.
+        bool pixal3d       = false;
+        // Pixal3D only. Horizontal FOV of the input image in DEGREES, which
+        // fixes the projection camera. 0 = leave trellis-cli on its own
+        // default (49.13, Pixal3D's own training value) rather than guessing.
+        float fovDeg       = 0.0f;
+        // Pixal3D only. Skip the NAF guided upsampler. Costs the shape and
+        // texture stages their high-frequency projection branch, but removes
+        // the naf.gguf dependency.
+        bool noNaf         = false;
+        bool removeBackground = true;   // alpha matte (skipped if the input
+                                        // already carries real alpha)
+        // #1016: which matting model. Fast = U²-Net 320² (default); Best =
+        // BiRefNet 1024² (MIT, ~930 MB, ~3x crisper edges). Best degrades to
+        // Fast when its model is unavailable.
+        BackgroundRemover::Quality mattingQuality =
+            BackgroundRemover::Quality::Fast;
         // Phase 9: persist the raw generation (QTM3D) here so textures/LODs can
         // be re-baked later without re-running inference. Empty = don't keep.
         QString sourceKeepDir;

@@ -122,3 +122,33 @@ TEST(MeshGenPredictorTest, InferenceProducesMeshOrDegradesGracefully)
     EXPECT_TRUE(r.error.contains("ENABLE_ONNX"));
 #endif
 }
+
+// ---- Platform texture cap (Roblox presets: 1024 px on the FINAL images) ----
+// xatlas treats the requested bake size as a hint, so the cap has to act on
+// what came out of the bake, every map included, and must be a no-op at 0.
+TEST(MeshGenPredictorCap, CapResultTexturesScalesEveryMapAndKeepsAspect)
+{
+    MeshGenPredictor::Result r;
+    r.ok = true;
+    r.texture      = QImage(2048, 1024, QImage::Format_RGBA8888);
+    r.normalMap    = QImage(1500, 1500, QImage::Format_RGB888);
+    r.roughnessMap = QImage(1025, 1025, QImage::Format_Grayscale8);
+    r.metallicMap  = QImage(512, 512, QImage::Format_Grayscale8);   // already within
+    r.texture.fill(Qt::red);
+    MeshGenPredictor::capResultTextures(r, 1024);
+    EXPECT_EQ(r.texture.width(), 1024);
+    EXPECT_EQ(r.texture.height(), 512);      // 2:1 aspect preserved
+    EXPECT_EQ(r.normalMap.width(), 1024);
+    EXPECT_EQ(r.normalMap.height(), 1024);
+    EXPECT_EQ(r.roughnessMap.width(), 1024);
+    EXPECT_EQ(r.metallicMap.width(), 512);   // untouched
+    EXPECT_EQ(r.texture.pixelColor(10, 10), QColor(Qt::red));
+
+    MeshGenPredictor::Result untouched;
+    untouched.texture = QImage(4096, 4096, QImage::Format_RGBA8888);
+    MeshGenPredictor::capResultTextures(untouched, 0);
+    EXPECT_EQ(untouched.texture.width(), 4096);
+    MeshGenPredictor::Result empty;
+    MeshGenPredictor::capResultTextures(empty, 1024);   // null images: no crash
+    EXPECT_TRUE(empty.texture.isNull());
+}

@@ -4,6 +4,7 @@
 
 #include "FaceCapGeom.h"
 #include "../ModelDownloader.h"
+#include "../ModelFetch.h"
 #include "../OnnxRuntimeSettings.h"
 
 #include <QDir>
@@ -93,30 +94,15 @@ QString PoseCapPredictor::ensureModelsBlocking()
         QDir().mkpath(QFileInfo(dest).absolutePath());
         const QString label =
             QStringLiteral("Pose capture model (%1)").arg(QLatin1String(fileName));
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(
-            dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(
-            dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-                         [&]() { timedOut = true; loop.quit(); });
-        timeout.start(300000);  // 5 min — ~25 MB total
-        dl->startDownload(base + QLatin1String("pose/") + QLatin1String(fileName), dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut && dl)
-            dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = base + QLatin1String("pose/") + QLatin1String(fileName);
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 300000;
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        return fo.ok;
     };
 
     if (!downloadOne(kDetectorFile) || !downloadOne(kLandmarksFile))

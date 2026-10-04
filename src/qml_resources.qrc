@@ -8,6 +8,7 @@
     <file alias="TextureChannelPackerDialog.qml">../qml/TextureChannelPackerDialog.qml</file>
     <file alias="NormalMapGeneratorDialog.qml">../qml/NormalMapGeneratorDialog.qml</file>
     <file alias="TextureAtlasDialog.qml">../qml/TextureAtlasDialog.qml</file>
+    <file alias="PaintBakeDialog.qml">../qml/PaintBakeDialog.qml</file>
     <file alias="ApplyAtlasDialog.qml">../qml/ApplyAtlasDialog.qml</file>
     <file alias="UvUnwrapDialog.qml">../qml/UvUnwrapDialog.qml</file>
     <file alias="QuadRetopoDialog.qml">../qml/QuadRetopoDialog.qml</file>
@@ -20,6 +21,7 @@
     <file alias="AttachBoneDialog.qml">../qml/AttachBoneDialog.qml</file>
     <file alias="BoneContextMenu.qml">../qml/BoneContextMenu.qml</file>
     <file alias="IsometricSpritesDialog.qml">../qml/IsometricSpritesDialog.qml</file>
+    <file alias="RetargetAnimationDialog.qml">../qml/RetargetAnimationDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>
@@ -53,6 +55,9 @@
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
     <file alias="NodeAnimationPanel.qml">../qml/NodeAnimationPanel.qml</file>
+    <file alias="PoseLibraryPanel.qml">../qml/PoseLibraryPanel.qml</file>
+    <file alias="GeneratorsPanel.qml">../qml/GeneratorsPanel.qml</file>
+    <file alias="ConstraintsPanel.qml">../qml/ConstraintsPanel.qml</file>
     <file alias="AnimationDopeSheet.qml">../qml/AnimationDopeSheet.qml</file>
     <file alias="AnimationCurveEditor.qml">../qml/AnimationCurveEditor.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>

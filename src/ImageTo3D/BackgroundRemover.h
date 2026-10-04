@@ -28,8 +28,21 @@
 // opaque isolated subject, not transparency.
 class BackgroundRemover {
 public:
+    /// #1016: which matting model to run.
+    ///   Fast — U²-Net at 320² (Apache-2.0). Small, quick, the historical
+    ///          default; visibly loses hair/fur edges.
+    ///   Best — BiRefNet at 1024² (MIT). ~930 MB, several seconds on CPU, and
+    ///          measured 3x crisper at the edge (0.86% vs 2.56% ambiguous
+    ///          mid-band pixels on a reference photo).
+    /// Best falls back to Fast when its model is unavailable, so an offline or
+    /// not-yet-downloaded install still cuts out a subject.
+    enum class Quality { Fast, Best };
+
     struct Options {
         Options();
+        /// Model tier (see Quality). Default Fast preserves the shipped
+        /// behaviour for every existing caller.
+        Quality quality = Quality::Fast;
         // Composite the cut-out subject over this solid color. TripoSR is trained
         // with the background filled to NEUTRAL GRAY 128 (run.py: (1-alpha)*0.5) —
         // NOT white. White gets reconstructed as a solid wall of geometry behind
@@ -61,18 +74,29 @@ public:
         QString error;
         QImage image;      // the composited, background-removed RGB image
         bool usedModel = false;
+        /// Which tier actually ran — Best degrades to Fast when the BiRefNet
+        /// model is missing, and a caller that asked for Best should be able to
+        /// tell rather than silently believing it got the better matte.
+        Quality qualityUsed = Quality::Fast;
     };
 
     // True only when built with ENABLE_ONNX.
     static bool isAvailable();
 
-    // AppData/ai_models/rembg/u2net.onnx.
-    static QString modelPath();
-    static bool modelPresent();
+    // AppData/ai_models/rembg/u2net.onnx (Fast) or birefnet.onnx (Best).
+    static QString modelPath(Quality q = Quality::Fast);
+    static bool modelPresent(Quality q = Quality::Fast);
     // Download the model on first use (blocks via a local event loop). Returns the
     // path when present, else empty. Honours QTMESH_REMBG_NO_DOWNLOAD + the
     // base-URL override (QTMESH_REMBG_MODEL_BASE_URL / QSettings ai/rembgModelBaseUrl).
-    static QString ensureModelBlocking();
+    static QString ensureModelBlocking(Quality q = Quality::Fast);
+
+    /// Resolve the model for `wanted`, degrading Best -> Fast when BiRefNet is
+    /// unavailable (not downloaded, offline, downloads disabled). Writes the
+    /// tier that was actually resolved to `actual`, so a caller can report an
+    /// honest result instead of assuming it got the better matte. Returns an
+    /// empty path when neither tier is available.
+    static QString resolveModelBlocking(Quality wanted, Quality* actual);
 
     // Run U²-Net on `image`, apply the mask as alpha, composite over the solid
     // background, and return the cleaned image. On any failure (no ONNX, missing

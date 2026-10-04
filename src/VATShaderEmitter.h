@@ -54,7 +54,10 @@ public:
                                        QStringList* rejectedOut = nullptr);
 
     /// Write the engine templates for every entry in `engines` into
-    /// `outputDir`. Returns the list of absolute paths actually written
+    /// `outputDir`. With `rigidMode` the rigid-body variant of each
+    /// engine template that has one (`openvat_rigid.gdshader`) is
+    /// written INSTEAD of the per-vertex one, since a rigid bake's
+    /// texture has a different layout (chunk columns + quaternions). Returns the list of absolute paths actually written
     /// (may be shorter than `engines` if a target file failed to write
     /// — in that case `out` carries the partial success and the caller
     /// can surface a warning per missing file).
@@ -69,7 +72,13 @@ public:
     /// insensitively against {godot, unity, unreal}; anything else
     /// is silently skipped (use `parseEngineList` to surface that).
     static QStringList writeShaders(const QString& outputDir,
-                                    const QStringList& engines);
+                                    const QStringList& engines,
+                                    bool rigidMode = false);
+
+    /// Engine template ids a rigid-body bake can ship (#522). Only the
+    /// Godot template exists today; the README carries the Unity /
+    /// Unreal math for the same texel layout.
+    static QStringList rigidEngines();
 };
 
 #endif // VATSHADEREMITTER_H

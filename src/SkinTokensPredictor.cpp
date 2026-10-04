@@ -1,5 +1,6 @@
 #include "SkinTokensPredictor.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 
 #include <QCoreApplication>
@@ -311,31 +312,15 @@ QString SkinTokensPredictor::ensureModelBlocking()
         QDir().mkpath(QFileInfo(dest).absolutePath());
         const QString label =
             QStringLiteral("skintokens/%1").arg(fileName);
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(
-            dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(
-            dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-                         [&]() { timedOut = true; loop.quit(); });
-        // The Qwen3-0.6B decoder graph is the big one (~2.4 GB fp32);
-        // generous cap for slow links.
-        timeout.start(3600000);
-        dl->startDownload(base + fileName, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut) dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = base + fileName;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 3600000;
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        return fo.ok;
     };
 
     for (const char* f : kFiles)

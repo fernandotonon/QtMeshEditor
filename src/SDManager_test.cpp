@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QSignalSpy>
 #include <QDir>
+#include <QSettings>
 #include <QStandardPaths>
 #include "SDManager.h"
 
@@ -72,6 +73,70 @@ TEST_F(SDManagerTest, DefaultSettings)
     EXPECT_EQ(manager->steps(), 20);
     EXPECT_FLOAT_EQ(manager->cfgScale(), 7.0f);
     EXPECT_TRUE(manager->negativePrompt().isEmpty());
+}
+
+// FLUX.2-klein is guidance-distilled: it ignores cfg and takes far fewer
+// steps than an SD checkpoint, so it has its own knob. 4 is the
+// distillation's MINIMUM (it was hardcoded there, which is what left
+// character prompts with extra limbs/malformed hands); extra steps are what
+// resolve anatomy, so the default is 8. Clamped on BOTH sides: a value that
+// silently differs from what the sampler uses reads as "the knob did
+// nothing", and a hand-edited config must not reach the sampler unchecked.
+TEST_F(SDManagerTest, Flux2StepsDefaultsToEightAndClampsToTheUsefulRange)
+{
+    const int restore = manager->flux2Steps();
+    // The singleton loads QSettings at construction and this fixture uses the
+    // REAL app settings, so a persisted value legitimately differs from the
+    // compiled default — assert the default only when the key is absent, and
+    // the clamping behaviour (below) unconditionally. (A developer machine
+    // that has run the app has this key set; CI runners do not.)
+    {
+        QSettings probe;
+        if (!probe.contains(QStringLiteral("StableDiffusion/flux2Steps")))
+            EXPECT_EQ(restore, 8) << "compiled default: above the 4-step minimum";
+        EXPECT_GE(restore, 4);
+        EXPECT_LE(restore, 20) << "whatever was loaded must already be in range";
+    }
+
+    manager->setFlux2Steps(12);
+    EXPECT_EQ(manager->flux2Steps(), 12);
+
+    manager->setFlux2Steps(1);
+    EXPECT_EQ(manager->flux2Steps(), 4) << "below the distillation minimum → 4";
+
+    manager->setFlux2Steps(999);
+    EXPECT_EQ(manager->flux2Steps(), 20) << "a distilled model stops improving → 20";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setFlux2Steps(manager->flux2Steps());
+    EXPECT_EQ(spy.count(), 0) << "setting the same value must not churn settings";
+
+    manager->setFlux2Steps(restore);
+}
+
+// Added for the step-count A/B: without a fixed seed two runs differ by
+// noise, so "did more steps help?" is unanswerable. -1 (and any negative)
+// means "random per generation", which is the default.
+TEST_F(SDManagerTest, SeedCanBeFixedForReproducibleGenerationsAndNegativeMeansRandom)
+{
+    const qint64 restore = manager->seed();
+    {
+        QSettings probe;   // same rationale as the flux2Steps test above
+        if (!probe.contains(QStringLiteral("StableDiffusion/seed")))
+            EXPECT_EQ(restore, -1) << "compiled default: random per generation";
+    }
+
+    manager->setSeed(12345);
+    EXPECT_EQ(manager->seed(), 12345);
+
+    manager->setSeed(-7);
+    EXPECT_EQ(manager->seed(), -1) << "any negative normalises to the random sentinel";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setSeed(manager->seed());
+    EXPECT_EQ(spy.count(), 0) << "no churn when the value is unchanged";
+
+    manager->setSeed(restore);
 }
 
 TEST_F(SDManagerTest, SetImageWidth)
@@ -239,11 +304,13 @@ TEST_F(SDManagerTest, GetModelFilePathResolvesRecommendedModelFilename)
     QString originalDir = manager->modelsDirectory();
     QString tempDir = QDir::temp().filePath("qtmesh_sd_recommended_models");
 
-    const QString recommendedPath = createModelFile(tempDir, "sd_xl_turbo_1.0_fp16.safetensors");
+    // SDXL Turbo was removed from the catalog (non-commercial licence), so
+    // this resolves against a recommended entry that still exists.
+    const QString recommendedPath = createModelFile(tempDir, "sd_xl_base_1.0.safetensors");
     manager->setModelsDirectory(tempDir);
 
-    EXPECT_EQ(manager->getModelFilePath("SDXL Turbo (FP16)"), recommendedPath);
-    EXPECT_TRUE(manager->modelFileExists("SDXL Turbo (FP16)"));
+    EXPECT_EQ(manager->getModelFilePath("SDXL Base 1.0 (FP16) — best anatomy"), recommendedPath);
+    EXPECT_TRUE(manager->modelFileExists("SDXL Base 1.0 (FP16) — best anatomy"));
 
     manager->setModelsDirectory(originalDir);
     QDir(tempDir).removeRecursively();
@@ -307,10 +374,21 @@ TEST_F(SDManagerTest, GetAvailableModelsInfoIncludesFileMetadata)
     manager->setModelsDirectory(tempDir);
     manager->scanForModels();
 
+    // NB not an exact count: the FLUX.2-klein SET is discovered from its own
+    // ai_models/flux2_klein/ directory, not from modelsDirectory, so a
+    // machine with klein installed legitimately lists it here too. Find the
+    // entry under test instead of assuming it is the only one.
     const QVariantList models = manager->getAvailableModelsInfo();
-    ASSERT_EQ(models.size(), 1);
-
-    const QVariantMap info = models.first().toMap();
+    QVariantMap info;
+    for (const QVariant& m : models) {
+        const QVariantMap candidate = m.toMap();
+        if (candidate.value("name").toString() == QLatin1String("metadata-model")) {
+            info = candidate;
+            break;
+        }
+    }
+    ASSERT_FALSE(info.isEmpty())
+        << "the scanned model is missing from getAvailableModelsInfo()";
     EXPECT_EQ(info.value("name").toString(), QString("metadata-model"));
     EXPECT_EQ(info.value("fileName").toString(), QString("metadata-model.ckpt"));
     EXPECT_GT(info.value("size").toLongLong(), 0);

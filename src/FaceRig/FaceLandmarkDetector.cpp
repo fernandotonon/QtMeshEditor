@@ -2,6 +2,7 @@
 
 #include "ArkitTemplate.h"        // reuse its model dir + base-url convention
 #include "../ModelDownloader.h"
+#include "../ModelFetch.h"
 #include "../OnnxRuntimeSettings.h"
 #include "../SentryReporter.h"
 
@@ -98,39 +99,20 @@ QString FaceLandmarkDetector::ensureModelBlocking()
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
         QStringLiteral("face landmark model download start"));
 
-    QEventLoop loop;
-    bool ok = false, timedOut = false, done = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = true; done = true; loop.quit(); }
-        });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = false; done = true; loop.quit(); }
-        });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop,
-                     [&]() { timedOut = true; loop.quit(); });
-    timeout.start(120000);  // 2 min — the model is small (~3 MB)
-
-    dl->startDownload(url, dest, label);
-    // done-guard: a synchronous downloadError would otherwise block the
-    // loop for the full timeout (same pattern as ArkitTemplate).
-    if (!done)
-        loop.exec();
-
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut && dl)
-        dl->cancelDownload();
-
-    const bool success = ok && !timedOut && QFileInfo::exists(dest);
+    // #1037: one shared blocking wait (ModelFetch) — carries the synchronous-
+    // rejection guard this file used to implement by hand as `done`, and
+    // keeps the downloader's own error text.
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dest;
+    req.label = label;
+    req.timeoutMs = 120000;   // 2 min — the model is small (~3 MB)
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
-        success ? QStringLiteral("face landmark model download ok")
-                : QStringLiteral("face landmark model download failed%1")
-                      .arg(timedOut ? QStringLiteral(" (timeout)") : QString()));
-    return success ? dest : QString();
+        fo.ok ? QStringLiteral("face landmark model download ok")
+              : QStringLiteral("face landmark model download failed%1")
+                    .arg(fo.timedOut ? QStringLiteral(" (timeout)") : QString()));
+    return fo.ok ? dest : QString();
 }
 
 bool FaceLandmarkDetector::isAvailable() const { return d && d->loaded; }

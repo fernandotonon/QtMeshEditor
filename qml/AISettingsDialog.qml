@@ -23,6 +23,8 @@ Dialog {
     property color buttonTextColor: palette.buttonText
     property string pendingDeleteModelId: ""
     property string pendingDeleteModelName: ""
+    property string pendingDeleteLlmFile: ""
+    property string pendingDeleteLlmName: ""
 
     SystemPalette {
         id: palette
@@ -81,7 +83,7 @@ Dialog {
                 width: implicitWidth
             }
             TabButton {
-                text: "SD Models"
+                text: "Image Models"
                 visible: MaterialEditorQML.stableDiffusionEnabled
                 width: visible ? implicitWidth : 0
             }
@@ -224,11 +226,25 @@ Dialog {
 
                         Item { Layout.preferredHeight: 8 }
 
-                        Text {
-                            text: "Recommended Models"
-                            font.pointSize: 12
-                            font.bold: true
-                            color: textColor
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            Text {
+                                Layout.fillWidth: true
+                                text: "Recommended Models"
+                                font.pointSize: 12
+                                font.bold: true
+                                color: textColor
+                            }
+                            Local.ThemedButton {
+                                text: "Remove All"
+                                enabled: !ModelDownloader.isDownloading && LLMManager.availableModels.length > 0
+                                onClicked: removeAllLlmModelsDialog.open()
+                            }
+                            Local.ThemedButton {
+                                text: "Open Folder"
+                                onClicked: Qt.openUrlExternally(LLMManager.modelsDirectoryUrl)
+                            }
                         }
 
                         ListView {
@@ -277,6 +293,19 @@ Dialog {
                                             text: formatSize(modelData.size) + (modelData.isDownloaded ? "  [Downloaded]" : "")
                                             font.pointSize: 9
                                             color: modelData.isDownloaded ? "#4caf50" : Qt.darker(textColor, 1.5)
+                                        }
+                                    }
+
+                                    // Same affordance as the QtMeshEditor Models tab: free the disk
+                                    // space of a downloaded GGUF (unloads it first if it is active).
+                                    Local.ThemedButton {
+                                        text: "Delete"
+                                        visible: modelData.isDownloaded
+                                        enabled: !ModelDownloader.isDownloading
+                                        onClicked: {
+                                            aiSettingsDialog.pendingDeleteLlmFile = modelData.fileName
+                                            aiSettingsDialog.pendingDeleteLlmName = modelData.name
+                                            removeLlmModelDialog.open()
                                         }
                                     }
                                 }
@@ -723,7 +752,7 @@ Dialog {
                 }
             }
 
-            // ============ SD Models Tab ============
+            // ============ Image Models Tab ============
             ScrollView {
                 visible: MaterialEditorQML.stableDiffusionEnabled
                 Layout.fillWidth: true
@@ -789,7 +818,7 @@ Dialog {
                         // SD Model Selection
                         GroupBox {
                             Layout.fillWidth: true
-                            title: "Available SD Models"
+                            title: "Available Image Models"
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -828,9 +857,9 @@ Dialog {
                             }
                         }
 
-                        // Recommended SD Models
+                        // Recommended image models
                         Text {
-                            text: "Recommended SD Models"
+                            text: "Recommended Image Models"
                             font.pointSize: 12
                             font.bold: true
                             color: textColor
@@ -960,6 +989,30 @@ Dialog {
                                     editable: true
                                 }
 
+                                // A guidance-distilled FLUX.2 model IGNORES
+                                // the Steps and CFG Scale controls above (it
+                                // pins cfg 1.0 and takes its own step count),
+                                // so without this row the visible Steps box
+                                // looks editable but does nothing for klein.
+                                Text {
+                                    text: "FLUX.2 Steps:"; color: textColor
+                                }
+                                RowLayout {
+                                    SpinBox {
+                                        from: 4; to: 20
+                                        value: SDManager.flux2Steps
+                                        onValueModified: SDManager.flux2Steps = value
+                                        editable: true
+                                    }
+                                    Text {
+                                        text: "distilled model; 8 resolves hands, 12+ invents extra objects"
+                                        color: textColor; opacity: 0.6
+                                        font.pixelSize: 10
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
                                 Text { text: "CFG Scale:"; color: textColor }
                                 RowLayout {
                                     Slider {
@@ -990,6 +1043,38 @@ Dialog {
                     }
                 }
             }
+        }
+    }
+
+    Dialog {
+        id: removeLlmModelDialog
+        title: "Delete Model File"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: LLMManager.deleteModelFile(aiSettingsDialog.pendingDeleteLlmFile)
+
+        Text {
+            width: 360
+            text: "Delete " + aiSettingsDialog.pendingDeleteLlmName + " (" + aiSettingsDialog.pendingDeleteLlmFile + ") from the models folder? It is unloaded first if it is the active model."
+            color: textColor
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    Dialog {
+        id: removeAllLlmModelsDialog
+        title: "Remove All LLM Files"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: LLMManager.deleteAllModelFiles()
+
+        Text {
+            width: 360
+            text: "Remove every downloaded GGUF model (" + LLMManager.availableModels.length + " file(s)) from the models folder? The active model is unloaded first."
+            color: textColor
+            wrapMode: Text.WordWrap
         }
     }
 

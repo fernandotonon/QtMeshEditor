@@ -2,7 +2,8 @@
 
 #include "MarchingCubes.h"
 #include "MeshRefine.h"       // Taubin smoothing + iso-surface reprojection
-#include "MeshGenBaker.h"     // xatlas unwrap + diffuse texture bake
+#include "MeshGenBaker.h"      // xatlas unwrap + diffuse texture bake
+#include "TextureInpaint.h"     // #1017 UV-seam fill (LaMa)
 #include "PbrMapSynth.h"      // toNCHW (image → planar [0,1])
 #include "BackgroundRemover.h"
 #include "OnnxRuntimeSettings.h"
@@ -21,6 +22,7 @@
 
 #ifdef ENABLE_ONNX
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include <QEventLoop>
 #include <QSettings>
 #include <QTimer>
@@ -108,6 +110,9 @@ MeshGenPredictor::Backend MeshGenPredictor::defaultBackend()
 {
     // TRELLIS.2 becomes the default the moment its runtime is installed on
     // this machine; otherwise the local ONNX TripoSR path stays the default.
+    // Trellis2 stays the default; Pixal3D is an opt-in alternative:
+    // Pixal3D needs its own ~11 GB of flow weights, so preselecting it would
+    // point most users at models they have not downloaded.
     return Trellis2Predictor::runtimeAvailable() ? Backend::Trellis2
                                                  : Backend::TripoSR;
 }
@@ -125,10 +130,17 @@ MeshGenPredictor::Result predictTrellis2(
     t2.preset           = opts.trellis2Preset;
     t2.seed             = opts.seed;
     t2.targetTriangles  = opts.targetTriangles;
+    t2.strictTriangleBudget = opts.targetTrianglesStrict;
     t2.bakeTexture      = opts.bakeTexture;
     t2.textureSize      = opts.textureSize;
     t2.bakeNormalMap    = opts.bakeNormalMap;
+    t2.supersample      = opts.textureSupersample;
+    t2.texVolumeRes     = opts.texVolumeRes;
+    t2.pixal3d          = (opts.backend == MeshGenPredictor::Backend::Pixal3D);
+    t2.fovDeg           = opts.pixal3dFovDeg;
+    t2.noNaf            = opts.pixal3dNoNaf;
     t2.removeBackground = opts.removeBackground;
+    t2.mattingQuality   = opts.mattingQuality;   // #1016
     t2.mock             = opts.trellis2Mock;
     t2.sourceKeepDir    = opts.trellis2SourceKeepDir;
     t2.sourceKeepBaseName = opts.trellis2SourceKeepBaseName;
@@ -163,6 +175,7 @@ MeshGenPredictor::Result predictTrellis2(
 // Returns false only on a hard failure (result untouched, warning appended).
 bool applyGameReady(MeshGenPredictor::Result& out,
                     int targetTriangles,
+                    bool strictBudget,
                     std::vector<float>* srcPosOut,
                     std::vector<uint32_t>* srcIdxOut)
 {
@@ -170,9 +183,18 @@ bool applyGameReady(MeshGenPredictor::Result& out,
         return false;
     Trellis2Bake::GameReadyOptions gr;
     gr.targetTriangles = targetTriangles;
+    gr.strictTriangleBudget = strictBudget;
     const Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(out.positions, out.indices, gr);
     if (!processed.ok) {
+        // A strict (platform-ceiling) budget that cannot be met is a failed
+        // generation, not a warning: keeping the dense mesh would export an
+        // asset the platform rejects under a preset that promised otherwise.
+        if (strictBudget) {
+            out.ok = false;
+            out.error = processed.error;
+            return false;
+        }
         if (!out.warning.isEmpty())
             out.warning += QStringLiteral(" ");
         out.warning += QStringLiteral("game-ready pass failed (%1) — keeping "
@@ -199,13 +221,15 @@ bool MeshGenPredictor::isAvailable() { return false; }
 
 QString MeshGenPredictor::ensureModelBlocking(Quality) { return {}; }
 
-MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
                                                    const QString&,
                                                    const QString&,
                                                    const Options& opts,
                                                    const ProgressFn& progress)
 {
-    if (opts.backend == Backend::Trellis2)
+    // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
+    // `--model pixal3d` for the latter and everything downstream is shared.
+    if (isTrellisRuntime(opts.backend))
         return predictTrellis2(image, opts, progress);
     Result r;
     r.error = QStringLiteral(
@@ -247,27 +271,15 @@ QString MeshGenPredictor::ensureModelBlocking(Quality q)
                            const QString& label) -> bool {
         QDir().mkpath(QFileInfo(dest).absolutePath());
         const QString url = base + fileName;
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-            [&]() { timedOut = true; loop.quit(); });
-        timeout.start(1800000);   // 30 min — the encoder is ~1.7 GB
-        dl->startDownload(url, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut) dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = url;
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 1800000;
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        return fo.ok;
     };
 
     if (!QFileInfo::exists(enc) &&
@@ -304,7 +316,7 @@ MeshGenPredictor::Result fail(const QString& msg)
 
 } // namespace
 
-MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
                                                    const QString& encoderModelPath,
                                                    const QString& decoderModelPath,
                                                    const Options& opts,
@@ -314,7 +326,9 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         return fail(QStringLiteral("MeshGen: input image is empty."));
 
     // ---- Backend dispatch: TRELLIS.2 (out-of-process sidecar) ----------------
-    if (opts.backend == Backend::Trellis2)
+    // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
+    // `--model pixal3d` for the latter and everything downstream is shared.
+    if (isTrellisRuntime(opts.backend))
         return predictTrellis2(image, opts, progress);
 
     // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------
@@ -323,8 +337,14 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         if (opts.removeBackground) {
             // TripoSG's reference pipeline composites the cut-out over WHITE
             // (unlike TripoSR's gray-128) — see docs/TRIPOSG_EXPORT_NOTES.md.
-            const QString bgModel = BackgroundRemover::ensureModelBlocking();
+            // Resolve for the requested tier; Best silently degrades to Fast
+            // when BiRefNet is not downloaded (normal at ~930 MB), and the
+            // resolved tier is fed back so the matte matches the model.
+            BackgroundRemover::Quality usedQ = opts.mattingQuality;
+            const QString bgModel =
+                BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &usedQ);
             BackgroundRemover::Options bg;
+            bg.quality = usedQ;   // #1016: the tier that actually resolved
             bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
             const BackgroundRemover::Result br =
                 BackgroundRemover::removeBackground(image, bgModel, bg);
@@ -350,7 +370,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         // the later GUI AI-texture pass unwraps/bakes the SIMPLIFIED mesh,
         // which is exactly what you want for skinning-friendly assets).
         if (r.ok)
-            applyGameReady(r, opts.targetTriangles, nullptr, nullptr);
+            applyGameReady(r, opts.targetTriangles, opts.targetTrianglesStrict,
+                           nullptr, nullptr);
         // TripoSG is geometry-only. Colour comes SOLELY from the AI image
         // generation pass (multi-view depth-ControlNet, run later in the GUI
         // layer) — no TripoSR field colouring. With no AI texture the mesh
@@ -367,9 +388,13 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
     // Falls back to the original image if the model/ONNX is unavailable.
     QImage subject = image;
     if (opts.removeBackground) {
-        const QString bgModel = BackgroundRemover::ensureModelBlocking();
+        // #1016: resolve for the requested tier (Best -> Fast when uncached).
+        BackgroundRemover::Quality mq2 = opts.mattingQuality;
+        const QString bgModel =
+            BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &mq2);
         const BackgroundRemover::Result br =
-            BackgroundRemover::removeBackground(image, bgModel, {});
+            BackgroundRemover::removeBackground(image, bgModel, [&]{
+                BackgroundRemover::Options o; o.quality = mq2; return o; }());
         subject = br.image;   // cleaned on success, original on fallback
     }
 
@@ -585,8 +610,13 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         std::vector<float>    gameReadySrcPos;
         std::vector<uint32_t> gameReadySrcIdx;
         const bool gameReady =
-            applyGameReady(out, opts.targetTriangles,
+            applyGameReady(out, opts.targetTriangles, opts.targetTrianglesStrict,
                            &gameReadySrcPos, &gameReadySrcIdx);
+        // NB Result::ok defaults to false and is only set at the end of this
+        // function, so the failure signal here is a populated error (review
+        // finding: an `!out.ok` check aborted every TripoSR run before the bake).
+        if (!out.error.isEmpty())
+            return out;   // strict budget unreachable — see applyGameReady
 
         // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
         if (wantColor && out.vertexCount > 0 && opts.bakeTexture) {
@@ -613,6 +643,34 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                 out.texture       = baked.texture;
                 out.vertexCount   = baked.vertexCount;
                 out.triangleCount = baked.triangleCount;
+
+                // #1017: AI-fill the atlas gutter. The baker's dilation pass
+                // smears chart-border colour outward so filtering does not
+                // drag the clear colour into a seam, but it does not CONTINUE
+                // the texture — inpainting the uncovered texels does.
+                // Coverage is sized to the baked texture, NOT to
+                // Options::textureSize (xatlas picks its own atlas dims).
+                if (opts.inpaintSeams && !baked.coverage.empty()
+                    && TextureInpaint::isAvailable()) {
+                    const QImage mask = TextureInpaint::maskFromCoverage(
+                        baked.coverage, out.texture.width(),
+                        out.texture.height());
+                    const QString model = TextureInpaint::ensureModelBlocking();
+                    if (!mask.isNull() && !model.isEmpty()) {
+                        const TextureInpaint::Result ip =
+                            TextureInpaint::inpaint(out.texture, mask, model);
+                        if (ip.ok && !ip.image.isNull())
+                            out.texture = ip.image;
+                        else
+                            // A seam fill is a refinement; never fail a whole
+                            // generation over it.
+                            out.warning = QStringLiteral(
+                                "seam inpaint skipped (%1)").arg(ip.error);
+                    } else if (model.isEmpty()) {
+                        out.warning = QStringLiteral(
+                            "seam inpaint skipped (LaMa model unavailable)");
+                    }
+                }
             } else if (baked.cancelled) {
                 return fail(QStringLiteral("cancelled"));
             } else {
@@ -672,3 +730,35 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
 }
 
 #endif // ENABLE_ONNX
+
+// ---- Public entry: backend dispatch + the platform texture cap --------------
+
+void MeshGenPredictor::capResultTextures(Result& r, int maxSize)
+{
+    if (maxSize <= 0)
+        return;
+    auto cap = [maxSize](QImage& img) {
+        if (img.isNull() || (img.width() <= maxSize && img.height() <= maxSize))
+            return;
+        img = img.scaled(maxSize, maxSize, Qt::KeepAspectRatio,
+                         Qt::SmoothTransformation);
+    };
+    cap(r.texture);
+    cap(r.normalMap);
+    cap(r.roughnessMap);
+    cap(r.metallicMap);
+}
+
+MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
+                                                   const QString& encoderModelPath,
+                                                   const QString& decoderModelPath,
+                                                   const Options& opts,
+                                                   const ProgressFn& progress)
+{
+    Result r = predictImpl(image, encoderModelPath, decoderModelPath, opts, progress);
+    // The bake honours textureSize only as a request (xatlas can hand back a
+    // larger atlas), so a platform cap is applied to what actually came out.
+    if (r.ok)
+        capResultTextures(r, opts.maxTextureSize);
+    return r;
+}

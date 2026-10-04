@@ -60,6 +60,7 @@
 #include "CloudUploadPlanner.h"
 #include "CloudUploadProgress.h"
 #include "FeedbackDialog.h"
+#include "FeedbackPromptController.h"
 #include "FeedbackReportHelper.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
@@ -117,6 +118,7 @@
 #include "MeshLodController.h"
 #include "MeshDecimatorController.h"
 #include "PartOpsController.h"
+#include "LatticeController.h"
 #include "MeshValidator.h"
 #include "AssetScanController.h"
 #include "UvUnwrapController.h"
@@ -124,6 +126,7 @@
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
 #include "FaceRigController.h"
+#include "LipsyncController.h"
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
@@ -137,6 +140,8 @@
 #include "SkinWeightController.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
+#include "AIAgentManager.h"
+#include "ClickFocusFilter.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
@@ -145,11 +150,15 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
+#include "RetargetController.h"
+#include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
 #include "NodeAnimationManager.h"
+#include "PoseLibrary.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
 #include <QDockWidget>
@@ -726,7 +735,7 @@ MainWindow::MainWindow(QWidget *parent) :
             }
         }
     });
-    m_pTimer->start(0);
+    m_pTimer->start(kRenderIntervalMs);
 
     // Edit Mode indicator in status bar
     m_editModeLabel = new QLabel("Object Mode", this);
@@ -758,11 +767,21 @@ MainWindow::MainWindow(QWidget *parent) :
                     [this]() { m_editHintLabel->setVisible(false); });
             });
 
+    // The MCP server object doubles as the in-process TOOL DISPATCHER for
+    // the AI chat/agent (callTool needs no transport). Create it always so
+    // the agent has an executor on a fresh install (review finding on
+    // #1052: with MCP/enabled=false every agent message failed with "tool
+    // server not available"); the HTTP transport stays opt-in below.
+    if (!m_mcpServer) {
+        m_mcpServer = new MCPServer(this);
+        m_mcpServer->setMainWindow(this);
+        AIChatManager::instance()->setMcpServer(m_mcpServer);
+    }
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
     int mcpPort = mcpSettings.value("MCP/port", 8080).toInt();
-    if (mcpEnabled && !m_mcpServer) {
+    if (mcpEnabled && !m_mcpServer->isHttpRunning()) {
         startMCPServer(mcpPort);
     }
 
@@ -866,12 +885,16 @@ MainWindow::~MainWindow()
         QuadRetopoController::kill();
         SkinWeightsController::kill();
         FaceRigController::kill();
+        LipsyncController::kill();
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
         LightGroupController::kill();
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
+        RetargetController::kill();
+        AnimGeneratorManager::kill();
+        ConstraintManager::kill();
         MeshGenController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
@@ -880,6 +903,7 @@ MainWindow::~MainWindow()
         PaintChannelPresets::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        AIAgentManager::kill();
         ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
@@ -965,6 +989,21 @@ void MainWindow::initToolBar()
             // updates the data but the SkeletonDebug overlay stays at
             // its pre-undo pose until the next animation tick.
             auto* animCtrl = AnimationControlController::instance();
+            // #521: the Pose Library poses SelectionSet's entity, which is NOT
+            // necessarily AnimationControlController's (that one stays null
+            // until a clip is picked in the Animation panel). Release-guard
+            // every selected entity that is holding a pose, not just the
+            // animation panel's — otherwise the first Apply after a fresh
+            // selection falls through to reset(true) below and is wiped,
+            // while later clicks (once the panel has synced) survive.
+            auto* poseLib = PoseLibrary::instance();
+            for (Ogre::Entity* selEnt : SelectionSet::getSingleton()->getResolvedEntities()) {
+                if (!selEnt || !poseLib || !poseLib->hasHeldBones(selEnt)) continue;
+                if (Ogre::SkeletonInstance* hs = selEnt->getSkeleton()) {
+                    hs->_notifyManualBonesDirty();
+                    hs->_updateTransforms();
+                }
+            }
             // Drop cached track / keyframe pointers BEFORE refreshing
             // anything: AddKeyframeCommand::undo can destroy a track
             // entirely, and a stale m_selectedTrack would crash on the
@@ -984,6 +1023,21 @@ void MainWindow::initToolBar()
                     //      empty-track and missing-mask edge cases.
                     //   3. _updateTransforms — extra push to make
                     //      TagPoint-attached entities catch up.
+                    // #521: an applied Pose-Library pose HOLDS its bones
+                    // (manual control + zeroed blend mask). reset(true)
+                    // resets ALL bones including manual ones, and the
+                    // masked-out clip then contributes nothing — so the
+                    // held pose would snap to BIND (the "pose blinks then
+                    // reverts to T-pose" bug). A held pose is already the
+                    // authoritative skeleton state, so just push derived
+                    // transforms and skip the reset/re-apply.
+                    if (poseLib && poseLib->hasHeldBones(ent)) {
+                        skel->_notifyManualBonesDirty();
+                        skel->_updateTransforms();
+                        return;
+                    }
+                    // reset(true) discards manual control, so never run it on
+                    // a skeleton some other selected entity is holding.
                     skel->reset(true);
                     skel->_notifyManualBonesDirty();
                     ent->_updateAnimation();
@@ -1051,6 +1105,11 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return PartOpsController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<LatticeController>(
+            "PropertiesPanel", 1, 0, "LatticeController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LatticeController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<UVEditorController>(
             "PropertiesPanel", 1, 0, "UVEditorController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -1075,6 +1134,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "FaceRigController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return FaceRigController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<LipsyncController>(
+            "PropertiesPanel", 1, 0, "LipsyncController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LipsyncController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<LightsController>(
             "PropertiesPanel", 1, 0, "LightsController",
@@ -1167,6 +1231,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<AIAgentManager>("AIChatPanel", 1, 0, "AIAgentManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIAgentManager::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return WelcomeScreenController::qmlInstance(engine, nullptr);
@@ -1194,6 +1262,18 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<VATBakerController>("PropertiesPanel", 1, 0, "VATBakerController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VATBakerController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<RetargetController>("PropertiesPanel", 1, 0, "RetargetController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return RetargetController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AnimGeneratorManager>("PropertiesPanel", 1, 0, "AnimGeneratorManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AnimGeneratorManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ConstraintManager>("PropertiesPanel", 1, 0, "ConstraintManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ConstraintManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<IsometricSpritesController>("PropertiesPanel", 1, 0, "IsometricSpritesController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -1252,6 +1332,25 @@ void MainWindow::initToolBar()
                     });
             }
         }
+        // Lipsync (#1019): QML cannot parent a file dialog, so the controller
+        // asks and MainWindow raises it — the same split HDR uses. The
+        // non-native flag matters on macOS, where a native dialog opened from
+        // a QQuickWidget context can fail to appear at all.
+        connect(LipsyncController::instance(), &LipsyncController::browseRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this, tr("Select Speech Audio"), QString(),
+                    tr("Audio (*.wav);;All Files (*)"), nullptr,
+                    QFileDialog::DontUseNativeDialog
+                        | QFileDialog::DontUseCustomDirectoryIcons);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    path.isEmpty() ? QStringLiteral("lipsync.browseCancelled")
+                                   : QStringLiteral("lipsync.browse"));
+                if (!path.isEmpty())
+                    LipsyncController::instance()->generateAsync(path);
+            });
+        });
         connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
                 this, [this]() {
             QTimer::singleShot(0, this, [this]() {
@@ -1283,6 +1382,86 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return NodeAnimationManager::qmlInstance(engine, nullptr);
             });
+        // #521 slice D: the Pose Library panel's backing singleton.
+        qmlRegisterSingletonType<PoseLibrary>("PropertiesPanel", 1, 0, "PoseLibrary",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PoseLibrary::qmlInstance(engine, nullptr);
+            });
+        // .poselib sidecar export / import. QML can't parent a native file
+        // dialog, so the panel raises a signal and we run the dialog here —
+        // the same split HdrEnvironmentController::browseRequested uses. The
+        // singleShot defers out of the QML signal handler so the dialog's
+        // nested event loop doesn't re-enter QQuickWidget's own.
+        // Lattice deformer: QML can't parent a QFileDialog, so the controller
+        // raises a request and the window runs the dialog (the PoseLibrary split).
+        connect(LatticeController::instance(), &LatticeController::saveLatticeRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getSaveFileName(
+                    this, tr("Save Lattice"), QString(),
+                    tr("Lattice (*.lattice.json);;JSON (*.json);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) return;
+                LatticeController::instance()->saveLatticeToFile(path);
+            });
+        });
+        connect(LatticeController::instance(), &LatticeController::loadLatticeRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this, tr("Load Lattice"), QString(),
+                    tr("Lattice (*.lattice.json *.json);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) return;
+                LatticeController::instance()->loadLatticeFromFile(path);
+            });
+        });
+        connect(PoseLibrary::instance(), &PoseLibrary::exportLibraryRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getSaveFileName(
+                    this,
+                    tr("Export Pose Library"),
+                    QString(),
+                    tr("Pose Library (*.poselib);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("poselib.exportCancelled"));
+                    return;
+                }
+                const bool ok = PoseLibrary::instance()->savePoseLibraryForSelection(path);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    QStringLiteral("poselib.export%1=%2")
+                        .arg(ok ? QStringLiteral("Saved") : QStringLiteral("Failed"),
+                             QFileInfo(path).fileName()));
+            });
+        });
+        connect(PoseLibrary::instance(), &PoseLibrary::importLibraryRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Import Pose Library"),
+                    QString(),
+                    tr("Pose Library (*.poselib);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                if (path.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("poselib.importCancelled"));
+                    return;
+                }
+                const bool ok = PoseLibrary::instance()->loadPoseLibraryForSelection(path);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                    QStringLiteral("poselib.import%1=%2")
+                        .arg(ok ? QStringLiteral("Loaded") : QStringLiteral("Failed"),
+                             QFileInfo(path).fileName()));
+            });
+        });
 
         // Same image provider the detached editor window uses — serves the
         // live paint buffer as a QImage view (no PNG encode, no base64).
@@ -1315,6 +1494,9 @@ void MainWindow::initToolBar()
             root->setProperty("bottomToolHost",
                               QVariant::fromValue(static_cast<QObject*>(this)));
         }
+        // Register the panel widget so QML text inputs can re-grab WIDGET
+        // focus after the app window deactivates (focusPanel()).
+        PropertiesPanelController::instance()->setPanelWidget(m_propertiesPanel);
         createModeSurfaces();
 
         // Force QQuickWidget repaint when snap settings change — QQuickWidget
@@ -1354,7 +1536,13 @@ void MainWindow::initToolBar()
         // StrongFocus: a single click inside the dock routes keyboard events into QML
         // without requiring a prior click in the viewport.
         chatWidget->setFocusPolicy(Qt::StrongFocus);
+        // ...and make that true after focus has moved to ANOTHER QQuickWidget
+        // (the Inspector): the QML field took the click but widget focus did
+        // not follow, so typing went nowhere until a detour via the viewport.
+        chatWidget->installEventFilter(new ClickFocusFilter(chatWidget));
         markLazyQml(chatWidget, QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        connect(AIChatManager::instance(), &AIChatManager::modelSettingsRequested,
+                this, &MainWindow::showAIModelSettings, Qt::UniqueConnection);
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);
         m_chatDock->setObjectName("AIChatDock");
@@ -3900,6 +4088,75 @@ void MainWindow::setupCloudAccountStatusControl()
         });
         prompt->show();
     });
+
+    // Contextual feedback prompt (#1058). The churn question is whether a
+    // one-time user left because they FINISHED or because they got STUCK —
+    // those look identical in retention data, so the wording has to separate
+    // them rather than ask a generic "how's it going".
+    connect(FeedbackPromptController::instance(),
+            &FeedbackPromptController::promptRequested, this,
+            [this](FeedbackPromptController::Trigger trigger) {
+        auto* ctrl = FeedbackPromptController::instance();
+
+        auto* prompt = new QMessageBox(this);
+        prompt->setAttribute(Qt::WA_DeleteOnClose);
+        prompt->setWindowModality(Qt::NonModal);
+        prompt->setIcon(QMessageBox::Question);
+        prompt->setWindowTitle(tr("How did that go?"));
+
+        switch (trigger) {
+        case FeedbackPromptController::Trigger::ImportFailure:
+            prompt->setText(tr("That import didn't work. Want to tell us what happened?"));
+            break;
+        case FeedbackPromptController::Trigger::ExportFailure:
+            prompt->setText(tr("That export didn't work. Want to tell us what happened?"));
+            break;
+        case FeedbackPromptController::Trigger::FirstExport:
+            prompt->setText(tr("You just exported your first model — did it come out the way "
+                               "you wanted?"));
+            break;
+        case FeedbackPromptController::Trigger::SessionNoExport:
+            prompt->setText(tr("Did you get what you came for today?"));
+            break;
+        case FeedbackPromptController::Trigger::FirstImport:
+            prompt->setText(tr("How is QtMeshEditor working out so far?"));
+            break;
+        }
+        prompt->setInformativeText(tr(
+            "One question, and it genuinely shapes what gets built next. "
+            "Nothing about your model — no file names, paths or content — is ever sent."));
+
+        // Two affirmative answers rather than a thumbs up/down: a satisfied
+        // one-time user and a blocked one must be distinguishable.
+        QPushButton* good = prompt->addButton(tr("Got what I needed"), QMessageBox::AcceptRole);
+        QPushButton* bad  = prompt->addButton(tr("Something didn't work"), QMessageBox::DestructiveRole);
+        prompt->addButton(tr("Not now"), QMessageBox::RejectRole);
+
+        connect(prompt, &QMessageBox::finished, this, [this, prompt, good, bad, ctrl]() {
+            if (prompt->clickedButton() == good) {
+                ctrl->reportPositive();
+            } else if (prompt->clickedButton() == bad) {
+                ctrl->reportNegative();
+                // Hand off to the existing detailed dialog, prefilled from
+                // whichever moment triggered the prompt.
+                showSendFeedbackDialog(ctrl->prefillForLastTrigger());
+            } else {
+                ctrl->reportDismissed();
+            }
+        });
+        prompt->show();
+    });
+
+    // The session trigger has to fire while the window is still up: closeEvent
+    // calls QApplication::quit() (and _exit() on macOS), so a prompt raised
+    // there would never be seen. Poll instead — the controller itself decides
+    // whether anything is warranted, and stops after one prompt per session.
+    auto* feedbackSessionTimer = new QTimer(this);
+    feedbackSessionTimer->setInterval(60 * 1000);
+    connect(feedbackSessionTimer, &QTimer::timeout, this, []() {
+        FeedbackPromptController::instance()->evaluateSession();
+    });
+    feedbackSessionTimer->start();
 }
 
 void MainWindow::updateCloudAuthActions()
@@ -3942,7 +4199,13 @@ void MainWindow::showSendFeedbackDialog(const FeedbackPrefill& prefill)
         refreshAccount();
     };
 
-    dialog.exec();
+    // FeedbackDialog accepts ONLY after a successful POST, so this is the
+    // signal that a submission actually happened — without it
+    // feedback.submitted was never emitted and we could not distinguish
+    // "opened the form" from "sent something".
+    if (dialog.exec() == QDialog::Accepted) {
+        FeedbackPromptController::instance()->reportSubmitted(dialog.submittedCategory());
+    }
 }
 
 void MainWindow::signInToQtMeshCloud()
@@ -4435,6 +4698,30 @@ void MainWindow::setPlaying(bool playing)
     // NOT force it here (doing so fought the checkbox: unchecking appeared to
     // do nothing). The frame loop advances enabled node states only while
     // isPlaying; an enabled clip poses its node (locked) — uncheck it to edit.
+    //
+    // #521: an applied Pose-Library pose HOLDS its bones (manual control +
+    // zeroed blend mask) so the pose is not wiped by Skeleton::reset or by a
+    // running track. Pressing Play means the author wants the clip back, so
+    // release the hold here — otherwise playback would visibly skip the
+    // posed bones.
+    if (playing && !isPlaying) {
+        // Release EVERY pose-held entity in the scene, not just the current
+        // selection: pose character A, select character B, press Play, and A
+        // would otherwise keep skipAnimationStateUpdate + zeroed masks — its
+        // timeline advancing while its skeleton stayed frozen.
+        if (auto* poseLib = PoseLibrary::instance()) {
+            if (auto* mgr = Manager::getSingletonPtr()) {
+                for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+                    if (!node) continue;
+                    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = node->getAttachedObject(i);
+                        if (!obj || obj->getMovableType() != "Entity") continue;
+                        poseLib->releasePosedBones(static_cast<Ogre::Entity*>(obj));
+                    }
+                }
+            }
+        }
+    }
     isPlaying = playing;
 }
 
@@ -4762,6 +5049,23 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
     const double scaledDt = dt * animCtrl->playbackSpeed();
 
+    // Advance any in-flight pose-library time blend (#521 slice D). This runs
+    // BEFORE (and independently of) the isPlaying gate on purpose: a blended
+    // "apply pose" is an authoring transition, not clip playback, so it has to
+    // complete whether or not the transport is running — the author is usually
+    // paused while posing. Uses raw dt rather than scaledDt for the same
+    // reason: the playback-speed knob belongs to clips, not to this.
+    // No-op (single hash check) when nothing is blending.
+    if (auto* poseLib = PoseLibrary::instance())
+        poseLib->tickBlend(static_cast<float>(dt));
+
+    // Procedural generators (#524): advance the generator clock and drive the
+    // runtime targets (pose weight / light / material). Track-backed targets
+    // are materialised into their clips and play with them, so they need
+    // nothing here. Paused, the clock follows the timeline slider.
+    if (auto* gens = AnimGeneratorManager::peek())
+        gens->tick(scaledDt, isPlaying);
+
     // Advance SceneManager-level animation states — the NodeAnimationManager's
     // transform clips (animated props/doors, #517 slice C) live here. They now
     // play from the MAIN transport like skeletal/vertex clips: setPlaying()
@@ -4985,6 +5289,29 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         event->accept();
         return;
+    }
+
+    // Lattice deformer: Enter applies, Esc cancels, Ctrl+A selects every
+    // control point. Other keys pass through (the cage is not modal — camera
+    // and tool shortcuts keep working while it is open).
+    if (auto* lat = LatticeController::instance(); lat->sessionActive()) {
+        if (event->key() == Qt::Key_Escape) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel lattice");
+            lat->cancelSession();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Enter — apply lattice");
+            lat->applySession();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_A && (event->modifiers() & Qt::ControlModifier)) {
+            lat->selectAllPoints();
+            event->accept();
+            return;
+        }
     }
 
     if (editCtrl->isEditModeActive()) {
@@ -5471,6 +5798,7 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
             QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteImport(false, QFileInfo(firstImportPath).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
@@ -5478,6 +5806,9 @@ void MainWindow::importMeshs(const QStringList &_uriList)
         QStringLiteral("gui"), firstImportPath, QString(), importTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()),
         static_cast<int>(animOnlySkeletons.size()), QFileInfo(firstImportPath).size()});
+    // #1058: only the extension, never the path.
+    FeedbackPromptController::instance()->noteImport(
+        true, QFileInfo(firstImportPath).suffix().toLower());
     SentryReporter::finishTransaction(txn);
 
     // Material rebinding (texture hydration + per-material RTSS sync + a
@@ -5581,27 +5912,70 @@ void MainWindow::on_actionOpen_Scene_triggered()
                     QFileInfo(fileName).suffix(), tr("Could not import scene file.")));
             SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
                 QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("import_failed")});
+            FeedbackPromptController::instance()->noteImport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("import_failed"));
             SentryReporter::finishTransaction(txn);
             return;
         }
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("failed"),
             QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteImport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("import"), QStringLiteral("completed"),
         QStringLiteral("gui"), fileName, QString(), sceneImportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()), -1, QFileInfo(fileName).size()});
+    FeedbackPromptController::instance()->noteImport(
+        true, QFileInfo(fileName).suffix().toLower());
     SentryReporter::finishTransaction(txn);
     addToRecentFiles(fileName);
 }
 // LCOV_EXCL_STOP
 
 // LCOV_EXCL_START — opens QFileDialog
+// #525: glTF/FBX cannot store constraints. Before an export with live
+// constraints, offer to bake them into keyframes so the exported clip moves
+// the way the viewport does. Returns false when the user cancels the export.
+static bool offerConstraintBakeBeforeExport(QWidget* parent)
+{
+    ConstraintManager* cm = ConstraintManager::peek();
+    if (!cm || cm->activeCount() == 0) return true;
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QObject::tr("Animation Constraints"));
+    box.setText(QObject::tr("%n active constraint(s) drive this scene. Exported files cannot store constraints.", "",
+                            cm->activeCount()));
+    box.setInformativeText(QObject::tr("Bake them into keyframes first? (Without baking, the motion they add is not "
+                                       "in the export; the constraints are kept in a .constraints.json sidecar.)"));
+    QPushButton* bake = box.addButton(QObject::tr("Bake && Export"), QMessageBox::AcceptRole);
+    QPushButton* skip = box.addButton(QObject::tr("Export without baking"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(bake);
+    box.exec();
+    if (box.clickedButton() == bake) {
+        SentryReporter::addBreadcrumb("ui.action", "Export: bake constraints");
+        const ConstraintManager::Result r = cm->bake(ConstraintManager::BakeOptions{});
+        if (!r.ok) {
+            // The user asked for the motion in the file; exporting without it
+            // would silently drop it.
+            QMessageBox::warning(parent, QObject::tr("Animation Constraints"),
+                                 QObject::tr("Could not bake the constraints, so the export was cancelled:\n%1").arg(r.error));
+            return false;
+        }
+        return true;
+    }
+    if (box.clickedButton() == skip) {
+        SentryReporter::addBreadcrumb("ui.action", "Export: keep constraints unbaked");
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::on_actionSave_Scene_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Save scene file");
+    if (!offerConstraintBakeBeforeExport(this)) return;
 
     QString fileName = QFileDialog::getSaveFileName(this, tr("Save Scene"),
                                                     "scene.scene.glb",
@@ -5630,6 +6004,7 @@ void MainWindow::on_actionSave_Scene_triggered()
         if (result != 0) {
             SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
                 QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("export_failed")});
+            FeedbackPromptController::instance()->noteExport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("export_failed"));
             FeedbackReportHelper::showFailureWithReportOption(
                 this, tr("Save Scene"), tr("Failed to save scene."),
                 FeedbackReportHelper::exportFailurePrefill(
@@ -5641,12 +6016,15 @@ void MainWindow::on_actionSave_Scene_triggered()
     } catch (...) {
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
             QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteExport(false, QFileInfo(fileName).suffix().toLower(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
         QStringLiteral("gui"), QString(), fileName, sceneExportTimer.elapsed(), true, QString(),
         static_cast<int>(Manager::getSingleton()->getEntities().size()), -1, QFileInfo(fileName).size()});
+    FeedbackPromptController::instance()->noteExport(
+        true, QFileInfo(fileName).suffix().toLower());
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
@@ -5655,6 +6033,7 @@ void MainWindow::on_actionSave_Scene_triggered()
 void MainWindow::on_actionExport_Selected_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
+    if (!offerConstraintBakeBeforeExport(this)) return;
     QElapsedTimer exportTimer;
     exportTimer.start();
     SentryReporter::captureFileWorkflowEvent(
@@ -5681,6 +6060,12 @@ void MainWindow::on_actionExport_Selected_triggered()
     if (wasRendering) m_pTimer->stop();
     AnimationControlController::instance()->suspendPollTimer();
 
+    // #1058: exporter() returns an empty path when the user cancels the save
+    // dialog, declines texture flattening, or there is nothing exportable.
+    // Recording success then would mark firstExportDone, claim "you just
+    // exported your first model", and suppress the session-no-export trigger
+    // — for a session in which nothing was written.
+    QString lastExportedPath;
     try {
         const auto* sel = SelectionSet::getSingleton();
 
@@ -5689,8 +6074,10 @@ void MainWindow::on_actionExport_Selected_triggered()
             foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
             {
                 QString exportedPath = MeshImporterExporter::exporter(node, this);
-                if (!exportedPath.isEmpty())
+                if (!exportedPath.isEmpty()) {
+                    lastExportedPath = exportedPath;
                     addToRecentFiles(exportedPath);
+                }
             }
         }
         else if(sel->hasEntities())
@@ -5700,8 +6087,10 @@ void MainWindow::on_actionExport_Selected_triggered()
                 auto* node = entity->getParentSceneNode();
                 if (!node) continue;
                 QString exportedPath = MeshImporterExporter::exporter(node, this);
-                if (!exportedPath.isEmpty())
+                if (!exportedPath.isEmpty()) {
+                    lastExportedPath = exportedPath;
                     addToRecentFiles(exportedPath);
+                }
             }
         }
     } catch (...) {
@@ -5709,14 +6098,29 @@ void MainWindow::on_actionExport_Selected_triggered()
         if (wasRendering) m_pTimer->start();
         SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("failed"),
             QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), false, QStringLiteral("exception")});
+        FeedbackPromptController::instance()->noteExport(false, QString(), QStringLiteral("exception"));
         SentryReporter::finishTransaction(txn);
         throw;
     }
     AnimationControlController::instance()->resumePollTimer();
     if (wasRendering) m_pTimer->start();
-    SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"), QStringLiteral("completed"),
-        QStringLiteral("gui"), QString(), QString(), exportTimer.elapsed(), true, QString(),
-        static_cast<int>(Manager::getSingleton()->getEntities().size())});
+    // A cancelled save dialog / declined flatten / empty selection leaves
+    // lastExportedPath empty — nothing was written, so this is not a
+    // completed export. Reporting success=true here would inflate the export
+    // funnel with sessions that produced no file, which is precisely the
+    // signal #1058 is trying to measure.
+    if (lastExportedPath.isEmpty()) {
+        SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+            QStringLiteral("cancelled"), QStringLiteral("gui"), QString(), QString(),
+            exportTimer.elapsed(), false, QStringLiteral("no_output")});
+    } else {
+        SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+            QStringLiteral("completed"), QStringLiteral("gui"), QString(), lastExportedPath,
+            exportTimer.elapsed(), true, QString(),
+            static_cast<int>(Manager::getSingleton()->getEntities().size())});
+        FeedbackPromptController::instance()->noteExport(
+            true, QFileInfo(lastExportedPath).suffix().toLower());
+    }
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
@@ -6137,7 +6541,7 @@ void MainWindow::onWidgetClosing(EditorViewport* const& widget)
     // Safety check: don't restart timer if MainWindow is being destroyed
     if(m_pTimer)
     {
-        m_pTimer->start(0);
+        m_pTimer->start(kRenderIntervalMs);
     }
 }
 // LCOV_EXCL_STOP

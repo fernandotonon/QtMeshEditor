@@ -16,6 +16,10 @@ class MeshValidator : public QObject, public Ogre::FrameListener
     Q_PROPERTY(QVariantList issues READ issues NOTIFY issuesChanged)
     Q_PROPERTY(bool hasFixableIssues READ hasFixableIssues NOTIFY issuesChanged)
     Q_PROPERTY(bool hasCacheOptimization READ hasCacheOptimization NOTIFY issuesChanged)
+    // Co-located-vertex weld available (duplicates to merge and/or skinned
+    // seam twins with mismatched weights to unify) — gates the "Weld
+    // Duplicate Vertices" button.
+    Q_PROPERTY(bool hasWeldableVertices READ hasWeldableVertices NOTIFY issuesChanged)
     Q_PROPERTY(bool validated READ validated NOTIFY issuesChanged)
     Q_PROPERTY(bool validating READ validating NOTIFY validatingChanged)
 
@@ -28,6 +32,7 @@ public:
     QVariantList issues() const { return m_issues; }
     bool hasFixableIssues() const;
     bool hasCacheOptimization() const { return m_cacheOptimizationAvailable; }
+    bool hasWeldableVertices() const { return m_weldAvailable; }
     bool validated() const { return m_validated; }
     bool validating() const { return m_pendingValidate; }
 
@@ -39,6 +44,11 @@ public:
     // on every selected entity. Mutates Ogre's index buffers — does NOT
     // touch the source file. Re-runs validate() to refresh the report.
     Q_INVOKABLE void optimizeVertexCache();
+    // Weld duplicate vertices on every selected entity (undoable): remaps
+    // indices of byte-identical duplicates to one representative and unifies
+    // skin weights across the remaining co-located twins so animation cannot
+    // tear them apart. UV seams are preserved. Re-runs validate() after.
+    Q_INVOKABLE void weldDuplicateVertices();
 
     // Run validation synchronously (GL context must be current — safe from MCP/CLI context
     // and from inside the Ogre render loop; use validate() from QML to defer automatically).
@@ -65,6 +75,7 @@ private:
     bool m_validated = false;
     bool m_pendingValidate = false;
     bool m_cacheOptimizationAvailable = false;
+    bool m_weldAvailable = false;
     Ogre::Root* m_registeredRoot = nullptr; // which Root we are listening on
     // Persists the last "Optimize Geometry" outcome so the
     // validation list keeps showing it after the auto-revalidate

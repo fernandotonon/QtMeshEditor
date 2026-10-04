@@ -56,6 +56,9 @@ class SDManager : public QObject
     Q_PROPERTY(int imageWidth READ imageWidth WRITE setImageWidth NOTIFY settingsChanged)
     Q_PROPERTY(int imageHeight READ imageHeight WRITE setImageHeight NOTIFY settingsChanged)
     Q_PROPERTY(int steps READ steps WRITE setSteps NOTIFY settingsChanged)
+    /// Sampling steps for a guidance-distilled FLUX.2 model, which ignores
+    /// `steps` and `cfgScale`. More steps resolve anatomy; clamped to [4,20].
+    Q_PROPERTY(int flux2Steps READ flux2Steps WRITE setFlux2Steps NOTIFY settingsChanged)
     Q_PROPERTY(float cfgScale READ cfgScale WRITE setCfgScale NOTIFY settingsChanged)
     Q_PROPERTY(QString negativePrompt READ negativePrompt WRITE setNegativePrompt NOTIFY settingsChanged)
     Q_PROPERTY(int generationStep READ generationStep NOTIFY generationProgressChanged)
@@ -85,6 +88,13 @@ public:
     int imageHeight() const { return m_settings.height; }
     void setImageHeight(int value);
     int steps() const { return m_settings.steps; }
+    int flux2Steps() const { return m_settings.flux2Steps; }
+    void setFlux2Steps(int steps);
+    /// Stored RNG seed; -1 (the default) means "random per generation".
+    /// Fixing it makes a run reproducible, which is what makes an A/B of
+    /// sampling settings meaningful — otherwise two runs differ by noise.
+    qint64 seed() const { return m_settings.seed; }
+    Q_INVOKABLE void setSeed(qint64 seed);
     void setSteps(int value);
     float cfgScale() const { return m_settings.cfgScale; }
     void setCfgScale(float value);
@@ -94,6 +104,12 @@ public:
     // Prompt enhancement for 3D textures
     static QString enhanceTexturePrompt(const QString &prompt);
     static QString getTextureNegativePrompt();
+
+    /// Prompt-to-3D image generation (FLUX.2-klein-4B via sd.cpp): where the
+    /// AI Model Settings catalog installs the component set, and the name it
+    /// is listed under in the model dropdown when present.
+    static QString flux2KleinDirectory();
+    static QString flux2KleinModelName();
 
     // Generation state
     bool isGenerating() const;
@@ -111,6 +127,13 @@ public slots:
     Q_INVOKABLE void scanForModels();
 
     Q_INVOKABLE void generateTexture(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
+    /// Plain text-to-image with the prompt passed through UNTOUCHED (no
+    /// seamless-texture enhancement) — the prompt-to-3D source-image path.
+    /// Saves under <AppData>/generated_sources/. Same async signals as
+    /// generateTexture (generationStarted/Progress/Completed/Error).
+    /// `refImagePath` (FLUX.2 only): kontext-style EDIT — the prompt describes
+    /// a change to that image instead of a scene from scratch.
+    Q_INVOKABLE void generateImage(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString(), const QString &refImagePath = QString());
     // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
 
     // Issue #403: mesh-aware (depth-conditioned) generation. Same

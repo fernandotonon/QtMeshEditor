@@ -1,4 +1,6 @@
 #include "SDManager.h"
+
+#include <algorithm>
 #include "GamificationManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
@@ -103,14 +105,33 @@ void SDManager::populateRecommendedModels()
         false
     });
 
+    // The anatomy option. The DEFAULT model (FLUX.2-klein) is 4-step
+    // guidance-distilled, and distillation is what costs limb/finger
+    // coherence — the "extra arms, weird fingers" artifacts. SDXL Base is
+    // NOT distilled: the full 30-step schedule with real classifier-free
+    // guidance and a negative prompt, which is what resolves anatomy.
+    // Slower and a bigger download, so it is offered ALONGSIDE klein rather
+    // than replacing it. CreativeML OpenRAIL++-M — permissive, unlike
+    // FLUX.2-dev (the obvious quality jump) and the removed SDXL Turbo,
+    // both non-commercial and therefore out of scope for an MIT app.
     m_recommendedModels.append({
-        "SDXL Turbo (FP16)",
-        "sd_xl_turbo_1.0_fp16.safetensors",
-        "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
-        "SDXL Turbo - fast generation, 4-12 steps. ~6.5GB",
-        6938081905,
+        "SDXL Base 1.0 (FP16) — best anatomy",
+        "sd_xl_base_1.0.safetensors",
+        "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+        "SDXL Base - full 30-step sampling with real guidance; finest surface "
+        "detail, but it tends to CROP to a bust and ignore full-body framing, "
+        "which image-to-3D needs. Slower than the distilled models. ~6.9GB",
+        6938078334,
         false
     });
+
+    // SDXL Turbo was REMOVED (2026-09-18): its licence is
+    // `sai-nc-community` — the Stability AI NON-COMMERCIAL licence — which
+    // fails the permissive-redistribution bar every other entry is held to
+    // (SF3D, FLUX.2-dev and LAFAN1 were all rejected on exactly this
+    // ground). QtMeshEditor is MIT, so users reasonably assume what the app
+    // offers is safe for commercial work; a non-commercial model in this
+    // list is a trap. SDXL Base 1.0 above is the openrail++ replacement.
 
     // Issue #403: ControlNet depth model for mesh-aware texture
     // generation. NOT a base model — it pairs WITH SD 1.5 as the
@@ -201,6 +222,27 @@ void SDManager::setSteps(int value)
     }
 }
 
+void SDManager::setFlux2Steps(int steps)
+{
+    // Clamp here as well as in the worker so the persisted/QML-visible value
+    // is the one that will actually be used (a silently-corrected setting
+    // reads as "the knob did nothing").
+    const int clamped = std::clamp(steps, 4, 20);
+    if (m_settings.flux2Steps == clamped) return;
+    m_settings.flux2Steps = clamped;
+    saveSettings();
+    emit settingsChanged();
+}
+
+void SDManager::setSeed(qint64 seed)
+{
+    const qint64 v = seed < 0 ? -1 : seed;   // any negative means "random"
+    if (m_settings.seed == v) return;
+    m_settings.seed = v;
+    saveSettings();
+    emit settingsChanged();
+}
+
 void SDManager::setCfgScale(float value)
 {
     if (m_settings.cfgScale != value) {
@@ -231,6 +273,17 @@ void SDManager::setAutoLoadModel(bool value)
 void SDManager::tryAutoLoadModel()
 {
     if (!m_autoLoadModel || m_lastModelName.isEmpty()) {
+        return;
+    }
+
+    // Cold-start convenience ONLY: if a load is already in flight or done,
+    // never stomp it. This fired 1s after construction and queued the
+    // last-used checkpoint BEHIND an explicit loadModel() call on the worker
+    // — the prompt-to-3D CLI asked for FLUX.2-klein, the auto-load silently
+    // replaced it with SD 1.5, and the 1024² generation came out as mush.
+    if (m_isLoading || isModelLoaded()) {
+        qDebug() << "SDManager: Auto-load skipped (a model is already"
+                    " loading/loaded)";
         return;
     }
 
@@ -370,6 +423,12 @@ void SDManager::scanForModels()
         m_availableModels.append(file.completeBaseName());
     }
 
+    // Prompt-to-3D image generation: the FLUX.2-klein-4B component set
+    // (downloaded via AI Model Settings into ai_models/flux2_klein/) is a
+    // DIRECTORY-shaped model — list it when the full set is present.
+    if (SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
+        m_availableModels.append(flux2KleinModelName());
+
     // Update recommended models download status
     for (int i = 0; i < m_recommendedModels.size(); ++i) {
         QString filePath = modelsDir.filePath(m_recommendedModels[i].fileName);
@@ -442,6 +501,58 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
     QMetaObject::invokeMethod(m_worker, [this, enhancedPrompt, outputPath, genSettings]() {
         m_worker->setSettings(genSettings);
         m_worker->generateTexture(enhancedPrompt, outputPath);
+    }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
+void SDManager::generateImage(const QString &prompt, int width, int height,
+                              const QString &outputFileName,
+                              const QString &refImagePath)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No SD model loaded. Please load a model first.");
+        return;
+    }
+
+    GamificationManager::noteFeature(QStringLiteral("stable_diffusion"));
+
+    // LCOV_EXCL_START — requires a loaded SD model
+    // Unlike generateTexture, the prompt goes through UNTOUCHED: this path
+    // generates a SUBJECT image (prompt-to-3D source), and the seamless-
+    // texture enhancement would fight it.
+    if (width > 0)  m_settings.width = width;
+    if (height > 0) m_settings.height = height;
+
+    QDir outputDir(QDir(AppStorage::persistentRoot()).filePath(
+        QStringLiteral("generated_sources")));
+    if (!outputDir.exists()) outputDir.mkpath(QStringLiteral("."));
+    QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
+    if (fileName.isEmpty())
+        fileName = QStringLiteral("prompt_%1.png")
+                       .arg(QDateTime::currentMSecsSinceEpoch());
+    if (!fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive))
+        fileName += QLatin1String(".png");
+    const QString outputPath = outputDir.filePath(fileName);
+
+    // FLUX.2 edit mode: load the reference image on this thread (cheap) and
+    // hand it to the worker for the next generation.
+    QImage refImage;
+    if (!refImagePath.isEmpty()) {
+        refImage.load(refImagePath);
+        if (refImage.isNull()) {
+            emit generationError(
+                QStringLiteral("Cannot read the image to edit: %1")
+                    .arg(refImagePath));
+            return;
+        }
+    }
+
+    SDSettings genSettings = m_settings;
+    QMetaObject::invokeMethod(m_worker,
+                              [this, prompt, outputPath, genSettings, refImage]() {
+        m_worker->setSettings(genSettings);
+        m_worker->setRefImage(refImage);
+        m_worker->generateTexture(prompt, outputPath);
     }, Qt::QueuedConnection);
     // LCOV_EXCL_STOP
 }
@@ -521,6 +632,7 @@ void SDManager::saveSettings()
     settings.setValue("width", m_settings.width);
     settings.setValue("height", m_settings.height);
     settings.setValue("steps", m_settings.steps);
+    settings.setValue("flux2Steps", m_settings.flux2Steps);
     settings.setValue("cfgScale", static_cast<double>(m_settings.cfgScale));
     settings.setValue("seed", QVariant::fromValue(m_settings.seed));
     settings.setValue("negativePrompt", m_settings.negativePrompt);
@@ -542,6 +654,9 @@ void SDManager::loadSettings()
     m_settings.width = settings.value("width", 512).toInt();
     m_settings.height = settings.value("height", 512).toInt();
     m_settings.steps = settings.value("steps", 20).toInt();
+    // clamp on read too: an out-of-range value from an older build or a
+    // hand-edited config must not reach the sampler
+    m_settings.flux2Steps = std::clamp(settings.value("flux2Steps", 8).toInt(), 4, 20);
     m_settings.cfgScale = settings.value("cfgScale", 7.0).toFloat();
     m_settings.seed = settings.value("seed", -1).toLongLong();
     m_settings.negativePrompt = settings.value("negativePrompt", "").toString();
@@ -553,8 +668,27 @@ void SDManager::loadSettings()
     settings.endGroup();
 }
 
+QString SDManager::flux2KleinDirectory()
+{
+    // The AI Model Settings catalog installs the FLUX.2-klein-4B component
+    // set here (ai_models/flux2_klein/ — NOT sd_models, which holds
+    // single-file checkpoints).
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("flux2_klein"));
+}
+
+QString SDManager::flux2KleinModelName()
+{
+    return QStringLiteral("FLUX.2-klein-4B");
+}
+
 QString SDManager::getModelFilePath(const QString &modelName) const
 {
+    // The FLUX.2 set is a directory-shaped model (SDWorker loads the
+    // components from it).
+    if (modelName == flux2KleinModelName()
+        && SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
+        return flux2KleinDirectory();
+
     QDir modelsDir(m_modelsDirectory);
 
     // Check if it's a full filename with extension

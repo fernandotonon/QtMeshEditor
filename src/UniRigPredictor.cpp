@@ -1,5 +1,6 @@
 #include "UniRigPredictor.h"
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 
 #include <QDir>
@@ -10,6 +11,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -31,6 +33,17 @@ constexpr const char* kDefaultModelBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/unirig/";
 constexpr const char* kBaseUrlSettingsKey = "ai/unirigModelBaseUrl";
 constexpr const char* kEncoderLabel = "UniRig encoder model";
+// #1025: SHA-256 of the files at kDefaultModelBaseUrl (the HF LFS oids). The
+// hosted encoder was FINE all along; the copy on the reporting machine had a
+// corrupted ~8.6 MB region (309,884 bytes differing from HF, same size) that
+// loaded without complaint and produced NaN latents on every input — so
+// `--algo unirig` silently fell back to the template rig for months. With
+// these, ModelFetch verifies an existing file before use and re-fetches a
+// mismatch. They apply ONLY to the default hosting: a QTMESH_UNIRIG_MODEL_BASE_URL
+// / QSettings mirror may legitimately serve a different export.
+constexpr const char* kEncoderSha256 = "857d23810a5175365fae237fda6a8d9cf9942de9eb138d3093052306f22d132b";
+constexpr const char* kDecoderSha256 = "4b6dcb97eccff70b2c8d0740170eef78601f10b77ab5b3a4230791922dd9178d";
+constexpr const char* kEmbedSha256   = "c84e6bcf78e47d4395c24627542f382a0c14cdfaa46f20dd5c5f5704e3952fb3";
 constexpr const char* kDecoderLabel = "UniRig decoder model";
 constexpr const char* kEmbedLabel   = "UniRig embed model";
 
@@ -134,7 +147,7 @@ double UniRigPredictor::undiscretize(int bin)
 
 UniRigPredictor::Result UniRigPredictor::detokenize(
         const std::vector<int>& idsIn, double scale,
-        const std::array<double, 3>& centre)
+        const std::array<double, 3>& centre, Labeling labeling)
 {
     // Strip leading BOS / trailing PAD; drop the terminal EOS.
     std::vector<int> ids = idsIn;
@@ -258,16 +271,45 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
     // the mesh up-axis afterward). The ONNX predict() path re-labels with the
     // real up-axis after restoring it; for the detokenize-only path (tests /
     // non-ONNX) we label in +Y so the names are still anatomical.
-    labelJointsAnatomically(r.joints, /*upAxis=*/1);
+    r.labeling = applyLabeling(r.joints, /*upAxis=*/1, labeling);
 
     r.ok = true;
     return r;
 }
 
-void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
+void UniRigPredictor::labelJointsGeneric(std::vector<Joint>& joints)
+{
+    // Parent-before-child order is guaranteed by the detokenizer, so a plain
+    // index walk names parents before children; the root(s) are "root" (a
+    // second root gets "root_1" — Ogre rejects duplicate bone names).
+    int roots = 0, k = 0;
+    for (auto& j : joints) {
+        if (j.parent < 0) j.name = roots++ == 0 ? QStringLiteral("root")
+                                                : QStringLiteral("root_%1").arg(roots - 1);
+        else j.name = QStringLiteral("bone_%1").arg(++k, 2, 10, QLatin1Char('0'));
+    }
+}
+
+QString UniRigPredictor::applyLabeling(std::vector<Joint>& joints, int upAxis, Labeling labeling)
+{
+    if (labeling == Labeling::Generic) { labelJointsGeneric(joints); return QStringLiteral("generic"); }
+    const bool plausible = labelJointsAnatomically(joints, upAxis);
+    if (labeling == Labeling::Auto && !plausible) {
+        // #1013: the humanoid labeller stamps Hips/Neck/Head/LeftFoot on a car
+        // (its long axis reads as the spine) and RightArm_3 on a tree. When the
+        // geometry does not read as a humanoid, neutral names are the honest
+        // answer — and text-to-motion then refuses the rig with its
+        // "humanoid rigs only" message instead of animating a wheel as a foot.
+        labelJointsGeneric(joints);
+        return QStringLiteral("generic");
+    }
+    return QStringLiteral("humanoid");
+}
+
+bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
 {
     const int n = static_cast<int>(joints.size());
-    if (n == 0) return;
+    if (n == 0) return false;
 
     // ---- PATH 1: UniRig's OWN ordered name template (configs/skeleton/mixamo.yaml).
     // UniRig emits body joints in a FIXED canonical order and tags each joint's
@@ -311,7 +353,7 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
                 // hand-part joints keep their positional name (finger detail —
                 // not needed for the canonical body retarget).
             }
-            return;   // template applied — done
+            return true;   // the model's own humanoid template applied — a humanoid by construction
         }
         // else: parts unreliable for this rig → geometric path below.
     }
@@ -370,7 +412,12 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     // not (AnimationMerger::applyMotionClip) — so correct labels do NOT mirror
     // the motion. Decoupling label-side from retarget-side is the fix for "labels
     // flipped vs animation mirrored" being in tension.
-    auto side = [&](int i) { return -joints[i].pos[SIDE]; };
+    // Measured RELATIVE TO THE ROOT (review on #1013): a rig whose local origin
+    // is off its sagittal plane — every joint at, say, x > 0 — would otherwise
+    // put all four limbs on one "side", mis-naming them AND failing the
+    // plausibility check below; translation must not change either.
+    const double sideOrigin = joints[root].pos[SIDE];
+    auto side = [&](int i) { return -(joints[i].pos[SIDE] - sideOrigin); };
     // setName ENFORCES UNIQUENESS — Ogre::Skeleton::createBone rejects duplicate
     // names ("RightArm already exists"). When the geometric classification lands
     // two joints on the same anatomical role (e.g. a clavicle + upper-arm both
@@ -453,6 +500,8 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     for (int i = 0; i < n; ++i) { topUp2 = std::max(topUp2, up(i)); botUp2 = std::min(botUp2, up(i)); }
     const double bodyH = std::max(1e-6, topUp2 - botUp2);
 
+    // #1013 plausibility bookkeeping: how many chains landed on each role/side.
+    int armL = 0, armR = 0, legL = 0, legR = 0;
     // Limb roots = unclaimed children of any spine joint OR the root.
     std::vector<int> attach = spine; attach.push_back(root);
     for (int a : attach) {
@@ -480,6 +529,7 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
             else
                 isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
             const bool left  = (side(chain.front()) >= 0.0);
+            (isArm ? (left ? armL : armR) : (left ? legL : legR)) += 1;
             const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
             const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
             const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
@@ -524,6 +574,13 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
                     i, joints[i].parent, joints[i].pos[0], joints[i].pos[1],
                     joints[i].pos[2], up(i), side(i), joints[i].name.toUtf8().constData());
     }
+
+    // #1013: a plausible humanoid stands along the caller's up axis (a car's
+    // LONG axis is what the detector picks as "up", so U != upAxis) and has
+    // exactly one Left and one Right chain read as arm and as leg (a tree has
+    // several "arms"; a quadruped has no arms at all).
+    const bool upAgrees = (upAxis < 0 || upAxis > 2) || (U == upAxis);
+    return upAgrees && armL == 1 && armR == 1 && legL == 1 && legR == 1;
 }
 
 bool UniRigPredictor::isAvailable()
@@ -558,11 +615,98 @@ QString UniRigPredictor::embedModelPath()
         QStringLiteral("unirig/") + QString::fromLatin1(kEmbedFile));
 }
 
+QString UniRigPredictor::expectedSha256(const QString& fileName)
+{
+    if (fileName == QLatin1String(kEncoderFile)) return QString::fromLatin1(kEncoderSha256);
+    if (fileName == QLatin1String(kDecoderFile)) return QString::fromLatin1(kDecoderSha256);
+    if (fileName == QLatin1String(kEmbedFile))   return QString::fromLatin1(kEmbedSha256);
+    return {};
+}
+
 bool UniRigPredictor::modelsPresent()
 {
     return QFileInfo::exists(encoderModelPath())
         && QFileInfo::exists(decoderModelPath())
         && QFileInfo::exists(embedModelPath());
+}
+
+namespace {
+
+// FPS seed: the pool point farthest from the pool centroid — an extremity,
+// exactly what farthest-point sampling should reach first (deterministic,
+// like upstream's random_start=False at inference).
+int farthestFromCentroid(const std::vector<float>& pts, int pool)
+{
+    std::array<double, 3> c = {0.0, 0.0, 0.0};
+    for (int i = 0; i < pool; ++i)
+        for (int a = 0; a < 3; ++a) c[a] += pts[3*i + a];
+    for (double& v : c) v /= pool;
+    int seed = 0;
+    double best = -1.0;
+    for (int i = 0; i < pool; ++i) {
+        double d = 0.0;
+        for (int a = 0; a < 3; ++a) { const double t = pts[3*i + a] - c[a]; d += t * t; }
+        if (d > best) { best = d; seed = i; }
+    }
+    return seed;
+}
+
+// Greedy farthest-point order over the first `pool` points: O(pool * k)
+// distance updates — 65536 x 2048 is ~134M multiply-adds, well under a
+// second and dwarfed by the encoder. Marks the selected points in `chosen`.
+std::vector<int> greedyFarthestPointOrder(const std::vector<float>& pts, int pool, int k,
+                                          int seed, std::vector<char>& chosen)
+{
+    std::vector minD(static_cast<size_t>(pool), std::numeric_limits<float>::max());
+    std::vector<int> order;
+    order.reserve(static_cast<size_t>(k));
+    int cur = seed;
+    for (int it = 0; it < k; ++it) {
+        chosen[cur] = 1;
+        order.push_back(cur);
+        int next = -1;
+        float far = -1.0f;
+        for (int i = 0; i < pool; ++i) {
+            if (chosen[i]) continue;
+            float d = 0.0f;
+            for (int a = 0; a < 3; ++a) { const float t = pts[3*i + a] - pts[3*cur + a]; d += t * t; }
+            minD[i] = std::min(minD[i], d);
+            if (minD[i] > far) { far = minD[i]; next = i; }
+        }
+        if (next < 0) break;
+        cur = next;
+    }
+    return order;
+}
+
+// Rebuild an xyz-triple array as [order..., then every unchosen point in place].
+void reorderTriples(std::vector<float>& v, const std::vector<int>& order,
+                    const std::vector<char>& chosen, int count)
+{
+    std::vector<float> out;
+    out.reserve(v.size());
+    auto append = [&](int i) { out.insert(out.end(), v.begin() + 3*i, v.begin() + 3*i + 3); };
+    for (int i : order) append(i);
+    for (int i = 0; i < count; ++i) if (!chosen[i]) append(i);
+    v.swap(out);
+}
+
+} // namespace
+
+void UniRigPredictor::frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
+                                              int count, int k, int pool)
+{
+    if (count <= 2 || k <= 1) return;
+    if (static_cast<int>(pts.size()) < count * 3) return;
+    if (pool <= 0 || pool > count) pool = count;
+    k = std::min(k, pool);
+
+    std::vector<char> chosen(static_cast<size_t>(count), 0);
+    const std::vector<int> order =
+        greedyFarthestPointOrder(pts, pool, k, farthestFromCentroid(pts, pool), chosen);
+    reorderTriples(pts, order, chosen, count);
+    if (static_cast<int>(nrm.size()) >= count * 3)
+        reorderTriples(nrm, order, chosen, count);   // normals travel with their points
 }
 
 int UniRigPredictor::sampleBudgetForMesh(int vertexCount, int requested)
@@ -586,12 +730,12 @@ QString UniRigPredictor::ensureModelBlocking()
     const QString enc = encoderModelPath();
     const QString dec = decoderModelPath();
     const QString emb = embedModelPath();
-    if (QFileInfo::exists(enc) && QFileInfo::exists(dec) && QFileInfo::exists(emb))
-        return enc;
-
-    // Offline / test guard — never hit the network when set.
-    if (!qEnvironmentVariableIsEmpty("QTMESH_UNIRIG_NO_DOWNLOAD"))
-        return {};
+    // Offline / test guard — never hit the network when set. Cached files are
+    // STILL digest-verified below (review on #1025: an offline user holding the
+    // exact corrupted file this fix targets must fall back, not trust it); the
+    // request simply carries no URL, so a mismatch deletes the file and fails
+    // instead of re-fetching.
+    const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_UNIRIG_NO_DOWNLOAD");
 
     // Resolve the download base URL (QSettings override → env → default HF repo).
     QString base;
@@ -606,60 +750,106 @@ QString UniRigPredictor::ensureModelBlocking()
     }
     if (base.isEmpty()) return {};
     if (!base.endsWith('/')) base += '/';
+    // NB: no ModelDownloader::instance() here. The GUI runs this on a detached
+    // worker (AutoRigController), and touching the singleton from there would
+    // create its QNetworkAccessManager/timer with affinity to a thread that
+    // exits right after inference (review). ModelFetch reaches the downloader
+    // only when a download is actually needed; a fully cached, verified set
+    // never does.
 
-    auto* dl = ModelDownloader::instance();
-    if (!dl) return {};
+    // #1025: digests are known only for the default hosting.
+    const bool defaultHosting = (base == QString::fromLatin1(kDefaultModelBaseUrl));
 
-    // Download one file, blocking via a local event loop (same pattern as
-    // AIAssistManager::ensureModelBlocking / RigNetPredictor), with a hard
-    // timeout so a stalled connection can't hang the synchronous rig call.
-    auto downloadOne = [&](const QString& fileName, const QString& dest,
-                           const QString& label) -> bool {
+    // Ensure one file — present-and-verified, or downloaded — blocking via
+    // ModelFetch with a hard timeout so a stalled connection can't hang the
+    // synchronous rig call. Every file goes through this even when it exists:
+    // with a digest, "exists" is not "usable" (a corrupted download of the
+    // encoder sat on disk producing NaN for months).
+    auto ensureOne = [&](const QString& fileName, const QString& dest,
+                         const QString& label) -> bool {
         QDir().mkpath(QFileInfo(dest).absolutePath());
-        const QString url = base + fileName;
-        QEventLoop loop;
-        bool ok = false, timedOut = false;
-        auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = true; loop.quit(); }
-            });
-        auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-            [&](const QString& name, const QString&) {
-                if (name == label) { ok = false; loop.quit(); }
-            });
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(&timeout, &QTimer::timeout, &loop,
-            [&]() { timedOut = true; loop.quit(); });
-        // 30 min — UniRig is large (~1.44 GB across the 3 files; the decoder
-        // alone is 1.2 GB), so a generous cap for slow links; a truly dead
-        // connection still can't hang the synchronous rig call forever.
-        timeout.start(1800000);
-        dl->startDownload(url, dest, label);
-        loop.exec();
-        QObject::disconnect(onDone);
-        QObject::disconnect(onErr);
-        if (timedOut) dl->cancelDownload();
-        return ok && !timedOut && QFileInfo::exists(dest);
+        ModelFetch::Request req;
+        req.url = noDownload ? QString() : base + fileName;   // empty URL = verify only
+        req.destination = dest;
+        req.label = label;
+        req.timeoutMs = 1800000;
+        if (defaultHosting) req.expectedSha256 = expectedSha256(fileName);
+        // #1037: one shared blocking wait — keeps the downloader's own error text
+        // and the synchronous-rejection guard every consumer used to lack.
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        if (fo.replacedCorrupt)
+            qWarning().noquote() << "UniRig:" << label << (fo.ok ? "was corrupt on disk and has been re-downloaded"
+                                                                  : "was corrupt on disk; re-download failed:") << (fo.ok ? "" : fo.error);
+        return fo.ok;
     };
 
-    if (!QFileInfo::exists(enc) &&
-        !downloadOne(QString::fromLatin1(kEncoderFile), enc,
-                     QString::fromLatin1(kEncoderLabel)))
+    if (!ensureOne(QString::fromLatin1(kEncoderFile), enc, QString::fromLatin1(kEncoderLabel)))
         return {};
-    if (!QFileInfo::exists(dec) &&
-        !downloadOne(QString::fromLatin1(kDecoderFile), dec,
-                     QString::fromLatin1(kDecoderLabel)))
+    if (!ensureOne(QString::fromLatin1(kDecoderFile), dec, QString::fromLatin1(kDecoderLabel)))
         return {};
-    if (!QFileInfo::exists(emb) &&
-        !downloadOne(QString::fromLatin1(kEmbedFile), emb,
-                     QString::fromLatin1(kEmbedLabel)))
+    if (!ensureOne(QString::fromLatin1(kEmbedFile), emb, QString::fromLatin1(kEmbedLabel)))
         return {};
 
     // ALL THREE must exist for success.
     return (QFileInfo::exists(enc) && QFileInfo::exists(dec)
             && QFileInfo::exists(emb)) ? enc : QString();
 #endif  // ENABLE_ONNX
+}
+
+// ---- Public entry + chooser: defined for EVERY build (review on #1048 — they
+// lived inside the ENABLE_ONNX branch and the default non-ONNX configuration
+// failed to link). Only the ONNX predict() body, the inference itself, is guarded.
+const UniRigPredictor::Result& UniRigPredictor::pickRicher(const Result& fps, const Result& random)
+{
+    if (fps.ok != random.ok) return fps.ok ? fps : random;
+    return random.joints.size() > fps.joints.size() ? random : fps;
+}
+
+UniRigPredictor::Options::QuerySampling UniRigPredictor::resolveQuerySampling(const Options& opts)
+{
+    // An explicit single ordering always wins — predictBoth() sets Fps/Random
+    // on its inner calls, and letting the env re-resolve those to Both would
+    // recurse without end (QTMESH_UNIRIG_QUERIES=both crashed in 1 s). The env
+    // therefore only narrows the default Both.
+    if (opts.querySampling != Options::QuerySampling::Both) return opts.querySampling;
+    const QByteArray env = qgetenv("QTMESH_UNIRIG_QUERIES").trimmed().toLower();
+    if (env == "fps")    return Options::QuerySampling::Fps;
+    if (env == "random") return Options::QuerySampling::Random;
+    return Options::QuerySampling::Both;
+}
+
+UniRigPredictor::Result UniRigPredictor::predictBoth(
+        const float* positions, int vertexCount,
+        const uint32_t* indices, int indexCount,
+        const QString& encoderModelPath,
+        const QString& decoderModelPath,
+        const QString& embedModelPath,
+        const Options& opts,
+        const ProgressFn& progress)
+{
+    // Both: the encoder's frozen query slots make the point ORDER part of the
+    // input, and no single ordering wins across categories (see Options).
+    // Cancellation (progress returned false → error "cancelled") ends the whole
+    // call: no second decode, and never "pick" a finished run over a cancel.
+    auto cancelled = [](const Result& r) { return !r.ok && r.error == QLatin1String("cancelled"); };
+    Options one = opts;
+    one.querySampling = Options::QuerySampling::Fps;
+    const Result fps = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
+    if (cancelled(fps)) return fps;
+    one.querySampling = Options::QuerySampling::Random;
+    const Result rnd = predict(positions, vertexCount, indices, indexCount, encoderModelPath,
+                               decoderModelPath, embedModelPath, one, progress);
+    if (cancelled(rnd)) return rnd;
+    const Result& winner = pickRicher(fps, rnd);
+    const Result& other  = (&winner == &fps) ? rnd : fps;
+    Result chosen = winner;
+    chosen.alternativeJoints = other.ok ? static_cast<int>(other.joints.size()) : -1;
+    if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
+        fprintf(stderr, "[unirig] query sampling: fps=%s(%zu joints) random=%s(%zu joints) -> %s\n",
+                fps.ok ? "ok" : "fail", fps.joints.size(), rnd.ok ? "ok" : "fail", rnd.joints.size(),
+                qPrintable(chosen.querySampling));
+    return chosen;
 }
 
 #ifndef ENABLE_ONNX
@@ -796,6 +986,14 @@ UniRigPredictor::Result UniRigPredictor::predict(
         const Options& opts,
         const ProgressFn& progress)
 {
+    // #1046: which points occupy the encoder's frozen query slots (see
+    // Options::QuerySampling). Both = run this function twice via predictBoth.
+    const Options::QuerySampling mode = resolveQuerySampling(opts);
+    if (mode == Options::QuerySampling::Both)
+        return predictBoth(positions, vertexCount, indices, indexCount, encoderModelPath,
+                           decoderModelPath, embedModelPath, opts, progress);
+    const bool fpsFrontLoad = (mode == Options::QuerySampling::Fps);
+
     if (!positions || vertexCount < 4)
         return failResult(QStringLiteral("UniRig: mesh has too few vertices."));
     if (!QFileInfo::exists(encoderModelPath))
@@ -850,6 +1048,21 @@ UniRigPredictor::Result UniRigPredictor::predict(
         sampleSurface(nverts, vertexCount, indices, indexCount, sampleBudget);
     if (cloud.count < 1)
         return failResult(QStringLiteral("UniRig: failed to sample mesh surface."));
+
+    // #1046: the encoder's query positions are frozen at the first 2048 slots
+    // (see frontLoadFarthestPoints). With fpsFrontLoad, a farthest-point sample
+    // over the WHOLE cloud sits there (upstream: fps over all 65536 points,
+    // ratio 1/4, deterministic start at inference) — thin limbs and tails
+    // included. Restricting the FPS pool to the first 4096/8192 points was
+    // measured and is worse on every mesh (rat 24→13, tree 64→23 collapsed
+    // onto a line), so there is no pool knob.
+    if (fpsFrontLoad) {
+        const auto t0 = std::chrono::steady_clock::now();
+        frontLoadFarthestPoints(cloud.pts, cloud.nrm, cloud.count, 2048);
+        if (qEnvironmentVariableIsSet("QTMESH_ONNX_DEBUG"))
+            fprintf(stderr, "[unirig] FPS front-load of %d points: %.0f ms\n", cloud.count,
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_unirig");
@@ -958,6 +1171,32 @@ UniRigPredictor::Result UniRigPredictor::predict(
         if (!latentData || numLatents <= 0 || hidden <= 0)
             return failResult(QStringLiteral(
                 "UniRig: encoder produced no latent prefix."));
+
+        // #1025: guard against a numerically broken encoder. The reporting
+        // machine's encoder.onnx emitted 100% NaN latents on every input —
+        // independent of mesh and execution provider — and the cause turned
+        // out to be a CORRUPTED LOCAL DOWNLOAD (a ~8.6 MB region differing
+        // from the hosted file, same size; two weight matrices in resblocks.2
+        // held NaN/±3e38), not the export: the hosted graph is finite and
+        // sane. ensureModelBlocking now verifies the published digests, so this
+        // should no longer trigger; it stays as the last line of defence
+        // because without it the failure surfaces far downstream as
+        // "constrained decode reached a dead state", which points at the FSM
+        // and sent one investigation chasing the tokenizer. Sample a prefix
+        // rather than the whole 1M-element tensor: a broken graph is NaN from
+        // the first value, so a short scan is enough and costs nothing.
+        {
+            const int64_t probe = std::min<int64_t>(numLatents * hidden, 1024);
+            int64_t bad = 0;
+            for (int64_t i = 0; i < probe; ++i)
+                if (!std::isfinite(latentData[i])) ++bad;
+            if (bad == probe)
+                return failResult(QStringLiteral(
+                    "UniRig: the encoder export is numerically broken — it "
+                    "produced non-finite (NaN) latents for every sampled value. "
+                    "This is a bad model export, not a mesh problem; see #1025. "
+                    "Re-export with torch-parity assertions."));
+        }
 
         // Own the latent bytes (encOuts is reused/invalidated as we proceed).
         latents.assign(
@@ -1300,7 +1539,8 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // up-axis rotation that toModelUp applied to the input. (The static
         // works in the model's axis convention by contract.)
         // =====================================================================
-        Result r = detokenize(tokens, half, centre);
+        Result r = detokenize(tokens, half, centre, opts.labeling);
+        r.querySampling = fpsFrontLoad ? QStringLiteral("fps") : QStringLiteral("random");
         if (!r.ok) return r;
         for (auto& jt : r.joints) {
             std::array<double,3> local = { (jt.pos[0] - centre[0]) / (half > 1e-12 ? half : 1.0),

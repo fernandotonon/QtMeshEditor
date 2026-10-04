@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Layouts
 import PropertiesPanel 1.0
@@ -65,7 +66,7 @@ Rectangle {
 
     // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
     // (replaces the old modal AutoRigDialog) ----
-    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
+    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic", "vehicle"]
     property int    rigTemplateIndex: 0
     property var    rigAlgos: ["pinocchio", "unirig"]
     property int    rigAlgoIndex: 0             // pinocchio (offline) default
@@ -212,11 +213,57 @@ Rectangle {
         }
     }
 
-    component RigSegments: Row {
+    // Inspector button factory, FILE scope so every section shares one look
+    // (raw QML — the Themed* wrappers blank this dynamically-loaded panel, so
+    // raw controls are styled with the PropertiesPanelController palette).
+    component InspectorButton: Rectangle {
+        id: ibRoot
+        property alias text: ibLabel.text
+        property bool clickEnabled: true
+        signal clicked()
+        width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
+        height: 26
+        radius: 3
+        opacity: clickEnabled ? 1.0 : 0.45
+        color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.headerColor
+        border.color: ibRoot.activeFocus
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.borderColor
+        border.width: ibRoot.activeFocus ? 2 : 1
+        // Keyboard accessibility: focusable via Tab, activatable via
+        // Space/Enter, and exposed to assistive tech.
+        activeFocusOnTab: clickEnabled
+        Accessible.role: Accessible.Button
+        Accessible.name: ibLabel.text
+        Keys.onSpacePressed: if (clickEnabled) clicked()
+        Keys.onReturnPressed: if (clickEnabled) clicked()
+        Keys.onEnterPressed: if (clickEnabled) clicked()
+        Text {
+            id: ibLabel
+            anchors.centerIn: parent
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            id: ibMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: ibRoot.clickEnabled
+            cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: ibRoot.clicked()
+        }
+    }
+
+    // A wrapping segmented picker: options flow onto new lines when the panel
+    // is narrower than the row (5 skeleton types no longer clip at the edge).
+    component RigSegments: Flow {
         id: rseg
         property var options: []
         property int index: 0
         signal picked(int i)
+        width: parent ? parent.width : implicitWidth
         spacing: 4
         Repeater {
             model: rseg.options
@@ -584,6 +631,35 @@ Rectangle {
                 Component.onCompleted: content = animationModeToolsComponent
             }
 
+            // ---- Retarget animation (#523) ----
+            CollapsibleSection {
+                title: "Retarget"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    RetargetController.canRetarget)
+                expanded: false
+
+                Component.onCompleted: content = retargetToolsComponent
+            }
+
+            // ---- Procedural generators (#524) ----
+            CollapsibleSection {
+                title: "Generators"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = generatorsComponent
+            }
+
+            // ---- Animation constraints (#525) ----
+            CollapsibleSection {
+                title: "Constraints"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = constraintsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -828,6 +904,20 @@ Rectangle {
                 Component.onCompleted: content = nodeAnimComponent
             }
 
+            // ---- Pose Library (#521 — own group) ----
+            // Named bone-TRS snapshots: save / apply (optionally blended over
+            // time) / blend two / mirror / apply-with-mask. Skinned meshes
+            // only — a pose IS a skeleton state.
+            CollapsibleSection {
+                title: "Pose Library"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    SkinWeightsController.hasSkinnedSelection)
+                expanded: false
+
+                Component.onCompleted: content = poseLibraryComponent
+            }
+
             // ---- Lighting (preset rigs + ambient/background, Slice E #487) ----
             CollapsibleSection {
                 title: "Lighting"
@@ -881,6 +971,19 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = partOpsSplitComponent
+            }
+
+            // ---- Lattice Deform (free-form deformation, Object mode) ----
+            // Stays visible while a session is open even if the selection
+            // changes, so Apply/Cancel are always reachable.
+            CollapsibleSection {
+                title: "Lattice Deform"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    LatticeController.hasSelection || LatticeController.sessionActive)
+                expanded: false
+
+                Component.onCompleted: content = latticeDeformComponent
             }
 
             // ---- Explode / Join Parts (#859/#862, Object mode) ----
@@ -1133,8 +1236,14 @@ Rectangle {
             padding: 8
             spacing: 6
 
-            property var animList: VATBakerController.availableAnimations
+            // #522 mode family: the mode picker drives which clips the
+            // Anim picker offers (skeletal clips vs vertex/morph clips).
+            property var modeList: VATBakerController.availableModes
+            property string modeId: modeList.length > 0 ? modeList[0] : "skeletal"
+            property var animList: VATBakerController.animationsForMode(modeId)
             property string animName: animList.length > 0 ? animList[0] : ""
+            property string encoding: "rgba16"
+            property string target: "agnostic"
             property int fps: 30
             property string outputDir: ""
             property string lastResultText: ""
@@ -1151,20 +1260,66 @@ Rectangle {
             // Anim / FPS / Out rows align with each other.
             readonly property int labelWidth: 44
 
+            function refreshAnimList() {
+                animList = VATBakerController.animationsForMode(modeId)
+                if (animList.indexOf(animName) < 0)
+                    animName = animList.length > 0 ? animList[0] : ""
+            }
+            onModeIdChanged: refreshAnimList()
+
             Connections {
                 target: VATBakerController
                 function onAvailableAnimationsChanged() {
-                    animToolsCol.animList = VATBakerController.availableAnimations
-                    if (animToolsCol.animList.indexOf(animToolsCol.animName) < 0) {
-                        animToolsCol.animName = animToolsCol.animList.length > 0
-                            ? animToolsCol.animList[0]
-                            : ""
-                    }
+                    animToolsCol.modeList = VATBakerController.availableModes
+                    if (animToolsCol.modeList.indexOf(animToolsCol.modeId) < 0)
+                        animToolsCol.modeId = animToolsCol.modeList.length > 0
+                            ? animToolsCol.modeList[0] : "skeletal"
+                    animToolsCol.refreshAnimList()
                 }
                 function onBakeFinished(ok, posTex, err) {
                     animToolsCol.lastOk = ok
                     animToolsCol.lastResultText = ok ? "✓ " + posTex : "✗ " + err
                 }
+            }
+
+            // Mode picker (#522): skeletal / rigid / mesh-anim / morph.
+            // Only the modes the selection can actually bake are
+            // listed (a static mesh with morph targets never shows
+            // "Skeletal"), so an impossible combination cannot be
+            // requested from the panel.
+            Row {
+                spacing: 6; width: parent.width - 16
+                visible: animToolsCol.modeList.length > 0
+
+                Text {
+                    text: "Mode:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: vatModeCombo
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: animToolsCol.modeList.map(function(m) { return VATBakerController.modeLabel(m) })
+                    currentIndex: Math.max(0, animToolsCol.modeList.indexOf(animToolsCol.modeId))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < animToolsCol.modeList.length)
+                            animToolsCol.modeId = animToolsCol.modeList[index]
+                    }
+                    enabled: !VATBakerController.isBaking && animToolsCol.modeList.length > 0
+                }
+            }
+            Text {
+                visible: animToolsCol.modeList.length === 0
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Nothing bakeable selected: VAT needs a skeletal clip, a vertex "
+                    + "cache (Alembic) or keyed morph weights on the selected mesh."
             }
 
             // Animation picker — use ThemedComboBox so the dropdown
@@ -1390,6 +1545,53 @@ Rectangle {
                 }
             }
 
+            // Encoding (#522): rgba8 / rgba16 / exr.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Enc:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["RGBA8 PNG (smallest)", "RGBA16 PNG (default)", "EXR float32 (lossless)"]
+                    currentIndex: Math.max(0, VATBakerController.encodingIds.indexOf(animToolsCol.encoding))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.encodingIds.length)
+                            animToolsCol.encoding = VATBakerController.encodingIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
+            // Target engine (#522): recorded in the sidecar; a
+            // non-agnostic target also ships that engine's shader.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Target:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Agnostic", "Unity", "Unreal", "Godot"]
+                    currentIndex: Math.max(0, VATBakerController.targetIds.indexOf(animToolsCol.target))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.targetIds.length)
+                            animToolsCol.target = VATBakerController.targetIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
             // Include-shader master toggle. Off by default — the bake
             // produces all of the data files unconditionally, and the
             // shader templates are an opt-in convenience: copy
@@ -1596,7 +1798,10 @@ Rectangle {
                             animToolsCol.fps,
                             animToolsCol.outputDir,
                             "",
-                            engines)
+                            engines,
+                            animToolsCol.modeId,
+                            animToolsCol.encoding,
+                            animToolsCol.target)
                     }
                 }
             }
@@ -1609,6 +1814,69 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.Wrap
                 width: parent.width - 16
+            }
+            // Non-fatal note (e.g. a rigid bake asked for a Unity/Unreal
+            // template that does not exist yet).
+            Text {
+                visible: VATBakerController.lastWarning !== ""
+                text: "⚠ " + VATBakerController.lastWarning
+                color: "#e0c060"
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
+            }
+        }
+    }
+
+    // ---- Retarget Tools (Animation mode, #523) ----
+    Component {
+        id: retargetToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Map a clip from one skeleton onto another (e.g. a Mixamo "
+                    + "animation onto your character): auto bone mapping, manual "
+                    + "overrides, side-by-side preview."
+            }
+
+            Rectangle {
+                id: retargetBtn
+                width: Math.min(parent.width - 16, retargetLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: retargetMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: retargetBtn.activeFocus ? PropertiesPanelController.highlightColor
+                                                      : PropertiesPanelController.borderColor
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Retarget Animation"
+                Keys.onSpacePressed: root.openRetargetDialog()
+                Keys.onReturnPressed: root.openRetargetDialog()
+                Text {
+                    id: retargetLabel
+                    anchors.centerIn: parent
+                    text: "Retarget Animation…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: retargetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openRetargetDialog()
+                }
             }
         }
     }
@@ -1696,49 +1964,6 @@ Rectangle {
             property int mgActiveIdx: -1
             property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
             property bool mgAiPending: false     // AI texture queued for onCompleted
-
-            // A small local button factory (raw QML — the Themed* wrappers blank
-            // this dynamically-loaded panel, so we style raw controls with the
-            // PropertiesPanelController palette to match the Inspector).
-            component InspectorButton: Rectangle {
-                id: ibRoot
-                property alias text: ibLabel.text
-                property bool clickEnabled: true
-                signal clicked()
-                width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
-                height: 26
-                radius: 3
-                opacity: clickEnabled ? 1.0 : 0.45
-                color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: ibRoot.activeFocus
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.borderColor
-                border.width: ibRoot.activeFocus ? 2 : 1
-                // Keyboard accessibility: focusable via Tab, activatable via
-                // Space/Enter, and exposed to assistive tech.
-                activeFocusOnTab: clickEnabled
-                Accessible.role: Accessible.Button
-                Accessible.name: ibLabel.text
-                Keys.onSpacePressed: if (clickEnabled) clicked()
-                Keys.onReturnPressed: if (clickEnabled) clicked()
-                Keys.onEnterPressed: if (clickEnabled) clicked()
-                Text {
-                    id: ibLabel
-                    anchors.centerIn: parent
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: ibMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: ibRoot.clickEnabled
-                    cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: ibRoot.clicked()
-                }
-            }
 
             // Inspector-styled CheckBox (flat 16px box + checkmark, palette
             // colors) — one factory for the pipeline-stage toggles below,
@@ -1876,7 +2101,180 @@ Rectangle {
                 onClicked: MeshGenController.selectImage()
             }
 
+            // — or generate the source image from a TEXT PROMPT (FLUX.2-klein
+            // via stable-diffusion.cpp). Shown when the build has SD support
+            // and a usable image model exists (or can be pointed at).
+            Text {
+                text: MeshGenController.selectedImagePath.length > 0
+                    ? "— or EDIT the loaded image with a prompt (FLUX.2):"
+                    : "— or generate the image from text:"
+                color: PropertiesPanelController.textColor
+                opacity: 0.7; font.pixelSize: 10
+            }
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                Rectangle {
+                    width: parent.width - imgGenBtn.width - 6; height: 24; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: imgGenPromptIn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    TextInput {
+                        id: imgGenPromptIn
+                        anchors.fill: parent
+                        anchors.leftMargin: 6; anchors.rightMargin: 6
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        clip: true; selectByMouse: true; activeFocusOnPress: true
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onPressed: function(mouse) {
+                                // WIDGET-level focus first: after the app window
+                                // deactivates, the QQuickWidget still thinks this
+                                // item has activeFocus, so forceActiveFocus alone
+                                // is a no-op while keys go to the viewport.
+                                PropertiesPanelController.focusPanel()
+                                imgGenPromptIn.forceActiveFocus()
+                                mouse.accepted = false
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: !imgGenPromptIn.text && !imgGenPromptIn.activeFocus
+                            text: MeshGenController.selectedImagePath.length > 0
+                                ? "e.g. give him golden armor"
+                                : "describe it — \"a capybara standing on grass\", not \"capybara\""
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.4; font.pixelSize: 11
+                        }
+                        onAccepted: imgGenBtn.run()
+                    }
+                }
+                Rectangle {
+                    id: imgGenBtn
+                    width: 88; height: 24; radius: 3
+                    property bool genBusy: false
+                    opacity: genBusy ? 0.5 : 1.0
+                    color: imgGenMa.pressed
+                        ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                        : imgGenMa.containsMouse
+                            ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                            : PropertiesPanelController.highlightColor
+                    function run() {
+                        if (genBusy || !imgGenPromptIn.text.trim()) return
+                        if (!MeshGenController.imageGenAvailable()) {
+                            imgGenStatusTxt.isError = true
+                            imgGenStatusTxt.text =
+                                "Download FLUX.2-klein-4B in AI Model Settings first."
+                            return
+                        }
+                        genBusy = true
+                        MeshGenController.generateSourceImage(imgGenPromptIn.text)
+                    }
+                    // With an image already selected the prompt EDITS it
+                    // (FLUX.2 kontext-style) instead of generating from
+                    // scratch — a user who typed "capybara" after a previous
+                    // run got their old subject nudged, not a capybara. Say
+                    // which one the click will do.
+                    Text { anchors.centerIn: parent
+                           text: imgGenBtn.genBusy
+                                 ? "…"
+                                 : (MeshGenController.selectedImagePath.length > 0
+                                    ? "Edit Image" : "Create Image")
+                           color: "white"; font.pixelSize: 10 }
+                    MouseArea { id: imgGenMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: imgGenBtn.run() }
+                }
+            }
+            // Edit mode is easy to miss (the placeholder only shows on an EMPTY
+            // field) and its failure is confusing: typing a new subject nudges
+            // the old image instead of generating that subject. Sibling of the
+            // Row, not a child — a Row lays out horizontally, so a full-width
+            // Text inside it would overflow and displace the input and button.
+            Text {
+                visible: MeshGenController.selectedImagePath.length > 0
+                text: "✎ Editing the loaded image — 🗑 it to create a new one"
+                color: PropertiesPanelController.textColor
+                opacity: 0.65; font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
+            }
+            TextEdit {
+                id: imgGenStatusTxt
+                width: parent.width - 16
+                visible: text.length > 0
+                property bool isError: false
+                color: isError ? "#e08080" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: TextEdit.WordWrap
+                text: ""
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
+            }
+            // Progress while the image generates: determinate once sampling
+            // ticks arrive, indeterminate sweep during the (long) model load.
+            Rectangle {
+                id: imgGenProgress
+                width: parent.width - 16; height: 6; radius: 3
+                visible: imgGenBtn.genBusy
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                property int step: 0
+                property int total: 0
+                onVisibleChanged: if (visible) { step = 0; total = 0 }
+                // Determinate fill
+                Rectangle {
+                    visible: imgGenProgress.total > 0
+                    x: 1; y: 1; height: parent.height - 2; radius: 2
+                    width: imgGenProgress.total > 0
+                        ? Math.max(4, (parent.width - 2)
+                                       * imgGenProgress.step / imgGenProgress.total)
+                        : 0
+                    color: PropertiesPanelController.highlightColor
+                }
+                // Indeterminate sweep (model loading — no ticks yet)
+                Rectangle {
+                    id: imgGenSweep
+                    visible: imgGenProgress.total === 0 && imgGenProgress.visible
+                    y: 1; height: parent.height - 2; width: parent.width / 4
+                    radius: 2
+                    color: PropertiesPanelController.highlightColor
+                    opacity: 0.7
+                    SequentialAnimation on x {
+                        running: imgGenSweep.visible
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1; to: imgGenProgress.width * 3 / 4 - 1
+                                          duration: 900; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: imgGenProgress.width * 3 / 4 - 1; to: 1
+                                          duration: 900; easing.type: Easing.InOutQuad }
+                    }
+                }
+            }
+            Connections {
+                target: MeshGenController
+                function onImageGenStatus(message, isError) {
+                    imgGenStatusTxt.isError = isError
+                    imgGenStatusTxt.text = message
+                    // Busy only while a load/generate is still pending: any
+                    // error, and the final "Image ready" line, end the run.
+                    imgGenBtn.genBusy = !isError
+                        && message.indexOf("ready") < 0
+                }
+                function onImageGenProgress(step, total) {
+                    imgGenProgress.step = step
+                    imgGenProgress.total = total
+                }
+            }
+
             // Preview of the selected image (shown once one is chosen).
+            // Click to open the full-size image in a viewer window.
             Rectangle {
                 width: parent.width - 16
                 height: visible ? 140 : 0
@@ -1893,6 +2291,105 @@ Rectangle {
                     smooth: true
                     cache: false
                 }
+                Text {
+                    anchors.right: parent.right; anchors.bottom: parent.bottom
+                    anchors.margins: 4
+                    text: "🔍"
+                    font.pixelSize: 12
+                    opacity: prevMa.containsMouse ? 1.0 : 0.5
+                }
+                MouseArea {
+                    id: prevMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: imageViewerWindow.open()
+                }
+                // Remove the image (back to generate-from-scratch).
+                Rectangle {
+                    anchors.right: parent.right; anchors.top: parent.top
+                    anchors.margins: 4
+                    width: 22; height: 22; radius: 3
+                    color: trashMa.containsMouse
+                        ? Qt.darker(PropertiesPanelController.headerColor, 1.1)
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    opacity: trashMa.containsMouse ? 1.0 : 0.7
+                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: trashMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: MeshGenController.clearSelectedImage()
+                    }
+                }
+            }
+            // Full-size viewer for the selected/generated source image.
+            Window {
+                id: imageViewerWindow
+                title: "Source Image"
+                flags: Qt.Dialog
+                color: PropertiesPanelController.panelColor
+                width: Math.min(1024, Screen.desktopAvailableWidth - 120)
+                height: Math.min(1024, Screen.desktopAvailableHeight - 120)
+                function open() {
+                    fullImage.source = ""   // force reload (same path, new pixels)
+                    fullImage.source = MeshGenController.selectedImageUrl
+                    show(); raise(); requestActivate()
+                }
+                Image {
+                    id: fullImage
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: false
+                }
+                // Declared before the controls so they are on top of it, and
+                // bounded above the button row so it cannot cover them.
+                MouseArea {
+                    anchors { left: parent.left; right: parent.right; top: parent.top
+                              bottom: saveRow.top }
+                    onDoubleClicked: imageViewerWindow.close()
+                }
+                // A generated image otherwise lives only in AppData under a
+                // timestamped name, so it is effectively thrown away after the
+                // mesh is built. Saving makes prompt-to-image useful on its own.
+                Row {
+                    id: saveRow
+                    // Bottom-RIGHT: the path label below is centred and full
+                    // width, so a centred button sat directly above it and
+                    // read as part of that label.
+                    anchors.bottom: sourcePathLabel.top
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.bottomMargin: 6
+                    spacing: 8
+                    Button {
+                        text: "Save Image As…"
+                        onClicked: MeshGenController.saveSelectedImageInteractive()
+                    }
+                }
+                Text {
+                    id: sourcePathLabel
+                    anchors.bottom: parent.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.margins: 4
+                    text: MeshGenController.selectedImagePath
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.6; font.pixelSize: 10
+                    elide: Text.ElideMiddle
+                    width: parent.width - 16
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                // Esc closes. The close-on-double-click MouseArea must not
+                // eat the button's clicks: `fullImage` fills the WHOLE window
+                // (anchors.fill: parent), so anchoring to it still covered the
+                // button row — and being declared last it sat on top, so Save
+                // never received a press. Stop it above the controls, and
+                // declare it BEFORE them so they win the overlap regardless.
+                Shortcut { sequence: "Esc"; onActivated: imageViewerWindow.close() }
             }
 
             // Auto-generated caption of the selected image (SmolVLM), computed
@@ -1963,16 +2460,27 @@ Rectangle {
                     // while the app runs is picked up on the next session /
                     // section reopen).
                     readonly property bool t2Ready: MeshGenController.trellis2Available()
-                    readonly property bool t2Selected: currentIndex === 0
-                    readonly property bool sgSelected: currentIndex === 2
+                    // Backend IDs, parallel to `model`. Everything keys off
+                    // these rather than a positional currentIndex — the list
+                    // previously hardcoded `currentIndex === 0/2` in 14 places,
+                    // so inserting an entry silently rewired all of them.
+                    readonly property var backendIds: ["trellis2", "pixal3d", "triposr", "triposg"]
+                    readonly property string backendId: backendIds[currentIndex]
+                    // Pixal3D rides the SAME trellis-cli runtime as TRELLIS.2,
+                    // so every trellis-only control applies to both.
+                    readonly property bool t2Selected: backendId === "trellis2"
+                                                    || backendId === "pixal3d"
+                    readonly property bool pxSelected: backendId === "pixal3d"
+                    readonly property bool sgSelected: backendId === "triposg"
                     model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
+                            "Pixal3D" + (t2Ready ? "" : " (needs runtime)"),
                             "TripoSR (fast, textured)",
                             "TripoSG (best geometry)"]
-                    currentIndex: t2Ready ? 0 : 1
+                    currentIndex: t2Ready ? 0 : 2
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
                     onCurrentIndexChanged: {
-                        if (currentIndex === 2)
+                        if (sgSelected)
                             mgQualityCombo.currentIndex = 0
                     }
                 }
@@ -2030,12 +2538,52 @@ Rectangle {
                     // "Maximum" still caps dense TRELLIS sources at ~150–300k
                     // for the bake (an uncapped raw dual-grid mesh is
                     // un-unwrappable); the raw source is preserved either way.
-                    model: ["Maximum detail (auto cap)", "Game Low (~10k tris)",
-                            "Game Medium (~25k tris)", "Game High (~50k tris)"]
-                    currentIndex: 2
-                    readonly property var triValues: [0, 10000, 25000, 50000]
-                    property int triValue: triValues[currentIndex]
+                    // Simple props (a pizza box, a mat, a crate) are wasteful
+                    // at 10k — the low tiers exist for them. The backend has
+                    // always accepted these (--target-tris takes 0..10M); only
+                    // this picker was capped. Verified on a 16k-tri source:
+                    // 1000 -> 1030 tris, 5000 -> 5034, 500 -> 824.
+                    //
+                    // 500 is the lowest HONEST tier: meshoptimizer locks UV and
+                    // material border edges, so asking for 100 and asking for
+                    // 500 both bottom out at the same ~824 tris (~460 on a
+                    // simple bench). A "100 tris" entry would promise a number
+                    // the simplifier cannot deliver, so it is deliberately
+                    // absent — the floor depends on the asset's seams, not on
+                    // the request.
+                    //
+                    // The entries come from GameReadyPresets.h (via the
+                    // controller) so this picker, `qtmesh generate3d
+                    // --list-game-presets` and MCP `game_preset` agree. The
+                    // Roblox entries are PLATFORM presets: a hard triangle
+                    // ceiling (4k accessory / 20k MeshPart — Roblox rejects
+                    // the upload past it, so the pass guarantees the count)
+                    // plus Roblox's 1024 px texture cap, which snaps the
+                    // Texture picker below.
+                    readonly property var presets: MeshGenController.gameReadyPresets()
+                    model: presets.map(function(p) { return p.label })
+                    currentIndex: MeshGenController.gameReadyDefaultIndex()
+                    readonly property var preset: presets[currentIndex]
+                    property string presetId: preset ? preset.id : ""
+                    property int triValue: preset ? preset.tris : 0
+                    property int maxTexture: preset ? preset.maxTexture : 0
+                    property string presetNote: preset ? preset.note : ""
+                    onCurrentIndexChanged: {
+                        // typeof guard: this can fire while the section is
+                        // still instantiating, before the Texture picker exists.
+                        if (maxTexture > 0 && typeof mgT2Tex !== "undefined")
+                            mgT2Tex.clampTo(maxTexture)
+                    }
                 }
+            }
+            Text {
+                // Platform-limit hint (Roblox presets only).
+                visible: mgT2Mesh.maxTexture > 0
+                text: "  " + mgT2Mesh.presetNote
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
             }
             Row {
                 spacing: 6
@@ -2050,10 +2598,57 @@ Rectangle {
                     id: mgT2Tex
                     width: 190
                     enabled: !MeshGenController.busy
-                    model: ["1024 px", "2048 px (default)", "4096 px"]
-                    currentIndex: 1
-                    readonly property var sizeValues: [1024, 2048, 4096]
+                    // 64..512 for simple props whose texture is a few flat
+                    // faces (a mat, a pizza box); 4096 for hero assets.
+                    // Backend range is 64..8192, so every entry here is valid.
+                    // NB xatlas treats this as a HINT, not a size: it only
+                    // seeds an estimated texelsPerUnit, so the atlas that
+                    // lands can differ (a 64 request measured 140x143).
+                    // Treat these as a budget, not a guarantee.
+                    model: ["64 px", "128 px", "256 px", "512 px", "1024 px",
+                            "2048 px (default)", "4096 px"]
+                    currentIndex: 5
+                    readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
                     property int sizeValue: sizeValues[currentIndex]
+                    // A platform preset (Roblox: 1024 px) caps the bake size:
+                    // snap to the largest entry within the cap, and keep it
+                    // there while the preset is active (the controller clamps
+                    // too, so this is feedback, not the only guard).
+                    function clampTo(maxPx) {
+                        if (sizeValue <= maxPx) return
+                        var best = 0
+                        for (var i = 0; i < sizeValues.length; ++i)
+                            if (sizeValues[i] <= maxPx) best = i
+                        currentIndex = best
+                    }
+                    onCurrentIndexChanged: if (mgT2Mesh.maxTexture > 0) clampTo(mgT2Mesh.maxTexture)
+                }
+            }
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Sampling"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgT2Super
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    // Subsamples per baked texel. The bake normally takes ONE
+                    // sample at each texel centre, so where a texel straddles
+                    // a colour boundary the result is whichever side the
+                    // centre happened to land on. 2x2 averages four positions
+                    // instead, which softens that speckle — at roughly 4x the
+                    // bake cost, so it is off by default and worth enabling
+                    // mainly on small textures, where each texel covers more
+                    // of the surface.
+                    model: ["1x (fast, default)", "2x2 (smoother, ~4x slower)"]
+                    currentIndex: 0
+                    readonly property var superValues: [1, 2]
+                    property int superValue: superValues[currentIndex]
                 }
             }
 
@@ -2096,6 +2691,16 @@ Rectangle {
                 id: mgRemoveBg
                 text: "Remove background"
                 checked: true
+            }
+            // #1016: matting tier. BiRefNet (1024²) cuts hair/fur far cleaner
+            // than U²-Net (320²) — measured ~3x fewer ambiguous edge pixels —
+            // but it is a ~930 MB download and several CPU-seconds, so it is
+            // opt-in. Only meaningful while background removal is on.
+            InspectorCheck {
+                id: mgBestMatte
+                text: "High-quality matte (BiRefNet, ~930 MB)"
+                checked: false
+                enabled: mgRemoveBg.checked || mgBackendCombo.t2Selected
             }
             InspectorCheck {
                 id: mgSmooth
@@ -2182,8 +2787,11 @@ Rectangle {
                     && MeshGenController.selectedImagePath.length > 0
                     && (!mgBackendCombo.t2Selected || mgBackendCombo.t2Ready)
                 onClicked: {
-                    var t2 = mgBackendCombo.currentIndex === 0   // TRELLIS.2
-                    var sg = mgBackendCombo.currentIndex === 2   // TripoSG
+                    // Value-based, not positional: t2 covers BOTH trellis-cli
+                    // families (TRELLIS.2 and Pixal3D), which share the sidecar
+                    // path and so emit the same progress stages.
+                    var t2 = mgBackendCombo.t2Selected
+                    var sg = mgBackendCombo.sgSelected
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     // The worker only posts a "background" stage on the TripoSR
                     // path; TripoSG/TRELLIS.2 remove the bg inside their
@@ -2251,14 +2859,20 @@ Rectangle {
                         "bake_texture": buildBake,
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
-                        "backend": t2 ? "trellis2" : (sg ? "triposg" : "triposr"),
+                        "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
-                        "target_tris": mgT2Mesh.triValue
+                        // The preset id carries the strict-ceiling + texture
+                        // cap of the Roblox entries; target_tris stays for
+                        // the plain budgets (and older callers).
+                        "target_tris": mgT2Mesh.triValue,
+                        "game_preset": mgT2Mesh.presetId
                     }
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
+                        genOptions["texture_supersample"] = mgT2Super.superValue
                     }
+                    genOptions["matting"] = mgBestMatte.checked ? "best" : "fast"
                     MeshGenController.generateSelected(
                         mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
                         genOptions)
@@ -2332,14 +2946,29 @@ Rectangle {
                 }
             }
 
-            Text {
+            // A read-only TextEdit rather than a Text, so the message can be
+            // SELECTED and COPIED. Generation errors are often the backend's
+            // own multi-line output (a rejected argument makes trellis-cli
+            // print its whole usage), and a user reporting one had no way to
+            // get the text out of the panel except by retyping it from a
+            // screenshot. Read-only + no cursor keeps it looking like a label.
+            TextEdit {
                 id: mgStatus
                 width: parent.width - 16
-                wrapMode: Text.Wrap
+                wrapMode: TextEdit.Wrap
                 visible: text.length > 0
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: ""
+                readOnly: true
+                selectByMouse: true
+                // Selection needs focus, but taking it on load would steal it
+                // from the panel's inputs, so only a click focuses this.
+                activeFocusOnPress: true
+                cursorVisible: false
+                // Ctrl/Cmd+C works via the built-in TextEdit shortcut once
+                // there is a selection; Cmd+A selects the whole message.
+                persistentSelection: true
             }
 
             // Cancel (only while busy)
@@ -3380,24 +4009,42 @@ Rectangle {
                         + "skip them for a plain proportional template."
                 }
 
-                // ---- Template-only controls (hidden when UniRig is selected) ----
-                // Skeleton type — used by Pinocchio (and as the UniRig fallback).
+                // Skeleton type — the template Pinocchio embeds, and for UniRig
+                // (#1013) the CATEGORY HINT: biped forces humanoid joint names,
+                // quadruped/generic use generic names, and vehicle skips the
+                // model entirely for the geometric chassis/axle/wheel rig (UniRig
+                // rigs a car as a human lying along it). It used to be hidden in
+                // UniRig mode, which left the hint stuck on "humanoid".
                 Text {
-                    visible: !rigIdle.isUnirig
-                    text: "Skeleton type"
+                    text: rigIdle.isUnirig ? "Skeleton type (category hint)" : "Skeleton type"
                     color: PropertiesPanelController.textColor
                     opacity: 0.8
                     font.pixelSize: 10
                 }
                 Flow {
                     width: parent.width
-                    visible: !rigIdle.isUnirig
                     spacing: 4
                     RigSegments {
                         options: root.rigTemplates
                         index: root.rigTemplateIndex
                         onPicked: function(i) { root.rigTemplateIndex = i }
                     }
+                }
+                Text {
+                    width: parent.width
+                    visible: rigIdle.isUnirig
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 9
+                    text: root.rigTemplates[root.rigTemplateIndex] === "vehicle"
+                        ? "Vehicle: the model is skipped — cars come out of UniRig as a lying human. "
+                          + "A geometric Chassis / axles / 4-wheel rig is used and bound rigidly (one bone per vertex)."
+                        : (root.rigTemplates[root.rigTemplateIndex] === "biped"
+                            ? "Biped: humanoid joint names are forced on the predicted skeleton."
+                            : (root.rigTemplates[root.rigTemplateIndex] === "humanoid"
+                                ? "Humanoid: joints get humanoid names only when the predicted skeleton reads as one."
+                                : "Generic bone names (root, bone_01, …) — nothing is assumed about the anatomy."))
                 }
 
                 Flow {
@@ -4939,6 +5586,31 @@ Rectangle {
             property string maskOverlayUri: TexturePaintController.maskOverlayDataUri
             property bool hasMask: TexturePaintController.hasSelectionMask
             property int maskCount: TexturePaintController.selectedPixelCount
+            // #1017: last inpaint outcome. The model download alone can take
+            // minutes, so a silent button would read as "nothing happened".
+            property string inpaintStatus: ""
+            function runInpaint() {
+                texPaintCol.inpaintStatus = TexturePaintController.inpaintModelPresent()
+                        ? "Inpainting\u2026"
+                        : "Downloading model (~200 MB)\u2026"
+                // Let the label paint before the blocking call (model download
+                // + inference both run on this thread).
+                Qt.callLater(function() {
+                    var n = TexturePaintController.inpaintMaskPixels()
+                    if (n > 0)
+                        texPaintCol.inpaintStatus = "Inpainted " + n + " px"
+                    else if (n === 0)
+                        texPaintCol.inpaintStatus = "Nothing to inpaint"
+                    else if (n === -2)
+                        texPaintCol.inpaintStatus = TexturePaintController.inpaintAvailable()
+                            ? "Inpaint model unavailable (offline?)"
+                            : "Inpainting needs an ONNX build"
+                    else if (n === -3)
+                        texPaintCol.inpaintStatus = "Inpainting failed"
+                    else
+                        texPaintCol.inpaintStatus = "Select a region first"
+                })
+            }
             property real smartTolerance: TexturePaintController.smartSelectTolerance
             property int layerCount: TexturePaintController.layerCount
             property int activeLayerIndex: TexturePaintController.activeLayerIndex
@@ -5168,6 +5840,7 @@ Rectangle {
                             { label: "Fill FG",   action: "fillFG",   needsMask: true,  hint: "Replace selection with foreground color" },
                             { label: "Fill BG",   action: "fillBG",   needsMask: true,  hint: "Replace selection with background color" },
                             { label: "Delete",    action: "delete",   needsMask: true,  hint: "Clear selection to transparent" },
+                            { label: "Inpaint",   action: "inpaint",  needsMask: true,  needsInpaint: true, hint: "AI-fill the selection from its surroundings (LaMa; downloads ~200 MB on first use)" },
                             { label: "Invert",    action: "invert",   needsMask: false, hint: "Invert the selection" },
                             { label: "All",       action: "all",      needsMask: false, hint: "Select every pixel" },
                             { label: "None",      action: "none",     needsMask: true,  hint: "Clear the selection" }
@@ -5177,6 +5850,10 @@ Rectangle {
                             color: actionMa.containsMouse
                                 ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                                 : PropertiesPanelController.headerColor
+                            // A button that can only ever report "needs an
+                            // ONNX build" is worse than no button.
+                            visible: !modelData.needsInpaint
+                                     || TexturePaintController.inpaintAvailable()
                             opacity: (modelData.needsMask && !texPaintCol.hasMask) ? 0.45 : 1.0
                             border.color: PropertiesPanelController.borderColor; border.width: 1
                             Text {
@@ -5201,6 +5878,8 @@ Rectangle {
                                         TexturePaintController.fillMaskWithBG()
                                     else if (modelData.action === "delete")
                                         TexturePaintController.deleteMaskPixels()
+                                    else if (modelData.action === "inpaint")
+                                        texPaintCol.runInpaint()
                                     else if (modelData.action === "invert")
                                         TexturePaintController.invertSelectionMask()
                                     else if (modelData.action === "all")
@@ -5211,6 +5890,16 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // #1017 inpaint outcome (blank until the button is used).
+                Text {
+                    width: parent.width
+                    visible: texPaintCol.inpaintStatus !== ""
+                    text: texPaintCol.inpaintStatus
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
                 }
             }
 
@@ -5290,7 +5979,37 @@ Rectangle {
                         anchors.fill: parent
                         enabled: texPaintCol.hasSession
                         cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Bake this channel into the model's own "
+                            + "texture slot (stays in the editor)."
+                        hoverEnabled: true
                         onClicked: TexturePaintController.bakeChannel(texPaintCol.activeChannel)
+                    }
+                }
+                // Slice I (#552): bake ALL painted channels out to disk as an
+                // engine texture set. Distinct from the per-channel Bake above,
+                // which rebinds inside the editor rather than exporting.
+                Rectangle {
+                    width: 92; height: 22; radius: 4
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    color: PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent; text: "Bake set…"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: texPaintCol.hasSession
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Export every painted channel as a PBR "
+                            + "texture set for Unity / Unreal / Godot / glTF."
+                        onClicked: root.openPaintBakeDialog()
                     }
                 }
             }
@@ -7658,6 +8377,218 @@ Rectangle {
     // Parts") into independent scene nodes for inspection/editing, and join a
     // multi-selection of part nodes back into one fused mesh (baking their
     // world transforms into vertices). Both undoable (#859/#862, Object mode).
+    // ---- Lattice Deform section body ----
+    // Blender-style lattice modifier: a grid of control points boxes the mesh;
+    // dragging points in the viewport bends the enclosed vertices live. Apply
+    // bakes as one undo step; Cancel restores the mesh.
+    Component {
+        id: latticeDeformComponent
+
+        Column {
+            id: latticeContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            readonly property bool active: LatticeController.sessionActive
+
+            // Inspector-styled integer stepper (the stock SpinBox renders in
+            // the default Qt Quick style and clashes with the palette).
+            component LatticeStepper: Row {
+                id: lsRoot
+                property string label: ""
+                property int value: 2
+                property int from: 2
+                property int to: 16
+                signal modified(int v)
+                spacing: 0
+                Text {
+                    text: lsRoot.label
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    width: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Rectangle {
+                    width: 18; height: 22; radius: 3
+                    color: lsDownMa.containsMouse && lsRoot.value > lsRoot.from
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: lsRoot.value > lsRoot.from ? 1.0 : 0.45
+                    Text { anchors.centerIn: parent; text: "−"; color: PropertiesPanelController.textColor; font.pixelSize: 12 }
+                    MouseArea {
+                        id: lsDownMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: if (lsRoot.value > lsRoot.from) lsRoot.modified(lsRoot.value - 1)
+                    }
+                }
+                Rectangle {
+                    width: 26; height: 22
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: lsRoot.value
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                }
+                Rectangle {
+                    width: 18; height: 22; radius: 3
+                    color: lsUpMa.containsMouse && lsRoot.value < lsRoot.to
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: lsRoot.value < lsRoot.to ? 1.0 : 0.45
+                    Text { anchors.centerIn: parent; text: "+"; color: PropertiesPanelController.textColor; font.pixelSize: 12 }
+                    MouseArea {
+                        id: lsUpMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: if (lsRoot.value < lsRoot.to) lsRoot.modified(lsRoot.value + 1)
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: latticeContent.active
+                    ? "Deforming: " + LatticeController.entityName
+                    : "Box the selected mesh with a grid of control points and drag them to bend it."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                opacity: 0.85
+            }
+
+            // --- Resolution X / Y / Z ---
+            Text {
+                text: "Resolution"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Flow {
+                width: parent.width - 16
+                spacing: 10
+                LatticeStepper {
+                    label: "X"
+                    value: LatticeController.resolutionX
+                    onModified: function(v) { LatticeController.resolutionX = v }
+                }
+                LatticeStepper {
+                    label: "Y"
+                    value: LatticeController.resolutionY
+                    onModified: function(v) { LatticeController.resolutionY = v }
+                }
+                LatticeStepper {
+                    label: "Z"
+                    value: LatticeController.resolutionZ
+                    onModified: function(v) { LatticeController.resolutionZ = v }
+                }
+            }
+            Text {
+                visible: latticeContent.active
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: "Changing the resolution rebuilds the cage at rest (the current bend is dropped)."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.6
+            }
+
+            // --- Interpolation ---
+            Text {
+                text: "Interpolation"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            RigSegments {
+                width: parent.width - 16
+                options: ["Linear", "Smooth", "Bézier"]
+                index: LatticeController.interpolation
+                onPicked: function(i) { LatticeController.interpolation = i }
+            }
+
+            // --- Add lattice (idle) ---
+            InspectorButton {
+                visible: !latticeContent.active
+                text: "Add Lattice"
+                clickEnabled: LatticeController.hasSelection
+                onClicked: LatticeController.beginSession()
+            }
+
+            // --- Session controls ---
+            Column {
+                visible: latticeContent.active
+                width: parent.width - 16
+                spacing: 6
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: LatticeController.selectedPointCount + " / " + LatticeController.pointCount
+                          + " control points selected · drag on empty space to box-select · Shift adds · Ctrl+A all"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.7
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    InspectorButton { text: "Select All"; onClicked: LatticeController.selectAllPoints() }
+                    InspectorButton {
+                        text: "Deselect"
+                        clickEnabled: LatticeController.selectedPointCount > 0
+                        onClicked: LatticeController.clearPointSelection()
+                    }
+                    InspectorButton {
+                        text: "Reset Points"
+                        clickEnabled: LatticeController.isDeformed
+                        onClicked: LatticeController.resetPoints()
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    InspectorButton { text: "Save Lattice…"; onClicked: LatticeController.requestSaveDialog() }
+                    InspectorButton { text: "Load Lattice…"; onClicked: LatticeController.requestLoadDialog() }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    InspectorButton { text: "Apply  (Enter)"; onClicked: LatticeController.applySession() }
+                    InspectorButton { text: "Cancel  (Esc)"; onClicked: LatticeController.cancelSession() }
+                }
+            }
+
+            TextEdit {
+                width: parent.width - 16
+                wrapMode: TextEdit.WordWrap
+                visible: LatticeController.statusText.length > 0
+                text: LatticeController.statusText
+                color: LatticeController.statusIsError ? "#e06060" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: LatticeController.statusIsError ? 1.0 : 0.7
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
+            }
+        }
+    }
+
     Component {
         id: partOpsExplodeJoinComponent
 
@@ -9490,6 +10421,24 @@ Rectangle {
         }
     }
 
+    // Paint v2 Slice I (#552): bake painted layers to engine deliverables.
+    // Same lazy-load pattern as the dialogs above.
+    Loader {
+        id: paintBakeLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/PaintBakeDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openPaintBakeDialog() {
+        if (!paintBakeLoader.active) {
+            paintBakeLoader.active = true
+        } else if (paintBakeLoader.item) {
+            paintBakeLoader.item.open()
+        }
+    }
+
     // Phase 6 slice E2: Apply Atlas dialog is launched from inside the
     // Pack Atlas dialog (Atlas → "Apply to Mesh…") to avoid taking up
     // toolbar space for a niche follow-up tool.
@@ -9906,6 +10855,27 @@ Rectangle {
         onStatusChanged: {
             if (status === Loader.Error)
                 console.warn("IsometricSpritesDialog failed to load")
+        }
+    }
+    Loader {
+        id: retargetLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/RetargetAnimationDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+        onStatusChanged: {
+            if (status === Loader.Error)
+                console.warn("RetargetAnimationDialog failed to load")
+        }
+    }
+    function openRetargetDialog() {
+        if (!retargetLoader.active) {
+            retargetLoader.active = true
+        } else if (retargetLoader.item) {
+            retargetLoader.item.open()
+        } else if (retargetLoader.status === Loader.Error) {
+            retargetLoader.active = false
+            retargetLoader.active = true
         }
     }
     function openIsometricSpritesDialog() {
@@ -10480,6 +11450,28 @@ Rectangle {
                 }
             }
 
+            // Weld Duplicate Vertices — merges byte-identical co-located
+            // vertices (index remap; UV seams kept) and unifies skin weights
+            // across seam twins so animation can't tear the mesh apart.
+            // Undoable. Shown when validation found something to weld.
+            Rectangle {
+                width: parent.width - 16; height: 28; radius: 3
+                // `validated` too: the weld flag reflects the LAST validation,
+                // so without it the button would survive a selection change
+                // and weld a mesh that was never analyzed.
+                visible: MeshValidator.validated && MeshValidator.hasWeldableVertices
+                color: weldMouse.pressed ? Qt.darker("#50b070", 1.2)
+                     : weldMouse.containsMouse ? Qt.lighter("#50b070", 1.2)
+                     : "#50b070"
+                Text { anchors.centerIn: parent
+                       text: "Weld Duplicate Vertices (fix animation tearing)"
+                       color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: weldMouse; anchors.fill: parent; hoverEnabled: true
+                    onClicked: MeshValidator.weldDuplicateVertices()
+                }
+            }
+
             // Fix feedback
             Text {
                 id: fixFeedback
@@ -10525,6 +11517,36 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/NodeAnimationPanel.qml"
+        }
+    }
+
+    // ---- Procedural generators content (#524) ----
+    Component {
+        id: generatorsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/GeneratorsPanel.qml"
+        }
+    }
+
+    // ---- Animation constraints content (#525) ----
+    Component {
+        id: constraintsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/ConstraintsPanel.qml"
+        }
+    }
+
+    // ---- Pose Library Content (#521, own group) ----
+    Component {
+        id: poseLibraryComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/PoseLibraryPanel.qml"
         }
     }
 
@@ -10591,6 +11613,13 @@ Rectangle {
                 target: NodeAnimationManager
                 function onClipsChanged() { refreshAnimData() }
                 function onEditingClipChanged() { refreshAnimData() }
+            }
+            // Procedural generators (#524) write into clips — a node clip they
+            // create (default "Generators") or the morph weight clip — so the
+            // list must follow every add / edit / bake / remove.
+            Connections {
+                target: AnimGeneratorManager
+                function onGeneratorsChanged() { refreshAnimData() }
             }
             // #838: the animation picker applied a clip. Handle it HERE (in the
             // animation component scope) so lastGeneratedAnim / setArmSpaceTarget
@@ -10672,6 +11701,8 @@ Rectangle {
                             anchors.fill: parent
                             cursorShape: Qt.IBeamCursor
                             onPressed: function(mouse) {
+                                // Widget-level focus first (see imgGenPromptIn).
+                                PropertiesPanelController.focusPanel()
                                 genPromptIn.forceActiveFocus()
                                 mouse.accepted = false
                             }
@@ -10870,12 +11901,18 @@ Rectangle {
                 color: PropertiesPanelController.textColor; opacity: 0.5
                 font.pixelSize: 9
             }
-            Text {
+            TextEdit {
                 id: genStatus
                 property bool isError: false
                 visible: text.length > 0
-                width: parent.width - 16; wrapMode: Text.Wrap; font.pixelSize: 9; opacity: 0.85
+                width: parent.width - 16; wrapMode: TextEdit.Wrap; font.pixelSize: 9; opacity: 0.85
                 color: isError ? "#e06c6c" : PropertiesPanelController.textColor
+                // Selectable so a failure message can be COPIED — see mgStatus.
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
             }
             Connections {
                 target: AnimationControlController
@@ -11726,6 +12763,121 @@ Rectangle {
                               + "mesh and attach the 52 ARKit shapes. Humanoid faces "
                               + "only; a poor fit is rejected."
                             : "Select a face mesh first."
+                    }
+                }
+
+                // ── Lipsync from audio (Audio2Face, #1019) ──────────────────
+                // Speech in, ARKit blendshape animation out. Needs the ARKit
+                // targets above, so it sits directly beneath them: rig the
+                // face, then drive it. Heavy — worker thread via
+                // LipsyncController, with progress and cancel.
+                Rectangle {
+                    id: lipsyncBtn
+                    width: parent.width
+                    height: 24
+                    radius: 3
+                    visible: LipsyncController.available
+                    property bool canRun: LipsyncController.hasRiggableSelection
+                                          && !LipsyncController.busy
+                    opacity: canRun ? 1.0 : 0.5
+                    color: lipsyncMa.containsMouse && canRun
+                           ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                           : PropertiesPanelController.highlightColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text {
+                        anchors.centerIn: parent
+                        text: LipsyncController.busy
+                              ? (LipsyncController.status !== ""
+                                 ? LipsyncController.status : "Working…")
+                              : "🎙 Lipsync from Audio (AI)…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: lipsyncMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: lipsyncBtn.canRun
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: LipsyncController.browseForAudio()
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: LipsyncController.hasRiggableSelection
+                            ? "Pick a WAV and generate ARKit blendshape animation "
+                              + "from the speech in it. Writes a morph-weight clip "
+                              + "you can play on the timeline."
+                            : "Select a mesh that has ARKit morph targets first "
+                              + "(use Add ARKit Blendshapes above)."
+                    }
+                }
+
+                // Progress + cancel while a take is solving. The first run also
+                // downloads ~320 MB of model data, which is why the status line
+                // distinguishes loading from solving.
+                RowLayout {
+                    width: parent.width
+                    visible: LipsyncController.busy
+                    spacing: 4
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 4
+                        radius: 2
+                        color: PropertiesPanelController.controlBgColor
+                        Rectangle {
+                            height: parent.height
+                            radius: 2
+                            color: PropertiesPanelController.highlightColor
+                            width: LipsyncController.progressTotal > 0
+                                   ? parent.width * (LipsyncController.progress
+                                                     / LipsyncController.progressTotal)
+                                   : 0
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 46
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: lipsyncCancelMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Cancel"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: lipsyncCancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LipsyncController.cancel()
+                        }
+                    }
+                }
+
+                // Result of the last take. Kept in the panel rather than a
+                // dialog so it does not interrupt, and so the channel count is
+                // still readable while checking the animation.
+                Text {
+                    id: lipsyncResult
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    visible: text !== "" && !LipsyncController.busy
+                    font.pixelSize: 9
+                    property bool wasOk: true
+                    color: wasOk
+                           ? Qt.rgba(PropertiesPanelController.textColor.r,
+                                     PropertiesPanelController.textColor.g,
+                                     PropertiesPanelController.textColor.b, 0.75)
+                           : "#e06c6c"
+                    Connections {
+                        target: LipsyncController
+                        function onFinished(ok, message) {
+                            lipsyncResult.wasOk = ok;
+                            lipsyncResult.text = message;
+                        }
                     }
                 }
 

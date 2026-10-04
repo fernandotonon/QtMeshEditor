@@ -12,7 +12,9 @@ The MIT License
 #define POSE_LIBRARY_COMMANDS_H
 
 #include <QHash>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QUndoCommand>
 
 #include <OgreQuaternion.h>
@@ -105,6 +107,97 @@ private:
     // redo is a no-op and undo MUST also be a no-op — otherwise
     // we'd clobber user edits made after the failed apply with the
     // stale `mPreApply` snapshot (Codex P1 on PR #595).
+    bool mRedoApplied = false;
+};
+
+// ApplyPoseMaskedCommand: like ApplyPoseCommand but only the bones
+// named in the mask are written. Undo restores the pre-apply TRS of
+// exactly those bones, so bones the mask excluded are never touched
+// on either leg — that's the point of the feature.
+class ApplyPoseMaskedCommand : public QUndoCommand
+{
+public:
+    ApplyPoseMaskedCommand(Ogre::Entity* entity,
+                           const QString& name,
+                           const QStringList& boneNames,
+                           QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    Ogre::Entity* mEntity = nullptr;
+    QString mName;
+    QSet<QString> mMask;
+    // Pre-apply TRS for the MASKED bones only.
+    PoseLibSnapshot mPreApply;
+    bool mRedoApplied = false;
+};
+
+// ApplyPoseBlendedCommand: starts a time-blended transition toward
+// the saved pose. Undo cancels any in-flight blend and restores the
+// pre-blend bone TRS, so Ctrl+Z mid-transition lands back where the
+// author started rather than at a random point along the curve.
+class ApplyPoseBlendedCommand : public QUndoCommand
+{
+public:
+    ApplyPoseBlendedCommand(Ogre::Entity* entity,
+                            const QString& name,
+                            float durationSeconds,
+                            QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    Ogre::Entity* mEntity = nullptr;
+    QString mName;
+    float mDuration = 0.0f;
+    PoseLibSnapshot mPreApply;
+    bool mRedoApplied = false;
+};
+
+// MirrorPoseCommand: redo writes the mirrored pose under `dstName`.
+// Undo removes it (pure-add) or restores the prior content
+// (overwrite) — the same two-case shape as SavePoseCommand.
+class MirrorPoseCommand : public QUndoCommand
+{
+public:
+    MirrorPoseCommand(Ogre::Entity* entity,
+                      const QString& srcName,
+                      const QString& dstName,
+                      QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    Ogre::Entity* mEntity = nullptr;
+    QString mSrcName;
+    QString mDstName;
+    // Prior content of `dstName`, when we're overwriting one.
+    std::optional<PoseLibSnapshot> mPriorSnapshot;
+    bool mRedoApplied = false;
+};
+
+// BlendPosesCommand: redo writes the A/B blend under `dstName`.
+// Same undo shape as MirrorPoseCommand.
+class BlendPosesCommand : public QUndoCommand
+{
+public:
+    BlendPosesCommand(Ogre::Entity* entity,
+                      const QString& aName,
+                      const QString& bName,
+                      float weight,
+                      const QString& dstName,
+                      QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    Ogre::Entity* mEntity = nullptr;
+    QString mAName;
+    QString mBName;
+    float mWeight = 0.5f;
+    QString mDstName;
+    std::optional<PoseLibSnapshot> mPriorSnapshot;
     bool mRedoApplied = false;
 };
 

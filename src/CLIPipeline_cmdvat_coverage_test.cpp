@@ -215,3 +215,47 @@ TEST(CLIPipeline_cmdVatCoverageTest, ValidNumericArgsMissingFileReturns1)
                   "--fps", "24", "--bake-precision", "32", "--emit-uv2", "2"});
     EXPECT_EQ(1, CLIPipeline::cmdVat(args.argc(), args.argv()));
 }
+
+// ---------------------------------------------------------------------------
+// #522 — --mode / --encoding / --target argument gates. All return 2 from
+// the parser, before any Ogre init.
+// ---------------------------------------------------------------------------
+TEST(CLIPipeline_cmdVatCoverageTest, UnknownModeReturns2)
+{
+    VatArgv args({"qtmesh", "vat", "model.fbx", "--anim", "Walk", "--mode", "bogus"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdVatCoverageTest, ModeWithoutValueReturns2)
+{
+    VatArgv args({"qtmesh", "vat", "model.fbx", "--anim", "Walk", "--mode"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdVatCoverageTest, UnknownEncodingReturns2)
+{
+    VatArgv args({"qtmesh", "vat", "model.fbx", "--anim", "Walk", "--encoding", "jpeg"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdVatCoverageTest, UnknownTargetReturns2)
+{
+    VatArgv args({"qtmesh", "vat", "model.fbx", "--anim", "Walk", "--target", "blender"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+// Morph mode defaults --anim to the editor's weight clip, so the
+// missing-anim gate must NOT fire; the next gate (file not found → 1)
+// does instead.
+TEST(CLIPipeline_cmdVatCoverageTest, MorphModeDefaultsAnimSoMissingFileIsNextGate)
+{
+    VatArgv args({"qtmesh", "vat", "/nonexistent/dir/model.glb", "--mode", "morph"});
+    EXPECT_EQ(1, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+// Skeletal (default) mode still requires --anim.
+TEST(CLIPipeline_cmdVatCoverageTest, SkeletalModeStillRequiresAnim)
+{
+    VatArgv args({"qtmesh", "vat", "/nonexistent/dir/model.glb", "--mode", "skeletal"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}

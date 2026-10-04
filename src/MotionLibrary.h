@@ -30,6 +30,16 @@ public:
     struct Clip {
         QString action;                 // "walk", "run", "jump", …
         QString source;                 // provenance, e.g. "CMU 02_01"
+        // Character category this clip's MOTION STYLE belongs to. The library
+        // mixes ordinary human performance with undead/monster performance,
+        // and they share action names: 6 of 13 "walk" takes and 9 of 12
+        // "attack" takes were zombie clips, so asking for a walk had a ~46%
+        // chance of returning a Half-Life zombie shamble. Filtering on this
+        // keeps a plain request human unless the prompt asks otherwise.
+        // Values: "human" (default), "undead", "creature". Clips from
+        // libraries written before the field carry "" and are treated as
+        // human, which is what they were implicitly assumed to be.
+        QString category;
         int frames = 0;
         int fps = 30;
         // quats[frame][joint] = (x,y,z,w) unit quaternion, joint in canonical
@@ -80,6 +90,16 @@ public:
         /// Curation score 0..1 from the library builder (#855) — take
         /// selection samples proportionally to quality². Absent → 1.0.
         float quality = 1.0f;
+        /// #1009 loop metadata. `loopStart`/`loopEnd` bound the sub-range that
+        /// repeats most cleanly — the frame pair with the smallest canonical
+        /// pose distance, so splicing end→start does not pop. Computed at parse
+        /// time when the library JSON does not supply them (older libraries),
+        /// or read from `loop_start`/`loop_end`/`loopable` when it does.
+        /// `loopable` is false when even the best pair is too far apart for a
+        /// seamless repeat (a one-shot action like death or pickup).
+        bool loopable = false;
+        int loopStart = 0;
+        int loopEnd = 0;         ///< inclusive; 0 when the clip is too short
     };
 
     MotionLibrary() = default;
@@ -121,11 +141,63 @@ public:
     // map. Returns the clip index, or -1 if nothing matches. `matchedAction`
     // (optional) reports which action was chosen.
     int matchPrompt(const QString& prompt, QString* matchedAction = nullptr) const;
+    // Which character category a free-text prompt is asking for. "zombie
+    // walk" -> "undead", "dragon flying" -> "creature", anything unqualified
+    // -> "human" (the library mixes styles under the same action names, and
+    // an unqualified request should not draw a monster performance).
+    // Pure + static so it is unit-testable without a library on disk.
+    static QString categoryForPrompt(const QString& prompt);
 
     /// Mean chest forward-lean of a canonical clip (see Clip::uprightness).
     /// Pure — exposed for unit tests.
     static float meanChestLean(
         const std::vector<std::vector<std::array<float, 4>>>& quats);
+
+    // ---- Vocabulary + take selection (exposed for MotionComposer, #1010) ---
+    // Resolve a single word (or short phrase) to a library action, applying
+    // the same synonym table matchPrompt uses. Empty when nothing matches.
+    // Composition needs this per timeline STEP; matchPrompt only ever answers
+    // for a whole prompt and returns one clip.
+    QString resolveAction(const QString& word) const;
+    // Clip indices for an action, in library order (empty when unknown).
+    std::vector<int> takesForAction(const QString& action) const;
+    // Same, restricted to a character category ("human"/"undead"/"creature").
+    // An empty category means "any". If the action exists but NOT in that
+    // category, the unfiltered takes are returned rather than nothing —
+    // several actions are undead-only, and hiding them would regress against
+    // the pre-category behaviour.
+    std::vector<int> takesForAction(const QString& action,
+                                    const QString& category) const;
+    // Category of a clip ("human"/"undead"/"creature"); see Clip::category.
+    QString clipCategory(int i) const { return m_clips.at(static_cast<size_t>(i)).category; }
+    // The categories present in this library, sorted, for help text / GUI.
+    std::vector<QString> categories() const;
+    // Pick one take of `action` within `category` (empty = any).
+    int pickTake(const QString& action, const QString& category) const;
+    // Pick one take of `action` using the quality²/posture weighting
+    // (#855) — the exact rule matchPrompt applies. -1 when unknown.
+    int pickTake(const QString& action) const;
+
+    /// #1009: find the cleanest repeat range in a canonical clip — the (start,
+    /// end) frame pair minimising pose distance, searched over pairs at least
+    /// `minLen` frames apart. Returns {start, end, distance}; `end` is
+    /// inclusive. Pure — exposed for unit tests.
+    struct LoopRange {
+        int start = 0;
+        int end = 0;            ///< inclusive
+        double distance = 0.0;  ///< canonical pose distance across the seam
+        double span = 0.0;      ///< (end-start+1)/frames
+        double energyCoverage = 0.0;  ///< fraction of the clip's motion inside
+    };
+    static LoopRange findLoopRange(
+        const std::vector<std::vector<std::array<float, 4>>>& quats,
+        int minLen = 8);
+
+    /// Squared canonical-pose distance between two frames (summed quaternion
+    /// geodesic, sign-insensitive). Pure — exposed for unit tests.
+    static double framePoseDistance(
+        const std::vector<std::array<float, 4>>& a,
+        const std::vector<std::array<float, 4>>& b);
 
     /// Sampling weight for one take of `action`: quality² (the #855 rule)
     /// times a posture penalty — locomotion takes whose torso tips backward

@@ -1,4 +1,7 @@
 #include "TexturePaintController.h"
+
+#include "TextureInpaint.h"
+#include "PaintBakeTargets.h"
 #include "BrushPresetLibrary.h"
 
 #include "AppSettingsKeys.h"
@@ -866,7 +869,10 @@ bool TexturePaintController::buildOcclusionForView(const ProjectionPainter::View
 ProjectionPainter::Options TexturePaintController::projectionOptions() const
 {
     ProjectionPainter::Options opts;
-    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    // resolution stays 0 = "keep the target buffer's own size". Setting it to
+    // the width forced a SQUARE output, which on a non-square texture made
+    // PaintLayerStack::addFromBuffer resize (→ opaque white) the committed
+    // layer. Callers size their scratch buffer from the session instead.
     opts.backfaceCull = m_projBackfaceCull;
     opts.useOcclusion = m_projUseOcclusion;
     // depthLimit is a fraction of the bounds radius → world units.
@@ -919,18 +925,129 @@ void TexturePaintController::snapProjectionCamera()
     emit projectionChanged();
 }
 
-bool TexturePaintController::projectFromPhoto(const QString& path)
+/// Shared tail of both photo-projection entry points: everything after the
+/// View is decided. Kept as one function so the live-camera path and the
+/// explicit-camera (headless) path cannot drift in occlusion handling,
+/// resolution, breadcrumb, or commit behaviour.
+bool TexturePaintController::projectPhotoWithView(const QImage& src,
+                                                  const ProjectionPainter::View& v,
+                                                  const QString& layerName)
+{
+    m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
+    ProjectionPainter::Options opts = projectionOptions();
+    opts.useOcclusion = m_haveProjOcc;   // photo always occludes when we have a map
+
+    TexturePaintBuffer scratch;
+    const int sw = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    const int sh = m_buffer.height() > 0 ? m_buffer.height() : sw;
+    scratch.resize(sw, sh);
+    const auto rep = ProjectionPainter::project(
+        m_projTris, v, src, scratch, opts, m_haveProjOcc ? &m_projOcc : nullptr);
+    if (!rep.ok || rep.texelsWritten == 0) return false;
+
+    SentryReporter::addBreadcrumb("paint.projection.photo",
+        QStringLiteral("texels=%1 occluded=%2").arg(rep.texelsWritten).arg(rep.texelsOccluded));
+    return commitProjectedLayer(scratch, layerName) >= 0;
+}
+
+/// Load + normalise a projection source image, and rebuild the triangle cache.
+/// Returns a null image when either step fails.
+QImage TexturePaintController::prepareProjectionSource(const QString& path)
 {
     if (!hasActiveSession()) {
-        if (auto* e = activeEntity()) ensurePaintableTexture(1024);
-        if (!hasActiveSession()) return false;
+        if (activeEntity()) ensurePaintableTexture(1024);
+        if (!hasActiveSession()) return {};
     }
     QImage src(path);
-    if (src.isNull()) return false;
+    if (src.isNull()) return {};
     src = src.convertToFormat(QImage::Format_RGBA8888);
 
     m_projTris.clear(); m_haveProjTris = false; ensureProjTris();
-    if (!m_haveProjTris) return false;
+    if (!m_haveProjTris) return {};
+    return src;
+}
+
+bool TexturePaintController::projectFromPhotoWithCamera(const QString& path,
+                                                        const QVector3D& eye,
+                                                        const QVector3D& target,
+                                                        const QVector3D& up,
+                                                        double fovYDegrees)
+{
+    const QImage src = prepareProjectionSource(path);
+    if (src.isNull()) return false;
+
+    const Ogre::Vector3 e(eye.x(), eye.y(), eye.z());
+    const Ogre::Vector3 t(target.x(), target.y(), target.z());
+    Ogre::Vector3 dir = t - e;
+    if (dir.squaredLength() < 1e-12f) return false;   // degenerate camera
+    dir.normalise();
+
+    // Auto-pick an up vector when none is given, avoiding the degenerate case
+    // where the caller looks straight down the world up axis.
+    Ogre::Vector3 upv(up.x(), up.y(), up.z());
+    if (upv.squaredLength() < 1e-12f) {
+        upv = std::abs(dir.dotProduct(Ogre::Vector3::UNIT_Y)) > 0.99f
+                  ? Ogre::Vector3::UNIT_Z : Ogre::Vector3::UNIT_Y;
+    }
+    Ogre::Vector3 right = dir.crossProduct(upv);
+    if (right.squaredLength() < 1e-12f) return false;  // up parallel to dir
+    right.normalise();
+    const Ogre::Vector3 trueUp = right.crossProduct(dir).normalisedCopy();
+
+    // World -> view: rows are the camera basis, looking along -Z per Ogre's
+    // right-handed convention (so the forward row is negated).
+    Ogre::Matrix4 view = Ogre::Matrix4::IDENTITY;
+    for (int i = 0; i < 3; ++i) {
+        view[0][i] =  right[i];
+        view[1][i] =  trueUp[i];
+        view[2][i] = -dir[i];
+    }
+    view[0][3] = -right.dotProduct(e);
+    view[1][3] = -trueUp.dotProduct(e);
+    view[2][3] =  dir.dotProduct(e);
+
+    // Frame the mesh so the projection covers it: near/far from the entity's
+    // world bounds along the view direction, with generous padding rather than
+    // a tight fit (a clipped far plane silently drops the far half of the mesh).
+    float nearD = 0.1f, farD = 1000.0f;
+    if (auto* ent = activeEntity()) {
+        const Ogre::AxisAlignedBox box = ent->getWorldBoundingBox(true);
+        if (!box.isNull() && !box.isInfinite()) {
+            const float d = e.distance(box.getCenter());
+            const float r = box.getHalfSize().length();
+            nearD = std::max(0.01f, d - r * 2.0f);
+            farD  = d + r * 3.0f;
+            if (farD <= nearD) { nearD = 0.1f; farD = 1000.0f; }
+        }
+    }
+
+    const float fovY = static_cast<float>(
+        std::clamp(fovYDegrees, 1.0, 179.0) * M_PI / 180.0);
+    const float f = 1.0f / std::tan(fovY * 0.5f);
+    Ogre::Matrix4 proj = Ogre::Matrix4::ZERO;
+    proj[0][0] = f;          // square aspect: the paint buffer is square
+    proj[1][1] = f;
+    proj[2][2] = -(farD + nearD) / (farD - nearD);
+    proj[2][3] = -(2.0f * farD * nearD) / (farD - nearD);
+    proj[3][2] = -1.0f;
+
+    ProjectionPainter::View v;
+    v.viewProj = proj * view;
+    v.camDirection = dir;
+    v.camPosition = e;
+
+    SentryReporter::addBreadcrumb(
+        "paint.projection.camera",
+        QStringLiteral("eye=%1,%2,%3 fov=%4")
+            .arg(e.x).arg(e.y).arg(e.z).arg(fovYDegrees));
+
+    return projectPhotoWithView(src, v, QStringLiteral("Projected stencil"));
+}
+
+bool TexturePaintController::projectFromPhoto(const QString& path)
+{
+    const QImage src = prepareProjectionSource(path);
+    if (src.isNull()) return false;
 
     ProjectionPainter::View v;
     auto* widget = m_pendingStrokeWidget ? m_pendingStrokeWidget
@@ -938,20 +1055,9 @@ bool TexturePaintController::projectFromPhoto(const QString& path)
     if (m_haveLockedView) v = m_lockedView;
     else if (!currentProjectionView(widget, v)) return false;
 
-    m_haveProjOcc = buildOcclusionForView(v, m_projOcc);
-    ProjectionPainter::Options opts = projectionOptions();
-    opts.useOcclusion = m_haveProjOcc;   // photo always occludes when we have a map
-
-    TexturePaintBuffer scratch;
-    scratch.resize(opts.resolution, opts.resolution);
-    const auto rep = ProjectionPainter::project(
-        m_projTris, v, src, scratch, opts, m_haveProjOcc ? &m_projOcc : nullptr);
-    if (!rep.ok || rep.texelsWritten == 0) return false;
-
-    SentryReporter::addBreadcrumb("paint.projection.photo",
-        QStringLiteral("texels=%1 occluded=%2").arg(rep.texelsWritten).arg(rep.texelsOccluded));
-    return commitProjectedLayer(scratch, QStringLiteral("Projected photo")) >= 0;
+    return projectPhotoWithView(src, v, QStringLiteral("Projected photo"));
 }
+
 
 void TexturePaintController::chooseStencilImage()
 {
@@ -1158,12 +1264,18 @@ bool TexturePaintController::commitDecal()
     ProjectionPainter::OcclusionMap occ;
     const bool haveOcc = buildOcclusionForView(ci.view, occ);
     ProjectionPainter::Options opts;
-    opts.resolution = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    // Leave opts.resolution at 0 (= keep the scratch buffer's own size): the
+    // session buffer matches the model's texture, which is NOT necessarily
+    // square. Forcing a square scratch made PaintLayerStack::addFromBuffer
+    // resize the mismatched layer, which fills opaque WHITE and drops every
+    // projected texel — the "decal commits as an all-white layer" bug.
     opts.backfaceCull = true;
     opts.useOcclusion = haveOcc;
 
     TexturePaintBuffer scratch;
-    scratch.resize(opts.resolution, opts.resolution);
+    const int sw = m_buffer.width() > 0 ? m_buffer.width() : 1024;
+    const int sh = m_buffer.height() > 0 ? m_buffer.height() : sw;
+    scratch.resize(sw, sh);
     const auto rep = ProjectionPainter::project(
         m_projTris, ci.view, ci.source, scratch, opts, haveOcc ? &occ : nullptr);
     const bool ok = rep.ok && rep.texelsWritten > 0
@@ -5012,6 +5124,292 @@ bool TexturePaintController::bakeChannel(int channel)
     return true;
 }
 
+// --- Slice I (#552): bake-up to engine deliverables ----------------------
+
+QStringList TexturePaintController::bakeTargetIds() const
+{
+    return PaintBakeTargets::targetIds();
+}
+
+QString TexturePaintController::bakeTargetLabel(const QString& targetId) const
+{
+    PaintBakeTargets::Target t{};
+    if (!PaintBakeTargets::targetFromId(targetId, t)) return {};
+    return QString::fromLatin1(PaintBakeTargets::targetLabel(t));
+}
+
+/// The layer stack for `ch`, honouring the live-vs-stashed split.
+///
+/// The ACTIVE channel's stack lives in m_layerStack; its m_channelSessions copy
+/// is deliberately stale until the next channel switch (see stashChannelSession).
+/// Reading the map blindly would silently bake the pre-edit state of whatever
+/// channel happens to be open — the single most likely way this bake goes wrong.
+const PaintLayerStack* TexturePaintController::stackForChannel(
+    PaintChannelNS::Channel ch) const
+{
+    if (ch == m_activeChannel && m_layerStack.layerCount() > 0)
+        return &m_layerStack;
+    const auto it = m_channelSessions.constFind(static_cast<int>(ch));
+    if (it != m_channelSessions.constEnd() && it->initialized)
+        return &it->layerStack;
+    return nullptr;
+}
+
+/// True when `stack` holds any actually-painted pixel.
+///
+/// PaintLayerStack::empty() only means "no layers", but opening a session SEEDS
+/// layer 0 — so every channel that was ever merely VISITED reports as having a
+/// stack. Using that as "painted" listed all six channels on a mesh nobody had
+/// touched, and would have baked six blank textures. Paint is detected by a
+/// non-transparent texel in any visible layer instead.
+static bool stackHasPaintedPixels(const PaintLayerStack& stack)
+{
+    if (stack.empty()) return false;
+    const int w = stack.width(), h = stack.height();
+    if (w <= 0 || h <= 0) return false;
+
+    std::vector<uint8_t> px;
+    stack.compositeTo(px);
+    if (static_cast<int>(px.size()) < w * h * 4) return false;
+    for (size_t i = 3; i < px.size(); i += 4)
+        if (px[i] != 0) return true;      // any non-transparent texel
+    return false;
+}
+
+/// Composite `ch`, optionally forcing hidden layers in.
+///
+/// PaintLayerStack::compositeTo hardcodes `solo ? i == solo : visible`, so
+/// "include hidden layers" cannot be expressed through it. Rather than add an
+/// option to the live compositing path — which is on the paint hot path — this
+/// snapshots the stack, forces every layer visible, composites, and restores.
+QImage TexturePaintController::compositeChannelForBake(PaintChannelNS::Channel ch,
+                                                       bool includeHidden)
+{
+    const PaintLayerStack* src = stackForChannel(ch);
+    // Same rule as paintedChannelIds: a session seeds layer 0, so "has a stack"
+    // is not "has paint". Without this the bake emitted a blank texture for
+    // every channel the user had merely selected.
+    if (!src || !stackHasPaintedPixels(*src)) return {};
+
+    if (!includeHidden)
+        return compositeChannelToImage(*src);
+
+    // Mutate a COPY: the live stack must not be disturbed by a bake.
+    PaintLayerStack tmp = *src;
+    tmp.clearSolo();
+    for (int i = 0; i < tmp.layerCount(); ++i)
+        tmp.setVisible(i, true);
+    return compositeChannelToImage(tmp);
+}
+
+QStringList TexturePaintController::paintedChannelIds() const
+{
+    QStringList out;
+    for (int i = 0; i < PaintChannelNS::kTexturePaintChannelCount; ++i) {
+        const auto ch = static_cast<PaintChannelNS::Channel>(i);
+        // Height shares the Normal session and has no data of its own (#547).
+        if (ch == PaintChannelNS::Channel::Height) continue;
+        const PaintLayerStack* st = stackForChannel(ch);
+        if (st && stackHasPaintedPixels(*st))
+            out << QString::fromLatin1(PaintChannelNS::id(ch));
+    }
+    return out;
+}
+
+/// Gather every painted channel into the bake input struct.
+PaintBakeTargets::ChannelImages TexturePaintController::gatherBakeChannels(
+    bool includeHidden)
+{
+    PaintBakeTargets::ChannelImages ci;
+    ci.baseColor = compositeChannelForBake(PaintChannelNS::Channel::BaseColor, includeHidden);
+    ci.normal    = compositeChannelForBake(PaintChannelNS::Channel::Normal,    includeHidden);
+    ci.roughness = compositeChannelForBake(PaintChannelNS::Channel::Roughness, includeHidden);
+    ci.metallic  = compositeChannelForBake(PaintChannelNS::Channel::Metallic,  includeHidden);
+    ci.ao        = compositeChannelForBake(PaintChannelNS::Channel::AO,        includeHidden);
+    ci.emissive  = compositeChannelForBake(PaintChannelNS::Channel::Emissive,  includeHidden);
+    return ci;
+}
+
+QString TexturePaintController::bakePbrSet(const QString& targetId,
+                                           const QString& outputDir,
+                                           int resolution,
+                                           const QString& namePrefix,
+                                           bool includeHidden,
+                                           bool writeSidecar)
+{
+    PaintBakeTargets::Target target{};
+    if (!PaintBakeTargets::targetFromId(targetId, target))
+        return tr("Unknown bake target '%1'.").arg(targetId);
+
+    if (outputDir.trimmed().isEmpty())
+        return tr("Choose an output directory first.");
+    QDir dir(outputDir);
+    if (!dir.exists() && !QDir().mkpath(outputDir))
+        return tr("Could not create output directory '%1'.").arg(outputDir);
+
+    const PaintBakeTargets::ChannelImages channels = gatherBakeChannels(includeHidden);
+    if (channels.empty())
+        return tr("Nothing painted yet — paint a channel before baking.");
+
+    PaintBakeTargets::Options opt;
+    opt.target = target;
+    opt.resolution = resolution;
+    opt.namePrefix = namePrefix.trimmed();
+
+    const PaintBakeTargets::Result res = PaintBakeTargets::build(channels, opt);
+    if (!res.ok)
+        return res.error.isEmpty() ? tr("Bake failed.") : res.error;
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.start",
+        QStringLiteral("target=%1 res=%2 textures=%3 hidden=%4")
+            .arg(targetId).arg(resolution).arg(res.textures.size())
+            .arg(includeHidden ? 1 : 0));
+
+    // Write every texture before reporting success: a partial set on disk is
+    // worse than none, because it looks complete.
+    QStringList written;
+    for (const auto& t : res.textures) {
+        const QString stem = opt.namePrefix.isEmpty()
+                                 ? t.suffix
+                                 : (opt.namePrefix + QStringLiteral("_") + t.suffix);
+        const QString path = dir.filePath(stem + QStringLiteral(".png"));
+        if (!t.image.save(path)) {
+            SentryReporter::addBreadcrumb("paint.bake.error",
+                                          QStringLiteral("write failed %1").arg(stem));
+            return tr("Could not write '%1'.").arg(path);
+        }
+        written << path;
+    }
+
+    if (!res.godotResource.isEmpty()) {
+        const QString stem = opt.namePrefix.isEmpty() ? QStringLiteral("material")
+                                                      : opt.namePrefix;
+        QFile f(dir.filePath(stem + QStringLiteral(".tres")));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(res.godotResource.toUtf8());
+        // A missing .tres is a degraded but usable bake (the PNGs are the
+        // deliverable), so this is not treated as a hard failure.
+    }
+
+    if (writeSidecar) {
+        auto* entity = activeEntity();
+        const QString meshName = entity && entity->getMesh()
+            ? QString::fromStdString(entity->getMesh()->getName()) : QString();
+        const QString json = PaintBakeTargets::sidecarJson(
+            opt, paintedChannelIds(), res.textures, meshName);
+        const QString stem = opt.namePrefix.isEmpty() ? QStringLiteral("paint_bake")
+                                                      : opt.namePrefix;
+        QFile f(dir.filePath(stem + QStringLiteral(".bake.json")));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(json.toUtf8());
+    }
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.done",
+        QStringLiteral("target=%1 wrote=%2").arg(targetId).arg(written.size()));
+    return {};
+}
+
+QString TexturePaintController::chooseBakeOutputDir()
+{
+    // DontUseNativeDialog matches the other texture-export pickers in this
+    // project (see MaterialEditorQML::chooseTextureExportPath).
+    return QFileDialog::getExistingDirectory(
+        nullptr, tr("Bake PBR set to folder"), QString(),
+        QFileDialog::ShowDirsOnly | QFileDialog::DontUseNativeDialog);
+}
+
+QString TexturePaintController::bakePreviewUrl(const QString& targetId, int index,
+                                                int previewSize)
+{
+    PaintBakeTargets::Target target{};
+    if (!PaintBakeTargets::targetFromId(targetId, target)) return {};
+
+    const PaintBakeTargets::ChannelImages channels = gatherBakeChannels(false);
+    if (channels.empty()) return {};
+
+    PaintBakeTargets::Options opt;
+    opt.target = target;
+    // Small: base64 data-URIs are ~80ms on a 2048 texture vs ~3ms small (see
+    // PaintBufferImageProvider) — previews stay thumbnails on purpose.
+    opt.resolution = std::clamp(previewSize, 32, 512);
+
+    const PaintBakeTargets::Result res = PaintBakeTargets::build(channels, opt);
+    if (!res.ok || index < 0 || index >= static_cast<int>(res.textures.size()))
+        return {};
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!res.textures[static_cast<size_t>(index)].image.save(&buf, "PNG")) return {};
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString TexturePaintController::bakeVertexLayerToTextureLayer(int resolution,
+                                                               int dilation)
+{
+    auto* entity = activeEntity();
+    if (!entity) return tr("Select a mesh first.");
+    if (m_layerStack.layerCount() <= 0)
+        return tr("Start a paint session on this channel first.");
+
+    EditableMesh mesh;
+    if (!mesh.loadFromEntity(entity))
+        return tr("Could not read the mesh geometry.");
+
+    // Match the live stack so addFromBuffer does not have to resize.
+    const int edge = resolution > 0 ? resolution
+                                    : std::max(m_layerStack.width(), 1);
+    TexturePaintBuffer scratch(edge, edge);
+
+    VertexColorBaker::Options opts;
+    opts.resolution = edge;
+    opts.dilationPixels = std::max(0, dilation);
+    // Transparent background so unrasterised texels do not paint over the
+    // layers underneath — this becomes a LAYER, not a flat texture.
+    opts.background = Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.0f);
+
+    const int painted = VertexColorBaker::bake(mesh, scratch, opts);
+    if (painted <= 0)
+        return tr("The mesh has no vertex colours to bake, or no UV0 to bake into.");
+
+    // VertexColorBaker is square-only, but the layer stack follows the model's
+    // texture, which may not be. addFromBuffer would then resize() the layer —
+    // which fills opaque WHITE and drops the bake — so rescale to the stack's
+    // aspect here instead.
+    if (m_layerStack.layerCount() > 0
+        && (scratch.width() != m_layerStack.width()
+            || scratch.height() != m_layerStack.height())) {
+        QImage img(scratch.width(), scratch.height(), QImage::Format_RGBA8888);
+        std::memcpy(img.bits(), scratch.data().data(),
+                    static_cast<size_t>(scratch.width()) * scratch.height() * 4);
+        const QImage scaled = img.scaled(m_layerStack.width(), m_layerStack.height(),
+                                         Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation)
+                                  .convertToFormat(QImage::Format_RGBA8888);
+        TexturePaintBuffer resized(scaled.width(), scaled.height());
+        std::memcpy(resized.data().data(), scaled.constBits(),
+                    static_cast<size_t>(scaled.width()) * scaled.height() * 4);
+        scratch = std::move(resized);
+    }
+
+    const int idx = m_layerStack.addFromBuffer(
+        scratch, tr("Vertex colour bake"), PaintLayerStack::LayerType::Generated);
+    if (idx < 0) return tr("Could not add the baked layer.");
+
+    m_layerStack.setActiveIndex(idx);
+    m_layerStack.compositeTo(m_buffer);
+    m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
+    flushDirtyToOgre();
+
+    SentryReporter::addBreadcrumb(
+        "paint.bake.vertex_layer",
+        QStringLiteral("res=%1 dilation=%2 pixels=%3").arg(edge).arg(dilation).arg(painted));
+    emit layersChanged();
+    return {};
+}
+
 QString TexturePaintController::currentSlotTextureName(const std::string& slot) const
 {
     auto* entity = activeEntity();
@@ -6476,6 +6874,118 @@ int TexturePaintController::deleteMaskPixels()
     return affected;
 }
 
+bool TexturePaintController::inpaintAvailable() const
+{
+    return TextureInpaint::isAvailable();
+}
+
+bool TexturePaintController::inpaintModelPresent() const
+{
+    return TextureInpaint::modelPresent();
+}
+
+int TexturePaintController::inpaintMaskPixels()
+{
+    // #1017: AI-fill the selection. The fill/delete siblings above only need
+    // the selected pixels, but an inpainter is CONTEXT-driven — it has to see
+    // what surrounds the hole. So this composites the whole stack, runs the
+    // model on that, and writes the result back into the active layer inside
+    // the mask only.
+    if (!hasActiveSession() || !hasSelectionMask()) return -1;
+    if (!TextureInpaint::isAvailable()) return -2;
+
+    auto& layerBuf = activePaintBuffer();
+    const int W = layerBuf.width(), H = layerBuf.height();
+    if (W <= 0 || H <= 0) return -1;
+    if (m_mask.width() != W || m_mask.height() != H) return -1;
+
+    const QString model = TextureInpaint::ensureModelBlocking();
+    if (model.isEmpty()) return -2;
+
+    // Flatten what the user actually SEES. Inpainting the bare active layer
+    // would condition the model on transparent surroundings and fill the hole
+    // with the layer's own emptiness.
+    TexturePaintBuffer flat(W, H);
+    m_layerStack.compositeTo(flat);
+    const auto& flatPx = flat.data();
+
+    QImage src(W, H, QImage::Format_RGB888);
+    for (int y = 0; y < H; ++y) {
+        uchar* line = src.scanLine(y);
+        for (int x = 0; x < W; ++x) {
+            const size_t off =
+                (static_cast<size_t>(y) * W + x) * 4u;
+            line[x * 3 + 0] = flatPx[off + 0];
+            line[x * 3 + 1] = flatPx[off + 1];
+            line[x * 3 + 2] = flatPx[off + 2];
+        }
+    }
+
+    QImage maskImg(W, H, QImage::Format_Grayscale8);
+    {
+        const auto& md = m_mask.data();
+        for (int y = 0; y < H; ++y) {
+            uchar* line = maskImg.scanLine(y);
+            for (int x = 0; x < W; ++x)
+                line[x] = md[static_cast<size_t>(y) * W + x] ? 255 : 0;
+        }
+    }
+
+    const TextureInpaint::Result r =
+        TextureInpaint::inpaint(src, maskImg, model);
+    if (!r.ok || r.image.isNull()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Inpaint selection FAILED: %1").arg(r.error));
+        return -3;
+    }
+
+    const QImage filled = r.image.convertToFormat(QImage::Format_RGB888);
+    auto before = layerBuf.data();
+    int px = 0;
+    {
+        const auto& md = m_mask.data();
+        auto& dst = layerBuf.data();
+        const auto& bb = m_mask.bbox();
+        for (int y = bb.y0; y < bb.y1; ++y) {
+            const uchar* fl = filled.constScanLine(y);
+            for (int x = bb.x0; x < bb.x1; ++x) {
+                const size_t i = static_cast<size_t>(y) * W + x;
+                if (!md[i]) continue;
+                const size_t off = i * 4u;
+                dst[off + 0] = fl[x * 3 + 0];
+                dst[off + 1] = fl[x * 3 + 1];
+                dst[off + 2] = fl[x * 3 + 2];
+                // The filled region must be OPAQUE: the model returns colour
+                // with no alpha channel, and leaving a transparent texel's
+                // alpha at 0 would make the new colour invisible — presenting
+                // as "the inpaint did nothing".
+                dst[off + 3] = 255;
+                ++px;
+            }
+        }
+        if (px > 0) layerBuf.markDirty(bb.x0, bb.y0, bb.x1, bb.y1);
+    }
+    if (px <= 0) return 0;
+
+    const int layerIdx = m_layerStack.layerCount() > 0 ? m_layerStack.activeIndex() : 0;
+    UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
+        this, layerIdx, std::move(before), layerBuf.data(),
+        layerBuf.width(), layerBuf.height(),
+        (m_sessionEntity ? m_sessionEntity->getName() : std::string()),
+        static_cast<int>(m_activeChannel),
+        QStringLiteral("Inpaint selection")));
+    // The layer changed outside a stroke, so the cached stroke baseline is
+    // now stale — beginStroke() reuses a non-empty baseline as its undo
+    // snapshot, and undoing the NEXT stroke would then also revert this
+    // inpaint. Every other out-of-stroke layer mutator clears it too.
+    m_layerStrokeBaseline.clear();
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Inpaint: filled %1 px").arg(px));
+    flushDirtyToOgre();
+    updateEmbeddedTextureCache();
+    return px;
+}
+
 void TexturePaintController::scheduleMaskOverlayRefresh()
 {
     if (m_maskOverlayRefreshScheduled) return;
@@ -6933,6 +7443,8 @@ QStringList TexturePaintController::blendModeNames() const
 int TexturePaintController::addPaintLayer(const QString& name)
 {
     if (!hasActiveSession()) return -1;
+    SentryReporter::addBreadcrumb("paint.layer.add",
+        QStringLiteral("name=%1").arg(name.isEmpty() ? QStringLiteral("(auto)") : name));
     const auto before = m_layerStack.snapshot();
     const int idx = m_layerStack.addEmpty(name);
     recomposeComposite(/*fullBuffer=*/true);
@@ -6949,6 +7461,8 @@ int TexturePaintController::addPaintLayer(const QString& name)
 
 void TexturePaintController::deletePaintLayer(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.delete",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.layerCount() <= 1) return;
     const auto before = m_layerStack.snapshot();
@@ -6967,6 +7481,8 @@ void TexturePaintController::deletePaintLayer(int index)
 
 int TexturePaintController::duplicatePaintLayer(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.duplicate",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount()) return -1;
     const auto before = m_layerStack.snapshot();
     const int idx = m_layerStack.duplicateLayer(index);
@@ -6984,6 +7500,8 @@ int TexturePaintController::duplicatePaintLayer(int index)
 
 void TexturePaintController::movePaintLayerUp(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.reorder",
+        QStringLiteral("up index=%1").arg(index));
     if (index <= 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.moveLayer(index, index - 1);
@@ -6999,6 +7517,8 @@ void TexturePaintController::movePaintLayerUp(int index)
 
 void TexturePaintController::movePaintLayerDown(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.reorder",
+        QStringLiteral("down index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount() - 1) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.moveLayer(index, index + 1);
@@ -7014,6 +7534,8 @@ void TexturePaintController::movePaintLayerDown(int index)
 
 void TexturePaintController::renamePaintLayer(int index, const QString& name)
 {
+    SentryReporter::addBreadcrumb("paint.layer.rename",
+        QStringLiteral("index=%1").arg(index));
     if (index < 0 || index >= m_layerStack.layerCount() || name.isEmpty()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.renameLayer(index, name);
@@ -7026,6 +7548,8 @@ void TexturePaintController::renamePaintLayer(int index, const QString& name)
 
 void TexturePaintController::mergePaintLayerDown(int index)
 {
+    SentryReporter::addBreadcrumb("paint.layer.merge_down",
+        QStringLiteral("index=%1").arg(index));
     if (index <= 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.mergeDown(index);
@@ -7042,6 +7566,8 @@ void TexturePaintController::mergePaintLayerDown(int index)
 
 void TexturePaintController::flattenPaintLayers()
 {
+    SentryReporter::addBreadcrumb("paint.layer.flatten",
+        QStringLiteral("layers=%1").arg(m_layerStack.layerCount()));
     if (m_layerStack.layerCount() <= 1) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.flattenAll();
@@ -7057,6 +7583,8 @@ void TexturePaintController::flattenPaintLayers()
 
 void TexturePaintController::setPaintLayerVisible(int index, bool visible)
 {
+    SentryReporter::addBreadcrumb("paint.layer.visibility",
+        QStringLiteral("index=%1 visible=%2").arg(index).arg(visible ? 1 : 0));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     if (m_layerStack.layer(index).visible == visible) return;
     const auto before = m_layerStack.snapshot();
@@ -7130,6 +7658,8 @@ void TexturePaintController::endPaintLayerOpacityDrag()
 
 void TexturePaintController::setPaintLayerBlendMode(int index, int mode)
 {
+    SentryReporter::addBreadcrumb("paint.layer.blend_mode",
+        QStringLiteral("index=%1 mode=%2").arg(index).arg(mode));
     if (index < 0 || index >= m_layerStack.layerCount()) return;
     const auto before = m_layerStack.snapshot();
     m_layerStack.setBlendMode(index, static_cast<PaintLayerBlend::Mode>(mode));

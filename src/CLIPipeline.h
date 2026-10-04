@@ -43,9 +43,10 @@ struct MeshInfo {
 struct FixOptions {
     bool removeDegenerates = false;
     bool mergeMaterials = false;
+    bool weldVertices = false;   // post-import: MeshWeldOps::apply per entity
 
     bool anySet() const {
-        return removeDegenerates || mergeMaterials;
+        return removeDegenerates || mergeMaterials || weldVertices;
     }
 
     unsigned int toAssimpFlags() const {
@@ -89,6 +90,10 @@ public:
     static int cmdFix(int argc, char* argv[]);
     static int cmdConvert(int argc, char* argv[]);
     static int cmdAnim(int argc, char* argv[]);
+    // #523: retarget clips from one skeleton onto an incompatible one.
+    static int cmdAnimRetarget(int argc, char* argv[]);
+    static int cmdAnimGenerators(int argc, char* argv[]);
+    static int cmdAnimConstraints(int argc, char* argv[]);
     // #411 text-to-motion (template-clip MVP): prompt → library clip → retarget.
     static int cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                float duration, const QString& outputPath,
@@ -129,6 +134,14 @@ public:
     /// #405: Real-ESRGAN texture upscaling (2x/4x) via ONNX. Reads --texture,
     /// writes the upscaled PNG to -o (or <stem>_upscaled.png). Exit 1 when
     /// built without ENABLE_ONNX.
+    /// #1018: photo -> monocular depth map (Depth-Anything-V2-Small).
+    static int cmdMaterialPhotoDepth(const QString& srcPath, QString outputPath,
+                                     bool letterbox);
+    /// #1017: LaMa texture inpainting. Reads --texture and --mask (white =
+    /// inpaint), writes the filled texture to -o (or <stem>_inpainted.png).
+    /// Exit 1 when built without ENABLE_ONNX.
+    static int cmdMaterialInpaint(const QString& srcPath, const QString& maskPath,
+                                  QString outputPath, int maskDilatePx);
     static int cmdMaterialUpscale(const QString& srcPath, QString outputPath,
                                   int scale);
     /// #406: LLM-assisted material authoring. Headless equivalent of the
@@ -194,6 +207,40 @@ public:
     /// PNG texture with configurable resolution and seam dilation.
     /// Surfaces VertexColorBaker via the CLI for headless asset pipelines.
     static int cmdBakeVertexColors(int argc, char* argv[]);
+    /// Paint v2 Slice I (#552): repack a mesh's existing PBR textures into an
+    /// engine channel layout. Headless, so there is no live layer stack —
+    /// channels come from the material's bound texture slots.
+    static int cmdPaintBake(int argc, char* argv[]);
+
+    /// Paint v2 Slice J (#553): `qtmesh paint` — headless paint queries, the
+    /// bake (aliasing paint-bake), and stencil projection with an explicit
+    /// camera.
+    ///
+    /// Layer MUTATION (`--layer add/merge-down/flatten`) is deliberately absent:
+    /// paint layers are a live in-memory session and are never persisted to a
+    /// mesh file, so a headless `--layer add` would create a layer, write
+    /// nothing, and exit — a command that appears to work and does nothing.
+    /// `--layer list` IS supported (it reports the live/derived stack) and
+    /// baking is how painted pixels reach disk. See docs/PAINT_V2_CLI_MCP.md.
+    static int cmdPaint(int argc, char* argv[]);
+
+    /// Shared core behind `qtmesh paint-bake` and MCP `paint_bake`.
+    ///
+    /// Imports `inputPath`, reads its bound PBR slots, builds the engine layout
+    /// and writes the textures (+ .tres / sidecar) into `outputDir`. Kept as one
+    /// function so the CLI and MCP surfaces cannot drift apart.
+    ///
+    /// Returns true on success; on failure `errorOut` explains why and nothing
+    /// is written. `writtenOut` receives the absolute paths written.
+    static bool paintBakeToDirectory(const QString& inputPath,
+                                     const QString& targetId,
+                                     const QString& outputDir,
+                                     int resolution,
+                                     const QString& namePrefix,
+                                     bool writeSidecar,
+                                     QStringList& writtenOut,
+                                     QStringList& inputChannelsOut,
+                                     QString& errorOut);
 
     /// Bake a skeletal animation into a Vertex Animation Texture (VAT)
     /// + JSON sidecar. Surfaces `VATBaker::bake()` over the CLI for
@@ -238,6 +285,8 @@ public:
     /// [--no-model] [--up-axis x|y|z]`. Text lists per-part vertex/face counts;
     /// --json emits the full vertex/face → label arrays.
     static int cmdSegment(int argc, char* argv[]);
+    /// `qtmesh lattice <file> --apply <lattice.json> -o <out>` / `--info` (LatticeDeformer).
+    static int cmdLattice(int argc, char* argv[]);
 
     /// AI image-to-3D (epic #764, TripoSR via ONNX): generate a mesh from a
     /// single image. `generate3d <image> [-o out.glb] [--resolution 16..1024]
@@ -255,6 +304,15 @@ public:
     /// hosted). There is no non-model fallback (generative feature), so
     /// `--no-model` is rejected.
     static int cmdGenerate3d(int argc, char* argv[]);
+    /// Prompt-to-3D: synchronously generate the SOURCE image from text via
+    /// stable-diffusion.cpp (FLUX.2-klein-4B preferred, any SD checkpoint via
+    /// modelOverride) into outPng. Returns 0 on success (CLI exit code).
+    /// refImagePath (optional): FLUX.2 kontext-style EDIT — the prompt
+    /// describes a change to that image instead of a scene from scratch.
+    static int generateSourceImageFromPrompt(const QString& prompt,
+                                             const QString& modelOverride,
+                                             const QString& outPng,
+                                             const QString& refImagePath = {});
 
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,

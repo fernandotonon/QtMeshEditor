@@ -198,6 +198,14 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     const QString trellis2Base = resolveBaseUrl(
         "ai/trellis2GgufBaseUrl", "QTMESH_TRELLIS2_GGUF_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-trellis2-gguf/resolve/main/");
+    // Pixal3D flow weights. The upstream trellis.cpp docs point at this
+    // pre-built MIT set; its GGUFs are byte-size-identical to converting
+    // TencentARC/Pixal3D's own safetensors with tools/convert.py, and it also
+    // carries naf.gguf, which is NOT in TencentARC's repo (NAF ships as a
+    // torch .pth and is the one component converted through torch).
+    const QString pixal3dBase = resolveBaseUrl(
+        "ai/pixal3dGgufBaseUrl", "QTMESH_PIXAL3D_GGUF_BASE_URL",
+        "https://huggingface.co/vegax87/Pixal3D/resolve/main/");
     const QString segmentBase = resolveBaseUrl(
         "ai/segmentModelBaseUrl", "QTMESH_SEGMENT_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/segment/");
@@ -269,6 +277,59 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
         {
             file(QStringLiteral("trellis2"), QStringLiteral("shape_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 shape flow (1024 cascade)")),
             file(QStringLiteral("trellis2"), QStringLiteral("tex_flow_1024.gguf"), trellis2Base, QStringLiteral("TRELLIS.2 texture flow (1024 cascade)")),
+        }};
+    // Pixal3D: a TRELLIS.2 FORK, so it reuses that family's decoders and the
+    // same trellis-cli runtime — only the four flow models (plus NAF) differ,
+    // and they live in the SAME directory under a `pixal3d_` prefix.
+    out << ModelSpec{
+        QStringLiteral("pixal3d-gguf"), tr("Pixal3D"), tr("Image to 3D"),
+        tr("TencentARC Pixal3D GGUF weights (MIT) — a TRELLIS.2 fork that replaces the "
+           "global DINOv3 cross-attention with view-aligned projection conditioning. "
+           "An alternative to TRELLIS.2, worth trying on characters. Runs on the same "
+           "trellis.cpp runtime and REUSES the TRELLIS.2 decoders, so install those "
+           "weights too. Note Pixal3D ships no 512 texture flow: generate at 1024 for "
+           "textures, or 512 for geometry only."),
+        QStringLiteral("~11.0 GB"), QString(),
+        true,
+        {
+            file(QStringLiteral("trellis2"), QStringLiteral("pixal3d_ss_flow.gguf"), pixal3dBase, QStringLiteral("Pixal3D sparse-structure flow")),
+            file(QStringLiteral("trellis2"), QStringLiteral("pixal3d_shape_flow_512.gguf"), pixal3dBase, QStringLiteral("Pixal3D shape flow (512)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("pixal3d_shape_flow_1024.gguf"), pixal3dBase, QStringLiteral("Pixal3D shape flow (1024)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("pixal3d_tex_flow_1024.gguf"), pixal3dBase, QStringLiteral("Pixal3D texture flow (1024)")),
+            file(QStringLiteral("trellis2"), QStringLiteral("pixal3d_naf.gguf"), pixal3dBase, QStringLiteral("Pixal3D NAF guided upsampler")),
+        }};
+#ifdef ENABLE_STABLE_DIFFUSION
+    constexpr bool sdAvailable = true;
+#else
+    constexpr bool sdAvailable = false;
+#endif
+    // Prompt-to-3D: FLUX.2-klein-4B text-to-image via the bundled sd.cpp —
+    // three components (all permissively licensed: klein weights Apache-2.0,
+    // Qwen3 Apache-2.0, VAE from the klein release). Installed under
+    // ai_models/flux2_klein/; SDManager lists the set as one model.
+    out << ModelSpec{
+        QStringLiteral("flux2-klein-gguf"), tr("FLUX.2-klein-4B (text to image)"), tr("Image to 3D"),
+        tr("Black Forest Labs FLUX.2-klein-4B (Apache-2.0) — generate the source "
+           "image for image-to-3D from a text prompt instead of importing one. "
+           "4-step distilled flow model; runs on the same stable-diffusion.cpp "
+           "backend as texture generation. Three components: diffusion GGUF, "
+           "VAE, and the Qwen3-4B text encoder."),
+        QStringLiteral("~5.2 GB"),
+        sdAvailable ? QString() : tr("Requires a stable-diffusion build"),
+        sdAvailable,
+        {
+            FileSpec{QStringLiteral("flux-2-klein-4b-Q4_0.gguf"),
+                     path(QStringLiteral("flux2_klein/flux-2-klein-4b-Q4_0.gguf")),
+                     QStringLiteral("https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_0.gguf"),
+                     QStringLiteral("FLUX.2-klein-4B diffusion (Q4_0)")},
+            FileSpec{QStringLiteral("flux2-vae.safetensors"),
+                     path(QStringLiteral("flux2_klein/flux2-vae.safetensors")),
+                     QStringLiteral("https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors"),
+                     QStringLiteral("FLUX.2 VAE")},
+            FileSpec{QStringLiteral("Qwen3-4B-Q4_K_M.gguf"),
+                     path(QStringLiteral("flux2_klein/Qwen3-4B-Q4_K_M.gguf")),
+                     QStringLiteral("https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"),
+                     QStringLiteral("Qwen3-4B text encoder (Q4_K_M)")},
         }};
     out << ModelSpec{
         QStringLiteral("background-removal"), tr("Background Removal"), tr("Image to 3D"),

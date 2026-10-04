@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <QJsonObject>
 #include <QSettings>
+
+#include <algorithm>
 #include <QUuid>
 #include "AppSettingsKeys.h"
 #include "SentryReporter.h"
@@ -231,4 +233,43 @@ TEST_F(SentryReporterTest, FileWorkflowUsesExtensionsOnly)
     ASSERT_EQ(events.size(), 1);
     EXPECT_EQ(events[0].context.value(QStringLiteral("input_format")).toString(), QStringLiteral("fbx"));
     EXPECT_FALSE(events[0].context.contains(QStringLiteral("input_path")));
+}
+
+// #1058: a cancelled export carries success=false so the funnel does not
+// count it as a completion, but a user closing a save dialog is a normal
+// action — not an error-level event. Both halves matter: the event name must
+// also be in the allow-list, or captureTelemetryEvent drops it silently.
+TEST_F(SentryReporterTest, CancelledExportIsRecordedAtInfoLevel)
+{
+    SentryReporter::setEnabled(true);
+    SentryReporter::clearCapturedTelemetryEventsForTest();
+
+    SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+        QStringLiteral("cancelled"), QStringLiteral("gui"), QString(), QString(),
+        42, false, QStringLiteral("no_output")});
+
+    const auto events = SentryReporter::capturedTelemetryEventsForTest();
+    const auto it = std::find_if(events.cbegin(), events.cend(), [](const auto& e) {
+        return e.name == QStringLiteral("file.export.cancelled");
+    });
+    ASSERT_NE(it, events.cend()) << "file.export.cancelled is missing from the "
+                                    "isKnownTelemetryEvent allow-list";
+    EXPECT_EQ(it->level, QStringLiteral("info"));
+}
+
+TEST_F(SentryReporterTest, FailedExportStaysErrorLevel)
+{
+    SentryReporter::setEnabled(true);
+    SentryReporter::clearCapturedTelemetryEventsForTest();
+
+    SentryReporter::captureFileWorkflowEvent({QStringLiteral("export"),
+        QStringLiteral("failed"), QStringLiteral("gui"), QString(), QString(),
+        42, false, QStringLiteral("exception")});
+
+    const auto events = SentryReporter::capturedTelemetryEventsForTest();
+    const auto it = std::find_if(events.cbegin(), events.cend(), [](const auto& e) {
+        return e.name == QStringLiteral("file.export.failed");
+    });
+    ASSERT_NE(it, events.cend());
+    EXPECT_EQ(it->level, QStringLiteral("error"));
 }

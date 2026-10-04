@@ -1,4 +1,5 @@
 #include "LLMWorker.h"
+#include <QFileInfo>
 #include <QDebug>
 #include <QThread>
 
@@ -277,12 +278,22 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
         return;
     }
 
-    // Check if prompt fits in context
-    if (static_cast<int>(tokens.size()) > m_settings.contextSize - 4) {
+    // Check if the prompt fits the context ACTUALLY created (the requested
+    // size is clamped to the model's training limit in initializeContext —
+    // checking against the setting let an oversized prompt through, and
+    // llama_decode then failed with an opaque "Failed to decode prompt").
+    // Whatever is left after the prompt is the generation budget: the loop
+    // below is capped to it, so a full context ends generation cleanly
+    // instead of hitting llama_decode's "context full" error one token late.
+    const int windowTokens = m_nCtx > 0 ? m_nCtx : m_settings.contextSize;
+    const int remainingCapacity = windowTokens - static_cast<int>(tokens.size());
+    if (remainingCapacity <= 0) {
         m_isGenerating.store(false);
-        emit generationError(QString("Prompt too long: %1 tokens, max: %2")
+        emit generationError(QString("Prompt too long: %1 tokens, but the model's context window is %2. "
+                                     "Raise 'Context size' in AI → AI Model Settings (then reload the model) "
+                                     "or shorten the request.")
                                  .arg(tokens.size())
-                                 .arg(m_settings.contextSize - 4));
+                                 .arg(windowTokens));
         return;
     }
 
@@ -324,7 +335,16 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
 
         if (llama_decode(m_ctx, batch) != 0) {
             m_isGenerating.store(false);
-            emit generationError("Failed to decode prompt");
+            // llama_decode fails when a compute/KV buffer cannot be allocated —
+            // on Apple Silicon that is the GPU working-set budget (~75% of RAM),
+            // so a 17 GB MoE + an 8k KV cache on a 24 GB Mac lands here even
+            // though the weights loaded.
+            emit generationError(QString("The model could not process the prompt (llama_decode failed at token %1 of %2, "
+                                         "context window %3). This usually means the model does not fit in memory: "
+                                         "try a smaller model, a smaller context size, or fewer GPU layers "
+                                         "(AI → AI Model Settings). Model: %4")
+                                     .arg(i).arg(n_tokens).arg(windowTokens)
+                                     .arg(QFileInfo(m_modelPath).fileName()));
             return;
         }
     }
@@ -349,7 +369,11 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
         eosToken = llama_vocab_eos(m_vocab);
     }
 
-    const int effectiveMaxTokens = (maxTokensOverride > 0) ? maxTokensOverride : m_settings.maxTokens;
+    const int requestedMaxTokens = (maxTokensOverride > 0) ? maxTokensOverride : m_settings.maxTokens;
+    const int effectiveMaxTokens = std::min(requestedMaxTokens, remainingCapacity);
+    if (effectiveMaxTokens < requestedMaxTokens)
+        qWarning() << "LLMWorker: reply capped to" << effectiveMaxTokens << "tokens — the prompt fills the rest of the"
+                   << windowTokens << "token context";
     for (int i = 0; i < effectiveMaxTokens; ++i) {
         if (m_stopRequested.load()) {
             qDebug() << "LLMWorker: Generation stopped by user";
@@ -447,12 +471,15 @@ bool LLMWorker::initializeContext()
         return false;
     }
 
-    qDebug() << "LLMWorker: Context initialized successfully";
+    m_nCtx = static_cast<int>(llama_n_ctx(m_ctx));
+    qDebug() << "LLMWorker: Context initialized successfully, n_ctx =" << m_nCtx;
+    emit contextReady(m_nCtx);
     return true;
 }
 
 void LLMWorker::cleanupContext()
 {
+    m_nCtx = 0;
     if (m_ctx) {
         llama_free(m_ctx);
         m_ctx = nullptr;

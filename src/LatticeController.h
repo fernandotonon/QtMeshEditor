@@ -1,0 +1,261 @@
+#ifndef LATTICECONTROLLER_H
+#define LATTICECONTROLLER_H
+
+#include "LatticeDeformer.h"
+
+#include <QObject>
+#include <QQmlEngine>
+#include <QJsonObject>
+#include <QPoint>
+#include <QRect>
+#include <QString>
+#include <QVariantList>
+#include <QUndoStack>
+
+#include <OgreVector.h>
+
+#include <cstdint>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+class EditableMesh;
+class OgreWidget;
+namespace Ogre { class Entity; class SceneNode; class ManualObject; class Camera; class Mesh; }
+
+/**
+ * Lattice (free-form) deformer — the Blender "Lattice modifier" for
+ * QtMeshEditor. QML_SINGLETON (`PropertiesPanel 1.0`), Object mode.
+ *
+ * Workflow: select a mesh → **Add Lattice** boxes it with an `nx×ny×nz` grid of
+ * control points (default 3×3×3) → click/drag points in the viewport (Shift
+ * adds to the point selection; a drag moves every selected point in the
+ * camera plane) → the enclosed vertices follow live → **Apply** bakes the
+ * deformation into the mesh as ONE undo step, **Cancel** restores the mesh.
+ *
+ * The deformation is always recomputed from the REST positions captured when
+ * the session began (`Lattice::Grid::deformAll(rest)`), so it never
+ * accumulates and resetting the points restores the mesh bit-exactly.
+ * Interactive edits are also undoable inside the session
+ * (`LatticeGridCommand`, stamped with a session id); the bake is `LatticeApplyCommand`.
+ *
+ * Viewport hooks (`sessionActive`/`beginDrag`/`updateDrag`/`endDrag`/
+ * `updateHover`) are called by `TransformOperator` — the SkinWeightController
+ * "brush owns the drag" idiom. The cage is drawn on a dedicated child node of
+ * the entity's scene node (mesh-local geometry, follows the transform), never
+ * attached to the entity node itself (`ObjectItemModel` casts every attached
+ * object to `Entity*`).
+ *
+ * Headless parity: `latticeJson()`/`setLatticeJson()` expose the
+ * `qtmesh-lattice-v1` document the CLI (`qtmesh lattice`) and MCP
+ * (`lattice_*`) consume, and `deformEntityWithGrid` is the shared one-shot
+ * bake used by both.
+ */
+class LatticeController : public QObject
+{
+    Q_OBJECT
+    QML_ELEMENT
+    QML_SINGLETON
+
+    Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
+    Q_PROPERTY(bool sessionActive READ sessionActive NOTIFY sessionChanged)
+    Q_PROPERTY(QString entityName READ entityName NOTIFY sessionChanged)
+    Q_PROPERTY(int resolutionX READ resolutionX WRITE setResolutionX NOTIFY latticeChanged)
+    Q_PROPERTY(int resolutionY READ resolutionY WRITE setResolutionY NOTIFY latticeChanged)
+    Q_PROPERTY(int resolutionZ READ resolutionZ WRITE setResolutionZ NOTIFY latticeChanged)
+    Q_PROPERTY(int interpolation READ interpolation WRITE setInterpolation NOTIFY latticeChanged)
+    Q_PROPERTY(bool isDeformed READ isDeformed NOTIFY latticeChanged)
+    Q_PROPERTY(int pointCount READ pointCount NOTIFY latticeChanged)
+    Q_PROPERTY(int selectedPointCount READ selectedPointCount NOTIFY pointSelectionChanged)
+    Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged)
+    Q_PROPERTY(bool statusIsError READ statusIsError NOTIFY statusChanged)
+
+public:
+    static LatticeController* instance();
+    static LatticeController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
+    static void kill();
+    ~LatticeController() override;
+
+    // --- state -------------------------------------------------------------
+    /** Exactly one mesh entity selected and Edit Mode off — a lattice target. */
+    bool hasSelection() const;
+    bool sessionActive() const { return m_entity != nullptr; }
+    QString entityName() const { return QString::fromStdString(m_entityName); }
+    int resolutionX() const { return m_resX; }
+    int resolutionY() const { return m_resY; }
+    int resolutionZ() const { return m_resZ; }
+    /** 0 = linear, 1 = smooth (Catmull-Rom), 2 = Bézier — `Lattice::Interpolation`. */
+    int interpolation() const { return static_cast<int>(m_grid.interpolation); }
+    bool isDeformed() const { return sessionActive() && !m_grid.isAtRest(); }
+    int pointCount() const { return sessionActive() ? m_grid.pointCount() : 0; }
+    int selectedPointCount() const { return static_cast<int>(m_selected.size()); }
+    QString statusText() const { return m_status; }
+    bool statusIsError() const { return m_statusIsError; }
+
+    // --- session -----------------------------------------------------------
+    /** Box the selected entity with a rest lattice. Returns false (with a
+     *  status message) without a valid selection. */
+    Q_INVOKABLE bool beginSession();
+    /** Begin on a specific entity (MCP / tests). */
+    bool beginSessionOn(Ogre::Entity* entity);
+    /** Bake the current deformation into the mesh as one undo step and close. */
+    Q_INVOKABLE bool applySession();
+    /** Restore the rest mesh and close. */
+    Q_INVOKABLE void cancelSession();
+
+    // --- lattice edits (all undoable inside the session) ------------------
+    /** Changing the resolution rebuilds a REST lattice (the mesh snaps back
+     *  to its rest shape — the old control points have no meaning on the new
+     *  grid, exactly as in Blender). Clamped to [2, 16]. */
+    void setResolutionX(int n);
+    void setResolutionY(int n);
+    void setResolutionZ(int n);
+    Q_INVOKABLE void setResolution(int nx, int ny, int nz);
+    void setInterpolation(int mode);
+    /** Snap every control point back to its rest position. */
+    Q_INVOKABLE void resetPoints();
+    Q_INVOKABLE void selectAllPoints();
+    Q_INVOKABLE void clearPointSelection();
+    /** Translate the selected control points by a mesh-local delta. */
+    Q_INVOKABLE void moveSelectedPoints(double dx, double dy, double dz);
+    /** Set one control point (flat index) to a mesh-local position. */
+    Q_INVOKABLE bool setPoint(int index, double x, double y, double z);
+    /** Replace EVERY control point (mesh-local) as ONE undo step; the array
+     *  must hold exactly pointCount() entries. */
+    bool setPoints(const std::vector<Ogre::Vector3>& points);
+    /** Set the point selection to the given flat indices. */
+    Q_INVOKABLE void selectPoints(const QVariantList& indices);
+    Q_INVOKABLE QVariantList selectedPoints() const;
+    /** [x, y, z] of a control point (mesh-local), empty when out of range. */
+    Q_INVOKABLE QVariantList pointPosition(int index) const;
+    /** [x, y, z] rest position of a control point. */
+    Q_INVOKABLE QVariantList pointRestPosition(int index) const;
+
+    // --- persistence -------------------------------------------------------
+    QJsonObject latticeJson() const;
+    /** Replace the live lattice (resolution/box/points) — undoable. */
+    bool setLatticeJson(const QJsonObject& obj, QString* error = nullptr);
+    Q_INVOKABLE bool saveLatticeToFile(const QString& path);
+    Q_INVOKABLE bool loadLatticeFromFile(const QString& path);
+    /** Ask the host window for a save/open dialog (QML can't parent one). */
+    Q_INVOKABLE void requestSaveDialog() { emit saveLatticeRequested(); }
+    Q_INVOKABLE void requestLoadDialog() { emit loadLatticeRequested(); }
+
+    const Lattice::Grid& grid() const { return m_grid; }
+    /** Run the coalesced GPU write-back now instead of on the next event-loop
+     *  turn (tests / headless callers that read the mesh back immediately). */
+    void flushPendingDeform();
+
+    /** One-shot headless bake: deform `entity`'s vertices with `grid` from
+     *  their CURRENT positions and write them back (no session, no undo).
+     *  Shared by the CLI and the MCP one-shot tool. */
+    static bool deformEntityWithGrid(Ogre::Entity* entity, const Lattice::Grid& grid, QString* error = nullptr);
+
+    // --- viewport hooks (TransformOperator) --------------------------------
+    /** Flat index of the control point under the cursor, or -1. */
+    int hitTestPoint(OgreWidget* widget, const QPoint& screenPos);
+    /** Press: hit-test, update the point selection (`additive` = Shift) and
+     *  arm a camera-plane drag. Returns true when a point was grabbed; a miss
+     *  has no side effect (the caller decides between a click-to-deselect and
+     *  a rubber-band box select). */
+    bool beginDrag(OgreWidget* widget, const QPoint& screenPos, bool additive);
+    /** Rubber-band: select every control point whose screen projection lies
+     *  inside `screenRect` (viewport pixels). `additive` keeps the current
+     *  selection; otherwise it is replaced. Returns the number of points hit. */
+    int selectPointsInRect(OgreWidget* widget, const QRect& screenRect, bool additive);
+    void updateDrag(OgreWidget* widget, const QPoint& screenPos);
+    void endDrag();
+    bool dragActive() const { return m_dragActive; }
+    void updateHover(OgreWidget* widget, const QPoint& screenPos);
+
+    /** Undo plumbing (LatticeGridCommand): swap in a whole lattice document.
+     *  No-op unless the live session is on `entityName` AND is the very
+     *  session (`sessionId`) the command was recorded in. */
+    void restoreGridFromUndo(const std::string& entityName, uint64_t sessionId, const QJsonObject& grid);
+    /** Close a live session on `entityName` WITHOUT writing anything — for
+     *  a command about to rewrite that mesh's vertices itself. */
+    void abandonSessionFor(const std::string& entityName);
+    uint64_t sessionId() const { return m_sessionId; }
+    /** In-session edits live on this SESSION-LOCAL stack (routed through
+     *  UndoManager::setSessionStack while the session is open, cleared when
+     *  it ends) — only the bake reaches the global history. */
+    QUndoStack* sessionUndoStack() { return &m_sessionUndo; }
+
+signals:
+    void selectionChanged();
+    void sessionChanged();
+    void latticeChanged();
+    void pointSelectionChanged();
+    void statusChanged();
+    void saveLatticeRequested();
+    void loadLatticeRequested();
+
+private:
+    LatticeController();
+    static LatticeController* m_pSingleton;
+
+    /** The session entity if it is still alive AND unchanged — same name,
+     *  same pointer, same Ogre::Mesh. Anything else (destroyed, or replaced
+     *  under its scene node the way SplitMeshCommand swaps meshes) ENDS the
+     *  session and returns null, so no caller ever touches a dangling
+     *  `m_entity`. Every public entry point resolves through this. */
+    Ogre::Entity* resolveEntity();
+    Ogre::SceneNode* entityNode();
+    void endSession();
+    void setStatus(const QString& text, bool isError = false);
+
+    void rebuildRestLattice();
+    void captureRest();
+    /** Recompute every vertex from `m_rest` through `m_grid` and schedule a GPU flush. */
+    void applyDeform();
+    void flushToEntity();
+    void refreshOverlay();
+    void destroyOverlay();
+    /** Push a LatticeGridCommand if `before` differs from the live lattice. */
+    void pushGridUndo(const QJsonObject& before, const QString& description);
+    /** Swap the live lattice for `g` (resolution + points + interpolation) and re-deform. */
+    void adoptGrid(const Lattice::Grid& g);
+    bool restoreRestToEntity();
+
+    bool screenToRay(OgreWidget* widget, const QPoint& p, Ogre::Vector3& origin, Ogre::Vector3& dir,
+                     Ogre::Camera** camOut = nullptr) const;
+    bool worldToScreen(const Ogre::Camera* cam, OgreWidget* widget, const Ogre::Vector3& world,
+                       float& sx, float& sy) const;
+
+    // session
+    Ogre::Entity* m_entity = nullptr;
+    std::string m_entityName;
+    const Ogre::Mesh* m_meshIdentity = nullptr; ///< the entity's mesh at session start (replacement detector)
+    std::unique_ptr<EditableMesh> m_mesh;
+    std::vector<std::vector<Ogre::Vector3>> m_rest;        ///< [submesh][vertex] rest positions
+    std::vector<std::vector<Ogre::Vector3>> m_restNormals; ///< authored normals, restored verbatim on cancel
+    uint64_t m_sessionId = 0;      ///< bumps per beginSession; stamps LatticeGridCommands
+    QUndoStack m_sessionUndo;      ///< transient in-session edits (see sessionUndoStack)
+    bool m_inUndoReplay = false;   ///< a LatticeGridCommand is executing — never clear the stack under it
+    bool m_sessionUndoStale = false; ///< endSession ran mid-replay; clear on the next begin
+    bool m_meshDirty = false;      ///< GPU mesh currently holds a non-rest deform
+    Lattice::Grid m_grid;
+    int m_resX = 3, m_resY = 3, m_resZ = 3;
+    std::set<int> m_selected;
+    int m_hover = -1;
+    bool m_flushPending = false;
+
+    // drag
+    bool m_dragActive = false;
+    Ogre::Vector3 m_dragAnchorWorld = Ogre::Vector3::ZERO;
+    Ogre::Vector3 m_dragPlaneNormal = Ogre::Vector3::UNIT_Z;
+    std::vector<Ogre::Vector3> m_dragStartPoints;
+    bool m_dragMoved = false;
+
+    // overlay
+    Ogre::SceneNode* m_overlayNode = nullptr;
+    Ogre::ManualObject* m_wireObj = nullptr;
+    Ogre::ManualObject* m_pointObj = nullptr;
+    std::string m_overlayNodeName, m_wireObjName, m_pointObjName; ///< liveness lookups (see destroyOverlay)
+
+    QString m_status;
+    bool m_statusIsError = false;
+};
+
+#endif // LATTICECONTROLLER_H

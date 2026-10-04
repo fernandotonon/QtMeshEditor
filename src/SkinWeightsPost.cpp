@@ -1,6 +1,7 @@
 #include "SkinWeightsPost.h"
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <utility>
 
@@ -181,4 +182,100 @@ double SkinWeightsPost::bleedFraction(
     }
     if (total == 0) return -1.0;
     return double(bleeding) / double(total);
+}
+
+int SkinWeightsPost::unifyCoLocated(
+    std::vector<SkinWeights::VertexWeights>& weights,
+    const std::vector<float>& positions,
+    float epsilon,
+    const std::vector<std::uint8_t>& locked)
+{
+    const std::size_t n = weights.size();
+    if (n == 0 || positions.size() < n * 3) return 0;
+
+    if (epsilon <= 0.0f) {
+        float mn[3] = { positions[0], positions[1], positions[2] };
+        float mx[3] = { positions[0], positions[1], positions[2] };
+        for (std::size_t v = 1; v < n; ++v)
+            for (int a = 0; a < 3; ++a) {
+                mn[a] = std::min(mn[a], positions[v * 3 + a]);
+                mx[a] = std::max(mx[a], positions[v * 3 + a]);
+            }
+        const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
+        epsilon = std::max(1e-9f,
+                           1e-5f * std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+
+    // Quantized-position clustering (same scheme as MeshWeldOps).
+    struct Key {
+        long long x, y, z;
+        bool operator<(const Key& o) const {
+            if (x != o.x) return x < o.x;
+            if (y != o.y) return y < o.y;
+            return z < o.z;
+        }
+    };
+    std::map<Key, std::vector<int>> clusters;
+    for (std::size_t v = 0; v < n; ++v)
+        clusters[{ (long long)std::llround(positions[v * 3 + 0] / epsilon),
+                   (long long)std::llround(positions[v * 3 + 1] / epsilon),
+                   (long long)std::llround(positions[v * 3 + 2] / epsilon) }]
+            .push_back(int(v));
+
+    auto isLocked = [&](int v) {
+        return !locked.empty() && std::size_t(v) < locked.size() && locked[v];
+    };
+    auto sameWeights = [](const SkinWeights::VertexWeights& a,
+                          const SkinWeights::VertexWeights& b) {
+        if (a.count != b.count) return false;
+        for (int i = 0; i < a.count; ++i)
+            if (a.boneIndices[i] != b.boneIndices[i]
+                || std::fabs(a.weights[i] - b.weights[i]) > 1e-6)
+                return false;
+        return true;
+    };
+
+    int changed = 0;
+    for (auto& [key, verts] : clusters) {
+        if (verts.size() < 2) continue;
+
+        // A locked member dominates: everyone unlocked copies it.
+        int lockedRep = -1;
+        for (int v : verts)
+            if (isLocked(v)) { lockedRep = v; break; }
+
+        SkinWeights::VertexWeights target;
+        if (lockedRep >= 0) {
+            target = weights[lockedRep];
+        } else {
+            // Entry-wise average over the cluster, renormalized.
+            std::map<int, double> acc;
+            for (int v : verts)
+                for (int i = 0; i < weights[v].count; ++i)
+                    acc[weights[v].boneIndices[i]] +=
+                        weights[v].weights[i] / double(verts.size());
+            // Keep the top 8 by weight.
+            std::vector<std::pair<int, double>> rows(acc.begin(), acc.end());
+            std::sort(rows.begin(), rows.end(),
+                      [](const auto& a, const auto& b) {
+                          return a.second > b.second;
+                      });
+            if (rows.size() > 8) rows.resize(8);
+            double sum = 0;
+            for (const auto& r : rows) sum += r.second;
+            target = {};
+            for (const auto& r : rows) {
+                target.boneIndices[target.count] = r.first;
+                target.weights[target.count] = sum > 0 ? r.second / sum : 0.0;
+                ++target.count;
+            }
+        }
+        for (int v : verts) {
+            if (isLocked(v)) continue;
+            if (sameWeights(weights[v], target)) continue;
+            weights[v] = target;
+            ++changed;
+        }
+    }
+    return changed;
 }

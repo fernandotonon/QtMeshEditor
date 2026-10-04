@@ -3,6 +3,8 @@
 
 #include "FaceRig/FaceRigLandmarks.h"   // FaceMarker, NricpLandmark
 
+#include <array>
+
 #include <QObject>
 #include <QQmlEngine>
 #include <QStringList>
@@ -55,7 +57,7 @@ public:
     static void kill();
 
     bool hasMeshSelection() const;
-    bool busy() const { return m_busy; }
+    bool busy() const { return m_busy || m_preparing; }
     bool downloading() const { return m_downloading; }
     QString status() const { return m_status; }
     int progress() const { return m_progress; }
@@ -135,6 +137,11 @@ private:
 
     static FaceRigController* m_pSingleton;
     bool m_busy = false;
+    // Set while a rig/marker session PREPARES on the main thread (template +
+    // landmark-model waits spin nested event loops, so the UI could otherwise
+    // re-enter and start a second worker). busy() covers it.
+    bool m_preparing = false;
+    void setPreparing(bool p);
     bool m_downloading = false;
     QString m_status;
     int m_progress = 0;
@@ -147,6 +154,10 @@ private:
     bool m_seededConfident = false;
     std::string m_markerEntityName;
     std::vector<FaceRig::FaceMarker> m_markers;
+    // Face-forward direction (mesh-local) from the landmark view ranking,
+    // passed to the fit when the auto path found < 3 anchors so the template
+    // is yawed onto the face instead of the back of the head. Zero = none.
+    std::array<float, 3> m_faceDirHint{0, 0, 0};
     std::vector<Ogre::SceneNode*> m_markerNodes;
     std::shared_ptr<class FaceRig::ArkitTemplate> m_markerTmpl;
     // Geometry extracted on the main thread, handed to the worker rig run.

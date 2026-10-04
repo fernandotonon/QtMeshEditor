@@ -38,6 +38,10 @@ private slots:
     void onRefreshModelsClicked();
     void onDownloadModelClicked();
     void onCancelDownloadClicked();
+    void onDeleteModelClicked();        // #1052: free a downloaded GGUF from the same tab
+    void onDeleteAllModelsClicked();
+    void onOpenLlmFolderClicked();
+    void updateDownloadButtons();
 
     void onModelLoadCompleted(const QString &modelName);
     void onModelLoadError(const QString &error);
@@ -129,6 +133,9 @@ private:
     QListWidget *m_recommendedModelsList;
     QPushButton *m_downloadButton;
     QPushButton *m_cancelDownloadButton;
+    QPushButton *m_deleteModelButton = nullptr;
+    QPushButton *m_deleteAllModelsButton = nullptr;
+    QPushButton *m_openLlmFolderButton = nullptr;
     QProgressBar *m_downloadProgressBar;
     QLabel *m_downloadStatusLabel;
     QLabel *m_downloadSpeedLabel;

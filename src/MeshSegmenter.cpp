@@ -1,6 +1,7 @@
 #include "MeshSegmenter.h"
 
 #include "ModelDownloader.h"
+#include "ModelFetch.h"
 #include "OnnxRuntimeSettings.h"
 
 #include <QByteArray>
@@ -1137,25 +1138,16 @@ QString ensureSegmentFileBlocking(const QString& dest, const QString& fileName,
     QDir().mkpath(QFileInfo(dest).absolutePath());
     const QString url = base + fileName;
 
-    QEventLoop loop;
-    bool ok = false, timedOut = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) { if (name == label) { ok = true; loop.quit(); } });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) { if (name == label) { ok = false; loop.quit(); } });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
-    timeout.start(300000);   // 5 min — every segment model is small (~MBs)
-
-    dl->startDownload(url, dest, label);
-    loop.exec();
-
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut && dl) dl->cancelDownload();
-
-    return (ok && !timedOut && QFileInfo::exists(dest)) ? dest : QString();
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dest;
+    req.label = label;
+    req.timeoutMs = 300000;
+    // #1037: one shared blocking wait — keeps the downloader's own error text
+    // and the synchronous-rejection guard every consumer used to lack.
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    if (!fo.ok) return {};
+    return fo.path;
 #endif
 }
 } // namespace

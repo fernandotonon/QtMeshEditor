@@ -15,6 +15,41 @@ void copyBuffer(const TexturePaintBuffer& src, TexturePaintBuffer& dst)
     dst.clearDirty();
 }
 
+/// Nearest-neighbour rescale of `src` into a new w*h buffer.
+/// Deliberately NOT TexturePaintBuffer::resize, which fills with 0xFF
+/// (opaque white) and discards the content. Nearest-neighbour keeps this
+/// dependency-free and preserves hard alpha edges (decals / stencils).
+TexturePaintBuffer rescaleNearest(const TexturePaintBuffer& src, int w, int h)
+{
+    TexturePaintBuffer scaled;
+    if (w <= 0 || h <= 0) return scaled;
+    scaled.resize(w, h);
+    // resize() leaves the buffer OPAQUE WHITE, so a degenerate source must be
+    // cleared to transparent — returning it as-is would reintroduce exactly
+    // the blank-white layer this helper exists to prevent.
+    if (src.width() <= 0 || src.height() <= 0) {
+        scaled.clear(Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.0f));
+        scaled.clearDirty();
+        return scaled;
+    }
+
+    const auto& s = src.data();
+    auto& d = scaled.data();
+    for (int y = 0; y < h; ++y) {
+        const int sy = std::min(src.height() - 1, y * src.height() / h);
+        const size_t srcRow = static_cast<size_t>(sy) * src.width();
+        const size_t dstRow = static_cast<size_t>(y) * w;
+        for (int x = 0; x < w; ++x) {
+            const int sx = std::min(src.width() - 1, x * src.width() / w);
+            const size_t si = (srcRow + sx) * 4u;
+            const size_t di = (dstRow + x) * 4u;
+            if (si + 3 < s.size() && di + 3 < d.size())
+                std::memcpy(&d[di], &s[si], 4);
+        }
+    }
+    return scaled;
+}
+
 } // namespace
 
 int PaintLayerStack::width() const
@@ -165,8 +200,12 @@ int PaintLayerStack::addFromBuffer(const TexturePaintBuffer& src,
     }
     const int w = width();
     const int h = height();
+    // RESCALE a mismatched buffer, never bare resize(): resize fills with
+    // 0xFF (opaque WHITE) and drops the content, so a caller that handed us a
+    // differently-sized buffer — e.g. a decal projected at square resolution
+    // onto a NON-SQUARE texture — got a blank white layer instead of pixels.
     if (src.width() != w || src.height() != h)
-        L.buffer.resize(w, h);
+        L.buffer = rescaleNearest(src, w, h);
     m_layers.push_back(std::move(L));
     m_activeIndex = layerCount() - 1;
     return m_activeIndex;

@@ -216,7 +216,9 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
     // --- UniRig: run the slow ONNX inference on a WORKER thread so the UI
     // stays responsive + shows a progress bar; build the Ogre skeleton back on
     // the MAIN thread. Pinocchio is instant, so it keeps the synchronous path.
-    if (opts.algorithm == AutoRig::Algorithm::UniRig) {
+    // #1013: the vehicle template is geometric and rigEntity() short-circuits
+    // UniRig for it with a reason — no worker needed, take the synchronous path.
+    if (opts.algorithm == AutoRig::Algorithm::UniRig && !AutoRig::templateIsRigid(opts.tmpl)) {
         // Gather geometry now (main thread — locks Ogre HW buffers).
         std::vector<float> verts;
         std::vector<uint32_t> indices;
@@ -244,10 +246,12 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                 return true;
             };
             QString err;
+            QString labeling;   // #1013: which naming UniRig applied
             std::vector<AutoRig::Joint> joints =
-                AutoRig::predictUniRig(verts, indices, upAxisVal, progress, &err);
+                AutoRig::predictUniRig(verts, indices, upAxisVal, progress, &err,
+                                       AutoRig::templateFromString(templateName), &labeling);
             // Back to the main thread: build the skeleton (Ogre) or report.
-            QMetaObject::invokeMethod(qApp, [self, joints, err, entName,
+            QMetaObject::invokeMethod(qApp, [self, joints, err, labeling, entName,
                                              templateName, upAxisVal, alsoSkin, cancel]() {
                 if (!self) return;
                 self->m_rigDownloading = false;
@@ -263,8 +267,8 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                                                err, templateName, upAxisVal, alsoSkin);
                     return;
                 }
-                self->finishUniRigOnMain(QString::fromStdString(entName), joints,
-                                         templateName, upAxisVal, alsoSkin);
+                self->finishUniRigOnMain(QString::fromStdString(entName), joints, 
+                                         templateName, upAxisVal, alsoSkin, labeling);
             }, Qt::QueuedConnection);
         }).detach();
 
@@ -285,10 +289,11 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
         // (the default ML skinner takes minutes — a synchronous chain
         // froze the UI). Separate undo entry; result via its signals.
         skinned = false;
-        if (report.applied && alsoSkin)
-            skinned = SkinWeightsController::instance()
-                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
-                                                           false, true);
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
+            skinned = chainSkinForTemplate(templateName);
     } catch (const Ogre::Exception& e) {
         m_busy = false;
         emit busyChanged();
@@ -364,10 +369,21 @@ void AutoRigController::emitRigResult(const AutoRig::Report& report, bool skinne
                         ? QStringLiteral("Auto-rig failed") : report.error);
 }
 
+bool AutoRigController::chainSkinForTemplate(const QString& templateName)
+{
+    // #1013: vehicles/props bind rigidly (one bone per vertex, no smoothing);
+    // everything else keeps the soft default (SkinTokens → geodesic fallback).
+    auto* sc = SkinWeightsController::instance();
+    if (AutoRig::templateIsRigid(AutoRig::templateFromString(templateName)))
+        return sc->computeWeightsForSelectedAsync(1, 4.0, 0.0, false, true,
+                                                  QStringLiteral("inverse-distance"), 64, 0);
+    return sc->computeWeightsForSelectedAsync(4, 4.0, 0.5, false, true);
+}
+
 void AutoRigController::finishUniRigOnMain(const QString& entityName,
                                            const std::vector<AutoRig::Joint>& joints,
                                            const QString& templateName, int upAxis,
-                                           bool alsoSkin)
+                                           bool alsoSkin, const QString& labeling)
 {
     // MAIN thread: build the Ogre skeleton from worker-predicted joints via the
     // undoable command (using the prePredictedJoints escape hatch so it skips
@@ -377,6 +393,7 @@ void AutoRigController::finishUniRigOnMain(const QString& entityName,
     opts.tmpl = AutoRig::templateFromString(templateName);
     opts.upAxis = upAxis;
     opts.prePredictedJoints = joints;
+    opts.prePredictedLabeling = labeling;   // #1013
 
     AutoRig::Report report; bool skinned = false;
     try {
@@ -386,10 +403,11 @@ void AutoRigController::finishUniRigOnMain(const QString& entityName,
         // Chained skinning runs ASYNC (see autoRigSelected) — its
         // result arrives via SkinWeightsController's signals.
         skinned = false;
-        if (report.applied && alsoSkin)
-            skinned = SkinWeightsController::instance()
-                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
-                                                           false, true);
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
+            skinned = chainSkinForTemplate(templateName);
     } catch (const std::exception& e) {
         report.applied = false;
         report.error = QString::fromUtf8(e.what());
@@ -414,10 +432,11 @@ void AutoRigController::finishUniRigFallback(const QString& entityName, const QS
         // Chained skinning runs ASYNC (see autoRigSelected) — its
         // result arrives via SkinWeightsController's signals.
         skinned = false;
-        if (report.applied && alsoSkin)
-            skinned = SkinWeightsController::instance()
-                          ->computeWeightsForSelectedAsync(4, 4.0, 0.5,
-                                                           false, true);
+        // A rigid template (vehicle) is bound as part of the rig — the parts
+        // are useless unattached — so it skins even with the box unticked,
+        // matching `qtmesh rig --skeleton vehicle` (CLI) and MCP.
+        if (report.applied && (alsoSkin || AutoRig::templateIsRigid(opts.tmpl)))
+            skinned = chainSkinForTemplate(templateName);
     } catch (const std::exception& e) {
         report.applied = false;
         report.error = QString::fromUtf8(e.what());

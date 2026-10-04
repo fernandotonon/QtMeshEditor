@@ -17,6 +17,7 @@
 #include "CurveEditModel.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "MotionComposer.h"
 #include "MotionLibrary.h"
 #include "MotionGenerator.h"
 #include "commands/AddKeyframeCommand.h"
@@ -2182,6 +2183,10 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     bool worldFrame = false;
     std::vector<std::array<float, 4>> cmuRest;
     std::vector<std::array<float, 3>> clipDirs;
+    // #1023/#954: per-role bind->reference roll. The CLI has always passed
+    // this; the GUI did not, so an identical prompt produced a DIFFERENT roll
+    // treatment here than from `qtmesh anim --generate`.
+    std::vector<float> clipRefRoll;
     std::vector<float> clipRootY;
     std::vector<std::vector<std::array<float, 4>>> clipFingers;  // #838
     std::vector<std::array<float, 3>> clipFingerRest;             // #838
@@ -2190,6 +2195,24 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // The animation PICKER passes an explicit clip index — force the template
     // path and that exact clip (no model, no random matchAmong).
     if (variantIndex >= 0) useModel = false;
+
+    // #1034: the trained model consumes the WHOLE prompt as one text condition
+    // and emits ONE clip, so a sequenced prompt ("walk then punch, wave twice
+    // then sit") comes back as a single averaged pose — every action at once.
+    // Composition lives only on the template path, so route there and SAY SO;
+    // silently handing back a blend is the failure mode this fixes.
+    // Recorded, NOT emitted here: the QML handler assigns the status text
+    // (`genStatus.text = message`), so an interim emit is overwritten by the
+    // success message below and the user would see "template" with no reason.
+    // Fold it into the FINAL message instead.
+    QString modelSkipNote;
+    const bool multiStep = MotionComposer::promptHasMultipleSteps(prompt);
+    if (useModel && multiStep) {
+        useModel = false;
+        modelSkipNote = QStringLiteral(
+            " — multi-step prompt, so the template library was used "
+            "(the trained model generates a single motion)");
+    }
 
     if (useModel) {
         const QString mp = MotionGenerator::ensureModelBlocking();
@@ -2218,6 +2241,8 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                 QStringLiteral("Model unavailable for this prompt — using template library."), false);
     }
 
+    int composedSteps = 0;   // #1010: >1 when several takes were stitched
+    bool selDescent = false;
     if (!gotClip) {
         const QString libPath = MotionLibrary::ensureLibraryBlocking();
         if (libPath.isEmpty())
@@ -2232,12 +2257,31 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             idx = variantIndex;
             action = lib.clip(idx).action;
         } else {
-            idx = lib.matchPrompt(prompt, &action);
-            if (idx < 0) {
+            // #1010: a MULTI-STEP prompt ("walk then sit then wave twice")
+            // composes several takes into one stitched clip; a single action
+            // falls through to matchPrompt unchanged.
+            const auto sel = MotionComposer::selectForPrompt(prompt, lib);
+            if (!sel.ok) {
                 QString known; for (const QString& a : lib.actions()) known += " " + a;
-                return fail(QStringLiteral("No motion matched \"%1\". Try:%2").arg(prompt, known));
+                return fail(QStringLiteral("%1. Try:%2").arg(sel.error, known));
             }
+            action = sel.action;
+            quats = sel.quats; fps = sel.fps;
+            worldFrame = lib.isWorldFrame();
+            cmuRest = sel.restWorld.empty() ? lib.cmuRestWorld() : sel.restWorld;
+            clipDirs = sel.restDir;
+            clipRefRoll = sel.refRoll;   // #1023
+            clipRootY = sel.rootY;
+            if (lib.jointCount() == MotionInbetween::canonicalJointCount()) {
+                clipFingers = sel.fingers;
+                clipFingerRest = sel.fingerRestDir;
+            }
+            clipSource = QStringLiteral("template");
+            composedSteps = static_cast<int>(sel.steps.size());
+            selDescent = sel.verticalDescent;
+            idx = -2;   // handled
         }
+        if (idx >= 0) {
         const MotionLibrary::Clip& clip = lib.clip(idx);
         quats = clip.quats; fps = clip.fps;
         worldFrame = lib.isWorldFrame();
@@ -2246,6 +2290,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         cmuRest = clip.restWorld.empty() ? lib.cmuRestWorld()
                                          : clip.restWorld;
         clipDirs = clip.restDir;
+        clipRefRoll = clip.refRoll;   // #1023 bind-anchored roll
         clipRootY = clip.rootY;
         // V2 (schema v4, 52 joints): fingers retarget as canonical joints via
         // the body path — don't ALSO fire the applyFingerCurl side-channel
@@ -2255,18 +2300,23 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             clipFingerRest = clip.fingerRestDir;   // #838 (per-clip const)
         }
         clipSource = QStringLiteral("template");
-        if (duration > 0.05) {
-            const int want = std::max(2, int(duration * clip.fps));
+        selDescent = MotionLibrary::isVerticalDescentAction(action);
+        }   // end single-clip block (idx >= 0)
+        // Retime works for BOTH paths, so it reads the resolved arrays rather
+        // than the library clip (a composed clip has no single source Clip).
+        if (duration > 0.05 && quats.size() >= 2) {
+            const int srcFrames = static_cast<int>(quats.size());
+            const int want = std::max(2, int(duration * fps));
             std::vector<std::vector<std::array<float, 4>>> retimed(want);
             std::vector<float> retimedY;
             std::vector<std::vector<std::array<float, 4>>> retimedF;
-            const bool hadY = static_cast<int>(clipRootY.size()) == clip.frames;
-            const bool hadF = static_cast<int>(clipFingers.size()) == clip.frames;
+            const bool hadY = static_cast<int>(clipRootY.size()) == srcFrames;
+            const bool hadF = static_cast<int>(clipFingers.size()) == srcFrames;
             if (hadY) retimedY.resize(want);
             if (hadF) retimedF.resize(want);
             for (int f = 0; f < want; ++f) {
-                const float src = (clip.frames - 1) * (float(f) / float(want - 1));
-                const int si = std::min(clip.frames - 1, int(src + 0.5f));
+                const float src = (srcFrames - 1) * (float(f) / float(want - 1));
+                const int si = std::min(srcFrames - 1, int(src + 0.5f));
                 retimed[f] = quats[si];
                 if (hadY) retimedY[f] = clipRootY[si];
                 if (hadF) retimedF[f] = clipFingers[si];
@@ -2284,14 +2334,16 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     // Descent applies only to non-locomotion actions AND only when the user
     // left the checkbox on (#838).
     const bool doDescent =
-        verticalDescent && MotionLibrary::isVerticalDescentAction(action);
+        verticalDescent && selDescent;
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
                                                       worldFrame, cmuRest,
                                                       /*refineWithModel=*/false,
                                                       /*refineStride=*/8, yaw180,
                                                       clipDirs,
                                                       clipSource == QStringLiteral("model"),
-                                                      clipRootY, doDescent);
+                                                      clipRootY, doDescent,
+                                                      /*cmuLibraryHandedness=*/true,
+                                                      clipRefRoll);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 
@@ -2379,9 +2431,18 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     out["frames"] = res.frames;
     out["length"] = res.length;
     out["tracksWritten"] = res.tracksWritten;
-    const QString msg = QStringLiteral("Generated '%1' (%2) — %3 bones, %4 frames (%5s)")
+    out["composedSteps"] = composedSteps;
+    // #1010: say so when several takes were stitched, otherwise the user sees
+    // a long clip named "walk_sit_wave" with no explanation of where it came from.
+    const QString composedNote = composedSteps > 1
+        ? QStringLiteral(", composed from %1 steps").arg(composedSteps)
+        : QString();
+    // #1034: a user who CHECKED "use trained model" and got the template path
+    // must be told why, in the message that actually survives.
+    if (!modelSkipNote.isEmpty()) out["modelSkipped"] = modelSkipNote.trimmed();
+    const QString msg = QStringLiteral("Generated '%1' (%2) — %3 bones, %4 frames (%5s)%6%7")
         .arg(action, clipSource).arg(res.tracksWritten).arg(res.frames)
-        .arg(res.length, 0, 'f', 1);
+        .arg(res.length, 0, 'f', 1).arg(composedNote, modelSkipNote);
     emit generateMotionStatus(msg, false);
     return out;
 }

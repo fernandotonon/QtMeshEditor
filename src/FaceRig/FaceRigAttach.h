@@ -29,6 +29,8 @@ struct AttachReport {
     int userVertexCount = 0;
     double fitMeanResidualPct = 0.0;
     double fitMaxResidualPct = 0.0;
+    QString orientationSource = QStringLiteral("none");   // anchors | face_dir | none
+    double orientationAngleDeg = 0.0;
     QString templateFallback;   // set when the template had to be downloaded/etc.
     std::vector<QString> shapeNames;   // attached shape names, in order
 };

@@ -1,0 +1,762 @@
+#include <gtest/gtest.h>
+
+#include "MotionComposer.h"
+#include "MotionLibrary.h"
+
+#include <QByteArray>
+
+#include <cmath>
+#include <cstdio>
+
+// MotionComposer is Ogre-free (like MotionLibrary), so these run headless with
+// no GL/network. They pin the three stages the composed path is made of:
+// parsing, take compilation, and seam stitching.
+
+namespace {
+
+// A library with distinguishable poses per action so a stitch is observable:
+// each clip's joints rotate by a per-clip angle about X, ramping across frames.
+QByteArray libWithActions(const std::vector<std::pair<QString, int>>& actions)
+{
+    auto poseAt = [](double ang) {
+        const double h = ang * 0.5;
+        const double x = std::sin(h), w = std::cos(h);
+        QByteArray p = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) p += ",";
+            p += "[" + QByteArray::number(x, 'g', 8) + ",0,0,"
+               + QByteArray::number(w, 'g', 8) + "]";
+        }
+        return p + "]";
+    };
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    for (size_t c = 0; c < actions.size(); ++c) {
+        if (c) json += ",";
+        const int frames = actions[c].second;
+        QByteArray fr = "[";
+        for (int f = 0; f < frames; ++f) {
+            if (f) fr += ",";
+            // each clip occupies its own angular band; frames ramp within it
+            // Bands are widely separated so two clips can NEVER share a
+            // pose: otherwise bestCut finds a perfect match, the seam step
+            // is exactly 0, and any assertion about blending is vacuous.
+            fr += poseAt(4.0 * double(c) + 0.02 * double(f));
+        }
+        fr += "]";
+        // #1023: a DISTINCT per-clip refRoll, so a test can tell WHICH
+        // take's baseline (if any) survived a composition.
+        QByteArray rr = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) rr += ",";
+            rr += QByteArray::number(0.1 * double(c + 1), 'g', 8);
+        }
+        rr += "]";
+        json += "{\"action\":\"" + actions[c].first.toUtf8()
+              + "\",\"source\":\"test " + QByteArray::number(int(c))
+              + "\",\"refRoll\":" + rr
+              + ",\"quats\":" + fr + "}";
+    }
+    json += "]}";
+    return json;
+}
+
+MotionLibrary makeLib(const std::vector<std::pair<QString, int>>& actions)
+{
+    MotionLibrary lib;
+    EXPECT_TRUE(lib.loadFromJson(libWithActions(actions))) << lib.error().toStdString();
+    return lib;
+}
+
+} // namespace
+
+// ---- parsing ---------------------------------------------------------------
+
+TEST(MotionComposer, ParsesMultiStepPromptInOrder)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20},
+                                       {"wave", 20}, {"idle", 20}});
+    // The epic's own acceptance prompt.
+    const auto s = MotionComposer::parse(
+        QStringLiteral("walk forward, sit down, wave twice, then stand up"), lib);
+    ASSERT_EQ(s.steps.size(), 4u);
+    EXPECT_EQ(s.steps[0].action.toStdString(), "walk");
+    EXPECT_EQ(s.steps[1].action.toStdString(), "sit");
+    EXPECT_EQ(s.steps[2].action.toStdString(), "wave");
+    EXPECT_EQ(s.steps[3].action.toStdString(), "idle");   // "stand" -> idle
+    EXPECT_EQ(s.steps[2].repeat, 2);                      // "twice"
+}
+
+TEST(MotionComposer, SingleActionPromptYieldsOneStep)
+{
+    // Composing must degrade exactly to the old single-clip behaviour.
+    const MotionLibrary lib = makeLib({{"walk", 12}, {"run", 12}});
+    const auto s = MotionComposer::parse(QStringLiteral("walking forward"), lib);
+    ASSERT_EQ(s.steps.size(), 1u);
+    EXPECT_EQ(s.steps[0].action.toStdString(), "walk");
+    EXPECT_EQ(s.steps[0].repeat, 1);
+}
+
+TEST(MotionComposer, ParsesRepeatAndDuration)
+{
+    const MotionLibrary lib = makeLib({{"wave", 30}, {"walk", 30}});
+    const auto s = MotionComposer::parse(
+        QStringLiteral("walk for 2 seconds then wave 3 times"), lib);
+    ASSERT_EQ(s.steps.size(), 2u);
+    EXPECT_NEAR(s.steps[0].durationS, 2.0f, 1e-4f);
+    EXPECT_EQ(s.steps[1].repeat, 3);
+}
+
+TEST(MotionComposer, ReportsUnresolvedFragments)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}});
+    const auto s = MotionComposer::parse(
+        QStringLiteral("walk then juggle chainsaws"), lib);
+    ASSERT_EQ(s.steps.size(), 1u);
+    ASSERT_EQ(s.unresolved.size(), 1u);      // reported, never silently played
+    EXPECT_TRUE(s.unresolved[0].contains(QStringLiteral("juggle")));
+}
+
+TEST(MotionComposer, ParsesJsonScript)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}, {"wave", 10}});
+    const QByteArray js = R"({"steps":[{"action":"walk","duration_s":1.5},
+                                       {"action":"wave","repeat":2}]})";
+    const auto s = MotionComposer::parseJson(js, lib);
+    ASSERT_EQ(s.steps.size(), 2u);
+    EXPECT_NEAR(s.steps[0].durationS, 1.5f, 1e-4f);
+    EXPECT_EQ(s.steps[1].repeat, 2);
+}
+
+TEST(MotionComposer, JsonRejectsInventedAction)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}});
+    const auto s = MotionComposer::parseJson(
+        R"({"steps":[{"action":"teleport"}]})", lib);
+    EXPECT_TRUE(s.steps.empty());
+    ASSERT_EQ(s.unresolved.size(), 1u);
+}
+
+// ---- pure helpers ----------------------------------------------------------
+
+TEST(MotionComposer, PoseDistanceIsZeroForIdenticalPose)
+{
+    std::vector<std::array<float, 4>> a(22, {0.0f, 0.0f, 0.0f, 1.0f});
+    EXPECT_NEAR(MotionComposer::poseDistance(a, a), 0.0, 1e-9);
+}
+
+TEST(MotionComposer, PoseDistanceIgnoresQuaternionSign)
+{
+    // q and -q are the SAME rotation; a sign-sensitive metric would rank an
+    // identical pose as maximally distant and pick a nonsense cut point.
+    std::vector<std::array<float, 4>> a(22, {0.0f, 0.0f, 0.0f, 1.0f});
+    std::vector<std::array<float, 4>> b(22, {0.0f, 0.0f, 0.0f, -1.0f});
+    EXPECT_NEAR(MotionComposer::poseDistance(a, b), 0.0, 1e-6);
+}
+
+TEST(MotionComposer, BestCutFindsMatchingPosePair)
+{
+    // Take A ends on pose P; take B contains P at index 2. The cut must land on
+    // that pair rather than defaulting to (last, first). Every other frame gets
+    // a DISTINCT angle so exactly one pair matches — with repeated filler poses
+    // several pairs tie at distance 0 and the assertion would be meaningless.
+    auto poseAt = [](float ang) {
+        const float h = ang * 0.5f;
+        return std::vector<std::array<float, 4>>(
+            22, std::array<float, 4>{std::sin(h), 0.0f, 0.0f, std::cos(h)});
+    };
+    const float target = 1.1f;
+    std::vector<std::vector<std::array<float, 4>>> A{
+        poseAt(0.10f), poseAt(0.20f), poseAt(0.30f), poseAt(target)};
+    std::vector<std::vector<std::array<float, 4>>> B{
+        poseAt(0.50f), poseAt(0.60f), poseAt(target), poseAt(0.80f)};
+
+    const auto [ea, sb] = MotionComposer::bestCut(A, B, 4);
+    EXPECT_EQ(ea, 3);
+    EXPECT_EQ(sb, 2);
+}
+
+TEST(MotionComposer, SlerpEndpointsAndMidpoint)
+{
+    const std::array<float, 4> a{0.0f, 0.0f, 0.0f, 1.0f};
+    const std::array<float, 4> b{0.7071068f, 0.0f, 0.0f, 0.7071068f};
+    const auto at0 = MotionComposer::slerp(a, b, 0.0f);
+    EXPECT_NEAR(at0[3], 1.0f, 1e-4f);
+    const auto at1 = MotionComposer::slerp(a, b, 1.0f);
+    EXPECT_NEAR(at1[0], b[0], 1e-4f);
+    const auto mid = MotionComposer::slerp(a, b, 0.5f);
+    // Halfway between 0 and 90 degrees is 45.
+    EXPECT_NEAR(2.0f * std::acos(std::clamp(mid[3], -1.0f, 1.0f)),
+                static_cast<float>(M_PI) / 4.0f, 1e-3f);
+}
+
+// ---- composition -----------------------------------------------------------
+
+TEST(MotionComposer, ComposesMultiStepIntoOneContinuousClip)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}, {"wave", 20}});
+    const auto script = MotionComposer::parse(
+        QStringLiteral("walk then sit then wave"), lib);
+    ASSERT_EQ(script.steps.size(), 3u);
+
+    const auto comp = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(comp.ok) << comp.error.toStdString();
+    EXPECT_EQ(comp.actions.size(), 3u);
+    EXPECT_EQ(comp.seamFrames.size(), 2u);       // two junctions
+    EXPECT_EQ(comp.jointCount, 22);
+    // Longer than any single take: the steps really were concatenated.
+    EXPECT_GT(comp.frames(), 20);
+    for (const auto& pose : comp.quats) EXPECT_EQ(pose.size(), 22u);
+}
+
+TEST(MotionComposer, SeamBlendSmoothsTheJunction)
+{
+    // Isolate the BLEND. Two takes whose poses never coincide, so bestCut
+    // cannot hide the discontinuity by finding an already-matching pair: any
+    // junction is a real jump, and only the crossfade can soften it.
+    //
+    // NB comparing compose(blend=6) against compose(blend=0) does NOT isolate
+    // blending — blendFrames also widens bestCut's search window, so the two
+    // runs pick different seams. Here the window is held fixed and only the
+    // blend length differs.
+    auto poseAt = [](float ang) {
+        const float h = ang * 0.5f;
+        return std::vector<std::array<float, 4>>(
+            22, std::array<float, 4>{std::sin(h), 0.0f, 0.0f, std::cos(h)});
+    };
+    // A sits near 0 rad throughout; B sits near 1.5 rad throughout.
+    std::vector<std::vector<std::array<float, 4>>> A, B;
+    for (int f = 0; f < 12; ++f) A.push_back(poseAt(0.01f * float(f)));
+    for (int f = 0; f < 12; ++f) B.push_back(poseAt(1.50f + 0.01f * float(f)));
+
+    auto worstStep = [](const std::vector<std::vector<std::array<float, 4>>>& c) {
+        double worst = 0.0;
+        for (size_t f = 1; f < c.size(); ++f)
+            worst = std::max(worst, MotionComposer::poseDistance(c[f - 1], c[f]));
+        return worst;
+    };
+
+    // Hard cut: splice B straight onto A.
+    std::vector<std::vector<std::array<float, 4>>> hard = A;
+    for (const auto& p : B) hard.push_back(p);
+
+    // Blended: ramp across the first `blend` frames of B, the same rule
+    // compose() applies at each junction.
+    const int blend = 6;
+    std::vector<std::vector<std::array<float, 4>>> soft = A;
+    for (size_t k = 0; k < B.size(); ++k) {
+        std::vector<std::array<float, 4>> pose = B[k];
+        if (static_cast<int>(k) < blend) {
+            const float t = float(k + 1) / float(blend + 1);
+            const auto& prev = soft.back();
+            for (size_t j = 0; j < pose.size(); ++j)
+                pose[j] = MotionComposer::slerp(prev[j], pose[j], t);
+        }
+        soft.push_back(std::move(pose));
+    }
+
+    EXPECT_LT(worstStep(soft) * 2.0, worstStep(hard));
+}
+
+TEST(MotionComposer, ComposeAppliesTheBlendAtItsSeams)
+{
+    // The rule is tested above; this pins that compose() actually APPLIES it.
+    // Two actions whose poses are far apart (the fixture puts each clip in its
+    // own angular band), so the junction is a genuine jump that only the
+    // in-compose crossfade can soften. Without it the first post-seam frame
+    // lands on B's raw pose; with it that frame sits partway between.
+    const MotionLibrary lib = makeLib({{"walk", 16}, {"sit", 16}});
+    const auto script = MotionComposer::parse(QStringLiteral("walk then sit"), lib);
+    ASSERT_EQ(script.steps.size(), 2u);
+
+    const auto c = MotionComposer::compose(script, lib, /*blendFrames=*/6);
+    ASSERT_TRUE(c.ok) << c.error.toStdString();
+    ASSERT_EQ(c.seamFrames.size(), 1u);
+    const int seam = c.seamFrames[0];
+    ASSERT_GT(seam, 0);
+    ASSERT_LT(seam, c.frames());
+
+    // The step ACROSS the seam must be smaller than the gap between the two
+    // takes' own poses — i.e. the crossfade really interpolated.
+    const double acrossSeam =
+        MotionComposer::poseDistance(c.quats[size_t(seam - 1)],
+                                     c.quats[size_t(seam)]);
+    // Compare against the raw distance the un-blended splice would have had:
+    // the last pre-seam pose vs the take-B pose 'blend' frames later, which the
+    // ramp has fully reached by then.
+    const int after = std::min(c.frames() - 1, seam + 6);
+    const double fullGap =
+        MotionComposer::poseDistance(c.quats[size_t(seam - 1)],
+                                     c.quats[size_t(after)]);
+    EXPECT_LT(acrossSeam, fullGap)
+        << "seam step " << acrossSeam << " should be well under the "
+        << fullGap << " gap the blend ramps across";
+}
+
+TEST(MotionComposer, RepeatLengthensTheStep)
+{
+    const MotionLibrary lib = makeLib({{"wave", 10}});
+    const auto once = MotionComposer::compose(
+        MotionComposer::parse(QStringLiteral("wave"), lib), lib);
+    const auto twice = MotionComposer::compose(
+        MotionComposer::parse(QStringLiteral("wave twice"), lib), lib);
+    ASSERT_TRUE(once.ok);
+    ASSERT_TRUE(twice.ok);
+    EXPECT_GT(twice.frames(), once.frames());
+}
+
+TEST(MotionComposer, DurationTrimsTheTake)
+{
+    const MotionLibrary lib = makeLib({{"walk", 60}});   // 2 s at 30 fps
+    const auto full = MotionComposer::compose(
+        MotionComposer::parse(QStringLiteral("walk"), lib), lib);
+    const auto cut = MotionComposer::compose(
+        MotionComposer::parse(QStringLiteral("walk for 1 second"), lib), lib);
+    ASSERT_TRUE(full.ok);
+    ASSERT_TRUE(cut.ok);
+    EXPECT_EQ(full.frames(), 60);
+    EXPECT_EQ(cut.frames(), 30);
+}
+
+TEST(MotionComposer, EmptyScriptFailsCleanly)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}});
+    const auto comp = MotionComposer::compose(
+        MotionComposer::parse(QStringLiteral("juggle chainsaws"), lib), lib);
+    EXPECT_FALSE(comp.ok);
+    EXPECT_FALSE(comp.error.isEmpty());
+}
+
+// ---- surface-facing selection ----------------------------------------------
+
+TEST(MotionComposer, SelectionFallsBackToSingleClipForOneAction)
+{
+    // A one-action prompt must keep the EXACT shipped behaviour, including the
+    // finger side-channel that a stitched multi-take clip cannot carry.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk forward"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_FALSE(sel.composed);
+    EXPECT_EQ(sel.action.toStdString(), "walk");
+    EXPECT_EQ(sel.quats.size(), 20u);     // the take, untouched
+}
+
+TEST(MotionComposer, SelectionComposesMultiStepPrompt)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then sit then wave"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_TRUE(sel.composed);
+    EXPECT_EQ(sel.steps.size(), 3u);
+    // Clip name reflects the sequence so different prompts don't collide.
+    EXPECT_EQ(sel.action.toStdString(), "walk_sit_wave");
+    EXPECT_GT(sel.quats.size(), 20u);
+    // Fingers are intentionally dropped across a composition.
+    EXPECT_TRUE(sel.fingers.empty());
+}
+
+TEST(MotionComposer, SelectionAcceptsAJsonScript)
+{
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"wave", 20}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QString(), lib, R"({"steps":[{"action":"walk"},{"action":"wave"}]})");
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    EXPECT_TRUE(sel.composed);
+    EXPECT_EQ(sel.steps.size(), 2u);
+}
+
+TEST(MotionComposer, SelectionFailsCleanlyOnUnknownPrompt)
+{
+    const MotionLibrary lib = makeLib({{"walk", 10}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("juggle chainsaws"), lib);
+    EXPECT_FALSE(sel.ok);
+    EXPECT_FALSE(sel.error.isEmpty());
+}
+
+TEST(MotionComposer, SingleStepRepeatStillComposes)
+{
+    // Regression: selectForPrompt short-circuits a lone step to matchPrompt,
+    // which knows nothing about `repeat` — so "wave twice" silently played
+    // ONCE (verified on the real library: 73 frames for both). Only a step
+    // with no repeat AND no duration may take that shortcut.
+    const MotionLibrary lib = makeLib({{"wave", 20}});
+    const auto once = MotionComposer::selectForPrompt(QStringLiteral("wave"), lib);
+    const auto twice = MotionComposer::selectForPrompt(
+        QStringLiteral("wave twice"), lib);
+    ASSERT_TRUE(once.ok);
+    ASSERT_TRUE(twice.ok);
+    EXPECT_FALSE(once.composed);            // plain single action: shortcut
+    EXPECT_TRUE(twice.composed);            // repeat must reach the compiler
+    EXPECT_GT(twice.quats.size(), once.quats.size());
+}
+
+TEST(MotionComposer, SingleStepDurationStillComposes)
+{
+    // Same shortcut trap for a duration-only single step.
+    const MotionLibrary lib = makeLib({{"walk", 60}});
+    const auto cut = MotionComposer::selectForPrompt(
+        QStringLiteral("walk for 1 second"), lib);
+    ASSERT_TRUE(cut.ok);
+    EXPECT_TRUE(cut.composed);
+    EXPECT_EQ(cut.quats.size(), 30u);       // 1s at 30fps, not the full 60
+}
+
+TEST(MotionComposer, ComposedSelectionFlagsVerticalDescent)
+{
+    // A composed action NAME ("walk_sit_wave") matches no canonical label, so
+    // deriving the descent gate from the name silently loses the sit's crouch.
+    // rootY is per-FRAME and the composition carries each step's own values, so
+    // the gate opens if ANY step needs it and locomotion frames (~0) are
+    // unaffected.
+    const MotionLibrary lib = makeLib({{"walk", 16}, {"sit", 16}, {"wave", 16}});
+    const auto withSit = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then sit then wave"), lib);
+    ASSERT_TRUE(withSit.ok) << withSit.error.toStdString();
+    EXPECT_TRUE(withSit.composed);
+    EXPECT_TRUE(withSit.verticalDescent)
+        << "composition contains 'sit' — descent must stay enabled";
+
+    const auto noSit = MotionComposer::selectForPrompt(
+        QStringLiteral("walk then wave"), lib);
+    ASSERT_TRUE(noSit.ok);
+    EXPECT_FALSE(noSit.verticalDescent)
+        << "pure locomotion/gesture composition must not sink the root";
+}
+
+TEST(MotionComposer, SingleClipSelectionFlagsVerticalDescent)
+{
+    const MotionLibrary lib = makeLib({{"walk", 16}, {"sit", 16}});
+    EXPECT_TRUE(MotionComposer::selectForPrompt(QStringLiteral("sit"), lib)
+                    .verticalDescent);
+    EXPECT_FALSE(MotionComposer::selectForPrompt(QStringLiteral("walk"), lib)
+                     .verticalDescent);
+}
+
+// ---- review findings on #1024 ---------------------------------------------
+
+TEST(MotionComposer, SingleTakeRepeatKeepsFingerSideChannel)
+{
+    // Regression guard: making "wave twice" compose (so the repeat is honoured)
+    // must NOT drop the V1 finger side-channel. Fingers cannot ride a clip
+    // stitched from SEVERAL takes (one take's curl timing would land on
+    // another's body), but a single take repeated is still one take.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"wave", 12}});
+    // Give the clip a finger channel: frames x 30 slots.
+    QByteArray fing = "[";
+    for (int f = 0; f < 12; ++f) {
+        if (f) fing += ",";
+        fing += "[";
+        for (int j = 0; j < 30; ++j) { if (j) fing += ","; fing += "[0,0,0,1]"; }
+        fing += "]";
+    }
+    fing += "]";
+    json.replace("\"quats\":", "\"fingers\":" + fing + ",\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_FALSE(lib.clip(0).fingers.empty()) << "fixture must carry fingers";
+
+    const auto twice = MotionComposer::selectForPrompt(
+        QStringLiteral("wave twice"), lib);
+    ASSERT_TRUE(twice.ok) << twice.error.toStdString();
+    EXPECT_TRUE(twice.composed);
+    EXPECT_FALSE(twice.fingers.empty())
+        << "a single take repeated must keep its finger channel";
+    EXPECT_EQ(twice.fingers.size(), twice.quats.size())
+        << "finger frames must stay in step with body frames";
+}
+
+TEST(MotionComposer, RepeatIsHonouredWhenDurationCutsBeforeTheLoopStart)
+{
+    // A loopable clip whose loop starts late, combined with a duration short
+    // enough to cut before loopStart: every pass after the first had
+    // from > to, so it contributed NOTHING and the clip silently played once.
+    // The fixture must be LOOPABLE with a LATE loopStart, or the guarded branch
+    // is never entered. Explicit loop_start/loop_end in the JSON is the only
+    // way to pin that shape deterministically.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"walk", 40}});
+    json.replace("\"quats\":",
+                 "\"loopable\":true,\"loop_start\":20,\"loop_end\":39,\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_TRUE(lib.clip(0).loopable);
+    ASSERT_EQ(lib.clip(0).loopStart, 20);
+
+    MotionComposer::Script script;
+    MotionComposer::Step st;
+    st.action = QStringLiteral("walk");
+    st.repeat = 3;
+    st.durationS = 0.1f;              // 3 frames at 30fps — well before loopStart
+    script.steps.push_back(st);
+
+    const auto c = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(c.ok) << c.error.toStdString();
+    MotionComposer::Script once = script;
+    once.steps[0].repeat = 1;
+    const auto c1 = MotionComposer::compose(once, lib);
+    ASSERT_TRUE(c1.ok);
+    EXPECT_GT(c.frames(), c1.frames())
+        << "repeat=3 produced " << c.frames() << " frames, same as repeat=1 ("
+        << c1.frames() << ") — later passes were empty";
+}
+
+TEST(MotionComposer, MultiTakeCompositionDropsFingers)
+{
+    // The other half of the finger rule, and the dangerous direction: across
+    // SEVERAL takes the seam blend reflows the body while the V1 finger channel
+    // cannot follow, so carrying one take's curls onto another take's pose is
+    // worse than shipping no fingers. Guards against singleTake being forced on.
+    MotionLibrary lib;
+    QByteArray json = libWithActions({{"wave", 12}, {"walk", 12}});
+    QByteArray fing = "[";
+    for (int f = 0; f < 12; ++f) {
+        if (f) fing += ",";
+        fing += "[";
+        for (int j = 0; j < 30; ++j) { if (j) fing += ","; fing += "[0,0,0,1]"; }
+        fing += "]";
+    }
+    fing += "]";
+    // Both clips carry fingers, so a naive implementation would emit them.
+    json.replace("\"quats\":", "\"fingers\":" + fing + ",\"quats\":");
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_FALSE(lib.clip(0).fingers.empty());
+    ASSERT_FALSE(lib.clip(1).fingers.empty());
+
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("wave then walk"), lib);
+    ASSERT_TRUE(sel.ok) << sel.error.toStdString();
+    ASSERT_TRUE(sel.composed);
+    EXPECT_FALSE(sel.singleTake) << "two takes were stitched";
+    EXPECT_TRUE(sel.fingers.empty())
+        << "fingers from one take must not be applied across a stitched clip";
+}
+
+TEST(MotionComposer, SingleStepScriptIgnoresThePromptText)
+{
+    // A one-step `script` must be honoured on its own terms. The single-clip
+    // shortcut re-runs matchPrompt(prompt), which searches only the PROMPT — so
+    // an MCP caller supplying {"steps":[{"action":"wave"}]} with no prompt hit
+    // "no motion matched", and one supplying an UNRELATED prompt silently got
+    // the prompt's clip instead of the requested action.
+    const MotionLibrary lib = makeLib({{"walk", 12}, {"wave", 12}});
+
+    const auto noPrompt = MotionComposer::selectForPrompt(
+        QString(), lib, R"({"steps":[{"action":"wave"}]})");
+    ASSERT_TRUE(noPrompt.ok) << noPrompt.error.toStdString();
+    ASSERT_EQ(noPrompt.steps.size(), 1u);
+    EXPECT_EQ(noPrompt.steps[0].toStdString(), "wave");
+
+    // Prompt says walk, script says wave — the script wins.
+    const auto mismatched = MotionComposer::selectForPrompt(
+        QStringLiteral("walk"), lib, R"({"steps":[{"action":"wave"}]})");
+    ASSERT_TRUE(mismatched.ok) << mismatched.error.toStdString();
+    ASSERT_EQ(mismatched.steps.size(), 1u);
+    EXPECT_EQ(mismatched.steps[0].toStdString(), "wave")
+        << "an explicit script must not be overridden by the prompt text";
+}
+
+TEST(MotionComposer, EmptyScriptJsonFailsCleanly)
+{
+    // A script whose steps all failed to resolve must report an error, not
+    // silently fall back to the prompt (which would play something the caller
+    // never asked for).
+    const MotionLibrary lib = makeLib({{"walk", 12}});
+    const auto sel = MotionComposer::selectForPrompt(
+        QStringLiteral("walk"), lib, R"({"steps":[{"action":"teleport"}]})");
+    EXPECT_FALSE(sel.ok);
+    EXPECT_FALSE(sel.error.isEmpty());
+    ASSERT_EQ(sel.unresolved.size(), 1u);
+    EXPECT_EQ(sel.unresolved[0].toStdString(), "teleport");
+}
+
+// ---- #1023: refRoll across composition -------------------------------------
+
+TEST(MotionComposer, SingleTakeCompositionKeepsItsRefRoll)
+{
+    // One action (even repeated) has exactly one reference frame, so its
+    // bind->reference roll is valid for every frame and must be carried.
+    const MotionLibrary lib = makeLib({{"wave", 20}, {"walk", 20}});
+    const auto script = MotionComposer::parse(QStringLiteral("wave twice"), lib);
+    const auto comp = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(comp.ok) << comp.error.toStdString();
+    ASSERT_TRUE(comp.singleTake);
+    ASSERT_EQ(comp.refRoll.size(), 22u);
+    // The fixture gives clip 0 ("wave") a refRoll of 0.1 on every role.
+    EXPECT_NEAR(comp.refRoll[1], 0.1f, 1e-4f);
+}
+
+TEST(MotionComposer, MultiTakeCompositionDropsRefRoll)
+{
+    // refRoll is the per-clip bind->REFERENCE roll, and applyMotionClip adds
+    // it as ONE per-role constant across every frame. Takes disagree (measured
+    // up to 226 deg in the shipped library), so carrying the first take's
+    // vector would wear the wrong baseline over every later segment. Emitting
+    // nothing selects the legacy path, which is strictly better than a
+    // known-wrong constant — until a per-frame baseline exists.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}});
+    const auto script = MotionComposer::parse(
+        QStringLiteral("walk then sit"), lib);
+    ASSERT_EQ(script.steps.size(), 2u);
+    const auto comp = MotionComposer::compose(script, lib);
+    ASSERT_TRUE(comp.ok) << comp.error.toStdString();
+    ASSERT_FALSE(comp.singleTake);
+    EXPECT_TRUE(comp.refRoll.empty())
+        << "a stitched clip must not wear one take's roll baseline";
+    // NB restDir/restWorld are NOT asserted here: this fixture library ships
+    // neither, so the assertion would test the fixture rather than the gate.
+    // Their carry-the-first-take behaviour is deliberately unchanged — they
+    // describe the source SKELETON, shared by every take.
+}
+
+TEST(MotionComposer, SelectForPromptPropagatesTheRefRollGate)
+{
+    // The gate must survive the Selection wrapper the surfaces actually call.
+    const MotionLibrary lib = makeLib({{"walk", 20}, {"sit", 20}});
+    const auto one = MotionComposer::selectForPrompt(QStringLiteral("walk"), lib);
+    ASSERT_TRUE(one.ok) << one.error.toStdString();
+    EXPECT_FALSE(one.refRoll.empty()) << "a single take keeps its roll baseline";
+
+    const auto many =
+        MotionComposer::selectForPrompt(QStringLiteral("walk then sit"), lib);
+    ASSERT_TRUE(many.ok) << many.error.toStdString();
+    ASSERT_TRUE(many.composed);
+    EXPECT_TRUE(many.refRoll.empty()) << "a stitched clip drops it";
+}
+
+// ---- #1034: library-free multi-step detection ------------------------------
+
+TEST(MotionComposer, PromptHasMultipleStepsMatchesTheParserSplit)
+{
+    // The trained-model path consults this BEFORE loading the library, so it
+    // must agree with parse()'s own segmentation or the two disagree about
+    // where a prompt divides.
+    const MotionLibrary lib = makeLib({{"walk", 10}, {"sit", 10}, {"wave", 10}});
+    for (const char* p : {"walk then sit",
+                          "walk, sit",
+                          "walk and sit",
+                          "walk then sit then wave"}) {
+        const QString prompt = QString::fromLatin1(p);
+        EXPECT_TRUE(MotionComposer::promptHasMultipleSteps(prompt)) << p;
+        EXPECT_GT(MotionComposer::parse(prompt, lib).steps.size(), 1u) << p;
+    }
+}
+
+TEST(MotionComposer, SingleActionPromptIsNotMultiStep)
+{
+    // A lone action — with or without a repeat/duration — is ONE take, so the
+    // model path must stay available for it. Reporting true here would
+    // silently disable the trained model for every ordinary prompt.
+    const MotionLibrary lib = makeLib({{"wave", 10}, {"walk", 10}});
+    for (const char* p : {"wave", "wave twice", "walk for 3 seconds"}) {
+        const QString prompt = QString::fromLatin1(p);
+        EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(prompt)) << p;
+    }
+}
+
+TEST(MotionComposer, MultiStepDetectionNeedsNoLibraryAndIsConservative)
+{
+    // Deliberately counts SEGMENTS, not resolvable actions: an unknown second
+    // fragment still means the prompt asked for a sequence, and the template
+    // path is the one that can report the unresolved fragment.
+    EXPECT_TRUE(MotionComposer::promptHasMultipleSteps(
+        QStringLiteral("walk then flibbertigibbet")));
+    EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(QStringLiteral("")));
+    EXPECT_FALSE(MotionComposer::promptHasMultipleSteps(
+        QStringLiteral("flibbertigibbet")));
+}
+
+// ---- category propagation through composition ------------------------------
+namespace {
+
+// Two "walk" takes: a human (CMU) and an undead (zombie) one, plus a "wave"
+// so multi-step prompts have somewhere to go.
+QByteArray mixedCategoryLib()
+{
+    auto pose = [](double ang) {
+        const double h = ang * 0.5;
+        const double x = std::sin(h), w = std::cos(h);
+        QByteArray p = "[";
+        for (int j = 0; j < 22; ++j) {
+            if (j) p += ",";
+            p += "[" + QByteArray::number(x, 'g', 8) + ",0,0,"
+               + QByteArray::number(w, 'g', 8) + "]";
+        }
+        return p + "]";
+    };
+    auto frames = [&](double base) {
+        QByteArray fr = "[";
+        for (int f = 0; f < 8; ++f) {
+            if (f) fr += ",";
+            fr += pose(base + 0.02 * double(f));
+        }
+        return fr + "]";
+    };
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"source\":\"CMU 02_01\",\"quats\":" + frames(0.0) + "},";
+    json += "{\"action\":\"walk\",\"source\":\"Classic_Zombie_Half-Life_2 — a_walk3\",\"quats\":" + frames(4.0) + "},";
+    json += "{\"action\":\"wave\",\"source\":\"CMU 03_01\",\"quats\":" + frames(8.0) + "}";
+    json += "]}";
+    return json;
+}
+
+} // namespace
+
+TEST(MotionComposer, PromptCategoryIsCapturedOnTheScript)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib())) << lib.error().toStdString();
+    EXPECT_EQ(MotionComposer::parse("walk twice", lib).category.toStdString(), "human");
+    EXPECT_EQ(MotionComposer::parse("zombie walk twice", lib).category.toStdString(), "undead");
+}
+
+TEST(MotionComposer, MultiStepPromptStillExcludesTheZombieTake)
+{
+    // Codex P1 on #1074: compose() called the one-argument pickTake, so
+    // "walk twice" / "walk then wave" kept sampling the unfiltered pool and
+    // could still return a zombie take — the category filter only covered
+    // SINGLE-step prompts. Sample enough runs that a leak would show.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib()));
+    for (int i = 0; i < 120; ++i) {
+        const MotionComposer::Script s = MotionComposer::parse("walk then wave", lib);
+        ASSERT_GE(s.steps.size(), 2u);
+        const MotionComposer::Composition c = MotionComposer::compose(s, lib);
+        ASSERT_TRUE(c.ok) << c.error.toStdString();
+        // Composition exposes no take indices, so identify the source from
+        // the DATA: each clip sits in its own angular band, and the human
+        // walk starts near angle 0 (quat x ~ 0) while the undead walk starts
+        // near 4.0 rad (quat x = sin(2.0) ~ 0.909). A leak is unmistakable.
+        ASSERT_FALSE(c.quats.empty());
+        const float x0 = c.quats.front().front()[0];
+        EXPECT_LT(std::fabs(x0), 0.3f)
+            << "draw " << i << " composed a take from the undead band (x="
+            << x0 << ") for a plain prompt";
+    }
+}
+
+TEST(MotionComposer, ScriptedJsonCategoryIsHonouredAndDefaultsToAny)
+{
+    // A JSON caller has no phrasing to infer from, so an absent category
+    // means "any" — defaulting to human would silently narrow existing MCP
+    // callers' results.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedCategoryLib()));
+    EXPECT_TRUE(MotionComposer::parseJson("{\"steps\":[{\"action\":\"walk\"}]}", lib)
+                    .category.isEmpty());
+    EXPECT_EQ(MotionComposer::parseJson(
+                  "{\"category\":\"undead\",\"steps\":[{\"action\":\"walk\"}]}", lib)
+                  .category.toStdString(), "undead");
+}

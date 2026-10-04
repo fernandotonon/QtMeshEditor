@@ -584,6 +584,14 @@ SkinWeights::JobResult SkinWeights::runJob(const ComputeJob& job,
         SkinWeightsPost::laplacianSmooth(
             res.weights, adjacency, opts.smoothIterations, res.locked);
     }
+    // Co-located (UV-seam twin) vertices must end up with IDENTICAL weights
+    // or animation tears the seam apart — smoothing runs on the adjacency
+    // graph, which does not connect duplicated seam vertices. Unify BEFORE
+    // the prune pass: a union of two bone sets can exceed
+    // maxInfluencesPerVertex, and pruning identical rows keeps them
+    // identical, so the cap holds and the rows stay unified.
+    SkinWeightsPost::unifyCoLocated(res.weights, job.positions,
+                                    /*epsilon=*/0.0f, res.locked);
     SkinWeightsPost::pruneAndRenormalize(res.weights,
                                          opts.maxInfluencesPerVertex);
 
@@ -764,6 +772,15 @@ QString SkinWeights::algorithmToString(Algorithm algo)
     case Algorithm::SkinTokens:      return QStringLiteral("skintokens");
     }
     return QStringLiteral("skintokens");
+}
+
+SkinWeightsOptions SkinWeights::rigidOptions()
+{
+    SkinWeightsOptions o;
+    o.maxInfluencesPerVertex = 1;
+    o.maxInfluenceDistance   = 0.0;   // 0 = no cap: a wheel vertex far from any bone still binds
+    o.smoothIterations       = 0;     // smoothing would soften the hard part boundaries
+    return o;
 }
 
 SkinWeights::Algorithm SkinWeights::algorithmFromString(const QString& s)

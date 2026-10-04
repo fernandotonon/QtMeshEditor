@@ -51,6 +51,15 @@
 // callers never see the model's internal scale.
 class UniRigPredictor {
 public:
+    /// #1013: how predicted joints are NAMED.
+    ///   Humanoid — always the geometric humanoid labeller (Hips/Spine/Left…),
+    ///              the pre-#1013 behaviour; stamps humanoid names on cars.
+    ///   Generic  — hierarchical neutral names (root, bone_01, …).
+    ///   Auto     — humanoid names only when the labeller finds a plausible
+    ///              humanoid (detected up == the given up axis, exactly one
+    ///              left + one right arm chain and leg chain); else Generic.
+    enum class Labeling { Auto, Humanoid, Generic };
+
     struct Options {
         // Out-of-line ctor so the `{}` default arg on predict() resolves to a
         // constructor call, not class-definition-time aggregate init of this
@@ -66,6 +75,19 @@ public:
         // Up axis: 0=X, 1=Y, 2=Z (default +Y). UniRig is trained +Y-up; a
         // non-Y up axis is rotated into +Y for inference and back out after.
         int upAxis = 1;
+        // #1046: which points occupy the encoder's frozen query slots.
+        //   Fps    — farthest-point sample front-loaded (the paper's sampling;
+        //            rescued a biped rat 6→24 joints and a car's wheel clusters)
+        //   Random — the surface sample as drawn (a tree got 64 branch joints
+        //            here where Fps collapsed it to a 7-joint stick)
+        //   Both   — run both and keep the richer skeleton (tie → Fps). Costs a
+        //            second decode; the default because neither ordering wins
+        //            across categories. Env override: QTMESH_UNIRIG_QUERIES=fps|random|both.
+        enum class QuerySampling { Random, Fps, Both };
+        QuerySampling querySampling = QuerySampling::Both;
+        // #1013: joint naming policy (see Labeling). AutoRig maps --skeleton
+        // humanoid/biped → Auto and quadruped/generic → Generic.
+        Labeling labeling = Labeling::Auto;
     };
 
     struct Joint {
@@ -79,7 +101,15 @@ public:
         bool ok = false;
         QString error;                           // populated when !ok
         std::vector<Joint> joints;               // parent-ordered (root first)
+        QString querySampling;                   // "fps" | "random" — which ordering produced it (#1046)
+        int alternativeJoints = -1;              // joint count of the discarded ordering under Both, else -1
+        QString labeling;                        // "humanoid" | "generic" — naming actually applied (#1013)
     };
+    /// #1046: choose between the two query-sampling runs — the one that decoded
+    /// (if only one did), else the richer skeleton, tie → `fps` (the paper's
+    /// sampling). On every mesh measured the visibly better rig was the one
+    /// with more joints; the decode under-produces rather than over-produces.
+    static const Result& pickRicher(const Result& fps, const Result& random);
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per
     // call against the two model paths.)
@@ -99,10 +129,30 @@ public:
     static QString embedModelPath();     // AppData/ai_models/unirig/embed.onnx
     // True when all three model files already exist on disk (no download needed).
     static bool modelsPresent();
+    /// #1025: published SHA-256 (HF LFS oid) of one of the three default-hosted
+    /// files ("encoder.onnx" / "decoder.onnx" / "embed.onnx"); empty for any
+    /// other name. Applied by ensureModelBlocking() only when the base URL is
+    /// the default hosting.
+    static QString expectedSha256(const QString& fileName);
 
     // Encoder surface-sample budget. `requested` > 0 clamps to [4096, 65536];
     // 0 picks an automatic budget that scales down on very large meshes.
     static int sampleBudgetForMesh(int vertexCount, int requested = 0);
+    /// #1046: reorder a point cloud (xyz triples in `pts`, parallel `nrm`) so
+    /// its first `k` points are a greedy farthest-point sample of the whole
+    /// cloud (FPS order), the rest following in their original order. The
+    /// hosted encoder export froze its farthest-point-sampling indices at
+    /// trace time — 4096 indices, 1794 unique, all < 2048 — so the perceiver's
+    /// QUERY points are whatever happens to sit in the first 2048 input slots.
+    /// Front-loading an FPS subset there restores the paper's coverage-
+    /// maximising queries without a re-export. Pure; unit-tested.
+    /// `pool` (default: all) limits the FPS CANDIDATES to the first `pool`
+    /// points — upstream FPS-selects from ~8192 surface samples, and selecting
+    /// from a 65536-point cloud pushes queries to extremities far harder than
+    /// the model saw in training. Every point is kept either way.
+    static void frontLoadFarthestPoints(std::vector<float>& pts, std::vector<float>& nrm,
+                                        int count, int k, int pool = -1);
+
 
     // Ensure ALL THREE models exist on disk, downloading whichever is missing on
     // first use (blocks via a local event loop, like
@@ -133,6 +183,21 @@ public:
                           const QString& embedModelPath,
                           const Options& opts = {},
                           const ProgressFn& progress = {});
+private:
+    /// #1046 Both mode: predict() once with querySampling forced to Fps and
+    /// once to Random, keep the richer skeleton (pickRicher); a cancellation
+    /// ends the whole call. Defined for every build; predict() handles the
+    /// inference under ENABLE_ONNX.
+    static Result predictBoth(const float* positions, int vertexCount,
+                              const uint32_t* indices, int indexCount,
+                              const QString& encoderModelPath,
+                              const QString& decoderModelPath,
+                              const QString& embedModelPath,
+                              const Options& opts, const ProgressFn& progress);
+public:
+    /// Options::querySampling with the QTMESH_UNIRIG_QUERIES override applied —
+    /// the env only NARROWS the default Both (an explicit Fps/Random wins). Pure.
+    static Options::QuerySampling resolveQuerySampling(const Options& opts);
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----
     // These replicate UniRig's src/tokenizer/tokenizer_part.py exactly and are
@@ -151,7 +216,8 @@ public:
     // axis for inference must rotate the returned joints back themselves.
     static Result detokenize(const std::vector<int>& ids,
                              double scale,
-                             const std::array<double, 3>& centre);
+                             const std::array<double, 3>& centre,
+                             Labeling labeling = Labeling::Humanoid);
 
     // Assign anatomical bone names (Hips / Spine / Neck / Head / {Left,Right}
     // {Arm,ForeArm,Hand,UpLeg,Leg,Foot}, Mixamo-style) to a predicted joint set
@@ -161,7 +227,17 @@ public:
     // Pure-data + unit-testable. `upAxis` (0=X,1=Y,2=Z, default +Y) is the body's
     // up direction; the character's LEFT is +X by convention. Joints it can't
     // confidently classify keep their original name. Mutates `joints[].name`.
-    static void labelJointsAnatomically(std::vector<Joint>& joints, int upAxis = 1);
+    /// Returns whether the result is a PLAUSIBLE humanoid (#1013): the axis it
+    /// detected as "up" agrees with `upAxis`, and exactly one Left and one
+    /// Right chain were classified as arm and as leg. A car (its long axis is
+    /// mistaken for the spine) and a tree (many "arms") both return false.
+    static bool labelJointsAnatomically(std::vector<Joint>& joints, int upAxis = 1);
+    /// #1013: neutral hierarchical names — the root "root", every other joint
+    /// "bone_NN" in parent-before-child order. Unique by construction. Pure.
+    static void labelJointsGeneric(std::vector<Joint>& joints);
+    /// #1013: apply `labeling` — returns the naming actually used
+    /// ("humanoid" | "generic").
+    static QString applyLabeling(std::vector<Joint>& joints, int upAxis, Labeling labeling);
 };
 
 #endif // UNIRIG_PREDICTOR_H

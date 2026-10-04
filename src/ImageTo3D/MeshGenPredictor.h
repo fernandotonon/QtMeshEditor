@@ -1,6 +1,7 @@
 #ifndef MESH_GEN_PREDICTOR_H
 #define MESH_GEN_PREDICTOR_H
 
+#include "BackgroundRemover.h"
 #include <QImage>
 #include <QString>
 #include <cstdint>
@@ -59,7 +60,20 @@ public:
     // Trellis2Predictor + defaultBackend()); mesh cleanup/UVs/PBR baking are
     // done natively by Trellis2Bake, deliberately without NVIDIA
     // nvdiffrast/nvdiffrec (docs/trellis2-dependencies.md).
-    enum class Backend { TripoSR, TripoSG, Trellis2 };
+    // Pixal3D = TencentARC Pixal3D (SIGGRAPH 2026, MIT code+weights), run
+    // through the SAME trellis-cli runtime as Trellis2 — it is a fork of
+    // TRELLIS.2 that swaps the global DINOv3 cross-attention for view-aligned
+    // PROJECTION conditioning (`out = cross_attn(x, global) + proj_linear(proj)`),
+    // as an alternative conditioning path. Same samplers and byte-identical
+    // decoders; only the four flow models differ, so one model directory serves
+    // both families (flow weights take a `pixal3d_` prefix, decoders are shared).
+    enum class Backend { TripoSR, TripoSG, Trellis2, Pixal3D };
+
+    // True for the backends served by the trellis-cli runtime. Both share the
+    // Trellis2Predictor path, the game-ready pass and the native PBR bake —
+    // they differ only in which flow weights are loaded.
+    static bool isTrellisRuntime(Backend b)
+    { return b == Backend::Trellis2 || b == Backend::Pixal3D; }
 
     // The backend a surface should preselect when the user didn't choose one:
     // Trellis2 when its runtime is available on this machine, else TripoSR.
@@ -76,6 +90,12 @@ public:
         // the image is used as-is. Recommended for photos; harmless for
         // already-segmented inputs.
         bool  removeBackground = false;
+        // #1016: matting tier used when removeBackground is on. Fast = U²-Net
+        // 320² (default, unchanged behaviour); Best = BiRefNet 1024² (MIT,
+        // ~930 MB, measured ~3x crisper at the edge). Best degrades to Fast
+        // when its model is not available.
+        BackgroundRemover::Quality mattingQuality =
+            BackgroundRemover::Quality::Fast;
         // Decoder query-point chunk size (points per decoder Run). Bounds memory
         // on the resolution^3 grid; 0 → one shot (only for tiny grids).
         int   chunkPoints   = 262144;
@@ -97,6 +117,15 @@ public:
         // to vertex colours (Result::warning set) if the unwrap/bake fails.
         bool bakeTexture = true;
         int  textureSize = 1024;
+        // #1017: after baking, AI-fill the texels no chart covered (the atlas
+        // gutter) with LaMa, so bilinear filtering and MIPs pull continued
+        // texture across UV seams instead of the dilation pass's smeared
+        // border colour. OFF by default: the model is a ~200 MB first-use
+        // download and several CPU-seconds, which a caller should opt into
+        // rather than discover. Falls back silently to the dilated bake when
+        // the model is unavailable — a seam fill is a refinement, never a
+        // reason to fail a generation.
+        bool inpaintSeams = false;
 
         // ---- Backend selection ------------------------------------------------
         // TripoSG ignores the colour/bake options (geometry-only model) and
@@ -113,9 +142,34 @@ public:
         // Game-ready simplification target (Phase 8 presets: Low ~10k /
         // Medium ~25k / High ~50k). 0 = keep the original TRELLIS.2 density.
         int  targetTriangles = 0;
+        // targetTriangles is a hard ceiling (platform upload limit) rather
+        // than a budget — set by the Roblox game-ready presets
+        // (GameReadyPresets.h). Ignored when targetTriangles == 0.
+        bool targetTrianglesStrict = false;
+        // Platform texture cap in pixels (0 = none) — the Roblox presets set
+        // 1024. textureSize is only the bake REQUEST: xatlas treats it as a
+        // hint (PackOptions::resolution seeds a texelsPerUnit estimate, so a
+        // 64 request measured 140x143), and callers may upscale afterwards.
+        // This is enforced on the FINAL images: predict() downscales every
+        // map in the Result to fit, and the upscale sites skip a 2x that
+        // would exceed it.
+        int  maxTextureSize = 0;
         // Bake a tangent-space normal map carrying the full-res source detail
         // (only meaningful when the target was simplified; needs bakeTexture).
         bool bakeNormalMap = true;
+        // TRELLIS.2 only. 2 = 2x2 subsamples per baked texel; the extra
+        // samples average out the single-point sampling speckle that shows up
+        // on small atlases, at ~4x the bake cost.
+        int  textureSupersample = 1;
+        // TRELLIS.2 only. Texture-volume resolution passed to trellis-cli
+        // (--tex-res): 0 keeps the sidecar's own default, 512 or 1024 pick it
+        // explicitly. A simple prop does not need the larger volume.
+        int  texVolumeRes = 0;
+        // Pixal3D only: horizontal FOV of the input image in degrees (0 =
+        // trellis-cli's own default of 49.13, Pixal3D's training value), and
+        // an opt-out for the NAF guided upsampler.
+        float pixal3dFovDeg = 0.0f;
+        bool  pixal3dNoNaf  = false;
         // Test hook: drive the sidecar's --mock synthetic generation (no GPU,
         // no TRELLIS.2 models) — used by the plumbing e2e tests.
         bool trellis2Mock = false;
@@ -150,6 +204,16 @@ public:
         // TripoSG's field is already +Y-up (upstream exports the marching-cubes
         // trimesh as-is), so its dispatch sets this false to skip the bake.
         bool bakeTripoSROrientation = true;
+
+        // PIXAL3D ONLY: it needs a further -90° about X on top of the
+        // 180°-Y flip, because the fork reconstructs on its back (the
+        // goblin's height landed on Z while Y held only its depth — measured
+        // 1.02 / 0.26 / 0.69 on the exported bbox). TRELLIS.2 proper is
+        // already placed correctly by the 180° turn alone; rotating it too
+        // OVER-rotates every generation, so this stays false for it.
+        //   -90°X: (x, y, z) -> (x, z, -y)   (a proper rotation, det +1, so
+        //   triangle winding and normals are unaffected).
+        bool bakeTrellisUprightX = false;
 
         // ---- TRELLIS.2 extras (empty/null for the other backends) -------------
         // Real baked PBR maps from the sparse attribute volume (Trellis2Bake).
@@ -214,6 +278,12 @@ public:
                           const Options& opts = {},
                           const ProgressFn& progress = {});
 
+    // Downscale every image in `r` (diffuse + the TRELLIS PBR maps) so no
+    // side exceeds maxSize (0 = no-op), preserving aspect. predict() applies
+    // it with Options::maxTextureSize; exposed for the post-predict paths
+    // (upscale) and for tests.
+    static void capResultTextures(Result& r, int maxSize);
+
     // ---- Pure-data helpers (no ONNX / no Ogre — unit-testable) ----------------
 
     // Build the resolution^3 query-point grid TripoSR expects: points in
@@ -223,6 +293,15 @@ public:
     // count = res^3. Exposed for tests + so slice B's grid fill and the MC layout
     // provably agree.
     static std::vector<float> buildGridPoints(int resolution, float radius);
+
+private:
+    // The per-backend implementation; predict() wraps it with the
+    // Options::maxTextureSize cap so every backend's images obey it.
+    static Result predictImpl(const QImage& image,
+                              const QString& encoderModelPath,
+                              const QString& decoderModelPath,
+                              const Options& opts,
+                              const ProgressFn& progress);
 };
 
 #endif // MESH_GEN_PREDICTOR_H

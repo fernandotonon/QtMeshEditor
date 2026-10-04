@@ -8,6 +8,7 @@
 #include "BrushFootprint.h"
 #include "GradientRamp.h"
 #include "PaintLayerStack.h"
+#include "PaintBakeTargets.h"
 #include "PaintChannel.h"
 #include "SymmetryMirrorMap.h"
 #include "ProjectionPainter.h"
@@ -15,6 +16,7 @@
 #include "ColorPaletteLibrary.h"
 
 #include <QColor>
+#include <QVector3D>
 #include <QObject>
 #include <QPoint>
 #include <QPointF>
@@ -450,6 +452,22 @@ public:
     /// One-shot: load `path`, project it through the current camera onto the
     /// mesh, and commit the result as a NEW layer (one undo step).
     Q_INVOKABLE bool projectFromPhoto(const QString& path);
+
+    /// Project `path` using an EXPLICIT camera instead of the live viewport.
+    ///
+    /// `projectFromPhoto` reads the active viewport camera, so it cannot run
+    /// headlessly — there is no viewport in CLI/MCP. This takes eye/target/up
+    /// and builds the projection matrix itself, which is what `qtmesh paint
+    /// --apply-stencil --camera` and MCP `paint_apply_stencil` need.
+    ///
+    /// `fovYDegrees` and the mesh bounds drive the projection; `up` may be zero
+    /// to auto-pick a stable up vector. Returns false (without touching the
+    /// layer stack) when the image, mesh, or camera is unusable.
+    Q_INVOKABLE bool projectFromPhotoWithCamera(const QString& path,
+                                                const QVector3D& eye,
+                                                const QVector3D& target,
+                                                const QVector3D& up = QVector3D(),
+                                                double fovYDegrees = 45.0);
     /// Open a file dialog to pick the stencil image (sets stencilImagePath).
     Q_INVOKABLE void chooseStencilImage();
     /// Open a file dialog to pick a photo, then projectFromPhoto() it.
@@ -498,6 +516,37 @@ public:
     /// Sobel) and re-wire the material for IBL. Returns false if the channel
     /// has no painted session. Exposed for the "Bake channel" button + tests.
     Q_INVOKABLE bool bakeChannel(int channel);
+
+    // --- Slice I (#552): bake-up to engine deliverables ------------------
+    /// Engine target ids for the bake dialog ("generic"/"unity"/...).
+    Q_INVOKABLE QStringList bakeTargetIds() const;
+    /// Human-readable label for a target id.
+    Q_INVOKABLE QString bakeTargetLabel(const QString& targetId) const;
+    /// Channel ids that currently hold painted data, so the dialog can show
+    /// what a bake would actually write.
+    Q_INVOKABLE QStringList paintedChannelIds() const;
+    /// Bake every painted channel to `outputDir` for `targetId`.
+    ///
+    /// `resolution` 0 keeps each channel's own size. `includeHidden` forces
+    /// hidden layers into the composite (see the snapshot/restore note in the
+    /// implementation). Returns "" on success, else an error message — matching
+    /// MaterialEditorQML's packTextureChannels convention.
+    Q_INVOKABLE QString bakePbrSet(const QString& targetId,
+                                   const QString& outputDir,
+                                   int resolution = 0,
+                                   const QString& namePrefix = QString(),
+                                   bool includeHidden = false,
+                                   bool writeSidecar = true);
+    /// Native directory picker for the bake dialog.
+    Q_INVOKABLE QString chooseBakeOutputDir();
+    /// Small base64 preview of one baked output, for the dialog thumbnail.
+    /// `index` is into the target's output list.
+    Q_INVOKABLE QString bakePreviewUrl(const QString& targetId, int index,
+                                       int previewSize = 128);
+    /// Rasterise the active channel's VERTEX-colour data into a new texture
+    /// LAYER (UV space, seam-dilated). Returns "" on success, else an error.
+    Q_INVOKABLE QString bakeVertexLayerToTextureLayer(int resolution = 0,
+                                                      int dilation = 4);
     /// @}
 
     /// Preview data URI (PNG, base64) regenerated on every dirty flush.
@@ -702,6 +751,25 @@ public:
     Q_INVOKABLE int fillMaskWithBG();
     /// Delete = set selected pixels to fully transparent black (0,0,0,0).
     Q_INVOKABLE int deleteMaskPixels();
+    /// #1017: AI-fill the selection with LaMa. Unlike the fill/delete actions
+    /// above, this needs the SURROUNDING pixels as context, so it composites
+    /// the whole layer stack, inpaints, and writes the result back into the
+    /// active layer inside the mask only. Returns the pixel count filled, or a
+    /// negative code on failure: -1 no session/selection, -2 model unavailable,
+    /// -3 inference failed. (0 would be indistinguishable from "empty mask".)
+    Q_INVOKABLE int inpaintMaskPixels();
+    /// True when the LaMa model is already on disk, so inpaintMaskPixels()
+    /// will NOT spend minutes on a ~200 MB first-use download. The QML uses it
+    /// to say "Downloading model…" instead of freezing behind an unexplained
+    /// pause — model acquisition is the long pole; inference itself is a few
+    /// CPU-seconds, on par with the sibling bake actions, which are also
+    /// synchronous. (ensureModelBlocking runs a nested QEventLoop and is
+    /// main-thread-only, so it cannot simply be moved to a worker.)
+    Q_INVOKABLE bool inpaintModelPresent() const;
+    /// True when this build can inpaint at all (ENABLE_ONNX) — the QML button
+    /// binds its visibility to this rather than showing a control that can only
+    /// ever report an error.
+    Q_INVOKABLE bool inpaintAvailable() const;
     /// @}
 
     /// Walk every UV-mapped triangle and return the local-space
@@ -1008,6 +1076,14 @@ private:
     /// onto this base so the model's existing normal survives where unpainted.
     QString m_channelBaseTextureName;
     /// Stash the live session into m_channelSessions[channel].
+    // --- Slice I (#552) helpers ------------------------------------------
+    /// Layer stack for a channel, honouring the live-vs-stashed split.
+    const PaintLayerStack* stackForChannel(PaintChannelNS::Channel ch) const;
+    /// Composite one channel for a bake, optionally forcing hidden layers in.
+    QImage compositeChannelForBake(PaintChannelNS::Channel ch, bool includeHidden);
+    /// Every painted channel, as bake input.
+    PaintBakeTargets::ChannelImages gatherBakeChannels(bool includeHidden);
+
     void stashChannelSession(PaintChannelNS::Channel channel);
     /// Restore m_channelSessions[channel] into the live session (or mark it
     /// uninitialized so ensurePaintableTexture builds it fresh). Returns true
@@ -1247,6 +1323,13 @@ private:
     /// Destroy the decal preview texture/material (called from closeSession).
     void destroyDecalPreview();
     /// Rebuild the decal rectangle + handle overlay (or hide it when inactive).
+    /// Shared tail of both photo-projection paths (see the .cpp comment).
+    bool projectPhotoWithView(const QImage& src,
+                              const ProjectionPainter::View& v,
+                              const QString& layerName);
+    /// Load/normalise a projection source and rebuild the triangle cache.
+    QImage prepareProjectionSource(const QString& path);
+
     void refreshDecalOverlay();
     /// Ray-pick the decal rect plane at `screenPos` → world hit (on the plane).
     bool decalPlaneHit(OgreWidget* widget, const QPoint& screenPos,

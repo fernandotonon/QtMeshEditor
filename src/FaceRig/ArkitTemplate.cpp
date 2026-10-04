@@ -1,6 +1,7 @@
 #include "ArkitTemplate.h"
 
 #include "../ModelDownloader.h"
+#include "../ModelFetch.h"
 #include "../SentryReporter.h"
 
 #include <QDir>
@@ -177,40 +178,20 @@ QString ArkitTemplate::ensureModelBlocking()
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
         QStringLiteral("ARKit template download start"));
 
-    QEventLoop loop;
-    bool ok = false, timedOut = false, done = false;
-    auto onDone = QObject::connect(dl, &ModelDownloader::downloadCompleted, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = true; done = true; loop.quit(); }
-        });
-    auto onErr = QObject::connect(dl, &ModelDownloader::downloadError, &loop,
-        [&](const QString& name, const QString&) {
-            if (name == label) { ok = false; done = true; loop.quit(); }
-        });
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, &loop,
-                     [&]() { timedOut = true; loop.quit(); });
-    timeout.start(300000);  // 5 min — the template is ~17 MB
-
-    dl->startDownload(url, dest, label);
-    // `done` guards the synchronous-failure case: startDownload can emit
-    // downloadError DURING the call (another download active, .part file
-    // unopenable) — entering the loop then would block for the full timeout.
-    if (!done)
-        loop.exec();
-
-    QObject::disconnect(onDone);
-    QObject::disconnect(onErr);
-    if (timedOut && dl)
-        dl->cancelDownload();
-
-    const bool success = ok && !timedOut && QFileInfo::exists(dest);
+    // #1037: one shared blocking wait (ModelFetch) — carries the synchronous-
+    // rejection guard this file used to implement by hand as `done`, and
+    // keeps the downloader's own error text.
+    ModelFetch::Request req;
+    req.url = url;
+    req.destination = dest;
+    req.label = label;
+    req.timeoutMs = 300000;   // 5 min — the template is ~17 MB
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.face_rig"),
-        success ? QStringLiteral("ARKit template download ok")
-                : QStringLiteral("ARKit template download failed%1")
-                      .arg(timedOut ? QStringLiteral(" (timeout)") : QString()));
-    return success ? dest : QString();
+        fo.ok ? QStringLiteral("ARKit template download ok")
+              : QStringLiteral("ARKit template download failed%1")
+                    .arg(fo.timedOut ? QStringLiteral(" (timeout)") : QString()));
+    return fo.ok ? dest : QString();
 }
 
 }  // namespace FaceRig

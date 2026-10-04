@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QHostAddress>
 #include <QMap>
 #include <QTimer>
 #include <functional>
@@ -91,6 +92,40 @@ public:
      */
     int httpPort() const;
 
+    // ---- HTTP API hardening (#984) ----
+    // The HTTP API can drive EVERY tool, mutating ones included, so it is
+    // loopback-only and (optionally) token-protected. Tools execute only via
+    // POST /api/tools/<name>; a GET there is answered 405 and runs nothing.
+
+    /** Shared secret for the HTTP API. Empty = no authentication (the
+     *  default). When set, every /api request except the CORS preflight must
+     *  carry `Authorization: Bearer <token>` or `X-Api-Key: <token>`, else 401.
+     *  An explicit value wins over the env/QSettings resolution done by
+     *  startHttp(). */
+    void setHttpToken(const QString &token);
+    QString httpToken() const;
+
+    /** Interface the HTTP server binds. Default is loopback (127.0.0.1);
+     *  pass QHostAddress::Any to expose it (e.g. inside a container with a
+     *  mapped port) — then a token is strongly advised. */
+    void setHttpBindAddress(const QHostAddress &address);
+    QHostAddress httpBindAddress() const;
+
+    /** Token from `QTMESH_HTTP_TOKEN`, else QSettings `mcp/httpToken`, else empty. */
+    static QString resolveHttpToken();
+    /** Read a token from a file (`--http-token-file`): whole content trimmed of
+     *  surrounding whitespace/newlines. Empty result + `error` set when the
+     *  file is missing, unreadable or blank. The secret is never placed on the
+     *  command line, where every local user could read it via `ps`. */
+    static QString readHttpTokenFile(const QString &path, QString *error = nullptr);
+    /** Bind address from `QTMESH_HTTP_BIND` (e.g. "0.0.0.0"), else loopback. */
+    static QHostAddress resolveHttpBindAddress();
+    /** True when the raw request header block carries `token` as a Bearer
+     *  Authorization or X-Api-Key value (header names and the Bearer scheme are
+     *  case-insensitive; the comparison is constant-time). An empty `token`
+     *  never authorizes. Pure — unit-tested without a socket. */
+    static bool httpRequestAuthorized(const QString &headerBlock, const QString &token);
+
     /**
      * @brief Check if server is running
      */
@@ -101,9 +136,23 @@ public:
      */
     void setOgreInitFailed(bool failed) { m_ogreInitFailed = failed; }
 
+    /// Cleared when a heavy tool starts; set by requestToolCancel().
+    bool m_toolCancelRequested = false;
+
 signals:
     void messageReceived(const QJsonObject &message);
     void errorOccurred(const QString &error);
+    /// Progress of a long-running (heavy) tool, for in-app callers that drive
+    /// tools synchronously — the AI agent shows it in the chat panel. `done`/
+    /// `total` are units of the current stage; total <= 0 means "indeterminate".
+    void toolProgress(const QString &tool, const QString &stage, int done, int total);
+
+public:
+    /// Ask the running heavy tool to stop at its next progress callback. The
+    /// tool then returns a normal "cancelled" error result. Safe to call when
+    /// nothing is running (the flag is cleared when the next tool starts).
+    void requestToolCancel() { m_toolCancelRequested = true; }
+    bool toolCancelRequested() const { return m_toolCancelRequested; }
 
 private slots:
     void onReadyRead();
@@ -188,6 +237,7 @@ private:
     /// (NRICP + deformation transfer), attach the 52 ARKit morph targets, and
     /// optionally re-export.
     QJsonObject toolAddArkitBlendshapes(const QJsonObject &args);
+    QJsonObject toolGenerateLipsync(const QJsonObject &args);
     /// Issue #403: mesh-aware (depth-conditioned) texture
     /// generation. Renders the selected entity's depth map and
     /// conditions sd.cpp on it via a ControlNet depth model, then
@@ -198,6 +248,8 @@ private:
     /// Issue #405: Real-ESRGAN 2x/4x texture super-resolution. Writes
     /// <stem>_upscaled.png next to the source; model downloaded on first use.
     QJsonObject toolUpscaleTexture(const QJsonObject &args);
+    QJsonObject toolPhotoDepth(const QJsonObject &args);   // #1018
+    QJsonObject toolInpaintTexture(const QJsonObject &args);   // #1017
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);
@@ -224,6 +276,13 @@ private:
     QJsonObject toolPinFeet(const QJsonObject &args);           // #856 foot-contact pin
     QJsonObject toolSegmentMesh(const QJsonObject &args);
     QJsonObject toolSplitMeshBySegments(const QJsonObject &args);
+    // Lattice deformer (free-form deformation)
+    QJsonObject toolLatticeBegin(const QJsonObject &args);
+    QJsonObject toolLatticeGet(const QJsonObject &args);
+    QJsonObject toolLatticeSetPoints(const QJsonObject &args);
+    QJsonObject toolLatticeApply(const QJsonObject &args);
+    QJsonObject toolLatticeCancel(const QJsonObject &args);
+    QJsonObject toolLatticeDeform(const QJsonObject &args);
     QJsonObject toolExplodeMeshParts(const QJsonObject &args);   // #862/#864
     QJsonObject toolJoinMeshParts(const QJsonObject &args);      // #862/#864
     QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D
@@ -250,6 +309,7 @@ private:
     QJsonObject toolSetLightProperty(const QJsonObject &args);
     QJsonObject toolApplyLightRig(const QJsonObject &args);
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
+    QJsonObject toolSelectEntity(const QJsonObject &args);   // #1052: agent needs to target selection-based tools
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
     QJsonObject toolExportPose(const QJsonObject &args);
@@ -261,6 +321,28 @@ private:
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture (e.g. ORM = AO+Roughness+Metallic).
     QJsonObject toolPackTextures(const QJsonObject &args);
+    /// Paint v2 Slice I (#552): repack a mesh's PBR textures into an engine
+    /// channel layout (delegates to CLIPipeline::cmdPaintBake's core).
+    QJsonObject toolPaintBake(const QJsonObject &args);
+
+    // --- Paint v2 Slice J (#553): live-session paint tools ----------------
+    // These drive TexturePaintController in the RUNNING editor (main thread,
+    // no BlockingQueuedConnection), unlike paint_bake which is file-in/file-out.
+    QJsonObject toolPaintAddLayer(const QJsonObject &args);
+    QJsonObject toolPaintDeleteLayer(const QJsonObject &args);
+    QJsonObject toolPaintReorderLayer(const QJsonObject &args);
+    QJsonObject toolPaintMergeDown(const QJsonObject &args);
+    QJsonObject toolPaintFlatten(const QJsonObject &args);
+    QJsonObject toolPaintSetActiveLayer(const QJsonObject &args);
+    QJsonObject toolPaintSetActiveChannel(const QJsonObject &args);
+    QJsonObject toolPaintSetBrushPreset(const QJsonObject &args);
+    QJsonObject toolPaintSetColor(const QJsonObject &args);
+    QJsonObject toolPaintSetGradient(const QJsonObject &args);
+    QJsonObject toolPaintApplyStencil(const QJsonObject &args);
+    QJsonObject toolPaintListLayers(const QJsonObject &args);
+    /// Enter/leave texture-paint mode, so the 12 session tools above are
+    /// reachable without a human clicking the GUI first.
+    QJsonObject toolPaintSetEnabled(const QJsonObject &args);
     /// Slice H: generate a tangent-space normal map from a height/bump
     /// source via Sobel filter.
     QJsonObject toolGenerateNormalMap(const QJsonObject &args);
@@ -275,6 +357,10 @@ private:
     /// optimizations end-to-end on a single asset and writes the result.
     /// Per-stage applied/summary report on success.
     QJsonObject toolOptimizeMesh(const QJsonObject &args);
+    // Weld co-located duplicate vertices + unify seam skin weights on a live
+    // scene entity (undoable via WeldVerticesCommand). Fix for "triangles
+    // separate when animating" on generated/baked meshes.
+    QJsonObject toolWeldVertices(const QJsonObject &args);
     /// #724: 8-direction isometric animated sprite grid export (file-in / file-out).
     QJsonObject toolGenerateIsometricSprites(const QJsonObject &args);
     /// Phase VAT slice 4: bake a skeletal animation to a Vertex
@@ -282,6 +368,7 @@ private:
     /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,
     /// target, normals, output_dir, basename.
     QJsonObject toolBakeVat(const QJsonObject &args);
+    QJsonObject toolRetargetAnimation(const QJsonObject &args);   // #523
 
     /// Morph A6: list named morph targets / blend shapes on a mesh
     /// file. Args: `file` (path). Heavy — does a full mesh import.
@@ -373,6 +460,18 @@ private:
     /// Pose-lib D-MCP: list saved pose names on the first selected
     /// entity. Light read; returns `{ count, poses: [name…] }`.
     QJsonObject toolListPoses(const QJsonObject &args);
+    // #524 procedural animation generators
+    QJsonObject toolListGenerators(const QJsonObject &args);
+    QJsonObject toolAddGenerator(const QJsonObject &args);
+    QJsonObject toolSetGenerator(const QJsonObject &args);
+    QJsonObject toolBakeGenerator(const QJsonObject &args);
+    QJsonObject toolRemoveGenerator(const QJsonObject &args);
+    QJsonObject toolListConstraints(const QJsonObject &args);
+    QJsonObject toolAddConstraint(const QJsonObject &args);
+    QJsonObject toolSetConstraint(const QJsonObject &args);
+    QJsonObject toolMoveConstraint(const QJsonObject &args);
+    QJsonObject toolRemoveConstraint(const QJsonObject &args);
+    QJsonObject toolBakeConstraints(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the
@@ -390,6 +489,11 @@ private:
     /// using the _l/_r/.L/.R/Left/Right bone-name heuristic.
     /// Args: `src` (existing pose), `dst` (output pose name).
     QJsonObject toolMirrorPose(const QJsonObject &args);
+
+    /// Pose-lib D2: blend two saved poses into a third.
+    /// Args: `a`, `b` (existing poses), `weight` (0=a … 1=b,
+    /// clamped), `dst` (output pose name).
+    QJsonObject toolBlendPoses(const QJsonObject &args);
 
     /// Pose-lib D-Project: write the first-selected entity's pose
     /// library to a `.poselib` sidecar JSON file. Args: `path`.
@@ -489,6 +593,10 @@ private:
     void handleHttpRequest(QTcpSocket *socket);
     QTcpServer *m_httpServer = nullptr;
     int m_httpPort = 8080;
+    QString m_httpToken;
+    bool m_httpTokenExplicit = false;
+    QHostAddress m_httpBindAddress = QHostAddress::LocalHost;
+    bool m_httpBindExplicit = false;
     QMap<QTcpSocket*, QByteArray> m_httpBuffers;
 
     // Member variables
@@ -507,7 +615,7 @@ private:
     // 1.4.0 — added simplify_animation / analyze_animation tools
     // 1.5.0 — added bake_animation_fps tool
     // 1.6.0 — added list_material_presets / apply_material_preset (incl. PBR templates)
-    static constexpr const char* SERVER_VERSION = "1.9.0";
+    static constexpr const char* SERVER_VERSION = "1.11.0";
 };
 
 #endif // MCPSERVER_H

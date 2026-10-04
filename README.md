@@ -30,7 +30,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.37.8**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.48.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 
@@ -48,10 +48,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.37.8
+        uses: fernandotonon/QtMeshEditor@3.48.0
         with:
           command: scan
-          image-tag: "3.37.8"
+          image-tag: "3.48.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -76,37 +76,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.37.8
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.37.8"
+    image-tag: "3.48.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.37.8
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.37.8"
+    image-tag: "3.48.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.37.8
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.37.8"
+    image-tag: "3.48.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.37.8
+- uses: fernandotonon/QtMeshEditor@3.48.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.37.8"
+    image-tag: "3.48.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 # The image is multi-arch (linux/amd64 + linux/arm64), so it runs natively on
@@ -171,6 +171,13 @@ qtmesh lod model.fbx --auto
 
 # Bake vertex colors → texture (with UV-seam dilation)
 qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
+qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
+qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
+qtmesh paint --list-stamps                                     # brush stamps (also --list-presets, --list-palettes; all take --json)
+qtmesh paint model.fbx --layer list --json                     # paint layers (layers are a live-session concept; bake to write pixels)
+qtmesh paint model.fbx --bake --engine unity -o out/           # alias of paint-bake --target
+qtmesh paint model.fbx --apply-stencil decal.png --camera "0,1,4,0,1,0" -o out.mesh  # project an image through an explicit camera
 
 # Auto UV unwrap (xatlas — same library Blender/Godot use)
 qtmesh uv model.fbx --unwrap -o unwrapped.glb               # overwrite UV0
@@ -190,6 +197,29 @@ qtmesh skin model.fbx --skip-unweighted --merge -o filled.glb  # fill missing we
 # Auto-generate the 52 ARKit blendshapes on a humanoid FACE mesh (for face capture)
 qtmesh facerig head.glb -o rigged.glb                       # fit ARKit template + transfer 52 shapes
 qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / machine-readable report
+
+# Drive those blendshapes from SPEECH (NVIDIA Audio2Face-3D, runs locally)
+qtmesh lipsync take.wav --mesh head.glb -o spoken.glb        # audio -> ARKit weight animation
+qtmesh lipsync take.wav --mesh head.glb --fps 60 --clip Speech -o out.glb
+qtmesh lipsync take.wav --mesh head.glb --emotion joy=0.6 -o out.glb
+
+# Retarget a clip onto a different skeleton (auto bone map, or a bundled / .bonemap map)
+qtmesh anim mixamo_walk.fbx --retarget hero.glb --bonemap mixamo_to_unity --anim Walk -o hero_walking.glb
+
+# Procedural generators: drive a property from a formula, add it on top of the animation, bake when done
+qtmesh anim hero.fbx --generator sine --target "bone:*/mixamorig:Spine/rotation.z@Idle" --amplitude 8 --frequency 0.5 -o breathing.glb
+qtmesh anim drone.glb --generator follow-path --target "node:*/position" --points "0,2,0;4,2,0;4,2,4;0,2,4" --closed true --orient true \
+                      --generator noise --target "node:*/position.y" --amplitude 0.1 --noise-frequency 3 --bake -o patrol.glb
+# Constraints: IK a hand onto a prop, clamp the elbow, bake into the clip
+qtmesh anim hero.fbx --constraint ik --owner "bone:*/mixamorig:LeftHand" --target "node:Cup" \
+                     --constraint limit-rotation --owner "bone:*/mixamorig:LeftForeArm" --max-y 10 \
+                     --bake-constraints --animation Idle -o hero_cup.glb
+
+# Vertex Animation Textures (OpenVAT) — four modes, one baker
+qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
+qtmesh vat pieces.fbx --anim Explode --mode rigid --target godot -o out/  # rigid-body: one quaternion + pivot per submesh chunk (destruction / mechanical), ships openvat_rigid.gdshader
+qtmesh vat cache.abc --mode mesh-anim --anim Cache -o out/              # vertex cache (Alembic / VAT_POSE clip)
+qtmesh vat face.glb --mode morph --encoding exr -o out/                # keyed morph weights (default clip "MorphAnim"), float32 EXR; --encoding rgba8|rgba16|exr
 ```
 
 ---
@@ -249,6 +279,13 @@ outward by N pixels to mask UV-seam bleed at MIP-map time.
 
 ```bash
 qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+qtmesh paint-bake model.fbx --target unreal -o out/            # repack the mesh's PBR textures into an engine layout + sidecar JSON
+qtmesh paint-bake model.fbx --target unity -o out/ --resolution 2048 --prefix hero  # Unity: metallic+smoothness RGBA, DirectX (+Y down) normal
+qtmesh paint-bake --list-targets                               # generic | unity | unreal | godot | gltf
+qtmesh paint --list-stamps                                     # brush stamps (also --list-presets, --list-palettes; all take --json)
+qtmesh paint model.fbx --layer list --json                     # paint layers (layers are a live-session concept; bake to write pixels)
+qtmesh paint model.fbx --bake --engine unity -o out/           # alias of paint-bake --target
+qtmesh paint model.fbx --apply-stencil decal.png --camera "0,1,4,0,1,0" -o out.mesh  # project an image through an explicit camera
 ```
 
 **Export.** Vertex colors are preserved on export to formats that support
@@ -301,12 +338,14 @@ Split View|Skeleton Animation Controls
 - **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
 - **Material editor** — visual editing with AI-assisted generation; PBR + HDR/IBL materials look correct on first import (bundled studio HDRI, ACES tonemap, env intensity/tint per material)
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
+- **Lattice deformer** — Blender-style lattice modifier: box a mesh with a grid of control points and drag them in the viewport to bend, squash or stretch it (linear / smooth / Bézier interpolation, live preview, one-step undo); save the lattice and replay it with `qtmesh lattice <mesh> --apply <lattice.json> -o <out>` or MCP `lattice_begin` / `lattice_set_points` / `lattice_apply` / `lattice_deform`
 - **AI part segmentation & PartOps** — detect a character's parts (head/torso/arms/legs), then **split** into named submeshes, **explode** into separate scene nodes, **join** them back, or **solidify** thin-shell parts; GUI + `qtmesh segment --split-parts / --explode-parts` + MCP (`split_mesh_by_segments`, `explode_mesh_parts`, `join_mesh_parts`) — see [docs/PART_OPS.md](docs/PART_OPS.md)
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
 - **Performance capture** — video/webcam → facial morph animation (ARKit blendshapes), head pose, and full-body skeletal capture onto humanoid rigs; live preview + record in the editor, `qtmesh mocap` on the CLI (`-DENABLE_MOCAP` builds)
-- **AI chat** — natural language scene editing via local LLMs
+- **Audio-driven lipsync** — speech → ARKit blendshape animation via NVIDIA's Audio2Face-3D, running locally through ONNX; drives any mesh with ARKit targets (including the ones `qtmesh facerig` generates), in the Inspector, `qtmesh lipsync` on the CLI, or the `generate_lipsync` MCP tool
+- **AI agent** — describe a task in natural language; a local LLM plans it over the editor's tools, runs it step by step with structured observations and replanning, groups it into ONE undo step, and asks before deleting or overwriting (agent mode; the simple chat loop is one click away)
 - **MCP server** — 57+ tools for AI agents (Claude, Cursor, etc.), including HDR/IBL (`set_hdr_environment`, `set_tonemap`, …) and QtMesh Cloud (`cloud_*`)
-- **REST API** — HTTP interface for external automation
+- **REST API** — opt-in HTTP interface for external automation (`--with-mcp --http-port 8080`). Bound to **localhost** by default; tools execute only via `POST /api/tools/<name>` (`GET /api/tools` lists them); set `QTMESH_HTTP_TOKEN` (or `--http-token-file <path>`; a secret on the command line is refused, since `ps` shows it to every local user) to require `Authorization: Bearer <token>` on every request, and `--http-bind 0.0.0.0` only when you mean to expose it
 
 ---
 

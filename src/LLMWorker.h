@@ -13,7 +13,7 @@
 #endif
 
 struct LLMSettings {
-    int contextSize = 4096;
+    int contextSize = 8192;   // the AI agent's prompts (tool docs + scene state) need more than 4k
     int maxTokens = 2048;
     float temperature = 0.7f;
     int gpuLayers = 99;
@@ -48,6 +48,9 @@ public slots:
 
 signals:
     void modelLoaded(const QString &modelPath);
+    /// The context window actually created — the requested size clamped to
+    /// the model's training limit. Prompts are budgeted against THIS.
+    void contextReady(int nCtx);
     void modelLoadError(const QString &error);
     void modelUnloaded();
 
@@ -72,6 +75,7 @@ private:
 #ifdef ENABLE_LOCAL_LLM
     llama_model *m_model = nullptr;
     llama_context *m_ctx = nullptr;
+    int m_nCtx = 0;   // llama_n_ctx(m_ctx) after initialization
     const llama_vocab *m_vocab = nullptr;
     std::vector<llama_token> m_prevTokens; // cached input tokens for KV-prefix reuse
 
