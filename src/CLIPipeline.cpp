@@ -24,6 +24,7 @@
 #include "AnimationRetargeter.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "MotionGraphManager.h"
 #include "AnimGenerators.h"
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
@@ -659,6 +660,8 @@ void CLIPipeline::printUsage()
         "              --target <ref> ...] --bake-constraints [--animation <clip>] [--fps N] -o <out>\n"
         "                                    Animation constraints (#525): list the .constraints.json sidecar,\n"
         "                                    add constraints, bake them into keyframes\n"
+        "  anim <file> --graph-info [--json]  Motion graph (#526) saved beside the file (states/transitions/params);\n"
+        "                                    preview/authoring only — engine graphs are not exported\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
@@ -3141,6 +3144,82 @@ int CLIPipeline::cmdAnimConstraints(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::cmdAnimGraphInfo(int argc, char* argv[])
+{
+    QString filePath;
+    bool json = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        if (a == "anim" || a == "--cli" || a == "--verbose" || a == "--no-telemetry" || a == "--graph-info") continue;
+        if (a == "--json") { json = true; continue; }
+        if (!a.startsWith('-') && filePath.isEmpty()) { filePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'.\nUsage: qtmesh anim <file> --graph-info [--json]" << Qt::endl;
+        return 2;
+    }
+    if (filePath.isEmpty()) { err() << "Usage: qtmesh anim <file> --graph-info [--json]" << Qt::endl; return 2; }
+    if (!QFileInfo::exists(filePath)) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+    // Pure file read — no mesh load.
+    const QString side = MotionGraphManager::sidecarPath(filePath);
+    QFile f(side);
+    QJsonArray graphs;
+    if (f.open(QIODevice::ReadOnly)) {
+        QJsonParseError pe;
+        const QJsonDocument jd = QJsonDocument::fromJson(f.readAll(), &pe);
+        if (pe.error != QJsonParseError::NoError || !jd.isObject()) {
+            err() << "Error: " << side << ": not valid JSON (" << pe.errorString() << ")" << Qt::endl;
+            return 1;
+        }
+        const QJsonObject doc = jd.object();
+        if (doc.value("schema").toString() != QLatin1String("qtmesh-anim-graphs-v1")) {
+            err() << "Error: " << side << ": not a qtmesh-anim-graphs-v1 file" << Qt::endl;
+            return 1;
+        }
+        for (const QJsonValue& v : doc.value("graphs").toArray()) {
+            AnimGraph::Graph g;
+            QString e;
+            if (!AnimGraph::fromJson(v.toObject().value("graph").toObject(), &g, &e)) {
+                err() << "Error: " << side << ": " << e << Qt::endl;
+                return 1;
+            }
+            graphs.append(QJsonObject{{"entity", v.toObject().value("entity").toString()}, {"graph", AnimGraph::toJson(g)}});
+        }
+    }
+    if (json) {
+        cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"file", filePath}, {"sidecar", side}, {"graphs", graphs},
+                                                             {"exportable", false}})
+                                       .toJson(QJsonDocument::Indented)));
+        return 0;
+    }
+    if (graphs.isEmpty()) {
+        cliWrite(QStringLiteral("No motion graph (%1 not found or empty)\n").arg(QFileInfo(side).fileName()));
+        return 0;
+    }
+    for (const QJsonValue& v : graphs) {
+        AnimGraph::Graph g;
+        AnimGraph::fromJson(v.toObject().value("graph").toObject(), &g);
+        cliWrite(QStringLiteral("Entity %1 — entry '%2'\n").arg(v.toObject().value("entity").toString(), g.entry));
+        for (const auto& s : g.states)
+            cliWrite(QStringLiteral("  state  %1  clip=%2%3%4\n").arg(s.name, s.clip, s.loop ? QString() : QStringLiteral(" once"),
+                                                                       s.speed != 1.0 ? QStringLiteral(" speed=%1").arg(s.speed) : QString()));
+        for (const auto& t : g.transitions) {
+            QStringList c;
+            for (const auto& x : t.conditions)
+                c << (x.op == AnimGraph::Op::IsTrue || x.op == AnimGraph::Op::IsFalse
+                          ? QStringLiteral("%1 is %2").arg(x.param, AnimGraph::opId(x.op))
+                          : QStringLiteral("%1 %2 %3").arg(x.param, AnimGraph::opId(x.op)).arg(x.value));
+            if (t.exitTime >= 0) c << QStringLiteral("exit %1").arg(t.exitTime);
+            cliWrite(QStringLiteral("  trans  %1  %2  [%3]  %4s %5%6\n")
+                         .arg(t.id, AnimGraph::displayName(t), c.isEmpty() ? QStringLiteral("always") : c.join(", "))
+                         .arg(t.duration).arg(AnimGraph::curveId(t.curve),
+                              t.mask.isEmpty() ? QString() : QStringLiteral("  mask=%1 bones").arg(t.mask.size())));
+        }
+        for (const auto& p : g.params)
+            cliWrite(QStringLiteral("  param  %1 (%2) = %3\n").arg(p.name, AnimGraph::paramTypeId(p.type)).arg(p.value));
+    }
+    cliWrite(QStringLiteral("Preview/authoring only: export writes the clips, not the graph.\n"));
+    return 0;
+}
+
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i)
@@ -3149,6 +3228,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         const QString a(argv[i]);
         if (a == QLatin1String("--generator") || a == QLatin1String("--list-generators"))
             return cmdAnimGenerators(argc, argv);
+        if (a == QLatin1String("--graph-info")) return cmdAnimGraphInfo(argc, argv);
         if (a == QLatin1String("--constraint") || a == QLatin1String("--list-constraints")
             || a == QLatin1String("--bake-constraints"))
             return cmdAnimConstraints(argc, argv);
