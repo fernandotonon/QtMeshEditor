@@ -148,46 +148,6 @@ Result apply(Ogre::Skeleton* skel,
         return r;
     }
 
-    // A rig can carry MORE segments than the canonical skeleton: these packs
-    // are FrontLeg -> FrontUpLeg -> FrontLowLeg -> FrontFoot (four) against
-    // canonical UpLeg -> LowLeg -> Foot (three). Whichever bone loses out sits
-    // BETWEEN two mapped roles and is left at its bind pose, breaking the
-    // chain -- measured as a 91 deg discontinuity between role 5's bind
-    // orientation and role 6's parent bind orientation, which renders as a
-    // cramped stride with the limb swinging from the wrong joint.
-    //
-    // Give every such in-between bone the SAME role as the mapped bone above
-    // it, so the whole limb segment rotates together instead of hinging at a
-    // joint the clip never drives.
-    std::vector<Ogre::Bone*> extraBone;
-    std::vector<int> extraRole;
-    for (auto* bone : skel->getBones()) {
-        bool mapped = false;
-        for (int j = 0; j < J; ++j)
-            if (roleBone[static_cast<size_t>(j)] == bone) { mapped = true; break; }
-        if (mapped) continue;
-        // Nearest MAPPED ancestor decides this bone's role.
-        auto* p = dynamic_cast<Ogre::Bone*>(bone->getParent());
-        while (p) {
-            int pr = -1;
-            for (int j = 0; j < J; ++j)
-                if (roleBone[static_cast<size_t>(j)] == p) { pr = j; break; }
-            if (pr >= 0) {
-                // Only inherit within a LIMB; the spine/neck chain is already
-                // fully mapped and must not pick up stray children.
-                const QString pn =
-                    QString::fromStdString(p->getName()).toLower();
-                if (pn.contains(QLatin1String("leg"))
-                    || pn.contains(QLatin1String("foot"))) {
-                    extraBone.push_back(bone);
-                    extraRole.push_back(pr);
-                }
-                break;
-            }
-            p = dynamic_cast<Ogre::Bone*>(p->getParent());
-        }
-    }
-
     // ---- target bind-pose world orientations -------------------------------
     // Needed to transport a world delta into each bone's PARENT frame. Read
     // once from the reset pose; the clip is applied as a delta onto it, so
@@ -273,41 +233,27 @@ Result apply(Ogre::Skeleton* skel,
             // the limb was driven from the wrong reference. It scored ~40 deg
             // of world error on a SELF-retarget (which must be ~0) and read
             // as legs swinging in weird, cramped positions.
-            Ogre::Quaternion local = pInv * dWorld * parentBindWorld[static_cast<size_t>(j)];
+            // Ogre's NodeAnimationTrack POST-multiplies the key onto the
+            // bone's bind pose (`node->rotate(key)` on a node already reset
+            // to bind), so the key is not a parent-frame quantity:
+            //
+            //   final_local = bindLocal * key
+            //   key = bindLocal^-1 * (parentWorld^-1 * Wtarget)
+            //       = bindWorld^-1 * Wtarget
+            //   with Wtarget = dWorld * bindWorld:
+            //   key = bindWorld^-1 * dWorld * bindWorld
+            //
+            // i.e. the delta conjugated into the BONE's own bind frame. The
+            // shipped code conjugated by parentBindWorld instead -- the wrong
+            // frame -- which left a constant ~30 deg bias under every clip and
+            // read as legs swinging from the wrong place.
+            const Ogre::Quaternion& bw = bindWorld[static_cast<size_t>(j)];
+            Ogre::Quaternion local = bw.Inverse() * dWorld * bw;
             local.normalise();
             const float t = static_cast<float>(f) / static_cast<float>(fps);
             track->createNodeKeyFrame(t)->setRotation(local);
         }
         ++r.tracksWritten;
-    }
-
-    // In-between limb bones inherit their nearest mapped ancestor's role, so
-    // the whole segment rotates with the limb rather than hinging at a joint
-    // the clip never drives (see the extraBone pass above).
-    for (size_t e = 0; e < extraBone.size(); ++e) {
-        Ogre::Bone* bone = extraBone[e];
-        const int j = extraRole[e];
-        if (anim->hasNodeTrack(bone->getHandle())) continue;
-        Ogre::Quaternion pBind = Ogre::Quaternion::IDENTITY;
-        if (auto* p = dynamic_cast<Ogre::Bone*>(bone->getParent()))
-            pBind = p->_getDerivedOrientation();
-        const Ogre::Quaternion pI = pBind.Inverse();
-        const Ogre::Quaternion src0 =
-            (static_cast<int>(srcRestWorld.size()) == J)
-                ? toQ(srcRestWorld[static_cast<size_t>(j)])
-                : toQ(clipQuats.front()[static_cast<size_t>(j)]);
-        Ogre::NodeAnimationTrack* tr =
-            anim->createNodeTrack(bone->getHandle(), bone);
-        for (size_t f = 0; f < clipQuats.size(); ++f) {
-            Ogre::Quaternion dW =
-                toQ(clipQuats[f][static_cast<size_t>(j)]) * src0.Inverse();
-            dW.normalise();
-            Ogre::Quaternion lo = pI * dW * pBind;
-            lo.normalise();
-            tr->createNodeKeyFrame(static_cast<float>(f)
-                                   / static_cast<float>(fps))->setRotation(lo);
-        }
-        tr->_keyFrameDataChanged();
     }
 
     // Whole-rig displacement, on the top-level bone. Written after the
