@@ -41,6 +41,25 @@ struct Clip {
     /// The retarget applies each frame as a delta against this, so a target
     /// creature of different proportions still reads correctly.
     std::vector<std::array<float, 4>> restWorld;
+    /// Per-frame ROOT world translation, as a delta from frame 0, expressed
+    /// in units of the source rig's HIP HEIGHT (root bind height above the
+    /// mesh floor).
+    ///
+    /// Rotation alone cannot express a jump (the body rises), a death (it
+    /// topples to the ground) or a lunge: with translation discarded the body
+    /// pivots about a root pinned at its bind position and folds through its
+    /// own legs. Measured across the library, death clips rotate the root by a
+    /// median of 105 deg, so this is most of what those clips ARE.
+    ///
+    /// It is stored SCALE-NORMALISED because that is the whole reason
+    /// translation was originally dropped: a horse's leap in raw world units
+    /// would fling a pug into orbit. Dividing by hip height here and
+    /// multiplying by the TARGET's hip height on replay makes the motion
+    /// proportional to the creature, which is what "the same jump" means
+    /// across body sizes.
+    std::vector<std::array<float, 3>> rootOffset;
+    /// Source rig hip height used for the normalisation above (world units).
+    float hipHeight = 1.0f;
 };
 
 struct Result {

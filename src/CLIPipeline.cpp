@@ -3379,10 +3379,24 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             err() << "Error: mesh has no skeleton." << Qt::endl;
             return 1;
         }
+        // Root translation: parse the clip's channel and measure the TARGET's
+        // hip height so the displacement scales to this creature.
+        std::vector<std::array<float, 3>> rootOffset;
+        for (const QJsonValue& ov : chosen.value("rootOffset").toArray()) {
+            const QJsonArray o = ov.toArray();
+            if (o.size() != 3) continue;
+            rootOffset.push_back({static_cast<float>(o.at(0).toDouble()),
+                                  static_cast<float>(o.at(1).toDouble()),
+                                  static_cast<float>(o.at(2).toDouble())});
+        }
+        const float targetHip =
+            CreatureMotionRetarget::hipHeightOf(entity, srcPlan);
+
         const CreatureMotionRetarget::Result rr =
             CreatureMotionRetarget::apply(masterSkel.get(),
                                           newName.toStdString(), srcPlan,
-                                          quats, jroot.value("fps").toInt(30));
+                                          quats, jroot.value("fps").toInt(30),
+                                          rootOffset, targetHip);
         if (!rr.ok) {
             err() << "Error: " << rr.error << Qt::endl;
             return 1;
@@ -3464,6 +3478,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 frames.append(fr);
             }
             co["quats"] = frames;
+            // Scale-normalised root translation (hip-height units) — what
+            // makes jump/death/attack readable; see CreatureMotionExtract.h.
+            QJsonArray offArr;
+            for (const auto& o : c.rootOffset) {
+                QJsonArray v; v.append(o[0]); v.append(o[1]); v.append(o[2]);
+                offArr.append(v);
+            }
+            co["rootOffset"] = offArr;
+            co["hipHeight"] = c.hipHeight;
             clipArr.append(co);
         }
         root["clips"] = clipArr;

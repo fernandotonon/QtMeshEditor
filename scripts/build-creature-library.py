@@ -85,7 +85,24 @@ def main() -> int:
                 "quality": 1.0,
                 "quats": c["quats"],
                 "restWorld": c["restWorld"],
+                # Root displacement channel: what makes jump/death/attack
+                # readable. Absent in dumps from an older build, in which case
+                # the retarget stays rotation-only for that clip.
+                "rootOffset": c.get("rootOffset", []),
             })
+
+    # Drop exact duplicates. The first build shipped Cow|Walk and Horse|Walk
+    # twice each (indices 4/79 and 5/80) because the corpus contains the same
+    # pack under two paths, which wasted cap slots on identical motion.
+    seen_sig, uniq = set(), []
+    for c in clips:
+        sig = (c["action"], c["skeleton"], c["frames"],
+               repr(c["quats"][0]) if c["quats"] else "")
+        if sig in seen_sig:
+            continue
+        seen_sig.add(sig)
+        uniq.append(c)
+    clips = uniq
 
     # Cap per (action, plan) so one well-covered rig cannot dominate.
     capped, seen = [], {}

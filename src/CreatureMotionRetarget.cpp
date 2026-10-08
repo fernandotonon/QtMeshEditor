@@ -1,9 +1,13 @@
 #include "CreatureMotionRetarget.h"
 
 #include <OgreAnimation.h>
+#include <OgreAxisAlignedBox.h>
 #include <OgreBone.h>
+#include <OgreEntity.h>
+#include <OgreMesh.h>
 #include <OgreKeyFrame.h>
 #include <OgreSkeleton.h>
+#include <OgreSkeletonInstance.h>
 
 #include <QStringList>
 
@@ -47,11 +51,43 @@ Ogre::Quaternion toQ(const std::array<float, 4>& a)
 
 namespace CreatureMotionRetarget {
 
+float hipHeightOf(Ogre::Entity* entity, BodyPlan plan)
+{
+    if (!entity || !entity->getMesh()) return 0.0f;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    if (!skel) return 0.0f;
+
+    // The root is whichever bone claims canonical role 0, resolved with the
+    // same specificity rule the retarget uses so the two cannot disagree.
+    Ogre::Bone* root = nullptr;
+    int best = -1;
+    for (auto* b : skel->getBones()) {
+        const QString bn = QString::fromStdString(b->getName());
+        if (planIndexForBone(plan, bn) != 0) continue;
+        const int sc = planSpecificity(plan, bn);
+        if (sc > best) { best = sc; root = b; }
+    }
+    if (!root) return 0.0f;
+
+    skel->reset(true);
+    skel->_updateTransforms();
+    const Ogre::AxisAlignedBox& bb = entity->getMesh()->getBounds();
+    if (bb.isNull() || bb.isInfinite()) return 0.0f;
+    const float h = root->_getDerivedPosition().y - bb.getMinimum().y;
+    if (h > 1e-4f) return h;
+    // Root sitting on the floor: fall back to overall mesh height so a jump
+    // still scales sensibly rather than collapsing to zero.
+    const float mh = bb.getMaximum().y - bb.getMinimum().y;
+    return mh > 1e-4f ? mh : 0.0f;
+}
+
 Result apply(Ogre::Skeleton* skel,
              const std::string& animName,
              BodyPlan plan,
              const std::vector<std::vector<std::array<float, 4>>>& clipQuats,
-             int fps)
+             int fps,
+             const std::vector<std::array<float, 3>>& rootOffset,
+             float targetHipHeight)
 {
     Result r;
     if (!skel)                { r.error = QStringLiteral("no skeleton"); return r; }
@@ -128,6 +164,28 @@ Result apply(Ogre::Skeleton* skel,
             parentBindWorld[static_cast<size_t>(j)] = p->_getDerivedOrientation();
     }
 
+    // Translation is opt-in: it needs BOTH a clip that carries the channel
+    // and a target scale to replay it against.
+    //
+    // It must go on the skeleton's TOP-LEVEL bone, NOT on canonical role 0.
+    // On these rigs role 0 resolves to `Hips` (it beats `root` on
+    // specificity), which sits mid-hierarchy: the back legs hang off it but
+    // the FRONT legs do not. Translating Hips therefore dragged the pelvis
+    // and torso away while the forelegs stayed planted -- the body visibly
+    // tore in half during a death. The top-level bone carries the whole rig,
+    // which is what "the creature moved" means.
+    Ogre::Bone* transBone = nullptr;
+    if (Ogre::Bone* r0 = roleBone[0]) {
+        transBone = r0;
+        while (auto* p = dynamic_cast<Ogre::Bone*>(transBone->getParent()))
+            transBone = p;
+    }
+    const bool useRootTranslation =
+        transBone && targetHipHeight > 1e-5f
+        && rootOffset.size() >= clipQuats.size();
+    r.rootTranslation = useRootTranslation;
+
+
     const float len = static_cast<float>(clipQuats.size() - 1)
                       / static_cast<float>(fps);
     if (skel->hasAnimation(animName))
@@ -160,6 +218,28 @@ Result apply(Ogre::Skeleton* skel,
             track->createNodeKeyFrame(t)->setRotation(local);
         }
         ++r.tracksWritten;
+    }
+
+    // Whole-rig displacement, on the top-level bone. Written after the
+    // rotation pass so it can reuse that bone's track when it happens to also
+    // carry a canonical role, instead of creating a second track for the same
+    // handle (Ogre keys one track per bone).
+    if (useRootTranslation) {
+        Ogre::NodeAnimationTrack* tt =
+            anim->hasNodeTrack(transBone->getHandle())
+                ? anim->getNodeTrack(transBone->getHandle())
+                : anim->createNodeTrack(transBone->getHandle(), transBone);
+        for (size_t f = 0; f < clipQuats.size(); ++f) {
+            const float t = static_cast<float>(f) / static_cast<float>(fps);
+            const auto& o = rootOffset[f];
+            // Scale the normalised offset by the TARGET's hip height. The
+            // top-level bone's parent frame is the (unanimated) skeleton
+            // root, so a world offset applies directly here -- no transport
+            // needed, unlike the per-bone rotations.
+            tt->createNodeKeyFrame(t)->setTranslate(
+                Ogre::Vector3(o[0], o[1], o[2]) * targetHipHeight);
+        }
+        tt->_keyFrameDataChanged();
     }
 
     skel->reset(true);

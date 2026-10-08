@@ -3,6 +3,9 @@
 #include <OgreAnimation.h>
 #include <OgreBone.h>
 #include <OgreEntity.h>
+#include <OgreAxisAlignedBox.h>
+#include <OgreMesh.h>
+#include <OgreMath.h>
 #include <OgreSkeletonInstance.h>
 
 #include <QStringList>
@@ -113,6 +116,27 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
         if (Ogre::Bone* b = roleBone[static_cast<size_t>(j)])
             rest[static_cast<size_t>(j)] = toArr(b->_getDerivedOrientation());
 
+    // Root bind position + hip height, for the scale-normalised translation
+    // channel. Hip height is the root's height above the mesh floor, which is
+    // the natural per-creature yardstick: "rose by one hip height" transfers
+    // across body sizes, raw world units do not.
+    Ogre::Vector3 rootBind(0, 0, 0);
+    float hipHeight = 1.0f;
+    if (Ogre::Bone* rb = roleBone[0]) {
+        rootBind = rb->_getDerivedPosition();
+        const Ogre::AxisAlignedBox& bb = entity->getMesh()->getBounds();
+        if (!bb.isNull() && !bb.isInfinite()) {
+            const float h = rootBind.y - bb.getMinimum().y;
+            if (h > 1e-4f) hipHeight = h;
+        }
+        // A rig whose root sits ON the floor (or an unusable bound) would make
+        // the normalisation explode; fall back to the mesh's own height.
+        if (hipHeight <= 1e-4f && !bb.isNull() && !bb.isInfinite()) {
+            const float mh = bb.getMaximum().y - bb.getMinimum().y;
+            if (mh > 1e-4f) hipHeight = mh;
+        }
+    }
+
     for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
         Ogre::Animation* anim = skel->getAnimation(a);
         if (!anim || anim->getLength() <= 0.0f) continue;
@@ -129,6 +153,7 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
         c.fps = fps;
         c.resolvedRoles = resolved;
         c.restWorld = rest;
+        c.hipHeight = hipHeight;
 
         const float len = anim->getLength();
         const int n = std::max(2, static_cast<int>(std::lround(len * fps)));
@@ -146,7 +171,52 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
                     pose[static_cast<size_t>(j)] =
                         toArr(b->_getDerivedOrientation());
             c.quats.push_back(std::move(pose));
+
+            // Root displacement since frame 0, in hip-height units.
+            Ogre::Vector3 off(0, 0, 0);
+            if (Ogre::Bone* rb = roleBone[0])
+                off = (rb->_getDerivedPosition() - rootBind) / hipHeight;
+            c.rootOffset.push_back({static_cast<float>(off.x),
+                                    static_cast<float>(off.y),
+                                    static_cast<float>(off.z)});
         }
+        // Trim a DEAD TAIL. Several source clips declare a length well past
+        // their last real keyframe -- Horse|Walk animates for 50.6% of its
+        // 3.33s and is frozen for the rest, which reads as "the walk stops
+        // halfway and the legs stick". Measured across the farm pack: most
+        // clips are 95-100% live, the stragglers 50-85%.
+        //
+        // Cut back to the last frame that actually differs from its
+        // predecessor (plus one, so the final pose is kept). A clip that is
+        // live to the end is untouched. Deliberately NOT applied to a clip
+        // that barely moves at all (idle breathing is legitimately subtle and
+        // would be trimmed to nothing).
+        {
+            const float kEps = 0.05f;   // degrees-ish, on the quat dot
+            auto differs = [&](size_t f) {
+                for (int j = 0; j < J; ++j) {
+                    const auto& a = c.quats[f - 1][static_cast<size_t>(j)];
+                    const auto& b = c.quats[f][static_cast<size_t>(j)];
+                    float d = std::fabs(a[0] * b[0] + a[1] * b[1]
+                                        + a[2] * b[2] + a[3] * b[3]);
+                    d = std::min(1.0f, d);
+                    if (Ogre::Math::RadiansToDegrees(2.0f * std::acos(d)) > kEps)
+                        return true;
+                }
+                return false;
+            };
+            size_t last = 0;
+            for (size_t f = 1; f < c.quats.size(); ++f)
+                if (differs(f)) last = f;
+            // Only trim when there is a real tail AND the clip has real motion
+            // to begin with; keep at least 2 frames.
+            const size_t keep = last + 2;
+            if (last > 4 && keep < c.quats.size()) {
+                c.quats.resize(keep);
+                if (c.rootOffset.size() > keep) c.rootOffset.resize(keep);
+            }
+        }
+
         c.frames = static_cast<int>(c.quats.size());
         if (c.frames > 0) r.clips.push_back(std::move(c));
     }

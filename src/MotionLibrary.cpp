@@ -233,6 +233,20 @@ bool MotionLibrary::parse(const QByteArray& json)
                     static_cast<float>(q.at(3).toDouble(1.0))});
             }
         }
+        // Creature root-translation channel (#jump/death/attack). Accepted
+        // only at full length: a short array would silently freeze the root
+        // partway through, which is the exact failure this channel fixes.
+        const QJsonArray roff = co.value("rootOffset").toArray();
+        if (roff.size() == static_cast<int>(clip.quats.size())) {
+            clip.rootOffset.reserve(clip.quats.size());
+            for (const QJsonValue& ov : roff) {
+                const QJsonArray o = ov.toArray();
+                clip.rootOffset.push_back({
+                    static_cast<float>(o.at(0).toDouble()),
+                    static_cast<float>(o.at(1).toDouble()),
+                    static_cast<float>(o.at(2).toDouble())});
+            }
+        }
         const QJsonArray rdir = co.value("restDir").toArray();
         if (rdir.size() == nJoints) {
             clip.restDir.reserve(nJoints);

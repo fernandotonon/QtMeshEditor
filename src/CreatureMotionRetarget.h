@@ -8,7 +8,7 @@
 #include <array>
 #include <vector>
 
-namespace Ogre { class Skeleton; }
+namespace Ogre { class Skeleton; class Entity; }
 
 // Apply a canonical CREATURE clip onto a creature rig (#1073) — the
 // counterpart of AnimationMerger::applyMotionClip for non-humanoid skeletons.
@@ -32,8 +32,17 @@ namespace Ogre { class Skeleton; }
 // delta does NOT survive is being applied to the WRONG BONE, which is what
 // role resolution must get right (see roleSpecificity).
 //
-// Rotation only: translation and scale are left at the bind pose, so a
+// ROOT TRANSLATION is carried; every other joint is rotation-only, so a
 // long-legged horse clip on a short-legged pug does not stretch the pug.
+//
+// Rotation alone cannot express a jump (the body rises), a death (it topples
+// to the ground) or a lunge: with translation discarded the body pivots about
+// a root pinned at its bind position and folds through its own legs. So the
+// ROOT bone also receives a translation track, taken from the clip's
+// hip-height-normalised `rootOffset` and multiplied by the TARGET's hip
+// height -- "rose by one hip height" transfers across body sizes, raw world
+// units do not. Pass `targetHipHeight`; 0 disables translation (the legacy
+// rotation-only behaviour).
 namespace CreatureMotionRetarget {
 
 struct Result {
@@ -43,6 +52,9 @@ struct Result {
     int rolesResolved = 0;    ///< canonical roles matched on the TARGET rig
     int frames = 0;
     float length = 0.0f;      ///< seconds
+    /// True when the root received a translation track (clip carried the
+    /// channel and a target hip height was supplied).
+    bool rootTranslation = false;
 };
 
 /// Write `clipQuats` (frames x jointCount x [x,y,z,w], WORLD orientations on
@@ -52,11 +64,20 @@ struct Result {
 /// not a quadruped is refused rather than approximated, because the failure
 /// is silent — four legs driven through two roles still animates, it just
 /// animates wrongly.
+/// Measure a TARGET entity's hip height: the root bone's height above the
+/// mesh floor, in world units. This is the yardstick the clip's normalised
+/// `rootOffset` is multiplied by, so the same motion reads correctly on a
+/// horse and on a pug. Returns 0 when the rig has no resolvable root, which
+/// disables translation rather than guessing a scale.
+float hipHeightOf(Ogre::Entity* entity, CreatureSkeleton::BodyPlan plan);
+
 Result apply(Ogre::Skeleton* skel,
              const std::string& animName,
              CreatureSkeleton::BodyPlan plan,
              const std::vector<std::vector<std::array<float, 4>>>& clipQuats,
-             int fps);
+             int fps,
+             const std::vector<std::array<float, 3>>& rootOffset = {},
+             float targetHipHeight = 0.0f);
 
 } // namespace CreatureMotionRetarget
 

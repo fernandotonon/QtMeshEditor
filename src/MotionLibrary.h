@@ -61,6 +61,11 @@ public:
         // bind onto the target bind); absent (CMU-built libraries) → the
         // standing-pose path.
         std::vector<std::array<float, 4>> restWorld;
+        /// Creature libraries only: per-frame ROOT displacement from frame 0,
+        /// in units of the SOURCE rig's hip height. Empty for older libraries
+        /// (and for humanoid ones), in which case the retarget stays
+        /// rotation-only. See CreatureMotionExtract.h for why it exists.
+        std::vector<std::array<float, 3>> rootOffset;
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
